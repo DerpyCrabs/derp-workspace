@@ -67,6 +67,7 @@ impl ShellFrameSink {
         height: u32,
         stride: u32,
         pix: &[u8],
+        dirty_rects: &[shell_wire::ShellBufferRect],
     ) -> io::Result<()> {
         if std::env::var("CEF_HOST_SHELL_LEGACY_FRAMES").as_deref() == Ok("1") {
             shell_wire::encode_frame_bgra_into(&mut self.encode_buf, width, height, stride, pix)
@@ -133,6 +134,7 @@ impl ShellFrameSink {
             stride,
             offset as u64,
             half as u32,
+            dirty_rects,
         )
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "encode_frame_shm_commit"))?;
         let mut ipc = self.ipc.lock().expect("ipc");

@@ -220,7 +220,7 @@ wrap_render_handler! {
             &self,
             browser: Option<&mut Browser>,
             type_: PaintElementType,
-            _dirty_rects: Option<&[Rect]>,
+            dirty_rects: Option<&[Rect]>,
             buffer: *const u8,
             width: std::os::raw::c_int,
             height: std::os::raw::c_int,
@@ -243,6 +243,22 @@ wrap_render_handler! {
                 g.set_buffer_size(width, height);
                 prev != g.buffer_dimensions()
             };
+            let dirty: Vec<shell_wire::ShellBufferRect> = dirty_rects
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(|r| {
+                    if r.width > 0 && r.height > 0 {
+                        Some(shell_wire::ShellBufferRect {
+                            x: r.x,
+                            y: r.y,
+                            w: r.width,
+                            h: r.height,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             let stride = width * 4;
             let len = (stride * height) as usize;
             let pix = unsafe { std::slice::from_raw_parts(buffer, len) };
@@ -252,6 +268,7 @@ wrap_render_handler! {
                 height as u32,
                 stride as u32,
                 pix,
+                &dirty,
             ) {
                 eprintln!("cef_host: frame IPC: {e}");
             }

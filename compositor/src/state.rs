@@ -24,7 +24,7 @@ use smithay::{
             Display, DisplayHandle, Resource,
         },
     },
-    utils::{Logical, Point, Size, SERIAL_COUNTER},
+    utils::{Buffer, Logical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
@@ -1103,12 +1103,15 @@ impl CompositorState {
     }
 
     /// Upload a BGRA8888 frame (`shell_wire` pixels) into [`Self::shell_memory_buffer`].
+    ///
+    /// `dirty_rects` in buffer pixel space; empty means the full `width`×`height` buffer changed.
     pub fn apply_shell_frame_bgra(
         &mut self,
         width: u32,
         height: u32,
         stride: u32,
         pixels: &[u8],
+        dirty_rects: &[shell_wire::ShellBufferRect],
     ) -> Result<(), &'static str> {
         let w = width as i32;
         let h = height as i32;
@@ -1121,24 +1124,54 @@ impl CompositorState {
         if pixels.len() < need {
             return Err("pixel buffer too small");
         }
+        let size_changed = self.shell_view_px != Some((width, height));
+        let use_full = dirty_rects.is_empty() || size_changed;
         {
             let mut ctx = self.shell_memory_buffer.render();
             ctx.resize((w, h));
             ctx.draw(|mem| {
                 let row = w as usize * 4;
-                if stride as usize == row {
-                    mem[..need].copy_from_slice(&pixels[..need]);
-                } else {
-                    for y in 0..h as usize {
-                        let src_off = y * stride as usize;
-                        let dst_off = y * row;
-                        mem[dst_off..dst_off + row]
-                            .copy_from_slice(&pixels[src_off..src_off + row]);
+                let damage: Vec<Rectangle<i32, Buffer>> = if use_full {
+                    if stride as usize == row {
+                        mem[..need].copy_from_slice(&pixels[..need]);
+                    } else {
+                        for y in 0..h as usize {
+                            let src_off = y * stride as usize;
+                            let dst_off = y * row;
+                            mem[dst_off..dst_off + row]
+                                .copy_from_slice(&pixels[src_off..src_off + row]);
+                        }
                     }
-                }
-                Ok(vec![smithay::utils::Rectangle::from_size(
-                    smithay::utils::Size::from((w, h)),
-                )])
+                    vec![Rectangle::from_size(Size::from((w, h)))]
+                } else {
+                    let mut rects = Vec::new();
+                    for r in dirty_rects {
+                        let Some((x1, y1, rw, rh)) =
+                            clip_shell_dirty_rect(r.x, r.y, r.w, r.h, w, h)
+                        else {
+                            continue;
+                        };
+                        let row_b = rw as usize * 4;
+                        for yy in 0..rh {
+                            let y_abs = y1 + yy;
+                            let src_off = y_abs as usize * stride as usize + x1 as usize * 4;
+                            let dst_off = y_abs as usize * row + x1 as usize * 4;
+                            mem[dst_off..dst_off + row_b].copy_from_slice(
+                                &pixels[src_off..src_off + row_b],
+                            );
+                        }
+                        rects.push(Rectangle::new(
+                            Point::from((x1, y1)),
+                            Size::from((rw, rh)),
+                        ));
+                    }
+                    if rects.is_empty() {
+                        vec![Rectangle::from_size(Size::from((w, h)))]
+                    } else {
+                        rects
+                    }
+                };
+                Ok(damage)
             })
             .map_err(|_: ()| "memory buffer draw")?;
         }
@@ -1158,6 +1191,7 @@ impl CompositorState {
             height,
             stride,
             frame_bytes = pixels.len(),
+            partial = !use_full,
             "apply_shell_frame_bgra"
         );
         Ok(())
@@ -1204,6 +1238,28 @@ impl CompositorState {
 fn shell_sample_luma(b: u8, g: u8, r: u8) -> f32 {
     // BT.709 luma (B, G, R order for BGRA).
     0.0722 * b as f32 + 0.7152 * g as f32 + 0.2126 * r as f32
+}
+
+fn clip_shell_dirty_rect(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    bw: i32,
+    bh: i32,
+) -> Option<(i32, i32, i32, i32)> {
+    if w <= 0 || h <= 0 || bw <= 0 || bh <= 0 {
+        return None;
+    }
+    let x1 = x.clamp(0, bw);
+    let y1 = y.clamp(0, bh);
+    let x2 = (x as i64 + w as i64).clamp(0, bw as i64) as i32;
+    let y2 = (y as i64 + h as i64).clamp(0, bh as i64) as i32;
+    if x1 < x2 && y1 < y2 {
+        Some((x1, y1, x2 - x1, y2 - y1))
+    } else {
+        None
+    }
 }
 
 fn write_shell_e2e_frame_status(path: &Path, w: i32, h: i32, stride: u32, pixels: &[u8]) {

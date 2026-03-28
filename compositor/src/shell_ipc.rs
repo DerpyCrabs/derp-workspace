@@ -98,6 +98,7 @@ fn dispatch_shell_message(
             stride,
             offset,
             data_len,
+            dirty_rects,
         } => {
             let slot = state.shell_shm.take();
             let Some(ref shm) = slot else {
@@ -123,7 +124,8 @@ fn dispatch_shell_message(
                 return;
             }
             let slice = &shm.as_slice()[o..end];
-            let res = state.apply_shell_frame_bgra(width, height, stride, slice);
+            let res =
+                state.apply_shell_frame_bgra(width, height, stride, slice, dirty_rects.as_slice());
             state.shell_shm = slot;
             if let Err(e) = res {
                 warn!(?e, "shell ipc: bad shm frame");
@@ -136,7 +138,7 @@ fn dispatch_shell_message(
             format: _,
             pixels,
         } => {
-            if let Err(e) = state.apply_shell_frame_bgra(width, height, stride, &pixels) {
+            if let Err(e) = state.apply_shell_frame_bgra(width, height, stride, &pixels, &[]) {
                 warn!(?e, "shell ipc: bad frame");
             }
         }
@@ -177,7 +179,8 @@ fn dispatch_shell_message(
 }
 
 /// Pop and handle all complete shell→compositor messages currently in [`CompositorState::shell_read_buf`].
-/// Applies only the **last** [`shell_wire::DecodedMessage::Frame`] in this batch (avoids redundant work when the queue bursts).
+/// Applies only the **last** [`shell_wire::DecodedMessage::Frame`] or [`shell_wire::DecodedMessage::FrameShmCommit`]
+/// in this batch (avoids redundant work when the queue bursts).
 fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
     let mut batch: Vec<shell_wire::DecodedMessage> = Vec::new();
     loop {
@@ -197,9 +200,17 @@ fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
     let last_socket_frame = batch
         .iter()
         .rposition(|m| matches!(m, shell_wire::DecodedMessage::Frame { .. }));
+    let last_shm_commit = batch
+        .iter()
+        .rposition(|m| matches!(m, shell_wire::DecodedMessage::FrameShmCommit { .. }));
     for (i, msg) in batch.into_iter().enumerate() {
         if let Some(j) = last_socket_frame {
             if i != j && matches!(msg, shell_wire::DecodedMessage::Frame { .. }) {
+                continue;
+            }
+        }
+        if let Some(j) = last_shm_commit {
+            if i != j && matches!(msg, shell_wire::DecodedMessage::FrameShmCommit { .. }) {
                 continue;
             }
         }

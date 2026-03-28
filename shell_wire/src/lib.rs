@@ -1,7 +1,7 @@
 //! Wire format: `[u32 body_len LE][body]` where `body` is a single message.
 //!
 //! Frame message body layout (all little-endian):
-//! - `u32 protocol_version` — must be [`SHELL_PIXEL_PROTOCOL_VERSION`]
+//! - `u32 protocol_version` — must be accepted by [`protocol_version_ok`] (peers may be v5–v7)
 //! - `u32 msg_type` — [`MSG_FRAME`]
 //! - `u32 width`, `u32 height`, `u32 stride`, `u32 format` — [`PIXEL_FORMAT_BGRA8888`]
 //! - `u32 data_len` — must equal `stride * height` and fit in payload
@@ -24,12 +24,12 @@
 //!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session)
 //! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command)
 
-pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 6;
+pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 7;
 
-/// Accept v5 or v6 on decode so in-flight peers are not wedged across upgrades.
+/// Accept older peers on decode so in-flight messages are not wedged across upgrades.
 #[inline]
 pub fn protocol_version_ok(v: u32) -> bool {
-    v == 5 || v == 6
+    v == 5 || v == 6 || v == 7
 }
 
 pub const MSG_FRAME: u32 = 1;
@@ -78,9 +78,20 @@ pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
 /// Max UTF-8 basename length for [`MSG_SHELL_SHM_REGION`] (no path separators).
 pub const MAX_SHM_BASENAME_BYTES: u32 = 512;
+/// Max [`ShellBufferRect`] entries appended to [`MSG_FRAME_SHM_COMMIT`] (buffer pixel space).
+pub const MAX_FRAME_SHM_DIRTY_RECTS: u32 = 256;
 
 fn frame_header_len() -> u32 {
     4 * 7
+}
+
+/// Dirty rectangle in **buffer/device pixels** (BGRA), same coordinate space as the full OSR `width`×`height`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellBufferRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
 }
 
 /// Encodes a [`MSG_FRAME`] into `out` (clears `out` first). One allocation reuse-friendly.
@@ -150,15 +161,25 @@ pub fn encode_shell_shm_region(basename: &str, total_bytes: u64) -> Option<Vec<u
     Some(v)
 }
 
+/// Per-frame shm commit. With empty `dirty_rects` the on-wire body stays 32 bytes (v5–v7 compatible).
+/// Non-empty `dirty_rects` appends `u32 count` then `count`×(`i32` x,y,w,h) for partial compositor uploads.
 pub fn encode_frame_shm_commit(
     width: u32,
     height: u32,
     stride: u32,
     offset: u64,
     data_len: u32,
+    dirty_rects: &[ShellBufferRect],
 ) -> Option<Vec<u8>> {
-    // ver(4) + msg(4) + w + h + stride + offset(8) + data_len = 32
-    let body_len = 32u32;
+    if dirty_rects.len() > MAX_FRAME_SHM_DIRTY_RECTS as usize {
+        return None;
+    }
+    let base = 32u32;
+    let body_len = if dirty_rects.is_empty() {
+        base
+    } else {
+        base.checked_add(4)?.checked_add((dirty_rects.len() as u32).checked_mul(16)?)?
+    };
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
@@ -168,6 +189,16 @@ pub fn encode_frame_shm_commit(
     v.extend_from_slice(&stride.to_le_bytes());
     v.extend_from_slice(&offset.to_le_bytes());
     v.extend_from_slice(&data_len.to_le_bytes());
+    if !dirty_rects.is_empty() {
+        let n = u32::try_from(dirty_rects.len()).ok()?;
+        v.extend_from_slice(&n.to_le_bytes());
+        for r in dirty_rects {
+            v.extend_from_slice(&r.x.to_le_bytes());
+            v.extend_from_slice(&r.y.to_le_bytes());
+            v.extend_from_slice(&r.w.to_le_bytes());
+            v.extend_from_slice(&r.h.to_le_bytes());
+        }
+    }
     Some(v)
 }
 
@@ -483,12 +514,14 @@ pub enum DecodedMessage {
         total_bytes: u64,
     },
     /// Frame pixels are BGRA in the mapped shm file at `offset` for `data_len` bytes.
+    /// Empty `dirty_rects` means the full buffer changed.
     FrameShmCommit {
         width: u32,
         height: u32,
         stride: u32,
         offset: u64,
         data_len: u32,
+        dirty_rects: Vec<ShellBufferRect>,
     },
     SpawnWaylandClient {
         command: String,
@@ -1049,7 +1082,7 @@ fn decode_shell_shm_region_body(body: &[u8]) -> Result<DecodedMessage, DecodeErr
 }
 
 fn decode_frame_shm_commit_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
-    if body.len() != 32 {
+    if body.len() < 32 {
         return Err(DecodeError::BadShmCommitPayload);
     }
     let width = u32::from_le_bytes(body[8..12].try_into().unwrap());
@@ -1057,12 +1090,48 @@ fn decode_frame_shm_commit_body(body: &[u8]) -> Result<DecodedMessage, DecodeErr
     let stride = u32::from_le_bytes(body[16..20].try_into().unwrap());
     let offset = u64::from_le_bytes(body[20..28].try_into().unwrap());
     let data_len = u32::from_le_bytes(body[28..32].try_into().unwrap());
+    let dirty_rects = if body.len() == 32 {
+        Vec::new()
+    } else {
+        let rest = body.len().checked_sub(32).ok_or(DecodeError::BadShmCommitPayload)?;
+        if rest < 4 {
+            return Err(DecodeError::BadShmCommitPayload);
+        }
+        let n = u32::from_le_bytes(body[32..36].try_into().unwrap());
+        if n > MAX_FRAME_SHM_DIRTY_RECTS {
+            return Err(DecodeError::BadShmCommitPayload);
+        }
+        let mul = (n as usize)
+            .checked_mul(16)
+            .ok_or(DecodeError::BadShmCommitPayload)?;
+        let need = 4usize
+            .checked_add(mul)
+            .ok_or(DecodeError::BadShmCommitPayload)?;
+        if rest != need {
+            return Err(DecodeError::BadShmCommitPayload);
+        }
+        let mut out = Vec::with_capacity(n as usize);
+        let mut o = 36usize;
+        for _ in 0..n {
+            let x = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+            o += 4;
+            let y = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+            o += 4;
+            let w = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+            o += 4;
+            let h = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+            o += 4;
+            out.push(ShellBufferRect { x, y, w, h });
+        }
+        out
+    };
     Ok(DecodedMessage::FrameShmCommit {
         width,
         height,
         stride,
         offset,
         data_len,
+        dirty_rects,
     })
 }
 
@@ -1187,7 +1256,7 @@ mod tests {
     #[test]
     fn round_trip_shm_region_and_commit() {
         let enc = encode_shell_shm_region("derp-test-shm.bin", 123456).unwrap();
-        let commit = encode_frame_shm_commit(1920, 1080, 7680, 0, 8_294_400).unwrap();
+        let commit = encode_frame_shm_commit(1920, 1080, 7680, 0, 8_294_400, &[]).unwrap();
         let mut buf = Vec::new();
         buf.extend_from_slice(&enc);
         buf.extend_from_slice(&commit);
@@ -1208,10 +1277,49 @@ mod tests {
                 stride,
                 offset,
                 data_len,
+                dirty_rects,
             }) => {
                 assert_eq!((width, height, stride), (1920, 1080, 7680));
                 assert_eq!(offset, 0);
                 assert_eq!(data_len, 8_294_400);
+                assert!(dirty_rects.is_empty());
+            }
+            other => panic!("expected FrameShmCommit: {other:?}"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn round_trip_shm_commit_with_dirty_rects() {
+        let dirty = vec![
+            ShellBufferRect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 20,
+            },
+            ShellBufferRect {
+                x: 100,
+                y: 200,
+                w: 3,
+                h: 4,
+            },
+        ];
+        let enc = encode_frame_shm_commit(800, 600, 3200, 0, 1_920_000, &dirty).unwrap();
+        let mut buf = enc;
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::FrameShmCommit {
+                width,
+                height,
+                stride,
+                offset,
+                data_len,
+                dirty_rects,
+            }) => {
+                assert_eq!((width, height, stride), (800, 600, 3200));
+                assert_eq!(offset, 0);
+                assert_eq!(data_len, 1_920_000);
+                assert_eq!(dirty_rects, dirty);
             }
             other => panic!("expected FrameShmCommit: {other:?}"),
         }

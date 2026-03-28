@@ -73,7 +73,11 @@ if [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]];
     CEF_DIR=""
     CEF_DIR="$(resolve_cef_dir)" || CEF_DIR="${CEF_PATH:-}"
     if [[ -n "$CEF_DIR" && -f "$CEF_DIR/libcef.so" ]]; then
-      CMD="$(printf 'env CEF_HOST_USE_GPU=%q CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "${CEF_HOST_USE_GPU:-1}" "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
+      if [[ "${DERP_PERF_SESSION:-0}" == "1" ]]; then
+        CMD="$(printf 'env CEF_HOST_PERF=1 CEF_HOST_USE_GPU=%q CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "${CEF_HOST_USE_GPU:-1}" "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
+      else
+        CMD="$(printf 'env CEF_HOST_USE_GPU=%q CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "${CEF_HOST_USE_GPU:-1}" "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
+      fi
       ARGS+=( --command "$CMD" )
     fi
   fi
@@ -87,6 +91,12 @@ if [[ -z "${RUST_LOG:-}" ]]; then
   export RUST_LOG="warn,derp_input=debug"
 elif [[ "${RUST_LOG}" != *derp_input=* ]]; then
   export RUST_LOG="${RUST_LOG},derp_input=debug"
+fi
+# DERP_PERF_SESSION=1: compositor `shell_ipc=trace` + CEF_HOST_PERF (see install-system.sh).
+if [[ "${DERP_PERF_SESSION:-0}" == "1" ]]; then
+  if [[ "${RUST_LOG}" != *shell_ipc=* ]]; then
+    export RUST_LOG="${RUST_LOG},shell_ipc=trace"
+  fi
 fi
 
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"

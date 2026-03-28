@@ -268,7 +268,8 @@ fn headless_shell_shm_frame_shows_pixels() {
     sock.write_all(&shell_wire::encode_shell_shm_region(basename, cap).expect("region"))
         .expect("region");
     sock.write_all(
-        &shell_wire::encode_frame_shm_commit(w, h, stride, 0, frame_bytes as u32).expect("commit"),
+        &shell_wire::encode_frame_shm_commit(w, h, stride, 0, frame_bytes as u32, &[])
+            .expect("commit"),
     )
     .expect("commit");
     sock.flush().ok();

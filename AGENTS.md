@@ -54,6 +54,12 @@ Touch vs. pointer coordinate rules matter for **nested winit** vs **DRM**; keep 
 
 ---
 
+## Shell / CEF OSR vs native surfaces
+
+The Solid UI is **windowless OSR** today: BGRA frames over `shell_wire` shm into a `MemoryRenderBuffer`, with optional **partial damage** when CEF supplies dirty rects (`MSG_FRAME_SHM_COMMIT` extension, protocol v7). If profiling shows this path is still CPU-bound at target resolution, the strategic forks are: **(1)** CEF as a real **Wayland client** (`CEF_HOST_USE_WAYLAND_PLATFORM`, rework pointer + `shell_uplink` + transparency/letterbox), or **(2)** **dmabuf/zero-copy** from CEF/ANGLE if a future build can export shareable buffers and the compositor gains an import path. Prefer measuring with **`DERP_PERF_SESSION=1`** (see `install-system.sh`) before large migrations.
+
+---
+
 ## Conventions for future changes
 
 - Prefer **extending** existing input and `DesktopStack` paths over parallel one-off handlers.

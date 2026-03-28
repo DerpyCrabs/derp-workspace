@@ -12,6 +12,13 @@
 #   INSTALL_SKIP_GIT=1     — skip `git pull`
 #   INSTALL_PREFIX=/usr/local — install root (default /usr/local)
 #
+# Rendering / OSR baseline (optional):
+#   Export DERP_PERF_SESSION=1 before GDM login (e.g. ~/.config/environment.d/derp-perf.conf with
+#   DERP_PERF_SESSION=1) so scripts/derp-session.sh appends shell_ipc=trace to RUST_LOG and sets
+#   CEF_HOST_PERF=1 for cef_host. Logs: DERP_COMPOSITOR_LOG (default ~/.local/state/derp/compositor.log).
+#   Deploy to a test host: bash scripts/remote-update-and-restart.sh
+#   Fetch logs: bash scripts/list-derp-logs.sh -n 2000  (uses scripts/remote-install.env)
+#
 # GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
 # `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
 #
@@ -36,7 +43,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-git) SKIP_GIT=1 ;;
     -h|--help)
-      sed -n '1,28p' "$0"
+      sed -n '1,40p' "$0"
       exit 0
       ;;
     *)
