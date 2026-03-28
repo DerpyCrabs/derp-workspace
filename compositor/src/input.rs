@@ -2,7 +2,7 @@ use smithay::{
     backend::{
         input::{
             AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-            KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+            KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
         },
         session::Session,
     },
@@ -11,7 +11,7 @@ use smithay::{
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::SERIAL_COUNTER,
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER},
 };
 
 use crate::state::CompositorState;
@@ -45,6 +45,65 @@ fn linux_evdev_button_to_shell(button: u32) -> u32 {
 }
 
 impl CompositorState {
+    /// Logical pointer position **within the output** (`output_geo` from [`crate::state::CompositorState::space`]).
+    fn pointer_motion_output_local(&mut self, output_geo: Rectangle<i32, Logical>, local: Point<f64, Logical>, time_msec: u32) {
+        let (nx, ny) =
+            if let Some((ox, oy, cw, ch)) = self.shell_letterbox_logical(output_geo.size) {
+                let pw = cw.max(1) as f64;
+                let ph = ch.max(1) as f64;
+                (
+                    ((local.x - ox as f64) / pw).clamp(0.0, 1.0),
+                    ((local.y - oy as f64) / ph).clamp(0.0, 1.0),
+                )
+            } else {
+                let gw = output_geo.size.w.max(1) as f64;
+                let gh = output_geo.size.h.max(1) as f64;
+                (
+                    (local.x / gw).clamp(0.0, 1.0),
+                    (local.y / gh).clamp(0.0, 1.0),
+                )
+            };
+        self.shell_pointer_norm = Some((nx, ny));
+
+        let pos = local + output_geo.loc.to_f64();
+
+        let serial = SERIAL_COUNTER.next_serial();
+
+        let pointer = self.seat.get_pointer().unwrap();
+
+        let route_cef = self.shell_pointer_route_to_cef(pos);
+
+        if route_cef {
+            if let Some((vx, vy)) = self.shell_pointer_buffer_pixels(nx, ny) {
+                let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
+                self.shell_ipc_try_write(&pkt);
+                pointer.motion(
+                    self,
+                    None,
+                    &MotionEvent {
+                        location: pos,
+                        serial,
+                        time: time_msec,
+                    },
+                );
+                pointer.frame(self);
+                return;
+            }
+        }
+
+        let under = self.surface_under(pos);
+
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location: pos,
+                serial,
+                time: time_msec,
+            },
+        );
+        pointer.frame(self);
+    }
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
             InputEvent::Keyboard { event, .. } => {
@@ -84,69 +143,29 @@ impl CompositorState {
                     },
                 );
             }
-            InputEvent::PointerMotion { .. } => {}
+            InputEvent::PointerMotion { event, .. } => {
+                let output = self.space.outputs().next().unwrap();
+                let output_geo = self.space.output_geometry(output).unwrap();
+                let pointer = self.seat.get_pointer().unwrap();
+                let mut pos = pointer.current_location() + event.delta();
+                let min_x = output_geo.loc.x as f64;
+                let min_y = output_geo.loc.y as f64;
+                let max_x = min_x + output_geo.size.w.max(0) as f64;
+                let max_y = min_y + output_geo.size.h.max(0) as f64;
+                pos.x = pos.x.clamp(min_x, max_x);
+                pos.y = pos.y.clamp(min_y, max_y);
+                let local = pos - output_geo.loc.to_f64();
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
+            }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = self.space.outputs().next().unwrap();
 
                 let output_geo = self.space.output_geometry(output).unwrap();
 
                 let local = event.position_transformed(output_geo.size);
-                let (nx, ny) =
-                    if let Some((ox, oy, cw, ch)) = self.shell_letterbox_logical(output_geo.size) {
-                        let pw = cw.max(1) as f64;
-                        let ph = ch.max(1) as f64;
-                        (
-                            ((local.x - ox as f64) / pw).clamp(0.0, 1.0),
-                            ((local.y - oy as f64) / ph).clamp(0.0, 1.0),
-                        )
-                    } else {
-                        let gw = output_geo.size.w.max(1) as f64;
-                        let gh = output_geo.size.h.max(1) as f64;
-                        (
-                            (local.x / gw).clamp(0.0, 1.0),
-                            (local.y / gh).clamp(0.0, 1.0),
-                        )
-                    };
-                self.shell_pointer_norm = Some((nx, ny));
-
-                let pos = local + output_geo.loc.to_f64();
-
-                let serial = SERIAL_COUNTER.next_serial();
-
-                let pointer = self.seat.get_pointer().unwrap();
-
-                let route_cef = self.shell_pointer_route_to_cef(pos);
-
-                if route_cef {
-                    if let Some((vx, vy)) = self.shell_pointer_buffer_pixels(nx, ny) {
-                        let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
-                        self.shell_ipc_try_write(&pkt);
-                        pointer.motion(
-                            self,
-                            None,
-                            &MotionEvent {
-                                location: pos,
-                                serial,
-                                time: event.time_msec(),
-                            },
-                        );
-                        pointer.frame(self);
-                        return;
-                    }
-                }
-
-                let under = self.surface_under(pos);
-
-                pointer.motion(
-                    self,
-                    under,
-                    &MotionEvent {
-                        location: pos,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(self);
+                self.pointer_motion_output_local(output_geo, local, event.time_msec());
+                self.needs_winit_redraw = true;
             }
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();

@@ -51,6 +51,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     desktop_stack::DesktopStack,
+    pointer_render,
     shell_ipc, shell_letterbox,
     CalloopData, CompositorState,
 };
@@ -198,6 +199,9 @@ impl DrmSession {
                         > = Vec::with_capacity(space_els.len() + custom.len());
                         render_elements.extend(space_els.into_iter().map(DesktopStack::Space));
                         render_elements.extend(custom.iter().map(DesktopStack::Shell));
+                        for el in pointer_render::pointer_render_elements(state, renderer, output) {
+                            render_elements.push(DesktopStack::Pointer(el));
+                        }
 
                         self.damage_tracker.render_output(
                             renderer,

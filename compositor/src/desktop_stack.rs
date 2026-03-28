@@ -13,4 +13,6 @@ render_elements! {
         R: ImportAll;
     Space=SpaceRenderElements<R, E>,
     Shell=&'a C,
+    /// Client cursor (wl_surface); must be last so it paints above shell and toplevels.
+    Pointer=E,
 }

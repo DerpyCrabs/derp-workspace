@@ -13,6 +13,7 @@ mod gpu_tests;
 
 mod desktop_stack;
 pub mod drm;
+mod pointer_render;
 mod grabs;
 mod handlers;
 mod input;

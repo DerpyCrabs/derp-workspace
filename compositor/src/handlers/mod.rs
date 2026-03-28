@@ -27,8 +27,10 @@ impl SeatHandler for CompositorState {
     fn cursor_image(
         &mut self,
         _seat: &Seat<Self>,
-        _image: smithay::input::pointer::CursorImageStatus,
+        image: smithay::input::pointer::CursorImageStatus,
     ) {
+        self.pointer_cursor_image = image;
+        self.needs_winit_redraw = true;
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {

@@ -45,6 +45,7 @@ use crate::{
     window_registry::WindowRegistry,
     CalloopData,
 };
+use smithay::input::pointer::CursorImageStatus;
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
@@ -121,6 +122,8 @@ pub struct CompositorState {
     pub(crate) shell_window_physical_px: (i32, i32),
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
+    /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
+    pub pointer_cursor_image: CursorImageStatus,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
     shell_e2e_status_path: Option<PathBuf>,
@@ -201,6 +204,7 @@ impl CompositorState {
             shell_view_px: None,
             shell_window_physical_px: (1, 1),
             shell_pointer_norm: None,
+            pointer_cursor_image: CursorImageStatus::Hidden,
             shell_move_window_id: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
