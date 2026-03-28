@@ -40,6 +40,7 @@ fn unix_bytes_available(stream: &std::os::unix::net::UnixStream) -> io::Result<u
 fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
     state.shell_ipc_client = None;
     state.shell_read_buf.clear();
+    state.shell_clear_ipc_last_rx();
     state.clear_shell_frame();
 }
 
@@ -47,6 +48,7 @@ fn dispatch_shell_message(
     state: &mut crate::state::CompositorState,
     msg: shell_wire::DecodedMessage,
 ) {
+    state.shell_note_shell_ipc_rx();
     use shell_wire::DecodedMessage::*;
     match msg {
         Frame {

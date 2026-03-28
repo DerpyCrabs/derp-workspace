@@ -69,6 +69,7 @@ pub fn run(
                 }
 
                 shell_ipc::drain_shell_stream(&mut data.state);
+                data.state.shell_check_ipc_watchdog();
                 data.state.space.refresh();
                 data.state.popups.cleanup();
 

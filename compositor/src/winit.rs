@@ -101,6 +101,7 @@ pub fn init_winit(
                 }
                 WinitEvent::Redraw => {
                     shell_ipc::drain_shell_stream(state);
+                    state.shell_check_ipc_watchdog();
 
                     let size = backend.window_size();
 

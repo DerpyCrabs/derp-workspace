@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use smithay::{
@@ -64,6 +65,8 @@ pub struct CompositorInitOptions {
     pub shell_e2e_status_path: Option<PathBuf>,
     /// When set, each applied shell frame overwrites this path with a PNG (BGRA → RGBA) for visual debugging / screenshot tests.
     pub shell_e2e_screenshot_path: Option<PathBuf>,
+    /// If set while shell IPC is enabled, exit the compositor when `cef_host` sends nothing for this long (see `DERP_SHELL_WATCHDOG_SEC`).
+    pub shell_ipc_stall_timeout: Option<Duration>,
 }
 
 impl Default for CompositorInitOptions {
@@ -75,6 +78,7 @@ impl Default for CompositorInitOptions {
             shell_ipc_socket: None,
             shell_e2e_status_path: None,
             shell_e2e_screenshot_path: None,
+            shell_ipc_stall_timeout: None,
         }
     }
 }
@@ -120,6 +124,11 @@ pub struct CompositorState {
     shell_e2e_screenshot_path: Option<PathBuf>,
     /// Drives nested winit repaints when Wayland clients commit or on first frame.
     pub(crate) needs_winit_redraw: bool,
+
+    /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
+    shell_ipc_stall_timeout: Option<Duration>,
+    /// Last time a length-prefixed message was decoded from [`Self::shell_ipc_client`].
+    shell_ipc_last_rx: Option<Instant>,
 }
 
 impl CompositorState {
@@ -143,6 +152,7 @@ impl CompositorState {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
         let shell_ipc_socket = options.shell_ipc_socket.clone();
+        let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
         let shell_e2e_status_path = options.shell_e2e_status_path.clone();
         let shell_e2e_screenshot_path = options.shell_e2e_screenshot_path.clone();
         let popups = PopupManager::default();
@@ -189,6 +199,8 @@ impl CompositorState {
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
             needs_winit_redraw: true,
+            shell_ipc_stall_timeout,
+            shell_ipc_last_rx: None,
         };
 
         if let Some(name) = shell_ipc_socket {
@@ -340,6 +352,7 @@ impl CompositorState {
 
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
+        self.shell_note_shell_ipc_rx();
         self.send_shell_output_geometry();
         for info in self.window_registry.all_infos() {
             if let Some(p) = shell_wire::encode_window_mapped(
@@ -366,6 +379,36 @@ impl CompositorState {
         };
         let pkt = shell_wire::encode_focus_changed(surface_id, window_id);
         self.shell_ipc_try_write(&pkt);
+    }
+
+    pub(crate) fn shell_note_shell_ipc_rx(&mut self) {
+        self.shell_ipc_last_rx = Some(Instant::now());
+    }
+
+    pub(crate) fn shell_clear_ipc_last_rx(&mut self) {
+        self.shell_ipc_last_rx = None;
+    }
+
+    /// Stops the compositor if a shell IPC client is connected but has been silent longer than [`Self::shell_ipc_stall_timeout`].
+    pub(crate) fn shell_check_ipc_watchdog(&mut self) {
+        let Some(limit) = self.shell_ipc_stall_timeout else {
+            return;
+        };
+        if self.shell_ipc_client.is_none() {
+            return;
+        }
+        let Some(last) = self.shell_ipc_last_rx else {
+            return;
+        };
+        if last.elapsed() <= limit {
+            return;
+        }
+        tracing::warn!(
+            timeout_secs = limit.as_secs(),
+            "shell ipc: no message from cef_host within timeout; stopping compositor (stuck shell / JS or CEF not painting)"
+        );
+        self.loop_signal.stop();
+        self.loop_signal.wakeup();
     }
 
     fn shell_point_in_decoration_chrome(

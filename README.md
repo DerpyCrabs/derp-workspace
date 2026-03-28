@@ -136,6 +136,12 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 
 The compositor draws Wayland clients first, then **overlays** the latest shell frame when one has been received.
 
+**Gray shell / CEF:** Run `cef_host` with **`CEF_HOST_DIAG=1`** for stderr checks (`CEF_PATH`, `libcef.so`, key pack files). Use **`CEF_HOST_TRACE_PAINT=1`** to confirm the first OSR paint size (if you never see this line, CEF may not be painting). Set **`CEF_HOST_LOG_FILE`** / **`CEF_HOST_LOG_SEVERITY=verbose`** for Chromium’s log. **`on_load_error`** is always printed on stderr if navigation fails.
+
+**Exit without the shell:** **`Ctrl+Shift+Q`** stops the compositor event loop (same effect as the Solid “Exit session” control). From another TTY or SSH you can **`kill`** the compositor process or end the session via **`loginctl`**. Nested runs: close the window or send **SIGINT** to the compositor if it is foreground in a terminal.
+
+**Shell stall watchdog:** While `cef_host` is connected, the compositor can exit if **no** shell→compositor traffic arrives for **`DERP_SHELL_WATCHDOG_SEC`** seconds (`scripts/derp-session.sh` defaults this to **5** after `install-system.sh`). Set **`DERP_SHELL_WATCHDOG_SEC=0`** to turn it off, or raise the value if a very static UI stops sending OSR frames and you hit false positives.
+
 **Shell pointer input:** The overlay is not a Wayland surface, so the compositor **forwards** pointer move/button events over the same Unix socket (`MSG_COMPOSITOR_POINTER_MOVE` / `MSG_COMPOSITOR_POINTER_BUTTON` in [`shell_wire`]) for `cef_host` to inject via CEF OSR. `cef_host` uses a **`try_clone` read thread** so frame writes stay on a blocking socket.
 
 **Shell → native spawn:** `cef_host` serves `POST http://127.0.0.1:<port>/spawn` (loopback only) and forwards JSON `{"command":"…"}` as a `shell_wire` spawn message. The Solid shell uses an inline **command field** (not `window.prompt`): windowless CEF has no parent window for native JS dialogs. The compositor runs `sh -c` with **`WAYLAND_DISPLAY` set to the nested socket** only when **`DERP_ALLOW_SHELL_SPAWN=1`** (set automatically by **`scripts/run-nested.sh`**). The Solid app uses **`window.__DERP_SPAWN_URL`** (injected on load) for the **“Run native app in compositor”** button.

@@ -233,6 +233,7 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
             shell_ipc_socket: None,
             shell_e2e_status_path: None,
             shell_e2e_screenshot_path: None,
+            shell_ipc_stall_timeout: None,
         };
         headless::run(opts, Some(Duration::from_secs(12))).expect("headless run");
     });

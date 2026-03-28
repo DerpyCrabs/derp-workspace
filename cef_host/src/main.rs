@@ -7,6 +7,11 @@
 //! Ozone defaults to `headless` (see [`cef_host::ozone_platform_headless_for_osr`]) so a nested
 //! compositor’s `WAYLAND_DISPLAY` does not become Chromium’s display while OSR is active; set
 //! `CEF_HOST_USE_WAYLAND_PLATFORM=1` to experiment.
+//!
+//! **Gray / blank shell:** enable **`CEF_HOST_DIAG=1`** for stderr layout checks (`CEF_PATH`,
+//! `libcef.so`, pack files), **`CEF_HOST_TRACE_PAINT=1`** to log the first OSR paint size, and
+//! optional **`CEF_HOST_LOG_FILE` / `CEF_HOST_LOG_SEVERITY`** (e.g. `verbose`) for Chromium’s log.
+//! Navigation failures are always logged from [`LoadHandler::on_load_error`].
 
 mod compositor_downlink;
 mod control_server;
@@ -14,10 +19,10 @@ mod control_server;
 use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Mutex, Once,
     },
     thread,
     time::Duration,
@@ -29,6 +34,8 @@ use clap::Parser;
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 
 use cef_host::osr_view_state::OsrViewState;
+
+static FIRST_OSR_PAINT_LOG: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "cef_host", about = "CEF OSR → compositor shell IPC")]
@@ -90,6 +97,23 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
+        fn on_load_error(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            error_code: Errorcode,
+            error_text: Option<&CefString>,
+            failed_url: Option<&CefString>,
+        ) {
+            let main = frame.map(|f| f.is_main() == 1).unwrap_or(false);
+            let text = error_text.map(ToString::to_string).unwrap_or_default();
+            let url = failed_url.map(ToString::to_string).unwrap_or_default();
+            eprintln!(
+                "cef_host: on_load_error (main_frame={main}) code={} text={text:?} url={url:?}",
+                error_code.get_raw(),
+            );
+        }
+
         fn on_load_end(
             &self,
             browser: Option<&mut Browser>,
@@ -192,6 +216,13 @@ wrap_render_handler! {
             if type_ != PaintElementType::VIEW || buffer.is_null() || width <= 0 || height <= 0 {
                 return;
             }
+            FIRST_OSR_PAINT_LOG.call_once(|| {
+                if std::env::var("CEF_HOST_DIAG").as_deref() == Ok("1")
+                    || std::env::var("CEF_HOST_TRACE_PAINT").as_deref() == Ok("1")
+                {
+                    eprintln!("cef_host: first OSR paint buffer {}x{}", width, height);
+                }
+            });
             let notify = {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;
@@ -244,6 +275,70 @@ wrap_client! {
     }
 }
 
+fn cef_host_diag_enabled() -> bool {
+    std::env::var("CEF_HOST_DIAG").as_deref() == Ok("1")
+}
+
+fn log_cef_layout(cef_path: Option<&Path>) {
+    if !cef_host_diag_enabled() {
+        return;
+    }
+    eprintln!("cef_host: CEF_HOST_DIAG layout check");
+    if let Ok(exe) = std::env::current_exe() {
+        eprintln!("cef_host:   executable: {}", exe.display());
+        if let Some(parent) = exe.parent() {
+            let lib = parent.join("libcef.so");
+            eprintln!(
+                "cef_host:   libcef next to exe [{}]: {}",
+                lib.display(),
+                lib.is_file()
+            );
+        }
+    }
+    match cef_path {
+        Some(root) => {
+            eprintln!("cef_host:   CEF_PATH: {}", root.display());
+            for name in [
+                "libcef.so",
+                "icudtl.dat",
+                "v8_context_snapshot.bin",
+                "resources.pak",
+                "locales",
+            ] {
+                let p = root.join(name);
+                eprintln!(
+                    "cef_host:     [{}] {}",
+                    name,
+                    if p.exists() { "ok" } else { "MISSING" }
+                );
+            }
+        }
+        None => eprintln!(
+            "cef_host:   CEF_PATH unset (resources from RUNPATH libcef dir / CEF defaults)"
+        ),
+    }
+}
+
+fn apply_cef_log_env(settings: &mut Settings) {
+    if let Ok(path) = std::env::var("CEF_HOST_LOG_FILE") {
+        if !path.is_empty() {
+            settings.log_file = CefString::from(path.as_str());
+            eprintln!("cef_host: CEF_HOST_LOG_FILE -> {path}");
+        }
+    }
+    if let Ok(sev) = std::env::var("CEF_HOST_LOG_SEVERITY") {
+        settings.log_severity = match sev.to_ascii_lowercase().as_str() {
+            "verbose" => LogSeverity::VERBOSE,
+            "info" => LogSeverity::INFO,
+            "warning" => LogSeverity::WARNING,
+            "error" => LogSeverity::ERROR,
+            "fatal" => LogSeverity::FATAL,
+            "disable" => LogSeverity::DISABLE,
+            "default" | _ => LogSeverity::DEFAULT,
+        };
+    }
+}
+
 fn main() {
     // Multiprocess bootstrap matches tauri-apps/cef-rs `examples/cefsimple` (`shared/run_main`):
     // - Touch API hash before any Cef C++ wrapper runs (binds to the loaded libcef).
@@ -278,19 +373,22 @@ fn main() {
 
     let cli = Cli::parse();
 
+    let cef_path = std::env::var("CEF_PATH").ok().map(PathBuf::from);
+    log_cef_layout(cef_path.as_deref());
+
     let mut settings = Settings::default();
     settings.no_sandbox = 1;
     settings.windowless_rendering_enabled = 1;
     settings.external_message_pump = 1;
     settings.log_severity = LogSeverity::INFO;
+    apply_cef_log_env(&mut settings);
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(s) = exe.to_str() {
             settings.browser_subprocess_path = CefString::from(s);
         }
     }
-    if let Ok(cef) = std::env::var("CEF_PATH") {
-        let root = Path::new(&cef);
+    if let Some(ref root) = cef_path {
         settings.resources_dir_path = CefString::from(root.to_str().unwrap_or(""));
         let locales = root.join("locales");
         settings.locales_dir_path = CefString::from(locales.to_str().unwrap_or(""));

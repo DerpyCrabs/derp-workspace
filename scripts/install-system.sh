@@ -9,6 +9,9 @@
 #   INSTALL_SKIP_GIT=1     — skip `git pull`
 #   INSTALL_PREFIX=/usr/local — install root (default /usr/local)
 #
+# GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
+# `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
+#
 # Flags:
 #   --no-git               — same as INSTALL_SKIP_GIT=1
 set -euo pipefail

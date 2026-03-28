@@ -53,4 +53,5 @@ if [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]];
 fi
 
 export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
+export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
 exec "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"

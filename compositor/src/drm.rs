@@ -103,6 +103,7 @@ impl DrmSession {
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
 
         shell_ipc::drain_shell_stream(state);
+        state.shell_check_ipc_watchdog();
 
         if !self.drm.is_active() {
             return;

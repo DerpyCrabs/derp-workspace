@@ -1,10 +1,10 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
-        keyboard::FilterResult,
+        keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -28,14 +28,29 @@ impl CompositorState {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
+                let key_state = event.state();
 
                 self.seat.get_keyboard().unwrap().input::<(), _>(
                     self,
                     event.key_code(),
-                    event.state(),
+                    key_state,
                     serial,
                     time,
-                    |_, _, _| FilterResult::Forward,
+                    move |state, mods, keysym| {
+                        if key_state == KeyState::Pressed
+                            && mods.ctrl
+                            && mods.shift
+                            && matches!(
+                                keysym.modified_sym().raw(),
+                                keysyms::KEY_q | keysyms::KEY_Q
+                            )
+                        {
+                            state.loop_signal.stop();
+                            state.loop_signal.wakeup();
+                            return FilterResult::Intercept(());
+                        }
+                        FilterResult::Forward
+                    },
                 );
             }
             InputEvent::PointerMotion { .. } => {}

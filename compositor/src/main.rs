@@ -64,6 +64,18 @@ fn shell_e2e_screenshot_from_env() -> Option<PathBuf> {
     std::env::var_os("DERP_SHELL_E2E_SCREENSHOT").map(PathBuf::from)
 }
 
+/// If set to a positive integer, exit when `cef_host` sends no shell IPC messages for this many seconds.
+fn shell_ipc_stall_timeout_from_env() -> Option<Duration> {
+    let Ok(raw) = std::env::var("DERP_SHELL_WATCHDOG_SEC") else {
+        return None;
+    };
+    let secs: u64 = raw.trim().parse().ok()?;
+    if secs == 0 {
+        return None;
+    }
+    Some(Duration::from_secs(secs))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
@@ -90,6 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shell_ipc_socket: cli.shell_ipc_socket.clone(),
             shell_e2e_status_path: shell_e2e_status_from_env(),
             shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
+            shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
         };
         let run_for = cli.run_for_ms.map(Duration::from_millis);
         headless::run(opts, run_for)?;
@@ -125,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         shell_e2e_status_path: shell_e2e_status_from_env(),
         shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
+        shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
     };
 
     let state = CompositorState::new(&mut event_loop, display, init);
