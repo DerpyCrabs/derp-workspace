@@ -12,7 +12,7 @@ Rough split of responsibilities:
 
 **Native Wayland applications** remain first-class: they connect as ordinary clients. The compositor exposes enough structure (stable window/surface ids, geometry, stacking) so the **SolidJS shell can position native surfaces and draw HTML+CSS “decorations”** around them — title bars, shadows, tab strips, or full custom frames — without those apps needing to know about CEF.
 
-The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). **Shell → compositor** control messages include move (existing), **list windows**, **set geometry**, **close**, and **fullscreen** (`SHELL_PIXEL_PROTOCOL_VERSION` **4**); Solid can grow buttons that send these over the same socket.
+The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). **Shell → compositor** control messages include move (existing), **list windows**, **set geometry**, **close**, **fullscreen**, and **quit session** (`SHELL_PIXEL_PROTOCOL_VERSION` **5**); the Solid shell exposes these via HTTP control → shell socket where applicable.
 
 ---
 
@@ -106,11 +106,19 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 
 | Path | Role |
 |------|------|
-| `compositor/` | Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints, shell IPC listener (winit) |
-| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **4**) |
+| `compositor/` | Smithay compositor, `chrome_bridge` stub, winit + **DRM/KMS** + headless entrypoints, shell IPC |
+| `resources/derp-wayland.desktop` | GDM session entry (`wayland-sessions`) |
+| `scripts/derp-session.sh` | Session wrapper: `--backend drm`, optional CEF + `shell/dist` |
+| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/quit/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **5**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |
+
+### GDM / DRM login session
+
+1. **Install (example paths):** `cargo build --release -p compositor -p cef_host`; then `sudo install -Dm755 target/release/compositor /usr/local/bin/` and `sudo install -Dm755 target/release/cef_host /usr/local/bin/`; `sudo install -Dm755 scripts/derp-session.sh /usr/local/bin/derp-session`; `sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop`.
+2. **GDM:** Pick **Derp Compositor**. The wrapper runs `compositor --backend drm` under your `XDG_RUNTIME_DIR` (requires **libseat** / logind session). Override the GPU node with **`DERP_DRM_DEVICE`** (e.g. `/dev/dri/card0`) if detection fails.
+3. **Stack:** KMS + GBM + EGL GLES + libinput; Mesa on Intel/AMD is the expected path. See DRM limitations in code comments if a driver misbehaves.
 
 ### Phase 3 dev setup (nested compositor + shell)
 

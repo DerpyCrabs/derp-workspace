@@ -5,11 +5,23 @@ use std::{path::PathBuf, time::Duration};
 use clap::Parser;
 use compositor::{
     chrome_bridge::NoOpChromeBridge,
+    drm,
     headless,
     state::{CompositorInitOptions, SocketConfig},
     winit, CalloopData, CompositorState,
 };
+use smithay::backend::session::libseat::LibSeatSession;
+use smithay::backend::session::Session;
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum CompositorBackend {
+    /// Nested window via winit (development).
+    #[default]
+    Winit,
+    /// KMS/DRM session (GDM, tty). Requires libseat/logind and a seat.
+    Drm,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "compositor", about = "Minimal Smithay Wayland compositor")]
@@ -34,6 +46,14 @@ struct Cli {
     /// Shell pixel IPC socket name under `XDG_RUNTIME_DIR` (winit and headless; default on winit: derp-shell.sock).
     #[arg(long, value_name = "NAME")]
     shell_ipc_socket: Option<String>,
+
+    /// Graphics backend when not using `--headless`.
+    #[arg(long, value_enum, default_value_t = CompositorBackend::Winit)]
+    backend: CompositorBackend,
+
+    /// DRM node path (`--backend drm`). Overrides `DERP_DRM_DEVICE` and primary GPU detection.
+    #[arg(long, value_name = "PATH")]
+    drm_device: Option<PathBuf>,
 }
 
 fn shell_e2e_status_from_env() -> Option<PathBuf> {
@@ -80,12 +100,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let display: Display<CompositorState> = Display::new()?;
     let display_handle = display.handle();
 
+    let drm_session_setup = match cli.backend {
+        CompositorBackend::Drm => {
+            let (session, notifier) = LibSeatSession::new()?;
+            Some((session, notifier))
+        }
+        CompositorBackend::Winit => None,
+    };
+
     let init = CompositorInitOptions {
         socket: cli
             .socket
             .map(SocketConfig::Fixed)
             .unwrap_or(SocketConfig::Auto),
-        seat_name: "winit".to_string(),
+        seat_name: drm_session_setup
+            .as_ref()
+            .map(|(s, _)| s.seat())
+            .unwrap_or_else(|| "winit".to_string()),
         chrome_bridge: std::sync::Arc::new(NoOpChromeBridge),
         shell_ipc_socket: Some(
             cli.shell_ipc_socket
@@ -103,9 +134,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state,
         display_handle,
         command_child: None,
+        drm: None,
     };
 
-    winit::init_winit(&mut event_loop, &mut data)?;
+    match cli.backend {
+        CompositorBackend::Winit => {
+            #[cfg(feature = "winit-backend")]
+            {
+                winit::init_winit(&mut event_loop, &mut data)?;
+            }
+            #[cfg(not(feature = "winit-backend"))]
+            {
+                return Err("compositor built without winit-backend".into());
+            }
+        }
+        CompositorBackend::Drm => {
+            let (session, notifier) = drm_session_setup.expect("drm session");
+            drm::init_drm(
+                &mut event_loop,
+                &mut data,
+                session,
+                notifier,
+                cli.drm_device.clone(),
+            )?;
+        }
+    }
 
     if let Some(cmd) = cli.command {
         match compositor::sidecar::spawn_shell_command_line(&cmd) {

@@ -12,6 +12,7 @@ mod renderer_smoke;
 mod gpu_tests;
 
 mod desktop_stack;
+pub mod drm;
 mod grabs;
 mod handlers;
 mod input;
@@ -35,4 +36,6 @@ pub struct CalloopData {
     /// Populated when the binary is run with `--command` (e.g. `cef_host`). Killed when the
     /// nested compositor window closes or the event loop exits.
     pub command_child: Option<std::process::Child>,
+    /// Set when using `--backend drm` (KMS session).
+    pub drm: Option<crate::drm::DrmSession>,
 }

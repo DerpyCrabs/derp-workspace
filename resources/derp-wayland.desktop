@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Derp Compositor
+Comment=derp-workspace Wayland session (Smithay DRM + optional Solid/CEF shell)
+Exec=/usr/local/bin/derp-session
+Type=Application
+DesktopNames=Derp

@@ -80,6 +80,10 @@ fn dispatch_shell_message(
         ShellSetFullscreen { window_id, enabled } => {
             state.shell_set_window_fullscreen(window_id, enabled);
         }
+        ShellQuitCompositor => {
+            state.loop_signal.stop();
+            state.loop_signal.wakeup();
+        }
     }
 }
 

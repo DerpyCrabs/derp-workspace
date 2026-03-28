@@ -129,6 +129,7 @@ fn handle_one(
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
 
     let packet: Vec<u8> = match path {
+        "/session_quit" => shell_wire::encode_shell_quit_compositor(),
         "/spawn" => {
             let command = v
                 .get("command")

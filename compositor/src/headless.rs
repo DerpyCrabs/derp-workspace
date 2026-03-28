@@ -28,6 +28,7 @@ pub fn run(
         state,
         display_handle,
         command_child: None,
+        drm: None,
     };
 
     let dh = data.display_handle.clone();

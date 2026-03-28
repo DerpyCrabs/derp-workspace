@@ -450,6 +450,15 @@ function App() {
         >
           {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
         </button>
+        <button
+          type="button"
+          class="shell-exit-session-btn"
+          disabled={!shellHttpBase()}
+          title={shellHttpBase() ? 'Tell compositor to exit (ends session)' : 'Needs cef_host control server'}
+          onClick={() => void postShell('/session_quit', {})}
+        >
+          Exit session
+        </button>
         {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
       </div>
 

@@ -304,6 +304,27 @@
   cursor: wait;
 }
 
+.shell-exit-session-btn {
+  margin-top: 0.65rem;
+  padding: 0.45rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: hsl(0, 0%, 96%);
+  background: hsl(0, 55%, 42%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.45rem;
+  cursor: pointer;
+}
+
+.shell-exit-session-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.shell-exit-session-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .shell-spawn-status {
   margin: 0.85rem 0 0;
   font-size: 0.875rem;

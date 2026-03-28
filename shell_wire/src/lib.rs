@@ -20,10 +20,11 @@
 //!
 //! Shell → compositor (decoded by [`pop_message`]):
 //! - [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
-//!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`]
+//!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
+//!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session)
 //! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command)
 
-pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 4;
+pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 5;
 
 pub const MSG_FRAME: u32 = 1;
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -48,6 +49,8 @@ pub const MSG_SHELL_LIST_WINDOWS: u32 = 23;
 pub const MSG_SHELL_SET_GEOMETRY: u32 = 24;
 pub const MSG_SHELL_CLOSE: u32 = 25;
 pub const MSG_SHELL_SET_FULLSCREEN: u32 = 26;
+/// Shell → compositor: stop the compositor event loop (end session).
+pub const MSG_SHELL_QUIT_COMPOSITOR: u32 = 27;
 
 pub const PIXEL_FORMAT_BGRA8888: u32 = 0;
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
@@ -373,6 +376,15 @@ pub fn encode_shell_set_fullscreen(window_id: u32, enabled: bool) -> Vec<u8> {
     v
 }
 
+pub fn encode_shell_quit_compositor() -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_QUIT_COMPOSITOR.to_le_bytes());
+    v
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedMessage {
     Frame {
@@ -410,6 +422,7 @@ pub enum DecodedMessage {
         window_id: u32,
         enabled: bool,
     },
+    ShellQuitCompositor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -675,7 +688,8 @@ pub fn pop_compositor_to_shell_message(
         | MSG_SHELL_LIST_WINDOWS
         | MSG_SHELL_SET_GEOMETRY
         | MSG_SHELL_CLOSE
-        | MSG_SHELL_SET_FULLSCREEN => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_SET_FULLSCREEN
+        | MSG_SHELL_QUIT_COMPOSITOR => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -837,6 +851,12 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
                 window_id,
                 enabled: en != 0,
             }))
+        }
+        MSG_SHELL_QUIT_COMPOSITOR => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(Some(DecodedMessage::ShellQuitCompositor))
         }
         _ => Err(DecodeError::UnknownMsgType),
     }
@@ -1059,6 +1079,12 @@ mod tests {
             }
             _ => panic!("expected ShellSetFullscreen"),
         }
+
+        buf = encode_shell_quit_compositor();
+        assert!(matches!(
+            pop_message(&mut buf).unwrap(),
+            Some(DecodedMessage::ShellQuitCompositor)
+        ));
     }
 
     #[test]
