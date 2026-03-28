@@ -23,10 +23,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex, Once,
+        mpsc::{self, RecvTimeoutError},
+        Arc, Mutex, Once,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cef::{args::Args, rc::*, sys, *};
@@ -627,9 +628,39 @@ fn main() {
     let lh = ShellLoadHandler::new(Some(inject_js));
     let mut client = ShellClient::new(rh, lh, capture, ipc.clone());
 
+    // Compositor sends `OutputGeometry` as soon as the shell client connects. If we create the
+    // browser first, the first OSR paints use the CLI default (800×600) and stay visibly upscaled.
+    {
+        let deadline = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < deadline {
+            do_message_loop_work();
+            match shell_ipc_rx.recv_timeout(Duration::from_millis(5)) {
+                Ok(msg) => {
+                    let is_geo = matches!(
+                        &msg,
+                        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+                    );
+                    compositor_downlink::apply_message(msg, &browser_holder, &view_state);
+                    if is_geo {
+                        break;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        while let Ok(msg) = shell_ipc_rx.try_recv() {
+            compositor_downlink::apply_message(msg, &browser_holder, &view_state);
+        }
+    }
+
     let mut window_info = WindowInfo::default();
-    window_info.bounds.width = cli.width;
-    window_info.bounds.height = cli.height;
+    let (init_w, init_h) = view_state
+        .lock()
+        .map(|g| (g.dip_w, g.dip_h))
+        .unwrap_or((cli.width, cli.height));
+    window_info.bounds.width = init_w;
+    window_info.bounds.height = init_h;
     let window_info = window_info.set_as_windowless(0);
 
     let mut browser_settings = BrowserSettings::default();

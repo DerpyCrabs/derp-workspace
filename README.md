@@ -12,7 +12,7 @@ Rough split of responsibilities:
 
 **Native Wayland applications** remain first-class: they connect as ordinary clients. The compositor exposes enough structure (stable window/surface ids, geometry, stacking) so the **SolidJS shell can position native surfaces and draw HTML+CSS “decorations”** around them — title bars, shadows, tab strips, or full custom frames — without those apps needing to know about CEF.
 
-The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). **Shell → compositor** control messages include move (existing), **list windows**, **set geometry**, **close**, **fullscreen**, and **quit session** (`SHELL_PIXEL_PROTOCOL_VERSION` **6**, optional shm frame path + legacy socket frames); the Solid shell exposes these via HTTP control → shell socket where applicable.
+The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). **Shell → compositor** control messages include move (existing), **list windows**, **set geometry**, **close**, **fullscreen**, and **quit session** (optional shm frame path + inline socket frames); the Solid shell exposes these via HTTP control → shell socket where applicable.
 
 ---
 
@@ -112,7 +112,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | `scripts/install-system.sh` | Wrapper: `git pull` (optional), then `exec`s `scripts/install-system-run.sh` so post-pull script changes apply |
 | `scripts/install-system-run.sh` | Release build, npm `shell/dist`, install to `/usr/local` + GDM `.desktop` (run via `install-system.sh` or alone if repo already synced) |
 | `scripts/remote-install.sh` | Optional: run `install-system.sh` on another host over SSH (`scripts/remote-install.sample.md`, gitignored `remote-install.env`) |
-| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/quit/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **6**) |
+| `shell_wire/` | Length‑prefixed messages (`msg_type` + payload): BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/quit/list, compositor→shell output geometry, window events, pointer |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |

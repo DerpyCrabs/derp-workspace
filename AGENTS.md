@@ -71,7 +71,11 @@ Touch vs. pointer coordinate rules matter for **nested winit** vs **DRM**; keep 
 
 ## Shell / CEF OSR vs native surfaces
 
-The Solid UI is **windowless OSR** today: BGRA frames over `shell_wire` shm into a `MemoryRenderBuffer`, with optional **partial damage** when CEF supplies dirty rects (`MSG_FRAME_SHM_COMMIT` extension, protocol v7). If profiling shows this path is still CPU-bound at target resolution, the strategic forks are: **(1)** CEF as a real **Wayland client** (`CEF_HOST_USE_WAYLAND_PLATFORM`, rework pointer + `shell_uplink` + transparency/letterbox), or **(2)** **dmabuf/zero-copy** from CEF/ANGLE if a future build can export shareable buffers and the compositor gains an import path. Prefer measuring with **`DERP_PERF_SESSION=1`** (see `install-system.sh`) before large migrations.
+The Solid UI is **windowless OSR** today: BGRA frames over `shell_wire` shm into a `MemoryRenderBuffer`, with optional **partial damage** when CEF supplies dirty rects (`MSG_FRAME_SHM_COMMIT`).
+
+**`shell_wire`:** messages are `[u32 body_len][body]` with **`body` = `msg_type` + payload** — there is **no** separate protocol-version field. Any on-wire layout change is a breaking change: deploy **`compositor` and `cef_host` from the same tree/build** (`install-system-run.sh`); mismatched binaries will mis-decode or reject payloads.
+
+If profiling shows this path is still CPU-bound at target resolution, the strategic forks are: **(1)** CEF as a real **Wayland client** (`CEF_HOST_USE_WAYLAND_PLATFORM`, rework pointer + `shell_uplink` + transparency/letterbox), or **(2)** **dmabuf/zero-copy** from CEF/ANGLE if a future build can export shareable buffers and the compositor gains an import path. Prefer measuring with **`DERP_PERF_SESSION=1`** (see `install-system.sh`) before large migrations.
 
 ---
 
@@ -79,4 +83,5 @@ The Solid UI is **windowless OSR** today: BGRA frames over `shell_wire` shm into
 
 - Prefer **extending** existing input and `DesktopStack` paths over parallel one-off handlers.
 - Keep **install** behavior split: thin `install-system.sh` + `install-system-run.sh` so post-pull script updates apply without asking users to re-copy installers manually.
+- When changing **`shell_wire`** framing, treat it as breaking IPC (see **Shell / CEF** → `shell_wire`); keep **`compositor`** and **`cef_host`** in sync.
 - When debugging **gray screen / input / cursor**, start from **`compositor.log`** and **`derp_input`** lines, then libinput/kernel messages if coordinates look wrong.

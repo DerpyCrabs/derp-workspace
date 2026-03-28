@@ -16,6 +16,9 @@ pub struct OsrViewState {
     pub dip_h: i32,
     buffer_w: i32,
     buffer_h: i32,
+    /// Expected OSR bitmap size from compositor (physical output pixels); undersized paints trigger a nudge.
+    target_buf_w: i32,
+    target_buf_h: i32,
     /// Last time we nudged CEF after an undersized OSR paint (stuck low-res upscale in the compositor).
     last_undersized_nudge: Option<Instant>,
 }
@@ -27,7 +30,16 @@ impl OsrViewState {
             dip_h,
             buffer_w: dip_w,
             buffer_h: dip_h,
+            target_buf_w: dip_w,
+            target_buf_h: dip_h,
             last_undersized_nudge: None,
+        }
+    }
+
+    pub fn set_target_buffer(&mut self, w: i32, h: i32) {
+        if w > 0 && h > 0 {
+            self.target_buf_w = w;
+            self.target_buf_h = h;
         }
     }
 
@@ -46,7 +58,9 @@ impl OsrViewState {
         if self.dip_w <= 0 || self.dip_h <= 0 || buf_w <= 0 || buf_h <= 0 {
             return false;
         }
-        if buf_w * 100 >= self.dip_w * 97 && buf_h * 100 >= self.dip_h * 97 {
+        let tw = self.target_buf_w.max(1);
+        let th = self.target_buf_h.max(1);
+        if buf_w * 100 >= tw * 97 && buf_h * 100 >= th * 97 {
             return false;
         }
         let now = Instant::now();
@@ -122,5 +136,14 @@ mod tests {
         assert!(s.maybe_take_undersized_paint_nudge(800, 600, min));
         assert!(!s.maybe_take_undersized_paint_nudge(800, 600, min));
         assert!(!s.maybe_take_undersized_paint_nudge(1920, 1080, min));
+    }
+
+    #[test]
+    fn undersized_uses_target_buffer_not_dip() {
+        let mut s = OsrViewState::new(800, 600);
+        s.set_target_buffer(1600, 1200);
+        let min = Duration::from_millis(100);
+        assert!(s.maybe_take_undersized_paint_nudge(800, 600, min));
+        assert!(!s.maybe_take_undersized_paint_nudge(1600, 1200, min));
     }
 }

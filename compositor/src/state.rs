@@ -604,7 +604,10 @@ impl CompositorState {
         let Some((lw, lh)) = self.shell_output_logical_size() else {
             return;
         };
-        let pkt = shell_wire::encode_output_geometry(lw, lh);
+        let (pw, ph) = self.shell_window_physical_px;
+        let physical_w = u32::try_from(pw).unwrap_or(lw).max(1);
+        let physical_h = u32::try_from(ph).unwrap_or(lh).max(1);
+        let pkt = shell_wire::encode_output_geometry(lw, lh, physical_w, physical_h);
         self.shell_ipc_try_write(&pkt);
     }
 

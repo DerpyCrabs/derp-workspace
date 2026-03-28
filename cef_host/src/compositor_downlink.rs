@@ -42,11 +42,16 @@ pub fn apply_message(
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
             logical_w,
             logical_h,
+            physical_w,
+            physical_h,
         } => {
             if let Ok(mut g) = view_state.lock() {
                 g.dip_w = logical_w as i32;
                 g.dip_h = logical_h as i32;
-                g.set_buffer_size(logical_w as i32, logical_h as i32);
+                let pw = physical_w.max(1) as i32;
+                let ph = physical_h.max(1) as i32;
+                g.set_buffer_size(pw, ph);
+                g.set_target_buffer(pw, ph);
                 g.reset_undersized_nudge();
             }
             let Ok(guard) = browser.lock() else {
