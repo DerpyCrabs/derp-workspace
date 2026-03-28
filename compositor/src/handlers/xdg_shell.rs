@@ -61,7 +61,10 @@ impl XdgShellHandler for CompositorState {
             .expect("just registered");
 
         let window = Window::new_wayland_window(surface);
+        let wl = window.toplevel().unwrap().wl_surface().clone();
         self.space.map_element(window.clone(), (0, 0), false);
+
+        self.apply_fractional_scale_to_surface(&wl);
 
         self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
         self.notify_geometry_if_changed(&window);

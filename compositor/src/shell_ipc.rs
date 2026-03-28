@@ -68,6 +68,18 @@ fn dispatch_shell_message(
         ShellMoveBegin { window_id } => state.shell_move_begin(window_id),
         ShellMoveDelta { dx, dy } => state.shell_move_delta(dx, dy),
         ShellMoveEnd { window_id } => state.shell_move_end(window_id),
+        ShellListWindows => state.shell_reply_window_list(),
+        ShellSetGeometry {
+            window_id,
+            x,
+            y,
+            width,
+            height,
+        } => state.shell_set_window_geometry(window_id, x, y, width, height),
+        ShellClose { window_id } => state.shell_close_window(window_id),
+        ShellSetFullscreen { window_id, enabled } => {
+            state.shell_set_window_fullscreen(window_id, enabled);
+        }
     }
 }
 

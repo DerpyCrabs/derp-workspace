@@ -12,7 +12,7 @@ Rough split of responsibilities:
 
 **Native Wayland applications** remain first-class: they connect as ordinary clients. The compositor exposes enough structure (stable window/surface ids, geometry, stacking) so the **SolidJS shell can position native surfaces and draw HTML+CSS “decorations”** around them — title bars, shadows, tab strips, or full custom frames — without those apps needing to know about CEF.
 
-The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). Window‑chrome commands on the wire are still future work.
+The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). **Shell → compositor** control messages include move (existing), **list windows**, **set geometry**, **close**, and **fullscreen** (`SHELL_PIXEL_PROTOCOL_VERSION` **4**); Solid can grow buttons that send these over the same socket.
 
 ---
 
@@ -107,7 +107,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | Path | Role |
 |------|------|
 | `compositor/` | Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints, shell IPC listener (winit) |
-| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move commands, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **3**) |
+| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **4**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |
@@ -129,6 +129,16 @@ The compositor draws Wayland clients first, then **overlays** the latest shell f
 **Shell pointer input:** The overlay is not a Wayland surface, so the compositor **forwards** pointer move/button events over the same Unix socket (`MSG_COMPOSITOR_POINTER_MOVE` / `MSG_COMPOSITOR_POINTER_BUTTON` in [`shell_wire`]) for `cef_host` to inject via CEF OSR. `cef_host` uses a **`try_clone` read thread** so frame writes stay on a blocking socket.
 
 **Shell → native spawn:** `cef_host` serves `POST http://127.0.0.1:<port>/spawn` (loopback only) and forwards JSON `{"command":"…"}` as a `shell_wire` spawn message. The Solid shell uses an inline **command field** (not `window.prompt`): windowless CEF has no parent window for native JS dialogs. The compositor runs `sh -c` with **`WAYLAND_DISPLAY` set to the nested socket** only when **`DERP_ALLOW_SHELL_SPAWN=1`** (set automatically by **`scripts/run-nested.sh`**). The Solid app uses **`window.__DERP_SPAWN_URL`** (injected on load) for the **“Run native app in compositor”** button.
+
+### Known limitations (nested clients & GPU)
+
+**Warnings from `wayland.c` (e.g. in foot):** If you run a terminal such as **`foot`** against the nested socket, you may see messages like “compositor does not implement the primary selection interface”, “does not implement XDG activation”, “does not implement fractional scaling”, “does not implement server-side cursors”, “does not implement the xdg-toplevel-icon protocol”, “text input interface not implemented”, or “no decoration manager available”. Those come from the **client**, not from the compositor’s Rust code. They mean the compositor does not yet advertise those **optional** Wayland protocols (some of these are implemented in recent `compositor` builds; **`cargo build -p compositor`** so foot sees the current globals). Remaining warnings go away as more protocols are added (see roadmap **Phase 5**).
+
+**`Connection reset by peer`:** Usually the nested **`WAYLAND_DISPLAY` socket closed** (you closed the compositor window, the process exited, or the client was killed). It is not specific to foot.
+
+**Performance / `llvmpipe`:** Startup logs may show **OpenGL ES** using **`llvmpipe`** (software rasterization). That makes nested compositing very slow. Common causes: **nested EGL** on a **proprietary NVIDIA** stack with Mesa’s LLVMpipe fallback, or **EGL_BAD_ALLOC** / “failed to create dri2 screen” during device enumeration. Mitigations to try: run the parent session on **Mesa** where possible, use **integrated graphics** for the nested window, or adjust driver and compositor settings so the winit EGL context binds to a real GPU. Check logs for `GL Renderer:` after `renderer_gles2` initializes.
+
+**EGL `BAD_SURFACE` / blank nested window:** In nested mode the winit backend must **swap the EGL surface after each `bind()`**. Omitting `eglSwapBuffers` when the damage tracker skips drawing can leave the display in a bad state on some stacks, followed by **`Connection reset by peer`** for clients. Use a current `compositor` build; if you still see `BAD_SURFACE`, treat it like the `llvmpipe`/NVIDIA EGL issues above.
 
 ---
 

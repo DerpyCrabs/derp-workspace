@@ -11,6 +11,7 @@ mod renderer_smoke;
 #[cfg(all(test, feature = "gpu-tests"))]
 mod gpu_tests;
 
+mod desktop_stack;
 mod grabs;
 mod handlers;
 mod input;

@@ -152,6 +152,36 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            let list: Vec<_> = windows
+                .iter()
+                .map(|w| {
+                    json!({
+                        "window_id": w.window_id,
+                        "surface_id": w.surface_id,
+                        "x": w.x,
+                        "y": w.y,
+                        "width": w.w,
+                        "height": w.h,
+                        "title": &w.title,
+                        "app_id": &w.app_id,
+                    })
+                })
+                .collect();
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "window_list",
+                    "windows": list,
+                }),
+            );
+        }
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,

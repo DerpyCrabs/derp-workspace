@@ -15,10 +15,15 @@
 //! - [`MSG_OUTPUT_GEOMETRY`]: output logical size (matches OSR / DIP target)
 //! - [`MSG_WINDOW_MAPPED`], [`MSG_WINDOW_UNMAPPED`], [`MSG_WINDOW_GEOMETRY`], [`MSG_WINDOW_METADATA`], [`MSG_FOCUS_CHANGED`]
 //!
+//! **Privacy:** the compositor never sends native Wayland client pixels or buffer contents to the shell;
+//! only metadata, pointer routing, and shell→compositor **ingress** frames ([`MSG_FRAME`]) exist on this socket.
+//!
 //! Shell → compositor (decoded by [`pop_message`]):
-//! - [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`]
+//! - [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
+//!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`]
+//! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command)
 
-pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 3;
+pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 4;
 
 pub const MSG_FRAME: u32 = 1;
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -31,15 +36,24 @@ pub const MSG_WINDOW_UNMAPPED: u32 = 7;
 pub const MSG_WINDOW_GEOMETRY: u32 = 8;
 pub const MSG_WINDOW_METADATA: u32 = 9;
 pub const MSG_FOCUS_CHANGED: u32 = 10;
+/// Compositor → shell: snapshot of all mapped toplevels (reply to [`MSG_SHELL_LIST_WINDOWS`]).
+pub const MSG_WINDOW_LIST: u32 = 11;
 
 pub const MSG_SHELL_MOVE_BEGIN: u32 = 20;
 pub const MSG_SHELL_MOVE_DELTA: u32 = 21;
 pub const MSG_SHELL_MOVE_END: u32 = 22;
 
+/// Shell → compositor: request [`MSG_WINDOW_LIST`] reply.
+pub const MSG_SHELL_LIST_WINDOWS: u32 = 23;
+pub const MSG_SHELL_SET_GEOMETRY: u32 = 24;
+pub const MSG_SHELL_CLOSE: u32 = 25;
+pub const MSG_SHELL_SET_FULLSCREEN: u32 = 26;
+
 pub const PIXEL_FORMAT_BGRA8888: u32 = 0;
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
+pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
 
 fn frame_header_len() -> u32 {
     4 * 7
@@ -264,6 +278,101 @@ pub fn encode_shell_move_end(window_id: u32) -> Vec<u8> {
     v
 }
 
+/// One row in [`MSG_WINDOW_LIST`] / [`DecodedCompositorToShellMessage::WindowList`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellWindowSnapshot {
+    pub window_id: u32,
+    pub surface_id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub title: String,
+    pub app_id: String,
+}
+
+pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
+    let count = u32::try_from(windows.len()).ok()?;
+    if count > MAX_WINDOW_LIST_ENTRIES {
+        return None;
+    }
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    body.extend_from_slice(&MSG_WINDOW_LIST.to_le_bytes());
+    body.extend_from_slice(&count.to_le_bytes());
+    for w in windows {
+        let tb = w.title.as_bytes();
+        let ab = w.app_id.as_bytes();
+        if tb.len() > MAX_WINDOW_STRING_BYTES as usize || ab.len() > MAX_WINDOW_STRING_BYTES as usize {
+            return None;
+        }
+        let tl = u32::try_from(tb.len()).ok()?;
+        let al = u32::try_from(ab.len()).ok()?;
+        body.extend_from_slice(&w.window_id.to_le_bytes());
+        body.extend_from_slice(&w.surface_id.to_le_bytes());
+        body.extend_from_slice(&w.x.to_le_bytes());
+        body.extend_from_slice(&w.y.to_le_bytes());
+        body.extend_from_slice(&w.w.to_le_bytes());
+        body.extend_from_slice(&w.h.to_le_bytes());
+        body.extend_from_slice(&tl.to_le_bytes());
+        body.extend_from_slice(&al.to_le_bytes());
+        body.extend_from_slice(tb);
+        body.extend_from_slice(ab);
+    }
+    let body_len = u32::try_from(body.len()).ok()?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body.len());
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&body);
+    Some(v)
+}
+
+pub fn encode_shell_list_windows() -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_LIST_WINDOWS.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_set_geometry(window_id: u32, x: i32, y: i32, w: i32, h: i32) -> Vec<u8> {
+    let body_len = 28u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SET_GEOMETRY.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&x.to_le_bytes());
+    v.extend_from_slice(&y.to_le_bytes());
+    v.extend_from_slice(&w.to_le_bytes());
+    v.extend_from_slice(&h.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_close(window_id: u32) -> Vec<u8> {
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(16);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_CLOSE.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_set_fullscreen(window_id: u32, enabled: bool) -> Vec<u8> {
+    let body_len = 16u32;
+    let mut v = Vec::with_capacity(20);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SET_FULLSCREEN.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&(if enabled { 1u32 } else { 0 }).to_le_bytes());
+    v
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedMessage {
     Frame {
@@ -286,6 +395,21 @@ pub enum DecodedMessage {
     ShellMoveEnd {
         window_id: u32,
     },
+    ShellListWindows,
+    ShellSetGeometry {
+        window_id: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+    ShellClose {
+        window_id: u32,
+    },
+    ShellSetFullscreen {
+        window_id: u32,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +424,7 @@ pub enum DecodeError {
     BadUtf8Command,
     BadCompositorToShellPayload,
     BadWindowPayload,
+    BadWindowListPayload,
 }
 
 /// Messages the **compositor** writes on the shell Unix socket for `cef_host` to read.
@@ -349,6 +474,9 @@ pub enum DecodedCompositorToShellMessage {
     FocusChanged {
         surface_id: Option<u32>,
         window_id: Option<u32>,
+    },
+    WindowList {
+        windows: Vec<ShellWindowSnapshot>,
     },
 }
 
@@ -538,13 +666,85 @@ pub fn pop_compositor_to_shell_message(
                 window_id: if wid == 0 { None } else { Some(wid) },
             }))
         }
+        MSG_WINDOW_LIST => decode_window_list_compositor_body(body).map(Some),
         MSG_FRAME
         | MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
         | MSG_SHELL_MOVE_DELTA
-        | MSG_SHELL_MOVE_END => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_MOVE_END
+        | MSG_SHELL_LIST_WINDOWS
+        | MSG_SHELL_SET_GEOMETRY
+        | MSG_SHELL_CLOSE
+        | MSG_SHELL_SET_FULLSCREEN => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
+}
+
+fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
+    if body.len() < 12 {
+        return Err(DecodeError::BadWindowListPayload);
+    }
+    let ver = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    if ver != SHELL_PIXEL_PROTOCOL_VERSION {
+        return Err(DecodeError::BadProtocolVersion);
+    }
+    let msg = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    if msg != MSG_WINDOW_LIST {
+        return Err(DecodeError::UnknownMsgType);
+    }
+    let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    if count > MAX_WINDOW_LIST_ENTRIES as usize {
+        return Err(DecodeError::BadWindowListPayload);
+    }
+    let mut off = 12usize;
+    let mut windows = Vec::with_capacity(count);
+    for _ in 0..count {
+        if off + 32 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+        let surface_id = u32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
+        let x = i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
+        let y = i32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+        let w = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
+        let h = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
+        let title_len = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) as usize;
+        if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        off += 32;
+        let tend = off
+            .checked_add(title_len)
+            .ok_or(DecodeError::BadWindowListPayload)?;
+        let aend = tend
+            .checked_add(app_len)
+            .ok_or(DecodeError::BadWindowListPayload)?;
+        if aend > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let title = std::str::from_utf8(&body[off..tend])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        let app_id = std::str::from_utf8(&body[tend..aend])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off = aend;
+        windows.push(ShellWindowSnapshot {
+            window_id,
+            surface_id,
+            x,
+            y,
+            w,
+            h,
+            title,
+            app_id,
+        });
+    }
+    if off != body.len() {
+        return Err(DecodeError::BadWindowListPayload);
+    }
+    Ok(DecodedCompositorToShellMessage::WindowList { windows })
 }
 
 pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeError> {
@@ -593,6 +793,50 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
             }
             let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
             Ok(Some(DecodedMessage::ShellMoveEnd { window_id }))
+        }
+        MSG_SHELL_LIST_WINDOWS => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(Some(DecodedMessage::ShellListWindows))
+        }
+        MSG_SHELL_SET_GEOMETRY => {
+            if body.len() != 28 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            let x = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let y = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let width = i32::from_le_bytes(body[20..24].try_into().unwrap());
+            let height = i32::from_le_bytes(body[24..28].try_into().unwrap());
+            Ok(Some(DecodedMessage::ShellSetGeometry {
+                window_id,
+                x,
+                y,
+                width,
+                height,
+            }))
+        }
+        MSG_SHELL_CLOSE => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            Ok(Some(DecodedMessage::ShellClose { window_id }))
+        }
+        MSG_SHELL_SET_FULLSCREEN => {
+            if body.len() != 16 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            let en = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            if en > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(Some(DecodedMessage::ShellSetFullscreen {
+                window_id,
+                enabled: en != 0,
+            }))
         }
         _ => Err(DecodeError::UnknownMsgType),
     }
@@ -775,6 +1019,81 @@ mod tests {
             Some(DecodedMessage::ShellMoveDelta { dx, dy }) => assert_eq!((dx, dy), (3, -5)),
             _ => panic!("expected delta"),
         }
+    }
+
+    #[test]
+    fn round_trip_shell_chrome_commands() {
+        let mut buf = encode_shell_list_windows();
+        assert!(matches!(
+            pop_message(&mut buf).unwrap(),
+            Some(DecodedMessage::ShellListWindows)
+        ));
+
+        buf = encode_shell_set_geometry(3, 1, 2, 640, 480);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellSetGeometry {
+                window_id,
+                x,
+                y,
+                width,
+                height,
+            }) => {
+                assert_eq!((window_id, x, y, width, height), (3, 1, 2, 640, 480));
+            }
+            _ => panic!("expected ShellSetGeometry"),
+        }
+
+        buf = encode_shell_close(9);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellClose { window_id }) => assert_eq!(window_id, 9),
+            _ => panic!("expected ShellClose"),
+        }
+
+        buf = encode_shell_set_fullscreen(4, true);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellSetFullscreen {
+                window_id,
+                enabled,
+            }) => {
+                assert_eq!((window_id, enabled), (4, true));
+            }
+            _ => panic!("expected ShellSetFullscreen"),
+        }
+    }
+
+    #[test]
+    fn round_trip_window_list_compositor_to_shell() {
+        let wins = vec![
+            ShellWindowSnapshot {
+                window_id: 1,
+                surface_id: 10,
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 50,
+                title: "a".into(),
+                app_id: "b".into(),
+            },
+            ShellWindowSnapshot {
+                window_id: 2,
+                surface_id: 20,
+                x: 5,
+                y: 6,
+                w: 7,
+                h: 8,
+                title: "".into(),
+                app_id: "".into(),
+            },
+        ];
+        let enc = encode_window_list(&wins).unwrap();
+        let mut b = enc;
+        match pop_compositor_to_shell_message(&mut b).unwrap() {
+            Some(DecodedCompositorToShellMessage::WindowList { windows }) => {
+                assert_eq!(windows, wins);
+            }
+            _ => panic!("expected WindowList"),
+        }
+        assert!(b.is_empty());
     }
 
     /// Several length‑prefixed packets in one buffer (as the kernel may deliver them) must decode

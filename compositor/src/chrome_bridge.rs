@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 /// Protocol version for IPC evolution (`protocol_version` in messages).
-pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 3;
+pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 4;
 
 /// Stable compositor window id, metadata, and layout in Smithay logical space.
 ///

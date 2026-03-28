@@ -12,6 +12,7 @@ use smithay::wayland::selection::data_device::{
     ServerDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
 
 impl SeatHandler for CompositorState {
@@ -45,6 +46,8 @@ impl SeatHandler for CompositorState {
 }
 
 delegate_seat!(CompositorState);
+
+impl TabletSeatHandler for CompositorState {}
 
 impl SelectionHandler for CompositorState {
     type SelectionUserData = ();

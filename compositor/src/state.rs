@@ -22,9 +22,14 @@ use smithay::{
     utils::{Logical, Point, Size},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
+        cursor_shape::CursorShapeManagerState,
+        fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        shell::xdg::{
+            decoration::{XdgDecorationHandler, XdgDecorationState},
+            ToplevelSurface, XdgShellState,
+        },
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -84,6 +89,9 @@ pub struct CompositorState {
 
     pub compositor_state: WlCompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub xdg_decoration_state: XdgDecorationState,
+    pub fractional_scale_manager_state: FractionalScaleManagerState,
+    pub cursor_shape_manager_state: CursorShapeManagerState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<CompositorState>,
@@ -110,6 +118,8 @@ pub struct CompositorState {
     shell_move_window_id: Option<u32>,
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
+    /// Drives nested winit repaints when Wayland clients commit or on first frame.
+    pub(crate) needs_winit_redraw: bool,
 }
 
 impl CompositorState {
@@ -124,6 +134,9 @@ impl CompositorState {
 
         let compositor_state = WlCompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let cursor_shape_manager_state = CursorShapeManagerState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seat_state = SeatState::new();
@@ -154,6 +167,9 @@ impl CompositorState {
             socket_name,
             compositor_state,
             xdg_shell_state,
+            xdg_decoration_state,
+            fractional_scale_manager_state,
+            cursor_shape_manager_state,
             shm_state,
             output_manager_state,
             seat_state,
@@ -172,6 +188,7 @@ impl CompositorState {
             shell_move_window_id: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
+            needs_winit_redraw: true,
         };
 
         if let Some(name) = shell_ipc_socket {
@@ -230,6 +247,37 @@ impl CompositorState {
             .unwrap();
 
         socket_name
+    }
+
+    pub(crate) fn apply_fractional_scale_to_surface(&self, surface: &WlSurface) {
+        let scale = self
+            .space
+            .outputs()
+            .next()
+            .map(|o| o.current_scale().fractional_scale())
+            .unwrap_or(1.0);
+        smithay::wayland::compositor::with_states(surface, |states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+    }
+
+    pub(crate) fn refresh_all_surface_fractional_scales(&self) {
+        let scale = self
+            .space
+            .outputs()
+            .next()
+            .map(|o| o.current_scale().fractional_scale())
+            .unwrap_or(1.0);
+        for window in self.space.elements() {
+            let surf = window.toplevel().unwrap().wl_surface();
+            smithay::wayland::compositor::with_states(surf, |states| {
+                smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                    fs.set_preferred_scale(scale);
+                });
+            });
+        }
     }
 
     pub fn surface_under(
@@ -462,6 +510,7 @@ impl CompositorState {
         self.space
             .map_element(window.clone(), (loc.x + dx, loc.y + dy), true);
         self.notify_geometry_if_changed(&window);
+        self.needs_winit_redraw = true;
     }
 
     pub fn shell_move_end(&mut self, window_id: u32) {
@@ -470,9 +519,81 @@ impl CompositorState {
         }
     }
 
+    /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
+    pub fn shell_reply_window_list(&mut self) {
+        let windows: Vec<shell_wire::ShellWindowSnapshot> = self
+            .window_registry
+            .all_infos()
+            .into_iter()
+            .map(|i| shell_wire::ShellWindowSnapshot {
+                window_id: i.window_id,
+                surface_id: i.surface_id,
+                x: i.x,
+                y: i.y,
+                w: i.width,
+                h: i.height,
+                title: i.title,
+                app_id: i.app_id,
+            })
+            .collect();
+        if let Some(pkt) = shell_wire::encode_window_list(&windows) {
+            self.shell_ipc_try_write(&pkt);
+        }
+    }
+
+    pub fn shell_set_window_geometry(&mut self, window_id: u32, x: i32, y: i32, w: i32, h: i32) {
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        let tl = window.toplevel().unwrap();
+        tl.with_pending_state(|state| {
+            state.size = Some(smithay::utils::Size::from((w, h)));
+        });
+        tl.send_pending_configure();
+        self.space.map_element(window.clone(), (x, y), true);
+        self.notify_geometry_if_changed(&window);
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn shell_close_window(&mut self, window_id: u32) {
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        window.toplevel().unwrap().send_close();
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn shell_set_window_fullscreen(&mut self, window_id: u32, enabled: bool) {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        let tl = window.toplevel().unwrap();
+        tl.with_pending_state(|state| {
+            if enabled {
+                state.states.set(xdg_toplevel::State::Fullscreen);
+            } else {
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+                state.fullscreen_output = None;
+            }
+        });
+        tl.send_pending_configure();
+        self.needs_winit_redraw = true;
+    }
+
     pub fn clear_shell_frame(&mut self) {
         self.shell_has_frame = false;
         self.shell_view_px = None;
+        self.needs_winit_redraw = true;
     }
 
     /// Letterboxed shell in **output-local logical** pixels `(ox, oy, cw, ch)`.
@@ -577,6 +698,7 @@ impl CompositorState {
         }
         self.shell_has_frame = true;
         self.shell_view_px = Some((width, height));
+        self.needs_winit_redraw = true;
         if let Some(ref path) = self.shell_e2e_status_path {
             write_shell_e2e_frame_status(path, w, h, stride, pixels);
         }
@@ -708,6 +830,39 @@ fn write_shell_e2e_screenshot_png(path: &Path, w: i32, h: i32, stride: u32, pixe
         tracing::warn!(?e, dst = ?path, "shell e2e: failed to finalize screenshot png");
     }
 }
+
+impl XdgDecorationHandler for CompositorState {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+
+    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode)
+    {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+}
+
+impl FractionalScaleHandler for CompositorState {}
+
+smithay::delegate_xdg_decoration!(CompositorState);
+smithay::delegate_fractional_scale!(CompositorState);
+smithay::delegate_cursor_shape!(CompositorState);
 
 #[derive(Default)]
 pub struct ClientState {

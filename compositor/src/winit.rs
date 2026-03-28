@@ -3,19 +3,28 @@ use std::time::Duration;
 use smithay::{
     backend::{
         renderer::{
-            damage::OutputDamageTracker,
-            element::{memory::MemoryRenderBufferRenderElement, Kind},
-            gles::GlesRenderer,
+            damage::{Error as OutputDamageError, OutputDamageTracker, RenderOutputResult},
+            element::{
+                memory::MemoryRenderBufferRenderElement,
+                AsRenderElements, Kind,
+            },
+            gles::{GlesError, GlesRenderer},
+            Renderer,
         },
         winit::{self, WinitEvent},
     },
-    desktop::Window,
+    desktop::{
+        space::space_render_elements,
+        Window,
+    },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Point, Rectangle, Size, Transform},
+    utils::{Physical, Point, Rectangle, Size, Transform},
 };
 
-use crate::{shell_ipc, shell_letterbox, CalloopData, CompositorState};
+use crate::{
+    desktop_stack::DesktopStack, shell_ipc, shell_letterbox, CalloopData, CompositorState,
+};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
@@ -24,6 +33,8 @@ pub fn init_winit(
     let display_handle = &mut data.display_handle;
     let state = &mut data.state;
 
+    // Default Smithay attributes (`vsync: false`): nested EGL + vsync-on has stalled or confused
+    // some host compositor + driver stacks; post-swap `buffer_age()` caused BAD_SURFACE/context loss.
     let (mut backend, winit) = winit::init()?;
 
     let mode = Mode {
@@ -79,6 +90,8 @@ pub fn init_winit(
                         None,
                     );
                     state.send_shell_output_geometry();
+                    state.refresh_all_surface_fractional_scales();
+                    state.needs_winit_redraw = true;
                 }
                 WinitEvent::Input(event) => {
                     // Keep in sync with winit’s CursorMoved denominator (`inner_size` at event time).
@@ -90,10 +103,19 @@ pub fn init_winit(
                     shell_ipc::drain_shell_stream(state);
 
                     let size = backend.window_size();
-                    let damage = Rectangle::from_size(size);
 
-                    {
+                    enum PendingSubmit {
+                        None,
+                        Damage(Vec<Rectangle<i32, Physical>>),
+                        Full,
+                    }
+
+                    let submit = {
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
+                        // Never call `backend.buffer_age()` before `bind()` (nested EGL BAD_SURFACE).
+                        // We also avoid `buffer_age()` after `submit`: same class of failures on some drivers.
+                        // Smithay: treat age `0` as full repaint — correct, slightly more GPU work.
+                        let buffer_age = 0usize;
                         let out_size = output.current_mode().map(|m| m.size).unwrap_or(size);
 
                         // Letterbox in **output logical** space; physical `location` matches Smithay’s
@@ -141,40 +163,100 @@ pub fn init_winit(
                             }
                         }
 
-                        smithay::desktop::space::render_output::<
-                            _,
-                            MemoryRenderBufferRenderElement<GlesRenderer>,
-                            Window,
-                            _,
-                        >(
-                            &output,
+                        // Smithay `render_output` prepends `custom_elements`, so index 0 is **frontmost**.
+                        // Our CEF/shell plane must be **behind** Wayland toplevels so OSR never composites
+                        // over (or “shows through” onto) native client pixels — build the list explicitly.
+                        let render_res: Result<
+                            RenderOutputResult<'_>,
+                            OutputDamageError<GlesError>,
+                        > = match space_render_elements(
                             renderer,
-                            &mut framebuffer,
-                            1.0,
-                            0,
                             [&state.space],
-                            custom.as_slice(),
-                            &mut damage_tracker,
-                            [0.1, 0.1, 0.1, 1.0],
-                        )
-                        .unwrap();
-                    }
-                    backend.submit(Some(&[damage])).unwrap();
-
-                    state.space.elements().for_each(|window| {
-                        window.send_frame(
                             &output,
-                            state.start_time.elapsed(),
-                            Some(Duration::ZERO),
-                            |_, _| Some(output.clone()),
-                        )
-                    });
+                            1.0,
+                        ) {
+                            Ok(space_els) => {
+                                let mut render_elements: Vec<
+                                    DesktopStack<
+                                        '_,
+                                        GlesRenderer,
+                                        <Window as AsRenderElements<GlesRenderer>>::RenderElement,
+                                        MemoryRenderBufferRenderElement<GlesRenderer>,
+                                    >,
+                                > = Vec::with_capacity(space_els.len() + custom.len());
+                                render_elements
+                                    .extend(space_els.into_iter().map(DesktopStack::Space));
+                                render_elements
+                                    .extend(custom.iter().map(DesktopStack::Shell));
+
+                                damage_tracker.render_output(
+                                    renderer,
+                                    &mut framebuffer,
+                                    buffer_age,
+                                    &render_elements,
+                                    [0.1, 0.1, 0.1, 1.0],
+                                )
+                            }
+                            Err(e) => Err(e.into()),
+                        };
+
+                        match render_res {
+                            Ok(result) => {
+                                if let Some(damage) = result.damage {
+                                    PendingSubmit::Damage(damage.clone())
+                                } else {
+                                    let _ = renderer.cleanup_texture_cache();
+                                    PendingSubmit::None
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(?e, "render_output");
+                                PendingSubmit::Full
+                            }
+                        }
+                    };
+
+                    let content_advanced = match &submit {
+                        PendingSubmit::Damage(d) => !d.is_empty(),
+                        PendingSubmit::Full => true,
+                        PendingSubmit::None => false,
+                    };
+
+                    // Always swap after `bind()`/`render_output`. Use partial damage only when the
+                    // tracker produced non-empty regions; `None` means full-surface swap (Smithay).
+                    let damage_for_swap: Option<&[Rectangle<i32, Physical>]> = match &submit {
+                        PendingSubmit::Damage(d) if !d.is_empty() => Some(d.as_slice()),
+                        _ => None,
+                    };
+                    let submitted = match backend.submit(damage_for_swap) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            tracing::warn!(?e, "winit submit");
+                            false
+                        }
+                    };
+                    if submitted && content_advanced {
+                        state.space.elements().for_each(|window| {
+                            window.send_frame(
+                                &output,
+                                state.start_time.elapsed(),
+                                Some(Duration::ZERO),
+                                |_, _| Some(output.clone()),
+                            )
+                        });
+                    }
 
                     state.space.refresh();
                     state.popups.cleanup();
                     let _ = display.flush_clients();
 
-                    backend.window().request_redraw();
+                    // Do not tie the redraw loop to `shell_has_frame` — that forces compositing every
+                    // winit tick while Chrome has ever sent a frame. New frames set `needs_winit_redraw`.
+                    let schedule_next = content_advanced || state.needs_winit_redraw;
+                    state.needs_winit_redraw = false;
+                    if schedule_next {
+                        backend.window().request_redraw();
+                    }
                 }
                 WinitEvent::CloseRequested => {
                     crate::sidecar::terminate_sidecar(&mut data.command_child);
