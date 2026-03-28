@@ -12,7 +12,7 @@ mod compositor_downlink;
 mod control_server;
 
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::Path,
     sync::{
@@ -343,7 +343,7 @@ fn main() {
         std::process::exit(1);
     });
     let inject_js = format!(
-        r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";"#,
+        r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";window.__DERP_SHELL_HTTP="http://127.0.0.1:{port}";"#,
         port = port
     );
 
@@ -360,7 +360,11 @@ fn main() {
             match read_stream.read(&mut tmp) {
                 Ok(0) => break,
                 Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                Err(_) => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    eprintln!("cef_host: compositor socket read error: {e}");
+                    break;
+                }
             }
             loop {
                 match shell_wire::pop_compositor_to_shell_message(&mut buf) {
@@ -368,7 +372,10 @@ fn main() {
                         let _ = shell_ipc_tx.send(msg);
                     }
                     Ok(None) => break,
-                    Err(_) => {
+                    Err(e) => {
+                        eprintln!(
+                            "cef_host: compositor message decode error: {e:?}, dropping buffer"
+                        );
                         buf.clear();
                         break;
                     }
@@ -389,10 +396,8 @@ fn main() {
 
     let mut browser_settings = BrowserSettings::default();
     browser_settings.windowless_frame_rate = 60;
-    // Default `BrowserSettings` is zero-initialized; `background_color == 0` is fully transparent
-    // in windowless mode, so the OSR buffer stays cleared to black until (if ever) pixels are
-    // composited — screenshots and the compositor look "nothing drawn".
-    browser_settings.background_color = 0xFF_FF_FF_FF;
+    // Transparent background so native windows show through undecorated areas of the shell overlay.
+    browser_settings.background_color = 0x0000_0000;
 
     browser_host_create_browser(
         Some(&window_info),

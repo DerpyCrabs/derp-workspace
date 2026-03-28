@@ -1,16 +1,125 @@
-import { createMemo, createSignal, onCleanup, onMount, For } from 'solid-js'
+import { createMemo, createSignal, onCleanup, onMount, For, Show } from 'solid-js'
 import './App.css'
+
+/** Keep in sync with compositor `SHELL_TITLEBAR_HEIGHT` / `SHELL_BORDER_THICKNESS`. */
+export const CHROME_TITLEBAR_PX = 28
+export const CHROME_BORDER_PX = 4
 
 declare global {
   interface Window {
     /** Injected by `cef_host` after load (`http://127.0.0.1:…/spawn`). */
     __DERP_SPAWN_URL?: string
+    __DERP_SHELL_HTTP?: string
   }
 }
 
-/** Top / left ruler insets — must match `.shell-ruler--top` / `.shell-ruler--left` in `App.css`. */
+type DerpShellDetail =
+  | { type: 'output_geometry'; logical_width: number; logical_height: number }
+  | {
+      type: 'window_mapped'
+      window_id: number
+      surface_id: number
+      x: number
+      y: number
+      width: number
+      height: number
+      title: string
+      app_id: string
+    }
+  | { type: 'window_unmapped'; window_id: number }
+  | {
+      type: 'window_geometry'
+      window_id: number
+      surface_id: number
+      x: number
+      y: number
+      width: number
+      height: number
+    }
+  | {
+      type: 'window_metadata'
+      window_id: number
+      surface_id: number
+      title: string
+      app_id: string
+    }
+  | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
+
+type DerpWindow = {
+  window_id: number
+  surface_id: number
+  x: number
+  y: number
+  width: number
+  height: number
+  title: string
+  app_id: string
+}
+
+function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
+  const next = new Map(map)
+  switch (detail.type) {
+    case 'window_mapped': {
+      next.set(detail.window_id, {
+        window_id: detail.window_id,
+        surface_id: detail.surface_id,
+        x: detail.x,
+        y: detail.y,
+        width: detail.width,
+        height: detail.height,
+        title: detail.title,
+        app_id: detail.app_id,
+      })
+      break
+    }
+    case 'window_unmapped':
+      next.delete(detail.window_id)
+      break
+    case 'window_geometry': {
+      const w = next.get(detail.window_id)
+      if (w) {
+        next.set(detail.window_id, {
+          ...w,
+          x: detail.x,
+          y: detail.y,
+          width: detail.width,
+          height: detail.height,
+        })
+      }
+      break
+    }
+    case 'window_metadata': {
+      const w = next.get(detail.window_id)
+      if (w) {
+        next.set(detail.window_id, { ...w, title: detail.title, app_id: detail.app_id })
+      }
+      break
+    }
+    default:
+      break
+  }
+  return next
+}
+
+/** Ruler insets — must match `.shell-ruler--top` / `.shell-ruler--left` in `App.css`. */
 const RULER_GUTTER_X = 28
 const RULER_GUTTER_Y = 22
+
+function shellHttpBase(): string | null {
+  const u = window.__DERP_SHELL_HTTP
+  if (u && u.startsWith('http://127.0.0.1:')) return u.replace(/\/$/, '')
+  return null
+}
+
+async function postShell(path: string, body: object): Promise<void> {
+  const base = shellHttpBase()
+  if (!base) return
+  await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
 
 function App() {
   const [hue, setHue] = createSignal(210)
@@ -20,18 +129,19 @@ function App() {
   const [btnPointerDowns, setBtnPointerDowns] = createSignal(0)
   const [spawnClicks, setSpawnClicks] = createSignal(0)
   const [spawnUrlLine, setSpawnUrlLine] = createSignal('')
-  /// Command passed to compositor `sh -c` (no `window.prompt` — windowless CEF cannot show dialogs).
   const [spawnCommand, setSpawnCommand] = createSignal('foot')
 
-  /** Last position the engine delivered (`clientX` / `clientY`) — compare to the OS cursor. */
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
-  /** Same pointer, relative to `<main class="shell-root">` (content box). */
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
   const [viewportCss, setViewportCss] = createSignal({ w: 0, h: 0 })
+  const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
+  const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
+  const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
 
   const rulerStepPx = 100
 
-  /** Viewport X values drawn on the top ruler (that strip starts at clientX = RULER_GUTTER_X). */
+  const windowsList = createMemo(() => Array.from(windows().values()))
+
   const horizontalRulerTicks = createMemo(() => {
     const w = viewportCss().w
     if (w <= 0) return [] as number[]
@@ -42,7 +152,6 @@ function App() {
     return out
   })
 
-  /** Viewport Y values drawn on the left ruler (that strip starts at clientY = RULER_GUTTER_Y). */
   const verticalRulerTicks = createMemo(() => {
     const h = viewportCss().h
     if (h <= 0) return [] as number[]
@@ -56,6 +165,45 @@ function App() {
   let timer: ReturnType<typeof setInterval> | undefined
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
+
+  let moveDrag: { windowId: number; lastX: number; lastY: number } | null = null
+
+  const endWindowMove = (windowId: number) => {
+    moveDrag = null
+    void postShell('/window_move_end', { window_id: windowId })
+  }
+
+  const onTitlebarPointerDown = (e: PointerEvent, windowId: number) => {
+    e.stopPropagation()
+    const base = shellHttpBase()
+    if (!base) return
+    moveDrag = { windowId, lastX: e.clientX, lastY: e.clientY }
+    void postShell('/window_move_begin', { window_id: windowId })
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  const onTitlebarPointerMove = (e: PointerEvent) => {
+    const st = moveDrag
+    if (!st) return
+    const dx = e.clientX - st.lastX
+    const dy = e.clientY - st.lastY
+    st.lastX = e.clientX
+    st.lastY = e.clientY
+    if (dx !== 0 || dy !== 0) {
+      void postShell('/window_move_delta', { dx, dy })
+    }
+  }
+
+  const onTitlebarPointerUp = (e: PointerEvent, windowId: number) => {
+    if (moveDrag?.windowId === windowId) {
+      try {
+        ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      endWindowMove(windowId)
+    }
+  }
 
   onMount(() => {
     timer = setInterval(() => {
@@ -71,6 +219,22 @@ function App() {
     }
     refreshSpawnUrl()
     spawnPoll = setInterval(refreshSpawnUrl, 400)
+
+    const onDerpShell = (ev: Event) => {
+      const ce = ev as CustomEvent<DerpShellDetail>
+      const d = ce.detail
+      if (!d || typeof d !== 'object' || !('type' in d)) return
+      if (d.type === 'focus_changed') {
+        setFocusedWindowId(d.window_id ?? null)
+        return
+      }
+      if (d.type === 'output_geometry') {
+        setOutputGeom({ w: d.logical_width, h: d.logical_height })
+        return
+      }
+      setWindows((m) => applyDetail(m, d))
+    }
+    window.addEventListener('derp-shell', onDerpShell as EventListener)
 
     const syncViewport = () =>
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
@@ -92,6 +256,7 @@ function App() {
     window.addEventListener('resize', syncViewport, { passive: true })
 
     onCleanup(() => {
+      window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('resize', syncViewport)
     })
@@ -134,6 +299,9 @@ function App() {
     }
   }
 
+  const th = CHROME_TITLEBAR_PX
+  const bd = CHROME_BORDER_PX
+
   return (
     <main
       class="shell-root"
@@ -143,9 +311,92 @@ function App() {
       style={{ '--shell-hue': `${hue()}` }}
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
     >
+      <For each={windowsList()}>
+        {(win) => {
+          const focused = () => focusedWindowId() === win.window_id
+          const x = win.x
+          const y = win.y
+          const w = win.width
+          const h = win.height
+          return (
+            <div
+              class="shell-window-chrome"
+              classList={{ 'shell-window-chrome--focused': focused() }}
+              style={{
+                position: 'fixed',
+                left: `${x - bd}px`,
+                top: `${y - th - bd}px`,
+                width: `${w + bd * 2}px`,
+                height: `${h + th + bd * 2}px`,
+                'box-sizing': 'border-box',
+                'pointer-events': 'none',
+              }}
+            >
+              <div
+                class="shell-titlebar"
+                style={{
+                  position: 'absolute',
+                  left: `${bd}px`,
+                  top: `${bd}px`,
+                  width: `${w}px`,
+                  height: `${th}px`,
+                  'pointer-events': 'auto',
+                }}
+                onPointerDown={(e) => onTitlebarPointerDown(e, win.window_id)}
+                onPointerMove={onTitlebarPointerMove}
+                onPointerUp={(e) => onTitlebarPointerUp(e, win.window_id)}
+                onPointerCancel={(e) => onTitlebarPointerUp(e, win.window_id)}
+              >
+                <span class="shell-titlebar__text">{win.title || win.app_id || `window ${win.window_id}`}</span>
+              </div>
+              <div
+                class="shell-border shell-border--left"
+                style={{
+                  position: 'absolute',
+                  left: '0',
+                  top: `${bd + th}px`,
+                  width: `${bd}px`,
+                  height: `${h}px`,
+                }}
+              />
+              <div
+                class="shell-border shell-border--right"
+                style={{
+                  position: 'absolute',
+                  left: `${bd + w}px`,
+                  top: `${bd + th}px`,
+                  width: `${bd}px`,
+                  height: `${h}px`,
+                }}
+              />
+              <div
+                class="shell-border shell-border--bottom"
+                style={{
+                  position: 'absolute',
+                  left: '0',
+                  top: `${bd + th + h}px`,
+                  width: `${w + bd * 2}px`,
+                  height: `${bd}px`,
+                }}
+              />
+            </div>
+          )
+        }}
+      </For>
+
       <div class="shell-panel">
         <h1 class="shell-title">derp shell</h1>
         <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
+        <Show when={outputGeom()}>
+          {(g) => (
+            <p class="shell-output-geom">
+              Compositor output (logical):{' '}
+              <strong>
+                {g().w}×{g().h}
+              </strong>
+            </p>
+          )}
+        </Show>
         <p class="shell-input-hud" aria-live="polite">
           <span class="shell-input-hud__label">input debug</span>
           <span class="shell-input-hud__row">
@@ -154,6 +405,9 @@ function App() {
               {viewportCss().w}×{viewportCss().h}
             </strong>{' '}
             · devicePixelRatio <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
+          </span>
+          <span class="shell-input-hud__row">
+            Windows (native): <strong>{windowsList().length}</strong>
           </span>
           <span class="shell-input-hud__row">
             Pointer (clientX/Y):{' '}

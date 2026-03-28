@@ -14,6 +14,7 @@ mod gpu_tests;
 mod grabs;
 mod handlers;
 mod input;
+mod shell_encode;
 mod shell_ipc;
 mod shell_letterbox;
 mod shell_overlay;

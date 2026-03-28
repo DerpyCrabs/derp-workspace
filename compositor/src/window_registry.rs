@@ -99,6 +99,14 @@ impl WindowRegistry {
         let wid = self.by_surface.get(&surface_id).copied()?;
         self.records.get(&wid).cloned()
     }
+
+    pub fn surface_id_for_window(&self, window_id: WindowId) -> Option<u32> {
+        self.records.get(&window_id).map(|i| i.surface_id)
+    }
+
+    pub fn all_infos(&self) -> Vec<WindowInfo> {
+        self.records.values().cloned().collect()
+    }
 }
 
 #[cfg(test)]

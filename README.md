@@ -107,7 +107,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | Path | Role |
 |------|------|
 | `compositor/` | Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints, shell IPC listener (winit) |
-| `shell_wire/` | Length‑prefixed messages: BGRA frames + optional `MSG_SPAWN_WAYLAND_CLIENT` (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **2**) |
+| `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move commands, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **3**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |

@@ -37,6 +37,11 @@ use crate::{
     CalloopData,
 };
 
+/// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
+pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
+/// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
+pub const SHELL_BORDER_THICKNESS: i32 = 4;
+
 #[derive(Debug, Clone)]
 pub enum SocketConfig {
     Auto,
@@ -101,6 +106,8 @@ pub struct CompositorState {
     pub(crate) shell_window_physical_px: (i32, i32),
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
+    /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
+    shell_move_window_id: Option<u32>,
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
 }
@@ -162,6 +169,7 @@ impl CompositorState {
             shell_view_px: None,
             shell_window_physical_px: (1, 1),
             shell_pointer_norm: None,
+            shell_move_window_id: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
         };
@@ -252,9 +260,213 @@ impl CompositorState {
             .set_geometry(surface_id, loc.x, loc.y, size.w, size.h);
         if let Some(true) = changed {
             if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
-                self.chrome_bridge
-                    .notify(ChromeEvent::WindowGeometryChanged { info });
+                self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
+        }
+    }
+
+    /// Notify [`ChromeBridge`] and push the same event on the shell IPC socket (if connected).
+    pub fn shell_emit_chrome_event(&mut self, event: ChromeEvent) {
+        if let Some(p) = crate::shell_encode::chrome_event_to_shell_packet(&event) {
+            self.shell_ipc_try_write(&p);
+        }
+        self.chrome_bridge.notify(event);
+    }
+
+    /// Logical size matching [`Space::output_geometry`] / pointer normalization (not raw `current_mode` when they differ).
+    pub fn shell_output_logical_size(&self) -> Option<(u32, u32)> {
+        let output = self.space.outputs().next()?;
+        let geo = self.space.output_geometry(output)?;
+        let w = u32::try_from(geo.size.w).ok()?.max(1);
+        let h = u32::try_from(geo.size.h).ok()?.max(1);
+        Some((w, h))
+    }
+
+    pub fn send_shell_output_geometry(&mut self) {
+        let Some((lw, lh)) = self.shell_output_logical_size() else {
+            return;
+        };
+        let pkt = shell_wire::encode_output_geometry(lw, lh);
+        self.shell_ipc_try_write(&pkt);
+    }
+
+    /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
+    pub fn shell_on_shell_client_connected(&mut self) {
+        self.send_shell_output_geometry();
+        for info in self.window_registry.all_infos() {
+            if let Some(p) = shell_wire::encode_window_mapped(
+                info.window_id,
+                info.surface_id,
+                info.x,
+                info.y,
+                info.width,
+                info.height,
+                &info.title,
+                &info.app_id,
+            ) {
+                self.shell_ipc_try_write(&p);
+            }
+        }
+        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus())
+        {
+            Some(surf) => {
+                let sid = surf.id().protocol_id();
+                let wid = self.window_registry.window_id_for_surface(sid);
+                (Some(sid), wid)
+            }
+            None => (None, None),
+        };
+        let pkt = shell_wire::encode_focus_changed(surface_id, window_id);
+        self.shell_ipc_try_write(&pkt);
+    }
+
+    fn shell_point_in_decoration_chrome(
+        &self,
+        px: f64,
+        py: f64,
+        x0: i32,
+        y0: i32,
+        w: i32,
+        h: i32,
+    ) -> bool {
+        let th = SHELL_TITLEBAR_HEIGHT;
+        let b = SHELL_BORDER_THICKNESS;
+        let top = y0.saturating_sub(th);
+        if px >= x0 as f64 && px < (x0 + w) as f64 && py >= top as f64 && py < y0 as f64 {
+            return true;
+        }
+        if px >= (x0 - b) as f64
+            && px < (x0 + w + b) as f64
+            && py >= (y0 + h) as f64
+            && py < (y0 + h + b) as f64
+        {
+            return true;
+        }
+        if px >= (x0 - b) as f64 && px < x0 as f64 && py >= y0 as f64 && py < (y0 + h) as f64 {
+            return true;
+        }
+        if px >= (x0 + w) as f64
+            && px < (x0 + w + b) as f64
+            && py >= y0 as f64
+            && py < (y0 + h) as f64
+        {
+            return true;
+        }
+        false
+    }
+
+    /// True if pointer should be injected into the CEF shell (desktop + decoration chrome), not the native client.
+    ///
+    /// Does **not** depend on whether a shell BGRA frame has arrived yet — without a frame we still pick output-normalized
+    /// coordinates so the shell process can move the OSR cursor before the first paint.
+    pub fn shell_pointer_route_to_cef(&self, pos: Point<f64, Logical>) -> bool {
+        let px = pos.x;
+        let py = pos.y;
+
+        for window in self.space.elements().rev() {
+            let Some(loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            let x0 = loc.x;
+            let y0 = loc.y;
+            let w = geo.size.w;
+            let h = geo.size.h;
+
+            if self.shell_point_in_decoration_chrome(px, py, x0, y0, w, h) {
+                return true;
+            }
+            if px >= x0 as f64 && px < (x0 + w) as f64 && py >= y0 as f64 && py < (y0 + h) as f64 {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Map normalized pointer (`nx`, `ny`) to OSR buffer pixels for compositor → shell IPC.
+    ///
+    /// Prefers letterbox mapping when [`Self::shell_has_frame`] and buffer size are known; otherwise assumes buffer
+    /// matches output logical size (1:1), which matches `MSG_OUTPUT_GEOMETRY` before the first paint.
+    pub fn shell_pointer_buffer_pixels(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
+        if let Some(xy) = self.shell_pointer_view_px_norm(nx, ny) {
+            return Some(xy);
+        }
+        let (w, h) = self.shell_output_logical_size()?;
+        Some(crate::shell_letterbox::norm_to_buffer_px(nx, ny, w, h))
+    }
+
+    pub(crate) fn shell_pointer_norm_from_global(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(f64, f64)> {
+        let output = self.space.outputs().next()?;
+        let output_geo = self.space.output_geometry(output)?;
+        let local = pos - output_geo.loc.to_f64();
+        Some(
+            if let Some((ox, oy, cw, ch)) = self.shell_letterbox_logical(output_geo.size) {
+                let pw = cw.max(1) as f64;
+                let ph = ch.max(1) as f64;
+                (
+                    ((local.x - ox as f64) / pw).clamp(0.0, 1.0),
+                    ((local.y - oy as f64) / ph).clamp(0.0, 1.0),
+                )
+            } else {
+                let gw = output_geo.size.w.max(1) as f64;
+                let gh = output_geo.size.h.max(1) as f64;
+                (
+                    (local.x / gw).clamp(0.0, 1.0),
+                    (local.y / gh).clamp(0.0, 1.0),
+                )
+            },
+        )
+    }
+
+    pub fn find_window_by_surface_id(&self, surface_id: u32) -> Option<Window> {
+        self.space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .map(|t| t.wl_surface().id().protocol_id() == surface_id)
+                    .unwrap_or(false)
+            })
+            .cloned()
+    }
+
+    pub fn shell_move_begin(&mut self, window_id: u32) {
+        if self
+            .window_registry
+            .surface_id_for_window(window_id)
+            .is_none()
+        {
+            return;
+        }
+        self.shell_move_window_id = Some(window_id);
+    }
+
+    pub fn shell_move_delta(&mut self, dx: i32, dy: i32) {
+        let Some(wid) = self.shell_move_window_id else {
+            return;
+        };
+        let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
+            self.shell_move_window_id = None;
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            self.shell_move_window_id = None;
+            return;
+        };
+        let Some(loc) = self.space.element_location(&window) else {
+            return;
+        };
+        self.space
+            .map_element(window.clone(), (loc.x + dx, loc.y + dy), true);
+        self.notify_geometry_if_changed(&window);
+    }
+
+    pub fn shell_move_end(&mut self, window_id: u32) {
+        if self.shell_move_window_id == Some(window_id) {
+            self.shell_move_window_id = None;
         }
     }
 
@@ -311,10 +523,15 @@ impl CompositorState {
     /// Send compositor → `cef_host` message (pointer routing). No-op if shell IPC is disconnected.
     pub fn shell_ipc_try_write(&mut self, packet: &[u8]) {
         if let Some(ref mut stream) = self.shell_ipc_client {
+            // Shell client uses a **blocking** socket so the whole frame/packet is delivered or
+            // fails atomically (no truncated length prefix).
             if let Err(e) = stream.write_all(packet) {
                 tracing::warn!(?e, "shell ipc: write to client failed");
+                return;
             }
-            let _ = stream.flush();
+            if let Err(e) = stream.flush() {
+                tracing::warn!(?e, "shell ipc: flush failed");
+            }
         }
     }
 

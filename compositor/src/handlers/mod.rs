@@ -37,7 +37,7 @@ impl SeatHandler for CompositorState {
 
         let surface_id = focused.map(|s| s.id().protocol_id());
         let window_id = surface_id.and_then(|sid| self.window_registry.window_id_for_surface(sid));
-        self.chrome_bridge.notify(ChromeEvent::FocusChanged {
+        self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
             surface_id,
             window_id,
         });

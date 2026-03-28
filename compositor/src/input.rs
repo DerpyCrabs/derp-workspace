@@ -69,20 +69,24 @@ impl CompositorState {
 
                 let pointer = self.seat.get_pointer().unwrap();
 
-                if let Some((vx, vy)) = self.shell_pointer_view_px_norm(nx, ny) {
-                    let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
-                    self.shell_ipc_try_write(&pkt);
-                    pointer.motion(
-                        self,
-                        None,
-                        &MotionEvent {
-                            location: pos,
-                            serial,
-                            time: event.time_msec(),
-                        },
-                    );
-                    pointer.frame(self);
-                    return;
+                let route_cef = self.shell_pointer_route_to_cef(pos);
+
+                if route_cef {
+                    if let Some((vx, vy)) = self.shell_pointer_buffer_pixels(nx, ny) {
+                        let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
+                        self.shell_ipc_try_write(&pkt);
+                        pointer.motion(
+                            self,
+                            None,
+                            &MotionEvent {
+                                location: pos,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        pointer.frame(self);
+                        return;
+                    }
                 }
 
                 let under = self.surface_under(pos);
@@ -109,10 +113,16 @@ impl CompositorState {
                 let button_state = event.state();
 
                 let pos = pointer.current_location();
-                let shell_px = self
+                let norm = self
                     .shell_pointer_norm
-                    .and_then(|(nx, ny)| self.shell_pointer_view_px_norm(nx, ny))
-                    .or_else(|| self.shell_pointer_view_px(pos));
+                    .or_else(|| self.shell_pointer_norm_from_global(pos));
+                let route_cef = self.shell_pointer_route_to_cef(pos);
+                let shell_px = if route_cef {
+                    norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
+                        .or_else(|| self.shell_pointer_view_px(pos))
+                } else {
+                    None
+                };
                 if let Some((vx, vy)) = shell_px {
                     let b = linux_evdev_button_to_shell(button);
                     let mouse_up = button_state != ButtonState::Pressed;

@@ -63,8 +63,7 @@ impl XdgShellHandler for CompositorState {
         let window = Window::new_wayland_window(surface);
         self.space.map_element(window.clone(), (0, 0), false);
 
-        self.chrome_bridge
-            .notify(ChromeEvent::WindowMapped { info });
+        self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
         self.notify_geometry_if_changed(&window);
     }
 
@@ -80,8 +79,7 @@ impl XdgShellHandler for CompositorState {
             self.space.unmap_elem(&w);
         }
         if let Some(window_id) = self.window_registry.remove_by_surface(surface_id) {
-            self.chrome_bridge
-                .notify(ChromeEvent::WindowUnmapped { window_id });
+            self.shell_emit_chrome_event(ChromeEvent::WindowUnmapped { window_id });
         }
     }
 
@@ -90,8 +88,7 @@ impl XdgShellHandler for CompositorState {
         let title = toplevel_title_app_id(&surface).0;
         if let Some(true) = self.window_registry.set_title(surface_id, title) {
             if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
-                self.chrome_bridge
-                    .notify(ChromeEvent::WindowMetadataChanged { info });
+                self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
     }
@@ -101,8 +98,7 @@ impl XdgShellHandler for CompositorState {
         let app_id = toplevel_title_app_id(&surface).1;
         if let Some(true) = self.window_registry.set_app_id(surface_id, app_id) {
             if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
-                self.chrome_bridge
-                    .notify(ChromeEvent::WindowMetadataChanged { info });
+                self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
     }

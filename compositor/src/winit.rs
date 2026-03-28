@@ -78,6 +78,7 @@ pub fn init_winit(
                         Some(Scale::Fractional(scale_factor)),
                         None,
                     );
+                    state.send_shell_output_geometry();
                 }
                 WinitEvent::Input(event) => {
                     // Keep in sync with winit’s CursorMoved denominator (`inner_size` at event time).

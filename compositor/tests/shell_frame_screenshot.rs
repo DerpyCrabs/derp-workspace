@@ -185,3 +185,46 @@ fn headless_shell_blank_png_is_black() {
     let _ = comp.kill();
     let _ = comp.wait();
 }
+
+/// Three full frames concatenated in a single `write` must all drain in one tick; the overlay keeps
+/// the last (regression for FIONREAD / incremental decode on the shell socket).
+#[test]
+fn headless_shell_back_to_back_frames_last_wins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path();
+    let status_path = runtime.join("status.json");
+    let png_path = runtime.join("overlay_triple.png");
+
+    let mut comp = spawn_headless_compositor(runtime, &status_path, &png_path);
+    wait_path_exists(&runtime.join(WL_SOCKET), Duration::from_secs(15)).expect("wl socket");
+    wait_path_exists(&runtime.join(SHELL_SOCK), Duration::from_secs(15)).expect("shell socket");
+
+    let w = 32u32;
+    let h = 32u32;
+    let red = solid_bgra(w, h, 0, 0, 255, 255);
+    let green = solid_bgra(w, h, 0, 255, 0, 255);
+    let blue = solid_bgra(w, h, 255, 0, 0, 255);
+
+    let mut blob = Vec::new();
+    blob.extend(shell_wire::encode_frame_bgra(w, h, w * 4, &red).expect("encode red"));
+    blob.extend(shell_wire::encode_frame_bgra(w, h, w * 4, &green).expect("encode green"));
+    blob.extend(shell_wire::encode_frame_bgra(w, h, w * 4, &blue).expect("encode blue"));
+
+    let mut sock = UnixStream::connect(runtime.join(SHELL_SOCK)).expect("connect shell ipc");
+    sock.write_all(&blob).expect("write 3 frames");
+    sock.flush().ok();
+
+    wait_shell_status(&status_path, Duration::from_secs(10));
+
+    let img = image::open(&png_path).expect("read png");
+    let rgba = img.to_rgba8();
+    let p = rgba.get_pixel(w / 2, h / 2);
+    assert!(
+        p[0] < 20 && p[1] < 20 && p[2] >= 240,
+        "expected saturated blue center (last frame), got Rgba {:?}",
+        p
+    );
+
+    let _ = comp.kill();
+    let _ = comp.wait();
+}

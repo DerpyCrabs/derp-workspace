@@ -5,13 +5,66 @@
   align-items: center;
   justify-content: center;
   font-family: system-ui, sans-serif;
-  background: linear-gradient(
-    135deg,
-    hsl(var(--shell-hue), 55%, 18%) 0%,
-    hsl(calc(var(--shell-hue) + 40), 45%, 12%) 100%
-  );
+  /* Transparent so Wayland clients show through; panel keeps its own background. */
+  background: transparent;
   color: hsl(0, 0%, 96%);
   position: relative;
+}
+
+.shell-window-chrome {
+  z-index: 8;
+  pointer-events: none;
+}
+
+.shell-window-chrome--focused .shell-titlebar {
+  box-shadow: inset 0 -2px hsla(var(--shell-hue), 90%, 55%, 0.9);
+}
+
+.shell-titlebar {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  box-sizing: border-box;
+  cursor: grab;
+  background: linear-gradient(
+    180deg,
+    hsla(var(--shell-hue), 35%, 22%, 0.92) 0%,
+    hsla(var(--shell-hue), 40%, 14%, 0.88) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  user-select: none;
+}
+
+.shell-titlebar:active {
+  cursor: grabbing;
+}
+
+.shell-titlebar__text {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.95;
+}
+
+.shell-border {
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    hsla(var(--shell-hue), 30%, 18%, 0.85),
+    hsla(var(--shell-hue), 35%, 12%, 0.82)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-sizing: border-box;
+}
+
+.shell-output-geom {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.9;
 }
 
 /* Rulers + crosshair: above panel, never intercept clicks */
@@ -141,10 +194,12 @@
 }
 
 .shell-panel {
+  position: relative;
+  z-index: 12;
   text-align: center;
   padding: 2.5rem 3rem;
   border-radius: 1rem;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.55);
   box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
