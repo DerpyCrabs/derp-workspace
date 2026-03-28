@@ -1,4 +1,4 @@
-//! Unix stream socket for [`shell_wire`] pixel frames (Phase 2 transport slice).
+//! Unix stream socket for [`shell_wire`] (pixel frames + optional spawn commands).
 
 use std::{
     io::{self, Read},
@@ -6,9 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use smithay::reexports::calloop::{
-    generic::Generic, EventLoop, Interest, Mode, PostAction,
-};
+use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
 use tracing::{error, warn};
 
 use crate::CalloopData;
@@ -56,7 +54,7 @@ pub fn register_shell_ipc_listener(
             }
             Ok(PostAction::Continue)
         })
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
     Ok(path)
 }
@@ -99,6 +97,11 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
             })) => {
                 if let Err(e) = state.apply_shell_frame_bgra(width, height, stride, &pixels) {
                     warn!(?e, "shell ipc: bad frame");
+                }
+            }
+            Ok(Some(shell_wire::DecodedMessage::SpawnWaylandClient { command })) => {
+                if let Err(e) = state.try_spawn_wayland_client_sh(&command) {
+                    warn!(%e, "shell ipc: spawn");
                 }
             }
             Ok(None) => break,

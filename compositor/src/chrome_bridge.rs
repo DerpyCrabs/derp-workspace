@@ -144,9 +144,7 @@ mod tests {
             width: 0,
             height: 0,
         };
-        b.notify(ChromeEvent::WindowMapped {
-            info: info.clone(),
-        });
+        b.notify(ChromeEvent::WindowMapped { info: info.clone() });
         b.notify(ChromeEvent::WindowMetadataChanged {
             info: WindowInfo {
                 title: "t2".into(),
@@ -177,10 +175,7 @@ mod tests {
         b.notify(ChromeEvent::WindowMetadataChanged { info: info.clone() });
         let ev = b.take_events();
         assert_eq!(ev.len(), 1);
-        assert_eq!(
-            ev[0],
-            ChromeEvent::WindowMetadataChanged { info }
-        );
+        assert_eq!(ev[0], ChromeEvent::WindowMetadataChanged { info });
     }
 
     #[test]
@@ -195,10 +190,7 @@ mod tests {
         b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
         let ev = b.take_events();
         assert_eq!(ev.len(), 1);
-        assert_eq!(
-            ev[0],
-            ChromeEvent::WindowGeometryChanged { info }
-        );
+        assert_eq!(ev[0], ChromeEvent::WindowGeometryChanged { info });
     }
 
     #[test]

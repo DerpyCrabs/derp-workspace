@@ -51,13 +51,7 @@ fn headless_compositor_accepts_client_and_exposes_globals() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_compositor"))
         .env("XDG_RUNTIME_DIR", runtime)
-        .args([
-            "--headless",
-            "--socket",
-            SOCKET,
-            "--run-for-ms",
-            "15000",
-        ])
+        .args(["--headless", "--socket", SOCKET, "--run-for-ms", "15000"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

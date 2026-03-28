@@ -27,6 +27,12 @@ cleanup_shell_http() {
   fi
 }
 
+# Shell http.server + best-effort teardown on signals (compositor also handles SIGINT/SIGTERM).
+cleanup_nested_session() {
+  cleanup_shell_http
+}
+trap cleanup_nested_session EXIT INT TERM HUP
+
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   echo 'XDG_RUNTIME_DIR is unset; nested Wayland usually needs it (e.g. /run/user/$UID).' >&2
   exit 1
@@ -140,7 +146,6 @@ if [[ "${NESTED_NO_SHELL:-}" != "1" ]]; then
     SHELL_HTTP_PID=$!
     sleep 0.2
     URL="http://127.0.0.1:${SHELL_PORT}/index.html"
-    trap cleanup_shell_http EXIT INT TERM
     CMD="$(printf 'env CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' \
       "$CEF_DIR" "$URL" "$CEF_BIN" "$LAUNCHER")"
     ARGS+=( --command "$CMD" )
@@ -155,8 +160,8 @@ fi
 echo "Using XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR (must stay the session path so winit reaches the parent compositor)"
 echo "This compositor will listen on WAYLAND_DISPLAY=$SOCKET for your clients"
 
+# Allow Solid/CEF shell to spawn native Wayland clients into this nested display (see DERP_ALLOW_SHELL_SPAWN).
+export DERP_ALLOW_SHELL_SPAWN=1
+
 "$BINARY" "${ARGS[@]}" "$@"
-code=$?
-cleanup_shell_http
-trap - EXIT INT TERM
-exit "$code"
+exit $?

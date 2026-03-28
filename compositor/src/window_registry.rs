@@ -131,10 +131,7 @@ mod tests {
         r.register_toplevel(1, "old".into(), "".into());
         assert_eq!(r.set_title(1, "old".into()), Some(false));
         assert_eq!(r.set_title(1, "new".into()), Some(true));
-        assert_eq!(
-            r.snapshot_for_surface(1).unwrap().title,
-            "new"
-        );
+        assert_eq!(r.snapshot_for_surface(1).unwrap().title, "new");
     }
 
     #[test]

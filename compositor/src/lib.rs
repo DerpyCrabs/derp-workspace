@@ -15,6 +15,7 @@ mod grabs;
 mod handlers;
 mod input;
 mod shell_ipc;
+mod shell_letterbox;
 mod shell_overlay;
 pub mod sidecar;
 pub mod state;

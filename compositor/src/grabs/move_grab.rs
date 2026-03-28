@@ -3,9 +3,9 @@ use smithay::{
     desktop::Window,
     input::pointer::{
         AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
-        GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
-        GestureSwipeUpdateEvent, GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab,
-        PointerInnerHandle, RelativeMotionEvent,
+        GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent,
+        GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData as PointerGrabStartData,
+        MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point},
@@ -68,7 +68,11 @@ impl PointerGrab<CompositorState> for MoveSurfaceGrab {
         handle.axis(data, details)
     }
 
-    fn frame(&mut self, data: &mut CompositorState, handle: &mut PointerInnerHandle<'_, CompositorState>) {
+    fn frame(
+        &mut self,
+        data: &mut CompositorState,
+        handle: &mut PointerInnerHandle<'_, CompositorState>,
+    ) {
         handle.frame(data);
     }
 

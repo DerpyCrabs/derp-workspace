@@ -7,8 +7,7 @@ use compositor::{
     chrome_bridge::NoOpChromeBridge,
     headless,
     state::{CompositorInitOptions, SocketConfig},
-    winit,
-    CalloopData, CompositorState,
+    winit, CalloopData, CompositorState,
 };
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 
@@ -47,9 +46,7 @@ fn shell_e2e_screenshot_from_env() -> Option<PathBuf> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
     } else {
         tracing_subscriber::fmt().init();
     }
@@ -119,6 +116,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => tracing::warn!(%e, "failed to spawn --command"),
         }
     }
+
+    // Without this, SIGINT/SIGTERM (terminal, systemd, pkill) aborts the process before
+    // `event_loop.run` returns and `terminate_sidecar` never runs — CEF subprocesses linger.
+    let loop_stop = data.state.loop_signal.clone();
+    std::thread::Builder::new()
+        .name("signal-hook-stop".into())
+        .spawn(move || {
+            use signal_hook::consts::signal::*;
+            use signal_hook::iterator::Signals;
+            if let Ok(mut signals) = Signals::new([SIGINT, SIGTERM]) {
+                if let Some(sig) = signals.forever().next() {
+                    tracing::info!(
+                        sig,
+                        "caught, stopping compositor and tearing down --command"
+                    );
+                    loop_stop.stop();
+                    loop_stop.wakeup();
+                }
+            }
+        })
+        .expect("signal-hook thread");
 
     event_loop.run(None, &mut data, |_| {})?;
     compositor::sidecar::terminate_sidecar(&mut data.command_child);

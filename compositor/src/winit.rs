@@ -10,12 +10,12 @@ use smithay::{
         winit::{self, WinitEvent},
     },
     desktop::Window,
-    output::{Mode, Output, PhysicalProperties, Subpixel},
+    output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::calloop::EventLoop,
     utils::{Point, Rectangle, Size, Transform},
 };
 
-use crate::{shell_ipc, CalloopData, CompositorState};
+use crate::{shell_ipc, shell_letterbox, CalloopData, CompositorState};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
@@ -48,105 +48,140 @@ pub fn init_winit(
     output.change_current_state(
         Some(mode),
         Some(Transform::Flipped180),
-        None,
+        Some(Scale::Fractional(backend.scale_factor())),
         Some((0, 0).into()),
     );
     output.set_preferred(mode);
 
     state.space.map_output(&output, (0, 0));
+    state.shell_window_physical_px = (mode.size.w, mode.size.h);
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    event_loop.handle().insert_source(winit, move |event, _, data| {
-        let display = &mut data.display_handle;
-        let state = &mut data.state;
+    event_loop
+        .handle()
+        .insert_source(winit, move |event, _, data| {
+            let display = &mut data.display_handle;
+            let state = &mut data.state;
 
-        match event {
-            WinitEvent::Resized { size, .. } => {
-                output.change_current_state(
-                    Some(Mode {
-                        size,
-                        refresh: 60_000,
-                    }),
-                    None,
-                    None,
-                    None,
-                );
-            }
-            WinitEvent::Input(event) => state.process_input_event(event),
-            WinitEvent::Redraw => {
-                shell_ipc::drain_shell_stream(state);
-
-                let size = backend.window_size();
-                let damage = Rectangle::from_size(size);
-
-                {
-                    let (renderer, mut framebuffer) = backend.bind().unwrap();
-                    let out_size = output
-                        .current_mode()
-                        .map(|m| m.size)
-                        .unwrap_or(size);
-
-                    let mut custom: Vec<MemoryRenderBufferRenderElement<GlesRenderer>> = Vec::new();
-                    if state.shell_has_frame {
-                        match MemoryRenderBufferRenderElement::from_buffer(
-                            renderer,
-                            Point::from((0.0f64, 0.0f64)),
-                            &state.shell_memory_buffer,
-                            None,
-                            None,
-                            Some(Size::from((out_size.w, out_size.h))),
-                            Kind::Unspecified,
-                        ) {
-                            Ok(el) => custom.push(el),
-                            Err(e) => tracing::warn!(?e, "shell overlay: MemoryRenderBufferRenderElement failed"),
-                        }
-                    }
-
-                    smithay::desktop::space::render_output::<
-                        _,
-                        MemoryRenderBufferRenderElement<GlesRenderer>,
-                        Window,
-                        _,
-                    >(
-                        &output,
-                        renderer,
-                        &mut framebuffer,
-                        1.0,
-                        0,
-                        [&state.space],
-                        custom.as_slice(),
-                        &mut damage_tracker,
-                        [0.1, 0.1, 0.1, 1.0],
-                    )
-                    .unwrap();
+            match event {
+                WinitEvent::Resized { size, scale_factor } => {
+                    state.shell_window_physical_px = (size.w, size.h);
+                    output.change_current_state(
+                        Some(Mode {
+                            size,
+                            refresh: 60_000,
+                        }),
+                        None,
+                        Some(Scale::Fractional(scale_factor)),
+                        None,
+                    );
                 }
-                backend.submit(Some(&[damage])).unwrap();
+                WinitEvent::Input(event) => {
+                    // Keep in sync with winit’s CursorMoved denominator (`inner_size` at event time).
+                    let ws = backend.window_size();
+                    state.shell_window_physical_px = (ws.w, ws.h);
+                    state.process_input_event(event);
+                }
+                WinitEvent::Redraw => {
+                    shell_ipc::drain_shell_stream(state);
 
-                state.space.elements().for_each(|window| {
-                    window.send_frame(
-                        &output,
-                        state.start_time.elapsed(),
-                        Some(Duration::ZERO),
-                        |_, _| Some(output.clone()),
-                    )
-                });
+                    let size = backend.window_size();
+                    let damage = Rectangle::from_size(size);
 
-                state.space.refresh();
-                state.popups.cleanup();
-                let _ = display.flush_clients();
+                    {
+                        let (renderer, mut framebuffer) = backend.bind().unwrap();
+                        let out_size = output.current_mode().map(|m| m.size).unwrap_or(size);
 
-                backend.window().request_redraw();
-            }
-            WinitEvent::CloseRequested => {
-                crate::sidecar::terminate_sidecar(&mut data.command_child);
-                state.loop_signal.stop();
-            }
-            _ => (),
-        };
-    })?;
+                        // Letterbox in **output logical** space; physical `location` matches Smithay’s
+                        // `logical.to_physical(scale)` path used inside `from_buffer`.
+                        let geo = state.space.output_geometry(&output);
+                        let scale_f = output.current_scale().fractional_scale();
+                        let (shell_loc_phys, shell_size_logical) = if let Some(g) = geo {
+                            if let Some((ox_l, oy_l, cw_l, ch_l)) =
+                                state.shell_letterbox_logical(g.size)
+                            {
+                                let px = (g.loc.x as f64 + ox_l as f64) * scale_f;
+                                let py = (g.loc.y as f64 + oy_l as f64) * scale_f;
+                                (Point::from((px, py)), Size::from((cw_l, ch_l)))
+                            } else {
+                                (Point::from((0.0f64, 0.0f64)), g.size)
+                            }
+                        } else {
+                            (
+                                Point::from((0.0f64, 0.0f64)),
+                                Size::from((out_size.w, out_size.h)),
+                            )
+                        };
+
+                        let mut custom: Vec<MemoryRenderBufferRenderElement<GlesRenderer>> =
+                            Vec::new();
+                        if state.shell_has_frame {
+                            // Full-buffer `src`: see [`crate::shell_letterbox`] (regression tests there).
+                            let src_full_buffer = state
+                                .shell_view_px
+                                .map(|(bw, bh)| shell_letterbox::full_buffer_src_rect(bw, bh));
+                            match MemoryRenderBufferRenderElement::from_buffer(
+                                renderer,
+                                shell_loc_phys,
+                                &state.shell_memory_buffer,
+                                None,
+                                src_full_buffer,
+                                Some(shell_size_logical),
+                                Kind::Unspecified,
+                            ) {
+                                Ok(el) => custom.push(el),
+                                Err(e) => tracing::warn!(
+                                    ?e,
+                                    "shell overlay: MemoryRenderBufferRenderElement failed"
+                                ),
+                            }
+                        }
+
+                        smithay::desktop::space::render_output::<
+                            _,
+                            MemoryRenderBufferRenderElement<GlesRenderer>,
+                            Window,
+                            _,
+                        >(
+                            &output,
+                            renderer,
+                            &mut framebuffer,
+                            1.0,
+                            0,
+                            [&state.space],
+                            custom.as_slice(),
+                            &mut damage_tracker,
+                            [0.1, 0.1, 0.1, 1.0],
+                        )
+                        .unwrap();
+                    }
+                    backend.submit(Some(&[damage])).unwrap();
+
+                    state.space.elements().for_each(|window| {
+                        window.send_frame(
+                            &output,
+                            state.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output.clone()),
+                        )
+                    });
+
+                    state.space.refresh();
+                    state.popups.cleanup();
+                    let _ = display.flush_clients();
+
+                    backend.window().request_redraw();
+                }
+                WinitEvent::CloseRequested => {
+                    crate::sidecar::terminate_sidecar(&mut data.command_child);
+                    state.loop_signal.stop();
+                }
+                _ => (),
+            };
+        })?;
 
     Ok(())
 }

@@ -1,4 +1,8 @@
 //! Small, CEF-free helpers shared with the `cef_host` binary (unit-testable without loading Chromium).
+//!
+//! [`osr_view_state`] holds DIP vs OSR buffer sizes and the buffer→view mapping used with compositor pointer IPC.
+
+pub mod osr_view_state;
 
 use std::path::PathBuf;
 

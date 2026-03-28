@@ -8,16 +8,27 @@
 //! compositor’s `WAYLAND_DISPLAY` does not become Chromium’s display while OSR is active; set
 //! `CEF_HOST_USE_WAYLAND_PLATFORM=1` to experiment.
 
+mod compositor_downlink;
+mod control_server;
+
 use std::{
-    io::Write,
+    io::{Read, Write},
     os::unix::net::UnixStream,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    thread,
     time::Duration,
 };
 
 use cef::{args::Args, rc::*, sys, *};
 use clap::Parser;
+#[cfg(unix)]
+use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
+
+use cef_host::osr_view_state::OsrViewState;
 
 #[derive(Parser, Debug)]
 #[command(name = "cef_host", about = "CEF OSR → compositor shell IPC")]
@@ -74,7 +85,10 @@ wrap_app! {
 }
 
 wrap_load_handler! {
-    struct InvalidateViewOnLoad;
+    struct ShellLoadHandler {
+        spawn_inject_js: Option<String>,
+    }
+
     impl LoadHandler {
         fn on_load_end(
             &self,
@@ -88,6 +102,13 @@ wrap_load_handler! {
             if frame.is_main() != 1 {
                 return;
             }
+            if let Some(ref js) = self.spawn_inject_js {
+                frame.execute_java_script(
+                    Some(&CefString::from(js.as_str())),
+                    Some(&CefString::from("https://derp/spawn-url.js")),
+                    0,
+                );
+            }
             let Some(browser) = browser else {
                 return;
             };
@@ -99,26 +120,69 @@ wrap_load_handler! {
     }
 }
 
+wrap_life_span_handler! {
+    struct CaptureBrowser {
+        browser_holder: Arc<Mutex<Option<Browser>>>,
+    }
+
+    impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            if let Some(b) = browser {
+                if let Ok(mut g) = self.browser_holder.lock() {
+                    *g = Some(b.clone());
+                }
+            }
+        }
+    }
+}
+
 wrap_render_handler! {
     struct OsrToCompositor {
-        view_w: i32,
-        view_h: i32,
         ipc: Arc<Mutex<UnixStream>>,
+        view_state: Arc<Mutex<OsrViewState>>,
     }
 
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(r) = rect {
+                let Ok(g) = self.view_state.lock() else {
+                    return;
+                };
                 r.x = 0;
                 r.y = 0;
-                r.width = self.view_w;
-                r.height = self.view_h;
+                // DIP / CSS pixels — must stay in sync with [`cef_host::osr_view_state::OsrViewState`] and `WindowInfo::bounds`.
+                r.width = g.dip_w;
+                r.height = g.dip_h;
             }
+        }
+
+        fn screen_info(
+            &self,
+            _browser: Option<&mut Browser>,
+            screen_info: Option<&mut ScreenInfo>,
+        ) -> std::os::raw::c_int {
+            let Some(si) = screen_info else {
+                return 0;
+            };
+            let Ok(g) = self.view_state.lock() else {
+                return 0;
+            };
+            let mut out = ScreenInfo::default();
+            out.device_scale_factor = g.device_scale_factor();
+            out.rect = Rect {
+                x: 0,
+                y: 0,
+                width: g.dip_w,
+                height: g.dip_h,
+            };
+            out.available_rect = out.rect.clone();
+            *si = out;
+            1
         }
 
         fn on_paint(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             type_: PaintElementType,
             _dirty_rects: Option<&[Rect]>,
             buffer: *const u8,
@@ -127,6 +191,21 @@ wrap_render_handler! {
         ) {
             if type_ != PaintElementType::VIEW || buffer.is_null() || width <= 0 || height <= 0 {
                 return;
+            }
+            let notify = {
+                let Ok(mut g) = self.view_state.lock() else {
+                    return;
+                };
+                let prev = g.buffer_dimensions();
+                g.set_buffer_size(width, height);
+                prev != g.buffer_dimensions()
+            };
+            if notify {
+                if let Some(b) = browser {
+                    if let Some(host) = b.host() {
+                        host.notify_screen_info_changed();
+                    }
+                }
             }
             let stride = width * 4;
             let len = (stride * height) as usize;
@@ -147,6 +226,7 @@ wrap_client! {
     struct ShellClient {
         render_handler: RenderHandler,
         load_handler: LoadHandler,
+        life_span_handler: LifeSpanHandler,
     }
 
     impl Client {
@@ -156,6 +236,10 @@ wrap_client! {
 
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(self.load_handler.clone())
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span_handler.clone())
         }
     }
 }
@@ -177,11 +261,7 @@ fn main() {
     let switch_type = CefString::from("type");
     let is_browser_process = cmd.has_switch(Some(&switch_type)) != 1;
 
-    let exec_ret = execute_process(
-        Some(cef_args.as_main_args()),
-        None,
-        std::ptr::null_mut(),
-    );
+    let exec_ret = execute_process(Some(cef_args.as_main_args()), None, std::ptr::null_mut());
 
     if is_browser_process {
         assert_eq!(
@@ -245,14 +325,62 @@ fn main() {
 
     let sock_path = cef_host::runtime_dir().join(&cli.compositor_socket);
     let stream = UnixStream::connect(&sock_path).unwrap_or_else(|e| {
-        eprintln!("cef_host: connect {}: {e} (start compositor first)", sock_path.display());
+        eprintln!(
+            "cef_host: connect {}: {e} (start compositor first)",
+            sock_path.display()
+        );
+        std::process::exit(1);
+    });
+    let read_stream = stream.try_clone().unwrap_or_else(|e| {
+        eprintln!("cef_host: dup Unix socket for compositor→shell reads: {e}");
         std::process::exit(1);
     });
     let ipc = Arc::new(Mutex::new(stream));
 
-    let rh = OsrToCompositor::new(cli.width, cli.height, ipc);
-    let lh = InvalidateViewOnLoad::new();
-    let mut client = ShellClient::new(rh, lh);
+    let control_rx = control_server::start(ipc.clone());
+    let port = control_rx.recv().unwrap_or_else(|_| {
+        eprintln!("cef_host: control server thread exited before binding");
+        std::process::exit(1);
+    });
+    let inject_js = format!(
+        r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";"#,
+        port = port
+    );
+
+    let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
+    let capture = CaptureBrowser::new(browser_holder.clone());
+
+    let (shell_ipc_tx, shell_ipc_rx) =
+        mpsc::channel::<shell_wire::DecodedCompositorToShellMessage>();
+    thread::spawn(move || {
+        let mut read_stream = read_stream;
+        let mut buf = Vec::<u8>::new();
+        let mut tmp = [0u8; 8192];
+        loop {
+            match read_stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(_) => break,
+            }
+            loop {
+                match shell_wire::pop_compositor_to_shell_message(&mut buf) {
+                    Ok(Some(msg)) => {
+                        let _ = shell_ipc_tx.send(msg);
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        buf.clear();
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let view_state = Arc::new(Mutex::new(OsrViewState::new(cli.width, cli.height)));
+    let rh = OsrToCompositor::new(ipc.clone(), view_state.clone());
+    let lh = ShellLoadHandler::new(Some(inject_js));
+    let mut client = ShellClient::new(rh, lh, capture);
 
     let mut window_info = WindowInfo::default();
     window_info.bounds.width = cli.width;
@@ -275,9 +403,34 @@ fn main() {
         None,
     );
 
-    loop {
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    {
+        if flag::register(SIGINT, Arc::clone(&shutdown_requested)).is_err()
+            || flag::register(SIGTERM, Arc::clone(&shutdown_requested)).is_err()
+        {
+            eprintln!("cef_host: warning: could not register SIGINT/SIGTERM handlers");
+        }
+    }
+
+    while !shutdown_requested.load(Ordering::Relaxed) {
         do_message_loop_work();
+        while let Ok(msg) = shell_ipc_rx.try_recv() {
+            compositor_downlink::apply_message(msg, &browser_holder, &view_state);
+        }
         std::thread::sleep(Duration::from_millis(4));
     }
-}
 
+    if let Ok(g) = browser_holder.lock() {
+        if let Some(ref browser) = *g {
+            if let Some(host) = browser.host() {
+                host.close_browser(1);
+            }
+        }
+    }
+    for _ in 0..750 {
+        do_message_loop_work();
+        thread::sleep(Duration::from_millis(4));
+    }
+    shutdown();
+}

@@ -12,13 +12,7 @@ use smithay::utils::Transform;
 pub const SHELL_OSR_MEMORY_FOURCC: Fourcc = Fourcc::Argb8888;
 
 pub(crate) fn new_shell_memory_buffer() -> MemoryRenderBuffer {
-    MemoryRenderBuffer::new(
-        SHELL_OSR_MEMORY_FOURCC,
-        (4, 4),
-        1,
-        Transform::Normal,
-        None,
-    )
+    MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (4, 4), 1, Transform::Normal, None)
 }
 
 #[cfg(test)]

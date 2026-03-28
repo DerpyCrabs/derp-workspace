@@ -107,7 +107,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | Path | Role |
 |------|------|
 | `compositor/` | Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints, shell IPC listener (winit) |
-| `shell_wire/` | Shared length‑prefixed BGRA frame codec (`SHELL_PIXEL_PROTOCOL_VERSION`) |
+| `shell_wire/` | Length‑prefixed messages: BGRA frames + optional `MSG_SPAWN_WAYLAND_CLIENT` (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **2**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |
@@ -119,12 +119,16 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
    - Manual: `export CEF_PATH=<same dir as readelf RUNPATH on target/debug/cef_host>` (resources + `libcef.so`). You usually **do not** need `LD_LIBRARY_PATH` if you did not override it with another `libcef` tree.
 2. **Solid bundle:** From repo root, `cd shell && npm install && npm run build` (output in `shell/dist/`).
 3. **One-shot nested + Solid:** from a real session (`XDG_RUNTIME_DIR` set), run **`bash scripts/run-nested.sh`**. It **`cargo build`s compositor + `cef_host`**, **`npm run build`s `shell/`**, then starts the nested compositor and `cef_host`. Set **`NESTED_SKIP_BUILD=1`** to skip rebuilds, or **`NESTED_NO_SHELL=1`** for compositor-only.
-4. **Compositor without the script:** `cargo run -p compositor` still listens for shell IPC on **`derp-shell.sock`** by default.
+4. **Compositor without the script:** `cargo run -p compositor` still listens for shell IPC on **`derp-shell.sock`** by default. To allow the Solid “run native app” control path, set **`DERP_ALLOW_SHELL_SPAWN=1`** (see above).
 5. **CEF host alone:** `bash scripts/run-cef-host.sh -- --url "file://$(realpath shell/dist/index.html)"`
 
 `cef_host` follows **tauri-apps/cef-rs** `cefsimple` multiprocess wiring: **`api_hash`**, **`execute_process` with no `App`** (subprocesses must not construct `CefApp`), then **`Cli::parse`** and **`initialize` with `App`** only in the browser process. If you passed `App` into `execute_process`, subprocesses could hit **`CefApp_… invalid version -1`**. Ozone defaults to Wayland/X11 when `WAYLAND_DISPLAY`/`DISPLAY` are set; headless is used only when both are unset.
 
 The compositor draws Wayland clients first, then **overlays** the latest shell frame when one has been received.
+
+**Shell pointer input:** The overlay is not a Wayland surface, so the compositor **forwards** pointer move/button events over the same Unix socket (`MSG_COMPOSITOR_POINTER_MOVE` / `MSG_COMPOSITOR_POINTER_BUTTON` in [`shell_wire`]) for `cef_host` to inject via CEF OSR. `cef_host` uses a **`try_clone` read thread** so frame writes stay on a blocking socket.
+
+**Shell → native spawn:** `cef_host` serves `POST http://127.0.0.1:<port>/spawn` (loopback only) and forwards JSON `{"command":"…"}` as a `shell_wire` spawn message. The Solid shell uses an inline **command field** (not `window.prompt`): windowless CEF has no parent window for native JS dialogs. The compositor runs `sh -c` with **`WAYLAND_DISPLAY` set to the nested socket** only when **`DERP_ALLOW_SHELL_SPAWN=1`** (set automatically by **`scripts/run-nested.sh`**). The Solid app uses **`window.__DERP_SPAWN_URL`** (injected on load) for the **“Run native app in compositor”** button.
 
 ---
 

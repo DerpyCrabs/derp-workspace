@@ -11,6 +11,133 @@
     hsl(calc(var(--shell-hue) + 40), 45%, 12%) 100%
   );
   color: hsl(0, 0%, 96%);
+  position: relative;
+}
+
+/* Rulers + crosshair: above panel, never intercept clicks */
+.shell-debug-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.shell-ruler-corner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 28px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.55);
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 52;
+}
+
+.shell-ruler {
+  position: fixed;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 51;
+  box-sizing: border-box;
+}
+
+/* Gutter sizes are duplicated in `App.tsx` (RULER_GUTTER_X / RULER_GUTTER_Y) for label math. */
+.shell-ruler--top {
+  top: 0;
+  left: 28px;
+  height: 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.shell-ruler--left {
+  top: 22px;
+  left: 0;
+  width: 28px;
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.shell-ruler__ticks {
+  position: absolute;
+  inset: 0;
+  opacity: 0.85;
+}
+
+/* Minor ticks every 10px, slightly taller at 50px */
+.shell-ruler__ticks--h {
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 9px,
+    rgba(255, 255, 255, 0.22) 9px,
+    rgba(255, 255, 255, 0.22) 10px
+  );
+}
+
+.shell-ruler__ticks--v {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 9px,
+    rgba(255, 255, 255, 0.22) 9px,
+    rgba(255, 255, 255, 0.22) 10px
+  );
+}
+
+.shell-ruler__label {
+  position: absolute;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.shell-ruler__label--h {
+  bottom: 1px;
+  transform: translateX(-50%);
+}
+
+.shell-ruler__label--v {
+  left: 2px;
+  transform: translateY(-50%);
+  width: 22px;
+  text-align: right;
+}
+
+.shell-crosshair {
+  position: fixed;
+  z-index: 53;
+  pointer-events: none;
+  background: hsla(var(--shell-hue), 90%, 65%, 0.75);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+}
+
+.shell-crosshair--v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.shell-crosshair--h {
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.shell-cursor-readout {
+  position: fixed;
+  z-index: 54;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: hsl(0, 0%, 12%);
+  background: hsl(var(--shell-hue), 85%, 78%);
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .shell-panel {
@@ -30,7 +157,102 @@
 }
 
 .shell-sub {
-  margin: 0;
+  margin: 0 0 1rem;
   opacity: 0.85;
   font-size: 1rem;
+}
+
+.shell-input-hud {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.85rem;
+  text-align: left;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.shell-input-hud__label {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+  margin-bottom: 0.35rem;
+}
+
+.shell-input-hud__row {
+  display: block;
+}
+
+.shell-input-hud__row strong {
+  color: hsl(var(--shell-hue), 85%, 82%);
+}
+
+.shell-spawn-url {
+  margin: 0 0 0.85rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: left;
+  opacity: 0.88;
+  word-break: break-all;
+  max-width: 22rem;
+}
+
+.shell-cmd-label {
+  display: block;
+  text-align: left;
+  margin: 0 0 0.65rem;
+  max-width: 22rem;
+}
+
+.shell-cmd-label__text {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.88;
+  margin-bottom: 0.35rem;
+}
+
+.shell-cmd-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.9rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+}
+
+.shell-spawn-btn {
+  margin-top: 0.25rem;
+  padding: 0.6rem 1.2rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: hsl(0, 0%, 12%);
+  background: hsl(var(--shell-hue), 70%, 78%);
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  box-shadow: 0 0.15rem 0.5rem rgba(0, 0, 0, 0.25);
+}
+
+.shell-spawn-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.shell-spawn-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.shell-spawn-status {
+  margin: 0.85rem 0 0;
+  font-size: 0.875rem;
+  opacity: 0.9;
+  max-width: 22rem;
+  line-height: 1.35;
 }

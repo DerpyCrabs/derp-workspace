@@ -24,9 +24,7 @@ use compositor::{
 };
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
-    protocol::{
-        wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
-    },
+    protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface},
     Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -135,7 +133,7 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_buffer::Event::Release {} = event {
+        if let wl_buffer::Event::Release = event {
             // ignore
         }
     }
@@ -205,9 +203,7 @@ impl AppData {
         file.write_all(&[0u8, 0, 0, 0]).expect("write pixel");
         file.flush().ok();
 
-        let pool = self
-            .shm
-            .create_pool(file.as_fd(), pool_size as i32, qh, ());
+        let pool = self.shm.create_pool(file.as_fd(), pool_size as i32, qh, ());
         let buffer = pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, qh, ());
 
         self.wl_surface.attach(Some(&buffer), 0, 0);
@@ -250,14 +246,13 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
     let (globals, mut event_queue) = registry_queue_init::<AppData>(&conn).expect("registry");
     let qh = event_queue.handle();
 
-    let compositor: wl_compositor::WlCompositor = globals
-        .bind(&qh, 1..=5, ())
-        .expect("wl_compositor");
+    let compositor: wl_compositor::WlCompositor =
+        globals.bind(&qh, 1..=5, ()).expect("wl_compositor");
     let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).expect("wl_shm");
     let xdg_wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).expect("xdg_wm_base");
 
     let wl_surface = compositor.create_surface(&qh, ());
-    let xdg_surface = xdg_wm.get_xdg_surface(&wl_surface, &qh, XdgSurfaceData::default());
+    let xdg_surface = xdg_wm.get_xdg_surface(&wl_surface, &qh, XdgSurfaceData);
     let toplevel = xdg_surface.get_toplevel(&qh, ());
     toplevel.set_title(TEST_TITLE.to_string());
     toplevel.set_app_id(TEST_APP_ID.to_string());
@@ -274,10 +269,14 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
     };
 
     // Receives configure; handler attaches SHM and commits.
-    event_queue.roundtrip(&mut state).expect("roundtrip after toplevel");
+    event_queue
+        .roundtrip(&mut state)
+        .expect("roundtrip after toplevel");
 
     for _ in 0..3 {
-        event_queue.roundtrip(&mut state).expect("roundtrip after commit");
+        event_queue
+            .roundtrip(&mut state)
+            .expect("roundtrip after commit");
         thread::sleep(Duration::from_millis(20));
     }
 
@@ -291,7 +290,9 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
     xdg_surface.destroy();
     wl_surface.destroy();
 
-    event_queue.roundtrip(&mut state).expect("roundtrip after destroy");
+    event_queue
+        .roundtrip(&mut state)
+        .expect("roundtrip after destroy");
 
     drop(conn);
     compositor_thread.join().expect("compositor join");
@@ -332,7 +333,9 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
         "expected title/app_id on WindowMetadataChanged (or mapped) for window {mapped_window_id}; got {events:?}"
     );
 
-    let mapped_pos = events.iter().position(|e| matches!(e, ChromeEvent::WindowMapped { .. }));
+    let mapped_pos = events
+        .iter()
+        .position(|e| matches!(e, ChromeEvent::WindowMapped { .. }));
 
     let geometry_events: Vec<_> = events
         .iter()

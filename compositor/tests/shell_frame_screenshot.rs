@@ -167,7 +167,11 @@ fn headless_shell_blank_png_is_black() {
     sock.flush().ok();
 
     let st = wait_shell_status(&status_path, Duration::from_secs(10));
-    assert!(st.max_luma < 1.0, "blank frame should have ~0 luma, got {:?}", st);
+    assert!(
+        st.max_luma < 1.0,
+        "blank frame should have ~0 luma, got {:?}",
+        st
+    );
 
     let img = image::open(&png_path).expect("png");
     let rgba = img.to_rgba8();

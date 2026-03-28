@@ -1,7 +1,9 @@
 use std::{
     ffi::OsString,
+    io::Write,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
 };
 
@@ -17,7 +19,7 @@ use smithay::{
             Display, DisplayHandle, Resource,
         },
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, Size},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         output::OutputManagerState,
@@ -92,6 +94,13 @@ pub struct CompositorState {
     pub shell_read_buf: Vec<u8>,
     pub shell_memory_buffer: MemoryRenderBuffer,
     pub shell_has_frame: bool,
+    /// Last OSR frame dimensions (buffer pixels) — maps nested pointer into the same space as the BGRA frame for [`shell_ipc_try_write`](Self::shell_ipc_try_write).
+    pub shell_view_px: Option<(u32, u32)>,
+    /// Winit [`Window::inner_size`](https://docs.rs/winit/latest/winit/window/struct.Window.html#method.inner_size) —
+    /// same denominator the backend uses for pointer normalization ([`crate::winit`] updates on resize).
+    pub(crate) shell_window_physical_px: (i32, i32),
+    /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
+    pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
 }
@@ -150,6 +159,9 @@ impl CompositorState {
             shell_read_buf: Vec::new(),
             shell_memory_buffer,
             shell_has_frame: false,
+            shell_view_px: None,
+            shell_window_physical_px: (1, 1),
+            shell_pointer_norm: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
         };
@@ -199,7 +211,10 @@ impl CompositorState {
                 Generic::new(display, Interest::READ, Mode::Level),
                 |_, display, state| {
                     unsafe {
-                        display.get_mut().dispatch_clients(&mut state.state).unwrap();
+                        display
+                            .get_mut()
+                            .dispatch_clients(&mut state.state)
+                            .unwrap();
                     }
                     Ok(PostAction::Continue)
                 },
@@ -213,11 +228,13 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(window, location)| {
-            window
-                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                .map(|(s, p)| (s, (p + location).to_f64()))
-        })
+        self.space
+            .element_under(pos)
+            .and_then(|(window, location)| {
+                window
+                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                    .map(|(s, p)| (s, (p + location).to_f64()))
+            })
     }
 
     /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
@@ -230,7 +247,9 @@ impl CompositorState {
             return;
         };
         let size = window.geometry().size;
-        let changed = self.window_registry.set_geometry(surface_id, loc.x, loc.y, size.w, size.h);
+        let changed = self
+            .window_registry
+            .set_geometry(surface_id, loc.x, loc.y, size.w, size.h);
         if let Some(true) = changed {
             if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
                 self.chrome_bridge
@@ -241,6 +260,62 @@ impl CompositorState {
 
     pub fn clear_shell_frame(&mut self) {
         self.shell_has_frame = false;
+        self.shell_view_px = None;
+    }
+
+    /// Letterboxed shell in **output-local logical** pixels `(ox, oy, cw, ch)`.
+    ///
+    /// Matches [`AbsolutePositionEvent::position_transformed`] (logical) and the logical `size`
+    /// passed to [`smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer`],
+    /// so hit-testing and drawing use one coordinate space.
+    pub(crate) fn shell_letterbox_logical(
+        &self,
+        output_logical_size: Size<i32, Logical>,
+    ) -> Option<(i32, i32, i32, i32)> {
+        if !self.shell_has_frame {
+            return None;
+        }
+        let (buf_w, buf_h) = self.shell_view_px?;
+        crate::shell_letterbox::letterbox_logical(output_logical_size, buf_w, buf_h)
+    }
+
+    /// Map normalized pointer (0..1) in letterboxed shell space into OSR buffer pixels.
+    pub fn shell_pointer_view_px_norm(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
+        if !self.shell_has_frame {
+            return None;
+        }
+        let (vw, vh) = self.shell_view_px?;
+        Some(crate::shell_letterbox::norm_to_buffer_px(nx, ny, vw, vh))
+    }
+
+    /// Fallback: map global **logical** seat position to OSR buffer pixels (e.g. button before motion).
+    pub fn shell_pointer_view_px(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {
+        if !self.shell_has_frame {
+            return None;
+        }
+        let (vw, vh) = self.shell_view_px?;
+        let output = self.space.outputs().next()?;
+        let geo = self.space.output_geometry(output)?;
+        let (ox_l, oy_l, cw_l, ch_l) = self.shell_letterbox_logical(geo.size)?;
+        let ox = geo.loc.x as f64 + ox_l as f64;
+        let oy = geo.loc.y as f64 + oy_l as f64;
+        let lx = pos.x - ox;
+        let ly = pos.y - oy;
+        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw_l, ch_l, vw, vh)
+    }
+
+    pub fn shell_overlay_has_pointer(&self, pos: Point<f64, Logical>) -> bool {
+        self.shell_pointer_view_px(pos).is_some()
+    }
+
+    /// Send compositor → `cef_host` message (pointer routing). No-op if shell IPC is disconnected.
+    pub fn shell_ipc_try_write(&mut self, packet: &[u8]) {
+        if let Some(ref mut stream) = self.shell_ipc_client {
+            if let Err(e) = stream.write_all(packet) {
+                tracing::warn!(?e, "shell ipc: write to client failed");
+            }
+            let _ = stream.flush();
+        }
     }
 
     /// Upload a BGRA8888 frame (`shell_wire` pixels) into [`Self::shell_memory_buffer`].
@@ -284,6 +359,7 @@ impl CompositorState {
             .map_err(|_: ()| "memory buffer draw")?;
         }
         self.shell_has_frame = true;
+        self.shell_view_px = Some((width, height));
         if let Some(ref path) = self.shell_e2e_status_path {
             write_shell_e2e_frame_status(path, w, h, stride, pixels);
         }
@@ -291,6 +367,42 @@ impl CompositorState {
             write_shell_e2e_screenshot_png(path, w, h, stride, pixels);
         }
         Ok(())
+    }
+
+    /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).
+    ///
+    /// Disabled unless `DERP_ALLOW_SHELL_SPAWN=1` (trusted local shell IPC only).
+    #[cfg(unix)]
+    pub fn try_spawn_wayland_client_sh(&self, shell_command: &str) -> Result<(), String> {
+        if std::env::var("DERP_ALLOW_SHELL_SPAWN").as_deref() != Ok("1") {
+            return Err(
+                "spawning from shell IPC requires DERP_ALLOW_SHELL_SPAWN=1 (trusted local connection)"
+                    .into(),
+            );
+        }
+        let trimmed = shell_command.trim();
+        if trimmed.is_empty() {
+            return Err("empty command".into());
+        }
+        if trimmed.len() > shell_wire::MAX_SPAWN_COMMAND_BYTES as usize {
+            return Err("command too long".into());
+        }
+        let display = self.socket_name.to_string_lossy().into_owned();
+        let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR unset")?;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg(trimmed)
+            .env("WAYLAND_DISPLAY", display)
+            .env("XDG_RUNTIME_DIR", runtime)
+            .stdin(Stdio::null());
+        let child = cmd.spawn().map_err(|e| e.to_string())?;
+        tracing::info!(pid = child.id(), "spawned Wayland client via shell IPC");
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn try_spawn_wayland_client_sh(&self, _shell_command: &str) -> Result<(), String> {
+        Err("shell IPC spawn is only supported on Unix".into())
     }
 }
 

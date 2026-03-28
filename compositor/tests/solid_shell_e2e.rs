@@ -97,7 +97,11 @@ fn read_runpath_dir(elf: &Path) -> PathBuf {
         .arg(elf)
         .output()
         .expect("run `readelf` (install binutils)");
-    assert!(out.status.success(), "readelf failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "readelf failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let line = stdout
         .lines()
@@ -216,6 +220,7 @@ fn solid_shell_overlay_drawn() {
     let compositor_bin = env!("CARGO_BIN_EXE_compositor");
     let mut compositor = Command::new(compositor_bin)
         .env("XDG_RUNTIME_DIR", runtime)
+        .env("DERP_ALLOW_SHELL_SPAWN", "1")
         .env("DERP_SHELL_E2E_STATUS", &status_path)
         .env("DERP_SHELL_E2E_SCREENSHOT", &screenshot_path)
         .args([
@@ -254,10 +259,7 @@ fn solid_shell_overlay_drawn() {
         .spawn()
         .expect("spawn cef_host");
 
-    let st = wait_shell_status(
-        &status_path,
-        Duration::from_secs(180),
-    );
+    let st = wait_shell_status(&status_path, Duration::from_secs(180));
 
     // Let the last OSR frame finish writing JSON/PNG; `kill()` uses SIGKILL, which can truncate
     // an in-progress `image::save` on the final path (0-byte png).
