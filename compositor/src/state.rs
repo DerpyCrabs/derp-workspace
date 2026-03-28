@@ -214,7 +214,9 @@ impl CompositorState {
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             shell_pointer_norm: None,
-            pointer_cursor_image: CursorImageStatus::Hidden,
+            // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
+            // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
+            pointer_cursor_image: CursorImageStatus::default_named(),
             cursor_fallback_buffer: SolidColorBuffer::new((22, 22), [0.97f32, 0.97f32, 1.0f32, 1.0f32]),
             shell_move_window_id: None,
             shell_e2e_status_path,

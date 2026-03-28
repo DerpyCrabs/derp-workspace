@@ -226,6 +226,15 @@ pub fn apply_message(
                 modifiers: 0,
             };
             host.send_mouse_move_event(Some(&ev), 0);
+            // OSR does not reliably surface browser PointerEvents on `window`; shell HUD reads coords from here.
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "osr_pointer",
+                    "client_x": vx,
+                    "client_y": vy,
+                }),
+            );
         }
         shell_wire::DecodedCompositorToShellMessage::PointerButton {
             x,

@@ -44,6 +44,8 @@ type DerpShellDetail =
       app_id: string
     }
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
+  /** Compositor → CEF injected pointer; view/DIP coords (matches `clientX`/`clientY` when OSR fills the view). */
+  | { type: 'osr_pointer'; client_x: number; client_y: number }
 
 type DerpWindow = {
   window_id: number
@@ -230,6 +232,20 @@ function App() {
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
+        return
+      }
+      if (d.type === 'osr_pointer') {
+        setPointerClient({ x: d.client_x, y: d.client_y })
+        const el = mainRef
+        if (el) {
+          const r = el.getBoundingClientRect()
+          setPointerInMain({
+            x: Math.round(d.client_x - r.left),
+            y: Math.round(d.client_y - r.top),
+          })
+        } else {
+          setPointerInMain({ x: d.client_x, y: d.client_y })
+        }
         return
       }
       setWindows((m) => applyDetail(m, d))
