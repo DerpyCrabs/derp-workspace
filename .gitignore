@@ -1,0 +1,29 @@
+# Rust / Cargo
+/target/
+**/target/
+
+# rustc / rustdoc
+*.pdb
+*.rlib
+*.profdata
+*.profraw
+
+# Backup / editor debris
+*.rs.bk
+*.orig
+*~
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE (uncomment if you don't commit editor configs)
+# /.idea/
+# /.vscode/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
