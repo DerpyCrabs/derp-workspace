@@ -164,6 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         CompositorBackend::Drm => {
             let (session, notifier) = drm_session_setup.expect("drm session");
+            let vt_session = session.clone();
             drm::init_drm(
                 &mut event_loop,
                 &mut data,
@@ -171,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 notifier,
                 cli.drm_device.clone(),
             )?;
+            data.state.set_vt_session(Some(vt_session));
         }
     }
 

@@ -1,7 +1,10 @@
 use smithay::{
-    backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+    backend::{
+        input::{
+            AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
+            KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        },
+        session::Session,
     },
     input::{
         keyboard::{keysyms, FilterResult},
@@ -12,6 +15,25 @@ use smithay::{
 };
 
 use crate::state::CompositorState;
+
+/// Ctrl+Alt+F*n* → Linux VT *n* (1..=12) for [`Session::change_vt`].
+fn vt_number_from_fkey(sym: u32) -> Option<i32> {
+    match sym {
+        keysyms::KEY_F1 => Some(1),
+        keysyms::KEY_F2 => Some(2),
+        keysyms::KEY_F3 => Some(3),
+        keysyms::KEY_F4 => Some(4),
+        keysyms::KEY_F5 => Some(5),
+        keysyms::KEY_F6 => Some(6),
+        keysyms::KEY_F7 => Some(7),
+        keysyms::KEY_F8 => Some(8),
+        keysyms::KEY_F9 => Some(9),
+        keysyms::KEY_F10 => Some(10),
+        keysyms::KEY_F11 => Some(11),
+        keysyms::KEY_F12 => Some(12),
+        _ => None,
+    }
+}
 
 /// Map Linux evdev button codes to `shell_wire` / CEF button index (0 left, 1 middle, 2 right).
 fn linux_evdev_button_to_shell(button: u32) -> u32 {
@@ -37,17 +59,26 @@ impl CompositorState {
                     serial,
                     time,
                     move |state, mods, keysym| {
-                        if key_state == KeyState::Pressed
-                            && mods.ctrl
-                            && mods.shift
-                            && matches!(
-                                keysym.modified_sym().raw(),
-                                keysyms::KEY_q | keysyms::KEY_Q
-                            )
-                        {
-                            state.loop_signal.stop();
-                            state.loop_signal.wakeup();
-                            return FilterResult::Intercept(());
+                        if key_state == KeyState::Pressed {
+                            let sym = keysym.modified_sym().raw();
+                            if mods.ctrl && mods.alt {
+                                if let (Some(vt), Some(ref mut sess)) =
+                                    (vt_number_from_fkey(sym), state.vt_session.as_mut())
+                                {
+                                    if let Err(e) = sess.change_vt(vt) {
+                                        tracing::warn!(?e, vt, "VT switch (Ctrl+Alt+F) failed");
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+                            }
+                            if mods.ctrl
+                                && mods.shift
+                                && matches!(sym, keysyms::KEY_q | keysyms::KEY_Q)
+                            {
+                                state.loop_signal.stop();
+                                state.loop_signal.wakeup();
+                                return FilterResult::Intercept(());
+                            }
                         }
                         FilterResult::Forward
                     },

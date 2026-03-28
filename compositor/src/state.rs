@@ -9,7 +9,10 @@ use std::{
 };
 
 use smithay::{
-    backend::renderer::element::memory::MemoryRenderBuffer,
+    backend::{
+        renderer::element::memory::MemoryRenderBuffer,
+        session::libseat::LibSeatSession,
+    },
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatState},
     reexports::{
@@ -129,6 +132,9 @@ pub struct CompositorState {
     shell_ipc_stall_timeout: Option<Duration>,
     /// Last time a length-prefixed message was decoded from [`Self::shell_ipc_client`].
     shell_ipc_last_rx: Option<Instant>,
+
+    /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
+    pub(crate) vt_session: Option<LibSeatSession>,
 }
 
 impl CompositorState {
@@ -201,6 +207,7 @@ impl CompositorState {
             needs_winit_redraw: true,
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
+            vt_session: None,
         };
 
         if let Some(name) = shell_ipc_socket {
@@ -218,6 +225,11 @@ impl CompositorState {
         }
 
         s
+    }
+
+    /// DRM session handle for **Ctrl+Alt+F1–F12** VT switching ([`crate::input`]).
+    pub fn set_vt_session(&mut self, session: Option<LibSeatSession>) {
+        self.vt_session = session;
     }
 
     fn init_wayland_listener(
