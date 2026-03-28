@@ -9,13 +9,16 @@ use smithay::{
     },
     input::{
         keyboard::{keysyms, FilterResult},
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData as PointerGrabStartData, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER},
 };
 
-use crate::state::CompositorState;
+use crate::{
+    grabs::MoveSurfaceGrab,
+    state::CompositorState,
+};
 
 /// Ctrl+Alt+F*n* → Linux VT *n* (1..=12) for [`Session::change_vt`].
 fn vt_number_from_fkey(sym: u32) -> Option<i32> {
@@ -73,26 +76,23 @@ impl CompositorState {
         let pointer = self.seat.get_pointer().unwrap();
 
         let route_cef = self.shell_pointer_route_to_cef(pos);
+        let grabbed = pointer.is_grabbed();
 
-        if route_cef {
-            if let Some((vx, vy)) = self.shell_pointer_buffer_pixels(nx, ny) {
+        let shell_buf = self.shell_pointer_buffer_pixels(nx, ny);
+        if route_cef && !grabbed {
+            if let Some((vx, vy)) = shell_buf {
                 let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
                 self.shell_ipc_try_write(&pkt);
-                pointer.motion(
-                    self,
-                    None,
-                    &MotionEvent {
-                        location: pos,
-                        serial,
-                        time: time_msec,
-                    },
-                );
-                pointer.frame(self);
-                return;
             }
         }
 
-        let under = self.surface_under(pos);
+        let under = if grabbed {
+            None
+        } else if route_cef && shell_buf.is_some() {
+            None
+        } else {
+            self.surface_under(pos)
+        };
 
         pointer.motion(
             self,
@@ -148,6 +148,46 @@ impl CompositorState {
             shell_norm = ?norm,
             "PointerButton"
         );
+        const BTN_LEFT: u32 = 0x110;
+
+        if button == BTN_LEFT
+            && button_state == ButtonState::Pressed
+            && !pointer.is_grabbed()
+        {
+            if let Some(window) = self.window_for_titlebar_drag_at(pos) {
+                let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+                self.space.raise_element(&window, true);
+                keyboard.set_focus(
+                    self,
+                    Some(wl_surface.clone()),
+                    serial,
+                );
+                self.space.elements().for_each(|w| {
+                    w.toplevel().unwrap().send_pending_configure();
+                });
+                let initial_window_location = self.space.element_location(&window).unwrap();
+                let start_data = PointerGrabStartData {
+                    focus: Some((wl_surface, pos)),
+                    button: BTN_LEFT,
+                    location: pos,
+                };
+                let grab = MoveSurfaceGrab::new(start_data, window.clone(), initial_window_location);
+                pointer.set_grab(self, grab, serial, Focus::Clear);
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time: time_msec,
+                    },
+                );
+                pointer.frame(self);
+                self.needs_winit_redraw = true;
+                return;
+            }
+        }
+
         let shell_px = if route_cef {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
                 .or_else(|| self.shell_pointer_view_px(pos))
@@ -159,7 +199,10 @@ impl CompositorState {
             let mouse_up = button_state != ButtonState::Pressed;
             let pkt = shell_wire::encode_compositor_pointer_button(vx, vy, b, mouse_up);
             self.shell_ipc_try_write(&pkt);
-            if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+            if ButtonState::Pressed == button_state
+                && !pointer.is_grabbed()
+                && !self.shell_point_in_any_window_decoration(pos)
+            {
                 self.space.elements().for_each(|window| {
                     window.set_activated(false);
                     window.toplevel().unwrap().send_pending_configure();

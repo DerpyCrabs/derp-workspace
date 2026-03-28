@@ -4,12 +4,16 @@ import './App.css'
 /** Keep in sync with compositor `SHELL_TITLEBAR_HEIGHT` / `SHELL_BORDER_THICKNESS`. */
 export const CHROME_TITLEBAR_PX = 28
 export const CHROME_BORDER_PX = 4
+/** Keep in sync with compositor `SHELL_TITLEBAR_CONTROLS_INSET` (close zone + margin). */
+export const CHROME_TITLEBAR_CONTROLS_PX = 40
 
 declare global {
   interface Window {
     /** Injected by `cef_host` after load (`http://127.0.0.1:…/spawn`). */
     __DERP_SPAWN_URL?: string
     __DERP_SHELL_HTTP?: string
+    /** Registered by CEF render process: `close` | `quit` | `spawn` + optional arg. */
+    __derpShellWireSend?: (op: 'close' | 'quit' | 'spawn', arg?: number | string) => void
   }
 }
 
@@ -130,6 +134,17 @@ async function postShell(path: string, body: object): Promise<void> {
   })
 }
 
+function shellWireSend(op: 'close' | 'quit' | 'spawn', arg?: number | string): boolean {
+  const fn = window.__derpShellWireSend
+  if (typeof fn !== 'function') return false
+  fn(op, arg)
+  return true
+}
+
+function canSessionControl(): boolean {
+  return typeof window.__derpShellWireSend === 'function' || shellHttpBase() !== null
+}
+
 function App() {
   const [hue, setHue] = createSignal(210)
   const [spawnStatus, setSpawnStatus] = createSignal<string | null>(null)
@@ -175,44 +190,7 @@ function App() {
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
 
-  let moveDrag: { windowId: number; lastX: number; lastY: number } | null = null
-
-  const endWindowMove = (windowId: number) => {
-    moveDrag = null
-    void postShell('/window_move_end', { window_id: windowId })
-  }
-
-  const onTitlebarPointerDown = (e: PointerEvent, windowId: number) => {
-    e.stopPropagation()
-    const base = shellHttpBase()
-    if (!base) return
-    moveDrag = { windowId, lastX: e.clientX, lastY: e.clientY }
-    void postShell('/window_move_begin', { window_id: windowId })
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }
-
-  const onTitlebarPointerMove = (e: PointerEvent) => {
-    const st = moveDrag
-    if (!st) return
-    const dx = e.clientX - st.lastX
-    const dy = e.clientY - st.lastY
-    st.lastX = e.clientX
-    st.lastY = e.clientY
-    if (dx !== 0 || dy !== 0) {
-      void postShell('/window_move_delta', { dx, dy })
-    }
-  }
-
-  const onTitlebarPointerUp = (e: PointerEvent, windowId: number) => {
-    if (moveDrag?.windowId === windowId) {
-      try {
-        ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
-      } catch {
-        /* ignore */
-      }
-      endWindowMove(windowId)
-    }
-  }
+  const panelHueStyle = () => ({ '--shell-hue': `${hue()}` } as const)
 
   onMount(() => {
     timer = setInterval(() => {
@@ -306,14 +284,20 @@ function App() {
 
   async function runNativeInCompositor() {
     setSpawnClicks((c) => c + 1)
-    const url = window.__DERP_SPAWN_URL
-    if (!url) {
-      setSpawnStatus('Not running under cef_host (no spawn URL).')
-      return
-    }
     const cmd = spawnCommand().trim()
     if (!cmd) {
       setSpawnStatus('Enter a command above (e.g. foot).')
+      return
+    }
+    if (shellWireSend('spawn', cmd)) {
+      setSpawnBusy(true)
+      setSpawnStatus(`Started: ${cmd}`)
+      setSpawnBusy(false)
+      return
+    }
+    const url = window.__DERP_SPAWN_URL
+    if (!url) {
+      setSpawnStatus('Not running under cef_host (no spawn URL / wire).')
       return
     }
     setSpawnBusy(true)
@@ -346,7 +330,6 @@ function App() {
       ref={(el) => {
         mainRef = el
       }}
-      style={{ '--shell-hue': `${hue()}` }}
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
     >
       <For each={windowsList()}>
@@ -378,14 +361,22 @@ function App() {
                   top: `${bd}px`,
                   width: `${w}px`,
                   height: `${th}px`,
-                  'pointer-events': 'auto',
+                  'pointer-events': 'none',
                 }}
-                onPointerDown={(e) => onTitlebarPointerDown(e, win.window_id)}
-                onPointerMove={onTitlebarPointerMove}
-                onPointerUp={(e) => onTitlebarPointerUp(e, win.window_id)}
-                onPointerCancel={(e) => onTitlebarPointerUp(e, win.window_id)}
               >
                 <span class="shell-titlebar__text">{win.title || win.app_id || `window ${win.window_id}`}</span>
+                <button
+                  type="button"
+                  class="shell-titlebar__close"
+                  style={{ 'pointer-events': 'auto' }}
+                  title="Close window"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    shellWireSend('close', win.window_id)
+                  }}
+                >
+                  ×
+                </button>
               </div>
               <div
                 class="shell-border shell-border--left"
@@ -422,7 +413,7 @@ function App() {
         }}
       </For>
 
-      <div class="shell-panel">
+      <div class="shell-panel" style={panelHueStyle()}>
         <h1 class="shell-title">derp shell</h1>
         <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
         <Show when={outputGeom()}>
@@ -491,16 +482,22 @@ function App() {
         <button
           type="button"
           class="shell-exit-session-btn"
-          disabled={!shellHttpBase()}
-          title={shellHttpBase() ? 'Tell compositor to exit (ends session)' : 'Needs cef_host control server'}
-          onClick={() => void postShell('/session_quit', {})}
+          disabled={!canSessionControl()}
+          title={
+            canSessionControl()
+              ? 'Tell compositor to exit (ends session)'
+              : 'Needs cef_host control server'
+          }
+          onClick={() => {
+            if (!shellWireSend('quit')) void postShell('/session_quit', {})
+          }}
         >
           Exit session
         </button>
         {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
       </div>
 
-      <div class="shell-debug-overlay" aria-hidden="true">
+      <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">
         <div class="shell-ruler-corner" />
         <div
           class="shell-ruler shell-ruler--top"

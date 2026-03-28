@@ -27,6 +27,7 @@ use smithay::{
 use crate::{
     chrome_bridge::ChromeEvent,
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
+    state::{DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y},
     CompositorState,
 };
 
@@ -62,7 +63,21 @@ impl XdgShellHandler for CompositorState {
 
         let window = Window::new_wayland_window(surface);
         let wl = window.toplevel().unwrap().wl_surface().clone();
-        self.space.map_element(window.clone(), (0, 0), false);
+        // Place top-left of the client surface at this offset from the first output's top-left so the
+        // SSD titlebar strip (`y0 - SHELL_TITLEBAR_HEIGHT .. y0`) stays on-screen.
+        let (map_x, map_y) = self
+            .space
+            .outputs()
+            .next()
+            .and_then(|o| self.space.output_geometry(o))
+            .map(|g| {
+                (
+                    g.loc.x.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_X),
+                    g.loc.y.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_Y),
+                )
+            })
+            .unwrap_or((DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y));
+        self.space.map_element(window.clone(), (map_x, map_y), false);
 
         self.apply_fractional_scale_to_surface(&wl);
 
@@ -142,11 +157,7 @@ impl XdgShellHandler for CompositorState {
                 .clone();
             let initial_window_location = self.space.element_location(&window).unwrap();
 
-            let grab = MoveSurfaceGrab {
-                start_data,
-                window,
-                initial_window_location,
-            };
+            let grab = MoveSurfaceGrab::new(start_data, window, initial_window_location);
 
             pointer.set_grab(self, grab, serial, Focus::Clear);
         }

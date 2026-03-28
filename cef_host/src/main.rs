@@ -15,6 +15,7 @@
 
 mod compositor_downlink;
 mod control_server;
+mod shell_uplink;
 
 use std::{
     io::{self, Read},
@@ -88,6 +89,10 @@ wrap_app! {
                 }
             }
         }
+
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(shell_uplink::DerpRenderProcessHandler::new())
+        }
     }
 }
 
@@ -139,6 +144,7 @@ wrap_load_handler! {
             let Some(host) = browser.host() else {
                 return;
             };
+            host.notify_screen_info_changed();
             host.invalidate(PaintElementType::VIEW);
         }
     }
@@ -232,13 +238,6 @@ wrap_render_handler! {
                 g.set_buffer_size(width, height);
                 prev != g.buffer_dimensions()
             };
-            if notify {
-                if let Some(b) = browser {
-                    if let Some(host) = b.host() {
-                        host.notify_screen_info_changed();
-                    }
-                }
-            }
             let stride = width * 4;
             let len = (stride * height) as usize;
             let pix = unsafe { std::slice::from_raw_parts(buffer, len) };
@@ -250,6 +249,34 @@ wrap_render_handler! {
                 pix,
             ) {
                 eprintln!("cef_host: frame IPC: {e}");
+            }
+            let undersized_nudge = {
+                let Ok(mut g) = self.view_state.lock() else {
+                    return;
+                };
+                g.maybe_take_undersized_paint_nudge(width, height, std::time::Duration::from_millis(200))
+            };
+            if notify || undersized_nudge {
+                if undersized_nudge && std::env::var("CEF_HOST_TRACE_PAINT").as_deref() == Ok("1") {
+                    eprintln!(
+                        "cef_host: undersized OSR paint {}x{} vs DIP (nudging was_resized/notify/invalidate)",
+                        width,
+                        height
+                    );
+                }
+                if let Some(b) = browser {
+                    if let Some(host) = b.host() {
+                        if undersized_nudge {
+                            host.was_resized();
+                        }
+                        if notify || undersized_nudge {
+                            host.notify_screen_info_changed();
+                        }
+                        if undersized_nudge {
+                            host.invalidate(PaintElementType::VIEW);
+                        }
+                    }
+                }
             }
             if std::env::var("CEF_HOST_PERF").as_deref() == Ok("1") {
                 eprintln!(
@@ -268,6 +295,7 @@ wrap_client! {
         render_handler: RenderHandler,
         load_handler: LoadHandler,
         life_span_handler: LifeSpanHandler,
+        compositor_ipc: Arc<Mutex<UnixStream>>,
     }
 
     impl Client {
@@ -281,6 +309,21 @@ wrap_client! {
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(self.life_span_handler.clone())
+        }
+
+        fn on_process_message_received(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            source_process: ProcessId,
+            message: Option<&mut ProcessMessage>,
+        ) -> std::os::raw::c_int {
+            if shell_uplink::on_browser_process_message(&self.compositor_ipc, source_process, message)
+            {
+                1
+            } else {
+                0
+            }
         }
     }
 }
@@ -508,7 +551,7 @@ fn main() {
     let view_state = Arc::new(Mutex::new(OsrViewState::new(cli.width, cli.height)));
     let rh = OsrToCompositor::new(ipc.clone(), view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(Some(inject_js));
-    let mut client = ShellClient::new(rh, lh, capture);
+    let mut client = ShellClient::new(rh, lh, capture, ipc.clone());
 
     let mut window_info = WindowInfo::default();
     window_info.bounds.width = cli.width;

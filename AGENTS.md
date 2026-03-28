@@ -43,7 +43,7 @@ Touch vs. pointer coordinate rules matter for **nested winit** vs **DRM**; keep 
 
 ## Remote logs
 
-- **`scripts/list-derp-logs.sh`** — By default **SSH**s like **`scripts/remote-install.sh`**, using **`scripts/remote-install.env`** (`REMOTE_USER`, `REMOTE_HOST`, `REMOTE_REPO`). Use **`--local`** to read logs on the current machine only. Options: `-n`, `-f` / `--follow`.
+- **`scripts/list-derp-logs.sh`** — **SSH**s like **`scripts/remote-install.sh`**, using **`scripts/remote-install.env`** (`REMOTE_USER`, `REMOTE_HOST`, `REMOTE_REPO`), then tails `~/.local/state/derp/compositor.log` on that host. Options: `-n`, `-f` / `--follow`.
 
 ---
 

@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::CompositorState;
 use smithay::{
     desktop::Window,
@@ -11,10 +13,29 @@ use smithay::{
     utils::{Logical, Point},
 };
 
+/// Minimum interval between compositor → shell geometry updates while dragging.
+const SHELL_GEOMETRY_NOTIFY_MIN: Duration = Duration::from_millis(12);
+
 pub struct MoveSurfaceGrab {
     pub start_data: PointerGrabStartData<CompositorState>,
     pub window: Window,
     pub initial_window_location: Point<i32, Logical>,
+    last_geometry_shell_notify: Option<Instant>,
+}
+
+impl MoveSurfaceGrab {
+    pub fn new(
+        start_data: PointerGrabStartData<CompositorState>,
+        window: Window,
+        initial_window_location: Point<i32, Logical>,
+    ) -> Self {
+        Self {
+            start_data,
+            window,
+            initial_window_location,
+            last_geometry_shell_notify: None,
+        }
+    }
 }
 
 impl PointerGrab<CompositorState> for MoveSurfaceGrab {
@@ -31,6 +52,16 @@ impl PointerGrab<CompositorState> for MoveSurfaceGrab {
         let new_location = self.initial_window_location.to_f64() + delta;
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
+
+        let now = Instant::now();
+        let notify = match self.last_geometry_shell_notify {
+            None => true,
+            Some(t) => now.duration_since(t) >= SHELL_GEOMETRY_NOTIFY_MIN,
+        };
+        if notify {
+            self.last_geometry_shell_notify = Some(now);
+            data.notify_geometry_if_changed(&self.window);
+        }
     }
 
     fn relative_motion(

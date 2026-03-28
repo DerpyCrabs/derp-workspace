@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Show compositor / derp-session logs from the machine that runs the GDM session.
 #
-# Default: SSH to REMOTE_HOST (same config as scripts/remote-install.sh) and tail the log there.
+# Always SSHs to REMOTE_HOST (same config as scripts/remote-install.sh) and tails the log there.
 #
 # Config: scripts/remote-install.env (gitignored; copy from remote-install.env.example)
 #         or env: REMOTE_USER, REMOTE_HOST, REMOTE_REPO
@@ -13,26 +13,22 @@
 #
 # Usage:
 #   bash scripts/list-derp-logs.sh [-n N] [-f|--follow]
-#   bash scripts/list-derp-logs.sh --local [-n N] [-f|--follow]    # no SSH; this machine only
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LOCAL_MODE=0
 LINES=120
 FOLLOW=0
 
 usage() {
-  echo "Usage: $0 [--local] [-n N] [-f|--follow] [-h|--help]"
-  echo "  Default: SSH (remote-install.env: REMOTE_USER, REMOTE_HOST, REMOTE_REPO) and tail logs on the remote."
-  echo "  --local  Tail logs on this machine only."
+  echo "Usage: $0 [-n N] [-f|--follow] [-h|--help]"
+  echo "  SSH (remote-install.env: REMOTE_USER, REMOTE_HOST, REMOTE_REPO) and tail logs on the remote."
   echo "  -n N     Last N lines (default $LINES)."
   echo "  -f       tail -f (ssh uses -t when this terminal is interactive)."
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --local) LOCAL_MODE=1; shift ;;
     -n)
       LINES="${2:?}"
       shift 2
@@ -76,7 +72,8 @@ list_logs_body() {
   fi
 }
 
-if [[ "$LOCAL_MODE" == 1 ]]; then
+# Set by the SSH stub below so we only read files on the remote host, not recurse into SSH again.
+if [[ -n "${LIST_DERP_LOGS_INTERNAL:-}" ]]; then
   list_logs_body
   exit 0
 fi
@@ -100,5 +97,6 @@ follow_arg=""
 exec ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
-exec bash scripts/list-derp-logs.sh --local -n $(printf '%q' "$LINES") ${follow_arg}
+export LIST_DERP_LOGS_INTERNAL=1
+exec bash scripts/list-derp-logs.sh -n $(printf '%q' "$LINES") ${follow_arg}
 EOF

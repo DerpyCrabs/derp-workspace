@@ -39,6 +39,7 @@ pub fn apply_message(
                 g.dip_w = logical_w as i32;
                 g.dip_h = logical_h as i32;
                 g.set_buffer_size(logical_w as i32, logical_h as i32);
+                g.reset_undersized_nudge();
             }
             let Ok(guard) = browser.lock() else {
                 return;

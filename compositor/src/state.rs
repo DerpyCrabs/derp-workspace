@@ -50,6 +50,11 @@ use smithay::input::pointer::CursorImageStatus;
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
+/// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
+pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
+pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
+/// Right side of titlebar reserved for shell controls (close); keep in sync with `shell` CSS.
+pub const SHELL_TITLEBAR_CONTROLS_INSET: i32 = 40;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 
@@ -483,6 +488,60 @@ impl CompositorState {
             && py < (y0 + h) as f64
         {
             return true;
+        }
+        false
+    }
+
+    /// Titlebar strip for **drag** (excludes right control inset reserved for shell close button).
+    pub fn shell_point_in_titlebar_drag_region(
+        &self,
+        px: f64,
+        py: f64,
+        x0: i32,
+        y0: i32,
+        w: i32,
+        _h: i32,
+    ) -> bool {
+        let th = SHELL_TITLEBAR_HEIGHT;
+        let inset = SHELL_TITLEBAR_CONTROLS_INSET;
+        let top = y0.saturating_sub(th);
+        let drag_right = x0 + w - inset;
+        px >= x0 as f64
+            && px < drag_right as f64
+            && py >= top as f64
+            && py < y0 as f64
+    }
+
+    /// Topmost window whose server-side titlebar drag region contains `pos`, if any.
+    pub fn window_for_titlebar_drag_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
+        let px = pos.x;
+        let py = pos.y;
+        for window in self.space.elements().rev() {
+            let loc = self.space.element_location(window)?;
+            let geo = window.geometry();
+            let x0 = loc.x;
+            let y0 = loc.y;
+            let w = geo.size.w;
+            let h = geo.size.h;
+            if self.shell_point_in_titlebar_drag_region(px, py, x0, y0, w, h) {
+                return Some(window.clone());
+            }
+        }
+        None
+    }
+
+    /// Whether `pos` lies over shell-drawn per-window chrome (title strip or border frame) for any stacked window.
+    pub fn shell_point_in_any_window_decoration(&self, pos: Point<f64, Logical>) -> bool {
+        let px = pos.x;
+        let py = pos.y;
+        for window in self.space.elements().rev() {
+            let Some(loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            if self.shell_point_in_decoration_chrome(px, py, loc.x, loc.y, geo.size.w, geo.size.h) {
+                return true;
+            }
         }
         false
     }
@@ -927,7 +986,7 @@ impl XdgDecorationHandler for CompositorState {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+            state.decoration_mode = Some(XdgDecoMode::ServerSide);
         });
         toplevel.send_configure();
     }
@@ -935,8 +994,9 @@ impl XdgDecorationHandler for CompositorState {
     fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode)
     {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
+        // Shell draws decorations (CEF); force SSD so clients like foot omit CSD.
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+            state.decoration_mode = Some(XdgDecoMode::ServerSide);
         });
         toplevel.send_configure();
     }
@@ -944,7 +1004,7 @@ impl XdgDecorationHandler for CompositorState {
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(XdgDecoMode::ClientSide);
+            state.decoration_mode = Some(XdgDecoMode::ServerSide);
         });
         toplevel.send_configure();
     }

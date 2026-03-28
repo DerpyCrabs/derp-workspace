@@ -18,6 +18,8 @@ pub struct OsrViewState {
     buffer_h: i32,
     /// Last time we ran `execute_java_script` for the Solid HUD (`osr_pointer`); avoids starving `do_message_loop_work`.
     last_osr_hud_at: Option<Instant>,
+    /// Last time we nudged CEF after an undersized OSR paint (stuck low-res upscale in the compositor).
+    last_undersized_nudge: Option<Instant>,
 }
 
 impl OsrViewState {
@@ -28,7 +30,36 @@ impl OsrViewState {
             buffer_w: dip_w,
             buffer_h: dip_h,
             last_osr_hud_at: None,
+            last_undersized_nudge: None,
         }
+    }
+
+    pub fn reset_undersized_nudge(&mut self) {
+        self.last_undersized_nudge = None;
+    }
+
+    /// OSR buffer should span at least the view in device pixels (≥ ~1× DIP each axis). If not, the compositor
+    /// letterbox-upscales and the shell looks blurry while native clients stay sharp.
+    pub fn maybe_take_undersized_paint_nudge(
+        &mut self,
+        buf_w: i32,
+        buf_h: i32,
+        min_interval: Duration,
+    ) -> bool {
+        if self.dip_w <= 0 || self.dip_h <= 0 || buf_w <= 0 || buf_h <= 0 {
+            return false;
+        }
+        if buf_w * 100 >= self.dip_w * 97 && buf_h * 100 >= self.dip_h * 97 {
+            return false;
+        }
+        let now = Instant::now();
+        if let Some(t) = self.last_undersized_nudge {
+            if now.saturating_duration_since(t) < min_interval {
+                return false;
+            }
+        }
+        self.last_undersized_nudge = Some(now);
+        true
     }
 
     /// Whether to emit another `osr_pointer` custom event (throttled); always call [`Self::buffer_to_view`] / mouse IPC every move.
@@ -72,6 +103,8 @@ impl OsrViewState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::OsrViewState;
 
     #[test]
@@ -95,5 +128,14 @@ mod tests {
         s.set_buffer_size(801, 601);
         let (vx, vy) = s.buffer_to_view(400, 300);
         assert_eq!((vx, vy), (400, 300));
+    }
+
+    #[test]
+    fn undersized_nudge_fires_once_then_rate_limits() {
+        let mut s = OsrViewState::new(1920, 1080);
+        let min = Duration::from_millis(100);
+        assert!(s.maybe_take_undersized_paint_nudge(800, 600, min));
+        assert!(!s.maybe_take_undersized_paint_nudge(800, 600, min));
+        assert!(!s.maybe_take_undersized_paint_nudge(1920, 1080, min));
     }
 }

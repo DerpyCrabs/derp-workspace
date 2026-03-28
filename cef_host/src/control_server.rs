@@ -1,4 +1,5 @@
-//! Loopback HTTP control plane: POST `/spawn`, `/window_move_*` → [`shell_wire`] on the compositor Unix stream.
+//! Loopback HTTP control plane: POST `/spawn`, `/session_quit` → [`shell_wire`] on the compositor Unix stream.
+//! Window move and chrome actions use the in-process `__derpShellWireSend` path instead.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -138,44 +139,6 @@ fn handle_one(
                 .to_string();
             shell_wire::encode_spawn_wayland_client(&command)
                 .ok_or_else(|| "invalid command".to_string())?
-        }
-        "/window_move_begin" => {
-            let window_id = v
-                .get("window_id")
-                .and_then(|x| x.as_u64())
-                .ok_or_else(|| "missing window_id".to_string())?;
-            if window_id > u32::MAX as u64 {
-                return Err("window_id too large".into());
-            }
-            shell_wire::encode_shell_move_begin(window_id as u32)
-        }
-        "/window_move_delta" => {
-            let dx = v
-                .get("dx")
-                .and_then(|x| x.as_i64())
-                .ok_or_else(|| "missing dx".to_string())?;
-            let dy = v
-                .get("dy")
-                .and_then(|x| x.as_i64())
-                .ok_or_else(|| "missing dy".to_string())?;
-            if dx < i32::MIN as i64
-                || dx > i32::MAX as i64
-                || dy < i32::MIN as i64
-                || dy > i32::MAX as i64
-            {
-                return Err("delta out of range".into());
-            }
-            shell_wire::encode_shell_move_delta(dx as i32, dy as i32)
-        }
-        "/window_move_end" => {
-            let window_id = v
-                .get("window_id")
-                .and_then(|x| x.as_u64())
-                .ok_or_else(|| "missing window_id".to_string())?;
-            if window_id > u32::MAX as u64 {
-                return Err("window_id too large".into());
-            }
-            shell_wire::encode_shell_move_end(window_id as u32)
         }
         _ => {
             write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)
