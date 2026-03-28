@@ -12,7 +12,14 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   exit 1
 fi
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# GDM runs `/usr/local/bin/derp-session` — a symlink to `…/scripts/derp-session.sh`. Without
+# resolving it, `dirname` is `/usr/local/bin` and ROOT becomes `/usr/local` (no `shell/dist`).
+_session="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+  _canonical="$(readlink -f "$_session" 2>/dev/null || true)"
+  [[ -n "$_canonical" ]] && _session="$_canonical"
+fi
+ROOT="$(cd "$(dirname "$_session")/.." && pwd)"
 COMPOSITOR_BIN="${COMPOSITOR_BIN:-/usr/local/bin/compositor}"
 CEF_HOST_BIN="${CEF_HOST_BIN:-/usr/local/bin/cef_host}"
 LAUNCHER="${DERP_CEF_LAUNCHER:-$ROOT/scripts/launch-cef-to-compositor.sh}"
