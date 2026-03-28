@@ -1,0 +1,7 @@
+[package]
+name = "shell_wire"
+version = "0.1.0"
+edition = "2021"
+description = "Length-prefixed pixel frame protocol for SolidJS/CEF shell → compositor IPC"
+
+[dependencies]

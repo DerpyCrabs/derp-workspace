@@ -12,7 +12,7 @@ Rough split of responsibilities:
 
 **Native Wayland applications** remain first-class: they connect as ordinary clients. The compositor exposes enough structure (stable window/surface ids, geometry, stacking) so the **SolidJS shell can position native surfaces and draw HTML+CSS “decorations”** around them — title bars, shadows, tab strips, or full custom frames — without those apps needing to know about CEF.
 
-Today the tree is a **minimal Smithay compositor** (winit/nested and headless modes, tests, CI); CEF and SolidJS are **planned**, not yet wired.
+The tree includes a **minimal Smithay compositor** (winit/nested and headless, tests, CI), a **Phase‑3 slice** for shell pixels (`shell_wire` + Unix socket + compositor overlay), a **SolidJS** app in [`shell/`](shell/), and the **`cef_host`** binary (CEF windowless / OSR → that IPC). Window‑chrome commands on the wire are still future work.
 
 ---
 
@@ -106,14 +106,41 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 
 | Path | Role |
 |------|------|
-| `compositor/` | Rust workspace member: Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints |
+| `compositor/` | Smithay compositor, `chrome_bridge` stub, winit/headless entrypoints, shell IPC listener (winit) |
+| `shell_wire/` | Shared length‑prefixed BGRA frame codec (`SHELL_PIXEL_PROTOCOL_VERSION`) |
+| `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
+| `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |
 | `MANUAL_CHECKLIST.md` | Manual QA for nested and headless runs |
+
+### Phase 3 dev setup (nested compositor + shell)
+
+1. **CEF / libcef.so:** The `cef-dll-sys` crate builds **`libcef_dll_wrapper` against a specific `libcef.so`**. At runtime you **must** load that same `libcef.so` (the one under `target/**/libcef.so` after `cargo build -p cef_host`). The **`cef_host` binary embeds a `RUNPATH`** to that directory so a plain `target/debug/cef_host` usually finds `libcef.so` even with no `LD_LIBRARY_PATH`; putting **another** `libcef.so` first on `LD_LIBRARY_PATH` (or an old **`CEF_PATH`**-derived path) still overrides and triggers **`CefApp_0_CToCpp called with invalid version -1`** (API hash mismatch).
+   - Easiest: use **`bash scripts/run-nested.sh`** (nested compositor + shell) or **`bash scripts/run-cef-host.sh -- --url file://…`** so the toolchain CEF directory is chosen automatically. **`scripts/run-nested.sh` prefers the Cargo-built CEF** over a conflicting `CEF_PATH`.
+   - Manual: `export CEF_PATH=<same dir as readelf RUNPATH on target/debug/cef_host>` (resources + `libcef.so`). You usually **do not** need `LD_LIBRARY_PATH` if you did not override it with another `libcef` tree.
+2. **Solid bundle:** From repo root, `cd shell && npm install && npm run build` (output in `shell/dist/`).
+3. **One-shot nested + Solid:** from a real session (`XDG_RUNTIME_DIR` set), run **`bash scripts/run-nested.sh`**. It **`cargo build`s compositor + `cef_host`**, **`npm run build`s `shell/`**, then starts the nested compositor and `cef_host`. Set **`NESTED_SKIP_BUILD=1`** to skip rebuilds, or **`NESTED_NO_SHELL=1`** for compositor-only.
+4. **Compositor without the script:** `cargo run -p compositor` still listens for shell IPC on **`derp-shell.sock`** by default.
+5. **CEF host alone:** `bash scripts/run-cef-host.sh -- --url "file://$(realpath shell/dist/index.html)"`
+
+`cef_host` follows **tauri-apps/cef-rs** `cefsimple` multiprocess wiring: **`api_hash`**, **`execute_process` with no `App`** (subprocesses must not construct `CefApp`), then **`Cli::parse`** and **`initialize` with `App`** only in the browser process. If you passed `App` into `execute_process`, subprocesses could hit **`CefApp_… invalid version -1`**. Ozone defaults to Wayland/X11 when `WAYLAND_DISPLAY`/`DISPLAY` are set; headless is used only when both are unset.
+
+The compositor draws Wayland clients first, then **overlays** the latest shell frame when one has been received.
 
 ---
 
 ## Contributing mindset
 
 Prefer **small, reviewable changes** that keep headless tests green. When extending IPC, bump **`CHROME_BRIDGE_PROTOCOL_VERSION`** (or equivalent) and document compatibility rules in code reviews.
+
+**CEF / `cef_host`:** Default `cargo test` does not run Chromium (no `libcef.so` in clean CI, large downloads). **SolidJS E2E (opt-in):** after `cargo build -p cef_host` and `(cd shell && npm run build)`, run  
+`RUN_SOLID_SHELL_E2E=1 cargo test -p compositor solid_shell_overlay_drawn -- --ignored`  
+(Linux; headless compositor + `cef_host`; asserts the shell frame is not blank via `DERP_SHELL_E2E_STATUS`).
+
+There is an **opt-in** regression test that `execute_process` runs before CLI parsing (subprocess argv must not hit clap’s `--url` requirement):
+
+`RUN_CEF_INTEGRATION=1 cargo test -p cef_host --test subprocess_argv -- --ignored`
+
+A mismatched **`libcef.so` vs `libcef_dll_wrapper`** still has to be caught by using the toolchain tree or that integration run with a real build.
 
 ---
 

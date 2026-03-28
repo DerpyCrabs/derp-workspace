@@ -234,6 +234,9 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
             socket: SocketConfig::Fixed(SOCKET.to_string()),
             seat_name: "chrome-bridge-test".to_string(),
             chrome_bridge: bridge_for_thread,
+            shell_ipc_socket: None,
+            shell_e2e_status_path: None,
+            shell_e2e_screenshot_path: None,
         };
         headless::run(opts, Some(Duration::from_secs(12))).expect("headless run");
     });

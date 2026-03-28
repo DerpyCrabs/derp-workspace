@@ -3,16 +3,19 @@ use std::time::Duration;
 use smithay::{
     backend::{
         renderer::{
-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer,
+            damage::OutputDamageTracker,
+            element::{memory::MemoryRenderBufferRenderElement, Kind},
+            gles::GlesRenderer,
         },
         winit::{self, WinitEvent},
     },
+    desktop::Window,
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Rectangle, Transform},
+    utils::{Point, Rectangle, Size, Transform},
 };
 
-use crate::{CalloopData, CompositorState};
+use crate::{shell_ipc, CalloopData, CompositorState};
 
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
@@ -28,10 +31,14 @@ pub fn init_winit(
         refresh: 60_000,
     };
 
+    // Rough physical size in mm (~96 DPI) so wl_output isn’t advertised as 0×0 mm.
+    let mm_w = ((mode.size.w.max(1) as f64) * 25.4 / 96.0).round() as i32;
+    let mm_h = ((mode.size.h.max(1) as f64) * 25.4 / 96.0).round() as i32;
+
     let output = Output::new(
         "winit".to_string(),
         PhysicalProperties {
-            size: (0, 0).into(),
+            size: (mm_w.max(1), mm_h.max(1)).into(),
             subpixel: Subpixel::Unknown,
             make: "derp-workspace".into(),
             model: "Winit".into(),
@@ -70,15 +77,38 @@ pub fn init_winit(
             }
             WinitEvent::Input(event) => state.process_input_event(event),
             WinitEvent::Redraw => {
+                shell_ipc::drain_shell_stream(state);
+
                 let size = backend.window_size();
                 let damage = Rectangle::from_size(size);
 
                 {
                     let (renderer, mut framebuffer) = backend.bind().unwrap();
+                    let out_size = output
+                        .current_mode()
+                        .map(|m| m.size)
+                        .unwrap_or(size);
+
+                    let mut custom: Vec<MemoryRenderBufferRenderElement<GlesRenderer>> = Vec::new();
+                    if state.shell_has_frame {
+                        match MemoryRenderBufferRenderElement::from_buffer(
+                            renderer,
+                            Point::from((0.0f64, 0.0f64)),
+                            &state.shell_memory_buffer,
+                            None,
+                            None,
+                            Some(Size::from((out_size.w, out_size.h))),
+                            Kind::Unspecified,
+                        ) {
+                            Ok(el) => custom.push(el),
+                            Err(e) => tracing::warn!(?e, "shell overlay: MemoryRenderBufferRenderElement failed"),
+                        }
+                    }
+
                     smithay::desktop::space::render_output::<
                         _,
-                        WaylandSurfaceRenderElement<GlesRenderer>,
-                        _,
+                        MemoryRenderBufferRenderElement<GlesRenderer>,
+                        Window,
                         _,
                     >(
                         &output,
@@ -87,7 +117,7 @@ pub fn init_winit(
                         1.0,
                         0,
                         [&state.space],
-                        &[],
+                        custom.as_slice(),
                         &mut damage_tracker,
                         [0.1, 0.1, 0.1, 1.0],
                     )
@@ -111,6 +141,7 @@ pub fn init_winit(
                 backend.window().request_redraw();
             }
             WinitEvent::CloseRequested => {
+                crate::sidecar::terminate_sidecar(&mut data.command_child);
                 state.loop_signal.stop();
             }
             _ => (),

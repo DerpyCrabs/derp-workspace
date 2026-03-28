@@ -1,0 +1,23 @@
+[package]
+name = "cef_host"
+version = "0.1.0"
+edition = "2021"
+description = "CEF off-screen host: SolidJS UI → shell_wire IPC → compositor"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cef_host"
+path = "src/main.rs"
+
+[dependencies]
+cef = { version = "146", default-features = false }
+# Direct dep (not only transitive through `cef`) so this crate's build script receives
+# `DEP_CEF_DLL_WRAPPER_CEF_DIR` and we can embed the matching RUNPATH.
+cef-dll-sys = { version = "146", default-features = true }
+clap = { version = "4", features = ["derive"] }
+shell_wire = { path = "../shell_wire" }
+
+[dev-dependencies]
+tempfile = "3"

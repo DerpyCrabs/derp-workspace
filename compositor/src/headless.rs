@@ -13,7 +13,7 @@ use smithay::{
     utils::Transform,
 };
 
-use crate::{CalloopData, CompositorInitOptions, CompositorState};
+use crate::{shell_ipc, CalloopData, CompositorInitOptions, CompositorState};
 
 pub fn run(
     options: CompositorInitOptions,
@@ -27,6 +27,7 @@ pub fn run(
     let mut data = CalloopData {
         state,
         display_handle,
+        command_child: None,
     };
 
     let dh = data.display_handle.clone();
@@ -66,6 +67,7 @@ pub fn run(
                     }
                 }
 
+                shell_ipc::drain_shell_stream(&mut data.state);
                 data.state.space.refresh();
                 data.state.popups.cleanup();
 

@@ -1,0 +1,36 @@
+.shell-root {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, sans-serif;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--shell-hue), 55%, 18%) 0%,
+    hsl(calc(var(--shell-hue) + 40), 45%, 12%) 100%
+  );
+  color: hsl(0, 0%, 96%);
+}
+
+.shell-panel {
+  text-align: center;
+  padding: 2.5rem 3rem;
+  border-radius: 1rem;
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.shell-title {
+  margin: 0 0 0.5rem;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.shell-sub {
+  margin: 0;
+  opacity: 0.85;
+  font-size: 1rem;
+}

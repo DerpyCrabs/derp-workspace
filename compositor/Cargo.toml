@@ -13,6 +13,8 @@ gpu-tests = []
 [dependencies]
 bitflags = "2.2.1"
 clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+shell_wire = { path = "../shell_wire" }
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_winit",
     "wayland_frontend",
@@ -22,7 +24,14 @@ smithay = { version = "0.7.0", default-features = false, features = [
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shell_wire = { path = "../shell_wire" }
 tempfile = "3"
 wayland-client = "0.31.13"
 wayland-protocols = { version = "0.32.11", features = ["client"] }

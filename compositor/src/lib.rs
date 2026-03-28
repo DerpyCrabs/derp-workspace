@@ -14,6 +14,9 @@ mod gpu_tests;
 mod grabs;
 mod handlers;
 mod input;
+mod shell_ipc;
+mod shell_overlay;
+pub mod sidecar;
 pub mod state;
 
 pub use state::{ClientState, CompositorInitOptions, CompositorState, SocketConfig};
@@ -26,4 +29,7 @@ pub mod winit;
 pub struct CalloopData {
     pub state: CompositorState,
     pub display_handle: DisplayHandle,
+    /// Populated when the binary is run with `--command` (e.g. `cef_host`). Killed when the
+    /// nested compositor window closes or the event loop exits.
+    pub command_child: Option<std::process::Child>,
 }
