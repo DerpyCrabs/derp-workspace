@@ -196,15 +196,15 @@ impl DrmSession {
                                 <Window as AsRenderElements<GlesRenderer>>::RenderElement,
                                 MemoryRenderBufferRenderElement<GlesRenderer>,
                             >,
-                        > = Vec::with_capacity(space_els.len() + custom.len());
-                        render_elements.extend(space_els.into_iter().map(DesktopStack::Space));
-                        render_elements.extend(custom.iter().map(DesktopStack::Shell));
+                        > = Vec::with_capacity(space_els.len() + custom.len() + 2);
                         pointer_render::append_pointer_desktop_elements(
                             state,
                             renderer,
                             output,
                             &mut render_elements,
                         );
+                        render_elements.extend(space_els.into_iter().map(DesktopStack::Space));
+                        render_elements.extend(custom.iter().map(DesktopStack::Shell));
 
                         self.damage_tracker.render_output(
                             renderer,

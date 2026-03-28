@@ -1,10 +1,9 @@
-//! Draw the client cursor: `wl_surface` sprite, or a solid fallback for `wp_cursor_shape` [`Named`] icons.
+//! Draw the client cursor: `wl_surface` sprite, or the system / themed bitmap fallback for [`Named`].
 
 use smithay::{
     backend::renderer::{
         element::{
             memory::MemoryRenderBufferRenderElement,
-            solid::SolidColorRenderElement,
             surface::render_elements_from_surface_tree,
             AsRenderElements, Kind,
         },
@@ -27,7 +26,34 @@ type Desk<'a> = DesktopStack<
     MemoryRenderBufferRenderElement<GlesRenderer>,
 >;
 
-/// Append cursor layers (topmost) to the render list: Wayland surface and/or solid fallback for themed cursors.
+fn push_named_cursor_fallback(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    pos: Point<f64, Logical>,
+    scale_f: f64,
+    out: &mut Vec<Desk<'_>>,
+) {
+    let (hx, hy) = state.cursor_fallback_hotspot;
+    let phys = Point::<f64, Physical>::from((
+        ((pos.x - hx as f64) * scale_f),
+        ((pos.y - hy as f64) * scale_f),
+    ));
+    match MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        phys,
+        &state.cursor_fallback_buffer,
+        None,
+        None,
+        None,
+        Kind::Cursor,
+    ) {
+        Ok(el) => out.push(DesktopStack::CursorTex(el)),
+        Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
+    }
+}
+
+/// Append pointer layers. Caller should place these **first** in the `elements` slice passed to
+/// [`smithay::backend::renderer::damage::OutputDamageTracker::render_output`] (front-to-back: cursor is frontmost).
 pub fn append_pointer_desktop_elements(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
@@ -43,18 +69,7 @@ pub fn append_pointer_desktop_elements(
     match &state.pointer_cursor_image {
         CursorImageStatus::Hidden => {}
         CursorImageStatus::Named(_) => {
-            let phys = Point::<i32, Physical>::from((
-                (pos.x * scale_f).round() as i32,
-                (pos.y * scale_f).round() as i32,
-            ));
-            let el = SolidColorRenderElement::from_buffer(
-                &state.cursor_fallback_buffer,
-                phys,
-                Scale::from(scale_f),
-                1.0,
-                Kind::Unspecified,
-            );
-            out.push(DesktopStack::CursorFb(el));
+            push_named_cursor_fallback(state, renderer, pos, scale_f, out);
         }
         CursorImageStatus::Surface(surface) => {
             if !surface.alive() {
@@ -77,7 +92,7 @@ pub fn append_pointer_desktop_elements(
                 phys,
                 Scale::from(scale_f),
                 1.0,
-                Kind::Unspecified,
+                Kind::Cursor,
             ) {
                 out.push(DesktopStack::Pointer(el));
             }

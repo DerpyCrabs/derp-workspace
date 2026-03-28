@@ -166,9 +166,9 @@ pub fn init_winit(
                             }
                         }
 
-                        // Smithay `render_output` prepends `custom_elements`, so index 0 is **frontmost**.
-                        // Our CEF/shell plane must be **behind** Wayland toplevels so OSR never composites
-                        // over (or “shows through” onto) native client pixels — build the list explicitly.
+                        // `OutputDamageTracker::render_output` expects **front-to-back** order (first entry =
+                        // topmost). Pointer → toplevels → shell OSR so the cursor is never covered by the
+                        // Solid/CEF plane and native windows stay above the shell.
                         let render_res: Result<
                             RenderOutputResult<'_>,
                             OutputDamageError<GlesError>,
@@ -186,17 +186,17 @@ pub fn init_winit(
                                         <Window as AsRenderElements<GlesRenderer>>::RenderElement,
                                         MemoryRenderBufferRenderElement<GlesRenderer>,
                                     >,
-                                > = Vec::with_capacity(space_els.len() + custom.len());
-                                render_elements
-                                    .extend(space_els.into_iter().map(DesktopStack::Space));
-                                render_elements
-                                    .extend(custom.iter().map(DesktopStack::Shell));
+                                > = Vec::with_capacity(space_els.len() + custom.len() + 2);
                                 pointer_render::append_pointer_desktop_elements(
                                     state,
                                     renderer,
                                     &output,
                                     &mut render_elements,
                                 );
+                                render_elements
+                                    .extend(space_els.into_iter().map(DesktopStack::Space));
+                                render_elements
+                                    .extend(custom.iter().map(DesktopStack::Shell));
 
                                 damage_tracker.render_output(
                                     renderer,

@@ -11,7 +11,7 @@ use std::{
 use smithay::{
     backend::input::TouchSlot,
     backend::{
-        renderer::element::{memory::MemoryRenderBuffer, solid::SolidColorBuffer},
+        renderer::element::memory::MemoryRenderBuffer,
         session::libseat::LibSeatSession,
     },
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
@@ -130,8 +130,10 @@ pub struct CompositorState {
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
-    /// Solid sprite when the client sets [`CursorImageStatus::Named`] (cursor_shape) with no surface.
-    pub(crate) cursor_fallback_buffer: SolidColorBuffer,
+    /// Themed / system default pointer (`left_ptr`); also used for [`CursorImageStatus::Named`].
+    pub(crate) cursor_fallback_buffer: MemoryRenderBuffer,
+    /// Hotspot within [`Self::cursor_fallback_buffer`] (logical px).
+    pub(crate) cursor_fallback_hotspot: (i32, i32),
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
     shell_e2e_status_path: Option<PathBuf>,
@@ -175,6 +177,7 @@ impl CompositorState {
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
         let shell_memory_buffer = crate::shell_overlay::new_shell_memory_buffer();
+        let (cursor_fallback_buffer, cursor_fallback_hotspot) = crate::cursor_fallback::load_cursor_fallback();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, &options.seat_name);
         seat.add_keyboard(Default::default(), 200, 25).unwrap();
@@ -217,7 +220,8 @@ impl CompositorState {
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
             pointer_cursor_image: CursorImageStatus::default_named(),
-            cursor_fallback_buffer: SolidColorBuffer::new((22, 22), [0.97f32, 0.97f32, 1.0f32, 1.0f32]),
+            cursor_fallback_buffer,
+            cursor_fallback_hotspot,
             shell_move_window_id: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,

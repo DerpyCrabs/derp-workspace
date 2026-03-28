@@ -46,6 +46,13 @@ type DerpShellDetail =
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   /** Compositor → CEF injected pointer; view/DIP coords (matches `clientX`/`clientY` when OSR fills the view). */
   | { type: 'osr_pointer'; client_x: number; client_y: number }
+  | {
+      type: 'osr_pointer_button'
+      client_x: number
+      client_y: number
+      button: number
+      mouse_up: boolean
+    }
 
 type DerpWindow = {
   window_id: number
@@ -245,6 +252,21 @@ function App() {
           })
         } else {
           setPointerInMain({ x: d.client_x, y: d.client_y })
+        }
+        return
+      }
+      if (d.type === 'osr_pointer_button') {
+        setPointerClient({ x: d.client_x, y: d.client_y })
+        const el = mainRef
+        if (el) {
+          const r = el.getBoundingClientRect()
+          setPointerInMain({
+            x: Math.round(d.client_x - r.left),
+            y: Math.round(d.client_y - r.top),
+          })
+        }
+        if (d.button === 0 && !d.mouse_up) {
+          setRootPointerDowns((n) => n + 1)
         }
         return
       }

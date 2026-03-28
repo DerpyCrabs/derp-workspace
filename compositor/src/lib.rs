@@ -11,6 +11,7 @@ mod renderer_smoke;
 #[cfg(all(test, feature = "gpu-tests"))]
 mod gpu_tests;
 
+mod cursor_fallback;
 mod desktop_stack;
 pub mod drm;
 mod pointer_render;

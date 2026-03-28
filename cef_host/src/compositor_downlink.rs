@@ -17,11 +17,8 @@ fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Some(frame) = browser.main_frame() else {
         return;
     };
-    frame.execute_java_script(
-        Some(&CefString::from(code.as_str())),
-        Some(&CefString::from("https://derp/shell-bridge.js")),
-        0,
-    );
+    // `None` script URL runs in the loaded document (fake https://derp/ origins were ignored for OSR HUD).
+    frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
 }
 
 pub fn apply_message(
@@ -271,6 +268,16 @@ pub fn apply_message(
                 _ => MouseButtonType::LEFT,
             };
             host.send_mouse_click_event(Some(&ev), ty, if mouse_up { 1 } else { 0 }, 1);
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "osr_pointer_button",
+                    "client_x": vx,
+                    "client_y": vy,
+                    "button": button,
+                    "mouse_up": mouse_up,
+                }),
+            );
         }
     }
 }
