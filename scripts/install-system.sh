@@ -20,7 +20,8 @@
 #
 # Session logging: `derp-session` appends compositor + cef_host stdout/stderr to DERP_COMPOSITOR_LOG
 # (default ~/.local/state/derp/compositor.log). Set DERP_COMPOSITOR_LOG to override or inspect that
-# file from a TTY/SSH/live mount when debugging a gray screen (tracing, CEF_HOST_*, shell IPC).
+# file from a TTY/SSH (`scripts/list-derp-logs.sh`) when debugging. `derp-session` sets RUST_LOG to
+# include derp_input=debug; the compositor binary uses the same default if RUST_LOG is unset.
 #
 # Flags:
 #   --no-git               — same as INSTALL_SKIP_GIT=1

@@ -8,9 +8,8 @@
 #
 # On the remote, reads ~/.local/state/derp/compositor.log (override with DERP_COMPOSITOR_LOG on that host).
 #
-# Input tracing (remote session must be restarted after changing):
-#   DERP_INPUT_DEBUG=1  in derp-session / environment → RUST_LOG derp_input=debug
-#   DERP_INPUT_TRACE=1  → derp_input=trace
+# Input: `derp_session` and the compositor binary default to RUST_LOG including derp_input=debug (no extra env).
+# For trace: set RUST_LOG=…,derp_input=trace before login or in a test shell.
 #
 # Usage:
 #   bash scripts/list-derp-logs.sh [-n N] [-f|--follow]

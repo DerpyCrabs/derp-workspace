@@ -77,11 +77,13 @@ fn shell_ipc_stall_timeout_from_env() -> Option<Duration> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    } else {
-        tracing_subscriber::fmt().init();
-    }
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        // GDM / nested runs often have no RUST_LOG; keep input diagnostics without extra env.
+        tracing_subscriber::EnvFilter::new("warn,derp_input=debug")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .init();
 
     let cli = Cli::parse();
 
