@@ -21,8 +21,8 @@
 //! Shell → compositor (decoded by [`pop_message`]):
 //! - [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
-//!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session)
-//! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command)
+//!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session), [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
+//! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command), [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
 
 pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 7;
 
@@ -38,6 +38,8 @@ pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
 pub const MSG_COMPOSITOR_POINTER_BUTTON: u32 = 4;
 /// Real touch finger / slot (not pointer-emulated mouse). Maps to CEF [`send_touch_event`].
 pub const MSG_COMPOSITOR_TOUCH: u32 = 31;
+/// Compositor → shell: watchdog keepalive; [`cef_host`] must reply with [`MSG_SHELL_PONG`].
+pub const MSG_COMPOSITOR_PING: u32 = 32;
 
 /// [`MSG_COMPOSITOR_TOUCH`] `phase` values (compositor → `cef_host` → CEF).
 pub const TOUCH_PHASE_MOVED: u32 = 0;
@@ -65,6 +67,8 @@ pub const MSG_SHELL_CLOSE: u32 = 25;
 pub const MSG_SHELL_SET_FULLSCREEN: u32 = 26;
 /// Shell → compositor: stop the compositor event loop (end session).
 pub const MSG_SHELL_QUIT_COMPOSITOR: u32 = 27;
+/// Shell → compositor: reply to [`MSG_COMPOSITOR_PING`] (watchdog liveness).
+pub const MSG_SHELL_PONG: u32 = 30;
 
 /// Shell → compositor: shared pixel buffer file under `XDG_RUNTIME_DIR` (basename only in payload).
 pub const MSG_SHELL_SHM_REGION: u32 = 28;
@@ -552,6 +556,8 @@ pub enum DecodedMessage {
         enabled: bool,
     },
     ShellQuitCompositor,
+    /// Reply to [`MSG_COMPOSITOR_PING`].
+    ShellPong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -631,6 +637,8 @@ pub enum DecodedCompositorToShellMessage {
     WindowList {
         windows: Vec<ShellWindowSnapshot>,
     },
+    /// Compositor requests [`encode_shell_pong`] from `cef_host`.
+    Ping,
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32) -> Vec<u8> {
@@ -661,6 +669,24 @@ pub fn encode_compositor_pointer_button(
     v.extend_from_slice(&button.to_le_bytes());
     v.extend_from_slice(&(if mouse_up { 1u32 } else { 0 }).to_le_bytes());
     v.extend_from_slice(&titlebar_drag_window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_ping() -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_PING.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_pong() -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_PONG.to_le_bytes());
     v
 }
 
@@ -866,6 +892,12 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             })
         }
         MSG_WINDOW_LIST => decode_window_list_compositor_body(body),
+        MSG_COMPOSITOR_PING => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            Ok(DecodedCompositorToShellMessage::Ping)
+        }
         MSG_FRAME
         | MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
@@ -876,6 +908,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_CLOSE
         | MSG_SHELL_SET_FULLSCREEN
         | MSG_SHELL_QUIT_COMPOSITOR
+        | MSG_SHELL_PONG
         | MSG_SHELL_SHM_REGION
         | MSG_FRAME_SHM_COMMIT => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
@@ -1049,6 +1082,12 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 return Err(DecodeError::BadWindowPayload);
             }
             Ok(DecodedMessage::ShellQuitCompositor)
+        }
+        MSG_SHELL_PONG => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(DecodedMessage::ShellPong)
         }
         MSG_SHELL_SHM_REGION => decode_shell_shm_region_body(body),
         MSG_FRAME_SHM_COMMIT => decode_frame_shm_commit_body(body),
@@ -1580,5 +1619,22 @@ mod tests {
             other => panic!("expected end: {other:?}"),
         }
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn ping_pong_round_trip() {
+        let mut a = encode_compositor_ping();
+        match pop_compositor_to_shell_message(&mut a).unwrap() {
+            Some(DecodedCompositorToShellMessage::Ping) => {}
+            o => panic!("expected Ping: {o:?}"),
+        }
+        assert!(a.is_empty());
+
+        let mut b = encode_shell_pong();
+        match pop_message(&mut b).unwrap() {
+            Some(DecodedMessage::ShellPong) => {}
+            o => panic!("expected ShellPong: {o:?}"),
+        }
+        assert!(b.is_empty());
     }
 }

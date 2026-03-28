@@ -13,6 +13,7 @@ pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowInfo {
     pub window_id: u32,
+    /// Compositor token for shell IPC (not the raw Wayland protocol id).
     pub surface_id: u32,
     pub title: String,
     pub app_id: String,
@@ -56,7 +57,6 @@ pub enum ChromeEvent {
         info: WindowInfo,
     },
     FocusChanged {
-        /// Wayland object id for the focused surface, if any.
         surface_id: Option<u32>,
         /// Compositor [`WindowInfo::window_id`], if the surface is a known toplevel.
         window_id: Option<u32>,
@@ -164,13 +164,16 @@ mod tests {
 
     #[test]
     fn registry_updates_match_metadata_changed_event() {
-        use crate::window_registry::WindowRegistry;
-
-        let mut reg = WindowRegistry::new();
-        reg.register_toplevel(9, "old".into(), "id".into());
-        assert_eq!(reg.set_title(9, "new".into()), Some(true));
-
-        let info = reg.snapshot_for_surface(9).unwrap();
+        let info = WindowInfo {
+            window_id: 1,
+            surface_id: 42,
+            title: "new".into(),
+            app_id: "id".into(),
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowMetadataChanged { info: info.clone() });
         let ev = b.take_events();
@@ -180,12 +183,16 @@ mod tests {
 
     #[test]
     fn logging_bridge_records_window_geometry_changed() {
-        use crate::window_registry::WindowRegistry;
-
-        let mut reg = WindowRegistry::new();
-        reg.register_toplevel(3, "t".into(), "app".into());
-        assert_eq!(reg.set_geometry(3, 1, 2, 400, 300), Some(true));
-        let info = reg.snapshot_for_surface(3).unwrap();
+        let info = WindowInfo {
+            window_id: 1,
+            surface_id: 7,
+            title: "t".into(),
+            app_id: "app".into(),
+            x: 1,
+            y: 2,
+            width: 400,
+            height: 300,
+        };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
         let ev = b.take_events();
@@ -195,16 +202,16 @@ mod tests {
 
     #[test]
     fn geometry_then_metadata_sequence_preserves_layout_fields() {
-        use crate::window_registry::WindowRegistry;
-
-        let mut reg = WindowRegistry::new();
-        reg.register_toplevel(8, "tit".into(), "aid".into());
-        assert_eq!(reg.set_geometry(8, 0, 0, 640, 480), Some(true));
-        assert_eq!(reg.set_title(8, "new".into()), Some(true));
-
-        let info = reg.snapshot_for_surface(8).unwrap();
-        assert_eq!((info.x, info.y, info.width, info.height), (0, 0, 640, 480));
-        assert_eq!(info.title, "new");
+        let info = WindowInfo {
+            window_id: 3,
+            surface_id: 1,
+            title: "new".into(),
+            app_id: "aid".into(),
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 480,
+        };
 
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });

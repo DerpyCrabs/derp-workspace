@@ -11,7 +11,7 @@ use smithay::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER},
 };
 
@@ -197,8 +197,8 @@ impl CompositorState {
                 && !pointer.is_grabbed()
             {
                 if let Some(window) = self.window_for_titlebar_close_at(pos) {
-                    let sid = window.toplevel().unwrap().wl_surface().id().protocol_id();
-                    if let Some(wid) = self.window_registry.window_id_for_surface(sid) {
+                    let wl = window.toplevel().unwrap().wl_surface();
+                    if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
                         self.shell_close_window(wid);
                     }
                 } else if let Some(window) = self.window_for_titlebar_drag_at(pos) {
@@ -221,8 +221,8 @@ impl CompositorState {
                 } else {
                     self.window_for_titlebar_drag_at(pos)
                         .and_then(|w| {
-                            let sid = w.toplevel()?.wl_surface().id().protocol_id();
-                            self.window_registry.window_id_for_surface(sid)
+                            self.window_registry
+                                .window_id_for_wl_surface(w.toplevel()?.wl_surface())
                         })
                         .unwrap_or(0)
                 }
@@ -348,7 +348,7 @@ impl CompositorState {
                 let output_geo = self.space.output_geometry(output).unwrap();
                 let pointer = self.seat.get_pointer().unwrap();
                 let d = event.delta();
-                tracing::debug!(
+                tracing::trace!(
                     target: "derp_input",
                     dx = d.x,
                     dy = d.y,
@@ -365,7 +365,7 @@ impl CompositorState {
                 pos.x = pos.x.clamp(min_x, max_x);
                 pos.y = pos.y.clamp(min_y, max_y);
                 let local = pos - output_geo.loc.to_f64();
-                tracing::debug!(
+                tracing::trace!(
                     target: "derp_input",
                     clamped_x = pos.x,
                     clamped_y = pos.y,
@@ -384,7 +384,7 @@ impl CompositorState {
                 let output_geo = self.space.output_geometry(output).unwrap();
 
                 let local = event.position_transformed(output_geo.size);
-                tracing::debug!(
+                tracing::trace!(
                     target: "derp_input",
                     raw_x = event.x(),
                     raw_y = event.y(),
@@ -461,7 +461,7 @@ impl CompositorState {
                 let output = self.space.outputs().next().unwrap();
                 let output_geo = self.space.output_geometry(output).unwrap();
                 let local = self.touch_output_local(&event, output_geo);
-                tracing::debug!(
+                tracing::trace!(
                     target: "derp_input",
                     raw_x = event.x(),
                     raw_y = event.y(),

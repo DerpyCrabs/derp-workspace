@@ -16,6 +16,8 @@ export type ShellWindowModel = {
 type ShellWindowFrameProps = {
   win: ShellWindowModel
   focused: boolean
+  /** Stacking vs other chrome (focused window should use the largest). */
+  stackZ: number
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
   onClose: () => void
 }
@@ -30,6 +32,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       classList={{ 'shell-window-chrome--focused': props.focused }}
       style={{
         position: 'fixed',
+        'z-index': props.stackZ,
         left: `${props.win.x - bd}px`,
         top: `${props.win.y - th - bd}px`,
         width: `${props.win.width + bd * 2}px`,
@@ -55,16 +58,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           e.stopPropagation()
           console.log(
             `[derp-shell-move] titlebar pointerdown win=${props.win.window_id} ${e.clientX},${e.clientY}`,
-          )
-          props.onTitlebarPointerDown(e.clientX, e.clientY)
-        }}
-        onMouseDown={(e) => {
-          if (e.button !== 0) return
-          if ((e.target as HTMLElement).closest('.shell-titlebar__close')) return
-          e.preventDefault()
-          e.stopPropagation()
-          console.log(
-            `[derp-shell-move] titlebar mousedown win=${props.win.window_id} ${e.clientX},${e.clientY}`,
           )
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}

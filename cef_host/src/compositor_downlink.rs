@@ -337,5 +337,6 @@ pub fn apply_message(
             };
             host.send_touch_event(Some(&ev));
         }
+        shell_wire::DecodedCompositorToShellMessage::Ping => {}
     }
 }

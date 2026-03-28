@@ -11,9 +11,8 @@
   position: relative;
 }
 
-/* Above `.shell-panel` (12) so titlebar/close match visual stacking; below debug overlay (50). */
+/* Base layer; per-frame inline `z-index` stacks focused window on top. Above `.shell-panel` (12); below debug overlay (50). */
 .shell-window-chrome {
-  z-index: 14;
   pointer-events: none;
 }
 

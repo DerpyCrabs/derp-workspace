@@ -8,8 +8,10 @@
 #
 # On the remote, reads ~/.local/state/derp/compositor.log (override with DERP_COMPOSITOR_LOG on that host).
 #
-# Input: `derp_session` and the compositor binary default to RUST_LOG including derp_input=debug (no extra env).
+# Input: `derp-session` and the compositor default to RUST_LOG including derp_input=debug (no extra env).
 # For trace: set RUST_LOG=…,derp_input=trace before login or in a test shell.
+# Multi-window / shell chrome: compositor emits `derp_shell_sync` (map, unmap, IPC snapshot); e.g.
+#   RUST_LOG=warn,derp_input=debug,derp_shell_sync=debug
 #
 # Usage:
 #   bash scripts/list-derp-logs.sh [-n N] [-f|--follow]

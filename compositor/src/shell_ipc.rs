@@ -65,6 +65,7 @@ fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
     state.shell_read_buf.clear();
     state.shell_shm = None;
     state.shell_clear_ipc_last_rx();
+    state.shell_ipc_last_compositor_ping = None;
     state.clear_shell_frame();
 }
 
@@ -152,7 +153,7 @@ fn dispatch_shell_message(
             state.shell_move_begin(window_id);
         }
         ShellMoveDelta { dx, dy } => {
-            tracing::warn!(target: "derp_shell_move", dx, dy, "shell ipc rx: move_delta");
+            tracing::trace!(target: "derp_shell_move", dx, dy, "shell ipc rx: move_delta");
             state.shell_move_delta(dx, dy);
         }
         ShellMoveEnd { window_id } => {
@@ -175,6 +176,7 @@ fn dispatch_shell_message(
             state.loop_signal.stop();
             state.loop_signal.wakeup();
         }
+        ShellPong => {}
     }
 }
 

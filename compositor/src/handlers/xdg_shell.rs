@@ -27,7 +27,6 @@ use smithay::{
 use crate::{
     chrome_bridge::ChromeEvent,
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
-    state::{DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y},
     CompositorState,
 };
 
@@ -52,31 +51,28 @@ impl XdgShellHandler for CompositorState {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let surface_id = surface.wl_surface().id().protocol_id();
+        let wl0 = surface.wl_surface();
         let (title, app_id) = toplevel_title_app_id(&surface);
-        self.window_registry
-            .register_toplevel(surface_id, title, app_id);
+        self.window_registry.register_toplevel(wl0, title, app_id);
         let info = self
             .window_registry
-            .snapshot_for_surface(surface_id)
+            .snapshot_for_wl_surface(wl0)
             .expect("just registered");
 
         let window = Window::new_wayland_window(surface);
         let wl = window.toplevel().unwrap().wl_surface().clone();
-        // Place top-left of the client surface at this offset from the first output's top-left so the
-        // SSD titlebar strip (`y0 - SHELL_TITLEBAR_HEIGHT .. y0`) stays on-screen.
-        let (map_x, map_y) = self
-            .space
-            .outputs()
-            .next()
-            .and_then(|o| self.space.output_geometry(o))
-            .map(|g| {
-                (
-                    g.loc.x.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_X),
-                    g.loc.y.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_Y),
-                )
-            })
-            .unwrap_or((DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y));
+
+        let existing_before = self.space.elements().count();
+        let (map_x, map_y) = self.new_toplevel_initial_location();
+        tracing::info!(
+            target: "derp_shell_sync",
+            window_id = info.window_id,
+            surface_id = info.surface_id,
+            existing_before,
+            map_x,
+            map_y,
+            "xdg new_toplevel initial map (logical)"
+        );
         self.space.map_element(window.clone(), (map_x, map_y), false);
 
         self.apply_fractional_scale_to_surface(&wl);
@@ -87,7 +83,6 @@ impl XdgShellHandler for CompositorState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
-        let surface_id = wl.id().protocol_id();
         let window_opt = self
             .space
             .elements()
@@ -96,26 +91,26 @@ impl XdgShellHandler for CompositorState {
         if let Some(w) = window_opt {
             self.space.unmap_elem(&w);
         }
-        if let Some(window_id) = self.window_registry.remove_by_surface(surface_id) {
+        if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
             self.shell_emit_chrome_event(ChromeEvent::WindowUnmapped { window_id });
         }
     }
 
     fn title_changed(&mut self, surface: ToplevelSurface) {
-        let surface_id = surface.wl_surface().id().protocol_id();
+        let wl = surface.wl_surface();
         let title = toplevel_title_app_id(&surface).0;
-        if let Some(true) = self.window_registry.set_title(surface_id, title) {
-            if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
+        if let Some(true) = self.window_registry.set_title(wl, title) {
+            if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
-        let surface_id = surface.wl_surface().id().protocol_id();
+        let wl = surface.wl_surface();
         let app_id = toplevel_title_app_id(&surface).1;
-        if let Some(true) = self.window_registry.set_app_id(surface_id, app_id) {
-            if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
+        if let Some(true) = self.window_registry.set_app_id(wl, app_id) {
+            if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }

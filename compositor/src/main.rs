@@ -92,6 +92,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(env_filter)
         .init();
 
+    tracing::warn!(
+        target: "derp_shell_sync",
+        "compositor startup — second+ toplevels tile right-of / below existing stack (reinstall binary if you still see overlap)"
+    );
+
     let cli = Cli::parse();
 
     if cli.headless {

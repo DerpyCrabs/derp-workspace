@@ -243,22 +243,37 @@ wrap_render_handler! {
                 g.set_buffer_size(width, height);
                 prev != g.buffer_dimensions()
             };
-            let dirty: Vec<shell_wire::ShellBufferRect> = dirty_rects
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|r| {
-                    if r.width > 0 && r.height > 0 {
-                        Some(shell_wire::ShellBufferRect {
-                            x: r.x,
-                            y: r.y,
-                            w: r.width,
-                            h: r.height,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            // CEF may supply partial dirty rects (e.g. hue tick on `.shell-panel` only). The compositor only
+            // copies those regions into the shell memory buffer; undamaged pixels stay stale. Window chrome
+            // (`position:fixed` titlebars) then desyncs from Wayland clients during drag / multi-window.
+            // An empty dirty list on the wire means full-buffer upload (see `apply_shell_frame_bgra`).
+            // Set `CEF_HOST_SHELL_PARTIAL_DAMAGE=1` to forward CEF dirty rects (better perf if acceptable).
+            let dirty_forward = std::env::var("CEF_HOST_SHELL_PARTIAL_DAMAGE").as_deref() == Ok("1");
+            let dirty_owned: Vec<shell_wire::ShellBufferRect> = if dirty_forward {
+                dirty_rects
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter_map(|r| {
+                        if r.width > 0 && r.height > 0 {
+                            Some(shell_wire::ShellBufferRect {
+                                x: r.x,
+                                y: r.y,
+                                w: r.width,
+                                h: r.height,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let dirty_ref: &[shell_wire::ShellBufferRect] = if dirty_forward {
+                &dirty_owned
+            } else {
+                &[]
+            };
             let stride = width * 4;
             let len = (stride * height) as usize;
             let pix = unsafe { std::slice::from_raw_parts(buffer, len) };
@@ -268,7 +283,7 @@ wrap_render_handler! {
                 height as u32,
                 stride as u32,
                 pix,
-                &dirty,
+                dirty_ref,
             ) {
                 eprintln!("cef_host: frame IPC: {e}");
             }
@@ -646,6 +661,13 @@ fn main() {
         let batch = cef_host::ipc_coalesce::recv_folded(&shell_ipc_rx);
         let had_ipc = !batch.is_empty();
         for msg in batch {
+            if matches!(
+                msg,
+                shell_wire::DecodedCompositorToShellMessage::Ping
+            ) {
+                shell_uplink::write_shell_packet(&ipc, &shell_wire::encode_shell_pong());
+                continue;
+            }
             compositor_downlink::apply_message(msg, &browser_holder, &view_state);
         }
         // Bursty pointer + `execute_java_script` HUD: coalesce above; when idle, sleep like a typical CEF pump.

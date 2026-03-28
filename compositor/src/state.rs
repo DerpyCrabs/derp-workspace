@@ -21,7 +21,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
-            Display, DisplayHandle, Resource,
+            Display, DisplayHandle,
         },
     },
     utils::{Buffer, Logical, Point, Rectangle, Size, SERIAL_COUNTER},
@@ -53,6 +53,8 @@ pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
 /// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
+/// Added per already-mapped toplevel so new windows are not stacked at the identical `(offset_x, offset_y)` (breaks shell chrome / input).
+pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 48;
 /// Right side of titlebar reserved for shell controls (close); keep in sync with `shell` CSS.
 pub const SHELL_TITLEBAR_CONTROLS_INSET: i32 = 40;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
@@ -145,9 +147,8 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_hotspot: (i32, i32),
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
-    /// Deltas from shell `move_delta` not yet applied to [`Self::space`]. Flushed from
-    /// [`Self::apply_shell_frame_bgra`] (next OSR paint) or [`Self::shell_move_end`] so a presented
-    /// frame never shows the toplevel ahead of Solid chrome.
+    /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Flushed from [`Self::apply_shell_frame_bgra`]
+    /// (next OSR frame) and [`Self::shell_move_end`].
     shell_move_pending_delta: (i32, i32),
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
@@ -158,6 +159,8 @@ pub struct CompositorState {
     shell_ipc_stall_timeout: Option<Duration>,
     /// Last time a length-prefixed message was decoded from [`Self::shell_ipc_client`].
     shell_ipc_last_rx: Option<Instant>,
+    /// Last [`shell_wire::encode_compositor_ping`] sent (throttle while waiting for [`shell_wire::MSG_SHELL_PONG`]).
+    pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -245,6 +248,7 @@ impl CompositorState {
             needs_winit_redraw: true,
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
+            shell_ipc_last_compositor_ping: None,
             vt_session: None,
         };
 
@@ -356,21 +360,99 @@ impl CompositorState {
             })
     }
 
+    /// Logical top-left for mapping a new xdg toplevel (client rectangle origin).
+    ///
+    /// The first window uses the default output-relative corner. Each additional window is placed
+    /// **to the right of the rightmost** existing window (same `GAP` as [`DEFAULT_XDG_TOPLEVEL_CASCADE_STEP`]),
+    /// or **below** all windows if there is no horizontal room. That avoids overlap even when the first
+    /// window was dragged away from the default position (a fixed diagonal grid still collides).
+    pub fn new_toplevel_initial_location(&self) -> (i32, i32) {
+        const GAP: i32 = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
+        const MIN_PLACEHOLDER_W: i32 = 240;
+
+        let Some(output) = self.space.outputs().next() else {
+            return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
+        };
+        let Some(geo) = self.space.output_geometry(output) else {
+            return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
+        };
+
+        let base_x = geo.loc.x.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_X);
+        let base_y = geo.loc.y.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
+
+        if self.space.elements().count() == 0 {
+            return (base_x, base_y);
+        }
+
+        let mut max_right = i32::MIN;
+        let mut min_top = i32::MAX;
+        let mut max_bottom = i32::MIN;
+
+        for w in self.space.elements() {
+            let Some(loc) = self.space.element_location(w) else {
+                continue;
+            };
+            let sz = w.geometry().size;
+            let wdt = sz.w.max(1);
+            let hgt = sz.h.max(1);
+            max_right = max_right.max(loc.x.saturating_add(wdt));
+            min_top = min_top.min(loc.y);
+            max_bottom = max_bottom.max(loc.y.saturating_add(hgt));
+        }
+
+        if max_right == i32::MIN {
+            return (base_x, base_y);
+        }
+
+        let right_limit = geo
+            .loc
+            .x
+            .saturating_add(geo.size.w)
+            .saturating_sub(MIN_PLACEHOLDER_W);
+
+        let (mut x, mut y) = if max_right.saturating_add(GAP) > right_limit {
+            (base_x, max_bottom.saturating_add(GAP))
+        } else {
+            (
+                max_right.saturating_add(GAP),
+                if min_top == i32::MAX { base_y } else { min_top },
+            )
+        };
+
+        let min_y_client = geo.loc.y.saturating_add(SHELL_TITLEBAR_HEIGHT);
+        let max_y_client = geo
+            .loc
+            .y
+            .saturating_add(geo.size.h)
+            .saturating_sub(32);
+        y = y.clamp(min_y_client, max_y_client.max(min_y_client));
+
+        let min_x_client = geo.loc.x;
+        let max_x_client = geo
+            .loc
+            .x
+            .saturating_add(geo.size.w)
+            .saturating_sub(MIN_PLACEHOLDER_W);
+        x = x.clamp(min_x_client, max_x_client.max(min_x_client));
+
+        (x, y)
+    }
+
     /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
     pub fn notify_geometry_if_changed(&mut self, window: &Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
-        let surface_id = toplevel.wl_surface().id().protocol_id();
+        let wl = toplevel.wl_surface();
         let Some(loc) = self.space.element_location(window) else {
             return;
         };
         let size = window.geometry().size;
         let changed = self
             .window_registry
-            .set_geometry(surface_id, loc.x, loc.y, size.w, size.h);
+            .set_geometry(wl, loc.x, loc.y, size.w, size.h);
         if let Some(true) = changed {
-            if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
+            if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
         }
@@ -449,6 +531,60 @@ impl CompositorState {
             },
             _ => event.clone(),
         };
+
+        // Filter compositor.log with: `derp_shell_sync` (see scripts/list-derp-logs.sh).
+        match &ipc_event {
+            ChromeEvent::WindowMapped { info } => {
+                tracing::info!(
+                    target: "derp_shell_sync",
+                    window_id = info.window_id,
+                    surface_id = info.surface_id,
+                    buf_x = info.x,
+                    buf_y = info.y,
+                    buf_w = info.width,
+                    buf_h = info.height,
+                    "shell ipc WindowMapped (OSR buffer px)"
+                );
+            }
+            ChromeEvent::WindowGeometryChanged { info } => {
+                tracing::debug!(
+                    target: "derp_shell_sync",
+                    window_id = info.window_id,
+                    buf_x = info.x,
+                    buf_y = info.y,
+                    buf_w = info.width,
+                    buf_h = info.height,
+                    "shell ipc WindowGeometry"
+                );
+            }
+            ChromeEvent::WindowUnmapped { window_id } => {
+                tracing::info!(
+                    target: "derp_shell_sync",
+                    window_id,
+                    "shell ipc WindowUnmapped"
+                );
+            }
+            ChromeEvent::WindowMetadataChanged { info } => {
+                tracing::trace!(
+                    target: "derp_shell_sync",
+                    window_id = info.window_id,
+                    title = %info.title,
+                    "shell ipc WindowMetadata"
+                );
+            }
+            ChromeEvent::FocusChanged {
+                surface_id,
+                window_id,
+            } => {
+                tracing::debug!(
+                    target: "derp_shell_sync",
+                    ?surface_id,
+                    ?window_id,
+                    "shell ipc FocusChanged"
+                );
+            }
+        }
+
         if let Some(p) = crate::shell_encode::chrome_event_to_shell_packet(&ipc_event) {
             self.shell_ipc_try_write(&p);
         }
@@ -475,6 +611,7 @@ impl CompositorState {
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
         self.shell_note_shell_ipc_rx();
+        self.shell_ipc_last_compositor_ping = None;
         self.send_shell_output_geometry();
         for info in self.window_registry.all_infos() {
             let ipc_info = self
@@ -493,12 +630,11 @@ impl CompositorState {
                 self.shell_ipc_try_write(&p);
             }
         }
-        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus())
-        {
+        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus()) {
             Some(surf) => {
-                let sid = surf.id().protocol_id();
-                let wid = self.window_registry.window_id_for_surface(sid);
-                (Some(sid), wid)
+                let wid = self.window_registry.window_id_for_wl_surface(&surf);
+                let sid = wid.and_then(|w| self.window_registry.surface_id_for_window(w));
+                (sid, wid)
             }
             None => (None, None),
         };
@@ -520,12 +656,28 @@ impl CompositorState {
             return;
         };
         if self.shell_ipc_client.is_none() {
+            self.shell_ipc_last_compositor_ping = None;
             return;
         }
-        let Some(last) = self.shell_ipc_last_rx else {
+        let Some(last_rx) = self.shell_ipc_last_rx else {
             return;
         };
-        if last.elapsed() <= limit {
+        let idle = last_rx.elapsed();
+        // Static OSR (no new frames) does not reset `shell_ipc_last_rx`; prod `cef_host` with ping → pong.
+        let prod_after = std::cmp::max(limit / 2, Duration::from_millis(500))
+            .min(Duration::from_secs(2));
+        if idle >= prod_after {
+            let throttle = Duration::from_secs(1);
+            if self
+                .shell_ipc_last_compositor_ping
+                .map(|t| t.elapsed() >= throttle)
+                .unwrap_or(true)
+            {
+                self.shell_ipc_try_write(&shell_wire::encode_compositor_ping());
+                self.shell_ipc_last_compositor_ping = Some(Instant::now());
+            }
+        }
+        if idle <= limit {
             return;
         }
         tracing::warn!(
@@ -731,12 +883,13 @@ impl CompositorState {
     }
 
     pub fn find_window_by_surface_id(&self, surface_id: u32) -> Option<Window> {
+        let window_id = self.window_registry.window_id_for_shell_surface(surface_id)?;
         self.space
             .elements()
             .find(|w| {
                 w.toplevel()
-                    .map(|t| t.wl_surface().id().protocol_id() == surface_id)
-                    .unwrap_or(false)
+                    .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface()))
+                    == Some(window_id)
             })
             .cloned()
     }
@@ -816,9 +969,11 @@ impl CompositorState {
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = (0, 0);
         self.needs_winit_redraw = true;
+        let loc = self.space.element_location(&window);
         tracing::warn!(
             target: "derp_shell_move",
             window_id,
+            loc = ?loc,
             "shell_move_begin: started"
         );
     }
@@ -848,23 +1003,27 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: no element_location");
             return;
         };
+        let before = (loc.x, loc.y);
+        let after = (loc.x + pdx, loc.y + pdy);
         self.space
-            .map_element(window.clone(), (loc.x + pdx, loc.y + pdy), true);
+            .map_element(window.clone(), after, true);
         self.shell_move_pending_delta = (0, 0);
         self.notify_geometry_if_changed(&window);
         self.needs_winit_redraw = true;
-        tracing::warn!(
+        tracing::debug!(
             target: "derp_shell_move",
             wid,
             pdx,
             pdy,
-            "shell_move: flushed pending delta (sync with OSR frame)"
+            before = ?before,
+            after = ?after,
+            "shell_move: flushed pending delta"
         );
     }
 
     pub fn shell_move_delta(&mut self, dx: i32, dy: i32) {
         let Some(wid) = self.shell_move_window_id else {
-            tracing::warn!(
+            tracing::debug!(
                 target: "derp_shell_move",
                 dx,
                 dy,
@@ -890,13 +1049,13 @@ impl CompositorState {
         };
         self.shell_move_pending_delta.0 += dx;
         self.shell_move_pending_delta.1 += dy;
-        tracing::warn!(
+        tracing::trace!(
             target: "derp_shell_move",
             wid,
             dx,
             dy,
             accum = ?self.shell_move_pending_delta,
-            "shell_move_delta: queued until next shell OSR frame"
+            "shell_move_delta: queued for flush on next OSR frame"
         );
     }
 
@@ -912,7 +1071,7 @@ impl CompositorState {
 
     pub fn shell_move_end(&mut self, window_id: u32) {
         if self.shell_move_window_id != Some(window_id) {
-            tracing::warn!(
+            tracing::debug!(
                 target: "derp_shell_move",
                 window_id,
                 active = ?self.shell_move_window_id,

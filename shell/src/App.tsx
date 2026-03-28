@@ -1,4 +1,4 @@
-import { batch, createMemo, createSignal, onCleanup, onMount, For, Show } from 'solid-js'
+import { batch, createMemo, createSignal, onCleanup, onMount, For, Index, Show } from 'solid-js'
 import './App.css'
 import { ShellWindowFrame } from './ShellWindowFrame'
 
@@ -59,13 +59,26 @@ type DerpWindow = {
   app_id: string
 }
 
+/** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
+function coerceShellWindowId(raw: unknown): number | null {
+  if (raw == null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(n)) return null
+  const t = Math.trunc(n)
+  // Wire/protocol uses 0 as “none” (e.g. focus_cleared); compositor window_id starts at 1.
+  return t > 0 ? t : null
+}
+
 function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
   const next = new Map(map)
   switch (detail.type) {
     case 'window_mapped': {
-      next.set(detail.window_id, {
-        window_id: detail.window_id,
-        surface_id: detail.surface_id,
+      const wid = coerceShellWindowId(detail.window_id)
+      const sid = coerceShellWindowId(detail.surface_id)
+      if (wid === null || sid === null) break
+      next.set(wid, {
+        window_id: wid,
+        surface_id: sid,
         x: detail.x,
         y: detail.y,
         width: detail.width,
@@ -75,13 +88,17 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
       })
       break
     }
-    case 'window_unmapped':
-      next.delete(detail.window_id)
+    case 'window_unmapped': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid !== null) next.delete(wid)
       break
+    }
     case 'window_geometry': {
-      const w = next.get(detail.window_id)
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = next.get(wid)
       if (w) {
-        next.set(detail.window_id, {
+        next.set(wid, {
           ...w,
           x: detail.x,
           y: detail.y,
@@ -92,9 +109,11 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
       break
     }
     case 'window_metadata': {
-      const w = next.get(detail.window_id)
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = next.get(wid)
       if (w) {
-        next.set(detail.window_id, { ...w, title: detail.title, app_id: detail.app_id })
+        next.set(wid, { ...w, title: detail.title, app_id: detail.app_id })
       }
       break
     }
@@ -158,7 +177,7 @@ function canSessionControl(): boolean {
 }
 
 function App() {
-  const [hue, setHue] = createSignal(210)
+  const panelHue = 210
   const [spawnStatus, setSpawnStatus] = createSignal<string | null>(null)
   const [spawnBusy, setSpawnBusy] = createSignal(false)
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
@@ -176,7 +195,11 @@ function App() {
 
   const rulerStepPx = 100
 
-  const windowsList = createMemo(() => Array.from(windows().values()))
+  /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
+   * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
+  const windowsList = createMemo(() =>
+    Array.from(windows().values()).sort((a, b) => a.window_id - b.window_id),
+  )
 
   const horizontalRulerTicks = createMemo(() => {
     const w = viewportCss().w
@@ -198,7 +221,6 @@ function App() {
     return out
   })
 
-  let timer: ReturnType<typeof setInterval> | undefined
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
 
@@ -252,8 +274,8 @@ function App() {
   function endShellWindowMove(reason: string) {
     if (!shellWindowDrag) return
     const id = shellWindowDrag.windowId
-    shellWindowDrag = null
     shellMoveLog('titlebar_end', { windowId: id, reason })
+    shellWindowDrag = null
     shellWireSend('move_end', id)
   }
 
@@ -294,15 +316,12 @@ function App() {
     dragDemoGrab = null
   }
 
-  const panelHueStyle = () => ({ '--shell-hue': `${hue()}` } as const)
+  const panelHueStyle = () => ({ '--shell-hue': `${panelHue}` } as const)
 
   onMount(() => {
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
-    timer = setInterval(() => {
-      setHue((h) => (h + 1) % 360)
-    }, 48)
     const refreshSpawnUrl = () => {
       const u = window.__DERP_SPAWN_URL
       setSpawnUrlLine(
@@ -319,19 +338,19 @@ function App() {
       const d = ce.detail
       if (!d || typeof d !== 'object' || !('type' in d)) return
       if (d.type === 'focus_changed') {
-        setFocusedWindowId(d.window_id ?? null)
+        const fw = coerceShellWindowId(d.window_id)
+        setFocusedWindowId((prev) => (prev === fw ? prev : fw))
         return
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
         return
       }
-      if (
-        d.type === 'window_geometry' &&
-        shellWindowDrag !== null &&
-        d.window_id === shellWindowDrag.windowId
-      ) {
-        return
+      if (d.type === 'window_geometry' && shellWindowDrag !== null) {
+        const gw = coerceShellWindowId(d.window_id)
+        if (gw !== null && gw === shellWindowDrag.windowId) {
+          return
+        }
       }
       setWindows((m) => applyDetail(m, d))
     }
@@ -366,7 +385,9 @@ function App() {
         dragLog('mousemove_with_grab_but_buttons_0', { type: 'mouse' })
       }
       applyDragDemoMove(e.clientX, e.clientY)
-      applyShellWindowMove(e.clientX, e.clientY)
+      // Do not call applyShellWindowMove here: CEF/OSR fires both pointermove and mousemove for the same
+      // motion → doubled dx/dy, doubled move_delta IPC, shell state and compositor desync (looks like
+      // "everything drags wrong" with multiple windows).
       setPointerClient({ x: e.clientX, y: e.clientY })
       const el = mainRef
       if (el) {
@@ -458,7 +479,6 @@ function App() {
     })
   })
   onCleanup(() => {
-    if (timer !== undefined) clearInterval(timer)
     if (spawnPoll !== undefined) clearInterval(spawnPoll)
   })
 
@@ -509,18 +529,23 @@ function App() {
       }}
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
     >
-      <For each={windowsList()}>
+      <Index each={windowsList()}>
         {(win) => (
-            <ShellWindowFrame
-              win={win}
-              focused={focusedWindowId() === win.window_id}
-              onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win.window_id, cx, cy)}
-              onClose={() => {
-                shellWireSend('close', win.window_id)
-              }}
-            />
-          )}
-      </For>
+          <ShellWindowFrame
+            win={win()}
+            stackZ={
+              20 +
+              win().window_id +
+              (focusedWindowId() === win().window_id ? 10_000 : 0)
+            }
+            focused={focusedWindowId() === win().window_id}
+            onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win().window_id, cx, cy)}
+            onClose={() => {
+              shellWireSend('close', win().window_id)
+            }}
+          />
+        )}
+      </Index>
 
       <div class="shell-panel" style={panelHueStyle()}>
         <h1 class="shell-title">derp shell</h1>
