@@ -11,7 +11,7 @@
 //! - `u32 protocol_version`, `u32 msg_type`, `u32 command_len`, then `command_len` UTF-8 bytes (no NUL).
 //!
 //! Compositor → shell process (CEF OSR), same length-prefixed framing:
-//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`]
+//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_TOUCH`]
 //! - [`MSG_OUTPUT_GEOMETRY`]: output logical size (matches OSR / DIP target)
 //! - [`MSG_WINDOW_MAPPED`], [`MSG_WINDOW_UNMAPPED`], [`MSG_WINDOW_GEOMETRY`], [`MSG_WINDOW_METADATA`], [`MSG_FOCUS_CHANGED`]
 //!
@@ -36,6 +36,14 @@ pub const MSG_FRAME: u32 = 1;
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
 pub const MSG_COMPOSITOR_POINTER_BUTTON: u32 = 4;
+/// Real touch finger / slot (not pointer-emulated mouse). Maps to CEF [`send_touch_event`].
+pub const MSG_COMPOSITOR_TOUCH: u32 = 31;
+
+/// [`MSG_COMPOSITOR_TOUCH`] `phase` values (compositor → `cef_host` → CEF).
+pub const TOUCH_PHASE_MOVED: u32 = 0;
+pub const TOUCH_PHASE_PRESSED: u32 = 1;
+pub const TOUCH_PHASE_RELEASED: u32 = 2;
+pub const TOUCH_PHASE_CANCELLED: u32 = 3;
 /// Compositor output size in **logical** pixels (match winit / Smithay output mode).
 pub const MSG_OUTPUT_GEOMETRY: u32 = 5;
 pub const MSG_WINDOW_MAPPED: u32 = 6;
@@ -542,6 +550,15 @@ pub enum DecodedCompositorToShellMessage {
         y: i32,
         button: u32,
         mouse_up: bool,
+        /// Compositor-assigned window id when this is a **left press** in the server titlebar-drag strip; `0` otherwise.
+        titlebar_drag_window_id: u32,
+    },
+    /// Buffer-space coords (same as pointer move); `touch_id` is the Wayland/libinput touch slot (`i32`, `-1` if unknown).
+    Touch {
+        touch_id: i32,
+        phase: u32,
+        x: i32,
+        y: i32,
     },
     OutputGeometry {
         logical_w: u32,
@@ -594,8 +611,14 @@ pub fn encode_compositor_pointer_move(x: i32, y: i32) -> Vec<u8> {
     v
 }
 
-pub fn encode_compositor_pointer_button(x: i32, y: i32, button: u32, mouse_up: bool) -> Vec<u8> {
-    let body_len = 24u32;
+pub fn encode_compositor_pointer_button(
+    x: i32,
+    y: i32,
+    button: u32,
+    mouse_up: bool,
+    titlebar_drag_window_id: u32,
+) -> Vec<u8> {
+    let body_len = 28u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
@@ -604,6 +627,20 @@ pub fn encode_compositor_pointer_button(x: i32, y: i32, button: u32, mouse_up: b
     v.extend_from_slice(&y.to_le_bytes());
     v.extend_from_slice(&button.to_le_bytes());
     v.extend_from_slice(&(if mouse_up { 1u32 } else { 0 }).to_le_bytes());
+    v.extend_from_slice(&titlebar_drag_window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_touch(touch_id: i32, phase: u32, x: i32, y: i32) -> Vec<u8> {
+    let body_len = 24u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_TOUCH.to_le_bytes());
+    v.extend_from_slice(&touch_id.to_le_bytes());
+    v.extend_from_slice(&phase.to_le_bytes());
+    v.extend_from_slice(&x.to_le_bytes());
+    v.extend_from_slice(&y.to_le_bytes());
     v
 }
 
@@ -705,9 +742,11 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             Ok(DecodedCompositorToShellMessage::PointerMove { x, y })
         }
         MSG_COMPOSITOR_POINTER_BUTTON => {
-            if body.len() != 24 {
-                return Err(DecodeError::BadCompositorToShellPayload);
-            }
+            let titlebar_drag_window_id = match body.len() {
+                24 => 0u32,
+                28 => u32::from_le_bytes(body[24..28].try_into().unwrap()),
+                _ => return Err(DecodeError::BadCompositorToShellPayload),
+            };
             let x = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let y = i32::from_le_bytes(body[12..16].try_into().unwrap());
             let button = u32::from_le_bytes(body[16..20].try_into().unwrap());
@@ -720,6 +759,25 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 y,
                 button,
                 mouse_up: up_flag != 0,
+                titlebar_drag_window_id,
+            })
+        }
+        MSG_COMPOSITOR_TOUCH => {
+            if body.len() != 24 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let touch_id = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let phase = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            if phase > TOUCH_PHASE_CANCELLED {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let x = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let y = i32::from_le_bytes(body[20..24].try_into().unwrap());
+            Ok(DecodedCompositorToShellMessage::Touch {
+                touch_id,
+                phase,
+                x,
+                y,
             })
         }
         MSG_OUTPUT_GEOMETRY => {
@@ -1161,6 +1219,51 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_compositor_pointer_button_with_titlebar_id() {
+        let mut buf = encode_compositor_pointer_button(3, 4, 0, false, 99);
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::PointerButton {
+                x,
+                y,
+                button,
+                mouse_up,
+                titlebar_drag_window_id,
+            }) => {
+                assert_eq!((x, y, button, mouse_up, titlebar_drag_window_id), (3, 4, 0, false, 99));
+            }
+            _ => panic!("expected PointerButton"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn compositor_pointer_button_legacy_24_byte_body_decodes_titlebar_zero() {
+        // Pre-extension on-wire layout (body len 24, no trailing window id).
+        let body_len = 24u32;
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&body_len.to_le_bytes());
+        raw.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+        raw.extend_from_slice(&MSG_COMPOSITOR_POINTER_BUTTON.to_le_bytes());
+        raw.extend_from_slice(&5i32.to_le_bytes());
+        raw.extend_from_slice(&6i32.to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        let mut buf = raw;
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::PointerButton {
+                x,
+                y,
+                titlebar_drag_window_id,
+                ..
+            }) => {
+                assert_eq!((x, y, titlebar_drag_window_id), (5, 6, 0));
+            }
+            _ => panic!("expected PointerButton"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
     fn round_trip_compositor_pointer_move() {
         let mut buf = encode_compositor_pointer_move(42, -3);
         match pop_compositor_to_shell_message(&mut buf).unwrap() {
@@ -1169,6 +1272,23 @@ mod tests {
                 assert_eq!(y, -3);
             }
             _ => panic!("expected PointerMove"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn round_trip_compositor_touch() {
+        let mut buf = encode_compositor_touch(-1, TOUCH_PHASE_PRESSED, 100, 200);
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::Touch {
+                touch_id,
+                phase,
+                x,
+                y,
+            }) => {
+                assert_eq!((touch_id, phase, x, y), (-1, TOUCH_PHASE_PRESSED, 100, 200));
+            }
+            _ => panic!("expected Touch"),
         }
         assert!(buf.is_empty());
     }

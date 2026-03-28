@@ -16,8 +16,6 @@ pub struct OsrViewState {
     pub dip_h: i32,
     buffer_w: i32,
     buffer_h: i32,
-    /// Last time we ran `execute_java_script` for the Solid HUD (`osr_pointer`); avoids starving `do_message_loop_work`.
-    last_osr_hud_at: Option<Instant>,
     /// Last time we nudged CEF after an undersized OSR paint (stuck low-res upscale in the compositor).
     last_undersized_nudge: Option<Instant>,
 }
@@ -29,7 +27,6 @@ impl OsrViewState {
             dip_h,
             buffer_w: dip_w,
             buffer_h: dip_h,
-            last_osr_hud_at: None,
             last_undersized_nudge: None,
         }
     }
@@ -59,18 +56,6 @@ impl OsrViewState {
             }
         }
         self.last_undersized_nudge = Some(now);
-        true
-    }
-
-    /// Whether to emit another `osr_pointer` custom event (throttled); always call [`Self::buffer_to_view`] / mouse IPC every move.
-    pub fn should_emit_osr_hud(&mut self, min_interval: Duration) -> bool {
-        let now = Instant::now();
-        if let Some(t) = self.last_osr_hud_at {
-            if now.saturating_duration_since(t) < min_interval {
-                return false;
-            }
-        }
-        self.last_osr_hud_at = Some(now);
         true
     }
 

@@ -24,7 +24,7 @@ use smithay::{
             Display, DisplayHandle, Resource,
         },
     },
-    utils::{Logical, Point, Size},
+    utils::{Logical, Point, Size, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
@@ -512,6 +512,44 @@ impl CompositorState {
             && py < y0 as f64
     }
 
+    /// Titlebar close control strip (right inset); matches shell close button zone.
+    pub fn shell_point_in_titlebar_close_region(
+        &self,
+        px: f64,
+        py: f64,
+        x0: i32,
+        y0: i32,
+        w: i32,
+        _h: i32,
+    ) -> bool {
+        let th = SHELL_TITLEBAR_HEIGHT;
+        let inset = SHELL_TITLEBAR_CONTROLS_INSET;
+        let top = y0.saturating_sub(th);
+        let drag_right = x0 + w - inset;
+        px >= drag_right as f64
+            && px < (x0 + w) as f64
+            && py >= top as f64
+            && py < y0 as f64
+    }
+
+    /// Topmost window whose titlebar close region contains `pos`, if any.
+    pub fn window_for_titlebar_close_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
+        let px = pos.x;
+        let py = pos.y;
+        for window in self.space.elements().rev() {
+            let loc = self.space.element_location(window)?;
+            let geo = window.geometry();
+            let x0 = loc.x;
+            let y0 = loc.y;
+            let w = geo.size.w;
+            let h = geo.size.h;
+            if self.shell_point_in_titlebar_close_region(px, py, x0, y0, w, h) {
+                return Some(window.clone());
+            }
+        }
+        None
+    }
+
     /// Topmost window whose server-side titlebar drag region contains `pos`, if any.
     pub fn window_for_titlebar_drag_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
         let px = pos.x;
@@ -624,15 +662,62 @@ impl CompositorState {
             .cloned()
     }
 
+    pub(crate) fn shell_move_is_active(&self) -> bool {
+        self.shell_move_window_id.is_some()
+    }
+
+    pub(crate) fn shell_move_end_active(&mut self) {
+        if let Some(wid) = self.shell_move_window_id {
+            self.shell_move_end(wid);
+        }
+    }
+
+    /// Whether to send compositor → shell [`PointerMove`][`shell_wire`] for the CEF HUD / drag logic.
+    ///
+    /// **Do not** gate on [`PointerHandle::is_grabbed`]: Smithay’s default [`ClickGrab`] is active for the
+    /// whole primary press, so `!grabbed` would freeze the shell cursor for every click on chrome.
+    ///
+    /// During a shell-initiated window move, [`Self::shell_pointer_route_to_cef`] is often false (cursor
+    /// over client); keep forwarding whenever [`Self::shell_move_window_id`] is set.
+    pub(crate) fn shell_forward_pointer_to_shell_while_grabbed(
+        &self,
+        route_cef: bool,
+        _pointer_is_grabbed: bool,
+    ) -> bool {
+        self.shell_move_window_id.is_some() || route_cef
+    }
+
     pub fn shell_move_begin(&mut self, window_id: u32) {
-        if self
-            .window_registry
-            .surface_id_for_window(window_id)
-            .is_none()
-        {
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+
+        if self.shell_move_window_id == Some(window_id) {
             return;
         }
+
+        if let Some(prev) = self.shell_move_window_id {
+            if prev != window_id {
+                self.shell_move_end(prev);
+            }
+        }
+
+        self.space.raise_element(&window, true);
+        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+        let k_serial = SERIAL_COUNTER.next_serial();
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Some(wl_surface.clone()), k_serial);
+        self.space.elements().for_each(|w| {
+            w.toplevel().unwrap().send_pending_configure();
+        });
+
         self.shell_move_window_id = Some(window_id);
+        self.needs_winit_redraw = true;
     }
 
     pub fn shell_move_delta(&mut self, dx: i32, dy: i32) {
@@ -656,10 +741,39 @@ impl CompositorState {
         self.needs_winit_redraw = true;
     }
 
-    pub fn shell_move_end(&mut self, window_id: u32) {
-        if self.shell_move_window_id == Some(window_id) {
-            self.shell_move_window_id = None;
+    /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.
+    pub(crate) fn shell_move_end_cleanup(&mut self, window_id: u32, window: &Window) {
+        if self.shell_move_window_id != Some(window_id) {
+            return;
         }
+        self.shell_move_window_id = None;
+        self.notify_geometry_if_changed(window);
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn shell_move_end(&mut self, window_id: u32) {
+        if self.shell_move_window_id != Some(window_id) {
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            self.shell_move_window_id = None;
+            self.needs_winit_redraw = true;
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            self.shell_move_window_id = None;
+            self.needs_winit_redraw = true;
+            return;
+        };
+        self.shell_move_end_cleanup(window_id, &window);
+    }
+
+    /// End an in-progress shell move when the shell IPC client disconnects (avoid stuck state).
+    pub(crate) fn shell_disconnect_end_move_if_any(&mut self) {
+        let Some(wid) = self.shell_move_window_id else {
+            return;
+        };
+        self.shell_move_end(wid);
     }
 
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).

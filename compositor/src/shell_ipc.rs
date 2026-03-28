@@ -60,6 +60,7 @@ fn unix_bytes_available(stream: &std::os::unix::net::UnixStream) -> io::Result<u
 }
 
 fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
+    state.shell_disconnect_end_move_if_any();
     state.shell_ipc_client = None;
     state.shell_read_buf.clear();
     state.shell_shm = None;

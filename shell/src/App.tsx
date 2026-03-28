@@ -12,8 +12,12 @@ declare global {
     /** Injected by `cef_host` after load (`http://127.0.0.1:…/spawn`). */
     __DERP_SPAWN_URL?: string
     __DERP_SHELL_HTTP?: string
-    /** Registered by CEF render process: `close` | `quit` | `spawn` + optional arg. */
-    __derpShellWireSend?: (op: 'close' | 'quit' | 'spawn', arg?: number | string) => void
+    /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
+    __derpShellWireSend?: (
+      op: 'close' | 'quit' | 'spawn' | 'move_begin' | 'move_delta' | 'move_end',
+      arg?: number | string,
+      arg2?: number,
+    ) => void
   }
 }
 
@@ -48,15 +52,6 @@ type DerpShellDetail =
       app_id: string
     }
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
-  /** Compositor → CEF injected pointer; view/DIP coords (matches `clientX`/`clientY` when OSR fills the view). */
-  | { type: 'osr_pointer'; client_x: number; client_y: number }
-  | {
-      type: 'osr_pointer_button'
-      client_x: number
-      client_y: number
-      button: number
-      mouse_up: boolean
-    }
 
 type DerpWindow = {
   window_id: number
@@ -134,10 +129,20 @@ async function postShell(path: string, body: object): Promise<void> {
   })
 }
 
-function shellWireSend(op: 'close' | 'quit' | 'spawn', arg?: number | string): boolean {
+function shellWireSend(
+  op: 'close' | 'quit' | 'spawn' | 'move_begin' | 'move_delta' | 'move_end',
+  arg?: number | string,
+  arg2?: number,
+): boolean {
   const fn = window.__derpShellWireSend
   if (typeof fn !== 'function') return false
-  fn(op, arg)
+  if (op === 'move_delta' && arg2 !== undefined) {
+    fn(op, arg as number, arg2)
+  } else if (op === 'quit') {
+    fn(op)
+  } else {
+    fn(op, arg)
+  }
   return true
 }
 
@@ -190,6 +195,48 @@ function App() {
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
 
+  /** Local-only draggable box. CEF OSR often delivers mouse events to `window` more reliably than `PointerEvent` + capture on a node. */
+  const [dragDemoPos, setDragDemoPos] = createSignal({ x: 48, y: 96 })
+  let dragDemoGrab: { offsetX: number; offsetY: number } | null = null
+  let dragDemoMoveLogSeq = 0
+
+  /** Readable in `~/.local/state/derp/compositor.log` when `cef_host` runs under `derp-session` (stderr tee). */
+  function dragLog(msg: string, detail?: Record<string, unknown>) {
+    const extra = detail !== undefined ? ` ${JSON.stringify(detail)}` : ''
+    console.log(`[derp-drag] ${msg}${extra}`)
+  }
+
+  function armDragDemo(clientX: number, clientY: number) {
+    const p = dragDemoPos()
+    dragDemoGrab = { offsetX: clientX - p.x, offsetY: clientY - p.y }
+    dragDemoMoveLogSeq = 0
+    dragLog('arm', {
+      clientX,
+      clientY,
+      box: p,
+      grab: dragDemoGrab,
+    })
+  }
+
+  function applyDragDemoMove(clientX: number, clientY: number) {
+    if (!dragDemoGrab) return
+    dragDemoMoveLogSeq += 1
+    if (dragDemoMoveLogSeq === 1 || dragDemoMoveLogSeq % 20 === 0) {
+      dragLog('move', { seq: dragDemoMoveLogSeq, clientX, clientY })
+    }
+    setDragDemoPos({
+      x: clientX - dragDemoGrab.offsetX,
+      y: clientY - dragDemoGrab.offsetY,
+    })
+  }
+
+  function disarmDragDemo(reason: string) {
+    if (dragDemoGrab) {
+      dragLog('disarm', { reason })
+    }
+    dragDemoGrab = null
+  }
+
   const panelHueStyle = () => ({ '--shell-hue': `${hue()}` } as const)
 
   onMount(() => {
@@ -219,35 +266,6 @@ function App() {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
         return
       }
-      if (d.type === 'osr_pointer') {
-        setPointerClient({ x: d.client_x, y: d.client_y })
-        const el = mainRef
-        if (el) {
-          const r = el.getBoundingClientRect()
-          setPointerInMain({
-            x: Math.round(d.client_x - r.left),
-            y: Math.round(d.client_y - r.top),
-          })
-        } else {
-          setPointerInMain({ x: d.client_x, y: d.client_y })
-        }
-        return
-      }
-      if (d.type === 'osr_pointer_button') {
-        setPointerClient({ x: d.client_x, y: d.client_y })
-        const el = mainRef
-        if (el) {
-          const r = el.getBoundingClientRect()
-          setPointerInMain({
-            x: Math.round(d.client_x - r.left),
-            y: Math.round(d.client_y - r.top),
-          })
-        }
-        if (d.button === 0 && !d.mouse_up) {
-          setRootPointerDowns((n) => n + 1)
-        }
-        return
-      }
       setWindows((m) => applyDetail(m, d))
     }
     window.addEventListener('derp-shell', onDerpShell as EventListener)
@@ -257,6 +275,13 @@ function App() {
     syncViewport()
 
     const onPointerMove = (e: PointerEvent) => {
+      if (dragDemoGrab && dragDemoMoveLogSeq < 3 && e.buttons === 0) {
+        dragLog('pointermove_with_grab_but_buttons_0', {
+          pointerType: e.pointerType,
+          button: e.button,
+        })
+      }
+      applyDragDemoMove(e.clientX, e.clientY)
       setPointerClient({ x: e.clientX, y: e.clientY })
       const el = mainRef
       if (el) {
@@ -268,12 +293,85 @@ function App() {
       }
     }
 
+    const onMouseMove = (e: MouseEvent) => {
+      if (dragDemoGrab && dragDemoMoveLogSeq < 3 && e.buttons === 0) {
+        dragLog('mousemove_with_grab_but_buttons_0', { type: 'mouse' })
+      }
+      applyDragDemoMove(e.clientX, e.clientY)
+      setPointerClient({ x: e.clientX, y: e.clientY })
+      const el = mainRef
+      if (el) {
+        const r = el.getBoundingClientRect()
+        setPointerInMain({
+          x: Math.round(e.clientX - r.left),
+          y: Math.round(e.clientY - r.top),
+        })
+      }
+    }
+
+    const onWindowPointerUp = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      disarmDragDemo('window-pointerup')
+    }
+
+    const onWindowMouseUp = (e: MouseEvent) => {
+      if (e.button !== 0) return
+      disarmDragDemo('window-mouseup')
+    }
+
+    const onWindowPointerCancel = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      disarmDragDemo('window-pointercancel')
+    }
+
+    const onWindowBlur = () => {
+      disarmDragDemo('window-blur')
+    }
+
+    const onWindowTouchEnd = () => {
+      disarmDragDemo('window-touchend')
+    }
+
+    const onWindowTouchMove = (e: TouchEvent) => {
+      const t = e.changedTouches[0]
+      if (!t) return
+      if (dragDemoGrab) {
+        applyDragDemoMove(t.clientX, t.clientY)
+        e.preventDefault()
+      }
+      setPointerClient({ x: t.clientX, y: t.clientY })
+      const el = mainRef
+      if (el) {
+        const r = el.getBoundingClientRect()
+        setPointerInMain({
+          x: Math.round(t.clientX - r.left),
+          y: Math.round(t.clientY - r.top),
+        })
+      }
+    }
+
     window.addEventListener('pointermove', onPointerMove, { passive: true })
+    window.addEventListener('mousemove', onMouseMove, { passive: true })
+    window.addEventListener('pointerup', onWindowPointerUp, { passive: true })
+    window.addEventListener('mouseup', onWindowMouseUp, { passive: true })
+    window.addEventListener('pointercancel', onWindowPointerCancel, { passive: true })
+    window.addEventListener('blur', onWindowBlur)
+    window.addEventListener('touchend', onWindowTouchEnd, { passive: true })
+    window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
+    window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
     window.addEventListener('resize', syncViewport, { passive: true })
 
     onCleanup(() => {
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('pointerup', onWindowPointerUp)
+      window.removeEventListener('mouseup', onWindowMouseUp)
+      window.removeEventListener('pointercancel', onWindowPointerCancel)
+      window.removeEventListener('blur', onWindowBlur)
+      window.removeEventListener('touchend', onWindowTouchEnd)
+      window.removeEventListener('touchcancel', onWindowTouchEnd)
+      window.removeEventListener('touchmove', onWindowTouchMove)
       window.removeEventListener('resize', syncViewport)
     })
   })
@@ -361,14 +459,12 @@ function App() {
                   top: `${bd}px`,
                   width: `${w}px`,
                   height: `${th}px`,
-                  'pointer-events': 'none',
                 }}
               >
                 <span class="shell-titlebar__text">{win.title || win.app_id || `window ${win.window_id}`}</span>
                 <button
                   type="button"
                   class="shell-titlebar__close"
-                  style={{ 'pointer-events': 'auto' }}
                   title="Close window"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => {
@@ -495,6 +591,44 @@ function App() {
           Exit session
         </button>
         {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
+      </div>
+
+      <div
+        class="shell-drag-demo"
+        style={{
+          left: `${dragDemoPos().x}px`,
+          top: `${dragDemoPos().y}px`,
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary) return
+          if (e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          armDragDemo(e.clientX, e.clientY)
+        }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          armDragDemo(e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          armDragDemo(t.clientX, t.clientY)
+        }}
+        onPointerUp={(e) => {
+          if (!e.isPrimary) return
+          disarmDragDemo('demo-pointerup')
+        }}
+        onMouseUp={(e) => {
+          if (e.button !== 0) return
+          disarmDragDemo('demo-mouseup')
+        }}
+      >
+        Drag me (DOM only)
       </div>
 
       <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">

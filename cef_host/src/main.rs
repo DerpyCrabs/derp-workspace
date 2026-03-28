@@ -145,6 +145,8 @@ wrap_load_handler! {
                 return;
             };
             host.notify_screen_info_changed();
+            // Windowless browsers do not take focus from the OS; DOM input needs an explicit focus bit.
+            host.set_focus(1);
             host.invalidate(PaintElementType::VIEW);
         }
     }
@@ -158,6 +160,9 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(b) = browser {
+                if let Some(host) = b.host() {
+                    host.set_focus(1);
+                }
                 if let Ok(mut g) = self.browser_holder.lock() {
                     *g = Some(b.clone());
                 }
@@ -290,6 +295,37 @@ wrap_render_handler! {
     }
 }
 
+// Forward `[derp-drag]` shell `console.log` lines to stderr → `derp-session` tee → `DERP_COMPOSITOR_LOG`.
+wrap_display_handler! {
+    struct DerpJsConsoleDisplayHandler;
+
+    impl DisplayHandler {
+        fn on_console_message(
+            &self,
+            _browser: Option<&mut Browser>,
+            level: LogSeverity,
+            message: Option<&CefString>,
+            source: Option<&CefString>,
+            line: std::os::raw::c_int,
+        ) -> std::os::raw::c_int {
+            let Some(msg) = message else {
+                return 0;
+            };
+            let text = msg.to_string();
+            if !text.contains("[derp-drag]") {
+                return 0;
+            }
+            let src = source.map(|s| s.to_string()).unwrap_or_default();
+            eprintln!(
+                "cef_js_console: sev={} line={} src={src:?} msg={text}",
+                level.get_raw(),
+                line
+            );
+            0
+        }
+    }
+}
+
 wrap_client! {
     struct ShellClient {
         render_handler: RenderHandler,
@@ -299,6 +335,10 @@ wrap_client! {
     }
 
     impl Client {
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(DerpJsConsoleDisplayHandler::new())
+        }
+
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }

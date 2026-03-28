@@ -69,6 +69,7 @@ mod tests {
                 y: 1,
                 button: 0,
                 mouse_up: false,
+                titlebar_drag_window_id: 0,
             },
             PointerMove { x: 2, y: 2 },
         ];
@@ -81,6 +82,7 @@ mod tests {
                     y: 1,
                     button: 0,
                     mouse_up: false,
+                    titlebar_drag_window_id: 0,
                 },
                 PointerMove { x: 2, y: 2 },
             ]

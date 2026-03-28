@@ -1,4 +1,4 @@
-//! Renderer ↔ browser process bridge: JS calls `__derpShellWireSend(op, arg)` → compositor `shell_wire` on the Unix stream (no HTTP).
+//! Renderer ↔ browser process bridge: JS calls `__derpShellWireSend(op, arg?, arg2?)` → compositor `shell_wire` on the Unix stream (no HTTP).
 
 use std::{
     io::Write,
@@ -10,7 +10,7 @@ use cef::{sys, *};
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_uplink";
 
-fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
+pub(crate) fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
     CefStringUtf8::from(&CefStringUtf16::from(s)).to_string()
 }
 
@@ -35,6 +35,19 @@ fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
             if let Some(pkt) = shell_wire::encode_spawn_wayland_client(&cmd) {
                 write_shell_packet(ipc, &pkt);
             }
+        }
+        "move_begin" => {
+            let wid = args.int(1) as u32;
+            write_shell_packet(ipc, &shell_wire::encode_shell_move_begin(wid));
+        }
+        "move_delta" => {
+            let dx = args.int(1) as i32;
+            let dy = args.int(2) as i32;
+            write_shell_packet(ipc, &shell_wire::encode_shell_move_delta(dx, dy));
+        }
+        "move_end" => {
+            let wid = args.int(1) as u32;
+            write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
         }
         _ => {}
     }
@@ -135,8 +148,52 @@ wrap_v8_handler! {
                     let cmd = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(cmd.as_str())));
                 }
+                "move_begin" | "move_end" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("move_begin/move_end require window id");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("move_begin/move_end: second arg must be a number");
+                    };
+                    if id < 0 {
+                        return_exception!("window id must be non-negative");
+                    }
+                    let _ = list.set_int(1, id);
+                }
+                "move_delta" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("move_delta requires dx");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("move_delta requires dy");
+                    };
+                    let dx = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("move_delta: dx must be a number");
+                    };
+                    let dy = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("move_delta: dy must be a number");
+                    };
+                    let _ = list.set_int(1, dx);
+                    let _ = list.set_int(2, dy);
+                }
                 _ => {
-                    return_exception!("unknown op (use close, quit, spawn)");
+                    return_exception!(
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end)"
+                    );
                 }
             }
 
@@ -151,6 +208,28 @@ wrap_render_process_handler! {
     pub struct DerpRenderProcessHandler;
 
     impl RenderProcessHandler {
+        fn on_process_message_received(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            source_process: ProcessId,
+            message: Option<&mut ProcessMessage>,
+        ) -> std::os::raw::c_int {
+            if source_process != ProcessId::BROWSER {
+                return 0;
+            }
+            let Some(_msg) = message else {
+                return 0;
+            };
+            let Some(frame) = frame else {
+                return 1;
+            };
+            if frame.is_main() != 1 {
+                return 0;
+            }
+            0
+        }
+
         fn on_context_created(
             &self,
             _browser: Option<&mut Browser>,

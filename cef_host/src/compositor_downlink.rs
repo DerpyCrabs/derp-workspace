@@ -1,17 +1,14 @@
-//! Read compositor → shell messages from the duplex Unix socket and forward to CEF OSR / JS.
+//! Read compositor → shell messages from the duplex Unix socket and forward to CEF OSR (`BrowserHost` input + JS `derp-shell` for shell state only).
 
 use std::sync::Mutex;
-use std::time::Duration;
 
 use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, MouseButtonType, MouseEvent,
+    PointerType, TouchEvent, TouchEventType,
 };
 use serde_json::json;
 
 use cef_host::osr_view_state::OsrViewState;
-
-/// Max rate for Solid HUD `osr_pointer` (`execute_java_script`); mouse events are not throttled.
-const OSR_POINTER_HUD_MIN_INTERVAL: Duration = Duration::from_millis(20);
 
 fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Ok(js) = serde_json::to_string(&detail) else {
@@ -228,28 +225,13 @@ pub fn apply_message(
                 modifiers: 0,
             };
             host.send_mouse_move_event(Some(&ev), 0);
-            // HUD: throttled — each move used to run synchronous JS and could stall `do_message_loop_work` for seconds
-            // when the compositor flooded PointerMove (unbounded channel + many Coalescable events).
-            let hud = view_state
-                .lock()
-                .map(|mut s| s.should_emit_osr_hud(OSR_POINTER_HUD_MIN_INTERVAL))
-                .unwrap_or(false);
-            if hud {
-                dispatch_shell_detail(
-                    b,
-                    json!({
-                        "type": "osr_pointer",
-                        "client_x": vx,
-                        "client_y": vy,
-                    }),
-                );
-            }
         }
         shell_wire::DecodedCompositorToShellMessage::PointerButton {
             x,
             y,
             button,
             mouse_up,
+            titlebar_drag_window_id: _,
         } => {
             let Ok(guard) = browser.lock() else {
                 return;
@@ -279,17 +261,58 @@ pub fn apply_message(
                 2 => MouseButtonType::RIGHT,
                 _ => MouseButtonType::LEFT,
             };
+            // OSR: Blink's last synthetic position must match the click or hit-testing targets the wrong node.
+            host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_click_event(Some(&ev), ty, if mouse_up { 1 } else { 0 }, 1);
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "osr_pointer_button",
-                    "client_x": vx,
-                    "client_y": vy,
-                    "button": button,
-                    "mouse_up": mouse_up,
-                }),
-            );
+        }
+        shell_wire::DecodedCompositorToShellMessage::Touch {
+            touch_id,
+            phase,
+            x,
+            y,
+        } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            let Some(host) = b.host() else {
+                return;
+            };
+
+            let (vx, vy) = view_state
+                .lock()
+                .map(|s| s.buffer_to_view(x, y))
+                .unwrap_or((x, y));
+
+            let ty = match phase {
+                shell_wire::TOUCH_PHASE_MOVED => TouchEventType::MOVED,
+                shell_wire::TOUCH_PHASE_PRESSED => TouchEventType::PRESSED,
+                shell_wire::TOUCH_PHASE_RELEASED => TouchEventType::RELEASED,
+                shell_wire::TOUCH_PHASE_CANCELLED => TouchEventType::CANCELLED,
+                _ => TouchEventType::RELEASED,
+            };
+
+            let pressure = match phase {
+                shell_wire::TOUCH_PHASE_PRESSED => 1.0_f32,
+                shell_wire::TOUCH_PHASE_MOVED => 1.0_f32,
+                _ => 0.0_f32,
+            };
+
+            let ev = TouchEvent {
+                id: touch_id,
+                x: vx as f32,
+                y: vy as f32,
+                radius_x: 0.0,
+                radius_y: 0.0,
+                rotation_angle: 0.0,
+                pressure,
+                type_: ty,
+                modifiers: 0,
+                pointer_type: PointerType::TOUCH,
+            };
+            host.send_touch_event(Some(&ev));
         }
     }
 }
