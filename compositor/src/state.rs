@@ -181,11 +181,8 @@ impl CompositorState {
             return;
         };
         let size = window.geometry().size;
-        if let Some(true) =
-            self
-                .window_registry
-                .set_geometry(surface_id, loc.x, loc.y, size.w, size.h)
-        {
+        let changed = self.window_registry.set_geometry(surface_id, loc.x, loc.y, size.w, size.h);
+        if let Some(true) = changed {
             if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
                 self.chrome_bridge
                     .notify(ChromeEvent::WindowGeometryChanged { info });
