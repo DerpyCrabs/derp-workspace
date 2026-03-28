@@ -109,7 +109,8 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | `compositor/` | Smithay compositor, `chrome_bridge` stub, winit + **DRM/KMS** + headless entrypoints, shell IPC |
 | `resources/derp-wayland.desktop` | GDM session entry (`wayland-sessions`) |
 | `scripts/derp-session.sh` | Session wrapper: `--backend drm`, optional CEF + `shell/dist` |
-| `scripts/install-system.sh` | One-shot: pull, release build, npm `shell/dist`, install to `/usr/local` + GDM `.desktop` |
+| `scripts/install-system.sh` | Wrapper: `git pull` (optional), then `exec`s `scripts/install-system-run.sh` so post-pull script changes apply |
+| `scripts/install-system-run.sh` | Release build, npm `shell/dist`, install to `/usr/local` + GDM `.desktop` (run via `install-system.sh` or alone if repo already synced) |
 | `scripts/remote-install.sh` | Optional: run `install-system.sh` on another host over SSH (`scripts/remote-install.sample.md`, gitignored `remote-install.env`) |
 | `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/quit/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **5**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
@@ -118,7 +119,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 
 ### GDM / DRM login session
 
-1. **One-command install (repo anywhere, e.g. `~/derp-workspace`):** `bash scripts/install-system.sh` — `git pull` (unless `--no-git` / `INSTALL_SKIP_GIT=1`), `cargo build --release -p compositor -p cef_host`, `npm` build for `shell/dist`, then installs into `/usr/local` and symlinks `derp-session` to this clone. **`derp-session.sh` resolves that symlink** (`readlink -f`) so `shell/dist` and CEF RUNPATH are read from the **clone**, not from `/usr/local`.
+1. **One-command install (repo anywhere, e.g. `~/derp-workspace`):** `bash scripts/install-system.sh` — `git pull` (unless `--no-git` / `INSTALL_SKIP_GIT=1`), then **`exec` of `scripts/install-system-run.sh`** so anything updated by the pull (including these scripts) drives the rest: `cargo build --release -p compositor -p cef_host`, `npm` for `shell/dist`, install into `/usr/local`, symlink `derp-session`. **`derp-session.sh` resolves that symlink** (`readlink -f`) so `shell/dist` and CEF RUNPATH are read from the **clone**, not from `/usr/local`.
 2. **Manual install:** `cargo build --release -p compositor -p cef_host`; then `sudo install -Dm755 target/release/compositor /usr/local/bin/` and `sudo install -Dm755 target/release/cef_host /usr/local/bin/`; `sudo ln -sf "$(pwd)/scripts/derp-session.sh" /usr/local/bin/derp-session`; `sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop`.
 3. **GDM:** Pick **Derp Compositor**. The wrapper runs `compositor --backend drm` under your `XDG_RUNTIME_DIR` (requires **libseat** / logind session). Override the GPU node with **`DERP_DRM_DEVICE`** (e.g. `/dev/dri/card0`) if detection fails.
 4. **Stack:** KMS + GBM + EGL GLES + libinput; Mesa on Intel/AMD is the expected path. See DRM limitations in code comments if a driver misbehaves.
