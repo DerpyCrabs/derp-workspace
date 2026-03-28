@@ -518,10 +518,17 @@ fn main() {
 
     while !shutdown_requested.load(Ordering::Relaxed) {
         do_message_loop_work();
-        while let Ok(msg) = shell_ipc_rx.try_recv() {
+        let batch = cef_host::ipc_coalesce::recv_folded(&shell_ipc_rx);
+        let had_ipc = !batch.is_empty();
+        for msg in batch {
             compositor_downlink::apply_message(msg, &browser_holder, &view_state);
         }
-        std::thread::sleep(Duration::from_millis(4));
+        // Bursty pointer + `execute_java_script` HUD: coalesce above; when idle, sleep like a typical CEF pump.
+        if had_ipc {
+            std::thread::sleep(Duration::from_millis(1));
+        } else {
+            std::thread::sleep(Duration::from_millis(4));
+        }
     }
 
     if let Ok(g) = browser_holder.lock() {

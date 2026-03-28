@@ -1,6 +1,7 @@
 //! Read compositor → shell messages from the duplex Unix socket and forward to CEF OSR / JS.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, MouseButtonType, MouseEvent,
@@ -8,6 +9,9 @@ use cef::{
 use serde_json::json;
 
 use cef_host::osr_view_state::OsrViewState;
+
+/// Max rate for Solid HUD `osr_pointer` (`execute_java_script`); mouse events are not throttled.
+const OSR_POINTER_HUD_MIN_INTERVAL: Duration = Duration::from_millis(20);
 
 fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Ok(js) = serde_json::to_string(&detail) else {
@@ -223,15 +227,22 @@ pub fn apply_message(
                 modifiers: 0,
             };
             host.send_mouse_move_event(Some(&ev), 0);
-            // OSR does not reliably surface browser PointerEvents on `window`; shell HUD reads coords from here.
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "osr_pointer",
-                    "client_x": vx,
-                    "client_y": vy,
-                }),
-            );
+            // HUD: throttled — each move used to run synchronous JS and could stall `do_message_loop_work` for seconds
+            // when the compositor flooded PointerMove (unbounded channel + many Coalescable events).
+            let hud = view_state
+                .lock()
+                .map(|mut s| s.should_emit_osr_hud(OSR_POINTER_HUD_MIN_INTERVAL))
+                .unwrap_or(false);
+            if hud {
+                dispatch_shell_detail(
+                    b,
+                    json!({
+                        "type": "osr_pointer",
+                        "client_x": vx,
+                        "client_y": vy,
+                    }),
+                );
+            }
         }
         shell_wire::DecodedCompositorToShellMessage::PointerButton {
             x,

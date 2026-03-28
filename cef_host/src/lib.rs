@@ -2,6 +2,7 @@
 //!
 //! [`osr_view_state`] holds DIP vs OSR buffer sizes and the buffer→view mapping used with compositor pointer IPC.
 
+pub mod ipc_coalesce;
 pub mod osr_view_state;
 
 use std::path::PathBuf;
