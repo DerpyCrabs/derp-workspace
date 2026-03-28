@@ -8,7 +8,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
-            Display, DisplayHandle,
+            Display, DisplayHandle, Resource,
         },
     },
     utils::{Logical, Point},
@@ -23,7 +23,7 @@ use smithay::{
 };
 
 use crate::{
-    chrome_bridge::{NoOpChromeBridge, SharedChromeBridge},
+    chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge},
     window_registry::WindowRegistry,
     CalloopData,
 };
@@ -169,6 +169,28 @@ impl CompositorState {
                 .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                 .map(|(s, p)| (s, (p + location).to_f64()))
         })
+    }
+
+    /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
+    pub fn notify_geometry_if_changed(&mut self, window: &Window) {
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let surface_id = toplevel.wl_surface().id().protocol_id();
+        let Some(loc) = self.space.element_location(window) else {
+            return;
+        };
+        let size = window.geometry().size;
+        if let Some(true) =
+            self
+                .window_registry
+                .set_geometry(surface_id, loc.x, loc.y, size.w, size.h)
+        {
+            if let Some(info) = self.window_registry.snapshot_for_surface(surface_id) {
+                self.chrome_bridge
+                    .notify(ChromeEvent::WindowGeometryChanged { info });
+            }
+        }
     }
 }
 

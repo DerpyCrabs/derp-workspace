@@ -4,15 +4,22 @@
 use std::sync::Arc;
 
 /// Protocol version for IPC evolution (`protocol_version` in messages).
-pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 2;
+pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 3;
 
-/// Stable compositor window id and metadata for the shell.
+/// Stable compositor window id, metadata, and layout in Smithay logical space.
+///
+/// `x`/`y` are the window element position in compositor space; `width`/`height` are
+/// the Smithay desktop window client geometry size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowInfo {
     pub window_id: u32,
     pub surface_id: u32,
     pub title: String,
     pub app_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +50,9 @@ pub enum ChromeEvent {
         window_id: u32,
     },
     WindowMetadataChanged {
+        info: WindowInfo,
+    },
+    WindowGeometryChanged {
         info: WindowInfo,
     },
     FocusChanged {
@@ -129,6 +139,10 @@ mod tests {
             surface_id: 10,
             title: "t".into(),
             app_id: "a".into(),
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
         };
         b.notify(ChromeEvent::WindowMapped {
             info: info.clone(),
@@ -167,5 +181,44 @@ mod tests {
             ev[0],
             ChromeEvent::WindowMetadataChanged { info }
         );
+    }
+
+    #[test]
+    fn logging_bridge_records_window_geometry_changed() {
+        use crate::window_registry::WindowRegistry;
+
+        let mut reg = WindowRegistry::new();
+        reg.register_toplevel(3, "t".into(), "app".into());
+        assert_eq!(reg.set_geometry(3, 1, 2, 400, 300), Some(true));
+        let info = reg.snapshot_for_surface(3).unwrap();
+        let b = LoggingChromeBridge::new();
+        b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
+        let ev = b.take_events();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(
+            ev[0],
+            ChromeEvent::WindowGeometryChanged { info }
+        );
+    }
+
+    #[test]
+    fn geometry_then_metadata_sequence_preserves_layout_fields() {
+        use crate::window_registry::WindowRegistry;
+
+        let mut reg = WindowRegistry::new();
+        reg.register_toplevel(8, "tit".into(), "aid".into());
+        assert_eq!(reg.set_geometry(8, 0, 0, 640, 480), Some(true));
+        assert_eq!(reg.set_title(8, "new".into()), Some(true));
+
+        let info = reg.snapshot_for_surface(8).unwrap();
+        assert_eq!((info.x, info.y, info.width, info.height), (0, 0, 640, 480));
+        assert_eq!(info.title, "new");
+
+        let b = LoggingChromeBridge::new();
+        b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
+        b.notify(ChromeEvent::WindowMetadataChanged { info });
+        let ev = b.take_events();
+        assert!(matches!(ev[0], ChromeEvent::WindowGeometryChanged { .. }));
+        assert!(matches!(ev[1], ChromeEvent::WindowMetadataChanged { .. }));
     }
 }

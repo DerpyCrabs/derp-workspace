@@ -59,9 +59,10 @@ impl XdgShellHandler for CompositorState {
             .expect("just registered");
 
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window, (0, 0), false);
+        self.space.map_element(window.clone(), (0, 0), false);
 
         self.chrome_bridge.notify(ChromeEvent::WindowMapped { info });
+        self.notify_geometry_if_changed(&window);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

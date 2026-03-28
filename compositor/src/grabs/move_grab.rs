@@ -55,6 +55,7 @@ impl PointerGrab<CompositorState> for MoveSurfaceGrab {
 
         if !handle.current_pressed().contains(&BTN_LEFT) {
             handle.unset_grab(self, data, event.serial, event.time, true);
+            data.notify_geometry_if_changed(&self.window);
         }
     }
 

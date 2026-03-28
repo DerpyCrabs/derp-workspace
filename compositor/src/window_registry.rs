@@ -37,6 +37,10 @@ impl WindowRegistry {
             surface_id,
             title,
             app_id,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
         };
         self.by_surface.insert(surface_id, window_id);
         self.records.insert(window_id, info);
@@ -69,6 +73,25 @@ impl WindowRegistry {
         let info = self.records.get_mut(&wid)?;
         let changed = info.app_id != app_id;
         info.app_id = app_id;
+        Some(changed)
+    }
+
+    /// Sets geometry in compositor logical space; returns change status like [`Self::set_title`].
+    pub fn set_geometry(
+        &mut self,
+        surface_id: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Option<bool> {
+        let wid = *self.by_surface.get(&surface_id)?;
+        let info = self.records.get_mut(&wid)?;
+        let changed = info.x != x || info.y != y || info.width != width || info.height != height;
+        info.x = x;
+        info.y = y;
+        info.width = width;
+        info.height = height;
         Some(changed)
     }
 
@@ -126,6 +149,26 @@ mod tests {
     fn unknown_surface_returns_none() {
         let mut r = WindowRegistry::new();
         assert_eq!(r.set_title(99, "x".into()), None);
+        assert_eq!(r.set_geometry(99, 0, 0, 1, 1), None);
         assert_eq!(r.remove_by_surface(99), None);
+    }
+
+    #[test]
+    fn set_geometry_reports_change() {
+        let mut r = WindowRegistry::new();
+        r.register_toplevel(1, "".into(), "".into());
+        assert_eq!(r.set_geometry(1, 0, 0, 0, 0), Some(false));
+        assert_eq!(r.set_geometry(1, 10, 20, 100, 80), Some(true));
+        let s = r.snapshot_for_surface(1).unwrap();
+        assert_eq!((s.x, s.y, s.width, s.height), (10, 20, 100, 80));
+        assert_eq!(r.set_geometry(1, 10, 20, 100, 80), Some(false));
+    }
+
+    #[test]
+    fn register_starts_with_zero_geometry() {
+        let mut r = WindowRegistry::new();
+        r.register_toplevel(7, "t".into(), "a".into());
+        let s = r.snapshot_for_surface(7).unwrap();
+        assert_eq!((s.x, s.y, s.width, s.height), (0, 0, 0, 0));
     }
 }
