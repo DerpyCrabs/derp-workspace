@@ -191,9 +191,12 @@ pub fn init_winit(
                                     .extend(space_els.into_iter().map(DesktopStack::Space));
                                 render_elements
                                     .extend(custom.iter().map(DesktopStack::Shell));
-                                for el in pointer_render::pointer_render_elements(state, renderer, &output) {
-                                    render_elements.push(DesktopStack::Pointer(el));
-                                }
+                                pointer_render::append_pointer_desktop_elements(
+                                    state,
+                                    renderer,
+                                    &output,
+                                    &mut render_elements,
+                                );
 
                                 damage_tracker.render_output(
                                     renderer,

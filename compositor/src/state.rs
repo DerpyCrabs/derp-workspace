@@ -11,7 +11,7 @@ use std::{
 use smithay::{
     backend::input::TouchSlot,
     backend::{
-        renderer::element::memory::MemoryRenderBuffer,
+        renderer::element::{memory::MemoryRenderBuffer, solid::SolidColorBuffer},
         session::libseat::LibSeatSession,
     },
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
@@ -130,6 +130,8 @@ pub struct CompositorState {
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
+    /// Solid sprite when the client sets [`CursorImageStatus::Named`] (cursor_shape) with no surface.
+    pub(crate) cursor_fallback_buffer: SolidColorBuffer,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
     shell_e2e_status_path: Option<PathBuf>,
@@ -213,6 +215,7 @@ impl CompositorState {
             touch_emulation_slot: None,
             shell_pointer_norm: None,
             pointer_cursor_image: CursorImageStatus::Hidden,
+            cursor_fallback_buffer: SolidColorBuffer::new((22, 22), [0.97f32, 0.97f32, 1.0f32, 1.0f32]),
             shell_move_window_id: None,
             shell_e2e_status_path,
             shell_e2e_screenshot_path,

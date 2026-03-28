@@ -5,7 +5,10 @@
 //! pixels (translucent Solid UI must not reveal window contents). [`DesktopStack`] mirrors Smithay’s
 //! internal layout with a reorderable `Space` → `Shell` variant order.
 
-use smithay::backend::renderer::{element::render_elements, ImportAll};
+use smithay::backend::renderer::{
+    element::{render_elements, solid::SolidColorRenderElement},
+    ImportAll,
+};
 use smithay::desktop::space::SpaceRenderElements;
 
 render_elements! {
@@ -13,6 +16,8 @@ render_elements! {
         R: ImportAll;
     Space=SpaceRenderElements<R, E>,
     Shell=&'a C,
-    /// Client cursor (wl_surface); must be last so it paints above shell and toplevels.
+    /// Client cursor (wl_surface).
     Pointer=E,
+    /// Themed/name-only cursor (`wp_cursor_shape`): no wl_surface bitmap — draw a solid fallback.
+    CursorFb=SolidColorRenderElement,
 }
