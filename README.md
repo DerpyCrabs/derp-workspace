@@ -110,6 +110,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 | `resources/derp-wayland.desktop` | GDM session entry (`wayland-sessions`) |
 | `scripts/derp-session.sh` | Session wrapper: `--backend drm`, optional CEF + `shell/dist` |
 | `scripts/install-system.sh` | One-shot: pull, release build, npm `shell/dist`, install to `/usr/local` + GDM `.desktop` |
+| `scripts/remote-install.sh` | Optional: run `install-system.sh` on another host over SSH (`scripts/remote-install.sample.md`, gitignored `remote-install.env`) |
 | `shell_wire/` | Length‑prefixed messages: BGRA frames, spawn, shell IPC move/geometry/close/fullscreen/quit/list, compositor→shell output geometry, window events, pointer (`SHELL_PIXEL_PROTOCOL_VERSION`, currently **5**) |
 | `cef_host/` | CEF OSR process: loads a URL, pushes frames to the compositor socket |
 | `shell/` | Vite + SolidJS UI built to `shell/dist/` for CEF `file://` loading |

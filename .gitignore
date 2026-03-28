@@ -27,3 +27,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Machine-specific SSH / remote-install overrides (see scripts/remote-install.sample.md)
+scripts/remote-install.env
+scripts/remote-install.local.md
