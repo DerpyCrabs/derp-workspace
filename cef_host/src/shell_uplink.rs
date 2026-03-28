@@ -1,9 +1,14 @@
 //! Renderer ↔ browser process bridge: JS calls `__derpShellWireSend(op, arg?, arg2?)` → compositor `shell_wire` on the Unix stream (no HTTP).
+//!
+//! After `move_delta`, optionally `BrowserHost::invalidate(VIEW)` throttled so OSR keeps up with shell chrome
+//! during drag. Disable with `CEF_HOST_SHELL_DRAG_INVALIDATE=0`, or tune ms with `CEF_HOST_SHELL_DRAG_INVALIDATE_MS`
+//! (default 8, clamped 1–50).
 
 use std::{
     io::Write,
     os::unix::net::UnixStream,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use cef::{sys, *};
@@ -20,7 +25,64 @@ pub fn write_shell_packet(ipc: &Arc<Mutex<UnixStream>>, packet: &[u8]) {
     let _ = g.flush();
 }
 
-fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
+static LAST_DRAG_VIEW_INVALIDATE: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn drag_invalidate_shell_view_enabled() -> bool {
+    std::env::var("CEF_HOST_SHELL_DRAG_INVALIDATE").as_deref() != Ok("0")
+}
+
+fn drag_invalidate_min_interval() -> Duration {
+    let ms: u64 = std::env::var("CEF_HOST_SHELL_DRAG_INVALIDATE_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8)
+        .clamp(1, 50);
+    Duration::from_millis(ms)
+}
+
+fn reset_drag_invalidate_throttle() {
+    *LAST_DRAG_VIEW_INVALIDATE.lock().expect("LAST_DRAG_VIEW_INVALIDATE") = None;
+}
+
+fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
+    if !drag_invalidate_shell_view_enabled() {
+        return;
+    }
+    let min_gap = drag_invalidate_min_interval();
+    let now = Instant::now();
+    {
+        let mut last = LAST_DRAG_VIEW_INVALIDATE.lock().expect("LAST_DRAG_VIEW_INVALIDATE");
+        if let Some(t) = *last {
+            if now.duration_since(t) < min_gap {
+                return;
+            }
+        }
+        *last = Some(now);
+    }
+    if let Some(b) = browser {
+        if let Some(host) = b.host() {
+            host.invalidate(PaintElementType::VIEW);
+        }
+    }
+}
+
+fn invalidate_shell_view_unthrottled(browser: Option<&mut Browser>) {
+    if !drag_invalidate_shell_view_enabled() {
+        return;
+    }
+    reset_drag_invalidate_throttle();
+    if let Some(b) = browser {
+        if let Some(host) = b.host() {
+            host.invalidate(PaintElementType::VIEW);
+        }
+    }
+}
+
+fn handle_uplink_list(
+    ipc: &Arc<Mutex<UnixStream>>,
+    browser: Option<&mut Browser>,
+    args: &ListValue,
+) {
     let op = cef_string_userfree_to_string(&args.string(0));
     match op.as_str() {
         "close" => {
@@ -39,6 +101,7 @@ fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
         "move_begin" => {
             let wid = args.int(1) as u32;
             eprintln!("[derp-shell-move] cef_host uplink: move_begin window_id={wid}");
+            reset_drag_invalidate_throttle();
             write_shell_packet(ipc, &shell_wire::encode_shell_move_begin(wid));
         }
         "move_delta" => {
@@ -46,11 +109,13 @@ fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
             let dy = args.int(2) as i32;
             eprintln!("[derp-shell-move] cef_host uplink: move_delta dx={dx} dy={dy}");
             write_shell_packet(ipc, &shell_wire::encode_shell_move_delta(dx, dy));
+            maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "move_end" => {
             let wid = args.int(1) as u32;
             eprintln!("[derp-shell-move] cef_host uplink: move_end window_id={wid}");
             write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
+            invalidate_shell_view_unthrottled(browser);
         }
         _ => {}
     }
@@ -59,6 +124,7 @@ fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
 /// Browser process: handle message from the render process.
 pub fn on_browser_process_message(
     ipc: &Arc<Mutex<UnixStream>>,
+    browser: Option<&mut Browser>,
     source_process: ProcessId,
     message: Option<&mut ProcessMessage>,
 ) -> bool {
@@ -74,7 +140,7 @@ pub fn on_browser_process_message(
     let Some(args) = msg.argument_list() else {
         return true;
     };
-    handle_uplink_list(ipc, &args);
+    handle_uplink_list(ipc, browser, &args);
     true
 }
 

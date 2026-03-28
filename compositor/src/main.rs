@@ -114,6 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             seat_name: "headless".to_string(),
             chrome_bridge: std::sync::Arc::new(NoOpChromeBridge),
             shell_ipc_socket: cli.shell_ipc_socket.clone(),
+            shell_ipc_embedded: None,
             shell_e2e_status_path: shell_e2e_status_from_env(),
             shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
             shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
@@ -150,6 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clone()
                 .unwrap_or_else(|| "derp-shell.sock".to_string()),
         ),
+        shell_ipc_embedded: None,
         shell_e2e_status_path: shell_e2e_status_from_env(),
         shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
         shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),

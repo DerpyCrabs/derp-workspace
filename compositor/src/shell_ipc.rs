@@ -1,8 +1,7 @@
-//! Unix stream socket for [`shell_wire`] (pixel frames + optional spawn commands).
+//! Shell ↔ compositor transport: Unix stream (legacy `cef_host` process) or in-process channel (DerpWorkspace merged binary).
 //!
-//! The accepted client uses **blocking** I/O so compositor→`cef_host` writes always complete whole
-//! length‑prefixed packets (non‑blocking duplex `O_NONBLOCK` was losing / interleaving pointer
-//! updates). [`drain_shell_stream`] uses **`FIONREAD`** to read only queued bytes without blocking the
+//! The accepted Unix client uses **blocking** I/O so compositor→`cef_host` writes complete whole
+//! length‑prefixed packets. [`drain_shell_stream`] uses **`FIONREAD`** to read only queued bytes without blocking the
 //! compositor tick.
 
 use std::{
@@ -39,6 +38,22 @@ use tracing::{error, warn};
 
 use crate::CalloopData;
 
+/// Duplex path to the CEF / shell side (OSR ingress + chrome commands).
+pub enum ShellIpcConn {
+    Disconnected,
+    Unix(std::os::unix::net::UnixStream),
+    Embedded {
+        to_peer: std::sync::mpsc::Sender<Vec<u8>>,
+        from_peer: std::sync::mpsc::Receiver<Vec<u8>>,
+    },
+}
+
+impl ShellIpcConn {
+    pub fn is_disconnected(&self) -> bool {
+        matches!(self, Self::Disconnected)
+    }
+}
+
 fn bind_shell_socket(path: &Path) -> io::Result<UnixListener> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -59,9 +74,9 @@ fn unix_bytes_available(stream: &std::os::unix::net::UnixStream) -> io::Result<u
     Ok((n.max(0)) as usize)
 }
 
-fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
+pub(crate) fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
     state.shell_disconnect_end_move_if_any();
-    state.shell_ipc_client = None;
+    state.shell_ipc_conn = ShellIpcConn::Disconnected;
     state.shell_read_buf.clear();
     state.shell_shm = None;
     state.shell_clear_ipc_last_rx();
@@ -181,8 +196,6 @@ fn dispatch_shell_message(
 }
 
 /// Pop and handle all complete shell→compositor messages currently in [`CompositorState::shell_read_buf`].
-/// Applies only the **last** [`shell_wire::DecodedMessage::Frame`] or [`shell_wire::DecodedMessage::FrameShmCommit`]
-/// in this batch (avoids redundant work when the queue bursts).
 fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
     let mut batch: Vec<shell_wire::DecodedMessage> = Vec::new();
     loop {
@@ -237,10 +250,9 @@ pub fn register_shell_ipc_listener(
             loop {
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        // Blocking peer: reliable compositor→shell writes; drain uses FIONREAD.
                         #[cfg(unix)]
                         tune_shell_accepted_stream(&stream);
-                        data.state.shell_ipc_client = Some(stream);
+                        data.state.shell_ipc_conn = ShellIpcConn::Unix(stream);
                         data.state.shell_read_buf.clear();
                         data.state.shell_shm = None;
                         data.state.shell_on_shell_client_connected();
@@ -259,23 +271,55 @@ pub fn register_shell_ipc_listener(
     Ok(path)
 }
 
-/// Read available bytes from the active shell client and apply complete frames to the shell buffer.
+/// Feed embedded channel payloads into the decode path (one [`Vec`] per length-prefixed wire packet).
+fn drain_embedded_channel(state: &mut crate::state::CompositorState) {
+    loop {
+        let packet = match &mut state.shell_ipc_conn {
+            ShellIpcConn::Embedded { from_peer, .. } => match from_peer.try_recv() {
+                Ok(p) => p,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    tracing::warn!("shell ipc: embedded peer disconnected (rx)");
+                    disconnect_shell_client(state);
+                    return;
+                }
+            },
+            _ => return,
+        };
+        state.shell_read_buf.extend_from_slice(&packet);
+        drain_decoded_messages(state);
+        if state.shell_ipc_conn.is_disconnected() {
+            return;
+        }
+    }
+}
+
+/// Read available bytes from the active shell Unix peer and apply complete frames.
 #[cfg(unix)]
 pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
+    match &mut state.shell_ipc_conn {
+        ShellIpcConn::Embedded { .. } => {
+            drain_embedded_channel(state);
+        }
+        ShellIpcConn::Disconnected => {}
+        ShellIpcConn::Unix(_) => drain_shell_unix_stream(state),
+    }
+}
+
+#[cfg(unix)]
+fn drain_shell_unix_stream(state: &mut crate::state::CompositorState) {
     let t0 = std::time::Instant::now();
     let mut total_read = 0usize;
     'drain: loop {
-        let avail = {
-            let Some(stream) = state.shell_ipc_client.as_mut() else {
-                return;
-            };
-            match unix_bytes_available(stream) {
+        let avail = match &mut state.shell_ipc_conn {
+            ShellIpcConn::Unix(stream) => match unix_bytes_available(stream) {
                 Ok(a) => a,
                 Err(e) => {
                     warn!(?e, "shell ipc: FIONREAD");
                     break 'drain;
                 }
-            }
+            },
+            _ => return,
         };
         if avail == 0 {
             break;
@@ -286,11 +330,8 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
             state.shell_read_scratch.resize(want, 0);
         }
         let cap = std::cmp::min(want, state.shell_read_scratch.len());
-        let n = {
-            let Some(stream) = state.shell_ipc_client.as_mut() else {
-                return;
-            };
-            match stream.read(&mut state.shell_read_scratch[..cap]) {
+        let n = match &mut state.shell_ipc_conn {
+            ShellIpcConn::Unix(stream) => match stream.read(&mut state.shell_read_scratch[..cap]) {
                 Ok(0) => {
                     disconnect_shell_client(state);
                     return;
@@ -301,14 +342,15 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
                     disconnect_shell_client(state);
                     return;
                 }
-            }
+            },
+            _ => return,
         };
         total_read += n;
         state
             .shell_read_buf
             .extend_from_slice(&state.shell_read_scratch[..n]);
         drain_decoded_messages(state);
-        if state.shell_ipc_client.is_none() {
+        if state.shell_ipc_conn.is_disconnected() {
             return;
         }
     }
@@ -323,6 +365,13 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
 
 #[cfg(not(unix))]
 pub fn drain_shell_stream(_state: &mut crate::state::CompositorState) {}
+
+#[allow(dead_code)]
+pub fn run_post_drain_hooks(state: &mut crate::state::CompositorState) {
+    if let Some(hook) = state.shell_post_drain_hook.as_mut() {
+        hook();
+    }
+}
 
 #[cfg(all(test, unix))]
 #[test]

@@ -388,8 +388,12 @@ wrap_client! {
             source_process: ProcessId,
             message: Option<&mut ProcessMessage>,
         ) -> std::os::raw::c_int {
-            if shell_uplink::on_browser_process_message(&self.compositor_ipc, source_process, message)
-            {
+            if shell_uplink::on_browser_process_message(
+                &self.compositor_ipc,
+                _browser,
+                source_process,
+                message,
+            ) {
                 1
             } else {
                 0

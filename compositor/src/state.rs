@@ -1,7 +1,6 @@
 use std::{
     ffi::OsString,
     io::Write,
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -66,13 +65,18 @@ pub enum SocketConfig {
     Fixed(String),
 }
 
-#[derive(Clone)]
 pub struct CompositorInitOptions {
     pub socket: SocketConfig,
     pub seat_name: String,
     pub chrome_bridge: SharedChromeBridge,
     /// When set, listen on `XDG_RUNTIME_DIR`/name for shell pixel IPC ([`shell_wire`]).
     pub shell_ipc_socket: Option<String>,
+    /// In-process shell bridge: `(compositor → peer tx, peer → compositor rx)`. When set, Unix
+    /// shell socket is not bound (`shell_ipc_socket` ignored for listen).
+    pub shell_ipc_embedded: Option<(
+        std::sync::mpsc::Sender<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    )>,
     /// When set, each applied shell frame overwrites this file with JSON luminance stats (E2E tests).
     pub shell_e2e_status_path: Option<PathBuf>,
     /// When set, each applied shell frame overwrites this path with a PNG (BGRA → RGBA) for visual debugging / screenshot tests.
@@ -88,6 +92,7 @@ impl Default for CompositorInitOptions {
             seat_name: "compositor".to_string(),
             chrome_bridge: Arc::new(NoOpChromeBridge),
             shell_ipc_socket: None,
+            shell_ipc_embedded: None,
             shell_e2e_status_path: None,
             shell_e2e_screenshot_path: None,
             shell_ipc_stall_timeout: None,
@@ -119,7 +124,10 @@ pub struct CompositorState {
     pub chrome_bridge: SharedChromeBridge,
     pub window_registry: WindowRegistry,
 
-    pub shell_ipc_client: Option<UnixStream>,
+    /// Unix stream peer, in-process channel pair, or disconnected.
+    pub shell_ipc_conn: crate::shell_ipc::ShellIpcConn,
+    /// After first mapped output: run [`Self::shell_on_shell_client_connected`] once for embedded IPC.
+    shell_embedded_initial_handshake_done: bool,
     pub shell_read_buf: Vec<u8>,
     /// `XDG_RUNTIME_DIR` when shell IPC is enabled (for [`shell_wire::MSG_SHELL_SHM_REGION`] paths).
     pub shell_ipc_runtime_dir: Option<PathBuf>,
@@ -147,8 +155,9 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_hotspot: (i32, i32),
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
-    /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Flushed from [`Self::apply_shell_frame_bgra`]
-    /// (next OSR frame) and [`Self::shell_move_end`].
+    /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
+    /// (immediate flush), again from [`Self::apply_shell_frame_bgra`] if anything remained coalesced, and from
+    /// [`Self::shell_move_end`].
     shell_move_pending_delta: (i32, i32),
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
@@ -157,10 +166,13 @@ pub struct CompositorState {
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
     shell_ipc_stall_timeout: Option<Duration>,
-    /// Last time a length-prefixed message was decoded from [`Self::shell_ipc_client`].
+    /// Last time a length-prefixed message was decoded from the shell peer.
     shell_ipc_last_rx: Option<Instant>,
     /// Last [`shell_wire::encode_compositor_ping`] sent (throttle while waiting for [`shell_wire::MSG_SHELL_PONG`]).
     pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
+
+    /// After [`crate::shell_ipc::drain_shell_stream`] on the compositor thread (DerpWorkspace CEF pump).
+    pub shell_post_drain_hook: Option<Box<dyn FnMut() + Send>>,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -187,6 +199,7 @@ impl CompositorState {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
         let shell_ipc_socket = options.shell_ipc_socket.clone();
+        let shell_ipc_embedded = options.shell_ipc_embedded;
         let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
         let shell_e2e_status_path = options.shell_e2e_status_path.clone();
         let shell_e2e_screenshot_path = options.shell_e2e_screenshot_path.clone();
@@ -224,7 +237,8 @@ impl CompositorState {
             seat,
             chrome_bridge,
             window_registry,
-            shell_ipc_client: None,
+            shell_ipc_conn: crate::shell_ipc::ShellIpcConn::Disconnected,
+            shell_embedded_initial_handshake_done: false,
             shell_read_buf: Vec::new(),
             shell_ipc_runtime_dir: None,
             shell_read_scratch: Vec::with_capacity(256 * 1024),
@@ -249,10 +263,23 @@ impl CompositorState {
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
+            shell_post_drain_hook: None,
             vt_session: None,
         };
 
-        if let Some(name) = shell_ipc_socket {
+        if let Some((to_peer, from_peer)) = shell_ipc_embedded {
+            if let Ok(rd) = std::env::var("XDG_RUNTIME_DIR") {
+                let rd_path = PathBuf::from(&rd);
+                s.shell_ipc_conn = crate::shell_ipc::ShellIpcConn::Embedded {
+                    to_peer,
+                    from_peer,
+                };
+                s.shell_ipc_runtime_dir = Some(rd_path);
+                tracing::info!("shell ipc embedded (in-process channel)");
+            } else {
+                tracing::warn!("XDG_RUNTIME_DIR unset; embedded shell ipc not started");
+            }
+        } else if let Some(name) = shell_ipc_socket {
             if let Ok(rd) = std::env::var("XDG_RUNTIME_DIR") {
                 let rd_path = PathBuf::from(&rd);
                 if let Err(e) =
@@ -611,6 +638,24 @@ impl CompositorState {
         self.shell_ipc_try_write(&pkt);
     }
 
+    /// Embedded shell IPC: first full handshake after [`Space::map_output`] so output geometry is non-empty.
+    pub fn shell_embedded_notify_output_ready(&mut self) {
+        if !matches!(
+            self.shell_ipc_conn,
+            crate::shell_ipc::ShellIpcConn::Embedded { .. }
+        ) {
+            return;
+        }
+        if self.shell_embedded_initial_handshake_done {
+            return;
+        }
+        if self.shell_output_logical_size().is_none() {
+            return;
+        }
+        self.shell_embedded_initial_handshake_done = true;
+        self.shell_on_shell_client_connected();
+    }
+
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
         self.shell_note_shell_ipc_rx();
@@ -658,7 +703,7 @@ impl CompositorState {
         let Some(limit) = self.shell_ipc_stall_timeout else {
             return;
         };
-        if self.shell_ipc_client.is_none() {
+        if self.shell_ipc_conn.is_disconnected() {
             self.shell_ipc_last_compositor_ping = None;
             return;
         }
@@ -1058,8 +1103,9 @@ impl CompositorState {
             dx,
             dy,
             accum = ?self.shell_move_pending_delta,
-            "shell_move_delta: queued for flush on next OSR frame"
+            "shell_move_delta: flushing to space (Wayland geometry tracks pointer)"
         );
+        self.shell_move_flush_pending_deltas();
     }
 
     /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.
@@ -1251,15 +1297,22 @@ impl CompositorState {
 
     /// Send compositor → `cef_host` message (pointer routing). No-op if shell IPC is disconnected.
     pub fn shell_ipc_try_write(&mut self, packet: &[u8]) {
-        if let Some(ref mut stream) = self.shell_ipc_client {
-            // Shell client uses a **blocking** socket so the whole frame/packet is delivered or
-            // fails atomically (no truncated length prefix).
-            if let Err(e) = stream.write_all(packet) {
-                tracing::warn!(?e, "shell ipc: write to client failed");
-                return;
+        match &mut self.shell_ipc_conn {
+            crate::shell_ipc::ShellIpcConn::Disconnected => {}
+            crate::shell_ipc::ShellIpcConn::Unix(stream) => {
+                if let Err(e) = stream.write_all(packet) {
+                    tracing::warn!(?e, "shell ipc: write to client failed");
+                    return;
+                }
+                if let Err(e) = stream.flush() {
+                    tracing::warn!(?e, "shell ipc: flush failed");
+                }
             }
-            if let Err(e) = stream.flush() {
-                tracing::warn!(?e, "shell ipc: flush failed");
+            crate::shell_ipc::ShellIpcConn::Embedded { to_peer, .. } => {
+                if to_peer.send(packet.to_vec()).is_err() {
+                    tracing::warn!("shell ipc: embedded peer disconnected (tx)");
+                    shell_ipc::disconnect_shell_client(self);
+                }
             }
         }
     }
