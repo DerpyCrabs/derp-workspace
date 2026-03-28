@@ -2,8 +2,8 @@
 # Rsync this repo to a remote host, run install-system-run.sh there (build + sudo install),
 # then signal the running compositor with SIGUSR2 for in-place restart.
 #
-# Requires on the remote: DERP_COMPOSITOR_RESPAWN=1 in the graphical session (see
-# scripts/remote-install.sample.md); compositor must handle SIGUSR2 and exit 42 after teardown.
+# Requires on the remote: derp-session from this tree (default: respawn when compositor exits 42).
+# Compositor must handle SIGUSR2 and exit 42 after teardown. See scripts/remote-install.sample.md.
 #
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
 # REMOTE_HOST, REMOTE_REPO.
@@ -59,9 +59,9 @@ else
 fi
 
 RSYNC_EXCLUDES=(
-  --exclude/target/
-  --exclude/shell/node_modules/
-  --exclude/.git/
+  --exclude=target/
+  --exclude=shell/node_modules/
+  --exclude=.git/
 )
 
 ssh_base() {
@@ -87,7 +87,7 @@ set -euo pipefail
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
   echo "remote-update-and-restart: no compositor process for user $(id -un); skipping SIGUSR2." >&2
-  echo "remote-update-and-restart: enable DERP_COMPOSITOR_RESPAWN=1 on the target session for in-place reload." >&2
+  echo "remote-update-and-restart: log into Derp session first; derp-session defaults to respawn-on-exit-42 (see remote-install.sample.md)." >&2
   exit 0
 fi
 if [[ ${#pids[@]} -gt 1 ]]; then

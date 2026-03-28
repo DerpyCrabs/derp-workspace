@@ -52,17 +52,13 @@ bash scripts/remote-update-and-restart.sh
 - **`--dry-run`** — print the operations without running them.
 - Forward extra args to `install-system-run.sh` after `--`, same idea as `remote-install.sh`.
 
-**In-place reload** needs both:
+**In-place reload** needs a **current** `derp-session.sh` and compositor from this tree:
 
-1. **Compositor + session from this tree:** the compositor exits with code **42** after a graceful `SIGUSR2` stop; **`derp-session`** must be started with **`DERP_COMPOSITOR_RESPAWN=1`** so it respawns the compositor when it sees exit 42 (pick up the newly installed `/usr/local/bin/compositor`). Without that env, a stop would end the Wayland session as before.
+- After **`install-system-run.sh`**, `/usr/local/bin/derp-session` points at the repo copy of **`scripts/derp-session.sh`**. That script **defaults to a supervisor loop**: when the compositor exits **42** (after graceful **`SIGUSR2`**), it starts **`/usr/local/bin/compositor`** again so you stay in-session instead of returning to GDM. Set **`DERP_COMPOSITOR_RESPAWN=0`** if you need the old single-**`exec`** behavior.
 
-2. **Session env (example):** one way on the target user account is a systemd user drop-in for the session, or an `environment.d` snippet GDM picks up, e.g. `/etc/environment.d/derp-respawn.conf`:
+- **One logout/login** (or reboot) after updating `derp-session.sh` on disk is required: a session that was started with an older launcher may still have used plain **`exec`**, so the first **`SIGUSR2`** would end the session. After logging in again, the new loop is active.
 
-   ```
-   DERP_COMPOSITOR_RESPAWN=1
-   ```
-
-   Use whatever matches your distro’s GDM documentation; the requirement is that **`derp-session`** sees the variable when the “Derp Compositor” session starts.
+- The **running** compositor must understand **`SIGUSR2`** (exit 42 after teardown). The first time you deploy that binary, if the **old** process is still running, **`SIGUSR2`** may terminate it without exit 42; log in once so the new binary runs, then remote updates should reload cleanly.
 
 **Fully non-interactive SSH** (no sudo password prompt): configure **`sudoers`** on the remote so `install-system-run.sh` can run its **`sudo`** steps without a TTY. That script uses **`install`** and **`ln`** (see `scripts/install-system-run.sh`). Example (adjust user and binary paths to match the host, e.g. `command -v install` / `command -v ln`):
 

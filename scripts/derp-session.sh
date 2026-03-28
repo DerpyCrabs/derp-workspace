@@ -95,7 +95,10 @@ mkdir -p "$(dirname "$DERP_COMPOSITOR_LOG")"
 printf '%s\n' "===== derp-session start $(date -Is) uid=$UID WAYLAND_SOCKET=$SOCKET RUST_LOG=${RUST_LOG} =====" >>"$DERP_COMPOSITOR_LOG"
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1
-if [[ "${DERP_COMPOSITOR_RESPAWN:-0}" == "1" ]]; then
+# Default: keep a supervisor loop so SIGUSR2 → exit 42 can reload a newly installed
+# /usr/local/bin/compositor without ending the GDM session (scripts/remote-update-and-restart.sh).
+# Set DERP_COMPOSITOR_RESPAWN=0 for legacy single-exec behavior.
+if [[ "${DERP_COMPOSITOR_RESPAWN:-1}" != "0" ]]; then
   while true; do
     if "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"; then
       ec=0
