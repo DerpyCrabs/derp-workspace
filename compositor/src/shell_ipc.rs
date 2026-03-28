@@ -145,9 +145,18 @@ fn dispatch_shell_message(
                 warn!(%e, "shell ipc: spawn");
             }
         }
-        ShellMoveBegin { window_id } => state.shell_move_begin(window_id),
-        ShellMoveDelta { dx, dy } => state.shell_move_delta(dx, dy),
-        ShellMoveEnd { window_id } => state.shell_move_end(window_id),
+        ShellMoveBegin { window_id } => {
+            tracing::warn!(target: "derp_shell_move", window_id, "shell ipc rx: move_begin");
+            state.shell_move_begin(window_id);
+        }
+        ShellMoveDelta { dx, dy } => {
+            tracing::warn!(target: "derp_shell_move", dx, dy, "shell ipc rx: move_delta");
+            state.shell_move_delta(dx, dy);
+        }
+        ShellMoveEnd { window_id } => {
+            tracing::warn!(target: "derp_shell_move", window_id, "shell ipc rx: move_end");
+            state.shell_move_end(window_id);
+        }
         ShellListWindows => state.shell_reply_window_list(),
         ShellSetGeometry {
             window_id,

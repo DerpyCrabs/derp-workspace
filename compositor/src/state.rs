@@ -145,6 +145,10 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_hotspot: (i32, i32),
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
+    /// Deltas from shell `move_delta` not yet applied to [`Self::space`]. Flushed from
+    /// [`Self::apply_shell_frame_bgra`] (next OSR paint) or [`Self::shell_move_end`] so a presented
+    /// frame never shows the toplevel ahead of Solid chrome.
+    shell_move_pending_delta: (i32, i32),
     shell_e2e_status_path: Option<PathBuf>,
     shell_e2e_screenshot_path: Option<PathBuf>,
     /// Drives nested winit repaints when Wayland clients commit or on first frame.
@@ -235,6 +239,7 @@ impl CompositorState {
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
             shell_move_window_id: None,
+            shell_move_pending_delta: (0, 0),
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
             needs_winit_redraw: true,
@@ -371,9 +376,80 @@ impl CompositorState {
         }
     }
 
+    /// Map one **output-local logical** point to OSR **buffer** pixels (same letterbox + norm as pointer IPC).
+    pub(crate) fn shell_output_local_point_to_buffer_px(
+        &self,
+        output_size: smithay::utils::Size<i32, Logical>,
+        lx: f64,
+        ly: f64,
+    ) -> Option<(i32, i32)> {
+        let (nx, ny) = if let Some((ox, oy, cw, ch)) = self.shell_letterbox_logical(output_size) {
+            let pw = cw.max(1) as f64;
+            let ph = ch.max(1) as f64;
+            (
+                ((lx - ox as f64) / pw).clamp(0.0, 1.0),
+                ((ly - oy as f64) / ph).clamp(0.0, 1.0),
+            )
+        } else {
+            let gw = output_size.w.max(1) as f64;
+            let gh = output_size.h.max(1) as f64;
+            ((lx / gw).clamp(0.0, 1.0), (ly / gh).clamp(0.0, 1.0))
+        };
+        let (buf_w, buf_h) = if self.shell_has_frame {
+            self.shell_view_px?
+        } else {
+            self.shell_output_logical_size()?
+        };
+        Some(crate::shell_letterbox::norm_to_buffer_px(nx, ny, buf_w, buf_h))
+    }
+
+    /// [`crate::chrome_bridge::WindowInfo`] uses **global compositor logical** geometry. Shell IPC must use
+    /// **buffer pixels** (same space as [`shell_wire::encode_compositor_pointer_move`]) so `cef_host` can
+    /// `buffer_to_view` consistently with mouse coordinates.
+    pub(crate) fn shell_window_info_to_osr_buffer_pixels(
+        &self,
+        info: &crate::chrome_bridge::WindowInfo,
+    ) -> Option<crate::chrome_bridge::WindowInfo> {
+        let output = self.space.outputs().next()?;
+        let geo = self.space.output_geometry(output)?;
+        let lx0 = (info.x - geo.loc.x) as f64;
+        let ly0 = (info.y - geo.loc.y) as f64;
+        let iw = info.width.max(1);
+        let ih = info.height.max(1);
+        let lx1 = lx0 + (iw - 1) as f64;
+        let ly1 = ly0 + (ih - 1) as f64;
+        let (bx0, by0) = self.shell_output_local_point_to_buffer_px(geo.size, lx0, ly0)?;
+        let (bx1, by1) = self.shell_output_local_point_to_buffer_px(geo.size, lx1, ly1)?;
+        let bw = (bx1 - bx0 + 1).max(1);
+        let bh = (by1 - by0 + 1).max(1);
+        Some(crate::chrome_bridge::WindowInfo {
+            window_id: info.window_id,
+            surface_id: info.surface_id,
+            title: info.title.clone(),
+            app_id: info.app_id.clone(),
+            x: bx0,
+            y: by0,
+            width: bw,
+            height: bh,
+        })
+    }
+
     /// Notify [`ChromeBridge`] and push the same event on the shell IPC socket (if connected).
     pub fn shell_emit_chrome_event(&mut self, event: ChromeEvent) {
-        if let Some(p) = crate::shell_encode::chrome_event_to_shell_packet(&event) {
+        let ipc_event = match &event {
+            ChromeEvent::WindowMapped { info } => ChromeEvent::WindowMapped {
+                info: self
+                    .shell_window_info_to_osr_buffer_pixels(info)
+                    .unwrap_or_else(|| info.clone()),
+            },
+            ChromeEvent::WindowGeometryChanged { info } => ChromeEvent::WindowGeometryChanged {
+                info: self
+                    .shell_window_info_to_osr_buffer_pixels(info)
+                    .unwrap_or_else(|| info.clone()),
+            },
+            _ => event.clone(),
+        };
+        if let Some(p) = crate::shell_encode::chrome_event_to_shell_packet(&ipc_event) {
             self.shell_ipc_try_write(&p);
         }
         self.chrome_bridge.notify(event);
@@ -401,15 +477,18 @@ impl CompositorState {
         self.shell_note_shell_ipc_rx();
         self.send_shell_output_geometry();
         for info in self.window_registry.all_infos() {
+            let ipc_info = self
+                .shell_window_info_to_osr_buffer_pixels(&info)
+                .unwrap_or_else(|| info.clone());
             if let Some(p) = shell_wire::encode_window_mapped(
-                info.window_id,
-                info.surface_id,
-                info.x,
-                info.y,
-                info.width,
-                info.height,
-                &info.title,
-                &info.app_id,
+                ipc_info.window_id,
+                ipc_info.surface_id,
+                ipc_info.x,
+                ipc_info.y,
+                ipc_info.width,
+                ipc_info.height,
+                &ipc_info.title,
+                &ipc_info.app_id,
             ) {
                 self.shell_ipc_try_write(&p);
             }
@@ -667,9 +746,11 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_move_end_active(&mut self) {
-        if let Some(wid) = self.shell_move_window_id {
-            self.shell_move_end(wid);
-        }
+        let Some(wid) = self.shell_move_window_id else {
+            return;
+        };
+        tracing::warn!(target: "derp_shell_move", wid, "shell_move_end_active (seat LMB release)");
+        self.shell_move_end(wid);
     }
 
     /// Whether to send compositor → shell [`PointerMove`][`shell_wire`] for the CEF HUD / drag logic.
@@ -689,13 +770,29 @@ impl CompositorState {
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                "shell_move_begin: unknown window_id (registry)"
+            );
             return;
         };
         let Some(window) = self.find_window_by_surface_id(sid) else {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                sid,
+                "shell_move_begin: surface not in space"
+            );
             return;
         };
 
         if self.shell_move_window_id == Some(window_id) {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                "shell_move_begin: already active (no-op)"
+            );
             return;
         }
 
@@ -717,28 +814,90 @@ impl CompositorState {
         });
 
         self.shell_move_window_id = Some(window_id);
+        self.shell_move_pending_delta = (0, 0);
         self.needs_winit_redraw = true;
+        tracing::warn!(
+            target: "derp_shell_move",
+            window_id,
+            "shell_move_begin: started"
+        );
+    }
+
+    /// Applies [`Self::shell_move_pending_delta`] to the active shell-move window in [`Self::space`].
+    fn shell_move_flush_pending_deltas(&mut self) {
+        let Some(wid) = self.shell_move_window_id else {
+            return;
+        };
+        let (pdx, pdy) = self.shell_move_pending_delta;
+        if pdx == 0 && pdy == 0 {
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
+            tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: registry lost window");
+            self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_flush: window gone");
+            self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
+            return;
+        };
+        let Some(loc) = self.space.element_location(&window) else {
+            tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: no element_location");
+            return;
+        };
+        self.space
+            .map_element(window.clone(), (loc.x + pdx, loc.y + pdy), true);
+        self.shell_move_pending_delta = (0, 0);
+        self.notify_geometry_if_changed(&window);
+        self.needs_winit_redraw = true;
+        tracing::warn!(
+            target: "derp_shell_move",
+            wid,
+            pdx,
+            pdy,
+            "shell_move: flushed pending delta (sync with OSR frame)"
+        );
     }
 
     pub fn shell_move_delta(&mut self, dx: i32, dy: i32) {
         let Some(wid) = self.shell_move_window_id else {
+            tracing::warn!(
+                target: "derp_shell_move",
+                dx,
+                dy,
+                "shell_move_delta: ignored (no active move)"
+            );
             return;
         };
         let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
+            tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: registry lost window");
             self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
             return;
         };
         let Some(window) = self.find_window_by_surface_id(sid) else {
+            tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_delta: window gone from space");
             self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
             return;
         };
-        let Some(loc) = self.space.element_location(&window) else {
+        let Some(_loc) = self.space.element_location(&window) else {
+            tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: no element_location");
             return;
         };
-        self.space
-            .map_element(window.clone(), (loc.x + dx, loc.y + dy), true);
-        self.notify_geometry_if_changed(&window);
-        self.needs_winit_redraw = true;
+        self.shell_move_pending_delta.0 += dx;
+        self.shell_move_pending_delta.1 += dy;
+        tracing::warn!(
+            target: "derp_shell_move",
+            wid,
+            dx,
+            dy,
+            accum = ?self.shell_move_pending_delta,
+            "shell_move_delta: queued until next shell OSR frame"
+        );
     }
 
     /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.
@@ -753,19 +912,44 @@ impl CompositorState {
 
     pub fn shell_move_end(&mut self, window_id: u32) {
         if self.shell_move_window_id != Some(window_id) {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                active = ?self.shell_move_window_id,
+                "shell_move_end: ignored (stale or no active move)"
+            );
             return;
         }
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                "shell_move_end: no surface; clearing active move"
+            );
             self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
             self.needs_winit_redraw = true;
             return;
         };
         let Some(window) = self.find_window_by_surface_id(sid) else {
+            tracing::warn!(
+                target: "derp_shell_move",
+                window_id,
+                sid,
+                "shell_move_end: surface missing; clearing"
+            );
             self.shell_move_window_id = None;
+            self.shell_move_pending_delta = (0, 0);
             self.needs_winit_redraw = true;
             return;
         };
+        self.shell_move_flush_pending_deltas();
         self.shell_move_end_cleanup(window_id, &window);
+        tracing::warn!(
+            target: "derp_shell_move",
+            window_id,
+            "shell_move_end: finished"
+        );
     }
 
     /// End an in-progress shell move when the shell IPC client disconnects (avoid stuck state).
@@ -782,15 +966,20 @@ impl CompositorState {
             .window_registry
             .all_infos()
             .into_iter()
-            .map(|i| shell_wire::ShellWindowSnapshot {
-                window_id: i.window_id,
-                surface_id: i.surface_id,
-                x: i.x,
-                y: i.y,
-                w: i.width,
-                h: i.height,
-                title: i.title,
-                app_id: i.app_id,
+            .map(|i| {
+                let i = self
+                    .shell_window_info_to_osr_buffer_pixels(&i)
+                    .unwrap_or_else(|| i.clone());
+                shell_wire::ShellWindowSnapshot {
+                    window_id: i.window_id,
+                    surface_id: i.surface_id,
+                    x: i.x,
+                    y: i.y,
+                    w: i.width,
+                    h: i.height,
+                    title: i.title,
+                    app_id: i.app_id,
+                }
             })
             .collect();
         if let Some(pkt) = shell_wire::encode_window_list(&windows) {
@@ -956,6 +1145,7 @@ impl CompositorState {
         self.shell_has_frame = true;
         self.shell_view_px = Some((width, height));
         self.needs_winit_redraw = true;
+        self.shell_move_flush_pending_deltas();
         if let Some(ref path) = self.shell_e2e_status_path {
             write_shell_e2e_frame_status(path, w, h, stride, pixels);
         }

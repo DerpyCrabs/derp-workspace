@@ -1,11 +1,6 @@
-import { createMemo, createSignal, onCleanup, onMount, For, Show } from 'solid-js'
+import { batch, createMemo, createSignal, onCleanup, onMount, For, Show } from 'solid-js'
 import './App.css'
-
-/** Keep in sync with compositor `SHELL_TITLEBAR_HEIGHT` / `SHELL_BORDER_THICKNESS`. */
-export const CHROME_TITLEBAR_PX = 28
-export const CHROME_BORDER_PX = 4
-/** Keep in sync with compositor `SHELL_TITLEBAR_CONTROLS_INSET` (close zone + margin). */
-export const CHROME_TITLEBAR_CONTROLS_PX = 40
+import { ShellWindowFrame } from './ShellWindowFrame'
 
 declare global {
   interface Window {
@@ -129,13 +124,25 @@ async function postShell(path: string, body: object): Promise<void> {
   })
 }
 
+/** Tee’d into `compositor.log` when `cef_host` stderr is captured (session). Filter: `derp-shell-move`. */
+function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
+  const extra = detail !== undefined ? ` ${JSON.stringify(detail)}` : ''
+  console.log(`[derp-shell-move] ${msg}${extra}`)
+}
+
 function shellWireSend(
   op: 'close' | 'quit' | 'spawn' | 'move_begin' | 'move_delta' | 'move_end',
   arg?: number | string,
   arg2?: number,
 ): boolean {
   const fn = window.__derpShellWireSend
-  if (typeof fn !== 'function') return false
+  const hasWire = typeof fn === 'function'
+  if (!hasWire) {
+    if (op === 'move_begin' || op === 'move_delta' || op === 'move_end') {
+      shellMoveLog('wire_missing', { op, arg, arg2 })
+    }
+    return false
+  }
   if (op === 'move_delta' && arg2 !== undefined) {
     fn(op, arg as number, arg2)
   } else if (op === 'quit') {
@@ -200,6 +207,56 @@ function App() {
   let dragDemoGrab: { offsetX: number; offsetY: number } | null = null
   let dragDemoMoveLogSeq = 0
 
+  /** Shell → compositor window move (same wire as `cef_host` `shell_uplink`). */
+  let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
+  let shellMoveDeltaLogSeq = 0
+
+  /** Solid owns (x,y) during drag; compositor mirrors via `move_delta` after this state commits (`batch` flushes first). */
+  function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
+    setWindows((m) => {
+      const w = m.get(windowId)
+      if (!w) return m
+      const next = new Map(m)
+      next.set(windowId, { ...w, x: w.x + dx, y: w.y + dy })
+      return next
+    })
+  }
+
+  function beginShellWindowMove(windowId: number, clientX: number, clientY: number) {
+    shellMoveLog('titlebar_begin_request', { windowId, clientX, clientY })
+    shellMoveDeltaLogSeq = 0
+    if (!shellWireSend('move_begin', windowId)) {
+      shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
+      return
+    }
+    shellWindowDrag = { windowId, lastX: clientX, lastY: clientY }
+    shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
+  }
+
+  function applyShellWindowMove(clientX: number, clientY: number) {
+    if (!shellWindowDrag) return
+    const dx = Math.round(clientX - shellWindowDrag.lastX)
+    const dy = Math.round(clientY - shellWindowDrag.lastY)
+    if (dx === 0 && dy === 0) return
+    shellMoveDeltaLogSeq += 1
+    if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
+      shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
+    }
+    const wid = shellWindowDrag.windowId
+    batch(() => bumpShellWindowPosition(wid, dx, dy))
+    shellWireSend('move_delta', dx, dy)
+    shellWindowDrag.lastX = clientX
+    shellWindowDrag.lastY = clientY
+  }
+
+  function endShellWindowMove(reason: string) {
+    if (!shellWindowDrag) return
+    const id = shellWindowDrag.windowId
+    shellWindowDrag = null
+    shellMoveLog('titlebar_end', { windowId: id, reason })
+    shellWireSend('move_end', id)
+  }
+
   /** Readable in `~/.local/state/derp/compositor.log` when `cef_host` runs under `derp-session` (stderr tee). */
   function dragLog(msg: string, detail?: Record<string, unknown>) {
     const extra = detail !== undefined ? ` ${JSON.stringify(detail)}` : ''
@@ -240,6 +297,9 @@ function App() {
   const panelHueStyle = () => ({ '--shell-hue': `${hue()}` } as const)
 
   onMount(() => {
+    console.log(
+      '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
+    )
     timer = setInterval(() => {
       setHue((h) => (h + 1) % 360)
     }, 48)
@@ -266,6 +326,13 @@ function App() {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
         return
       }
+      if (
+        d.type === 'window_geometry' &&
+        shellWindowDrag !== null &&
+        d.window_id === shellWindowDrag.windowId
+      ) {
+        return
+      }
       setWindows((m) => applyDetail(m, d))
     }
     window.addEventListener('derp-shell', onDerpShell as EventListener)
@@ -282,6 +349,7 @@ function App() {
         })
       }
       applyDragDemoMove(e.clientX, e.clientY)
+      applyShellWindowMove(e.clientX, e.clientY)
       setPointerClient({ x: e.clientX, y: e.clientY })
       const el = mainRef
       if (el) {
@@ -298,6 +366,7 @@ function App() {
         dragLog('mousemove_with_grab_but_buttons_0', { type: 'mouse' })
       }
       applyDragDemoMove(e.clientX, e.clientY)
+      applyShellWindowMove(e.clientX, e.clientY)
       setPointerClient({ x: e.clientX, y: e.clientY })
       const el = mainRef
       if (el) {
@@ -312,24 +381,33 @@ function App() {
     const onWindowPointerUp = (e: PointerEvent) => {
       if (!e.isPrimary) return
       disarmDragDemo('window-pointerup')
+      endShellWindowMove('window-pointerup')
     }
 
     const onWindowMouseUp = (e: MouseEvent) => {
       if (e.button !== 0) return
       disarmDragDemo('window-mouseup')
+      endShellWindowMove('window-mouseup')
     }
 
     const onWindowPointerCancel = (e: PointerEvent) => {
       if (!e.isPrimary) return
       disarmDragDemo('window-pointercancel')
+      endShellWindowMove('window-pointercancel')
     }
 
     const onWindowBlur = () => {
       disarmDragDemo('window-blur')
+      if (shellWindowDrag) {
+        shellMoveLog('window_blur_while_shell_drag', {
+          windowId: shellWindowDrag.windowId,
+        })
+      }
     }
 
     const onWindowTouchEnd = () => {
       disarmDragDemo('window-touchend')
+      endShellWindowMove('window-touchend')
     }
 
     const onWindowTouchMove = (e: TouchEvent) => {
@@ -337,6 +415,10 @@ function App() {
       if (!t) return
       if (dragDemoGrab) {
         applyDragDemoMove(t.clientX, t.clientY)
+        e.preventDefault()
+      }
+      if (shellWindowDrag) {
+        applyShellWindowMove(t.clientX, t.clientY)
         e.preventDefault()
       }
       setPointerClient({ x: t.clientX, y: t.clientY })
@@ -419,9 +501,6 @@ function App() {
     }
   }
 
-  const th = CHROME_TITLEBAR_PX
-  const bd = CHROME_BORDER_PX
-
   return (
     <main
       class="shell-root"
@@ -431,82 +510,16 @@ function App() {
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
     >
       <For each={windowsList()}>
-        {(win) => {
-          const focused = () => focusedWindowId() === win.window_id
-          const x = win.x
-          const y = win.y
-          const w = win.width
-          const h = win.height
-          return (
-            <div
-              class="shell-window-chrome"
-              classList={{ 'shell-window-chrome--focused': focused() }}
-              style={{
-                position: 'fixed',
-                left: `${x - bd}px`,
-                top: `${y - th - bd}px`,
-                width: `${w + bd * 2}px`,
-                height: `${h + th + bd * 2}px`,
-                'box-sizing': 'border-box',
-                'pointer-events': 'none',
+        {(win) => (
+            <ShellWindowFrame
+              win={win}
+              focused={focusedWindowId() === win.window_id}
+              onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win.window_id, cx, cy)}
+              onClose={() => {
+                shellWireSend('close', win.window_id)
               }}
-            >
-              <div
-                class="shell-titlebar"
-                style={{
-                  position: 'absolute',
-                  left: `${bd}px`,
-                  top: `${bd}px`,
-                  width: `${w}px`,
-                  height: `${th}px`,
-                }}
-              >
-                <span class="shell-titlebar__text">{win.title || win.app_id || `window ${win.window_id}`}</span>
-                <button
-                  type="button"
-                  class="shell-titlebar__close"
-                  title="Close window"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    shellWireSend('close', win.window_id)
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-              <div
-                class="shell-border shell-border--left"
-                style={{
-                  position: 'absolute',
-                  left: '0',
-                  top: `${bd + th}px`,
-                  width: `${bd}px`,
-                  height: `${h}px`,
-                }}
-              />
-              <div
-                class="shell-border shell-border--right"
-                style={{
-                  position: 'absolute',
-                  left: `${bd + w}px`,
-                  top: `${bd + th}px`,
-                  width: `${bd}px`,
-                  height: `${h}px`,
-                }}
-              />
-              <div
-                class="shell-border shell-border--bottom"
-                style={{
-                  position: 'absolute',
-                  left: '0',
-                  top: `${bd + th + h}px`,
-                  width: `${w + bd * 2}px`,
-                  height: `${bd}px`,
-                }}
-              />
-            </div>
-          )
-        }}
+            />
+          )}
       </For>
 
       <div class="shell-panel" style={panelHueStyle()}>

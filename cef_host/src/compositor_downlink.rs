@@ -10,6 +10,17 @@ use serde_json::json;
 
 use cef_host::osr_view_state::OsrViewState;
 
+/// Window `x,y,w,h` on the shell wire are **OSR buffer** pixels (same space as pointer IPC); map to CEF view/DIP for `position:fixed` + `clientX`/`clientY`.
+fn shell_window_rect_buffer_to_view(vs: &OsrViewState, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+    let xi = x.max(0);
+    let yi = y.max(0);
+    let wi = w.max(1);
+    let hi = h.max(1);
+    let (vx0, vy0) = vs.buffer_to_view(xi, yi);
+    let (vx1, vy1) = vs.buffer_to_view(xi + wi - 1, yi + hi - 1);
+    (vx0, vy0, (vx1 - vx0 + 1).max(1), (vy1 - vy0 + 1).max(1))
+}
+
 fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Ok(js) = serde_json::to_string(&detail) else {
         return;
@@ -74,16 +85,20 @@ pub fn apply_message(
             let Some(b) = guard.as_ref() else {
                 return;
             };
+            let (vx, vy, vw, vh) = view_state
+                .lock()
+                .map(|s| shell_window_rect_buffer_to_view(&s, x, y, w, h))
+                .unwrap_or((x, y, w, h));
             dispatch_shell_detail(
                 b,
                 json!({
                     "type": "window_mapped",
                     "window_id": window_id,
                     "surface_id": surface_id,
-                    "x": x,
-                    "y": y,
-                    "width": w,
-                    "height": h,
+                    "x": vx,
+                    "y": vy,
+                    "width": vw,
+                    "height": vh,
                     "title": title,
                     "app_id": app_id,
                 }),
@@ -115,16 +130,20 @@ pub fn apply_message(
             let Some(b) = guard.as_ref() else {
                 return;
             };
+            let (vx, vy, vw, vh) = view_state
+                .lock()
+                .map(|s| shell_window_rect_buffer_to_view(&s, x, y, w, h))
+                .unwrap_or((x, y, w, h));
             dispatch_shell_detail(
                 b,
                 json!({
                     "type": "window_geometry",
                     "window_id": window_id,
                     "surface_id": surface_id,
-                    "x": x,
-                    "y": y,
-                    "width": w,
-                    "height": h,
+                    "x": vx,
+                    "y": vy,
+                    "width": vw,
+                    "height": vh,
                 }),
             );
         }
@@ -161,13 +180,17 @@ pub fn apply_message(
             let list: Vec<_> = windows
                 .iter()
                 .map(|w| {
+                    let (vx, vy, vw, vh) = view_state
+                        .lock()
+                        .map(|s| shell_window_rect_buffer_to_view(&s, w.x, w.y, w.w, w.h))
+                        .unwrap_or((w.x, w.y, w.w, w.h));
                     json!({
                         "window_id": w.window_id,
                         "surface_id": w.surface_id,
-                        "x": w.x,
-                        "y": w.y,
-                        "width": w.w,
-                        "height": w.h,
+                        "x": vx,
+                        "y": vy,
+                        "width": vw,
+                        "height": vh,
                         "title": &w.title,
                         "app_id": &w.app_id,
                     })

@@ -38,15 +38,18 @@ fn handle_uplink_list(ipc: &Arc<Mutex<UnixStream>>, args: &ListValue) {
         }
         "move_begin" => {
             let wid = args.int(1) as u32;
+            eprintln!("[derp-shell-move] cef_host uplink: move_begin window_id={wid}");
             write_shell_packet(ipc, &shell_wire::encode_shell_move_begin(wid));
         }
         "move_delta" => {
             let dx = args.int(1) as i32;
             let dy = args.int(2) as i32;
+            eprintln!("[derp-shell-move] cef_host uplink: move_delta dx={dx} dy={dy}");
             write_shell_packet(ipc, &shell_wire::encode_shell_move_delta(dx, dy));
         }
         "move_end" => {
             let wid = args.int(1) as u32;
+            eprintln!("[derp-shell-move] cef_host uplink: move_end window_id={wid}");
             write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
         }
         _ => {}
@@ -239,21 +242,19 @@ wrap_render_process_handler! {
             let Some(frame) = frame else {
                 return;
             };
-            if frame.is_main() != 1 {
-                return;
-            }
             let Some(context) = context else {
                 return;
             };
             let Some(global) = context.global() else {
                 return;
             };
-            let frame = frame.clone();
-            let mut handler = ShellWireV8Handler::new(frame);
+            let is_main = frame.is_main();
+            let mut handler = ShellWireV8Handler::new(frame.clone());
             let fname = CefString::from("__derpShellWireSend");
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
+            eprintln!("cef_host: __derpShellWireSend bound (frame is_main={is_main})");
         }
     }
 }

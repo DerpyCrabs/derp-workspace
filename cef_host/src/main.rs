@@ -295,7 +295,7 @@ wrap_render_handler! {
     }
 }
 
-// Forward `[derp-drag]` shell `console.log` lines to stderr → `derp-session` tee → `DERP_COMPOSITOR_LOG`.
+// Mirror **all** Blink console messages to stderr → `derp-session` tee → `DERP_COMPOSITOR_LOG`.
 wrap_display_handler! {
     struct DerpJsConsoleDisplayHandler;
 
@@ -312,9 +312,6 @@ wrap_display_handler! {
                 return 0;
             };
             let text = msg.to_string();
-            if !text.contains("[derp-drag]") {
-                return 0;
-            }
             let src = source.map(|s| s.to_string()).unwrap_or_default();
             eprintln!(
                 "cef_js_console: sev={} line={} src={src:?} msg={text}",
@@ -433,13 +430,16 @@ fn apply_cef_log_env(settings: &mut Settings) {
 }
 
 fn main() {
-    // Multiprocess bootstrap matches tauri-apps/cef-rs `examples/cefsimple` (`shared/run_main`):
-    // - Touch API hash before any Cef C++ wrapper runs (binds to the loaded libcef).
-    // - `execute_process` with **no** `App` — subprocesses must not construct CefApp; only the
-    //   browser process calls `initialize` with `DerpApp`.
-    // - Parse our CLI only in the browser process (subprocess argv has no `--url`).
+    // Multiprocess bootstrap (see CEF `CefExecuteProcess`):
+    // - Renderer / GPU / utility subprocesses must run `execute_process` first and usually exit
+    //   with its return code. They still need the same `CefApp` so `render_process_handler()`
+    //   runs in the renderer — otherwise V8 hooks like `__derpShellWireSend` are never installed.
+    // - Browser process: `execute_process` returns -1, then `initialize` with the *same* app.
+    // - Parse CLI only in the browser process (subprocess argv has no `--url`).
 
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+
+    let mut app = DerpApp::new();
 
     let cef_args = Args::new();
     let cmd = cef_args
@@ -449,7 +449,11 @@ fn main() {
     let switch_type = CefString::from("type");
     let is_browser_process = cmd.has_switch(Some(&switch_type)) != 1;
 
-    let exec_ret = execute_process(Some(cef_args.as_main_args()), None, std::ptr::null_mut());
+    let exec_ret = execute_process(
+        Some(cef_args.as_main_args()),
+        Some(&mut app),
+        std::ptr::null_mut(),
+    );
 
     if is_browser_process {
         assert_eq!(
@@ -502,8 +506,6 @@ fn main() {
         settings.root_cache_path = s.clone();
         settings.cache_path = s;
     }
-
-    let mut app = DerpApp::new();
 
     let init_ret = initialize(
         Some(cef_args.as_main_args()),
