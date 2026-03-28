@@ -67,6 +67,7 @@ pub fn init_winit(
 
     state.space.map_output(&output, (0, 0));
     state.shell_window_physical_px = (mode.size.w, mode.size.h);
+    state.touch_abs_is_window_pixels = true;
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 

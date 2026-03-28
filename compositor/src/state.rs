@@ -9,6 +9,7 @@ use std::{
 };
 
 use smithay::{
+    backend::input::TouchSlot,
     backend::{
         renderer::element::memory::MemoryRenderBuffer,
         session::libseat::LibSeatSession,
@@ -120,6 +121,11 @@ pub struct CompositorState {
     /// Winit [`Window::inner_size`](https://docs.rs/winit/latest/winit/window/struct.Window.html#method.inner_size) —
     /// same denominator the backend uses for pointer normalization ([`crate::winit`] updates on resize).
     pub(crate) shell_window_physical_px: (i32, i32),
+    /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
+    /// (Smithay winit). When false (DRM libinput), touch coords use libinput mm / [`position_transformed`].
+    pub(crate) touch_abs_is_window_pixels: bool,
+    /// Touch→pointer emulation: slot of the emulated finger (first finger only).
+    pub(crate) touch_emulation_slot: Option<TouchSlot>,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
@@ -203,6 +209,8 @@ impl CompositorState {
             shell_has_frame: false,
             shell_view_px: None,
             shell_window_physical_px: (1, 1),
+            touch_abs_is_window_pixels: false,
+            touch_emulation_slot: None,
             shell_pointer_norm: None,
             pointer_cursor_image: CursorImageStatus::Hidden,
             shell_move_window_id: None,

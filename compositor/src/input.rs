@@ -3,6 +3,7 @@ use smithay::{
         input::{
             AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
             KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+            TouchEvent,
         },
         session::Session,
     },
@@ -104,6 +105,106 @@ impl CompositorState {
         );
         pointer.frame(self);
     }
+
+    /// Touch position in **output-local logical** coords (matches [`Self::pointer_motion_output_local`]).
+    fn touch_output_local<I: InputBackend>(
+        &self,
+        event: &impl AbsolutePositionEvent<I>,
+        output_geo: Rectangle<i32, Logical>,
+    ) -> Point<f64, Logical> {
+        if self.touch_abs_is_window_pixels {
+            let (pw, ph) = self.shell_window_physical_px;
+            let pw = pw.max(1) as f64;
+            let ph = ph.max(1) as f64;
+            let nx = (event.x() / pw).clamp(0.0, 1.0);
+            let ny = (event.y() / ph).clamp(0.0, 1.0);
+            Point::from((
+                nx * output_geo.size.w as f64,
+                ny * output_geo.size.h as f64,
+            ))
+        } else {
+            event.position_transformed(output_geo.size)
+        }
+    }
+
+    fn process_pointer_button(&mut self, button: u32, button_state: ButtonState, time_msec: u32) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let keyboard = self.seat.get_keyboard().unwrap();
+
+        let serial = SERIAL_COUNTER.next_serial();
+
+        let pos = pointer.current_location();
+        let norm = self
+            .shell_pointer_norm
+            .or_else(|| self.shell_pointer_norm_from_global(pos));
+        let route_cef = self.shell_pointer_route_to_cef(pos);
+        let shell_px = if route_cef {
+            norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
+                .or_else(|| self.shell_pointer_view_px(pos))
+        } else {
+            None
+        };
+        if let Some((vx, vy)) = shell_px {
+            let b = linux_evdev_button_to_shell(button);
+            let mouse_up = button_state != ButtonState::Pressed;
+            let pkt = shell_wire::encode_compositor_pointer_button(vx, vy, b, mouse_up);
+            self.shell_ipc_try_write(&pkt);
+            if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+                self.space.elements().for_each(|window| {
+                    window.set_activated(false);
+                    window.toplevel().unwrap().send_pending_configure();
+                });
+                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+            }
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: button_state,
+                    serial,
+                    time: time_msec,
+                },
+            );
+            pointer.frame(self);
+            return;
+        }
+
+        if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+            if let Some((window, _loc)) = self
+                .space
+                .element_under(pointer.current_location())
+                .map(|(w, l)| (w.clone(), l))
+            {
+                self.space.raise_element(&window, true);
+                keyboard.set_focus(
+                    self,
+                    Some(window.toplevel().unwrap().wl_surface().clone()),
+                    serial,
+                );
+                self.space.elements().for_each(|window| {
+                    window.toplevel().unwrap().send_pending_configure();
+                });
+            } else {
+                self.space.elements().for_each(|window| {
+                    window.set_activated(false);
+                    window.toplevel().unwrap().send_pending_configure();
+                });
+                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+            }
+        }
+
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button,
+                state: button_state,
+                serial,
+                time: time_msec,
+            },
+        );
+        pointer.frame(self);
+    }
+
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
             InputEvent::Keyboard { event, .. } => {
@@ -168,86 +269,47 @@ impl CompositorState {
                 self.needs_winit_redraw = true;
             }
             InputEvent::PointerButton { event, .. } => {
-                let pointer = self.seat.get_pointer().unwrap();
-                let keyboard = self.seat.get_keyboard().unwrap();
-
-                let serial = SERIAL_COUNTER.next_serial();
-
-                let button = event.button_code();
-
-                let button_state = event.state();
-
-                let pos = pointer.current_location();
-                let norm = self
-                    .shell_pointer_norm
-                    .or_else(|| self.shell_pointer_norm_from_global(pos));
-                let route_cef = self.shell_pointer_route_to_cef(pos);
-                let shell_px = if route_cef {
-                    norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
-                        .or_else(|| self.shell_pointer_view_px(pos))
-                } else {
-                    None
-                };
-                if let Some((vx, vy)) = shell_px {
-                    let b = linux_evdev_button_to_shell(button);
-                    let mouse_up = button_state != ButtonState::Pressed;
-                    let pkt = shell_wire::encode_compositor_pointer_button(vx, vy, b, mouse_up);
-                    self.shell_ipc_try_write(&pkt);
-                    if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                        self.space.elements().for_each(|window| {
-                            window.set_activated(false);
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                    }
-                    pointer.button(
-                        self,
-                        &ButtonEvent {
-                            button,
-                            state: button_state,
-                            serial,
-                            time: event.time_msec(),
-                        },
-                    );
-                    pointer.frame(self);
+                self.process_pointer_button(event.button_code(), event.state(), event.time_msec());
+            }
+            InputEvent::TouchDown { event, .. } => {
+                if self.touch_emulation_slot.is_some() {
                     return;
                 }
-
-                if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                    if let Some((window, _loc)) = self
-                        .space
-                        .element_under(pointer.current_location())
-                        .map(|(w, l)| (w.clone(), l))
-                    {
-                        self.space.raise_element(&window, true);
-                        keyboard.set_focus(
-                            self,
-                            Some(window.toplevel().unwrap().wl_surface().clone()),
-                            serial,
-                        );
-                        self.space.elements().for_each(|window| {
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                    } else {
-                        self.space.elements().for_each(|window| {
-                            window.set_activated(false);
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
-                        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                    }
-                }
-
-                pointer.button(
-                    self,
-                    &ButtonEvent {
-                        button,
-                        state: button_state,
-                        serial,
-                        time: event.time_msec(),
-                    },
-                );
-                pointer.frame(self);
+                let output = self.space.outputs().next().unwrap();
+                let output_geo = self.space.output_geometry(output).unwrap();
+                self.touch_emulation_slot = Some(event.slot());
+                let local = self.touch_output_local(&event, output_geo);
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                self.process_pointer_button(0x110, ButtonState::Pressed, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
             }
+            InputEvent::TouchMotion { event, .. } => {
+                if self.touch_emulation_slot != Some(event.slot()) {
+                    return;
+                }
+                let output = self.space.outputs().next().unwrap();
+                let output_geo = self.space.output_geometry(output).unwrap();
+                let local = self.touch_output_local(&event, output_geo);
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
+            }
+            InputEvent::TouchUp { event, .. } => {
+                if self.touch_emulation_slot != Some(event.slot()) {
+                    return;
+                }
+                self.touch_emulation_slot = None;
+                self.process_pointer_button(0x110, ButtonState::Released, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
+            }
+            InputEvent::TouchCancel { event, .. } => {
+                if self.touch_emulation_slot != Some(event.slot()) {
+                    return;
+                }
+                self.touch_emulation_slot = None;
+                self.process_pointer_button(0x110, ButtonState::Released, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
+            }
+            InputEvent::TouchFrame { .. } => {}
             InputEvent::PointerAxis { event, .. } => {
                 let source = event.source();
 
