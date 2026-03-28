@@ -43,4 +43,5 @@ REMOTE_HOST=192.0.2.1 REMOTE_USER=alice REMOTE_REPO=/home/alice/derp-workspace \
 ## See also
 
 - `scripts/install-system.sh` — what actually builds and installs on the remote.
+- `scripts/list-derp-logs.sh` — same `remote-install.env`; SSH to the host and tail `~/.local/state/derp/compositor.log` (DERP session log).
 - `README.md` — GDM session and DRM notes.

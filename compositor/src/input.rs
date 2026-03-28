@@ -138,6 +138,16 @@ impl CompositorState {
             .shell_pointer_norm
             .or_else(|| self.shell_pointer_norm_from_global(pos));
         let route_cef = self.shell_pointer_route_to_cef(pos);
+        tracing::debug!(
+            target: "derp_input",
+            button,
+            ?button_state,
+            pos_x = pos.x,
+            pos_y = pos.y,
+            route_cef,
+            shell_norm = ?norm,
+            "PointerButton"
+        );
         let shell_px = if route_cef {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
                 .or_else(|| self.shell_pointer_view_px(pos))
@@ -248,6 +258,16 @@ impl CompositorState {
                 let output = self.space.outputs().next().unwrap();
                 let output_geo = self.space.output_geometry(output).unwrap();
                 let pointer = self.seat.get_pointer().unwrap();
+                let d = event.delta();
+                tracing::debug!(
+                    target: "derp_input",
+                    dx = d.x,
+                    dy = d.y,
+                    prev_x = pointer.current_location().x,
+                    prev_y = pointer.current_location().y,
+                    touch_window_px = self.touch_abs_is_window_pixels,
+                    "PointerMotion (relative)"
+                );
                 let mut pos = pointer.current_location() + event.delta();
                 let min_x = output_geo.loc.x as f64;
                 let min_y = output_geo.loc.y as f64;
@@ -256,6 +276,16 @@ impl CompositorState {
                 pos.x = pos.x.clamp(min_x, max_x);
                 pos.y = pos.y.clamp(min_y, max_y);
                 let local = pos - output_geo.loc.to_f64();
+                tracing::debug!(
+                    target: "derp_input",
+                    clamped_x = pos.x,
+                    clamped_y = pos.y,
+                    local_x = local.x,
+                    local_y = local.y,
+                    out_w = output_geo.size.w,
+                    out_h = output_geo.size.h,
+                    "PointerMotion → logical"
+                );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
@@ -265,6 +295,17 @@ impl CompositorState {
                 let output_geo = self.space.output_geometry(output).unwrap();
 
                 let local = event.position_transformed(output_geo.size);
+                tracing::debug!(
+                    target: "derp_input",
+                    raw_x = event.x(),
+                    raw_y = event.y(),
+                    local_x = local.x,
+                    local_y = local.y,
+                    touch_window_px = self.touch_abs_is_window_pixels,
+                    shell_pw = self.shell_window_physical_px.0,
+                    shell_ph = self.shell_window_physical_px.1,
+                    "PointerMotionAbsolute"
+                );
                 self.pointer_motion_output_local(output_geo, local, event.time_msec());
                 self.needs_winit_redraw = true;
             }
@@ -273,38 +314,83 @@ impl CompositorState {
             }
             InputEvent::TouchDown { event, .. } => {
                 if self.touch_emulation_slot.is_some() {
+                    tracing::debug!(
+                        target: "derp_input",
+                        slot = ?event.slot(),
+                        "TouchDown ignored (first finger still active)"
+                    );
                     return;
                 }
                 let output = self.space.outputs().next().unwrap();
                 let output_geo = self.space.output_geometry(output).unwrap();
                 self.touch_emulation_slot = Some(event.slot());
                 let local = self.touch_output_local(&event, output_geo);
+                tracing::debug!(
+                    target: "derp_input",
+                    slot = ?event.slot(),
+                    raw_x = event.x(),
+                    raw_y = event.y(),
+                    local_x = local.x,
+                    local_y = local.y,
+                    touch_window_px = self.touch_abs_is_window_pixels,
+                    shell_pw = self.shell_window_physical_px.0,
+                    shell_ph = self.shell_window_physical_px.1,
+                    "TouchDown → emulate left press"
+                );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.process_pointer_button(0x110, ButtonState::Pressed, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchMotion { event, .. } => {
                 if self.touch_emulation_slot != Some(event.slot()) {
+                    tracing::debug!(
+                        target: "derp_input",
+                        active = ?self.touch_emulation_slot,
+                        slot = ?event.slot(),
+                        "TouchMotion ignored (wrong slot)"
+                    );
                     return;
                 }
                 let output = self.space.outputs().next().unwrap();
                 let output_geo = self.space.output_geometry(output).unwrap();
                 let local = self.touch_output_local(&event, output_geo);
+                tracing::debug!(
+                    target: "derp_input",
+                    raw_x = event.x(),
+                    raw_y = event.y(),
+                    local_x = local.x,
+                    local_y = local.y,
+                    "TouchMotion"
+                );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchUp { event, .. } => {
                 if self.touch_emulation_slot != Some(event.slot()) {
+                    tracing::debug!(
+                        target: "derp_input",
+                        active = ?self.touch_emulation_slot,
+                        slot = ?event.slot(),
+                        "TouchUp ignored (wrong slot)"
+                    );
                     return;
                 }
+                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp → emulate release");
                 self.touch_emulation_slot = None;
                 self.process_pointer_button(0x110, ButtonState::Released, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchCancel { event, .. } => {
                 if self.touch_emulation_slot != Some(event.slot()) {
+                    tracing::debug!(
+                        target: "derp_input",
+                        active = ?self.touch_emulation_slot,
+                        slot = ?event.slot(),
+                        "TouchCancel ignored (wrong slot)"
+                    );
                     return;
                 }
+                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel → emulate release");
                 self.touch_emulation_slot = None;
                 self.process_pointer_button(0x110, ButtonState::Released, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
@@ -321,6 +407,14 @@ impl CompositorState {
                 });
                 let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
                 let vertical_amount_discrete = event.amount_v120(Axis::Vertical);
+
+                tracing::debug!(
+                    target: "derp_input",
+                    ?source,
+                    horizontal_amount,
+                    vertical_amount,
+                    "PointerAxis"
+                );
 
                 let mut frame = AxisFrame::new(event.time_msec()).source(source);
                 if horizontal_amount != 0.0 {
@@ -349,7 +443,13 @@ impl CompositorState {
                 pointer.axis(self, frame);
                 pointer.frame(self);
             }
-            _ => {}
+            _ => {
+                // Gesture swipe/pinch/hold updates fire very often; use trace to avoid log floods.
+                tracing::trace!(
+                    target: "derp_input",
+                    "unhandled InputEvent (Gesture*, Tablet*, Switch*, …); try RUST_LOG=derp_input=trace"
+                );
+            }
         }
     }
 }

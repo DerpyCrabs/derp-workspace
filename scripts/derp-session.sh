@@ -82,10 +82,25 @@ fi
 export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
 export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
 
+# Input: logs with target `derp_input` (Pointer*, Touch*, unhandled at trace). See scripts/list-derp-logs.sh
+if [[ "${DERP_INPUT_TRACE:-0}" == "1" ]]; then
+  if [[ -n "${RUST_LOG:-}" ]]; then
+    export RUST_LOG="${RUST_LOG},derp_input=trace"
+  else
+    export RUST_LOG="warn,derp_input=trace"
+  fi
+elif [[ "${DERP_INPUT_DEBUG:-0}" == "1" ]]; then
+  if [[ -n "${RUST_LOG:-}" ]]; then
+    export RUST_LOG="${RUST_LOG},derp_input=debug"
+  else
+    export RUST_LOG="warn,derp_input=debug"
+  fi
+fi
+
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
 DERP_COMPOSITOR_LOG="${DERP_COMPOSITOR_LOG:-$STATE_BASE/derp/compositor.log}"
 mkdir -p "$(dirname "$DERP_COMPOSITOR_LOG")"
-printf '%s\n' "===== derp-session start $(date -Is) uid=$UID WAYLAND_SOCKET=$SOCKET =====" >>"$DERP_COMPOSITOR_LOG"
+printf '%s\n' "===== derp-session start $(date -Is) uid=$UID WAYLAND_SOCKET=$SOCKET DERP_INPUT_DEBUG=${DERP_INPUT_DEBUG:-0} DERP_INPUT_TRACE=${DERP_INPUT_TRACE:-0} RUST_LOG=${RUST_LOG:-} =====" >>"$DERP_COMPOSITOR_LOG"
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1
 exec "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"
