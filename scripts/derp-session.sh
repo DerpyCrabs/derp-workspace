@@ -95,4 +95,19 @@ mkdir -p "$(dirname "$DERP_COMPOSITOR_LOG")"
 printf '%s\n' "===== derp-session start $(date -Is) uid=$UID WAYLAND_SOCKET=$SOCKET RUST_LOG=${RUST_LOG} =====" >>"$DERP_COMPOSITOR_LOG"
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1
-exec "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"
+if [[ "${DERP_COMPOSITOR_RESPAWN:-0}" == "1" ]]; then
+  while true; do
+    if "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"; then
+      ec=0
+    else
+      ec=$?
+    fi
+    if [[ "$ec" -eq 42 ]]; then
+      printf '%s\n' "derp-session: compositor exited 42 (SIGUSR2 reload), respawning..."
+      continue
+    fi
+    exit "$ec"
+  done
+else
+  exec "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"
+fi

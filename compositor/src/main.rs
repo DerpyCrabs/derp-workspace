@@ -1,6 +1,13 @@
 //! Binary entry: winit-backed compositor or `--headless` for CI / integration tests.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use clap::Parser;
 use compositor::{
@@ -190,18 +197,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Without this, SIGINT/SIGTERM (terminal, systemd, pkill) aborts the process before
     // `event_loop.run` returns and `terminate_sidecar` never runs — CEF subprocesses linger.
+    // SIGUSR2 requests the same graceful stop but exits with code 42 so derp-session can respawn
+    // after a new binary is installed (scripts/remote-update-and-restart.sh).
     let loop_stop = data.state.loop_signal.clone();
+    let request_restart = Arc::new(AtomicBool::new(false));
+    let request_restart_thread = Arc::clone(&request_restart);
     std::thread::Builder::new()
         .name("signal-hook-stop".into())
         .spawn(move || {
             use signal_hook::consts::signal::*;
             use signal_hook::iterator::Signals;
-            if let Ok(mut signals) = Signals::new([SIGINT, SIGTERM]) {
+            if let Ok(mut signals) = Signals::new([SIGINT, SIGTERM, SIGUSR2]) {
                 if let Some(sig) = signals.forever().next() {
-                    tracing::info!(
-                        sig,
-                        "caught, stopping compositor and tearing down --command"
-                    );
+                    if sig == SIGUSR2 {
+                        request_restart_thread.store(true, Ordering::SeqCst);
+                        tracing::info!(
+                            "SIGUSR2: graceful stop for reload (exit 42 after --command teardown)"
+                        );
+                    } else {
+                        tracing::info!(
+                            sig,
+                            "caught, stopping compositor and tearing down --command"
+                        );
+                    }
                     loop_stop.stop();
                     loop_stop.wakeup();
                 }
@@ -211,6 +229,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     event_loop.run(None, &mut data, |_| {})?;
     compositor::sidecar::terminate_sidecar(&mut data.command_child);
+
+    if request_restart.load(Ordering::SeqCst) {
+        std::process::exit(42);
+    }
 
     Ok(())
 }
