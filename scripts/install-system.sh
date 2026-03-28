@@ -12,6 +12,10 @@
 # GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
 # `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
 #
+# Session logging: `derp-session` appends compositor + cef_host stdout/stderr to DERP_COMPOSITOR_LOG
+# (default ~/.local/state/derp/compositor.log). Set DERP_COMPOSITOR_LOG to override or inspect that
+# file from a TTY/SSH/live mount when debugging a gray screen (tracing, CEF_HOST_*, shell IPC).
+#
 # Flags:
 #   --no-git               — same as INSTALL_SKIP_GIT=1
 set -euo pipefail
@@ -88,3 +92,4 @@ sudo ln -sf "$REPO_ROOT/scripts/derp-session.sh" "$BIN_DIR/derp-session"
 echo ""
 echo "Done. Log out and choose «Derp Compositor» in GDM."
 echo "Repo (shell/dist + launcher): $REPO_ROOT"
+echo "Session log (default): ~/.local/state/derp/compositor.log — set DERP_COMPOSITOR_LOG to change."

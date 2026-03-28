@@ -136,7 +136,7 @@ Phases are ordered for incremental risk: get Wayland and rendering solid, then I
 
 The compositor draws Wayland clients first, then **overlays** the latest shell frame when one has been received.
 
-**Gray shell / CEF:** Run `cef_host` with **`CEF_HOST_DIAG=1`** for stderr checks (`CEF_PATH`, `libcef.so`, key pack files). Use **`CEF_HOST_TRACE_PAINT=1`** to confirm the first OSR paint size (if you never see this line, CEF may not be painting). Set **`CEF_HOST_LOG_FILE`** / **`CEF_HOST_LOG_SEVERITY=verbose`** for Chromium’s log. **`on_load_error`** is always printed on stderr if navigation fails.
+**Gray shell / CEF:** DRM **`derp-session`** appends compositor and **`cef_host`** stdout/stderr to **`~/.local/state/derp/compositor.log`** (override with **`DERP_COMPOSITOR_LOG`**). Inspect from a TTY, SSH, or live mount. Run `cef_host` with **`CEF_HOST_DIAG=1`** for layout checks; **`CEF_HOST_TRACE_PAINT=1`** for first OSR paint size; **`CEF_HOST_LOG_FILE`** / **`CEF_HOST_LOG_SEVERITY=verbose`** for Chromium’s log. **`on_load_error`** is always printed (now into that session log as well).
 
 **Exit without the shell:** **`Ctrl+Shift+Q`** stops the compositor event loop (same effect as the Solid “Exit session” control). On **`--backend drm`**, raw **Ctrl+Alt+Fn** does **not** reach the kernel for TTY switching while this compositor holds the seat; use the same chord anyway — **`Ctrl+Alt+F1`–`F12`** is handled here and calls **libseat** to switch VT (e.g. **F2** for a text console, **F1**/**F7** for GDM on many setups). From SSH or another machine you can still **`kill`** / **`loginctl`**. Nested **winit**: close the window or **SIGINT** if foreground in a terminal.
 

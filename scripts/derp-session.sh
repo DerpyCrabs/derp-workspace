@@ -2,6 +2,9 @@
 # GDM/session entry: DRM compositor (+ optional cef_host shell). Install to /usr/local/bin/derp-session (755).
 # Requires: built `compositor` and (for overlay) `cef_host`, `shell/dist`, python3 for loopback HTTP.
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
+#
+# Logging: compositor + `--command` (cef_host) stdout/stderr append to DERP_COMPOSITOR_LOG (default below).
+# Override with DERP_COMPOSITOR_LOG=/path/to/file. Inspect after a gray screen: tail -f that file from a TTY/SSH.
 set -euo pipefail
 
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
@@ -54,4 +57,11 @@ fi
 
 export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
 export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
+
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
+DERP_COMPOSITOR_LOG="${DERP_COMPOSITOR_LOG:-$STATE_BASE/derp/compositor.log}"
+mkdir -p "$(dirname "$DERP_COMPOSITOR_LOG")"
+printf '%s\n' "===== derp-session start $(date -Is) uid=$UID WAYLAND_SOCKET=$SOCKET =====" >>"$DERP_COMPOSITOR_LOG"
+
+exec >>"$DERP_COMPOSITOR_LOG" 2>&1
 exec "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"
