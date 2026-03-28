@@ -12,6 +12,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+fn tune_shell_accepted_stream(stream: &std::os::unix::net::UnixStream) {
+    let fd = stream.as_raw_fd();
+    let sz: libc::c_int = 4 * 1024 * 1024;
+    unsafe {
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &sz as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&sz) as libc::socklen_t,
+        );
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &sz as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&sz) as libc::socklen_t,
+        );
+    }
+}
+
 use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
 use tracing::{error, warn};
 
@@ -40,6 +62,7 @@ fn unix_bytes_available(stream: &std::os::unix::net::UnixStream) -> io::Result<u
 fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
     state.shell_ipc_client = None;
     state.shell_read_buf.clear();
+    state.shell_shm = None;
     state.shell_clear_ipc_last_rx();
     state.clear_shell_frame();
 }
@@ -51,6 +74,60 @@ fn dispatch_shell_message(
     state.shell_note_shell_ipc_rx();
     use shell_wire::DecodedMessage::*;
     match msg {
+        ShellShmRegion {
+            basename,
+            total_bytes,
+        } => {
+            let Some(rd) = state.shell_ipc_runtime_dir.as_ref() else {
+                warn!("shell ipc: shm region but no runtime dir");
+                return;
+            };
+            state.shell_shm = None;
+            match crate::shell_shm::ShellShmMapping::open(rd, &basename, total_bytes) {
+                Ok(m) => {
+                    tracing::debug!(%basename, total_bytes, "shell ipc: mapped shm region");
+                    state.shell_shm = Some(m);
+                }
+                Err(e) => warn!(?e, %basename, "shell ipc: shm map failed"),
+            }
+        }
+        FrameShmCommit {
+            width,
+            height,
+            stride,
+            offset,
+            data_len,
+        } => {
+            let slot = state.shell_shm.take();
+            let Some(ref shm) = slot else {
+                warn!("shell ipc: shm commit without region");
+                return;
+            };
+            let o = offset as usize;
+            let end = match o.checked_add(data_len as usize) {
+                Some(e) => e,
+                None => {
+                    warn!("shell ipc: shm commit overflow");
+                    state.shell_shm = slot;
+                    return;
+                }
+            };
+            if end > shm.len() {
+                warn!(
+                    end,
+                    len = shm.len(),
+                    "shell ipc: shm commit out of range"
+                );
+                state.shell_shm = slot;
+                return;
+            }
+            let slice = &shm.as_slice()[o..end];
+            let res = state.apply_shell_frame_bgra(width, height, stride, slice);
+            state.shell_shm = slot;
+            if let Err(e) = res {
+                warn!(?e, "shell ipc: bad shm frame");
+            }
+        }
         Frame {
             width,
             height,
@@ -90,10 +167,12 @@ fn dispatch_shell_message(
 }
 
 /// Pop and handle all complete shell→compositor messages currently in [`CompositorState::shell_read_buf`].
+/// Applies only the **last** [`shell_wire::DecodedMessage::Frame`] in this batch (avoids redundant work when the queue bursts).
 fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
+    let mut batch: Vec<shell_wire::DecodedMessage> = Vec::new();
     loop {
         match shell_wire::pop_message(&mut state.shell_read_buf) {
-            Ok(Some(msg)) => dispatch_shell_message(state, msg),
+            Ok(Some(msg)) => batch.push(msg),
             Ok(None) => break,
             Err(e) => {
                 warn!(?e, "shell ipc: decode error, dropping client");
@@ -101,6 +180,20 @@ fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
                 return;
             }
         }
+    }
+    if batch.is_empty() {
+        return;
+    }
+    let last_socket_frame = batch
+        .iter()
+        .rposition(|m| matches!(m, shell_wire::DecodedMessage::Frame { .. }));
+    for (i, msg) in batch.into_iter().enumerate() {
+        if let Some(j) = last_socket_frame {
+            if i != j && matches!(msg, shell_wire::DecodedMessage::Frame { .. }) {
+                continue;
+            }
+        }
+        dispatch_shell_message(state, msg);
     }
 }
 
@@ -122,8 +215,11 @@ pub fn register_shell_ipc_listener(
                 match listener.accept() {
                     Ok((stream, _)) => {
                         // Blocking peer: reliable compositor→shell writes; drain uses FIONREAD.
+                        #[cfg(unix)]
+                        tune_shell_accepted_stream(&stream);
                         data.state.shell_ipc_client = Some(stream);
                         data.state.shell_read_buf.clear();
+                        data.state.shell_shm = None;
                         data.state.shell_on_shell_client_connected();
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -143,7 +239,8 @@ pub fn register_shell_ipc_listener(
 /// Read available bytes from the active shell client and apply complete frames to the shell buffer.
 #[cfg(unix)]
 pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
-    let mut tmp = [0u8; 65536];
+    let t0 = std::time::Instant::now();
+    let mut total_read = 0usize;
     'drain: loop {
         let avail = {
             let Some(stream) = state.shell_ipc_client.as_mut() else {
@@ -161,12 +258,16 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
             break;
         }
 
-        let cap = std::cmp::min(avail, tmp.len());
+        let want = std::cmp::min(avail, 8 * 1024 * 1024);
+        if state.shell_read_scratch.len() < want {
+            state.shell_read_scratch.resize(want, 0);
+        }
+        let cap = std::cmp::min(want, state.shell_read_scratch.len());
         let n = {
             let Some(stream) = state.shell_ipc_client.as_mut() else {
                 return;
             };
-            match stream.read(&mut tmp[..cap]) {
+            match stream.read(&mut state.shell_read_scratch[..cap]) {
                 Ok(0) => {
                     disconnect_shell_client(state);
                     return;
@@ -179,12 +280,22 @@ pub fn drain_shell_stream(state: &mut crate::state::CompositorState) {
                 }
             }
         };
-        state.shell_read_buf.extend_from_slice(&tmp[..n]);
+        total_read += n;
+        state
+            .shell_read_buf
+            .extend_from_slice(&state.shell_read_scratch[..n]);
         drain_decoded_messages(state);
         if state.shell_ipc_client.is_none() {
             return;
         }
     }
+    tracing::trace!(
+        target: "shell_ipc",
+        bytes = total_read,
+        elapsed_us = t0.elapsed().as_micros(),
+        read_buf_len = state.shell_read_buf.len(),
+        "drain_shell_stream"
+    );
 }
 
 #[cfg(not(unix))]

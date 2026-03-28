@@ -73,7 +73,7 @@ if [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]];
     CEF_DIR=""
     CEF_DIR="$(resolve_cef_dir)" || CEF_DIR="${CEF_PATH:-}"
     if [[ -n "$CEF_DIR" && -f "$CEF_DIR/libcef.so" ]]; then
-      CMD="$(printf 'env CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
+      CMD="$(printf 'env CEF_HOST_USE_GPU=%q CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "${CEF_HOST_USE_GPU:-1}" "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
       ARGS+=( --command "$CMD" )
     fi
   fi

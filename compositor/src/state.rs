@@ -114,6 +114,10 @@ pub struct CompositorState {
 
     pub shell_ipc_client: Option<UnixStream>,
     pub shell_read_buf: Vec<u8>,
+    /// `XDG_RUNTIME_DIR` when shell IPC is enabled (for [`shell_wire::MSG_SHELL_SHM_REGION`] paths).
+    pub shell_ipc_runtime_dir: Option<PathBuf>,
+    pub(crate) shell_read_scratch: Vec<u8>,
+    pub(crate) shell_shm: Option<crate::shell_shm::ShellShmMapping>,
     pub shell_memory_buffer: MemoryRenderBuffer,
     pub shell_has_frame: bool,
     /// Last OSR frame dimensions (buffer pixels) — maps nested pointer into the same space as the BGRA frame for [`shell_ipc_try_write`](Self::shell_ipc_try_write).
@@ -189,7 +193,7 @@ impl CompositorState {
 
         let loop_signal = event_loop.get_signal();
 
-        let s = Self {
+        let mut s = Self {
             start_time,
             display_handle: dh,
             space,
@@ -210,6 +214,9 @@ impl CompositorState {
             window_registry,
             shell_ipc_client: None,
             shell_read_buf: Vec::new(),
+            shell_ipc_runtime_dir: None,
+            shell_read_scratch: Vec::with_capacity(256 * 1024),
+            shell_shm: None,
             shell_memory_buffer,
             shell_has_frame: false,
             shell_view_px: None,
@@ -233,18 +240,19 @@ impl CompositorState {
 
         if let Some(name) = shell_ipc_socket {
             if let Ok(rd) = std::env::var("XDG_RUNTIME_DIR") {
+                let rd_path = PathBuf::from(&rd);
                 if let Err(e) =
                     shell_ipc::register_shell_ipc_listener(event_loop, Path::new(&rd), &name)
                 {
                     tracing::warn!(?e, name, "failed to bind shell ipc socket");
                 } else {
+                    s.shell_ipc_runtime_dir = Some(rd_path);
                     tracing::info!(%name, "shell ipc listening");
                 }
             } else {
                 tracing::warn!("XDG_RUNTIME_DIR unset; shell ipc not started");
             }
         }
-
         s
     }
 
@@ -781,6 +789,14 @@ impl CompositorState {
         if let Some(ref path) = self.shell_e2e_screenshot_path {
             write_shell_e2e_screenshot_png(path, w, h, stride, pixels);
         }
+        tracing::trace!(
+            target: "shell_ipc",
+            width,
+            height,
+            stride,
+            frame_bytes = pixels.len(),
+            "apply_shell_frame_bgra"
+        );
         Ok(())
     }
 

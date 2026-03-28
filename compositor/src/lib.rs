@@ -22,6 +22,7 @@ mod shell_encode;
 mod shell_ipc;
 mod shell_letterbox;
 mod shell_overlay;
+mod shell_shm;
 pub mod sidecar;
 pub mod state;
 

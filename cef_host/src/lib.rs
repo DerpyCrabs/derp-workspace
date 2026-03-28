@@ -2,6 +2,8 @@
 //!
 //! [`osr_view_state`] holds DIP vs OSR buffer sizes and the buffer→view mapping used with compositor pointer IPC.
 
+#[cfg(unix)]
+pub mod frame_sink;
 pub mod ipc_coalesce;
 pub mod osr_view_state;
 

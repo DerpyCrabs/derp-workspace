@@ -17,7 +17,7 @@ mod compositor_downlink;
 mod control_server;
 
 use std::{
-    io::{self, Read, Write},
+    io::{self, Read},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     sync::{
@@ -164,6 +164,7 @@ wrap_render_handler! {
     struct OsrToCompositor {
         ipc: Arc<Mutex<UnixStream>>,
         view_state: Arc<Mutex<OsrViewState>>,
+        frame_sink: Arc<Mutex<cef_host::frame_sink::ShellFrameSink>>,
     }
 
     impl RenderHandler {
@@ -241,14 +242,23 @@ wrap_render_handler! {
             let stride = width * 4;
             let len = (stride * height) as usize;
             let pix = unsafe { std::slice::from_raw_parts(buffer, len) };
-            let Some(frame) =
-                shell_wire::encode_frame_bgra(width as u32, height as u32, stride as u32, pix)
-            else {
-                return;
-            };
-            let mut g = self.ipc.lock().expect("ipc lock");
-            let _ = g.write_all(&frame);
-            let _ = g.flush();
+            let t_send = std::time::Instant::now();
+            if let Err(e) = self.frame_sink.lock().expect("frame_sink").push_pixels(
+                width as u32,
+                height as u32,
+                stride as u32,
+                pix,
+            ) {
+                eprintln!("cef_host: frame IPC: {e}");
+            }
+            if std::env::var("CEF_HOST_PERF").as_deref() == Ok("1") {
+                eprintln!(
+                    "cef_host: on_paint IPC {} μs ({}x{})",
+                    t_send.elapsed().as_micros(),
+                    width,
+                    height
+                );
+            }
         }
     }
 }
@@ -373,6 +383,14 @@ fn main() {
 
     let cli = Cli::parse();
 
+    if std::env::var("CEF_HOST_USE_GPU").as_deref() == Ok("1") {
+        eprintln!("cef_host: CEF_HOST_USE_GPU=1 (OSR may use system GPU via ANGLE)");
+    } else {
+        eprintln!(
+            "cef_host: CEF_HOST_USE_GPU unset — ANGLE/SwiftShader OSR path; set CEF_HOST_USE_GPU=1 on capable GPUs"
+        );
+    }
+
     let cef_path = std::env::var("CEF_PATH").ok().map(PathBuf::from);
     log_cef_layout(cef_path.as_deref());
 
@@ -429,11 +447,16 @@ fn main() {
         );
         std::process::exit(1);
     });
+    cef_host::frame_sink::ShellFrameSink::tune_connected_stream(&stream);
     let read_stream = stream.try_clone().unwrap_or_else(|e| {
         eprintln!("cef_host: dup Unix socket for compositor→shell reads: {e}");
         std::process::exit(1);
     });
     let ipc = Arc::new(Mutex::new(stream));
+    let frame_sink = Arc::new(Mutex::new(cef_host::frame_sink::ShellFrameSink::new(
+        ipc.clone(),
+        cef_host::runtime_dir(),
+    )));
 
     let control_rx = control_server::start(ipc.clone());
     let port = control_rx.recv().unwrap_or_else(|_| {
@@ -483,7 +506,7 @@ fn main() {
     });
 
     let view_state = Arc::new(Mutex::new(OsrViewState::new(cli.width, cli.height)));
-    let rh = OsrToCompositor::new(ipc.clone(), view_state.clone());
+    let rh = OsrToCompositor::new(ipc.clone(), view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(Some(inject_js));
     let mut client = ShellClient::new(rh, lh, capture);
 

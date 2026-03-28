@@ -24,7 +24,13 @@
 //!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session)
 //! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command)
 
-pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 5;
+pub const SHELL_PIXEL_PROTOCOL_VERSION: u32 = 6;
+
+/// Accept v5 or v6 on decode so in-flight peers are not wedged across upgrades.
+#[inline]
+pub fn protocol_version_ok(v: u32) -> bool {
+    v == 5 || v == 6
+}
 
 pub const MSG_FRAME: u32 = 1;
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -52,39 +58,108 @@ pub const MSG_SHELL_SET_FULLSCREEN: u32 = 26;
 /// Shell → compositor: stop the compositor event loop (end session).
 pub const MSG_SHELL_QUIT_COMPOSITOR: u32 = 27;
 
+/// Shell → compositor: shared pixel buffer file under `XDG_RUNTIME_DIR` (basename only in payload).
+pub const MSG_SHELL_SHM_REGION: u32 = 28;
+/// Shell → compositor: BGRA frame is in the shm file at `offset` (see [`MSG_SHELL_SHM_REGION`]).
+pub const MSG_FRAME_SHM_COMMIT: u32 = 29;
+
 pub const PIXEL_FORMAT_BGRA8888: u32 = 0;
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
+/// Max UTF-8 basename length for [`MSG_SHELL_SHM_REGION`] (no path separators).
+pub const MAX_SHM_BASENAME_BYTES: u32 = 512;
 
 fn frame_header_len() -> u32 {
     4 * 7
 }
 
-pub fn encode_frame_bgra(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Option<Vec<u8>> {
+/// Encodes a [`MSG_FRAME`] into `out` (clears `out` first). One allocation reuse-friendly.
+pub fn encode_frame_bgra_into(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    stride: u32,
+    pixels: &[u8],
+) -> Result<(), ()> {
     if width == 0 || height == 0 {
-        return None;
+        return Err(());
     }
-    let data_len = stride.checked_mul(height)?;
+    let data_len = stride.checked_mul(height).ok_or(())?;
     if data_len as usize > pixels.len() {
-        return None;
+        return Err(());
     }
     let header = frame_header_len();
-    let body_len = header.checked_add(data_len)?;
+    let body_len = header.checked_add(data_len).ok_or(())?;
+    if body_len > MAX_BODY_BYTES {
+        return Err(());
+    }
+    out.clear();
+    out.reserve(4 + body_len as usize);
+    out.extend_from_slice(&body_len.to_le_bytes());
+    out.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    out.extend_from_slice(&MSG_FRAME.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&stride.to_le_bytes());
+    out.extend_from_slice(&PIXEL_FORMAT_BGRA8888.to_le_bytes());
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(&pixels[..data_len as usize]);
+    Ok(())
+}
+
+pub fn encode_frame_bgra(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Option<Vec<u8>> {
+    let mut v = Vec::new();
+    encode_frame_bgra_into(&mut v, width, height, stride, pixels).ok()?;
+    Some(v)
+}
+
+/// Basename only (no `/`, no `..`). Opens as `runtime_dir.join(basename)` on the compositor.
+pub fn encode_shell_shm_region(basename: &str, total_bytes: u64) -> Option<Vec<u8>> {
+    let b = basename.as_bytes();
+    if b.is_empty() || b.contains(&b'/') || b.contains(&b'\\') || basename == "." || basename == ".." {
+        return None;
+    }
+    if basename.contains("..") {
+        return None;
+    }
+    let plen = u32::try_from(b.len()).ok()?;
+    if plen > MAX_SHM_BASENAME_BYTES {
+        return None;
+    }
+    let body_len = 12u32.checked_add(plen)?.checked_add(8)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
-    v.extend_from_slice(&MSG_FRAME.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SHM_REGION.to_le_bytes());
+    v.extend_from_slice(&plen.to_le_bytes());
+    v.extend_from_slice(b);
+    v.extend_from_slice(&total_bytes.to_le_bytes());
+    Some(v)
+}
+
+pub fn encode_frame_shm_commit(
+    width: u32,
+    height: u32,
+    stride: u32,
+    offset: u64,
+    data_len: u32,
+) -> Option<Vec<u8>> {
+    // ver(4) + msg(4) + w + h + stride + offset(8) + data_len = 32
+    let body_len = 32u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&SHELL_PIXEL_PROTOCOL_VERSION.to_le_bytes());
+    v.extend_from_slice(&MSG_FRAME_SHM_COMMIT.to_le_bytes());
     v.extend_from_slice(&width.to_le_bytes());
     v.extend_from_slice(&height.to_le_bytes());
     v.extend_from_slice(&stride.to_le_bytes());
-    v.extend_from_slice(&PIXEL_FORMAT_BGRA8888.to_le_bytes());
+    v.extend_from_slice(&offset.to_le_bytes());
     v.extend_from_slice(&data_len.to_le_bytes());
-    v.extend_from_slice(&pixels[..data_len as usize]);
     Some(v)
 }
 
@@ -394,6 +469,19 @@ pub enum DecodedMessage {
         format: u32,
         pixels: Vec<u8>,
     },
+    /// Backing file for [`DecodedMessage::FrameShmCommit`]; basename under compositor `XDG_RUNTIME_DIR`.
+    ShellShmRegion {
+        basename: String,
+        total_bytes: u64,
+    },
+    /// Frame pixels are BGRA in the mapped shm file at `offset` for `data_len` bytes.
+    FrameShmCommit {
+        width: u32,
+        height: u32,
+        stride: u32,
+        offset: u64,
+        data_len: u32,
+    },
     SpawnWaylandClient {
         command: String,
     },
@@ -438,6 +526,8 @@ pub enum DecodeError {
     BadCompositorToShellPayload,
     BadWindowPayload,
     BadWindowListPayload,
+    BadShmRegionPayload,
+    BadShmCommitPayload,
 }
 
 /// Messages the **compositor** writes on the shell Unix socket for `cef_host` to read.
@@ -525,7 +615,7 @@ fn decode_window_strings_body(
         return Err(DecodeError::BadWindowPayload);
     }
     let ver = u32::from_le_bytes(body[0..4].try_into().unwrap());
-    if ver != SHELL_PIXEL_PROTOCOL_VERSION {
+    if !protocol_version_ok(ver) {
         return Err(DecodeError::BadProtocolVersion);
     }
     let msg = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -587,16 +677,21 @@ pub fn pop_compositor_to_shell_message(
     if body_len > MAX_BODY_BYTES as usize {
         return Err(DecodeError::BodyTooLarge);
     }
-    if buf.len() < 4 + body_len {
+    let total = 4 + body_len;
+    if buf.len() < total {
         return Ok(None);
     }
-    let packet: Vec<u8> = buf.drain(..4 + body_len).collect();
-    let body = &packet[4..];
+    let decoded = decode_compositor_to_shell_body(&buf[4..total])?;
+    buf.drain(..total);
+    return Ok(Some(decoded));
+}
+
+fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
     if body.len() < 8 {
         return Err(DecodeError::BadCompositorToShellPayload);
     }
     let ver = u32::from_le_bytes(body[0..4].try_into().unwrap());
-    if ver != SHELL_PIXEL_PROTOCOL_VERSION {
+    if !protocol_version_ok(ver) {
         return Err(DecodeError::BadProtocolVersion);
     }
     let msg = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -607,7 +702,7 @@ pub fn pop_compositor_to_shell_message(
             }
             let x = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let y = i32::from_le_bytes(body[12..16].try_into().unwrap());
-            Ok(Some(DecodedCompositorToShellMessage::PointerMove { x, y }))
+            Ok(DecodedCompositorToShellMessage::PointerMove { x, y })
         }
         MSG_COMPOSITOR_POINTER_BUTTON => {
             if body.len() != 24 {
@@ -620,12 +715,12 @@ pub fn pop_compositor_to_shell_message(
             if button > 2 || up_flag > 1 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            Ok(Some(DecodedCompositorToShellMessage::PointerButton {
+            Ok(DecodedCompositorToShellMessage::PointerButton {
                 x,
                 y,
                 button,
                 mouse_up: up_flag != 0,
-            }))
+            })
         }
         MSG_OUTPUT_GEOMETRY => {
             if body.len() != 16 {
@@ -633,20 +728,20 @@ pub fn pop_compositor_to_shell_message(
             }
             let logical_w = u32::from_le_bytes(body[8..12].try_into().unwrap());
             let logical_h = u32::from_le_bytes(body[12..16].try_into().unwrap());
-            Ok(Some(DecodedCompositorToShellMessage::OutputGeometry {
+            Ok(DecodedCompositorToShellMessage::OutputGeometry {
                 logical_w,
                 logical_h,
-            }))
+            })
         }
-        MSG_WINDOW_MAPPED => decode_window_strings_body(body, MSG_WINDOW_MAPPED).map(Some),
+        MSG_WINDOW_MAPPED => decode_window_strings_body(body, MSG_WINDOW_MAPPED),
         MSG_WINDOW_UNMAPPED => {
             if body.len() != 12 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-            Ok(Some(DecodedCompositorToShellMessage::WindowUnmapped {
+            Ok(DecodedCompositorToShellMessage::WindowUnmapped {
                 window_id,
-            }))
+            })
         }
         MSG_WINDOW_GEOMETRY => {
             if body.len() != 32 {
@@ -658,28 +753,28 @@ pub fn pop_compositor_to_shell_message(
             let y = i32::from_le_bytes(body[20..24].try_into().unwrap());
             let w = i32::from_le_bytes(body[24..28].try_into().unwrap());
             let h = i32::from_le_bytes(body[28..32].try_into().unwrap());
-            Ok(Some(DecodedCompositorToShellMessage::WindowGeometry {
+            Ok(DecodedCompositorToShellMessage::WindowGeometry {
                 window_id,
                 surface_id,
                 x,
                 y,
                 w,
                 h,
-            }))
+            })
         }
-        MSG_WINDOW_METADATA => decode_window_strings_body(body, MSG_WINDOW_METADATA).map(Some),
+        MSG_WINDOW_METADATA => decode_window_strings_body(body, MSG_WINDOW_METADATA),
         MSG_FOCUS_CHANGED => {
             if body.len() != 16 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let sid = u32::from_le_bytes([body[8], body[9], body[10], body[11]]);
             let wid = u32::from_le_bytes([body[12], body[13], body[14], body[15]]);
-            Ok(Some(DecodedCompositorToShellMessage::FocusChanged {
+            Ok(DecodedCompositorToShellMessage::FocusChanged {
                 surface_id: if sid == 0 { None } else { Some(sid) },
                 window_id: if wid == 0 { None } else { Some(wid) },
-            }))
+            })
         }
-        MSG_WINDOW_LIST => decode_window_list_compositor_body(body).map(Some),
+        MSG_WINDOW_LIST => decode_window_list_compositor_body(body),
         MSG_FRAME
         | MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
@@ -689,7 +784,9 @@ pub fn pop_compositor_to_shell_message(
         | MSG_SHELL_SET_GEOMETRY
         | MSG_SHELL_CLOSE
         | MSG_SHELL_SET_FULLSCREEN
-        | MSG_SHELL_QUIT_COMPOSITOR => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_QUIT_COMPOSITOR
+        | MSG_SHELL_SHM_REGION
+        | MSG_FRAME_SHM_COMMIT => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -699,7 +796,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         return Err(DecodeError::BadWindowListPayload);
     }
     let ver = u32::from_le_bytes(body[0..4].try_into().unwrap());
-    if ver != SHELL_PIXEL_PROTOCOL_VERSION {
+    if !protocol_version_ok(ver) {
         return Err(DecodeError::BadProtocolVersion);
     }
     let msg = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -769,17 +866,21 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
     if body_len > MAX_BODY_BYTES as usize {
         return Err(DecodeError::BodyTooLarge);
     }
-    if buf.len() < 4 + body_len {
+    let total = 4 + body_len;
+    if buf.len() < total {
         return Ok(None);
     }
-    let packet: Vec<u8> = buf.drain(..4 + body_len).collect();
-    let body = &packet[4..];
+    let decoded = decode_shell_to_compositor_body(&buf[4..total])?;
+    buf.drain(..total);
+    Ok(Some(decoded))
+}
 
+fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
     if body.len() < 8 {
         return Err(DecodeError::BadFrameLayout);
     }
     let ver = u32::from_le_bytes(body[0..4].try_into().unwrap());
-    if ver != SHELL_PIXEL_PROTOCOL_VERSION {
+    if !protocol_version_ok(ver) {
         return Err(DecodeError::BadProtocolVersion);
     }
     let msg = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -791,7 +892,7 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-            Ok(Some(DecodedMessage::ShellMoveBegin { window_id }))
+            Ok(DecodedMessage::ShellMoveBegin { window_id })
         }
         MSG_SHELL_MOVE_DELTA => {
             if body.len() != 16 {
@@ -799,20 +900,20 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
             }
             let dx = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let dy = i32::from_le_bytes(body[12..16].try_into().unwrap());
-            Ok(Some(DecodedMessage::ShellMoveDelta { dx, dy }))
+            Ok(DecodedMessage::ShellMoveDelta { dx, dy })
         }
         MSG_SHELL_MOVE_END => {
             if body.len() != 12 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-            Ok(Some(DecodedMessage::ShellMoveEnd { window_id }))
+            Ok(DecodedMessage::ShellMoveEnd { window_id })
         }
         MSG_SHELL_LIST_WINDOWS => {
             if body.len() != 8 {
                 return Err(DecodeError::BadWindowPayload);
             }
-            Ok(Some(DecodedMessage::ShellListWindows))
+            Ok(DecodedMessage::ShellListWindows)
         }
         MSG_SHELL_SET_GEOMETRY => {
             if body.len() != 28 {
@@ -823,20 +924,20 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
             let y = i32::from_le_bytes(body[16..20].try_into().unwrap());
             let width = i32::from_le_bytes(body[20..24].try_into().unwrap());
             let height = i32::from_le_bytes(body[24..28].try_into().unwrap());
-            Ok(Some(DecodedMessage::ShellSetGeometry {
+            Ok(DecodedMessage::ShellSetGeometry {
                 window_id,
                 x,
                 y,
                 width,
                 height,
-            }))
+            })
         }
         MSG_SHELL_CLOSE => {
             if body.len() != 12 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[8..12].try_into().unwrap());
-            Ok(Some(DecodedMessage::ShellClose { window_id }))
+            Ok(DecodedMessage::ShellClose { window_id })
         }
         MSG_SHELL_SET_FULLSCREEN => {
             if body.len() != 16 {
@@ -847,22 +948,67 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
             if en > 1 {
                 return Err(DecodeError::BadWindowPayload);
             }
-            Ok(Some(DecodedMessage::ShellSetFullscreen {
+            Ok(DecodedMessage::ShellSetFullscreen {
                 window_id,
                 enabled: en != 0,
-            }))
+            })
         }
         MSG_SHELL_QUIT_COMPOSITOR => {
             if body.len() != 8 {
                 return Err(DecodeError::BadWindowPayload);
             }
-            Ok(Some(DecodedMessage::ShellQuitCompositor))
+            Ok(DecodedMessage::ShellQuitCompositor)
         }
+        MSG_SHELL_SHM_REGION => decode_shell_shm_region_body(body),
+        MSG_FRAME_SHM_COMMIT => decode_frame_shm_commit_body(body),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
 
-fn decode_frame_body(body: &[u8]) -> Result<Option<DecodedMessage>, DecodeError> {
+fn decode_shell_shm_region_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
+    if body.len() < 12 {
+        return Err(DecodeError::BadShmRegionPayload);
+    }
+    let plen = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    if plen > MAX_SHM_BASENAME_BYTES as usize {
+        return Err(DecodeError::BadShmRegionPayload);
+    }
+    let need = 12usize.checked_add(plen).and_then(|a| a.checked_add(8)).ok_or(DecodeError::BadShmRegionPayload)?;
+    if body.len() != need {
+        return Err(DecodeError::BadShmRegionPayload);
+    }
+    let basename = std::str::from_utf8(&body[12..12 + plen])
+        .map_err(|_| DecodeError::BadUtf8Command)?
+        .to_string();
+    if basename.contains('/') || basename.contains('\\') || basename == "." || basename == ".." {
+        return Err(DecodeError::BadShmRegionPayload);
+    }
+    let total_bytes = u64::from_le_bytes(body[12 + plen..need].try_into().unwrap());
+    Ok(DecodedMessage::ShellShmRegion {
+        basename,
+        total_bytes,
+    })
+}
+
+fn decode_frame_shm_commit_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
+    if body.len() != 32 {
+        return Err(DecodeError::BadShmCommitPayload);
+    }
+    let width = u32::from_le_bytes(body[8..12].try_into().unwrap());
+    let height = u32::from_le_bytes(body[12..16].try_into().unwrap());
+    let stride = u32::from_le_bytes(body[16..20].try_into().unwrap());
+    let offset = u64::from_le_bytes(body[20..28].try_into().unwrap());
+    let data_len = u32::from_le_bytes(body[28..32].try_into().unwrap());
+    Ok(DecodedMessage::FrameShmCommit {
+        width,
+        height,
+        stride,
+        offset,
+        data_len,
+    })
+}
+
+fn decode_frame_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
     if body.len() < 8 + 24 {
         return Err(DecodeError::BadFrameLayout);
     }
@@ -886,17 +1032,17 @@ fn decode_frame_body(body: &[u8]) -> Result<Option<DecodedMessage>, DecodeError>
     if expected != data_len {
         return Err(DecodeError::BadFrameLayout);
     }
-    let pixels = body[28..data_end].to_vec();
-    Ok(Some(DecodedMessage::Frame {
+    let pixels = Vec::from(&body[28..data_end]);
+    Ok(DecodedMessage::Frame {
         width,
         height,
         stride,
         format,
         pixels,
-    }))
+    })
 }
 
-fn decode_spawn_body(body: &[u8]) -> Result<Option<DecodedMessage>, DecodeError> {
+fn decode_spawn_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
     if body.len() < 12 {
         return Err(DecodeError::BadSpawnPayload);
     }
@@ -918,9 +1064,9 @@ fn decode_spawn_body(body: &[u8]) -> Result<Option<DecodedMessage>, DecodeError>
         return Err(DecodeError::BadSpawnPayload);
     }
     let command = std::str::from_utf8(cmd_bytes).map_err(|_| DecodeError::BadUtf8Command)?;
-    Ok(Some(DecodedMessage::SpawnWaylandClient {
+    Ok(DecodedMessage::SpawnWaylandClient {
         command: command.to_string(),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -978,6 +1124,40 @@ mod tests {
             pop_message(&mut buf),
             Err(DecodeError::BadProtocolVersion)
         ));
+    }
+
+    #[test]
+    fn round_trip_shm_region_and_commit() {
+        let enc = encode_shell_shm_region("derp-test-shm.bin", 123456).unwrap();
+        let commit = encode_frame_shm_commit(1920, 1080, 7680, 0, 8_294_400).unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&enc);
+        buf.extend_from_slice(&commit);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellShmRegion {
+                basename,
+                total_bytes,
+            }) => {
+                assert_eq!(basename, "derp-test-shm.bin");
+                assert_eq!(total_bytes, 123456);
+            }
+            other => panic!("expected ShellShmRegion: {other:?}"),
+        }
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::FrameShmCommit {
+                width,
+                height,
+                stride,
+                offset,
+                data_len,
+            }) => {
+                assert_eq!((width, height, stride), (1920, 1080, 7680));
+                assert_eq!(offset, 0);
+                assert_eq!(data_len, 8_294_400);
+            }
+            other => panic!("expected FrameShmCommit: {other:?}"),
+        }
+        assert!(buf.is_empty());
     }
 
     #[test]

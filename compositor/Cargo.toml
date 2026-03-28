@@ -34,6 +34,7 @@ xcursor = "0.3.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+memmap2 = "0.9"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

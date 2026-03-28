@@ -7,4 +7,6 @@ set -euo pipefail
 : "${CEF_SHELL_URL:?}"
 : "${CEF_HOST_BIN:?}"
 
+export CEF_HOST_USE_GPU="${CEF_HOST_USE_GPU:-1}"
+
 exec "$CEF_HOST_BIN" --url "$CEF_SHELL_URL"

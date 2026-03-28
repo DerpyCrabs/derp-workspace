@@ -7,6 +7,7 @@
 
 use std::{
     fs,
+    fs::OpenOptions,
     io::Write,
     os::unix::net::UnixStream,
     path::Path,
@@ -222,6 +223,66 @@ fn headless_shell_back_to_back_frames_last_wins() {
     assert!(
         p[0] < 20 && p[1] < 20 && p[2] >= 240,
         "expected saturated blue center (last frame), got Rgba {:?}",
+        p
+    );
+
+    let _ = comp.kill();
+    let _ = comp.wait();
+}
+
+/// [`shell_wire::MSG_SHELL_SHM_REGION`] + [`shell_wire::MSG_FRAME_SHM_COMMIT`] path (no frame bytes on the Unix stream).
+#[test]
+fn headless_shell_shm_frame_shows_pixels() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path();
+    let status_path = runtime.join("status-shm.json");
+    let png_path = runtime.join("overlay-shm.png");
+
+    let mut comp = spawn_headless_compositor(runtime, &status_path, &png_path);
+    wait_path_exists(&runtime.join(WL_SOCKET), Duration::from_secs(15)).expect("wl socket");
+    wait_path_exists(&runtime.join(SHELL_SOCK), Duration::from_secs(15)).expect("shell socket");
+
+    let w = 48u32;
+    let h = 32u32;
+    let stride = w * 4;
+    let frame_bytes = (stride * h) as usize;
+    let cap = (frame_bytes * 2) as u64;
+    let basename = "derp-shm-e2e.bin";
+    let shm_path = runtime.join(basename);
+    let pixels = solid_bgra(w, h, 0, 220, 0, 255);
+    {
+        let f = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&shm_path)
+            .expect("shm file");
+        f.set_len(cap).expect("set_len");
+        let mut g = std::io::BufWriter::new(f);
+        g.write_all(&pixels).expect("write pixels");
+        g.flush().ok();
+    }
+
+    let mut sock = UnixStream::connect(runtime.join(SHELL_SOCK)).expect("connect shell ipc");
+    sock.write_all(&shell_wire::encode_shell_shm_region(basename, cap).expect("region"))
+        .expect("region");
+    sock.write_all(
+        &shell_wire::encode_frame_shm_commit(w, h, stride, 0, frame_bytes as u32).expect("commit"),
+    )
+    .expect("commit");
+    sock.flush().ok();
+
+    let st = wait_shell_status(&status_path, Duration::from_secs(10));
+    assert_eq!(st.width, w);
+    assert_eq!(st.height, h);
+
+    let img = image::open(&png_path).expect("read png");
+    let rgba = img.to_rgba8();
+    let p = rgba.get_pixel(w / 2, h / 2);
+    assert!(
+        p[0] < 30 && p[1] >= 200 && p[2] < 30,
+        "expected green center from shm, got Rgba {:?}",
         p
     );
 
