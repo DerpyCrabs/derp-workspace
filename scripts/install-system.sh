@@ -12,6 +12,9 @@
 # GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
 # `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
 #
+# `derp-session` will run `npm install && npm run build` in shell/ if `shell/dist/index.html` is missing
+# (requires Node on the login machine). Prefer a successful install here so GDM start is fast.
+#
 # Session logging: `derp-session` appends compositor + cef_host stdout/stderr to DERP_COMPOSITOR_LOG
 # (default ~/.local/state/derp/compositor.log). Set DERP_COMPOSITOR_LOG to override or inspect that
 # file from a TTY/SSH/live mount when debugging a gray screen (tracing, CEF_HOST_*, shell IPC).
@@ -48,21 +51,28 @@ fi
 echo "=== cargo build --release (compositor + cef_host) ==="
 cargo build --release -p compositor -p cef_host
 
+SHELL_INDEX="shell/dist/index.html"
 if [[ -f shell/package.json ]]; then
   echo "=== npm shell → dist/ ==="
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "install-system: npm not found; install Node.js, then re-run this script." >&2
+    exit 1
+  fi
   (cd shell && {
-    if [[ -f package-lock.json ]] && command -v npm >/dev/null 2>&1; then
+    if [[ -f package-lock.json ]]; then
       npm ci || npm install
-    elif command -v npm >/dev/null 2>&1; then
-      npm install
     else
-      echo "npm not found; install Node or run (cd shell && npm install && npm run build) yourself." >&2
-      exit 1
+      npm install
     fi
     npm run build
   })
+  if [[ ! -f "$SHELL_INDEX" ]]; then
+    echo "install-system: npm run build did not produce $REPO_ROOT/$SHELL_INDEX — fix shell/ and re-run." >&2
+    exit 1
+  fi
+  echo "=== Solid bundle ok: $SHELL_INDEX ==="
 else
-  echo "No shell/package.json; skipping Solid build." >&2
+  echo "No shell/package.json; skipping Solid build (GDM session will not load CEF until shell/ exists)." >&2
 fi
 
 BIN_DIR="$INSTALL_PREFIX/bin"
@@ -92,4 +102,9 @@ sudo ln -sf "$REPO_ROOT/scripts/derp-session.sh" "$BIN_DIR/derp-session"
 echo ""
 echo "Done. Log out and choose «Derp Compositor» in GDM."
 echo "Repo (shell/dist + launcher): $REPO_ROOT"
+if [[ -f "$SHELL_INDEX" ]]; then
+  echo "CEF shell: $REPO_ROOT/$SHELL_INDEX (derp-session will pass --command to compositor)."
+else
+  echo "CEF shell: not built — add shell/ and re-run this script, or run nested without Solid."
+fi
 echo "Session log (default): ~/.local/state/derp/compositor.log — set DERP_COMPOSITOR_LOG to change."

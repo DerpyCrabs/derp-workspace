@@ -29,6 +29,23 @@ cleanup_shell_http() {
 }
 trap cleanup_shell_http EXIT INT TERM HUP
 
+# If Solid wasn’t built after clone, build it now so `cef_host` can start (same as install-system.sh).
+ensure_shell_dist() {
+  [[ "${DERP_SESSION_SHELL:-1}" == "1" ]] || return 0
+  [[ -f "$INDEX" ]] && return 0
+  [[ -f "$ROOT/shell/package.json" ]] || return 0
+  command -v npm >/dev/null 2>&1 || {
+    echo "derp-session: missing $INDEX and npm not in PATH — run: bash $ROOT/scripts/install-system.sh" >&2
+    return 0
+  }
+  echo "derp-session: missing $INDEX; running npm install && npm run build in $ROOT/shell ..." >&2
+  (cd "$ROOT/shell" && ([[ -d node_modules ]] || npm install) && npm run build) || {
+    echo "derp-session: Solid build failed — run: bash $ROOT/scripts/install-system.sh (needs Node.js)." >&2
+    return 0
+  }
+}
+ensure_shell_dist
+
 ARGS=( --backend drm --socket "$SOCKET" )
 
 if [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]]; then
