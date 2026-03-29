@@ -188,6 +188,8 @@ fn dispatch_shell_message(
             height,
         } => state.shell_set_window_geometry(window_id, x, y, width, height),
         ShellClose { window_id } => state.shell_close_window(window_id),
+        ShellTaskbarActivate { window_id } => state.shell_taskbar_activate(window_id),
+        ShellMinimize { window_id } => state.shell_minimize_window(window_id),
         ShellSetFullscreen { window_id, enabled } => {
             state.shell_set_window_fullscreen(window_id, enabled);
         }

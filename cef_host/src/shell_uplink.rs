@@ -117,6 +117,14 @@ fn handle_uplink_list(
             write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
             invalidate_shell_view_unthrottled(browser);
         }
+        "taskbar_activate" => {
+            let wid = args.int(1) as u32;
+            write_shell_packet(ipc, &shell_wire::encode_shell_taskbar_activate(wid));
+        }
+        "minimize" => {
+            let wid = args.int(1) as u32;
+            write_shell_packet(ipc, &shell_wire::encode_shell_minimize(wid));
+        }
         _ => {}
     }
 }
@@ -217,9 +225,9 @@ wrap_v8_handler! {
                     let cmd = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(cmd.as_str())));
                 }
-                "move_begin" | "move_end" => {
+                "move_begin" | "move_end" | "taskbar_activate" | "minimize" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_begin/move_end require window id");
+                        return_exception!("move_begin/move_end/taskbar_activate/minimize require window id");
                     };
                     let id = if a1.is_int() != 0 {
                         a1.int_value()
@@ -228,7 +236,7 @@ wrap_v8_handler! {
                     } else if a1.is_double() != 0 {
                         a1.double_value() as i32
                     } else {
-                        return_exception!("move_begin/move_end: second arg must be a number");
+                        return_exception!("move_begin/move_end/taskbar_activate/minimize: second arg must be a number");
                     };
                     if id < 0 {
                         return_exception!("window id must be non-negative");
@@ -261,7 +269,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end)"
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, taskbar_activate, minimize)"
                     );
                 }
             }

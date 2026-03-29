@@ -77,6 +77,14 @@
   opacity: 0.95;
 }
 
+.shell-titlebar__controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shell-titlebar__minimize,
 .shell-titlebar__close {
   flex-shrink: 0;
   width: 28px;
@@ -93,6 +101,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.shell-titlebar__minimize {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.shell-titlebar__minimize:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .shell-titlebar__close:hover {
@@ -433,6 +450,53 @@
 
 .shell-taskbar__programs:hover {
   filter: brightness(1.06);
+}
+
+.shell-taskbar__windows {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.shell-taskbar__win {
+  flex: 0 1 auto;
+  max-width: 11rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: hsl(0, 0%, 88%);
+  background: hsla(210, 18%, 22%, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell-taskbar__win:hover {
+  filter: brightness(1.12);
+}
+
+.shell-taskbar__win--focused {
+  color: hsl(0, 0%, 12%);
+  background: hsl(var(--shell-hue), 65%, 72%);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.shell-taskbar__win--minimized:not(.shell-taskbar__win--focused) {
+  opacity: 0.55;
+}
+
+.shell-taskbar__win-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .shell-programs-menu {

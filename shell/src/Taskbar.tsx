@@ -14,9 +14,19 @@ function shellHttpBase(): string | null {
   return null
 }
 
+export type TaskbarWindowRow = {
+  window_id: number
+  title: string
+  app_id: string
+  minimized: boolean
+}
+
 export type TaskbarProps = {
   /** Launch a command in the compositor (same semantics as the spawn panel). */
   onLaunch: (exec: string) => void | Promise<void>
+  windows: TaskbarWindowRow[]
+  focusedWindowId: number | null
+  onTaskbarActivate: (windowId: number) => void
 }
 
 export function Taskbar(props: TaskbarProps) {
@@ -92,6 +102,31 @@ export function Taskbar(props: TaskbarProps) {
       >
         Programs
       </button>
+
+      <div class="shell-taskbar__windows" role="list" aria-label="Windows">
+        <For each={props.windows}>
+          {(w) => (
+            <button
+              type="button"
+              role="listitem"
+              class="shell-taskbar__win"
+              classList={{
+                'shell-taskbar__win--focused':
+                  props.focusedWindowId === w.window_id && !w.minimized,
+                'shell-taskbar__win--minimized': w.minimized,
+              }}
+              title={[w.title || w.app_id || `window ${w.window_id}`, w.minimized ? '(minimized)' : '']
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => props.onTaskbarActivate(w.window_id)}
+            >
+              <span class="shell-taskbar__win-label">
+                {w.title || w.app_id || `Window ${w.window_id}`}
+              </span>
+            </button>
+          )}
+        </For>
+      </div>
 
       <Show when={open()}>
         <div class="shell-programs-menu" role="menu" aria-label="Applications">

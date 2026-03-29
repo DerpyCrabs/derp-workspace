@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::OsString,
     io::Write,
     os::fd::OwnedFd,
@@ -72,8 +73,10 @@ pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
 /// Added per already-mapped toplevel so new windows are not stacked at the identical `(offset_x, offset_y)` (breaks shell chrome / input).
 pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 48;
-/// Right side of titlebar reserved for shell controls (close); keep in sync with `shell` CSS.
-pub const SHELL_TITLEBAR_CONTROLS_INSET: i32 = 40;
+/// Width of one titlebar control (minimize / close); keep in sync with `shell` CSS.
+pub const SHELL_TITLEBAR_BUTTON_WIDTH: i32 = 40;
+/// Right side of titlebar reserved for shell controls (minimize + close); keep in sync with `shell` CSS.
+pub const SHELL_TITLEBAR_CONTROLS_INSET: i32 = SHELL_TITLEBAR_BUTTON_WIDTH * 2;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
@@ -220,6 +223,11 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_buffer: MemoryRenderBuffer,
     /// Hotspot within [`Self::cursor_fallback_buffer`] (logical px).
     pub(crate) cursor_fallback_hotspot: (i32, i32),
+    /// Last Wayland client toplevel that had keyboard focus (non–solid-shell). Used for taskbar
+    /// minimize when real keyboard focus is on the shell/CEF layer.
+    pub(crate) shell_last_non_shell_focus_window_id: Option<u32>,
+    /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
+    pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     shell_move_window_id: Option<u32>,
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
@@ -336,6 +344,8 @@ impl CompositorState {
             pointer_cursor_image: CursorImageStatus::default_named(),
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
+            shell_last_non_shell_focus_window_id: None,
+            shell_minimized_windows: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
             needs_winit_redraw: true,
@@ -681,6 +691,7 @@ impl CompositorState {
             y: by0,
             width: bw,
             height: bh,
+            minimized: info.minimized,
         })
     }
 
@@ -708,6 +719,9 @@ impl CompositorState {
                 .and_then(|w| self.window_registry.window_info(w))
                 .map(|i| self.window_info_is_solid_shell_host(&i))
                 .unwrap_or(false),
+            ChromeEvent::WindowStateChanged { info, .. } => {
+                self.window_info_is_solid_shell_host(info)
+            }
         }
     }
 
@@ -759,6 +773,14 @@ impl CompositorState {
                 info: self
                     .shell_window_info_to_osr_buffer_pixels(info)
                     .unwrap_or_else(|| info.clone()),
+            },
+            ChromeEvent::WindowStateChanged { info, minimized } => {
+                ChromeEvent::WindowStateChanged {
+                    info: self
+                        .shell_window_info_to_osr_buffer_pixels(info)
+                        .unwrap_or_else(|| info.clone()),
+                    minimized: *minimized,
+                }
             },
             _ => event.clone(),
         };
@@ -863,6 +885,24 @@ impl CompositorState {
                         "shell ipc FocusChanged"
                     );
                 }
+            }
+            ChromeEvent::WindowStateChanged {
+                info,
+                minimized,
+            } if !suppress => {
+                tracing::debug!(
+                    target: "derp_shell_sync",
+                    window_id = info.window_id,
+                    minimized,
+                    "shell ipc WindowState"
+                );
+            }
+            ChromeEvent::WindowStateChanged { info, .. } if suppress => {
+                tracing::trace!(
+                    target: "derp_shell_sync",
+                    window_id = info.window_id,
+                    "shell ipc WindowState suppressed (solid host)"
+                );
             }
             _ => {}
         }
@@ -1070,7 +1110,7 @@ impl CompositorState {
         false
     }
 
-    /// Titlebar strip for **drag** (excludes right control inset reserved for shell close button).
+    /// Titlebar strip for **drag** (excludes minimize + close button strip on the right).
     pub fn shell_point_in_titlebar_drag_region(
         &self,
         px: f64,
@@ -1090,7 +1130,29 @@ impl CompositorState {
             && py < y0 as f64
     }
 
-    /// Titlebar close control strip (right inset); matches shell close button zone.
+    /// Titlebar minimize control (left of close); matches shell minimize button zone.
+    pub fn shell_point_in_titlebar_minimize_region(
+        &self,
+        px: f64,
+        py: f64,
+        x0: i32,
+        y0: i32,
+        w: i32,
+        _h: i32,
+    ) -> bool {
+        let th = SHELL_TITLEBAR_HEIGHT;
+        let bw = SHELL_TITLEBAR_BUTTON_WIDTH;
+        let ci = SHELL_TITLEBAR_CONTROLS_INSET;
+        let top = y0.saturating_sub(th);
+        let min_left = x0 + w - ci;
+        let min_right = x0 + w - bw;
+        px >= min_left as f64
+            && px < min_right as f64
+            && py >= top as f64
+            && py < y0 as f64
+    }
+
+    /// Titlebar close control strip (rightmost [`SHELL_TITLEBAR_BUTTON_WIDTH`] px).
     pub fn shell_point_in_titlebar_close_region(
         &self,
         px: f64,
@@ -1101,13 +1163,34 @@ impl CompositorState {
         _h: i32,
     ) -> bool {
         let th = SHELL_TITLEBAR_HEIGHT;
-        let inset = SHELL_TITLEBAR_CONTROLS_INSET;
+        let bw = SHELL_TITLEBAR_BUTTON_WIDTH;
         let top = y0.saturating_sub(th);
-        let drag_right = x0 + w - inset;
-        px >= drag_right as f64
+        let close_left = x0 + w - bw;
+        px >= close_left as f64
             && px < (x0 + w) as f64
             && py >= top as f64
             && py < y0 as f64
+    }
+
+    /// Topmost window whose titlebar minimize region contains `pos`, if any.
+    pub fn window_for_titlebar_minimize_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
+        let px = pos.x;
+        let py = pos.y;
+        for elem in self.space.elements().rev() {
+            let DerpSpaceElem::Wayland(window) = elem else {
+                continue;
+            };
+            let loc = self.space.element_location(elem)?;
+            let geo = window.geometry();
+            let x0 = loc.x;
+            let y0 = loc.y;
+            let w = geo.size.w;
+            let h = geo.size.h;
+            if self.shell_point_in_titlebar_minimize_region(px, py, x0, y0, w, h) {
+                return Some(window.clone());
+            }
+        }
+        None
     }
 
     /// Topmost window whose titlebar close region contains `pos`, if any.
@@ -1488,6 +1571,7 @@ impl CompositorState {
                     y: i.y,
                     w: i.width,
                     h: i.height,
+                    minimized: if i.minimized { 1 } else { 0 },
                     title: i.title,
                     app_id: i.app_id,
                 }
@@ -1564,6 +1648,177 @@ impl CompositorState {
         });
         tl.send_pending_configure();
         self.needs_winit_redraw = true;
+    }
+
+    fn keyboard_focused_window_id(&self) -> Option<u32> {
+        let surf = self.seat.get_keyboard()?.current_focus()?;
+        self.window_registry.window_id_for_wl_surface(&surf)
+    }
+
+    /// Raise a mapped Wayland toplevel to the top of the stack and give it keyboard focus.
+    pub fn shell_raise_and_focus_window(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if info.minimized || self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        self.shell_ipc_keyboard_to_cef = false;
+        self.space.elements().for_each(|e| {
+            e.set_activate(false);
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel().unwrap().send_pending_configure();
+            }
+        });
+        let _ = window.set_activated(true);
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+        let k_serial = SERIAL_COUNTER.next_serial();
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Some(wl_surface), k_serial);
+        self.space.elements().for_each(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel().unwrap().send_pending_configure();
+            }
+        });
+        self.needs_winit_redraw = true;
+    }
+
+    fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        self.shell_emit_chrome_event(ChromeEvent::WindowStateChanged { info, minimized });
+    }
+
+    /// Hide a toplevel (xdg minimized + unmap); stash the [`Window`] for restore.
+    pub fn shell_minimize_window(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+        if info.minimized {
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+
+        if self.shell_move_window_id == Some(window_id) {
+            self.shell_move_end(window_id);
+        }
+
+        let _ = window.set_activated(false);
+        window.toplevel().unwrap().send_pending_configure();
+        self.shell_minimized_windows
+            .insert(window_id, window.clone());
+        self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
+        self.window_registry.set_minimized(window_id, true);
+
+        if self.shell_last_non_shell_focus_window_id == Some(window_id) {
+            self.shell_last_non_shell_focus_window_id = None;
+        }
+
+        if self.keyboard_focused_window_id() == Some(window_id) {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat
+                .get_keyboard()
+                .unwrap()
+                .set_focus(self, Option::<WlSurface>::None, serial);
+        }
+
+        self.needs_winit_redraw = true;
+        self.shell_emit_window_state(window_id, true);
+    }
+
+    /// Map a compositor-minimized toplevel back into the space and focus it.
+    pub fn shell_restore_minimized_window(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+        if !info.minimized {
+            return;
+        }
+        let Some(window) = self.shell_minimized_windows.remove(&window_id) else {
+            let _ = self.window_registry.set_minimized(window_id, false);
+            return;
+        };
+
+        self.shell_ipc_keyboard_to_cef = false;
+        self.space.elements().for_each(|e| {
+            e.set_activate(false);
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel().unwrap().send_pending_configure();
+            }
+        });
+
+        self.space.map_element(
+            DerpSpaceElem::Wayland(window.clone()),
+            (info.x, info.y),
+            true,
+        );
+        let _ = self.window_registry.set_minimized(window_id, false);
+
+        let _ = window.set_activated(true);
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+        let k_serial = SERIAL_COUNTER.next_serial();
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Some(wl_surface), k_serial);
+        self.space.elements().for_each(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel().unwrap().send_pending_configure();
+            }
+        });
+
+        self.notify_geometry_if_changed(&window);
+        self.needs_winit_redraw = true;
+        self.shell_emit_window_state(window_id, false);
+    }
+
+    /// Taskbar: restore if minimized; else minimize if already focused; else raise and focus.
+    pub fn shell_taskbar_activate(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+
+        if info.minimized {
+            self.shell_restore_minimized_window(window_id);
+            return;
+        }
+
+        let kb = self.keyboard_focused_window_id();
+        let last = self.shell_last_non_shell_focus_window_id;
+        let should_minimize =
+            kb == Some(window_id) || last == Some(window_id);
+        if should_minimize {
+            self.shell_minimize_window(window_id);
+        } else {
+            self.shell_raise_and_focus_window(window_id);
+        }
     }
 
     /// Letterboxed shell in **output-local logical** pixels `(ox, oy, cw, ch)`.

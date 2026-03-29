@@ -33,5 +33,8 @@ pub fn chrome_event_to_shell_packet(ev: &ChromeEvent) -> Option<Vec<u8>> {
             surface_id,
             window_id,
         } => shell_wire::encode_focus_changed(*surface_id, *window_id),
+        ChromeEvent::WindowStateChanged { info, minimized } => {
+            shell_wire::encode_window_state(info.window_id, *minimized)
+        }
     })
 }

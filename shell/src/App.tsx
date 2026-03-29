@@ -1,4 +1,13 @@
-import { batch, createMemo, createSignal, onCleanup, onMount, For, Index, Show } from 'solid-js'
+import {
+  batch,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onMount,
+  For,
+  Index,
+  Show,
+} from 'solid-js'
 import './App.css'
 import { ShellWindowFrame } from './ShellWindowFrame'
 import { Taskbar } from './Taskbar'
@@ -10,7 +19,15 @@ declare global {
     __DERP_SHELL_HTTP?: string
     /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
     __derpShellWireSend?: (
-      op: 'close' | 'quit' | 'spawn' | 'move_begin' | 'move_delta' | 'move_end',
+      op:
+        | 'close'
+        | 'quit'
+        | 'spawn'
+        | 'move_begin'
+        | 'move_delta'
+        | 'move_end'
+        | 'taskbar_activate'
+        | 'minimize',
       arg?: number | string,
       arg2?: number,
     ) => void
@@ -48,6 +65,8 @@ type DerpShellDetail =
       app_id: string
     }
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
+  | { type: 'window_state'; window_id: number; minimized: boolean }
+  | { type: 'window_list'; windows: unknown[] }
 
 type DerpWindow = {
   window_id: number
@@ -58,6 +77,7 @@ type DerpWindow = {
   height: number
   title: string
   app_id: string
+  minimized: boolean
 }
 
 /** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
@@ -68,6 +88,30 @@ function coerceShellWindowId(raw: unknown): number | null {
   const t = Math.trunc(n)
   // Wire/protocol uses 0 as “none” (e.g. focus_cleared); compositor window_id starts at 1.
   return t > 0 ? t : null
+}
+
+function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
+  const next = new Map<number, DerpWindow>()
+  if (!Array.isArray(raw)) return next
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const r = row as Record<string, unknown>
+    const wid = coerceShellWindowId(r.window_id)
+    const sid = coerceShellWindowId(r.surface_id)
+    if (wid === null || sid === null) continue
+    next.set(wid, {
+      window_id: wid,
+      surface_id: sid,
+      x: Number(r.x) || 0,
+      y: Number(r.y) || 0,
+      width: Number(r.width) || 0,
+      height: Number(r.height) || 0,
+      title: typeof r.title === 'string' ? r.title : '',
+      app_id: typeof r.app_id === 'string' ? r.app_id : '',
+      minimized: !!r.minimized,
+    })
+  }
+  return next
 }
 
 function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
@@ -86,6 +130,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         height: detail.height,
         title: detail.title,
         app_id: detail.app_id,
+        minimized: false,
       })
       break
     }
@@ -106,6 +151,15 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
           width: detail.width,
           height: detail.height,
         })
+      }
+      break
+    }
+    case 'window_state': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = next.get(wid)
+      if (w) {
+        next.set(wid, { ...w, minimized: detail.minimized })
       }
       break
     }
@@ -151,7 +205,15 @@ function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
 }
 
 function shellWireSend(
-  op: 'close' | 'quit' | 'spawn' | 'move_begin' | 'move_delta' | 'move_end',
+  op:
+    | 'close'
+    | 'quit'
+    | 'spawn'
+    | 'move_begin'
+    | 'move_delta'
+    | 'move_end'
+    | 'taskbar_activate'
+    | 'minimize',
   arg?: number | string,
   arg2?: number,
 ): boolean {
@@ -200,6 +262,15 @@ function App() {
    * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
   const windowsList = createMemo(() =>
     Array.from(windows().values()).sort((a, b) => a.window_id - b.window_id),
+  )
+
+  const taskbarWindows = createMemo(() =>
+    windowsList().map((w) => ({
+      window_id: w.window_id,
+      title: w.title,
+      app_id: w.app_id,
+      minimized: w.minimized,
+    })),
   )
 
   const horizontalRulerTicks = createMemo(() => {
@@ -345,6 +416,20 @@ function App() {
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
+        return
+      }
+      if (d.type === 'window_list') {
+        setWindows(buildWindowsMapFromList(d.windows))
+        return
+      }
+      if (d.type === 'window_state') {
+        if (d.minimized) {
+          const wid = coerceShellWindowId(d.window_id)
+          if (wid !== null) {
+            setFocusedWindowId((prev) => (prev === wid ? null : prev))
+          }
+        }
+        setWindows((m) => applyDetail(m, d))
         return
       }
       if (d.type === 'window_geometry' && shellWindowDrag !== null) {
@@ -535,19 +620,24 @@ function App() {
     >
       <Index each={windowsList()}>
         {(win) => (
-          <ShellWindowFrame
-            win={win()}
-            stackZ={
-              20 +
-              win().window_id +
-              (focusedWindowId() === win().window_id ? 10_000 : 0)
-            }
-            focused={focusedWindowId() === win().window_id}
-            onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win().window_id, cx, cy)}
-            onClose={() => {
-              shellWireSend('close', win().window_id)
-            }}
-          />
+          <Show when={!win().minimized}>
+            <ShellWindowFrame
+              win={win()}
+              stackZ={
+                20 +
+                win().window_id +
+                (focusedWindowId() === win().window_id ? 10_000 : 0)
+              }
+              focused={focusedWindowId() === win().window_id}
+              onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win().window_id, cx, cy)}
+              onMinimize={() => {
+                shellWireSend('minimize', win().window_id)
+              }}
+              onClose={() => {
+                shellWireSend('close', win().window_id)
+              }}
+            />
+          </Show>
         )}
       </Index>
 
@@ -730,7 +820,14 @@ function App() {
         })()}
       </div>
 
-      <Taskbar onLaunch={(exec) => void spawnInCompositor(exec)} />
+      <Taskbar
+        onLaunch={(exec) => void spawnInCompositor(exec)}
+        windows={taskbarWindows()}
+        focusedWindowId={focusedWindowId()}
+        onTaskbarActivate={(id) => {
+          shellWireSend('taskbar_activate', id)
+        }}
+      />
     </main>
   )
 }

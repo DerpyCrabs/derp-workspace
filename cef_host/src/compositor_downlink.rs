@@ -196,6 +196,7 @@ pub fn apply_message(
                         "y": vy,
                         "width": vw,
                         "height": vh,
+                        "minimized": w.minimized != 0,
                         "title": &w.title,
                         "app_id": &w.app_id,
                     })
@@ -206,6 +207,25 @@ pub fn apply_message(
                 json!({
                     "type": "window_list",
                     "windows": list,
+                }),
+            );
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowState {
+            window_id,
+            minimized,
+        } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "window_state",
+                    "window_id": window_id,
+                    "minimized": minimized,
                 }),
             );
         }

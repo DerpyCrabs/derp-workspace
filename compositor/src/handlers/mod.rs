@@ -39,6 +39,13 @@ impl SeatHandler for CompositorState {
         set_data_device_focus(dh, seat, client);
 
         let window_id = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
+        if let Some(wid) = window_id {
+            if let Some(info) = self.window_registry.window_info(wid) {
+                if !self.window_info_is_solid_shell_host(&info) {
+                    self.shell_last_non_shell_focus_window_id = Some(wid);
+                }
+            }
+        }
         let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
         self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
             surface_id,

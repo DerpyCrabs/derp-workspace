@@ -152,7 +152,12 @@ impl CompositorState {
                 && button_state == ButtonState::Pressed
                 && !pointer.is_grabbed()
             {
-                if let Some(window) = self.window_for_titlebar_close_at(pos) {
+                if let Some(window) = self.window_for_titlebar_minimize_at(pos) {
+                    let wl = window.toplevel().unwrap().wl_surface();
+                    if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
+                        self.shell_minimize_window(wid);
+                    }
+                } else if let Some(window) = self.window_for_titlebar_close_at(pos) {
                     let wl = window.toplevel().unwrap().wl_surface();
                     if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
                         self.shell_close_window(wid);
@@ -199,7 +204,8 @@ impl CompositorState {
             let chrome_suppress_cef = button == BTN_LEFT
                 && button_state == ButtonState::Pressed
                 && !pointer.is_grabbed()
-                && (self.window_for_titlebar_close_at(pos).is_some()
+                && (self.window_for_titlebar_minimize_at(pos).is_some()
+                    || self.window_for_titlebar_close_at(pos).is_some()
                     || self.window_for_titlebar_drag_at(pos).is_some());
             if route_cef
                 && !chrome_suppress_cef

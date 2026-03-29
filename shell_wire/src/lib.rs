@@ -19,8 +19,8 @@
 //! - [`MSG_SPAWN_WAYLAND_CLIENT`], [`MSG_FRAME_DMABUF_COMMIT`],
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
-//!   [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
-//! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command), [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
+//!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
+//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -65,6 +65,12 @@ pub const MSG_FRAME_DMABUF_COMMIT: u32 = 33;
 pub const MSG_COMPOSITOR_POINTER_AXIS: u32 = 34;
 /// Compositor → shell: keyboard for CEF OSR (`cef_event_flags_t` modifiers + CEF key event types).
 pub const MSG_COMPOSITOR_KEY: u32 = 35;
+/// Shell → compositor: taskbar button — focus, restore from minimized, or minimize if already focused.
+pub const MSG_SHELL_TASKBAR_ACTIVATE: u32 = 36;
+/// Compositor → shell: minimized state changed (`minimized`: 0 or 1).
+pub const MSG_WINDOW_STATE: u32 = 37;
+/// Shell → compositor: minimize a toplevel (unmap + stash).
+pub const MSG_SHELL_MINIMIZE: u32 = 38;
 
 /// CEF [`cef_key_event_type_t`] values (composite → shell → `cef_host`).
 pub const CEF_KEYEVENT_RAWKEYDOWN: u32 = 0;
@@ -327,6 +333,8 @@ pub struct ShellWindowSnapshot {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// 0 = normal, 1 = compositor-minimized (hidden from space).
+    pub minimized: u32,
     pub title: String,
     pub app_id: String,
 }
@@ -353,6 +361,7 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(&w.y.to_le_bytes());
         body.extend_from_slice(&w.w.to_le_bytes());
         body.extend_from_slice(&w.h.to_le_bytes());
+        body.extend_from_slice(&w.minimized.to_le_bytes());
         body.extend_from_slice(&tl.to_le_bytes());
         body.extend_from_slice(&al.to_le_bytes());
         body.extend_from_slice(tb);
@@ -395,6 +404,34 @@ pub fn encode_shell_close(window_id: u32) -> Vec<u8> {
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_SHELL_CLOSE.to_le_bytes());
     v.extend_from_slice(&window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_taskbar_activate(window_id: u32) -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(16);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_TASKBAR_ACTIVATE.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_minimize(window_id: u32) -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(16);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_MINIMIZE.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v
+}
+
+pub fn encode_window_state(window_id: u32, minimized: bool) -> Vec<u8> {
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(20);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_WINDOW_STATE.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&(if minimized { 1u32 } else { 0 }).to_le_bytes());
     v
 }
 
@@ -456,6 +493,12 @@ pub enum DecodedMessage {
     ShellSetFullscreen {
         window_id: u32,
         enabled: bool,
+    },
+    ShellTaskbarActivate {
+        window_id: u32,
+    },
+    ShellMinimize {
+        window_id: u32,
     },
     ShellQuitCompositor,
     /// Reply to [`MSG_COMPOSITOR_PING`].
@@ -557,6 +600,10 @@ pub enum DecodedCompositorToShellMessage {
     },
     WindowList {
         windows: Vec<ShellWindowSnapshot>,
+    },
+    WindowState {
+        window_id: u32,
+        minimized: bool,
     },
     /// Compositor requests [`encode_shell_pong`] from `cef_host`.
     Ping,
@@ -899,6 +946,20 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 window_id: if wid == 0 { None } else { Some(wid) },
             })
         }
+        MSG_WINDOW_STATE => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let m = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            if m > 1 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            Ok(DecodedCompositorToShellMessage::WindowState {
+                window_id,
+                minimized: m != 0,
+            })
+        }
         MSG_WINDOW_LIST => decode_window_list_compositor_body(body),
         MSG_COMPOSITOR_PING => {
             if body.len() != 4 {
@@ -914,6 +975,8 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_SET_GEOMETRY
         | MSG_SHELL_CLOSE
         | MSG_SHELL_SET_FULLSCREEN
+        | MSG_SHELL_TASKBAR_ACTIVATE
+        | MSG_SHELL_MINIMIZE
         | MSG_SHELL_QUIT_COMPOSITOR
         | MSG_SHELL_PONG => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
@@ -935,7 +998,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
     let mut off = 8usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 32 > body.len() {
+        if off + 36 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -944,12 +1007,16 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         let y = i32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
         let w = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
         let h = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-        let title_len = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) as usize;
+        let minimized = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+        if minimized > 1 {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let title_len = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 32;
+        off += 36;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -973,6 +1040,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
             y,
             w,
             h,
+            minimized,
             title,
             app_id,
         });
@@ -1072,6 +1140,20 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 window_id,
                 enabled: en != 0,
             })
+        }
+        MSG_SHELL_TASKBAR_ACTIVATE => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            Ok(DecodedMessage::ShellTaskbarActivate { window_id })
+        }
+        MSG_SHELL_MINIMIZE => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            Ok(DecodedMessage::ShellMinimize { window_id })
         }
         MSG_SHELL_QUIT_COMPOSITOR => {
             if body.len() != 4 {
@@ -1427,6 +1509,35 @@ mod tests {
             pop_message(&mut buf).unwrap(),
             Some(DecodedMessage::ShellQuitCompositor)
         ));
+
+        buf = encode_shell_taskbar_activate(42);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellTaskbarActivate { window_id }) => assert_eq!(window_id, 42),
+            _ => panic!("expected ShellTaskbarActivate"),
+        }
+
+        buf = encode_shell_minimize(5);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellMinimize { window_id }) => assert_eq!(window_id, 5),
+            _ => panic!("expected ShellMinimize"),
+        }
+    }
+
+    #[test]
+    fn round_trip_window_state_compositor_to_shell() {
+        let enc = encode_window_state(7, true);
+        let mut b = enc;
+        match pop_compositor_to_shell_message(&mut b).unwrap() {
+            Some(DecodedCompositorToShellMessage::WindowState {
+                window_id,
+                minimized,
+            }) => {
+                assert_eq!(window_id, 7);
+                assert!(minimized);
+            }
+            _ => panic!("expected WindowState"),
+        }
+        assert!(b.is_empty());
     }
 
     #[test]
@@ -1439,6 +1550,7 @@ mod tests {
                 y: 0,
                 w: 100,
                 h: 50,
+                minimized: 0,
                 title: "a".into(),
                 app_id: "b".into(),
             },
@@ -1449,6 +1561,7 @@ mod tests {
                 y: 6,
                 w: 7,
                 h: 8,
+                minimized: 1,
                 title: "".into(),
                 app_id: "".into(),
             },

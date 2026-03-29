@@ -56,6 +56,7 @@ impl WindowRegistry {
             y: 0,
             width: 0,
             height: 0,
+            minimized: false,
         };
         self.by_surface.insert(k, window_id);
         self.records.insert(window_id, info);
@@ -129,5 +130,11 @@ impl WindowRegistry {
 
     pub fn all_infos(&self) -> Vec<WindowInfo> {
         self.records.values().cloned().collect()
+    }
+
+    pub fn set_minimized(&mut self, window_id: WindowId, minimized: bool) -> Option<()> {
+        let info = self.records.get_mut(&window_id)?;
+        info.minimized = minimized;
+        Some(())
     }
 }

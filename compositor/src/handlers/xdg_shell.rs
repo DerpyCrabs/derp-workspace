@@ -112,6 +112,10 @@ impl XdgShellHandler for CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
+            if self.shell_last_non_shell_focus_window_id == Some(window_id) {
+                self.shell_last_non_shell_focus_window_id = None;
+            }
+            self.shell_minimized_windows.remove(&window_id);
             self.shell_emit_chrome_window_unmapped(window_id, removed);
         }
     }
@@ -261,6 +265,14 @@ impl XdgShellHandler for CompositorState {
 
             pointer.set_grab(self, grab, serial, Focus::Clear);
         }
+    }
+
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        let wl = surface.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return;
+        };
+        self.shell_minimize_window(window_id);
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}

@@ -19,6 +19,7 @@ type ShellWindowFrameProps = {
   /** Stacking vs other chrome (focused window should use the largest). */
   stackZ: number
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
+  onMinimize: () => void
   onClose: () => void
 }
 
@@ -53,7 +54,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
-          if ((e.target as HTMLElement).closest('.shell-titlebar__close')) return
+          if ((e.target as HTMLElement).closest('.shell-titlebar__controls')) return
           e.preventDefault()
           e.stopPropagation()
           console.log(
@@ -62,7 +63,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
-          if ((e.target as HTMLElement).closest('.shell-titlebar__close')) return
+          if ((e.target as HTMLElement).closest('.shell-titlebar__controls')) return
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
@@ -76,15 +77,26 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <span class="shell-titlebar__text">
           {props.win.title || props.win.app_id || `window ${props.win.window_id}`}
         </span>
-        <button
-          type="button"
-          class="shell-titlebar__close"
-          title="Close window"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => props.onClose()}
-        >
-          ×
-        </button>
+        <div class="shell-titlebar__controls">
+          <button
+            type="button"
+            class="shell-titlebar__minimize"
+            title="Minimize window"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onMinimize()}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            class="shell-titlebar__close"
+            title="Close window"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onClose()}
+          >
+            ×
+          </button>
+        </div>
       </div>
       <div
         class="shell-border shell-border--left"

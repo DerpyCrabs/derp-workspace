@@ -23,6 +23,8 @@ pub struct WindowInfo {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    /// Compositor-minimized: unmapped from space but still alive.
+    pub minimized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +64,10 @@ pub enum ChromeEvent {
         surface_id: Option<u32>,
         /// Compositor [`WindowInfo::window_id`], if the surface is a known toplevel.
         window_id: Option<u32>,
+    },
+    WindowStateChanged {
+        info: WindowInfo,
+        minimized: bool,
     },
 }
 
@@ -146,6 +152,7 @@ mod tests {
             y: 0,
             width: 0,
             height: 0,
+            minimized: false,
         };
         b.notify(ChromeEvent::WindowMapped { info: info.clone() });
         b.notify(ChromeEvent::WindowMetadataChanged {
@@ -177,6 +184,7 @@ mod tests {
             y: 0,
             width: 0,
             height: 0,
+            minimized: false,
         };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowMetadataChanged { info: info.clone() });
@@ -197,6 +205,7 @@ mod tests {
             y: 2,
             width: 400,
             height: 300,
+            minimized: false,
         };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
@@ -217,6 +226,7 @@ mod tests {
             y: 0,
             width: 640,
             height: 480,
+            minimized: false,
         };
 
         let b = LoggingChromeBridge::new();
