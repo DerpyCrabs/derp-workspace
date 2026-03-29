@@ -150,8 +150,6 @@ pub fn init_winit(
                                     &output,
                                     &mut render_elements,
                                 );
-                                render_elements
-                                    .extend(space_els.into_iter().map(DesktopStack::Space));
                                 let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
                                     state, renderer, &output,
                                 ) {
@@ -165,8 +163,18 @@ pub fn init_winit(
                                         None
                                     }
                                 };
-                                if let Some(ref el) = shell_dma {
-                                    render_elements.push(DesktopStack::ShellDma(el));
+                                if state.shell_presentation_fullscreen {
+                                    if let Some(ref el) = shell_dma {
+                                        render_elements.push(DesktopStack::ShellDma(el));
+                                    }
+                                    render_elements
+                                        .extend(space_els.into_iter().map(DesktopStack::Space));
+                                } else {
+                                    render_elements
+                                        .extend(space_els.into_iter().map(DesktopStack::Space));
+                                    if let Some(ref el) = shell_dma {
+                                        render_elements.push(DesktopStack::ShellDma(el));
+                                    }
                                 }
 
                                 damage_tracker.render_output(

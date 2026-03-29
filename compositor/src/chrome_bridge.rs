@@ -8,8 +8,9 @@ pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 4;
 
 /// Stable compositor window id, metadata, and layout in Smithay logical space.
 ///
-/// `x`/`y` are the window element position in compositor space; `width`/`height` are
-/// the Smithay desktop window client geometry size.
+/// `x`/`y` are the window element position in **global** compositor space; `width`/`height` are
+/// the Smithay desktop window client geometry size. On the shell Unix socket, events use
+/// **output-local** layout integers (see [`crate::state::CompositorState::shell_window_info_to_output_local_layout`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowInfo {
     pub window_id: u32,
@@ -25,6 +26,8 @@ pub struct WindowInfo {
     pub height: i32,
     /// Compositor-minimized: unmapped from space but still alive.
     pub minimized: bool,
+    pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +45,13 @@ pub enum ChromeCommand {
     },
     SetFullscreen {
         id: u32,
+        enabled: bool,
+    },
+    SetMaximized {
+        id: u32,
+        enabled: bool,
+    },
+    SetPresentationFullscreen {
         enabled: bool,
     },
 }
@@ -153,6 +163,8 @@ mod tests {
             width: 0,
             height: 0,
             minimized: false,
+            maximized: false,
+            fullscreen: false,
         };
         b.notify(ChromeEvent::WindowMapped { info: info.clone() });
         b.notify(ChromeEvent::WindowMetadataChanged {
@@ -185,6 +197,8 @@ mod tests {
             width: 0,
             height: 0,
             minimized: false,
+            maximized: false,
+            fullscreen: false,
         };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowMetadataChanged { info: info.clone() });
@@ -206,6 +220,8 @@ mod tests {
             width: 400,
             height: 300,
             minimized: false,
+            maximized: false,
+            fullscreen: false,
         };
         let b = LoggingChromeBridge::new();
         b.notify(ChromeEvent::WindowGeometryChanged { info: info.clone() });
@@ -227,6 +243,8 @@ mod tests {
             width: 640,
             height: 480,
             minimized: false,
+            maximized: false,
+            fullscreen: false,
         };
 
         let b = LoggingChromeBridge::new();

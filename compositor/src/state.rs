@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     io::Write,
     os::fd::OwnedFd,
@@ -31,9 +31,10 @@ use smithay::{
         calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
-            protocol::wl_surface::WlSurface,
+            protocol::{wl_output::WlOutput, wl_surface::WlSurface},
             Display, DisplayHandle,
         },
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
     utils::{Buffer, Logical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
@@ -44,7 +45,7 @@ use smithay::{
         selection::data_device::DataDeviceState,
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
-            ToplevelSurface, XdgShellState,
+            ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
         shm::ShmState,
         socket::ListeningSocketSource,
@@ -56,6 +57,8 @@ use smithay::{
         X11Surface, X11Wm, XwmHandler,
     },
 };
+use smithay::output::Output;
+use smithay::reexports::wayland_server::Resource;
 
 use crate::{
     chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge, WindowInfo},
@@ -73,10 +76,6 @@ pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
 /// Added per already-mapped toplevel so new windows are not stacked at the identical `(offset_x, offset_y)` (breaks shell chrome / input).
 pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 48;
-/// Width of one titlebar control (minimize / close); keep in sync with `shell` CSS.
-pub const SHELL_TITLEBAR_BUTTON_WIDTH: i32 = 40;
-/// Right side of titlebar reserved for shell controls (minimize + close); keep in sync with `shell` CSS.
-pub const SHELL_TITLEBAR_CONTROLS_INSET: i32 = SHELL_TITLEBAR_BUTTON_WIDTH * 2;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
@@ -88,6 +87,23 @@ pub const DERP_SOLID_SHELL_TITLE: &str = "derp-shell";
 #[inline]
 pub(crate) fn window_is_solid_shell_host(title: &str, app_id: &str) -> bool {
     title == DERP_SOLID_SHELL_TITLE || app_id == DERP_SOLID_SHELL_APP_ID
+}
+
+/// Current maximize/fullscreen flags from the compositor’s xdg pending/current state.
+pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
+    smithay::wayland::compositor::with_states(wl, |states| {
+        let data = states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .unwrap()
+            .lock()
+            .unwrap();
+        let st = data.current_server_state();
+        (
+            st.states.contains(xdg_toplevel::State::Maximized),
+            st.states.contains(xdg_toplevel::State::Fullscreen),
+        )
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +280,13 @@ pub struct CompositorState {
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
+
+    /// Pre-maximize / pre-fullscreen **floating** geometry for [`Self::toplevel_restore_floating`].
+    pub(crate) toplevel_floating_restore: HashMap<u32, (i32, i32, i32, i32)>,
+    /// After [`xdg_toplevel::Request::UnsetFullscreen`], restore maximized layout instead of floating.
+    pub(crate) toplevel_fullscreen_return_maximized: HashSet<u32>,
+    /// When true, render OSR shell above native Wayland windows (HTML5 / presentation fullscreen).
+    pub shell_presentation_fullscreen: bool,
 }
 
 impl CompositorState {
@@ -371,6 +394,9 @@ impl CompositorState {
             shell_e2e_status_path,
             shell_e2e_screenshot_path,
             vt_session: None,
+            toplevel_floating_restore: HashMap::new(),
+            toplevel_fullscreen_return_maximized: HashSet::new(),
+            shell_presentation_fullscreen: false,
         };
 
         if let Some((to_peer, from_peer)) = shell_ipc_embedded {
@@ -658,57 +684,238 @@ impl CompositorState {
         let changed = self
             .window_registry
             .set_geometry(wl, loc.x, loc.y, size.w, size.h);
-        if force_shell_emit || changed == Some(true) {
+        let (max, fs) = read_toplevel_tiling(wl);
+        let tiling_changed = self
+            .window_registry
+            .set_tiling_state(wl, max, fs)
+            .unwrap_or(false);
+        if force_shell_emit || changed == Some(true) || tiling_changed {
             if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
         }
     }
 
-    /// Map one **output-local logical** point to **shell layout** pixels (normalized over the output).
-    pub(crate) fn shell_output_local_point_to_buffer_px(
-        &self,
-        output_size: smithay::utils::Size<i32, Logical>,
-        lx: f64,
-        ly: f64,
-    ) -> Option<(i32, i32)> {
-        let gw = output_size.w.max(1) as f64;
-        let gh = output_size.h.max(1) as f64;
-        let nx = (lx / gw).clamp(0.0, 1.0);
-        let ny = (ly / gh).clamp(0.0, 1.0);
-        let (buf_w, buf_h) = self.shell_output_logical_size()?;
-        Some(crate::shell_letterbox::norm_to_buffer_px(nx, ny, buf_w, buf_h))
+    pub(crate) fn cancel_shell_move_resize_for_window(&mut self, window_id: u32) {
+        if self.shell_move_window_id == Some(window_id) {
+            self.shell_move_end(window_id);
+        }
+        if self.shell_resize_window_id == Some(window_id) {
+            self.shell_resize_end(window_id);
+        }
     }
 
-    /// [`crate::chrome_bridge::WindowInfo`] uses **global compositor logical** geometry. Shell IPC uses the
-    /// same normalized **shell layout** pixel space as [`Self::shell_output_local_point_to_buffer_px`].
-    pub(crate) fn shell_window_info_to_osr_buffer_pixels(
+    pub(crate) fn clear_toplevel_layout_maps(&mut self, window_id: u32) {
+        self.toplevel_floating_restore.remove(&window_id);
+        self.toplevel_fullscreen_return_maximized.remove(&window_id);
+    }
+
+    fn primary_output_geometry_rect(&self) -> Option<Rectangle<i32, Logical>> {
+        let o = self.space.outputs().next()?;
+        self.space.output_geometry(o)
+    }
+
+    fn resolve_smithay_output(&self, wl_output: Option<&WlOutput>) -> Option<Output> {
+        wl_output
+            .and_then(Output::from_resource)
+            .or_else(|| self.space.outputs().next().cloned())
+    }
+
+    fn client_wl_output_for(&self, wl_surface: &WlSurface, output: &Output) -> Option<WlOutput> {
+        let client = wl_surface.client()?;
+        output.client_outputs(&client).next()
+    }
+
+    pub(crate) fn toplevel_rect_snapshot(&self, window: &Window) -> Option<(i32, i32, i32, i32)> {
+        let loc = self
+            .space
+            .element_location(&DerpSpaceElem::Wayland(window.clone()))?;
+        let sz = window.geometry().size;
+        Some((loc.x, loc.y, sz.w, sz.h))
+    }
+
+    /// Apply maximize without saving a restore snapshot (caller handles snapshot policy).
+    pub(crate) fn apply_toplevel_maximize_layout(&mut self, window: &Window) -> bool {
+        let Some(geo) = self.primary_output_geometry_rect() else {
+            return false;
+        };
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
+        self.cancel_shell_move_resize_for_window(window_id);
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Fullscreen);
+            st.fullscreen_output = None;
+            st.states.set(xdg_toplevel::State::Maximized);
+            st.size = Some(geo.size);
+        });
+        self.space.map_element(
+            DerpSpaceElem::Wayland(window.clone()),
+            (geo.loc.x, geo.loc.y),
+            true,
+        );
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        tl.send_pending_configure();
+        self.notify_geometry_if_changed(window);
+        self.needs_winit_redraw = true;
+        true
+    }
+
+    pub(crate) fn apply_toplevel_fullscreen_layout(
+        &mut self,
+        window: &Window,
+        wl_output_hint: Option<WlOutput>,
+    ) -> bool {
+        let Some(sm_out) = self.resolve_smithay_output(wl_output_hint.as_ref()) else {
+            return false;
+        };
+        let Some(geo) = self.space.output_geometry(&sm_out) else {
+            return false;
+        };
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
+        self.cancel_shell_move_resize_for_window(window_id);
+        let wl_out = wl_output_hint.or_else(|| self.client_wl_output_for(wl, &sm_out));
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Maximized);
+            st.states.set(xdg_toplevel::State::Fullscreen);
+            st.fullscreen_output = wl_out;
+            st.size = Some(geo.size);
+        });
+        self.space.map_element(
+            DerpSpaceElem::Wayland(window.clone()),
+            (geo.loc.x, geo.loc.y),
+            true,
+        );
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        tl.send_pending_configure();
+        self.notify_geometry_if_changed(window);
+        self.needs_winit_redraw = true;
+        true
+    }
+
+    pub(crate) fn restore_toplevel_floating_layout(&mut self, window_id: u32, window: &Window) -> bool {
+        let Some((x, y, w, h)) = self.toplevel_floating_restore.remove(&window_id) else {
+            return false;
+        };
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        self.cancel_shell_move_resize_for_window(window_id);
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Maximized);
+            st.states.unset(xdg_toplevel::State::Fullscreen);
+            st.fullscreen_output = None;
+            st.size = Some(Size::from((w, h)));
+        });
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        tl.send_pending_configure();
+        self.notify_geometry_if_changed(window);
+        self.needs_winit_redraw = true;
+        true
+    }
+
+    pub(crate) fn toplevel_unmaximize(&mut self, window: &Window) -> bool {
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
+        if !read_toplevel_tiling(wl).0 {
+            return false;
+        }
+        if read_toplevel_tiling(wl).1 {
+            return false;
+        }
+        if self.restore_toplevel_floating_layout(window_id, window) {
+            return true;
+        }
+        let (x, y) = self.new_toplevel_initial_location();
+        self.cancel_shell_move_resize_for_window(window_id);
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Maximized);
+            st.size = Some(Size::from((800, 600)));
+        });
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
+        tl.send_pending_configure();
+        self.notify_geometry_if_changed(window);
+        self.needs_winit_redraw = true;
+        true
+    }
+
+    pub(crate) fn toplevel_unfullscreen(&mut self, window: &Window) -> bool {
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
+        if !read_toplevel_tiling(wl).1 {
+            return false;
+        }
+        let return_max = self.toplevel_fullscreen_return_maximized.remove(&window_id);
+        if return_max {
+            self.apply_toplevel_maximize_layout(window)
+        } else if self.restore_toplevel_floating_layout(window_id, window) {
+            true
+        } else {
+            let (x, y) = self.new_toplevel_initial_location();
+            self.cancel_shell_move_resize_for_window(window_id);
+            tl.with_pending_state(|st| {
+                st.states.unset(xdg_toplevel::State::Fullscreen);
+                st.fullscreen_output = None;
+                st.size = Some(Size::from((800, 600)));
+            });
+            self.space
+                .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
+            tl.send_pending_configure();
+            self.notify_geometry_if_changed(window);
+            self.needs_winit_redraw = true;
+            true
+        }
+    }
+
+    /// [`WindowInfo`] in the registry uses **global** compositor logical pixels. Solid shell / CEF view (DIP)
+    /// uses **output-local logical** coordinates — same integers as `clientX`/`clientY` for the HUD when the
+    /// view size matches [`Self::shell_output_logical_size`]. No normalized rounding (that caused 1–2px drift
+    /// vs Wayland clients). Pointer IPC remains in physical **buffer** px and is converted only in `cef_host`.
+    pub(crate) fn shell_window_info_to_output_local_layout(
         &self,
         info: &crate::chrome_bridge::WindowInfo,
     ) -> Option<crate::chrome_bridge::WindowInfo> {
         let output = self.space.outputs().next()?;
         let geo = self.space.output_geometry(output)?;
-        let lx0 = (info.x - geo.loc.x) as f64;
-        let ly0 = (info.y - geo.loc.y) as f64;
-        let iw = info.width.max(1);
-        let ih = info.height.max(1);
-        let lx1 = lx0 + (iw - 1) as f64;
-        let ly1 = ly0 + (ih - 1) as f64;
-        let (bx0, by0) = self.shell_output_local_point_to_buffer_px(geo.size, lx0, ly0)?;
-        let (bx1, by1) = self.shell_output_local_point_to_buffer_px(geo.size, lx1, ly1)?;
-        let bw = (bx1 - bx0 + 1).max(1);
-        let bh = (by1 - by0 + 1).max(1);
         Some(crate::chrome_bridge::WindowInfo {
             window_id: info.window_id,
             surface_id: info.surface_id,
             title: info.title.clone(),
             app_id: info.app_id.clone(),
             wayland_client_pid: info.wayland_client_pid,
-            x: bx0,
-            y: by0,
-            width: bw,
-            height: bh,
+            x: info.x.saturating_sub(geo.loc.x),
+            y: info.y.saturating_sub(geo.loc.y),
+            width: info.width.max(1),
+            height: info.height.max(1),
             minimized: info.minimized,
+            maximized: info.maximized,
+            fullscreen: info.fullscreen,
         })
     }
 
@@ -783,18 +990,18 @@ impl CompositorState {
         let ipc_event = match &event {
             ChromeEvent::WindowMapped { info } => ChromeEvent::WindowMapped {
                 info: self
-                    .shell_window_info_to_osr_buffer_pixels(info)
+                    .shell_window_info_to_output_local_layout(info)
                     .unwrap_or_else(|| info.clone()),
             },
             ChromeEvent::WindowGeometryChanged { info } => ChromeEvent::WindowGeometryChanged {
                 info: self
-                    .shell_window_info_to_osr_buffer_pixels(info)
+                    .shell_window_info_to_output_local_layout(info)
                     .unwrap_or_else(|| info.clone()),
             },
             ChromeEvent::WindowStateChanged { info, minimized } => {
                 ChromeEvent::WindowStateChanged {
                     info: self
-                        .shell_window_info_to_osr_buffer_pixels(info)
+                        .shell_window_info_to_output_local_layout(info)
                         .unwrap_or_else(|| info.clone()),
                     minimized: *minimized,
                 }
@@ -821,11 +1028,11 @@ impl CompositorState {
                     target: "derp_shell_sync",
                     window_id = info.window_id,
                     surface_id = info.surface_id,
-                    buf_x = info.x,
-                    buf_y = info.y,
-                    buf_w = info.width,
-                    buf_h = info.height,
-                    "shell ipc WindowMapped (OSR buffer px)"
+                    shell_x = info.x,
+                    shell_y = info.y,
+                    shell_w = info.width,
+                    shell_h = info.height,
+                    "shell ipc WindowMapped (output-local layout px)"
                 );
             }
             ChromeEvent::WindowMapped { info } if suppress => {
@@ -840,11 +1047,11 @@ impl CompositorState {
                 tracing::debug!(
                     target: "derp_shell_sync",
                     window_id = info.window_id,
-                    buf_x = info.x,
-                    buf_y = info.y,
-                    buf_w = info.width,
-                    buf_h = info.height,
-                    "shell ipc WindowGeometry"
+                    shell_x = info.x,
+                    shell_y = info.y,
+                    shell_w = info.width,
+                    shell_h = info.height,
+                    "shell ipc WindowGeometry (output-local layout px)"
                 );
             }
             ChromeEvent::WindowGeometryChanged { info } if suppress => {
@@ -1011,7 +1218,7 @@ impl CompositorState {
                 continue;
             }
             let ipc_info = self
-                .shell_window_info_to_osr_buffer_pixels(&info)
+                .shell_window_info_to_output_local_layout(&info)
                 .unwrap_or_else(|| info.clone());
             if let Some(p) = shell_wire::encode_window_mapped(
                 ipc_info.window_id,
@@ -1125,131 +1332,6 @@ impl CompositorState {
             return true;
         }
         false
-    }
-
-    /// Titlebar strip for **drag** (excludes minimize + close button strip on the right).
-    pub fn shell_point_in_titlebar_drag_region(
-        &self,
-        px: f64,
-        py: f64,
-        x0: i32,
-        y0: i32,
-        w: i32,
-        _h: i32,
-    ) -> bool {
-        let th = SHELL_TITLEBAR_HEIGHT;
-        let inset = SHELL_TITLEBAR_CONTROLS_INSET;
-        let top = y0.saturating_sub(th);
-        let drag_right = x0 + w - inset;
-        px >= x0 as f64
-            && px < drag_right as f64
-            && py >= top as f64
-            && py < y0 as f64
-    }
-
-    /// Titlebar minimize control (left of close); matches shell minimize button zone.
-    pub fn shell_point_in_titlebar_minimize_region(
-        &self,
-        px: f64,
-        py: f64,
-        x0: i32,
-        y0: i32,
-        w: i32,
-        _h: i32,
-    ) -> bool {
-        let th = SHELL_TITLEBAR_HEIGHT;
-        let bw = SHELL_TITLEBAR_BUTTON_WIDTH;
-        let ci = SHELL_TITLEBAR_CONTROLS_INSET;
-        let top = y0.saturating_sub(th);
-        let min_left = x0 + w - ci;
-        let min_right = x0 + w - bw;
-        px >= min_left as f64
-            && px < min_right as f64
-            && py >= top as f64
-            && py < y0 as f64
-    }
-
-    /// Titlebar close control strip (rightmost [`SHELL_TITLEBAR_BUTTON_WIDTH`] px).
-    pub fn shell_point_in_titlebar_close_region(
-        &self,
-        px: f64,
-        py: f64,
-        x0: i32,
-        y0: i32,
-        w: i32,
-        _h: i32,
-    ) -> bool {
-        let th = SHELL_TITLEBAR_HEIGHT;
-        let bw = SHELL_TITLEBAR_BUTTON_WIDTH;
-        let top = y0.saturating_sub(th);
-        let close_left = x0 + w - bw;
-        px >= close_left as f64
-            && px < (x0 + w) as f64
-            && py >= top as f64
-            && py < y0 as f64
-    }
-
-    /// Topmost window whose titlebar minimize region contains `pos`, if any.
-    pub fn window_for_titlebar_minimize_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
-        let px = pos.x;
-        let py = pos.y;
-        for elem in self.space.elements().rev() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            let loc = self.space.element_location(elem)?;
-            let geo = window.geometry();
-            let x0 = loc.x;
-            let y0 = loc.y;
-            let w = geo.size.w;
-            let h = geo.size.h;
-            if self.shell_point_in_titlebar_minimize_region(px, py, x0, y0, w, h) {
-                return Some(window.clone());
-            }
-        }
-        None
-    }
-
-    /// Topmost window whose titlebar close region contains `pos`, if any.
-    pub fn window_for_titlebar_close_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
-        let px = pos.x;
-        let py = pos.y;
-        for elem in self.space.elements().rev() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            let loc = self.space.element_location(elem)?;
-            let geo = window.geometry();
-            let x0 = loc.x;
-            let y0 = loc.y;
-            let w = geo.size.w;
-            let h = geo.size.h;
-            if self.shell_point_in_titlebar_close_region(px, py, x0, y0, w, h) {
-                return Some(window.clone());
-            }
-        }
-        None
-    }
-
-    /// Topmost window whose server-side titlebar drag region contains `pos`, if any.
-    pub fn window_for_titlebar_drag_at(&self, pos: Point<f64, Logical>) -> Option<Window> {
-        let px = pos.x;
-        let py = pos.y;
-        for elem in self.space.elements().rev() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            let loc = self.space.element_location(elem)?;
-            let geo = window.geometry();
-            let x0 = loc.x;
-            let y0 = loc.y;
-            let w = geo.size.w;
-            let h = geo.size.h;
-            if self.shell_point_in_titlebar_drag_region(px, py, x0, y0, w, h) {
-                return Some(window.clone());
-            }
-        }
-        None
     }
 
     /// Whether `pos` lies over shell-drawn per-window chrome (title strip or border frame) for any stacked window.
@@ -1806,7 +1888,7 @@ impl CompositorState {
             .filter(|i| !self.window_info_is_solid_shell_host(i))
             .map(|i| {
                 let i = self
-                    .shell_window_info_to_osr_buffer_pixels(&i)
+                    .shell_window_info_to_output_local_layout(&i)
                     .unwrap_or_else(|| i.clone());
                 shell_wire::ShellWindowSnapshot {
                     window_id: i.window_id,
@@ -1816,6 +1898,8 @@ impl CompositorState {
                     w: i.width,
                     h: i.height,
                     minimized: if i.minimized { 1 } else { 0 },
+                    maximized: if i.maximized { 1 } else { 0 },
+                    fullscreen: if i.fullscreen { 1 } else { 0 },
                     title: i.title,
                     app_id: i.app_id,
                 }
@@ -1826,7 +1910,37 @@ impl CompositorState {
         }
     }
 
-    pub fn shell_set_window_geometry(&mut self, window_id: u32, x: i32, y: i32, w: i32, h: i32) {
+    /// Output-local **layout** rect from the shell (same integers as HUD `fixed` CSS / CEF DIP) → global logical.
+    fn shell_output_local_rect_to_logical_global(
+        &self,
+        lx: i32,
+        ly: i32,
+        lw: i32,
+        lh: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let output = self.space.outputs().next()?;
+        let geo = self.space.output_geometry(output)?;
+        Some((
+            geo.loc.x.saturating_add(lx),
+            geo.loc.y.saturating_add(ly),
+            lw.max(1),
+            lh.max(1),
+        ))
+    }
+
+    /// `layout_state`: 0 = floating; 1 = maximized — bounds are **output-local layout** px from the shell.
+    pub fn shell_set_window_geometry(
+        &mut self,
+        window_id: u32,
+        lx: i32,
+        ly: i32,
+        lw: i32,
+        lh: i32,
+        layout_state: u32,
+    ) {
+        if layout_state > 1 {
+            return;
+        }
         let Some(info) = self.window_registry.window_info(window_id) else {
             return;
         };
@@ -1839,8 +1953,30 @@ impl CompositorState {
         let Some(window) = self.find_window_by_surface_id(sid) else {
             return;
         };
+        let Some((x, y, w, h)) = self.shell_output_local_rect_to_logical_global(lx, ly, lw, lh) else {
+            return;
+        };
+
+        if layout_state == 0 {
+            self.clear_toplevel_layout_maps(window_id);
+        } else if layout_state == 1 {
+            self.cancel_shell_move_resize_for_window(window_id);
+            if !self.toplevel_floating_restore.contains_key(&window_id) {
+                if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                    self.toplevel_floating_restore.insert(window_id, s);
+                }
+            }
+        }
+
         let tl = window.toplevel().unwrap();
         tl.with_pending_state(|state| {
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+            state.fullscreen_output = None;
+            if layout_state == 1 {
+                state.states.set(xdg_toplevel::State::Maximized);
+            } else {
+                state.states.unset(xdg_toplevel::State::Maximized);
+            }
             state.size = Some(smithay::utils::Size::from((w, h)));
         });
         tl.send_pending_configure();
@@ -1874,7 +2010,6 @@ impl CompositorState {
     }
 
     pub fn shell_set_window_fullscreen(&mut self, window_id: u32, enabled: bool) {
-        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
         let Some(info) = self.window_registry.window_info(window_id) else {
             return;
         };
@@ -1887,16 +2022,64 @@ impl CompositorState {
         let Some(window) = self.find_window_by_surface_id(sid) else {
             return;
         };
-        let tl = window.toplevel().unwrap();
-        tl.with_pending_state(|state| {
-            if enabled {
-                state.states.set(xdg_toplevel::State::Fullscreen);
-            } else {
-                state.states.unset(xdg_toplevel::State::Fullscreen);
-                state.fullscreen_output = None;
+        let wl = window.toplevel().unwrap().wl_surface();
+        if enabled {
+            if read_toplevel_tiling(wl).1 {
+                return;
             }
-        });
-        tl.send_pending_configure();
+            let maximized = read_toplevel_tiling(wl).0;
+            if maximized {
+                self.toplevel_fullscreen_return_maximized.insert(window_id);
+            } else {
+                self.toplevel_fullscreen_return_maximized
+                    .remove(&window_id);
+                if !self.toplevel_floating_restore.contains_key(&window_id) {
+                    if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                        self.toplevel_floating_restore.insert(window_id, s);
+                    }
+                }
+            }
+            let wl_out = self
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| self.client_wl_output_for(wl, o));
+            self.apply_toplevel_fullscreen_layout(&window, wl_out);
+        } else {
+            if !read_toplevel_tiling(wl).1 {
+                return;
+            }
+            let _ = self.toplevel_unfullscreen(&window);
+        }
+    }
+
+    pub fn shell_set_window_maximized(&mut self, window_id: u32, enabled: bool) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        let wl = window.toplevel().unwrap().wl_surface();
+        if enabled {
+            // Maximize bounds come from the shell via [`MSG_SHELL_SET_GEOMETRY`] + `layout_state = 1`.
+            return;
+        } else {
+            if !read_toplevel_tiling(wl).0 {
+                return;
+            }
+            let _ = self.toplevel_unmaximize(&window);
+        }
+    }
+
+    pub fn shell_set_presentation_fullscreen(&mut self, enabled: bool) {
+        self.shell_presentation_fullscreen = enabled;
         self.needs_winit_redraw = true;
     }
 

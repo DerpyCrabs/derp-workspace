@@ -13,6 +13,8 @@ use std::{
 
 use cef::{sys, *};
 
+use cef_host::osr_view_state::OsrViewState;
+
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_uplink";
 
 pub(crate) fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
@@ -81,6 +83,7 @@ fn invalidate_shell_view_unthrottled(browser: Option<&mut Browser>) {
 fn handle_uplink_list(
     ipc: &Arc<Mutex<UnixStream>>,
     browser: Option<&mut Browser>,
+    _view_state: Option<&Arc<Mutex<OsrViewState>>>,
     args: &ListValue,
 ) {
     let op = cef_string_userfree_to_string(&args.string(0));
@@ -147,6 +150,36 @@ fn handle_uplink_list(
             let wid = args.int(1) as u32;
             write_shell_packet(ipc, &shell_wire::encode_shell_minimize(wid));
         }
+        "set_fullscreen" => {
+            let wid = args.int(1) as u32;
+            let en = args.int(2) != 0;
+            write_shell_packet(ipc, &shell_wire::encode_shell_set_fullscreen(wid, en));
+        }
+        "set_maximized" => {
+            let wid = args.int(1) as u32;
+            let en = args.int(2) != 0;
+            write_shell_packet(ipc, &shell_wire::encode_shell_set_maximized(wid, en));
+        }
+        "set_geometry" => {
+            let wid = args.int(1) as u32;
+            let vx = args.int(2);
+            let vy = args.int(3);
+            let vw = args.int(4).max(1);
+            let vh = args.int(5).max(1);
+            let layout = args.int(6) as u32;
+            // Same **output-local layout / DIP** integers as compositor → shell `window_geometry` (no buffer scaling).
+            write_shell_packet(
+                ipc,
+                &shell_wire::encode_shell_set_geometry_with_layout(wid, vx, vy, vw, vh, layout),
+            );
+        }
+        "presentation_fullscreen" => {
+            let en = args.int(1) != 0;
+            write_shell_packet(
+                ipc,
+                &shell_wire::encode_shell_set_presentation_fullscreen(en),
+            );
+        }
         _ => {}
     }
 }
@@ -157,6 +190,7 @@ pub fn on_browser_process_message(
     browser: Option<&mut Browser>,
     source_process: ProcessId,
     message: Option<&mut ProcessMessage>,
+    view_state: Option<&Arc<Mutex<OsrViewState>>>,
 ) -> bool {
     if source_process != ProcessId::RENDERER {
         return false;
@@ -170,7 +204,7 @@ pub fn on_browser_process_message(
     let Some(args) = msg.argument_list() else {
         return true;
     };
-    handle_uplink_list(ipc, browser, &args);
+    handle_uplink_list(ipc, browser, view_state, &args);
     true
 }
 
@@ -347,9 +381,116 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, dx);
                     let _ = list.set_int(2, dy);
                 }
+                "set_geometry" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_geometry requires window id");
+                    };
+                    let Some(ax) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_geometry requires x,y,w,h");
+                    };
+                    let Some(ay) = args.get(3).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_geometry requires y,w,h");
+                    };
+                    let Some(aw) = args.get(4).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_geometry requires w,h");
+                    };
+                    let Some(ah) = args.get(5).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_geometry requires h");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("set_geometry: window id must be a number");
+                    };
+                    if id < 0 {
+                        return_exception!("set_geometry: window id must be non-negative");
+                    }
+                    macro_rules! int_arg {
+                        ($v:expr, $label:literal) => {
+                            if $v.is_int() != 0 {
+                                $v.int_value()
+                            } else if $v.is_uint() != 0 {
+                                $v.uint_value() as i32
+                            } else if $v.is_double() != 0 {
+                                $v.double_value() as i32
+                            } else {
+                                return_exception!(concat!($label, " must be a number"));
+                            }
+                        };
+                    }
+                    let x = int_arg!(ax, "set_geometry: x");
+                    let y = int_arg!(ay, "set_geometry: y");
+                    let w = int_arg!(aw, "set_geometry: w");
+                    let h = int_arg!(ah, "set_geometry: h");
+                    let layout = if let Some(al) = args.get(6).and_then(|a| a.as_ref()) {
+                        let v = int_arg!(al, "set_geometry: layout");
+                        if v < 0 || v > 1 {
+                            return_exception!("set_geometry: layout must be 0 or 1");
+                        }
+                        v
+                    } else {
+                        0
+                    };
+                    let _ = list.set_int(1, id);
+                    let _ = list.set_int(2, x);
+                    let _ = list.set_int(3, y);
+                    let _ = list.set_int(4, w);
+                    let _ = list.set_int(5, h);
+                    let _ = list.set_int(6, layout);
+                }
+                "set_fullscreen" | "set_maximized" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_fullscreen/set_maximized require window id");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_fullscreen/set_maximized require enabled (0 or 1)");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("window id must be a number");
+                    };
+                    if id < 0 {
+                        return_exception!("window id must be non-negative");
+                    }
+                    let en = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_uint() != 0 {
+                        a2.uint_value() as i32
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("enabled must be a number");
+                    };
+                    let _ = list.set_int(1, id);
+                    let _ = list.set_int(2, en);
+                }
+                "presentation_fullscreen" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("presentation_fullscreen requires enabled (0 or 1)");
+                    };
+                    let en = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("enabled must be a number");
+                    };
+                    let _ = list.set_int(1, en);
+                }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize)"
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen)"
                     );
                 }
             }

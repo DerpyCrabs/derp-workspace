@@ -57,6 +57,8 @@ impl WindowRegistry {
             width: 0,
             height: 0,
             minimized: false,
+            maximized: false,
+            fullscreen: false,
         };
         self.by_surface.insert(k, window_id);
         self.records.insert(window_id, info);
@@ -136,5 +138,19 @@ impl WindowRegistry {
         let info = self.records.get_mut(&window_id)?;
         info.minimized = minimized;
         Some(())
+    }
+
+    pub fn set_tiling_state(
+        &mut self,
+        wl: &WlSurface,
+        maximized: bool,
+        fullscreen: bool,
+    ) -> Option<bool> {
+        let wid = *self.by_surface.get(&key(wl)?)?;
+        let info = self.records.get_mut(&wid)?;
+        let changed = info.maximized != maximized || info.fullscreen != fullscreen;
+        info.maximized = maximized;
+        info.fullscreen = fullscreen;
+        Some(changed)
     }
 }

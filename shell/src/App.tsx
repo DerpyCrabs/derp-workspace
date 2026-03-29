@@ -9,6 +9,11 @@ import {
   Show,
 } from 'solid-js'
 import './App.css'
+import {
+  CHROME_TASKBAR_RESERVE_PX,
+  CHROME_TITLEBAR_PX,
+  SHELL_LAYOUT_MAXIMIZED,
+} from './chromeConstants'
 import { ShellWindowFrame } from './ShellWindowFrame'
 import { Taskbar } from './Taskbar'
 
@@ -30,10 +35,30 @@ declare global {
         | 'resize_delta'
         | 'resize_end'
         | 'taskbar_activate'
-        | 'minimize',
+        | 'minimize'
+        | 'set_geometry'
+        | 'set_fullscreen'
+        | 'set_maximized'
+        | 'presentation_fullscreen',
       arg?: number | string,
       arg2?: number,
+      arg3?: number,
+      arg4?: number,
+      arg5?: number,
+      arg6?: number,
     ) => void
+  }
+}
+
+/** Work-area client rect in view/DIP: flush to output left/right/top; room for titlebar above + taskbar below. */
+function shellMaximizedWorkAreaClientRect(outW: number, outH: number) {
+  const th = CHROME_TITLEBAR_PX
+  const tb = CHROME_TASKBAR_RESERVE_PX
+  return {
+    x: 0,
+    y: th,
+    w: Math.max(1, outW),
+    h: Math.max(1, outH - tb - th),
   }
 }
 
@@ -59,6 +84,8 @@ type DerpShellDetail =
       y: number
       width: number
       height: number
+      maximized?: boolean
+      fullscreen?: boolean
     }
   | {
       type: 'window_metadata'
@@ -81,6 +108,8 @@ type DerpWindow = {
   title: string
   app_id: string
   minimized: boolean
+  maximized: boolean
+  fullscreen: boolean
 }
 
 /** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
@@ -112,6 +141,8 @@ function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
       minimized: !!r.minimized,
+      maximized: !!r.maximized,
+      fullscreen: !!r.fullscreen,
     })
   }
   return next
@@ -134,6 +165,8 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         title: detail.title,
         app_id: detail.app_id,
         minimized: false,
+        maximized: false,
+        fullscreen: false,
       })
       break
     }
@@ -153,6 +186,8 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
           y: detail.y,
           width: detail.width,
           height: detail.height,
+          maximized: detail.maximized ?? w.maximized,
+          fullscreen: detail.fullscreen ?? w.fullscreen,
         })
       }
       break
@@ -219,9 +254,17 @@ function shellWireSend(
     | 'resize_delta'
     | 'resize_end'
     | 'taskbar_activate'
-    | 'minimize',
+    | 'minimize'
+    | 'set_geometry'
+    | 'set_fullscreen'
+    | 'set_maximized'
+    | 'presentation_fullscreen',
   arg?: number | string,
   arg2?: number,
+  arg3?: number,
+  arg4?: number,
+  arg5?: number,
+  arg6?: number,
 ): boolean {
   const fn = window.__derpShellWireSend
   const hasWire = typeof fn === 'function'
@@ -241,6 +284,22 @@ function shellWireSend(
   if ((op === 'move_delta' || op === 'resize_delta') && arg2 !== undefined) {
     fn(op, arg as number, arg2)
   } else if (op === 'resize_begin' && arg2 !== undefined) {
+    fn(op, arg as number, arg2)
+  } else if (
+    op === 'set_geometry' &&
+    typeof arg === 'number' &&
+    arg2 !== undefined &&
+    arg3 !== undefined &&
+    arg4 !== undefined &&
+    arg5 !== undefined &&
+    arg6 !== undefined
+  ) {
+    fn(op, arg, arg2, arg3, arg4, arg5, arg6)
+  } else if (
+    (op === 'set_fullscreen' || op === 'set_maximized') &&
+    arg !== undefined &&
+    arg2 !== undefined
+  ) {
     fn(op, arg as number, arg2)
   } else if (op === 'quit') {
     fn(op)
@@ -270,6 +329,7 @@ function App() {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
+  const [crosshairCursor, setCrosshairCursor] = createSignal(false)
 
   const rulerStepPx = 100
 
@@ -308,6 +368,30 @@ function App() {
     return out
   })
 
+  /** Memo so pointer/viewport updates re-run (nested `Show` + FC did not track `pointerClient`). */
+  const crosshairDebugOverlay = createMemo(() => {
+    if (!crosshairCursor()) return null
+    const p = pointerClient()
+    if (!p) return null
+    const vpw = viewportCss().w
+    const vph = viewportCss().h
+    return (
+      <>
+        <div class="shell-crosshair shell-crosshair--v" style={{ left: `${p.x}px` }} />
+        <div class="shell-crosshair shell-crosshair--h" style={{ top: `${p.y}px` }} />
+        <div
+          class="shell-cursor-readout"
+          style={{
+            left: `${Math.min(p.x + 14, Math.max(0, vpw - 128))}px`,
+            top: `${Math.min(p.y + 14, Math.max(0, vph - 40))}px`,
+          }}
+        >
+          {p.x},{p.y}
+        </div>
+      </>
+    )
+  })
+
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
 
@@ -331,11 +415,11 @@ function App() {
       shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
       return
     }
-    shellWindowDrag = { windowId, lastX: clientX, lastY: clientY }
+    shellWindowDrag = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY) }
     shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
-  /** Match titlebar to pointer in view space; `window_geometry` still overwrites when it lands (compositor truth). */
+  /** Optimistic HUD position in output-local integers; matches compositor `move_delta` after layout unification. */
   function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
     setWindows((m) => {
       const w = m.get(windowId)
@@ -348,8 +432,10 @@ function App() {
 
   function applyShellWindowMove(clientX: number, clientY: number) {
     if (!shellWindowDrag) return
-    const dx = Math.round(clientX - shellWindowDrag.lastX)
-    const dy = Math.round(clientY - shellWindowDrag.lastY)
+    const cx = Math.round(clientX)
+    const cy = Math.round(clientY)
+    const dx = cx - shellWindowDrag.lastX
+    const dy = cy - shellWindowDrag.lastY
     if (dx === 0 && dy === 0) return
     shellMoveDeltaLogSeq += 1
     if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
@@ -360,8 +446,8 @@ function App() {
       bumpShellWindowPosition(wid, dx, dy)
       shellWireSend('move_delta', dx, dy)
     })
-    shellWindowDrag.lastX = clientX
-    shellWindowDrag.lastY = clientY
+    shellWindowDrag.lastX = cx
+    shellWindowDrag.lastY = cy
   }
 
   function endShellWindowMove(reason: string) {
@@ -376,22 +462,24 @@ function App() {
     if (shellWindowResize !== null || shellWindowDrag !== null) return
     shellResizeDeltaLogSeq = 0
     if (!shellWireSend('resize_begin', windowId, edges)) return
-    shellWindowResize = { windowId, lastX: clientX, lastY: clientY }
+    shellWindowResize = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY) }
     shellMoveLog('resize_begin', { windowId, edges, clientX, clientY })
   }
 
   function applyShellWindowResize(clientX: number, clientY: number) {
     if (!shellWindowResize) return
-    const dx = Math.round(clientX - shellWindowResize.lastX)
-    const dy = Math.round(clientY - shellWindowResize.lastY)
+    const cx = Math.round(clientX)
+    const cy = Math.round(clientY)
+    const dx = cx - shellWindowResize.lastX
+    const dy = cy - shellWindowResize.lastY
     if (dx === 0 && dy === 0) return
     shellResizeDeltaLogSeq += 1
     if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
       shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
     }
     shellWireSend('resize_delta', dx, dy)
-    shellWindowResize.lastX = clientX
-    shellWindowResize.lastY = clientY
+    shellWindowResize.lastX = cx
+    shellWindowResize.lastY = cy
   }
 
   function endShellWindowResize(reason: string) {
@@ -609,6 +697,11 @@ function App() {
     window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
     window.addEventListener('resize', syncViewport, { passive: true })
 
+    const onFullscreenChange = () => {
+      shellWireSend('presentation_fullscreen', document.fullscreenElement ? 1 : 0)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+
     onCleanup(() => {
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
@@ -621,6 +714,7 @@ function App() {
       window.removeEventListener('touchcancel', onWindowTouchEnd)
       window.removeEventListener('touchmove', onWindowTouchMove)
       window.removeEventListener('resize', syncViewport)
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
     })
   })
   onCleanup(() => {
@@ -670,7 +764,10 @@ function App() {
 
   return (
     <main
-      class="shell-root"
+      classList={{
+        'shell-root': true,
+        'shell-root--crosshair': crosshairCursor(),
+      }}
       style={panelHueStyle()}
       ref={(el) => {
         mainRef = el
@@ -695,6 +792,30 @@ function App() {
               onMinimize={() => {
                 shellWireSend('minimize', win().window_id)
               }}
+              onMaximize={() => {
+                const w = win()
+                if (w.maximized) {
+                  shellWireSend('set_maximized', w.window_id, 0)
+                  return
+                }
+                const g = outputGeom()
+                const vc = viewportCss()
+                const outW = g?.w ?? vc.w
+                const outH = g?.h ?? vc.h
+                if (outW <= 0 || outH <= 0) {
+                  return
+                }
+                const r = shellMaximizedWorkAreaClientRect(outW, outH)
+                shellWireSend(
+                  'set_geometry',
+                  w.window_id,
+                  r.x,
+                  r.y,
+                  r.w,
+                  r.h,
+                  SHELL_LAYOUT_MAXIMIZED,
+                )
+              }}
               onClose={() => {
                 shellWireSend('close', win().window_id)
               }}
@@ -706,6 +827,14 @@ function App() {
       <div class="shell-panel" style={panelHueStyle()}>
         <h1 class="shell-title">derp shell</h1>
         <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
+        <label class="shell-crosshair-toggle">
+          <input
+            type="checkbox"
+            checked={crosshairCursor()}
+            onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
+          />
+          <span>Crosshair cursor</span>
+        </label>
         <Show when={outputGeom()}>
           {(g) => (
             <p class="shell-output-geom">
@@ -728,16 +857,18 @@ function App() {
           <span class="shell-input-hud__row">
             Windows (native): <strong>{windowsList().length}</strong>
           </span>
-          <span class="shell-input-hud__row">
-            Pointer (clientX/Y):{' '}
-            <strong>{pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}</strong>
-          </span>
-          <span class="shell-input-hud__row">
-            Pointer (in &lt;main&gt;):{' '}
-            <strong>
-              {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
-            </strong>
-          </span>
+          <Show when={crosshairCursor()}>
+            <span class="shell-input-hud__row">
+              Pointer (clientX/Y):{' '}
+              <strong>{pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}</strong>
+            </span>
+            <span class="shell-input-hud__row">
+              Pointer (in &lt;main&gt;):{' '}
+              <strong>
+                {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
+              </strong>
+            </span>
+          </Show>
           <span class="shell-input-hud__row">
             Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
           </span>
@@ -826,60 +957,42 @@ function App() {
       </div>
 
       <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">
-        <div class="shell-ruler-corner" />
-        <div
-          class="shell-ruler shell-ruler--top"
-          style={{ width: `${Math.max(0, viewportCss().w - RULER_GUTTER_X)}px` }}
-        >
-          <div class="shell-ruler__ticks shell-ruler__ticks--h" />
-          <For each={horizontalRulerTicks()}>
-            {(x) => (
-              <span
-                class="shell-ruler__label shell-ruler__label--h"
-                style={{ left: `${x - RULER_GUTTER_X}px` }}
-              >
-                {x}
-              </span>
-            )}
-          </For>
-        </div>
-        <div
-          class="shell-ruler shell-ruler--left"
-          style={{ height: `${Math.max(0, viewportCss().h - RULER_GUTTER_Y)}px` }}
-        >
-          <div class="shell-ruler__ticks shell-ruler__ticks--v" />
-          <For each={verticalRulerTicks()}>
-            {(y) => (
-              <span
-                class="shell-ruler__label shell-ruler__label--v"
-                style={{ top: `${y - RULER_GUTTER_Y}px` }}
-              >
-                {y}
-              </span>
-            )}
-          </For>
-        </div>
-        {(() => {
-          const p = pointerClient()
-          if (!p) return null
-          const vpw = viewportCss().w
-          const vph = viewportCss().h
-          return (
-            <>
-              <div class="shell-crosshair shell-crosshair--v" style={{ left: `${p.x}px` }} />
-              <div class="shell-crosshair shell-crosshair--h" style={{ top: `${p.y}px` }} />
-              <div
-                class="shell-cursor-readout"
-                style={{
-                  left: `${Math.min(p.x + 14, Math.max(0, vpw - 128))}px`,
-                  top: `${Math.min(p.y + 14, Math.max(0, vph - 40))}px`,
-                }}
-              >
-                {p.x},{p.y}
-              </div>
-            </>
-          )
-        })()}
+        <Show when={crosshairCursor()}>
+          <div class="shell-ruler-corner" />
+          <div
+            class="shell-ruler shell-ruler--top"
+            style={{ width: `${Math.max(0, viewportCss().w - RULER_GUTTER_X)}px` }}
+          >
+            <div class="shell-ruler__ticks shell-ruler__ticks--h" />
+            <For each={horizontalRulerTicks()}>
+              {(x) => (
+                <span
+                  class="shell-ruler__label shell-ruler__label--h"
+                  style={{ left: `${x - RULER_GUTTER_X}px` }}
+                >
+                  {x}
+                </span>
+              )}
+            </For>
+          </div>
+          <div
+            class="shell-ruler shell-ruler--left"
+            style={{ height: `${Math.max(0, viewportCss().h - RULER_GUTTER_Y)}px` }}
+          >
+            <div class="shell-ruler__ticks shell-ruler__ticks--v" />
+            <For each={verticalRulerTicks()}>
+              {(y) => (
+                <span
+                  class="shell-ruler__label shell-ruler__label--v"
+                  style={{ top: `${y - RULER_GUTTER_Y}px` }}
+                >
+                  {y}
+                </span>
+              )}
+            </For>
+          </div>
+        </Show>
+        {crosshairDebugOverlay()}
       </div>
 
       <Taskbar

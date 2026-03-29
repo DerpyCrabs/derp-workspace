@@ -1,7 +1,7 @@
 .shell-root {
   margin: 0;
   min-height: 100vh;
-  padding-bottom: 52px;
+  padding-bottom: 44px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -40,30 +40,55 @@
   position: relative;
 }
 
+.shell-root.shell-root--crosshair {
+  cursor: crosshair;
+}
+
 /* Base layer; per-frame inline `z-index` stacks focused window on top. Above `.shell-panel` (12); below debug overlay (50). */
 .shell-window-chrome {
   pointer-events: none;
+  /* Shared by titlebar + frame borders (inherited). */
+  --shell-chrome-bg: hsla(210, 18%, 15%, 0.88);
+  --shell-chrome-edge: rgba(255, 255, 255, 0.14);
 }
 
-.shell-window-chrome--focused .shell-titlebar {
-  box-shadow: inset 0 -2px hsla(210, 90%, 55%, 0.9);
+.shell-window-chrome--focused {
+  --shell-chrome-bg: hsla(210, 38%, 26%, 0.96);
+  --shell-chrome-edge: rgba(255, 255, 255, 0.26);
+}
+
+.shell-window-chrome:not(.shell-window-chrome--focused) .shell-titlebar__text {
+  opacity: 0.72;
+}
+
+.shell-window-chrome--tiling .shell-resize-handle,
+.shell-window-chrome--tiling .shell-border {
+  display: none;
+}
+
+.shell-window-chrome--tiling .shell-titlebar {
+  border-radius: 0;
 }
 
 /* Auto: parent `.shell-window-chrome` stays `none` so borders/client hull don’t steal hits; this strip + close
  * must capture hits so CEF/OSR keeps a stable target for move/up while LMB is down. CustomEvents still fire on `window`. */
 .shell-titlebar {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 6px 0 10px;
   box-sizing: border-box;
-  background: hsla(210, 32%, 20%, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--shell-chrome-bg);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
   user-select: none;
   pointer-events: auto;
   touch-action: none;
+  /* Above `.shell-border` (5) and resize handles (3). */
+  z-index: 6;
 }
 
 .shell-titlebar__text {
@@ -85,6 +110,7 @@
 }
 
 .shell-titlebar__minimize,
+.shell-titlebar__maximize-tile,
 .shell-titlebar__close {
   flex-shrink: 0;
   width: 28px;
@@ -108,7 +134,18 @@
   font-weight: 700;
 }
 
-.shell-titlebar__minimize:hover {
+.shell-titlebar__maximize-tile {
+  font-size: 14px;
+}
+
+/* SVG icons use currentColor; keep same optical size as glyph buttons. */
+.shell-titlebar__maximize-tile svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.shell-titlebar__minimize:hover,
+.shell-titlebar__maximize-tile:hover {
   background: rgba(255, 255, 255, 0.22);
 }
 
@@ -125,12 +162,15 @@
   box-sizing: border-box;
 }
 
+/* Above resize handles so the 4px frame stays visible (narrow windows + CEF stacking); `pointer-events: none` keeps hits on handles. */
 .shell-border {
+  z-index: 5;
   pointer-events: none;
-  background: hsla(210, 28%, 16%, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.15);
   box-sizing: border-box;
+  background: var(--shell-chrome-bg);
+  border: none;
 }
+
 
 /* Client-only drag test (not compositor window move). Above window chrome (14) so OSR hit-test matches paint order. */
 .shell-drag-demo {
@@ -308,6 +348,24 @@
   margin: 0 0 1rem;
   opacity: 0.85;
   font-size: 1rem;
+}
+
+.shell-crosshair-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.92;
+}
+
+.shell-crosshair-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: hsl(var(--shell-hue), 65%, 55%);
 }
 
 .shell-input-hud {

@@ -10,7 +10,7 @@ use smithay::{
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
-            protocol::{wl_seat, wl_surface::WlSurface},
+            protocol::{wl_output::WlOutput, wl_seat, wl_surface::WlSurface},
             Client, Resource,
         },
     },
@@ -30,6 +30,7 @@ use crate::{
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
     CompositorState,
 };
+use crate::state::read_toplevel_tiling;
 
 fn toplevel_title_app_id(surface: &ToplevelSurface) -> (String, String) {
     with_states(surface.wl_surface(), |states| {
@@ -109,6 +110,9 @@ impl XdgShellHandler for CompositorState {
         });
         if let Some(w) = window_opt {
             self.space.unmap_elem(&DerpSpaceElem::Wayland(w));
+        }
+        if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
+            self.clear_toplevel_layout_maps(wid);
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
@@ -273,6 +277,116 @@ impl XdgShellHandler for CompositorState {
             return;
         };
         self.shell_minimize_window(window_id);
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let wl = surface.wl_surface();
+        if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            if self.window_info_is_solid_shell_host(&info) {
+                return;
+            }
+        }
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return;
+        };
+        if read_toplevel_tiling(wl).0 {
+            return;
+        }
+        if read_toplevel_tiling(wl).1 {
+            return;
+        }
+        if !self.toplevel_floating_restore.contains_key(&window_id) {
+            if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                self.toplevel_floating_restore.insert(window_id, s);
+            }
+        }
+        let _ = self.apply_toplevel_maximize_layout(&window);
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        let wl = surface.wl_surface();
+        if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            if self.window_info_is_solid_shell_host(&info) {
+                return;
+            }
+        }
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        let _ = self.toplevel_unmaximize(&window);
+    }
+
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
+        let wl = surface.wl_surface();
+        if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            if self.window_info_is_solid_shell_host(&info) {
+                return;
+            }
+        }
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return;
+        };
+        if read_toplevel_tiling(wl).1 {
+            return;
+        }
+        if read_toplevel_tiling(wl).0 {
+            self.toplevel_fullscreen_return_maximized.insert(window_id);
+        } else {
+            self.toplevel_fullscreen_return_maximized
+                .remove(&window_id);
+            if !self.toplevel_floating_restore.contains_key(&window_id) {
+                if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                    self.toplevel_floating_restore.insert(window_id, s);
+                }
+            }
+        }
+        let _ = self.apply_toplevel_fullscreen_layout(&window, output);
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        let wl = surface.wl_surface();
+        if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            if self.window_info_is_solid_shell_host(&info) {
+                return;
+            }
+        }
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        if !read_toplevel_tiling(wl).1 {
+            return;
+        }
+        let _ = self.toplevel_unfullscreen(&window);
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}

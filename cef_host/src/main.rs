@@ -456,6 +456,7 @@ wrap_client! {
         load_handler: LoadHandler,
         life_span_handler: LifeSpanHandler,
         compositor_ipc: Arc<Mutex<UnixStream>>,
+        view_state: Arc<Mutex<OsrViewState>>,
     }
 
     impl Client {
@@ -487,6 +488,7 @@ wrap_client! {
                 _browser,
                 source_process,
                 message,
+                Some(&self.view_state),
             ) {
                 1
             } else {
@@ -750,7 +752,7 @@ fn main() {
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let rh = OsrToCompositor::new(ipc.clone(), view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(Some(inject_js));
-    let mut client = ShellClient::new(rh, lh, capture, ipc.clone());
+    let mut client = ShellClient::new(rh, lh, capture, ipc.clone(), view_state.clone());
 
     // Compositor sends `OutputGeometry` soon after connect; logical size → DIP, physical → buffer/target.
     {

@@ -148,36 +148,6 @@ impl CompositorState {
             None
         };
         if shell_px.is_some() {
-            if button == BTN_LEFT
-                && button_state == ButtonState::Pressed
-                && !pointer.is_grabbed()
-            {
-                if let Some(window) = self.window_for_titlebar_minimize_at(pos) {
-                    let wl = window.toplevel().unwrap().wl_surface();
-                    if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
-                        self.shell_minimize_window(wid);
-                    }
-                } else if let Some(window) = self.window_for_titlebar_close_at(pos) {
-                    let wl = window.toplevel().unwrap().wl_surface();
-                    if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
-                        self.shell_close_window(wid);
-                    }
-                } else if let Some(window) = self.window_for_titlebar_drag_at(pos) {
-                    self.shell_ipc_keyboard_to_cef = false;
-                    self.space
-                        .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-                    keyboard.set_focus(
-                        self,
-                        Some(window.toplevel().unwrap().wl_surface().clone()),
-                        serial,
-                    );
-                    self.space.elements().for_each(|e| {
-                        if let DerpSpaceElem::Wayland(w) = e {
-                            w.toplevel().unwrap().send_pending_configure();
-                        }
-                    });
-                }
-            }
             if ButtonState::Pressed == button_state
                 && !pointer.is_grabbed()
                 && !self.shell_point_in_any_window_decoration(pos)
@@ -201,16 +171,7 @@ impl CompositorState {
                 },
             );
             pointer.frame(self);
-            let chrome_suppress_cef = button == BTN_LEFT
-                && button_state == ButtonState::Pressed
-                && !pointer.is_grabbed()
-                && (self.window_for_titlebar_minimize_at(pos).is_some()
-                    || self.window_for_titlebar_close_at(pos).is_some()
-                    || self.window_for_titlebar_drag_at(pos).is_some());
-            if route_cef
-                && !chrome_suppress_cef
-                && !self.shell_ipc_conn.is_disconnected()
-            {
+            if route_cef && !self.shell_ipc_conn.is_disconnected() {
                 if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                     if button_state == ButtonState::Pressed {
                         self.shell_ipc_keyboard_to_cef = true;

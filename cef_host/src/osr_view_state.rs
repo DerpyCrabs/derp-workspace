@@ -107,6 +107,32 @@ impl OsrViewState {
         let ymax = self.dip_h.saturating_sub(1).max(0);
         (vx.clamp(0, xmax), vy.clamp(0, ymax))
     }
+
+    /// Inverse of [`Self::buffer_to_view`] for shell → compositor geometry.
+    pub fn view_to_buffer(&self, vx: i32, vy: i32) -> (i32, i32) {
+        let bw = self.buffer_w.max(1) as f64;
+        let bh = self.buffer_h.max(1) as f64;
+        let dw = self.dip_w.max(1) as f64;
+        let dh = self.dip_h.max(1) as f64;
+        let bx = ((vx as f64) * bw / dw).round() as i32;
+        let by = ((vy as f64) * bh / dh).round() as i32;
+        let xmax = self.buffer_w.saturating_sub(1).max(0);
+        let ymax = self.buffer_h.saturating_sub(1).max(0);
+        (bx.clamp(0, xmax), by.clamp(0, ymax))
+    }
+
+    /// Inclusive view rect → buffer rect (matches compositor corner mapping for window sizes).
+    pub fn view_rect_to_buffer_rect(&self, vx: i32, vy: i32, vw: i32, vh: i32) -> (i32, i32, i32, i32) {
+        let vw = vw.max(1);
+        let vh = vh.max(1);
+        let (bx0, by0) = self.view_to_buffer(vx, vy);
+        let vx1 = vx + vw - 1;
+        let vy1 = vy + vh - 1;
+        let (bx1, by1) = self.view_to_buffer(vx1, vy1);
+        let bww = (bx1 - bx0 + 1).max(1);
+        let bhh = (by1 - by0 + 1).max(1);
+        (bx0, by0, bww, bhh)
+    }
 }
 
 #[cfg(test)]

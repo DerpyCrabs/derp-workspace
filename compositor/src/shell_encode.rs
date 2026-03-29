@@ -22,6 +22,8 @@ pub fn chrome_event_to_shell_packet(ev: &ChromeEvent) -> Option<Vec<u8>> {
             info.y,
             info.width,
             info.height,
+            info.maximized,
+            info.fullscreen,
         ),
         ChromeEvent::WindowMetadataChanged { info } => shell_wire::encode_window_metadata(
             info.window_id,

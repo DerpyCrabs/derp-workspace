@@ -20,7 +20,7 @@
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
-//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
+//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
 //! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -78,6 +78,10 @@ pub const MSG_SHELL_RESIZE_BEGIN: u32 = 39;
 pub const MSG_SHELL_RESIZE_DELTA: u32 = 40;
 /// Shell → compositor: end interactive resize for `window_id`.
 pub const MSG_SHELL_RESIZE_END: u32 = 41;
+/// Shell → compositor: set native toplevel maximized (xdg configure).
+pub const MSG_SHELL_SET_MAXIMIZED: u32 = 42;
+/// Shell → compositor: OSR shell plane above native windows (HTML5 presentation fullscreen).
+pub const MSG_SHELL_SET_PRESENTATION_FULLSCREEN: u32 = 43;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -266,8 +270,10 @@ pub fn encode_window_geometry(
     y: i32,
     w: i32,
     h: i32,
+    maximized: bool,
+    fullscreen: bool,
 ) -> Vec<u8> {
-    let body_len = 28u32;
+    let body_len = 36u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_WINDOW_GEOMETRY.to_le_bytes());
@@ -277,6 +283,8 @@ pub fn encode_window_geometry(
     v.extend_from_slice(&y.to_le_bytes());
     v.extend_from_slice(&w.to_le_bytes());
     v.extend_from_slice(&h.to_le_bytes());
+    v.extend_from_slice(&(if maximized { 1u32 } else { 0 }).to_le_bytes());
+    v.extend_from_slice(&(if fullscreen { 1u32 } else { 0 }).to_le_bytes());
     v
 }
 
@@ -380,6 +388,8 @@ pub struct ShellWindowSnapshot {
     pub h: i32,
     /// 0 = normal, 1 = compositor-minimized (hidden from space).
     pub minimized: u32,
+    pub maximized: u32,
+    pub fullscreen: u32,
     pub title: String,
     pub app_id: String,
 }
@@ -407,6 +417,8 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(&w.w.to_le_bytes());
         body.extend_from_slice(&w.h.to_le_bytes());
         body.extend_from_slice(&w.minimized.to_le_bytes());
+        body.extend_from_slice(&w.maximized.to_le_bytes());
+        body.extend_from_slice(&w.fullscreen.to_le_bytes());
         body.extend_from_slice(&tl.to_le_bytes());
         body.extend_from_slice(&al.to_le_bytes());
         body.extend_from_slice(tb);
@@ -431,7 +443,18 @@ pub fn encode_shell_list_windows() -> Vec<u8> {
 }
 
 pub fn encode_shell_set_geometry(window_id: u32, x: i32, y: i32, w: i32, h: i32) -> Vec<u8> {
-    let body_len = 24u32;
+    encode_shell_set_geometry_with_layout(window_id, x, y, w, h, 0)
+}
+
+pub fn encode_shell_set_geometry_with_layout(
+    window_id: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    layout_state: u32,
+) -> Vec<u8> {
+    let body_len = 28u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_SHELL_SET_GEOMETRY.to_le_bytes());
@@ -440,6 +463,7 @@ pub fn encode_shell_set_geometry(window_id: u32, x: i32, y: i32, w: i32, h: i32)
     v.extend_from_slice(&y.to_le_bytes());
     v.extend_from_slice(&w.to_le_bytes());
     v.extend_from_slice(&h.to_le_bytes());
+    v.extend_from_slice(&layout_state.to_le_bytes());
     v
 }
 
@@ -486,6 +510,25 @@ pub fn encode_shell_set_fullscreen(window_id: u32, enabled: bool) -> Vec<u8> {
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_SHELL_SET_FULLSCREEN.to_le_bytes());
     v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&(if enabled { 1u32 } else { 0 }).to_le_bytes());
+    v
+}
+
+pub fn encode_shell_set_maximized(window_id: u32, enabled: bool) -> Vec<u8> {
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(20);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SET_MAXIMIZED.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&(if enabled { 1u32 } else { 0 }).to_le_bytes());
+    v
+}
+
+pub fn encode_shell_set_presentation_fullscreen(enabled: bool) -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(16);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SET_PRESENTATION_FULLSCREEN.to_le_bytes());
     v.extend_from_slice(&(if enabled { 1u32 } else { 0 }).to_le_bytes());
     v
 }
@@ -542,12 +585,21 @@ pub enum DecodedMessage {
         y: i32,
         width: i32,
         height: i32,
+        /// 0 = floating; 1 = maximized (compositor sets xdg maximized + maps this rect).
+        layout_state: u32,
     },
     ShellClose {
         window_id: u32,
     },
     ShellSetFullscreen {
         window_id: u32,
+        enabled: bool,
+    },
+    ShellSetMaximized {
+        window_id: u32,
+        enabled: bool,
+    },
+    ShellSetPresentationFullscreen {
         enabled: bool,
     },
     ShellTaskbarActivate {
@@ -643,6 +695,8 @@ pub enum DecodedCompositorToShellMessage {
         y: i32,
         w: i32,
         h: i32,
+        maximized: bool,
+        fullscreen: bool,
     },
     WindowMetadata {
         window_id: u32,
@@ -972,7 +1026,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             })
         }
         MSG_WINDOW_GEOMETRY => {
-            if body.len() != 28 {
+            if body.len() != 28 && body.len() != 36 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -981,6 +1035,16 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             let y = i32::from_le_bytes(body[16..20].try_into().unwrap());
             let w = i32::from_le_bytes(body[20..24].try_into().unwrap());
             let h = i32::from_le_bytes(body[24..28].try_into().unwrap());
+            let (maximized, fullscreen) = if body.len() >= 36 {
+                let mx = u32::from_le_bytes(body[28..32].try_into().unwrap());
+                let fs = u32::from_le_bytes(body[32..36].try_into().unwrap());
+                if mx > 1 || fs > 1 {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                (mx != 0, fs != 0)
+            } else {
+                (false, false)
+            };
             Ok(DecodedCompositorToShellMessage::WindowGeometry {
                 window_id,
                 surface_id,
@@ -988,6 +1052,8 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 y,
                 w,
                 h,
+                maximized,
+                fullscreen,
             })
         }
         MSG_WINDOW_METADATA => decode_window_strings_body(body, MSG_WINDOW_METADATA),
@@ -1034,6 +1100,8 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_SET_GEOMETRY
         | MSG_SHELL_CLOSE
         | MSG_SHELL_SET_FULLSCREEN
+        | MSG_SHELL_SET_MAXIMIZED
+        | MSG_SHELL_SET_PRESENTATION_FULLSCREEN
         | MSG_SHELL_TASKBAR_ACTIVATE
         | MSG_SHELL_MINIMIZE
         | MSG_SHELL_QUIT_COMPOSITOR
@@ -1057,7 +1125,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
     let mut off = 8usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 36 > body.len() {
+        if off + 44 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -1067,15 +1135,17 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         let w = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
         let h = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
         let minimized = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-        if minimized > 1 {
+        let maximized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+        let fullscreen = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
+        if minimized > 1 || maximized > 1 || fullscreen > 1 {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()) as usize;
+        let title_len = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 36;
+        off += 44;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -1100,6 +1170,8 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
             w,
             h,
             minimized,
+            maximized,
+            fullscreen,
             title,
             app_id,
         });
@@ -1189,9 +1261,13 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             Ok(DecodedMessage::ShellListWindows)
         }
         MSG_SHELL_SET_GEOMETRY => {
-            if body.len() != 24 {
+            let layout_state = if body.len() == 28 {
+                u32::from_le_bytes(body[24..28].try_into().unwrap())
+            } else if body.len() == 24 {
+                0u32
+            } else {
                 return Err(DecodeError::BadWindowPayload);
-            }
+            };
             let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
             let x = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let y = i32::from_le_bytes(body[12..16].try_into().unwrap());
@@ -1203,6 +1279,7 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 y,
                 width,
                 height,
+                layout_state,
             })
         }
         MSG_SHELL_CLOSE => {
@@ -1223,6 +1300,32 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             }
             Ok(DecodedMessage::ShellSetFullscreen {
                 window_id,
+                enabled: en != 0,
+            })
+        }
+        MSG_SHELL_SET_MAXIMIZED => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let en = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            if en > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(DecodedMessage::ShellSetMaximized {
+                window_id,
+                enabled: en != 0,
+            })
+        }
+        MSG_SHELL_SET_PRESENTATION_FULLSCREEN => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let en = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            if en > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(DecodedMessage::ShellSetPresentationFullscreen {
                 enabled: en != 0,
             })
         }
@@ -1622,10 +1725,26 @@ mod tests {
                 y,
                 width,
                 height,
+                layout_state,
             }) => {
-                assert_eq!((window_id, x, y, width, height), (3, 1, 2, 640, 480));
+                assert_eq!(
+                    (window_id, x, y, width, height, layout_state),
+                    (3, 1, 2, 640, 480, 0)
+                );
             }
             _ => panic!("expected ShellSetGeometry"),
+        }
+
+        buf = encode_shell_set_geometry_with_layout(5, 10, 20, 800, 600, 1);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellSetGeometry {
+                window_id,
+                layout_state,
+                ..
+            }) => {
+                assert_eq!((window_id, layout_state), (5, 1));
+            }
+            _ => panic!("expected ShellSetGeometry with layout"),
         }
 
         buf = encode_shell_close(9);
@@ -1662,6 +1781,25 @@ mod tests {
             Some(DecodedMessage::ShellMinimize { window_id }) => assert_eq!(window_id, 5),
             _ => panic!("expected ShellMinimize"),
         }
+
+        buf = encode_shell_set_maximized(8, true);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellSetMaximized {
+                window_id,
+                enabled,
+            }) => {
+                assert_eq!((window_id, enabled), (8, true));
+            }
+            _ => panic!("expected ShellSetMaximized"),
+        }
+
+        buf = encode_shell_set_presentation_fullscreen(false);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellSetPresentationFullscreen { enabled }) => {
+                assert!(!enabled);
+            }
+            _ => panic!("expected ShellSetPresentationFullscreen"),
+        }
     }
 
     #[test]
@@ -1682,6 +1820,56 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_window_geometry_tiling_flags() {
+        let mut buf = encode_window_geometry(3, 4, 10, 20, 100, 200, true, false);
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::WindowGeometry {
+                window_id,
+                surface_id,
+                x,
+                y,
+                w,
+                h,
+                maximized,
+                fullscreen,
+            }) => {
+                assert_eq!((window_id, surface_id), (3, 4));
+                assert_eq!((x, y, w, h), (10, 20, 100, 200));
+                assert!(maximized);
+                assert!(!fullscreen);
+            }
+            o => panic!("expected WindowGeometry: {o:?}"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn decode_legacy_window_geometry_28_bytes() {
+        let mut body = vec![0u8; 28];
+        body[0..4].copy_from_slice(&MSG_WINDOW_GEOMETRY.to_le_bytes());
+        body[4..8].copy_from_slice(&1u32.to_le_bytes());
+        body[8..12].copy_from_slice(&2u32.to_le_bytes());
+        body[12..16].copy_from_slice(&0i32.to_le_bytes());
+        body[16..20].copy_from_slice(&0i32.to_le_bytes());
+        body[20..24].copy_from_slice(&10i32.to_le_bytes());
+        body[24..28].copy_from_slice(&20i32.to_le_bytes());
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(28u32).to_le_bytes());
+        buf.extend_from_slice(&body);
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::WindowGeometry {
+                maximized,
+                fullscreen,
+                ..
+            }) => {
+                assert!(!maximized);
+                assert!(!fullscreen);
+            }
+            o => panic!("expected WindowGeometry: {o:?}"),
+        }
+    }
+
+    #[test]
     fn round_trip_window_list_compositor_to_shell() {
         let wins = vec![
             ShellWindowSnapshot {
@@ -1692,6 +1880,8 @@ mod tests {
                 w: 100,
                 h: 50,
                 minimized: 0,
+                maximized: 0,
+                fullscreen: 0,
                 title: "a".into(),
                 app_id: "b".into(),
             },
@@ -1703,6 +1893,8 @@ mod tests {
                 w: 7,
                 h: 8,
                 minimized: 1,
+                maximized: 0,
+                fullscreen: 0,
                 title: "".into(),
                 app_id: "".into(),
             },
