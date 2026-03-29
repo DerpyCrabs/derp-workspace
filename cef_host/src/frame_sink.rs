@@ -1,12 +1,12 @@
-//! BGRA frames to the compositor: shared-memory + small commits by default, socket bulk legacy optional.
+//! Shell frames to the compositor: [`MSG_FRAME_DMABUF_COMMIT`] + SCM_RIGHTS fds.
 
-use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use memmap2::{MmapMut, MmapOptions};
 use shell_wire;
+#[cfg(unix)]
+use libc;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 #[cfg(unix)]
@@ -27,21 +27,11 @@ fn tune_socket(stream: &UnixStream) {
     }
 }
 
-struct ShmSlot {
-    #[allow(dead_code)]
-    path: PathBuf,
-    _file: File,
-    mmap: MmapMut,
-    cap: usize,
-}
-
 pub struct ShellFrameSink {
     ipc: Arc<Mutex<UnixStream>>,
+    #[allow(dead_code)]
     runtime_dir: PathBuf,
-    shm: Option<ShmSlot>,
-    encode_buf: Vec<u8>,
-    frame_no: u64,
-    shm_seq: u32,
+    dmabuf_generation: u32,
 }
 
 impl ShellFrameSink {
@@ -49,10 +39,7 @@ impl ShellFrameSink {
         Self {
             ipc,
             runtime_dir,
-            shm: None,
-            encode_buf: Vec::new(),
-            frame_no: 0,
-            shm_seq: 0,
+            dmabuf_generation: 0,
         }
     }
 
@@ -60,87 +47,90 @@ impl ShellFrameSink {
         tune_socket(stream);
     }
 
-    /// Push one full BGRA view frame. Uses shm unless `CEF_HOST_SHELL_LEGACY_FRAMES=1`.
-    pub fn push_pixels(
+    /// Send [`shell_wire::MSG_FRAME_DMABUF_COMMIT`] with **metadata** in `pkt` and duplicated plane fds via `SCM_RIGHTS`.
+    pub fn send_dmabuf_packet_with_fds(
+        &mut self,
+        pkt: &[u8],
+        src_fds: &[std::os::fd::RawFd],
+    ) -> io::Result<()> {
+        use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
+        use std::io::IoSlice;
+        use std::os::fd::AsRawFd;
+        if src_fds.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "dma-buf commit needs at least one fd",
+            ));
+        }
+        let mut duped: Vec<std::os::fd::RawFd> = Vec::with_capacity(src_fds.len());
+        for &fd in src_fds {
+            if fd < 0 {
+                for d in duped {
+                    let _ = nix::unistd::close(d);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "negative plane fd",
+                ));
+            }
+            let d = unsafe { libc::dup(fd) };
+            if d < 0 {
+                for x in duped {
+                    let _ = nix::unistd::close(x);
+                }
+                return Err(io::Error::last_os_error());
+            }
+            duped.push(d);
+        }
+        let iov = [IoSlice::new(pkt)];
+        let cmsgs = [ControlMessage::ScmRights(&duped)];
+        let ipc = self.ipc.lock().expect("ipc");
+        sendmsg::<()>(
+            ipc.as_raw_fd(),
+            &iov,
+            &cmsgs,
+            MsgFlags::empty(),
+            None,
+        )
+        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+        for fd in duped {
+            let _ = nix::unistd::close(fd);
+        }
+        Ok(())
+    }
+
+    /// Increment generation and build+send one dma-buf commit (fds duplicated per send).
+    pub fn push_dmabuf_planes(
         &mut self,
         width: u32,
         height: u32,
-        stride: u32,
-        pix: &[u8],
-        dirty_rects: &[shell_wire::ShellBufferRect],
+        drm_format: u32,
+        modifier: u64,
+        flags: u32,
+        planes: &[shell_wire::FrameDmabufPlane],
+        src_fds: &[std::os::fd::RawFd],
     ) -> io::Result<()> {
-        if std::env::var("CEF_HOST_SHELL_LEGACY_FRAMES").as_deref() == Ok("1") {
-            shell_wire::encode_frame_bgra_into(&mut self.encode_buf, width, height, stride, pix)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame encode"))?;
-            let mut ipc = self.ipc.lock().expect("ipc");
-            ipc.write_all(&self.encode_buf)?;
-            ipc.flush()?;
-            return Ok(());
-        }
-
-        let frame_bytes = (stride as usize)
-            .checked_mul(height as usize)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "frame size"))?;
-        if frame_bytes != pix.len() {
+        if planes.is_empty() || planes.len() != src_fds.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "pixel slice length",
+                "plane/fd count mismatch",
             ));
         }
-        let need_cap = frame_bytes
-            .checked_mul(2)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cap overflow"))?;
-
-        let must_recreate = self.shm.as_ref().map(|s| s.cap < need_cap).unwrap_or(true);
-        if must_recreate {
-            self.shm_seq = self.shm_seq.wrapping_add(1);
-            let basename = format!(
-                "derp-shell-shm-{}-{}.bin",
-                std::process::id(),
-                self.shm_seq
-            );
-            let path = self.runtime_dir.join(&basename);
-            let file = OpenOptions::new()
-                .create(true)
-                .read(true)
-                .write(true)
-                .truncate(true)
-                .open(&path)?;
-            file.set_len(need_cap as u64)?;
-            let mmap = unsafe { MmapOptions::new().len(need_cap).map_mut(&file)? };
-            let region = shell_wire::encode_shell_shm_region(&basename, need_cap as u64).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "encode_shell_shm_region")
-            })?;
-            let mut ipc = self.ipc.lock().expect("ipc");
-            ipc.write_all(&region)?;
-            ipc.flush()?;
-            drop(ipc);
-            self.shm = Some(ShmSlot {
-                path,
-                _file: file,
-                mmap,
-                cap: need_cap,
-            });
-        }
-
-        let slot = self.shm.as_mut().expect("shm");
-        let half = frame_bytes;
-        let offset = if (self.frame_no % 2) == 0 { 0 } else { half };
-        slot.mmap[offset..offset + half].copy_from_slice(pix);
-
-        let pkt = shell_wire::encode_frame_shm_commit(
+        self.dmabuf_generation = self.dmabuf_generation.wrapping_add(1);
+        let Some(pkt) = shell_wire::encode_frame_dmabuf_commit(
             width,
             height,
-            stride,
-            offset as u64,
-            half as u32,
-            dirty_rects,
-        )
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "encode_frame_shm_commit"))?;
-        let mut ipc = self.ipc.lock().expect("ipc");
-        ipc.write_all(&pkt)?;
-        ipc.flush()?;
-        self.frame_no = self.frame_no.wrapping_add(1);
-        Ok(())
+            drm_format,
+            modifier,
+            flags,
+            self.dmabuf_generation,
+            planes,
+        ) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "encode_frame_dmabuf_commit",
+            ));
+        };
+        self.send_dmabuf_packet_with_fds(&pkt, src_fds)
     }
 }

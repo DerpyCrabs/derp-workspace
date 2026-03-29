@@ -33,9 +33,64 @@ pub fn cef_user_data_dir() -> PathBuf {
     base.join(format!("cef-host-{pid}"))
 }
 
-/// Headless Ozone for OSR unless `CEF_HOST_USE_WAYLAND_PLATFORM=1`.
+/// Whether an embedder might choose **Ozone headless** for OSR.
+///
+/// The **`cef_host`** binary on **Linux** does **not** use this: it always appends
+/// **`--ozone-platform=wayland`** (see `main.rs`). This helper remains for tests and custom integrations.
+///
+/// On **Linux**, the default is **headless** whenever **`CEF_HOST_OZONE_HEADLESS`** is unset.
+/// **`CEF_HOST_USE_WAYLAND_PLATFORM=1`** forces non-headless. Non-Linux: headless only if
+/// **`WAYLAND_DISPLAY`** is unset.
 pub fn ozone_platform_headless_for_osr() -> bool {
-    std::env::var("CEF_HOST_USE_WAYLAND_PLATFORM").as_deref() != Ok("1")
+    if std::env::var("CEF_HOST_USE_WAYLAND_PLATFORM").as_deref() == Ok("1") {
+        return false;
+    }
+    if std::env::var("CEF_HOST_OZONE_HEADLESS").as_deref() == Ok("1") {
+        return true;
+    }
+    if std::env::var("CEF_HOST_OZONE_HEADLESS").as_deref() == Ok("0") {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        true
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::var_os("WAYLAND_DISPLAY").is_none()
+    }
+}
+
+/// ANGLE backend for `use-angle`. Linux OSR shared textures need **gl-egl** per CEF #3953 (`vulkan` prevents the dma-buf path).
+pub fn angle_backend_for_osr() -> String {
+    std::env::var("CEF_HOST_ANGLE_BACKEND").unwrap_or_else(|_| "gl-egl".into())
+}
+
+/// Ozone platform when not using headless OSR (Linux).
+///
+/// Prefer **`wayland`** whenever **`WAYLAND_DISPLAY`** is set (typical Wayland session, often with
+/// **`DISPLAY`** from XWayland). Chromium’s **x11** Ozone + dma-buf path expects a native GBM stack;
+/// on XWayland-only **`DISPLAY`** that yields *“gbm device is missing”* and no OSR frames.
+///
+/// Use **`x11`** only for a classic X session (**`DISPLAY`** set, no **`WAYLAND_DISPLAY`**). CEF #3953
+/// dma-buf OSR still wants **`gl-egl`** (not **`vulkan`**). Override with **`CEF_HOST_OZONE_PLATFORM`**.
+#[cfg(target_os = "linux")]
+pub fn ozone_platform_for_osr() -> String {
+    if let Ok(v) = std::env::var("CEF_HOST_OZONE_PLATFORM") {
+        return v;
+    }
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        "wayland".into()
+    } else if std::env::var_os("DISPLAY").is_some() {
+        "x11".into()
+    } else {
+        "x11".into()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn ozone_platform_for_osr() -> String {
+    std::env::var("CEF_HOST_OZONE_PLATFORM").unwrap_or_else(|_| "headless".into())
 }
 
 #[cfg(test)]
@@ -92,12 +147,104 @@ mod tests {
     }
 
     #[test]
-    fn ozone_defaults_to_headless_platform() {
+    fn ozone_headless_when_no_wayland_display() {
         let _g = env_lock();
         std::env::remove_var("CEF_HOST_USE_WAYLAND_PLATFORM");
+        std::env::remove_var("CEF_HOST_OZONE_HEADLESS");
+        std::env::remove_var("WAYLAND_DISPLAY");
         assert!(ozone_platform_headless_for_osr());
+    }
+
+    #[test]
+    fn ozone_headless_default_linux_even_when_wayland_display_set() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_USE_WAYLAND_PLATFORM");
+        std::env::remove_var("CEF_HOST_OZONE_HEADLESS");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-test");
+        #[cfg(target_os = "linux")]
+        assert!(ozone_platform_headless_for_osr());
+        #[cfg(not(target_os = "linux"))]
+        assert!(!ozone_platform_headless_for_osr());
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ozone_headless_explicit_off_still_allows_platform_ozone() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_USE_WAYLAND_PLATFORM");
+        std::env::set_var("CEF_HOST_OZONE_HEADLESS", "0");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-test");
+        assert!(!ozone_platform_headless_for_osr());
+        std::env::remove_var("CEF_HOST_OZONE_HEADLESS");
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    fn ozone_nested_forces_headless_even_with_wayland() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_USE_WAYLAND_PLATFORM");
+        std::env::set_var("CEF_HOST_OZONE_HEADLESS", "1");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-parent");
+        assert!(ozone_platform_headless_for_osr());
+        std::env::remove_var("CEF_HOST_OZONE_HEADLESS");
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    fn ozone_use_wayland_platform_skips_headless() {
+        let _g = env_lock();
         std::env::set_var("CEF_HOST_USE_WAYLAND_PLATFORM", "1");
+        std::env::set_var("CEF_HOST_OZONE_HEADLESS", "1");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-parent");
         assert!(!ozone_platform_headless_for_osr());
         std::env::remove_var("CEF_HOST_USE_WAYLAND_PLATFORM");
+        std::env::remove_var("CEF_HOST_OZONE_HEADLESS");
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ozone_platform_for_osr_wayland_when_xwayland_also_sets_display() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_OZONE_PLATFORM");
+        std::env::set_var("DISPLAY", ":0");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-1");
+        assert_eq!(super::ozone_platform_for_osr(), "wayland");
+        std::env::remove_var("DISPLAY");
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ozone_platform_for_osr_x11_when_display_only() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_OZONE_PLATFORM");
+        std::env::set_var("DISPLAY", ":0");
+        std::env::remove_var("WAYLAND_DISPLAY");
+        assert_eq!(super::ozone_platform_for_osr(), "x11");
+        std::env::remove_var("DISPLAY");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ozone_platform_for_osr_wayland_when_only_wayland() {
+        let _g = env_lock();
+        std::env::remove_var("CEF_HOST_OZONE_PLATFORM");
+        std::env::remove_var("DISPLAY");
+        std::env::set_var("WAYLAND_DISPLAY", "wayland-1");
+        assert_eq!(super::ozone_platform_for_osr(), "wayland");
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ozone_platform_for_osr_env_overrides() {
+        let _g = env_lock();
+        std::env::set_var("CEF_HOST_OZONE_PLATFORM", "headless");
+        std::env::set_var("DISPLAY", ":0");
+        assert_eq!(super::ozone_platform_for_osr(), "headless");
+        std::env::remove_var("CEF_HOST_OZONE_PLATFORM");
+        std::env::remove_var("DISPLAY");
     }
 }

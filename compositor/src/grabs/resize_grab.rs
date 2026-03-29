@@ -1,4 +1,4 @@
-use crate::CompositorState;
+use crate::{derp_space::DerpSpaceElem, CompositorState};
 use smithay::{
     desktop::{Space, Window},
     input::pointer::{
@@ -322,13 +322,16 @@ impl ResizeSurfaceState {
     }
 }
 
-pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface) -> Option<()> {
-    let window = space
-        .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned()?;
+pub fn handle_commit(space: &mut Space<DerpSpaceElem>, surface: &WlSurface) -> Option<()> {
+    let window = space.elements().find_map(|e| {
+        if let DerpSpaceElem::Wayland(w) = e {
+            (w.toplevel().unwrap().wl_surface() == surface).then_some(w.clone())
+        } else {
+            None
+        }
+    })?;
 
-    let mut window_loc = space.element_location(&window)?;
+    let mut window_loc = space.element_location(&DerpSpaceElem::Wayland(window.clone()))?;
     let geometry = window.geometry();
 
     let new_loc: Point<Option<i32>, Logical> = ResizeSurfaceState::with(surface, |state| {
@@ -358,7 +361,7 @@ pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface) -> Option<(
     }
 
     if new_loc.x.is_some() || new_loc.y.is_some() {
-        space.map_element(window, window_loc, false);
+        space.map_element(DerpSpaceElem::Wayland(window), window_loc, false);
     }
 
     Some(())

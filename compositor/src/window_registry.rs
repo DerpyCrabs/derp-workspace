@@ -34,7 +34,13 @@ impl WindowRegistry {
         }
     }
 
-    pub fn register_toplevel(&mut self, wl: &WlSurface, title: String, app_id: String) -> WindowId {
+    pub fn register_toplevel(
+        &mut self,
+        wl: &WlSurface,
+        title: String,
+        app_id: String,
+        wayland_client_pid: Option<i32>,
+    ) -> WindowId {
         let k = key(wl).expect("register_toplevel: surface has no client");
         let window_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
@@ -45,6 +51,7 @@ impl WindowRegistry {
             surface_id,
             title,
             app_id,
+            wayland_client_pid,
             x: 0,
             y: 0,
             width: 0,
@@ -114,6 +121,10 @@ impl WindowRegistry {
 
     pub fn surface_id_for_window(&self, window_id: WindowId) -> Option<u32> {
         self.records.get(&window_id).map(|i| i.surface_id)
+    }
+
+    pub fn window_info(&self, window_id: WindowId) -> Option<WindowInfo> {
+        self.records.get(&window_id).cloned()
     }
 
     pub fn all_infos(&self) -> Vec<WindowInfo> {

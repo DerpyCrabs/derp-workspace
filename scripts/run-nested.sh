@@ -162,6 +162,7 @@ echo "This compositor will listen on WAYLAND_DISPLAY=$SOCKET for your clients"
 
 # Allow Solid/CEF shell to spawn native Wayland clients into this nested display (see DERP_ALLOW_SHELL_SPAWN).
 export DERP_ALLOW_SHELL_SPAWN=1
+# cef_host forces --ozone-platform=wayland; WAYLAND_DISPLAY above is the nested socket (not the parent).
 
 "$BINARY" "${ARGS[@]}" "$@"
 exit $?

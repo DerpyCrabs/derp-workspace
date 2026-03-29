@@ -2,6 +2,10 @@
 
 use std::time::{Duration, Instant};
 
+/// Fixed OSR view / DIP size for CEF until compositor-driven logical size is reliable at startup.
+pub const OSR_VIEW_DIP_W: i32 = 2880;
+pub const OSR_VIEW_DIP_H: i32 = 1920;
+
 /// DIP (CSS / “view”) size of the browser plus last OSR paint dimensions.
 ///
 /// CEF [`send_mouse_move_event`](cef::ImplBrowserHost::send_mouse_move_event) expects coordinates

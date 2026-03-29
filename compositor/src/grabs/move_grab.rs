@@ -1,4 +1,4 @@
-use crate::CompositorState;
+use crate::{derp_space::DerpSpaceElem, CompositorState};
 use smithay::{
     desktop::Window,
     input::pointer::{
@@ -43,8 +43,11 @@ impl PointerGrab<CompositorState> for MoveSurfaceGrab {
 
         let delta = event.location - self.start_data.location;
         let new_location = self.initial_window_location.to_f64() + delta;
-        data.space
-            .map_element(self.window.clone(), new_location.to_i32_round(), true);
+        data.space.map_element(
+            DerpSpaceElem::Wayland(self.window.clone()),
+            new_location.to_i32_round(),
+            true,
+        );
 
         data.notify_geometry_if_changed(&self.window);
     }

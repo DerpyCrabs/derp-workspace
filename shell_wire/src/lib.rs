@@ -1,29 +1,27 @@
 //! Wire format: `[u32 body_len LE][body]` where `body` is a single message.
 //!
-//! Frame message body layout (all little-endian):
-//! - `u32 msg_type` — [`MSG_FRAME`]
-//! - `u32 width`, `u32 height`, `u32 stride`, `u32 format` — [`PIXEL_FORMAT_BGRA8888`]
-//! - `u32 data_len` — must equal `stride * height` and fit in payload
-//! - `data_len` bytes of pixels
-//!
 //! Spawn message body (`msg_type` [`MSG_SPAWN_WAYLAND_CLIENT`]):
 //! - `u32 msg_type`, `u32 command_len`, then `command_len` UTF-8 bytes (no NUL).
 //!
-//! Compositor → shell process (CEF OSR), same length-prefixed framing:
-//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_TOUCH`]
-//! - [`MSG_OUTPUT_GEOMETRY`]: logical size (DIP / layout) plus physical pixel size for sharp OSR on HiDPI
+//! Compositor → shell process, same length-prefixed framing:
+//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_TOUCH`] (legacy; current session uses `wl_seat` only)
+//! - [`MSG_OUTPUT_GEOMETRY`]: logical size (DIP / layout) plus physical pixel size for HiDPI shell HUD math
 //! - [`MSG_WINDOW_MAPPED`], [`MSG_WINDOW_UNMAPPED`], [`MSG_WINDOW_GEOMETRY`], [`MSG_WINDOW_METADATA`], [`MSG_FOCUS_CHANGED`]
 //!
-//! **Privacy:** the compositor never sends native Wayland client pixels or buffer contents to the shell;
-//! only metadata, pointer routing, and shell→compositor **ingress** frames ([`MSG_FRAME`]) exist on this socket.
+//! **Privacy:** the compositor never sends native Wayland client pixels or buffer contents to the shell.
+//! Shell→compositor **`MSG_FRAME_DMABUF_COMMIT`** is metadata plus out-of-band fds, not client buffer pixels.
+//!
+//! **Dma-buf frames:** [`MSG_FRAME_DMABUF_COMMIT`] metadata travels in the length-prefixed body; **plane
+//! fds must be sent in the same `sendmsg(2)`** as that packet using `SCM_RIGHTS` (see compositor and
+//! `cef_host` helpers). Deploy **`compositor` and `cef_host` from the same tree** when this opcode changes.
 //!
 //! Shell → compositor (decoded by [`pop_message`]):
-//! - [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
+//! - [`MSG_SPAWN_WAYLAND_CLIENT`], [`MSG_FRAME_DMABUF_COMMIT`],
+//!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
-//!   shell [`MSG_SHELL_QUIT_COMPOSITOR`] (end compositor session), [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
+//!   [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
 //! - compositor → shell: [`MSG_WINDOW_LIST`] (reply to list command), [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
 
-pub const MSG_FRAME: u32 = 1;
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
 pub const MSG_COMPOSITOR_POINTER_BUTTON: u32 = 4;
@@ -61,135 +59,59 @@ pub const MSG_SHELL_QUIT_COMPOSITOR: u32 = 27;
 /// Shell → compositor: reply to [`MSG_COMPOSITOR_PING`] (watchdog liveness).
 pub const MSG_SHELL_PONG: u32 = 30;
 
-/// Shell → compositor: shared pixel buffer file under `XDG_RUNTIME_DIR` (basename only in payload).
-pub const MSG_SHELL_SHM_REGION: u32 = 28;
-/// Shell → compositor: BGRA frame is in the shm file at `offset` (see [`MSG_SHELL_SHM_REGION`]).
-pub const MSG_FRAME_SHM_COMMIT: u32 = 29;
+/// Shell → compositor: dma-buf frame metadata (`drm_format` = raw DRM FourCC). Plane fds follow via `SCM_RIGHTS`.
+pub const MSG_FRAME_DMABUF_COMMIT: u32 = 33;
 
-pub const PIXEL_FORMAT_BGRA8888: u32 = 0;
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
-/// Max UTF-8 basename length for [`MSG_SHELL_SHM_REGION`] (no path separators).
-pub const MAX_SHM_BASENAME_BYTES: u32 = 512;
-/// Max [`ShellBufferRect`] entries appended to [`MSG_FRAME_SHM_COMMIT`] (buffer pixel space).
-pub const MAX_FRAME_SHM_DIRTY_RECTS: u32 = 256;
+/// Max planes in [`MSG_FRAME_DMABUF_COMMIT`] (matches Linux dma-buf multi-plane caps).
+pub const MAX_DMABUF_PLANES: u32 = 4;
 
-fn frame_header_len() -> u32 {
-    4 * 6
-}
+/// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
+pub const DMABUF_FLAG_Y_INVERT: u32 = 1;
 
-/// Dirty rectangle in **buffer/device pixels** (BGRA), same coordinate space as the full OSR `width`×`height`.
+/// One plane in [`MSG_FRAME_DMABUF_COMMIT`] (fds are out-of-band via `SCM_RIGHTS`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShellBufferRect {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
+pub struct FrameDmabufPlane {
+    pub plane_idx: u32,
+    pub stride: u32,
+    pub offset: u64,
 }
 
-/// Encodes a [`MSG_FRAME`] into `out` (clears `out` first). One allocation reuse-friendly.
-pub fn encode_frame_bgra_into(
-    out: &mut Vec<u8>,
+/// Full length-prefixed wire packet for [`MSG_FRAME_DMABUF_COMMIT`] (fds attached out-of-band).
+pub fn encode_frame_dmabuf_commit(
     width: u32,
     height: u32,
-    stride: u32,
-    pixels: &[u8],
-) -> Result<(), ()> {
-    if width == 0 || height == 0 {
-        return Err(());
-    }
-    let data_len = stride.checked_mul(height).ok_or(())?;
-    if data_len as usize > pixels.len() {
-        return Err(());
-    }
-    let header = frame_header_len();
-    let body_len = header.checked_add(data_len).ok_or(())?;
-    if body_len > MAX_BODY_BYTES {
-        return Err(());
-    }
-    out.clear();
-    out.reserve(4 + body_len as usize);
-    out.extend_from_slice(&body_len.to_le_bytes());
-    out.extend_from_slice(&MSG_FRAME.to_le_bytes());
-    out.extend_from_slice(&width.to_le_bytes());
-    out.extend_from_slice(&height.to_le_bytes());
-    out.extend_from_slice(&stride.to_le_bytes());
-    out.extend_from_slice(&PIXEL_FORMAT_BGRA8888.to_le_bytes());
-    out.extend_from_slice(&data_len.to_le_bytes());
-    out.extend_from_slice(&pixels[..data_len as usize]);
-    Ok(())
-}
-
-pub fn encode_frame_bgra(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Option<Vec<u8>> {
-    let mut v = Vec::new();
-    encode_frame_bgra_into(&mut v, width, height, stride, pixels).ok()?;
-    Some(v)
-}
-
-/// Basename only (no `/`, no `..`). Opens as `runtime_dir.join(basename)` on the compositor.
-pub fn encode_shell_shm_region(basename: &str, total_bytes: u64) -> Option<Vec<u8>> {
-    let b = basename.as_bytes();
-    if b.is_empty() || b.contains(&b'/') || b.contains(&b'\\') || basename == "." || basename == ".." {
-        return None;
-    }
-    if basename.contains("..") {
-        return None;
-    }
-    let plen = u32::try_from(b.len()).ok()?;
-    if plen > MAX_SHM_BASENAME_BYTES {
-        return None;
-    }
-    let body_len = 8u32.checked_add(plen)?.checked_add(8)?;
-    if body_len > MAX_BODY_BYTES {
-        return None;
-    }
-    let mut v = Vec::with_capacity(4 + body_len as usize);
-    v.extend_from_slice(&body_len.to_le_bytes());
-    v.extend_from_slice(&MSG_SHELL_SHM_REGION.to_le_bytes());
-    v.extend_from_slice(&plen.to_le_bytes());
-    v.extend_from_slice(b);
-    v.extend_from_slice(&total_bytes.to_le_bytes());
-    Some(v)
-}
-
-/// Per-frame shm commit. With empty `dirty_rects` the decoded `body` slice is 28 bytes (`msg` + frame fields only).
-/// Non-empty `dirty_rects` appends `u32 count` then `count`×(`i32` x,y,w,h) for partial compositor uploads.
-pub fn encode_frame_shm_commit(
-    width: u32,
-    height: u32,
-    stride: u32,
-    offset: u64,
-    data_len: u32,
-    dirty_rects: &[ShellBufferRect],
+    drm_format: u32,
+    modifier: u64,
+    flags: u32,
+    generation: u32,
+    planes: &[FrameDmabufPlane],
 ) -> Option<Vec<u8>> {
-    if dirty_rects.len() > MAX_FRAME_SHM_DIRTY_RECTS as usize {
+    let n = u32::try_from(planes.len()).ok()?;
+    if n == 0 || n > MAX_DMABUF_PLANES {
         return None;
     }
-    let base = 28u32;
-    let body_len = if dirty_rects.is_empty() {
-        base
-    } else {
-        base.checked_add(4)?.checked_add((dirty_rects.len() as u32).checked_mul(16)?)?
-    };
+    let body_len = 36u32.checked_add(n.checked_mul(16)?)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
-    v.extend_from_slice(&MSG_FRAME_SHM_COMMIT.to_le_bytes());
+    v.extend_from_slice(&MSG_FRAME_DMABUF_COMMIT.to_le_bytes());
     v.extend_from_slice(&width.to_le_bytes());
     v.extend_from_slice(&height.to_le_bytes());
-    v.extend_from_slice(&stride.to_le_bytes());
-    v.extend_from_slice(&offset.to_le_bytes());
-    v.extend_from_slice(&data_len.to_le_bytes());
-    if !dirty_rects.is_empty() {
-        let n = u32::try_from(dirty_rects.len()).ok()?;
-        v.extend_from_slice(&n.to_le_bytes());
-        for r in dirty_rects {
-            v.extend_from_slice(&r.x.to_le_bytes());
-            v.extend_from_slice(&r.y.to_le_bytes());
-            v.extend_from_slice(&r.w.to_le_bytes());
-            v.extend_from_slice(&r.h.to_le_bytes());
-        }
+    v.extend_from_slice(&drm_format.to_le_bytes());
+    v.extend_from_slice(&modifier.to_le_bytes());
+    v.extend_from_slice(&n.to_le_bytes());
+    v.extend_from_slice(&flags.to_le_bytes());
+    v.extend_from_slice(&generation.to_le_bytes());
+    for p in planes {
+        v.extend_from_slice(&p.plane_idx.to_le_bytes());
+        v.extend_from_slice(&p.stride.to_le_bytes());
+        v.extend_from_slice(&p.offset.to_le_bytes());
     }
     Some(v)
 }
@@ -486,27 +408,16 @@ pub fn encode_shell_quit_compositor() -> Vec<u8> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedMessage {
-    Frame {
+    /// CEF accelerated OSR: Linux dma-buf. Import [`FrameDmabufPlane`] fds after decode (same `recvmsg`).
+    FrameDmabufCommit {
         width: u32,
         height: u32,
-        stride: u32,
-        format: u32,
-        pixels: Vec<u8>,
-    },
-    /// Backing file for [`DecodedMessage::FrameShmCommit`]; basename under compositor `XDG_RUNTIME_DIR`.
-    ShellShmRegion {
-        basename: String,
-        total_bytes: u64,
-    },
-    /// Frame pixels are BGRA in the mapped shm file at `offset` for `data_len` bytes.
-    /// Empty `dirty_rects` means the full buffer changed.
-    FrameShmCommit {
-        width: u32,
-        height: u32,
-        stride: u32,
-        offset: u64,
-        data_len: u32,
-        dirty_rects: Vec<ShellBufferRect>,
+        /// Raw DRM FourCC (e.g. `drm_fourcc::DrmFourcc::Argb8888 as u32`).
+        drm_format: u32,
+        modifier: u64,
+        flags: u32,
+        generation: u32,
+        planes: Vec<FrameDmabufPlane>,
     },
     SpawnWaylandClient {
         command: String,
@@ -546,15 +457,12 @@ pub enum DecodeError {
     Incomplete,
     BodyTooLarge,
     UnknownMsgType,
-    BadFrameLayout,
-    UnsupportedPixelFormat,
     BadSpawnPayload,
     BadUtf8Command,
     BadCompositorToShellPayload,
     BadWindowPayload,
     BadWindowListPayload,
-    BadShmRegionPayload,
-    BadShmCommitPayload,
+    BadDmabufCommitPayload,
 }
 
 /// Messages the **compositor** writes on the shell Unix socket for `cef_host` to read.
@@ -871,8 +779,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             }
             Ok(DecodedCompositorToShellMessage::Ping)
         }
-        MSG_FRAME
-        | MSG_SPAWN_WAYLAND_CLIENT
+        MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
         | MSG_SHELL_MOVE_DELTA
         | MSG_SHELL_MOVE_END
@@ -881,9 +788,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_CLOSE
         | MSG_SHELL_SET_FULLSCREEN
         | MSG_SHELL_QUIT_COMPOSITOR
-        | MSG_SHELL_PONG
-        | MSG_SHELL_SHM_REGION
-        | MSG_FRAME_SHM_COMMIT => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_PONG => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -970,11 +875,10 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
 
 fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
     if body.len() < 4 {
-        return Err(DecodeError::BadFrameLayout);
+        return Err(DecodeError::BadWindowPayload);
     }
     let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
     match msg {
-        MSG_FRAME => decode_frame_body(body),
         MSG_SPAWN_WAYLAND_CLIENT => decode_spawn_body(body),
         MSG_SHELL_MOVE_BEGIN => {
             if body.len() != 8 {
@@ -1054,122 +958,54 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             }
             Ok(DecodedMessage::ShellPong)
         }
-        MSG_SHELL_SHM_REGION => decode_shell_shm_region_body(body),
-        MSG_FRAME_SHM_COMMIT => decode_frame_shm_commit_body(body),
+        MSG_FRAME_DMABUF_COMMIT => decode_frame_dmabuf_commit_body(body),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
 
-fn decode_shell_shm_region_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
-    if body.len() < 8 {
-        return Err(DecodeError::BadShmRegionPayload);
+fn decode_frame_dmabuf_commit_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
+    if body.len() < 36 {
+        return Err(DecodeError::BadDmabufCommitPayload);
     }
-    let plen = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
-    if plen > MAX_SHM_BASENAME_BYTES as usize {
-        return Err(DecodeError::BadShmRegionPayload);
+    let width = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    let height = u32::from_le_bytes(body[8..12].try_into().unwrap());
+    let drm_format = u32::from_le_bytes(body[12..16].try_into().unwrap());
+    let modifier = u64::from_le_bytes(body[16..24].try_into().unwrap());
+    let plane_count = u32::from_le_bytes(body[24..28].try_into().unwrap());
+    let flags = u32::from_le_bytes(body[28..32].try_into().unwrap());
+    let generation = u32::from_le_bytes(body[32..36].try_into().unwrap());
+    if plane_count == 0 || plane_count > MAX_DMABUF_PLANES {
+        return Err(DecodeError::BadDmabufCommitPayload);
     }
-    let need = 8usize.checked_add(plen).and_then(|a| a.checked_add(8)).ok_or(DecodeError::BadShmRegionPayload)?;
+    let need = 36usize
+        .checked_add((plane_count as usize).checked_mul(16).ok_or(DecodeError::BadDmabufCommitPayload)?)
+        .ok_or(DecodeError::BadDmabufCommitPayload)?;
     if body.len() != need {
-        return Err(DecodeError::BadShmRegionPayload);
+        return Err(DecodeError::BadDmabufCommitPayload);
     }
-    let basename = std::str::from_utf8(&body[8..8 + plen])
-        .map_err(|_| DecodeError::BadUtf8Command)?
-        .to_string();
-    if basename.contains('/') || basename.contains('\\') || basename == "." || basename == ".." {
-        return Err(DecodeError::BadShmRegionPayload);
+    let mut planes = Vec::with_capacity(plane_count as usize);
+    let mut o = 36usize;
+    for _ in 0..plane_count {
+        let plane_idx = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+        o += 4;
+        let stride = u32::from_le_bytes(body[o..o + 4].try_into().unwrap());
+        o += 4;
+        let offset = u64::from_le_bytes(body[o..o + 8].try_into().unwrap());
+        o += 8;
+        planes.push(FrameDmabufPlane {
+            plane_idx,
+            stride,
+            offset,
+        });
     }
-    let total_bytes = u64::from_le_bytes(body[8 + plen..need].try_into().unwrap());
-    Ok(DecodedMessage::ShellShmRegion {
-        basename,
-        total_bytes,
-    })
-}
-
-fn decode_frame_shm_commit_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
-    if body.len() < 28 {
-        return Err(DecodeError::BadShmCommitPayload);
-    }
-    let width = u32::from_le_bytes(body[4..8].try_into().unwrap());
-    let height = u32::from_le_bytes(body[8..12].try_into().unwrap());
-    let stride = u32::from_le_bytes(body[12..16].try_into().unwrap());
-    let offset = u64::from_le_bytes(body[16..24].try_into().unwrap());
-    let data_len = u32::from_le_bytes(body[24..28].try_into().unwrap());
-    let dirty_rects = if body.len() == 28 {
-        Vec::new()
-    } else {
-        let rest = body.len().checked_sub(28).ok_or(DecodeError::BadShmCommitPayload)?;
-        if rest < 4 {
-            return Err(DecodeError::BadShmCommitPayload);
-        }
-        let n = u32::from_le_bytes(body[28..32].try_into().unwrap());
-        if n > MAX_FRAME_SHM_DIRTY_RECTS {
-            return Err(DecodeError::BadShmCommitPayload);
-        }
-        let mul = (n as usize)
-            .checked_mul(16)
-            .ok_or(DecodeError::BadShmCommitPayload)?;
-        let need = 4usize
-            .checked_add(mul)
-            .ok_or(DecodeError::BadShmCommitPayload)?;
-        if rest != need {
-            return Err(DecodeError::BadShmCommitPayload);
-        }
-        let mut out = Vec::with_capacity(n as usize);
-        let mut o = 32usize;
-        for _ in 0..n {
-            let x = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
-            o += 4;
-            let y = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
-            o += 4;
-            let w = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
-            o += 4;
-            let h = i32::from_le_bytes(body[o..o + 4].try_into().unwrap());
-            o += 4;
-            out.push(ShellBufferRect { x, y, w, h });
-        }
-        out
-    };
-    Ok(DecodedMessage::FrameShmCommit {
+    Ok(DecodedMessage::FrameDmabufCommit {
         width,
         height,
-        stride,
-        offset,
-        data_len,
-        dirty_rects,
-    })
-}
-
-fn decode_frame_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
-    if body.len() < 4 + 20 {
-        return Err(DecodeError::BadFrameLayout);
-    }
-    let width = u32::from_le_bytes(body[4..8].try_into().unwrap());
-    let height = u32::from_le_bytes(body[8..12].try_into().unwrap());
-    let stride = u32::from_le_bytes(body[12..16].try_into().unwrap());
-    let format = u32::from_le_bytes(body[16..20].try_into().unwrap());
-    let data_len = u32::from_le_bytes(body[20..24].try_into().unwrap());
-    if format != PIXEL_FORMAT_BGRA8888 {
-        return Err(DecodeError::UnsupportedPixelFormat);
-    }
-    let data_end = 24usize
-        .checked_add(data_len as usize)
-        .ok_or(DecodeError::BadFrameLayout)?;
-    if body.len() < data_end {
-        return Err(DecodeError::BadFrameLayout);
-    }
-    let expected = stride
-        .checked_mul(height)
-        .ok_or(DecodeError::BadFrameLayout)?;
-    if expected != data_len {
-        return Err(DecodeError::BadFrameLayout);
-    }
-    let pixels = Vec::from(&body[24..data_end]);
-    Ok(DecodedMessage::Frame {
-        width,
-        height,
-        stride,
-        format,
-        pixels,
+        drm_format,
+        modifier,
+        flags,
+        generation,
+        planes,
     })
 }
 
@@ -1205,31 +1041,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_tiny_frame() {
-        let w = 2u32;
-        let h = 2u32;
-        let st = 8u32;
-        let pix = vec![0u8; 16];
-        let mut buf = encode_frame_bgra(w, h, st, &pix).unwrap();
-        match pop_message(&mut buf).unwrap() {
-            Some(DecodedMessage::Frame {
-                width,
-                height,
-                stride,
-                pixels,
-                ..
-            }) => {
-                assert_eq!(width, w);
-                assert_eq!(height, h);
-                assert_eq!(stride, st);
-                assert_eq!(pixels.as_slice(), pix.as_slice());
-            }
-            _ => panic!("expected frame"),
-        }
-        assert!(buf.is_empty());
-    }
-
-    #[test]
     fn round_trip_spawn() {
         let mut buf = encode_spawn_wayland_client("foot -a").unwrap();
         match pop_message(&mut buf).unwrap() {
@@ -1256,79 +1067,6 @@ mod tests {
             pop_message(&mut buf),
             Err(DecodeError::UnknownMsgType)
         ));
-    }
-
-    #[test]
-    fn round_trip_shm_region_and_commit() {
-        let enc = encode_shell_shm_region("derp-test-shm.bin", 123456).unwrap();
-        let commit = encode_frame_shm_commit(1920, 1080, 7680, 0, 8_294_400, &[]).unwrap();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&enc);
-        buf.extend_from_slice(&commit);
-        match pop_message(&mut buf).unwrap() {
-            Some(DecodedMessage::ShellShmRegion {
-                basename,
-                total_bytes,
-            }) => {
-                assert_eq!(basename, "derp-test-shm.bin");
-                assert_eq!(total_bytes, 123456);
-            }
-            other => panic!("expected ShellShmRegion: {other:?}"),
-        }
-        match pop_message(&mut buf).unwrap() {
-            Some(DecodedMessage::FrameShmCommit {
-                width,
-                height,
-                stride,
-                offset,
-                data_len,
-                dirty_rects,
-            }) => {
-                assert_eq!((width, height, stride), (1920, 1080, 7680));
-                assert_eq!(offset, 0);
-                assert_eq!(data_len, 8_294_400);
-                assert!(dirty_rects.is_empty());
-            }
-            other => panic!("expected FrameShmCommit: {other:?}"),
-        }
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn round_trip_shm_commit_with_dirty_rects() {
-        let dirty = vec![
-            ShellBufferRect {
-                x: 0,
-                y: 0,
-                w: 10,
-                h: 20,
-            },
-            ShellBufferRect {
-                x: 100,
-                y: 200,
-                w: 3,
-                h: 4,
-            },
-        ];
-        let enc = encode_frame_shm_commit(800, 600, 3200, 0, 1_920_000, &dirty).unwrap();
-        let mut buf = enc;
-        match pop_message(&mut buf).unwrap() {
-            Some(DecodedMessage::FrameShmCommit {
-                width,
-                height,
-                stride,
-                offset,
-                data_len,
-                dirty_rects,
-            }) => {
-                assert_eq!((width, height, stride), (800, 600, 3200));
-                assert_eq!(offset, 0);
-                assert_eq!(data_len, 1_920_000);
-                assert_eq!(dirty_rects, dirty);
-            }
-            other => panic!("expected FrameShmCommit: {other:?}"),
-        }
-        assert!(buf.is_empty());
     }
 
     #[test]
@@ -1551,15 +1289,17 @@ mod tests {
     }
 
     #[test]
-    fn concatenated_shell_move_and_frame_messages_decode_in_order() {
-        let w = 2u32;
-        let h = 2u32;
-        let st = 8u32;
-        let pix = vec![1u8; 16];
+    fn concatenated_shell_move_and_dmabuf_messages_decode_in_order() {
+        let planes = [FrameDmabufPlane {
+            plane_idx: 0,
+            stride: 8,
+            offset: 0,
+        }];
+        let dma = encode_frame_dmabuf_commit(2, 2, 0x34324241, 0, 0, 0, &planes).unwrap();
         let mut buf = Vec::new();
         buf.extend(encode_shell_move_begin(7));
         buf.extend(encode_shell_move_delta(1, 2));
-        buf.extend(encode_frame_bgra(w, h, st, &pix).unwrap());
+        buf.extend(dma);
         buf.extend(encode_shell_move_end(7));
 
         match pop_message(&mut buf).unwrap() {
@@ -1571,10 +1311,16 @@ mod tests {
             other => panic!("expected delta: {other:?}"),
         }
         match pop_message(&mut buf).unwrap() {
-            Some(DecodedMessage::Frame { width, height, .. }) => {
-                assert_eq!((width, height), (w, h));
+            Some(DecodedMessage::FrameDmabufCommit {
+                width,
+                height,
+                planes: pl,
+                ..
+            }) => {
+                assert_eq!((width, height), (2, 2));
+                assert_eq!(pl.as_slice(), planes);
             }
-            other => panic!("expected frame: {other:?}"),
+            other => panic!("expected FrameDmabufCommit: {other:?}"),
         }
         match pop_message(&mut buf).unwrap() {
             Some(DecodedMessage::ShellMoveEnd { window_id }) => assert_eq!(window_id, 7),
@@ -1598,5 +1344,44 @@ mod tests {
             o => panic!("expected ShellPong: {o:?}"),
         }
         assert!(b.is_empty());
+    }
+
+    #[test]
+    fn round_trip_frame_dmabuf_commit() {
+        let planes = vec![
+            FrameDmabufPlane {
+                plane_idx: 0,
+                stride: 7680,
+                offset: 0,
+            },
+            FrameDmabufPlane {
+                plane_idx: 1,
+                stride: 0,
+                offset: 8_294_400,
+            },
+        ];
+        let drm_format = 0x34324241u32;
+        let enc = encode_frame_dmabuf_commit(1920, 1080, drm_format, 0, 0, 42, &planes).unwrap();
+        let mut buf = enc;
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::FrameDmabufCommit {
+                width,
+                height,
+                drm_format: f,
+                modifier,
+                flags,
+                generation,
+                planes: pl,
+            }) => {
+                assert_eq!((width, height), (1920, 1080));
+                assert_eq!(f, drm_format);
+                assert_eq!(modifier, 0);
+                assert_eq!(flags, 0);
+                assert_eq!(generation, 42);
+                assert_eq!(pl, planes);
+            }
+            other => panic!("expected FrameDmabufCommit: {other:?}"),
+        }
+        assert!(buf.is_empty());
     }
 }

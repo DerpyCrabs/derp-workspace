@@ -9,22 +9,16 @@ use smithay::{
         },
         gles::GlesRenderer,
     },
-    desktop::Window,
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
     utils::{IsAlive, Logical, Point, Physical, Scale},
     wayland::compositor,
 };
 
-use crate::{desktop_stack::DesktopStack, CompositorState};
+use crate::{derp_space::DerpSpaceElem, desktop_stack::DesktopStack, CompositorState};
 
-type WinEl = <Window as AsRenderElements<GlesRenderer>>::RenderElement;
-type Desk<'a> = DesktopStack<
-    'a,
-    GlesRenderer,
-    WinEl,
-    MemoryRenderBufferRenderElement<GlesRenderer>,
->;
+type WinEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
+type Desk<'a> = DesktopStack<'a, WinEl>;
 
 fn push_named_cursor_fallback(
     state: &CompositorState,

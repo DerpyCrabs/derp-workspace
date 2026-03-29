@@ -1,3 +1,4 @@
+use smithay::desktop::space::SpaceElement;
 use smithay::{
     backend::{
         input::{
@@ -15,7 +16,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER},
 };
 
-use crate::state::CompositorState;
+use crate::{derp_space::DerpSpaceElem, state::CompositorState};
 
 /// Ctrl+Alt+F*n* → Linux VT *n* (1..=12) for [`Session::change_vt`].
 fn vt_number_from_fkey(sym: u32) -> Option<i32> {
@@ -36,15 +37,6 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
     }
 }
 
-/// Map Linux evdev button codes to `shell_wire` / CEF button index (0 left, 1 middle, 2 right).
-fn linux_evdev_button_to_shell(button: u32) -> u32 {
-    match button {
-        0x112 => 1, // BTN_MIDDLE
-        0x111 => 2, // BTN_RIGHT
-        _ => 0,     // BTN_LEFT (0x110) and others
-    }
-}
-
 impl CompositorState {
     /// Logical pointer position **within the output** (`output_geo` from [`crate::state::CompositorState::space`]).
     fn pointer_motion_output_local(
@@ -52,24 +44,13 @@ impl CompositorState {
         output_geo: Rectangle<i32, Logical>,
         local: Point<f64, Logical>,
         time_msec: u32,
-        write_shell_pointer_move: bool,
     ) {
-        let (nx, ny) =
-            if let Some((ox, oy, cw, ch)) = self.shell_letterbox_logical(output_geo.size) {
-                let pw = cw.max(1) as f64;
-                let ph = ch.max(1) as f64;
-                (
-                    ((local.x - ox as f64) / pw).clamp(0.0, 1.0),
-                    ((local.y - oy as f64) / ph).clamp(0.0, 1.0),
-                )
-            } else {
-                let gw = output_geo.size.w.max(1) as f64;
-                let gh = output_geo.size.h.max(1) as f64;
-                (
-                    (local.x / gw).clamp(0.0, 1.0),
-                    (local.y / gh).clamp(0.0, 1.0),
-                )
-            };
+        let gw = output_geo.size.w.max(1) as f64;
+        let gh = output_geo.size.h.max(1) as f64;
+        let (nx, ny) = (
+            (local.x / gw).clamp(0.0, 1.0),
+            (local.y / gh).clamp(0.0, 1.0),
+        );
         self.shell_pointer_norm = Some((nx, ny));
 
         let pos = local + output_geo.loc.to_f64();
@@ -78,21 +59,9 @@ impl CompositorState {
 
         let pointer = self.seat.get_pointer().unwrap();
 
-        let route_cef = self.shell_pointer_route_to_cef(pos);
         let grabbed = pointer.is_grabbed();
 
-        let shell_buf = self.shell_pointer_buffer_pixels(nx, ny);
-        let forward_shell = self.shell_forward_pointer_to_shell_while_grabbed(route_cef, grabbed);
-        if forward_shell && write_shell_pointer_move {
-            if let Some((vx, vy)) = shell_buf {
-                let pkt = shell_wire::encode_compositor_pointer_move(vx, vy);
-                self.shell_ipc_try_write(&pkt);
-            }
-        }
-
         let under = if grabbed || self.shell_move_is_active() {
-            None
-        } else if route_cef && shell_buf.is_some() {
             None
         } else {
             self.surface_under(pos)
@@ -108,6 +77,7 @@ impl CompositorState {
             },
         );
         pointer.frame(self);
+        self.shell_ipc_maybe_forward_pointer_move(pos);
     }
 
     /// Touch position in **output-local logical** coords (matches [`Self::pointer_motion_output_local`]).
@@ -131,37 +101,11 @@ impl CompositorState {
         }
     }
 
-    fn shell_try_touch_ipc(&mut self, touch_id: i32, phase: u32) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let pos = pointer.current_location();
-        let norm = self
-            .shell_pointer_norm
-            .or_else(|| self.shell_pointer_norm_from_global(pos));
-        let route_cef = self.shell_pointer_route_to_cef(pos);
-        let forward_shell =
-            self.shell_forward_pointer_to_shell_while_grabbed(route_cef, pointer.is_grabbed());
-        if !forward_shell {
-            return;
-        }
-        let Some((nx, ny)) = norm else {
-            return;
-        };
-        let Some((vx, vy)) = self.shell_pointer_buffer_pixels(nx, ny) else {
-            return;
-        };
-        if phase > shell_wire::TOUCH_PHASE_CANCELLED {
-            return;
-        }
-        let pkt = shell_wire::encode_compositor_touch(touch_id, phase, vx, vy);
-        self.shell_ipc_try_write(&pkt);
-    }
-
     fn process_pointer_button(
         &mut self,
         button: u32,
         button_state: ButtonState,
         time_msec: u32,
-        write_shell_pointer_button: bool,
     ) {
         let pointer = self.seat.get_pointer().unwrap();
         let keyboard = self.seat.get_keyboard().unwrap();
@@ -186,12 +130,14 @@ impl CompositorState {
         const BTN_LEFT: u32 = 0x110;
 
         let shell_px = if route_cef || self.shell_move_is_active() {
-            norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
-                .or_else(|| self.shell_pointer_view_px(pos))
+            norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
+                self.shell_pointer_norm_from_global(pos)
+                    .and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
+            })
         } else {
             None
         };
-        if let Some((vx, vy)) = shell_px {
+        if shell_px.is_some() {
             if button == BTN_LEFT
                 && button_state == ButtonState::Pressed
                 && !pointer.is_grabbed()
@@ -202,50 +148,29 @@ impl CompositorState {
                         self.shell_close_window(wid);
                     }
                 } else if let Some(window) = self.window_for_titlebar_drag_at(pos) {
-                    self.space.raise_element(&window, true);
+                    self.space
+                        .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
                     keyboard.set_focus(
                         self,
                         Some(window.toplevel().unwrap().wl_surface().clone()),
                         serial,
                     );
-                    self.space.elements().for_each(|w| {
-                        w.toplevel().unwrap().send_pending_configure();
+                    self.space.elements().for_each(|e| {
+                        if let DerpSpaceElem::Wayland(w) = e {
+                            w.toplevel().unwrap().send_pending_configure();
+                        }
                     });
                 }
-            }
-            let b = linux_evdev_button_to_shell(button);
-            let mouse_up = button_state != ButtonState::Pressed;
-            let titlebar_drag_wid = if button == BTN_LEFT && button_state == ButtonState::Pressed {
-                if self.window_for_titlebar_close_at(pos).is_some() {
-                    0
-                } else {
-                    self.window_for_titlebar_drag_at(pos)
-                        .and_then(|w| {
-                            self.window_registry
-                                .window_id_for_wl_surface(w.toplevel()?.wl_surface())
-                        })
-                        .unwrap_or(0)
-                }
-            } else {
-                0
-            };
-            if write_shell_pointer_button {
-                let pkt = shell_wire::encode_compositor_pointer_button(
-                    vx,
-                    vy,
-                    b,
-                    mouse_up,
-                    titlebar_drag_wid,
-                );
-                self.shell_ipc_try_write(&pkt);
             }
             if ButtonState::Pressed == button_state
                 && !pointer.is_grabbed()
                 && !self.shell_point_in_any_window_decoration(pos)
             {
-                self.space.elements().for_each(|window| {
-                    window.set_activated(false);
-                    window.toplevel().unwrap().send_pending_configure();
+                self.space.elements().for_each(|e| {
+                    e.set_activate(false);
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        w.toplevel().unwrap().send_pending_configure();
+                    }
                 });
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
             }
@@ -259,6 +184,35 @@ impl CompositorState {
                 },
             );
             pointer.frame(self);
+            let chrome_suppress_cef = button == BTN_LEFT
+                && button_state == ButtonState::Pressed
+                && !pointer.is_grabbed()
+                && (self.window_for_titlebar_close_at(pos).is_some()
+                    || self.window_for_titlebar_drag_at(pos).is_some());
+            if route_cef
+                && !chrome_suppress_cef
+                && !self.shell_ipc_conn.is_disconnected()
+            {
+                if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    const BTN_RIGHT: u32 = 0x111;
+                    const BTN_MIDDLE: u32 = 0x112;
+                    let shell_btn = match button {
+                        BTN_MIDDLE => 1u32,
+                        BTN_RIGHT => 2u32,
+                        _ => 0u32,
+                    };
+                    let mouse_up = button_state == ButtonState::Released;
+                    self.shell_last_pointer_ipc_px = Some((bx, by));
+                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(bx, by));
+                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_button(
+                        bx,
+                        by,
+                        shell_btn,
+                        mouse_up,
+                        0,
+                    ));
+                }
+            }
             if button == BTN_LEFT && button_state == ButtonState::Released {
                 self.shell_move_end_active();
             }
@@ -266,24 +220,40 @@ impl CompositorState {
         }
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-            if let Some((window, _loc)) = self
+            if let Some((elem, _loc)) = self
                 .space
                 .element_under(pointer.current_location())
                 .map(|(w, l)| (w.clone(), l))
             {
-                self.space.raise_element(&window, true);
-                keyboard.set_focus(
-                    self,
-                    Some(window.toplevel().unwrap().wl_surface().clone()),
-                    serial,
-                );
-                self.space.elements().for_each(|window| {
-                    window.toplevel().unwrap().send_pending_configure();
-                });
+                match elem {
+                    DerpSpaceElem::Wayland(window) => {
+                        self.space
+                            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+                        keyboard.set_focus(
+                            self,
+                            Some(window.toplevel().unwrap().wl_surface().clone()),
+                            serial,
+                        );
+                        self.space.elements().for_each(|e| {
+                            if let DerpSpaceElem::Wayland(w) = e {
+                                w.toplevel().unwrap().send_pending_configure();
+                            }
+                        });
+                    }
+                    DerpSpaceElem::X11(x11) => {
+                        if let Some(surf) = x11.wl_surface() {
+                            self.space
+                                .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
+                            keyboard.set_focus(self, Some(surf), serial);
+                        }
+                    }
+                }
             } else {
-                self.space.elements().for_each(|window| {
-                    window.set_activated(false);
-                    window.toplevel().unwrap().send_pending_configure();
+                self.space.elements().for_each(|e| {
+                    e.set_activate(false);
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        w.toplevel().unwrap().send_pending_configure();
+                    }
                 });
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
             }
@@ -375,7 +345,7 @@ impl CompositorState {
                     out_h = output_geo.size.h,
                     "PointerMotion → logical"
                 );
-                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event), true);
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
@@ -395,7 +365,7 @@ impl CompositorState {
                     shell_ph = self.shell_window_physical_px.1,
                     "PointerMotionAbsolute"
                 );
-                self.pointer_motion_output_local(output_geo, local, event.time_msec(), true);
+                self.pointer_motion_output_local(output_geo, local, event.time_msec());
                 self.needs_winit_redraw = true;
             }
             InputEvent::PointerButton { event, .. } => {
@@ -403,7 +373,6 @@ impl CompositorState {
                     event.button_code(),
                     event.state(),
                     event.time_msec(),
-                    true,
                 );
             }
             InputEvent::TouchDown { event, .. } => {
@@ -431,20 +400,11 @@ impl CompositorState {
                     shell_ph = self.shell_window_physical_px.1,
                     "TouchDown → emulate left press"
                 );
-                self.pointer_motion_output_local(
-                    output_geo,
-                    local,
-                    Event::time_msec(&event),
-                    false,
-                );
-                let tid = i32::from(event.slot());
-                self.shell_try_touch_ipc(tid, shell_wire::TOUCH_PHASE_MOVED);
-                self.shell_try_touch_ipc(tid, shell_wire::TOUCH_PHASE_PRESSED);
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.process_pointer_button(
                     0x110,
                     ButtonState::Pressed,
                     Event::time_msec(&event),
-                    false,
                 );
                 self.needs_winit_redraw = true;
             }
@@ -469,13 +429,7 @@ impl CompositorState {
                     local_y = local.y,
                     "TouchMotion"
                 );
-                self.pointer_motion_output_local(
-                    output_geo,
-                    local,
-                    Event::time_msec(&event),
-                    false,
-                );
-                self.shell_try_touch_ipc(i32::from(event.slot()), shell_wire::TOUCH_PHASE_MOVED);
+                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchUp { event, .. } => {
@@ -489,14 +443,11 @@ impl CompositorState {
                     return;
                 }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp → emulate release");
-                let tid = i32::from(event.slot());
-                self.shell_try_touch_ipc(tid, shell_wire::TOUCH_PHASE_RELEASED);
                 self.touch_emulation_slot = None;
                 self.process_pointer_button(
                     0x110,
                     ButtonState::Released,
                     Event::time_msec(&event),
-                    false,
                 );
                 self.needs_winit_redraw = true;
             }
@@ -511,14 +462,11 @@ impl CompositorState {
                     return;
                 }
                 tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel → emulate release");
-                let tid = i32::from(event.slot());
-                self.shell_try_touch_ipc(tid, shell_wire::TOUCH_PHASE_CANCELLED);
                 self.touch_emulation_slot = None;
                 self.process_pointer_button(
                     0x110,
                     ButtonState::Released,
                     Event::time_msec(&event),
-                    false,
                 );
                 self.needs_winit_redraw = true;
             }

@@ -13,7 +13,6 @@ gpu-tests = []
 [dependencies]
 bitflags = "2.2.1"
 clap = { version = "4", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 shell_wire = { path = "../shell_wire" }
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm",
@@ -26,6 +25,7 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "desktop",
     "renderer_test",
     "use_system_lib",
+    "xwayland",
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
@@ -34,7 +34,7 @@ xcursor = "0.3.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-memmap2 = "0.9"
+nix = { version = "0.29", default-features = false, features = ["socket", "uio"] }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

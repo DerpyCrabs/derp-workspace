@@ -7,7 +7,7 @@ use smithay::{
 
 use crate::shell_overlay::SHELL_OSR_MEMORY_FOURCC;
 
-/// Match CEf/shell path: **B,G,R,A** bytes per pixel for [`SHELL_OSR_MEMORY_FOURCC`] (see `apply_shell_frame_bgra`).
+/// Match CEF/shell path: **B,G,R,A** bytes per pixel for [`SHELL_OSR_MEMORY_FOURCC`] (shell overlay buffer format).
 fn rgba_strip_to_shell_bgra(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     let n = (width as usize)
         .checked_mul(height as usize)?

@@ -14,19 +14,21 @@
 #   RUST_LOG=warn,derp_input=debug,derp_shell_sync=debug
 #
 # Usage:
-#   bash scripts/list-derp-logs.sh [-n N] [-f|--follow]
+#   bash scripts/list-derp-logs.sh [-n N] [-f|--follow] [-H|--head] [-h|--help]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 LINES=120
 FOLLOW=0
+HEAD=0
 
 usage() {
-  echo "Usage: $0 [-n N] [-f|--follow] [-h|--help]"
+  echo "Usage: $0 [-n N] [-f|--follow] [-H|--head] [-h|--help]"
   echo "  SSH (remote-install.env: REMOTE_USER, REMOTE_HOST, REMOTE_REPO) and tail logs on the remote."
-  echo "  -n N     Last N lines (default $LINES)."
-  echo "  -f       tail -f (ssh uses -t when this terminal is interactive)."
+  echo "  -n N       Line count: last N with tail (default), or first N when -H/--head is set."
+  echo "  -H|--head  First N lines (head) instead of last N (tail). Not used with -f."
+  echo "  -f         tail -f (ssh uses -t when this terminal is interactive)."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -f|--follow) FOLLOW=1; shift ;;
+    -H|--head) HEAD=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown option: $1" >&2
@@ -44,6 +47,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$HEAD" == 1 ]] && [[ "$FOLLOW" == 1 ]]; then
+  echo "$0: --head is incompatible with -f/--follow" >&2
+  exit 1
+fi
 
 list_logs_body() {
   STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -66,11 +74,16 @@ list_logs_body() {
   fi
 
   echo ""
-  echo "--- last $LINES lines of $(basename "$DEFAULT_LOG") ($(wc -c <"$DEFAULT_LOG") bytes) ---"
-  if [[ "$FOLLOW" == 1 ]]; then
-    exec tail -n "$LINES" -f "$DEFAULT_LOG"
+  if [[ "$HEAD" == 1 ]]; then
+    echo "--- first $LINES lines of $(basename "$DEFAULT_LOG") ($(wc -c <"$DEFAULT_LOG") bytes) ---"
+    head -n "$LINES" "$DEFAULT_LOG"
   else
-    tail -n "$LINES" "$DEFAULT_LOG"
+    echo "--- last $LINES lines of $(basename "$DEFAULT_LOG") ($(wc -c <"$DEFAULT_LOG") bytes) ---"
+    if [[ "$FOLLOW" == 1 ]]; then
+      exec tail -n "$LINES" -f "$DEFAULT_LOG"
+    else
+      tail -n "$LINES" "$DEFAULT_LOG"
+    fi
   fi
 }
 
@@ -94,11 +107,13 @@ fi
 
 follow_arg=""
 [[ "$FOLLOW" == 1 ]] && follow_arg="--follow"
+head_arg=""
+[[ "$HEAD" == 1 ]] && head_arg="--head"
 
 # shellcheck disable=SC2086
 exec ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 export LIST_DERP_LOGS_INTERNAL=1
-exec bash scripts/list-derp-logs.sh -n $(printf '%q' "$LINES") ${follow_arg}
+exec bash scripts/list-derp-logs.sh -n $(printf '%q' "$LINES") ${head_arg} ${follow_arg}
 EOF

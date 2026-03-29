@@ -11,7 +11,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             protocol::{wl_seat, wl_surface::WlSurface},
-            Resource,
+            Client, Resource,
         },
     },
     utils::{Rectangle, Serial},
@@ -26,6 +26,7 @@ use smithay::{
 
 use crate::{
     chrome_bridge::ChromeEvent,
+    derp_space::DerpSpaceElem,
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
     CompositorState,
 };
@@ -53,7 +54,18 @@ impl XdgShellHandler for CompositorState {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let wl0 = surface.wl_surface();
         let (title, app_id) = toplevel_title_app_id(&surface);
-        self.window_registry.register_toplevel(wl0, title, app_id);
+        let wayland_client_pid = wl0
+            .client()
+            .and_then(|c: Client| c.get_credentials(&self.display_handle).ok())
+            .map(|cr| cr.pid);
+        let map_at_output_origin =
+            self.toplevel_is_embedded_shell_host(&title, &app_id, wayland_client_pid);
+        self.window_registry.register_toplevel(
+            wl0,
+            title,
+            app_id,
+            wayland_client_pid,
+        );
         let info = self
             .window_registry
             .snapshot_for_wl_surface(wl0)
@@ -63,7 +75,11 @@ impl XdgShellHandler for CompositorState {
         let wl = window.toplevel().unwrap().wl_surface().clone();
 
         let existing_before = self.space.elements().count();
-        let (map_x, map_y) = self.new_toplevel_initial_location();
+        let (map_x, map_y) = if map_at_output_origin {
+            self.primary_output_logical_origin()
+        } else {
+            self.new_toplevel_initial_location()
+        };
         tracing::info!(
             target: "derp_shell_sync",
             window_id = info.window_id,
@@ -73,7 +89,8 @@ impl XdgShellHandler for CompositorState {
             map_y,
             "xdg new_toplevel initial map (logical)"
         );
-        self.space.map_element(window.clone(), (map_x, map_y), false);
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), false);
 
         self.apply_fractional_scale_to_surface(&wl);
 
@@ -83,24 +100,39 @@ impl XdgShellHandler for CompositorState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
-        let window_opt = self
-            .space
-            .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == wl)
-            .cloned();
+        let window_opt = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
+            } else {
+                None
+            }
+        });
         if let Some(w) = window_opt {
-            self.space.unmap_elem(&w);
+            self.space.unmap_elem(&DerpSpaceElem::Wayland(w));
         }
+        let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
-            self.shell_emit_chrome_event(ChromeEvent::WindowUnmapped { window_id });
+            self.shell_emit_chrome_window_unmapped(window_id, removed);
         }
     }
 
     fn title_changed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
+        let old = self.window_registry.snapshot_for_wl_surface(wl);
         let title = toplevel_title_app_id(&surface).0;
         if let Some(true) = self.window_registry.set_title(wl, title) {
-            if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            let info = self
+                .window_registry
+                .snapshot_for_wl_surface(wl)
+                .expect("title_changed: registry row");
+            let old_shell = old
+                .as_ref()
+                .map(|i| self.window_info_is_solid_shell_host(i))
+                .unwrap_or(false);
+            let new_shell = self.window_info_is_solid_shell_host(&info);
+            if new_shell && !old_shell {
+                self.shell_retract_phantom_shell_window(info.window_id);
+            } else if !new_shell {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
@@ -108,9 +140,21 @@ impl XdgShellHandler for CompositorState {
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
+        let old = self.window_registry.snapshot_for_wl_surface(wl);
         let app_id = toplevel_title_app_id(&surface).1;
         if let Some(true) = self.window_registry.set_app_id(wl, app_id) {
-            if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
+            let info = self
+                .window_registry
+                .snapshot_for_wl_surface(wl)
+                .expect("app_id_changed: registry row");
+            let old_shell = old
+                .as_ref()
+                .map(|i| self.window_info_is_solid_shell_host(i))
+                .unwrap_or(false);
+            let new_shell = self.window_info_is_solid_shell_host(&info);
+            if new_shell && !old_shell {
+                self.shell_retract_phantom_shell_window(info.window_id);
+            } else if !new_shell {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
@@ -137,9 +181,14 @@ impl XdgShellHandler for CompositorState {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
-        let seat = Seat::from_resource(&seat).unwrap();
-
         let wl_surface = surface.wl_surface();
+        if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl_surface) {
+            if self.window_info_is_solid_shell_host(&info) {
+                return;
+            }
+        }
+
+        let seat = Seat::from_resource(&seat).unwrap();
 
         if let Some(start_data) = check_grab(&seat, wl_surface, serial) {
             let pointer = seat.get_pointer().unwrap();
@@ -147,10 +196,18 @@ impl XdgShellHandler for CompositorState {
             let window = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
-                .unwrap()
-                .clone();
-            let initial_window_location = self.space.element_location(&window).unwrap();
+                .find_map(|e| {
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        (w.toplevel().unwrap().wl_surface() == wl_surface).then_some(w.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let initial_window_location = self
+                .space
+                .element_location(&DerpSpaceElem::Wayland(window.clone()))
+                .unwrap();
 
             let grab = MoveSurfaceGrab::new(start_data, window, initial_window_location);
 
@@ -175,10 +232,18 @@ impl XdgShellHandler for CompositorState {
             let window = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == wl_surface)
-                .unwrap()
-                .clone();
-            let initial_window_location = self.space.element_location(&window).unwrap();
+                .find_map(|e| {
+                    if let DerpSpaceElem::Wayland(w) = e {
+                        (w.toplevel().unwrap().wl_surface() == wl_surface).then_some(w.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let initial_window_location = self
+                .space
+                .element_location(&DerpSpaceElem::Wayland(window.clone()))
+                .unwrap();
             let initial_window_size = window.geometry().size;
 
             surface.with_pending_state(|state| {
@@ -224,12 +289,14 @@ fn check_grab(
     Some(start_data)
 }
 
-pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: &WlSurface) {
-    if let Some(window) = space
-        .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned()
-    {
+pub fn handle_commit(popups: &mut PopupManager, space: &Space<DerpSpaceElem>, surface: &WlSurface) {
+    if let Some(window) = space.elements().find_map(|e| {
+        if let DerpSpaceElem::Wayland(w) = e {
+            (w.toplevel().unwrap().wl_surface() == surface).then_some(w.clone())
+        } else {
+            None
+        }
+    }) {
         let initial_configure_sent = with_states(surface, |states| {
             states
                 .data_map
@@ -263,17 +330,22 @@ impl CompositorState {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
         };
-        let Some(window) = self
-            .space
-            .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &root)
-        else {
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
             return;
         };
 
         let output = self.space.outputs().next().unwrap();
         let output_geo = self.space.output_geometry(output).unwrap();
-        let window_geo = self.space.element_geometry(window).unwrap();
+        let window_geo = self
+            .space
+            .element_geometry(&DerpSpaceElem::Wayland(window.clone()))
+            .unwrap();
 
         let mut target = output_geo;
         target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));

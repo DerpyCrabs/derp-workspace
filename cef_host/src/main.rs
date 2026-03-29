@@ -4,14 +4,20 @@
 //! unpack directory (Resources, locales, `libcef.so`). The binary embeds `RUNPATH` for `libcef.so`;
 //! use `XDG_RUNTIME_DIR` for the compositor Unix socket.
 //!
-//! Ozone defaults to `headless` (see [`cef_host::ozone_platform_headless_for_osr`]) so a nested
-//! compositor’s `WAYLAND_DISPLAY` does not become Chromium’s display while OSR is active; set
-//! `CEF_HOST_USE_WAYLAND_PLATFORM=1` to experiment.
+//! On **Linux**, Chromium flags **`--use-angle=gl-egl`** and **`--ozone-platform=wayland`** are always
+//! appended (dma-buf OSR). **`WAYLAND_DISPLAY`** must name the compositor socket.
 //!
 //! **Gray / blank shell:** enable **`CEF_HOST_DIAG=1`** for stderr layout checks (`CEF_PATH`,
 //! `libcef.so`, pack files), **`CEF_HOST_TRACE_PAINT=1`** to log the first OSR paint size, and
 //! optional **`CEF_HOST_LOG_FILE` / `CEF_HOST_LOG_SEVERITY`** (e.g. `verbose`) for Chromium’s log.
+//! **`CEF_HOST_DMABUF_TRACE=1`** logs **every** `OnAcceleratedPaint` (dma-buf planes/modifier) to stderr.
+//! **`CEF_HOST_CHROMIUM_VERBOSE=1`** adds Chromium **`--enable-logging=stderr --v=2`** (GPU/EGL noise).
 //! Navigation failures are always logged from [`LoadHandler::on_load_error`].
+//!
+//! **dma-buf OSR only**: CEF shares textures as dma-bufs → [`shell_wire::MSG_FRAME_DMABUF_COMMIT`].
+//! ANGLE defaults to **`gl-egl`** (override **`CEF_HOST_ANGLE_BACKEND`**).
+//! Chromium flags: **`--no-sandbox`**, **`--disable-gpu-sandbox`**, **`--disable-gpu-memory-buffer-video-frames`**,
+//! and **`--in-process-gpu`** unless **`CEF_HOST_IN_PROCESS_GPU=0`** (`Settings::no_sandbox` is also set).
 
 mod compositor_downlink;
 mod control_server;
@@ -35,9 +41,34 @@ use clap::Parser;
 #[cfg(unix)]
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 
-use cef_host::osr_view_state::OsrViewState;
+use cef_host::osr_view_state::{OsrViewState, OSR_VIEW_DIP_H, OSR_VIEW_DIP_W};
+
+#[cfg(unix)]
+static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
+
+/// Maps CEF [`ColorType`] to the **Linux dma-buf DRM fourcc** for the shared texture.
+///
+/// Chromium’s `GetFourCCFormatFromSharedImageFormat` in `ui/gfx/linux/drm_util_linux.cc`
+/// (https://chromium.googlesource.com/chromium/src/+/main/ui/gfx/linux/drm_util_linux.cc)
+/// maps Viz `kBGRA_8888` → `DRM_FORMAT_ARGB8888` and `kRGBA_8888` → `DRM_FORMAT_ABGR8888` (naming reflects
+/// channel assignment, not a literal “BGRA bytes” drm code). Using `Bgra8888` / `Rgba8888` here breaks
+/// `eglCreateImageKHR` on drivers that import `AR24`/`AB24` but not `BA24`/`RA24`.
+#[cfg(unix)]
+fn cef_color_to_drm_format(ct: ColorType) -> u32 {
+    use drm_fourcc::DrmFourcc;
+    if ct == ColorType::BGRA_8888 {
+        DrmFourcc::Argb8888 as u32
+    } else if ct == ColorType::RGBA_8888 {
+        DrmFourcc::Abgr8888 as u32
+    } else {
+        DrmFourcc::Argb8888 as u32
+    }
+}
 
 static FIRST_OSR_PAINT_LOG: Once = Once::new();
+
+#[cfg(unix)]
+static FIRST_ACCELERATED_PAINT_LOG: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "cef_host", about = "CEF OSR → compositor shell IPC")]
@@ -50,12 +81,14 @@ struct Cli {
     #[arg(long, default_value = "derp-shell.sock")]
     compositor_socket: String,
 
-    /// OSR view width in pixels.
+    /// Reserved; OSR DIP is fixed in `cef_host::osr_view_state` (`OSR_VIEW_DIP_*`) for now.
     #[arg(long, default_value_t = 800)]
+    #[allow(dead_code)]
     width: i32,
 
-    /// OSR view height in pixels.
+    /// Reserved; see `width`.
     #[arg(long, default_value_t = 600)]
+    #[allow(dead_code)]
     height: i32,
 }
 
@@ -68,24 +101,44 @@ wrap_app! {
             command_line: Option<&mut CommandLine>,
         ) {
             if let Some(cmd) = command_line {
+                cmd.append_switch(Some(&CefString::from("no-sandbox")));
                 cmd.append_switch(Some(&CefString::from("allow-file-access-from-files")));
-                if cef_host::ozone_platform_headless_for_osr() {
-                    cmd.append_switch_with_value(
-                        Some(&CefString::from("ozone-platform")),
-                        Some(&CefString::from("headless")),
-                    );
-                }
-                // Prefer ANGLE SwiftShader when not using the system GPU. `--disable-gpu` alone
-                // often yields an all-zero OSR buffer with Ozone headless; native EGL (e.g. NVIDIA
-                // in nested compositors) may also fail to create a context.
-                if std::env::var("CEF_HOST_USE_GPU").as_deref() != Ok("1") {
-                    cmd.append_switch_with_value(
-                        Some(&CefString::from("use-gl")),
-                        Some(&CefString::from("angle")),
-                    );
+                // OSR shared-texture / dma-buf: avoid blocklists and prefer native GPU buffers on Linux.
+                cmd.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
+                cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
+                // Wayland zero-copy: compositor must advertise `zwp_linux_dmabuf_v1` (Derp: `CompositorState::init_linux_dmabuf_global`).
+                cmd.append_switch(Some(&CefString::from("enable-native-gpu-memory-buffers")));
+                cmd.append_switch(Some(&CefString::from("disable-gpu-sandbox")));
+                cmd.append_switch(Some(&CefString::from(
+                    "disable-gpu-memory-buffer-video-frames",
+                )));
+                #[cfg(target_os = "linux")]
+                {
                     cmd.append_switch_with_value(
                         Some(&CefString::from("use-angle")),
-                        Some(&CefString::from("swiftshader")),
+                        Some(&CefString::from("gl-egl")),
+                    );
+                    cmd.append_switch_with_value(
+                        Some(&CefString::from("ozone-platform")),
+                        Some(&CefString::from("wayland")),
+                    );
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let angle_backend = cef_host::angle_backend_for_osr();
+                    cmd.append_switch_with_value(
+                        Some(&CefString::from("use-angle")),
+                        Some(&CefString::from(angle_backend.as_str())),
+                    );
+                }
+                if std::env::var("CEF_HOST_IN_PROCESS_GPU").as_deref() != Ok("0") {
+                    cmd.append_switch(Some(&CefString::from("in-process-gpu")));
+                }
+                if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1") {
+                    cmd.append_switch(Some(&CefString::from("enable-logging=stderr")));
+                    cmd.append_switch_with_value(
+                        Some(&CefString::from("v")),
+                        Some(&CefString::from("2")),
                     );
                 }
             }
@@ -182,14 +235,11 @@ wrap_render_handler! {
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(r) = rect {
-                let Ok(g) = self.view_state.lock() else {
-                    return;
-                };
                 r.x = 0;
                 r.y = 0;
-                // DIP / CSS pixels — must stay in sync with [`cef_host::osr_view_state::OsrViewState`] and `WindowInfo::bounds`.
-                r.width = g.dip_w;
-                r.height = g.dip_h;
+                // Fixed DIP for now (avoids 0×0 before geometry); keep in sync with `screen_info` and `OsrViewState` dip.
+                r.width = OSR_VIEW_DIP_W;
+                r.height = OSR_VIEW_DIP_H;
             }
         }
 
@@ -209,31 +259,121 @@ wrap_render_handler! {
             out.rect = Rect {
                 x: 0,
                 y: 0,
-                width: g.dip_w,
-                height: g.dip_h,
+                width: OSR_VIEW_DIP_W,
+                height: OSR_VIEW_DIP_H,
             };
             out.available_rect = out.rect.clone();
             *si = out;
             1
         }
 
+        #[cfg(unix)]
+        fn on_accelerated_paint(
+            &self,
+            _browser: Option<&mut Browser>,
+            type_: PaintElementType,
+            _dirty_rects: Option<&[Rect]>,
+            info: Option<&AcceleratedPaintInfo>,
+        ) {
+            if type_ != PaintElementType::VIEW {
+                return;
+            }
+            let Some(info) = info else {
+                return;
+            };
+            let pc = info.plane_count as usize;
+            if pc == 0 || pc > shell_wire::MAX_DMABUF_PLANES as usize {
+                return;
+            }
+            let drm_fmt = cef_color_to_drm_format(info.format);
+            let w = info.extra.coded_size.width as u32;
+            let h = info.extra.coded_size.height as u32;
+            let dmabuf_trace = std::env::var("CEF_HOST_DMABUF_TRACE").as_deref() == Ok("1");
+            if dmabuf_trace {
+                let planes_s: Vec<String> = (0..pc)
+                    .map(|i| {
+                        let p = &info.planes[i];
+                        format!(
+                            "plane[{}]: stride={} offset={} fd={}",
+                            i, p.stride, p.offset, p.fd
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "cef_host: OnAcceleratedPaint dma-buf {}x{} planes={} cef_color={:?} drm_fourcc={:#x} modifier={:#x} | {}",
+                    w,
+                    h,
+                    pc,
+                    info.format,
+                    drm_fmt,
+                    info.modifier,
+                    planes_s.join("; ")
+                );
+            } else {
+                FIRST_ACCELERATED_PAINT_LOG.call_once(|| {
+                    eprintln!(
+                        "cef_host: OnAcceleratedPaint dma-buf {}x{} planes={} drm_format={:#x} modifier={:#x} (CEF_HOST_DMABUF_TRACE=1 for every frame + plane fds)",
+                        w,
+                        h,
+                        pc,
+                        drm_fmt,
+                        info.modifier
+                    );
+                });
+            }
+            SHELL_USE_ACCELERATED_FRAMES.store(true, Ordering::Relaxed);
+            let mut planes = Vec::with_capacity(pc);
+            let mut fds: Vec<std::os::raw::c_int> = Vec::with_capacity(pc);
+            for i in 0..pc {
+                let p = &info.planes[i];
+                planes.push(shell_wire::FrameDmabufPlane {
+                    plane_idx: i as u32,
+                    stride: p.stride,
+                    offset: p.offset,
+                });
+                fds.push(p.fd);
+            }
+            let flags = 0u32;
+            if let Err(e) = self.frame_sink.lock().expect("frame_sink").push_dmabuf_planes(
+                w,
+                h,
+                drm_fmt,
+                info.modifier,
+                flags,
+                &planes,
+                &fds,
+            ) {
+                eprintln!("cef_host: dma-buf frame IPC: {e}");
+            }
+        }
+
         fn on_paint(
             &self,
             browser: Option<&mut Browser>,
             type_: PaintElementType,
-            dirty_rects: Option<&[Rect]>,
+            _dirty_rects: Option<&[Rect]>,
             buffer: *const u8,
             width: std::os::raw::c_int,
             height: std::os::raw::c_int,
         ) {
-            if type_ != PaintElementType::VIEW || buffer.is_null() || width <= 0 || height <= 0 {
+            if type_ != PaintElementType::VIEW || width <= 0 || height <= 0 {
+                return;
+            }
+            #[cfg(unix)]
+            if SHELL_USE_ACCELERATED_FRAMES.load(Ordering::Relaxed) {
+                return;
+            }
+            if buffer.is_null() {
                 return;
             }
             FIRST_OSR_PAINT_LOG.call_once(|| {
                 if std::env::var("CEF_HOST_DIAG").as_deref() == Ok("1")
                     || std::env::var("CEF_HOST_TRACE_PAINT").as_deref() == Ok("1")
                 {
-                    eprintln!("cef_host: first OSR paint buffer {}x{}", width, height);
+                    eprintln!(
+                        "cef_host: software OSR paint {}x{} (no IPC — waiting on OnAcceleratedPaint / dma-buf)",
+                        width, height
+                    );
                 }
             });
             let notify = {
@@ -244,50 +384,6 @@ wrap_render_handler! {
                 g.set_buffer_size(width, height);
                 prev != g.buffer_dimensions()
             };
-            // CEF may supply partial dirty rects (e.g. hue tick on `.shell-panel` only). The compositor only
-            // copies those regions into the shell memory buffer; undamaged pixels stay stale. Window chrome
-            // (`position:fixed` titlebars) then desyncs from Wayland clients during drag / multi-window.
-            // An empty dirty list on the wire means full-buffer upload (see `apply_shell_frame_bgra`).
-            // Set `CEF_HOST_SHELL_PARTIAL_DAMAGE=1` to forward CEF dirty rects (better perf if acceptable).
-            let dirty_forward = std::env::var("CEF_HOST_SHELL_PARTIAL_DAMAGE").as_deref() == Ok("1");
-            let dirty_owned: Vec<shell_wire::ShellBufferRect> = if dirty_forward {
-                dirty_rects
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter_map(|r| {
-                        if r.width > 0 && r.height > 0 {
-                            Some(shell_wire::ShellBufferRect {
-                                x: r.x,
-                                y: r.y,
-                                w: r.width,
-                                h: r.height,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let dirty_ref: &[shell_wire::ShellBufferRect] = if dirty_forward {
-                &dirty_owned
-            } else {
-                &[]
-            };
-            let stride = width * 4;
-            let len = (stride * height) as usize;
-            let pix = unsafe { std::slice::from_raw_parts(buffer, len) };
-            let t_send = std::time::Instant::now();
-            if let Err(e) = self.frame_sink.lock().expect("frame_sink").push_pixels(
-                width as u32,
-                height as u32,
-                stride as u32,
-                pix,
-                dirty_ref,
-            ) {
-                eprintln!("cef_host: frame IPC: {e}");
-            }
             let undersized_nudge = {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;
@@ -315,14 +411,6 @@ wrap_render_handler! {
                         }
                     }
                 }
-            }
-            if std::env::var("CEF_HOST_PERF").as_deref() == Ok("1") {
-                eprintln!(
-                    "cef_host: on_paint IPC {} μs ({}x{})",
-                    t_send.elapsed().as_micros(),
-                    width,
-                    height
-                );
             }
         }
     }
@@ -453,6 +541,12 @@ fn apply_cef_log_env(settings: &mut Settings) {
             eprintln!("cef_host: CEF_HOST_LOG_FILE -> {path}");
         }
     }
+    if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1")
+        && std::env::var("CEF_HOST_LOG_SEVERITY").is_err()
+    {
+        settings.log_severity = LogSeverity::VERBOSE;
+        eprintln!("cef_host: CEF_HOST_CHROMIUM_VERBOSE -> Settings.log_severity=VERBOSE (override with CEF_HOST_LOG_SEVERITY)");
+    }
     if let Ok(sev) = std::env::var("CEF_HOST_LOG_SEVERITY") {
         settings.log_severity = match sev.to_ascii_lowercase().as_str() {
             "verbose" => LogSeverity::VERBOSE,
@@ -507,12 +601,32 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if std::env::var("CEF_HOST_USE_GPU").as_deref() == Ok("1") {
-        eprintln!("cef_host: CEF_HOST_USE_GPU=1 (OSR may use system GPU via ANGLE)");
-    } else {
+    eprintln!("cef_host: dma-buf OSR (shared texture → compositor)");
+    #[cfg(target_os = "linux")]
+    {
         eprintln!(
-            "cef_host: CEF_HOST_USE_GPU unset — ANGLE/SwiftShader OSR path; set CEF_HOST_USE_GPU=1 on capable GPUs"
+            "cef_host: forced --use-angle=gl-egl --ozone-platform=wayland DISPLAY={:?} WAYLAND_DISPLAY={:?}",
+            std::env::var_os("DISPLAY"),
+            std::env::var_os("WAYLAND_DISPLAY")
         );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!(
+            "cef_host: use-angle={}",
+            cef_host::angle_backend_for_osr()
+        );
+        eprintln!("cef_host: ozone-platform not set on this target");
+    }
+    eprintln!("cef_host: --disable-gpu-sandbox --disable-gpu-memory-buffer-video-frames");
+    if std::env::var("CEF_HOST_IN_PROCESS_GPU").as_deref() != Ok("0") {
+        eprintln!("cef_host: --in-process-gpu (set CEF_HOST_IN_PROCESS_GPU=0 for separate gpu-process)");
+    }
+    if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1") {
+        eprintln!("cef_host: CEF_HOST_CHROMIUM_VERBOSE → Chromium --enable-logging=stderr --v=2");
+    }
+    if std::env::var("CEF_HOST_DMABUF_TRACE").as_deref() == Ok("1") {
+        eprintln!("cef_host: CEF_HOST_DMABUF_TRACE → every OnAcceleratedPaint on stderr");
     }
 
     let cef_path = std::env::var("CEF_PATH").ok().map(PathBuf::from);
@@ -627,13 +741,12 @@ fn main() {
         }
     });
 
-    let view_state = Arc::new(Mutex::new(OsrViewState::new(cli.width, cli.height)));
+    let view_state = Arc::new(Mutex::new(OsrViewState::new(OSR_VIEW_DIP_W, OSR_VIEW_DIP_H)));
     let rh = OsrToCompositor::new(ipc.clone(), view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(Some(inject_js));
     let mut client = ShellClient::new(rh, lh, capture, ipc.clone());
 
-    // Compositor sends `OutputGeometry` as soon as the shell client connects. If we create the
-    // browser first, the first OSR paints use the CLI default (800×600) and stay visibly upscaled.
+    // Compositor sends `OutputGeometry` soon after connect; buffer size is applied there while DIP stays fixed.
     {
         let deadline = Instant::now() + Duration::from_millis(300);
         while Instant::now() < deadline {
@@ -662,9 +775,10 @@ fn main() {
     let (init_w, init_h) = view_state
         .lock()
         .map(|g| (g.dip_w, g.dip_h))
-        .unwrap_or((cli.width, cli.height));
+        .unwrap_or((OSR_VIEW_DIP_W, OSR_VIEW_DIP_H));
     window_info.bounds.width = init_w;
     window_info.bounds.height = init_h;
+    window_info.shared_texture_enabled = 1;
     let window_info = window_info.set_as_windowless(0);
 
     let mut browser_settings = BrowserSettings::default();

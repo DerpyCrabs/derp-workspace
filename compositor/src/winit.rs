@@ -4,26 +4,24 @@ use smithay::{
     backend::{
         renderer::{
             damage::{Error as OutputDamageError, OutputDamageTracker, RenderOutputResult},
-            element::{
-                memory::MemoryRenderBufferRenderElement,
-                AsRenderElements, Kind,
-            },
+            element::AsRenderElements,
             gles::{GlesError, GlesRenderer},
-            Renderer,
+            ImportEgl, Renderer,
         },
         winit::{self, WinitEvent},
     },
-    desktop::{
-        space::space_render_elements,
-        Window,
-    },
+    desktop::space::space_render_elements,
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Physical, Point, Rectangle, Size, Transform},
+    utils::{Physical, Rectangle, Transform},
 };
 
 use crate::{
-    desktop_stack::DesktopStack, pointer_render, shell_ipc, shell_letterbox, CalloopData,
+    derp_space::DerpSpaceElem,
+    desktop_stack::DesktopStack,
+    pointer_render,
+    shell_ipc,
+    CalloopData,
     CompositorState,
 };
 
@@ -37,6 +35,16 @@ pub fn init_winit(
     // Default Smithay attributes (`vsync: false`): nested EGL + vsync-on has stalled or confused
     // some host compositor + driver stacks; post-swap `buffer_age()` caused BAD_SURFACE/context loss.
     let (mut backend, winit) = winit::init()?;
+
+    {
+        let dh = display_handle.clone();
+        let r: &mut GlesRenderer = backend.renderer();
+        if let Err(e) = r.bind_wl_display(&dh) {
+            tracing::warn!(?e, "winit bind_wl_display; EGL dmabuf clients may fail");
+        }
+        let formats = crate::state::formats_for_linux_dmabuf_global(r);
+        state.init_linux_dmabuf_global(formats);
+    }
 
     let mode = Mode {
         size: backend.window_size(),
@@ -68,6 +76,7 @@ pub fn init_winit(
     state.space.map_output(&output, (0, 0));
     state.shell_window_physical_px = (mode.size.w, mode.size.h);
     state.touch_abs_is_window_pixels = true;
+    state.shell_embedded_notify_output_ready();
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
@@ -105,7 +114,7 @@ pub fn init_winit(
                     shell_ipc::drain_shell_stream(state);
                     state.shell_check_ipc_watchdog();
 
-                    let size = backend.window_size();
+                    let _size = backend.window_size();
 
                     enum PendingSubmit {
                         None,
@@ -119,56 +128,6 @@ pub fn init_winit(
                         // We also avoid `buffer_age()` after `submit`: same class of failures on some drivers.
                         // Smithay: treat age `0` as full repaint — correct, slightly more GPU work.
                         let buffer_age = 0usize;
-                        let out_size = output.current_mode().map(|m| m.size).unwrap_or(size);
-
-                        // Letterbox in **output logical** space; physical `location` matches Smithay’s
-                        // `logical.to_physical(scale)` path used inside `from_buffer`.
-                        let geo = state.space.output_geometry(&output);
-                        let scale_f = output.current_scale().fractional_scale();
-                        let (shell_loc_phys, shell_size_logical) = if let Some(g) = geo {
-                            if let Some((ox_l, oy_l, cw_l, ch_l)) =
-                                state.shell_letterbox_logical(g.size)
-                            {
-                                let px = (g.loc.x as f64 + ox_l as f64) * scale_f;
-                                let py = (g.loc.y as f64 + oy_l as f64) * scale_f;
-                                (Point::from((px, py)), Size::from((cw_l, ch_l)))
-                            } else {
-                                (Point::from((0.0f64, 0.0f64)), g.size)
-                            }
-                        } else {
-                            (
-                                Point::from((0.0f64, 0.0f64)),
-                                Size::from((out_size.w, out_size.h)),
-                            )
-                        };
-
-                        let mut custom: Vec<MemoryRenderBufferRenderElement<GlesRenderer>> =
-                            Vec::new();
-                        if state.shell_has_frame {
-                            // Full-buffer `src`: see [`crate::shell_letterbox`] (regression tests there).
-                            let src_full_buffer = state
-                                .shell_view_px
-                                .map(|(bw, bh)| shell_letterbox::full_buffer_src_rect(bw, bh));
-                            match MemoryRenderBufferRenderElement::from_buffer(
-                                renderer,
-                                shell_loc_phys,
-                                &state.shell_memory_buffer,
-                                None,
-                                src_full_buffer,
-                                Some(shell_size_logical),
-                                Kind::Unspecified,
-                            ) {
-                                Ok(el) => custom.push(el),
-                                Err(e) => tracing::warn!(
-                                    ?e,
-                                    "shell overlay: MemoryRenderBufferRenderElement failed"
-                                ),
-                            }
-                        }
-
-                        // `OutputDamageTracker::render_output` expects **front-to-back** order (first entry =
-                        // topmost). Pointer → toplevels → shell OSR so the cursor is never covered by the
-                        // Solid/CEF plane and native windows stay above the shell.
                         let render_res: Result<
                             RenderOutputResult<'_>,
                             OutputDamageError<GlesError>,
@@ -179,14 +138,12 @@ pub fn init_winit(
                             1.0,
                         ) {
                             Ok(space_els) => {
-                                let mut render_elements: Vec<
-                                    DesktopStack<
-                                        '_,
-                                        GlesRenderer,
-                                        <Window as AsRenderElements<GlesRenderer>>::RenderElement,
-                                        MemoryRenderBufferRenderElement<GlesRenderer>,
-                                    >,
-                                > = Vec::with_capacity(space_els.len() + custom.len() + 2);
+                                type Desk<'a> = DesktopStack<
+                                    'a,
+                                    <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
+                                >;
+                                let mut render_elements: Vec<Desk<'_>> =
+                                    Vec::with_capacity(space_els.len() + 2);
                                 pointer_render::append_pointer_desktop_elements(
                                     state,
                                     renderer,
@@ -195,8 +152,22 @@ pub fn init_winit(
                                 );
                                 render_elements
                                     .extend(space_els.into_iter().map(DesktopStack::Space));
-                                render_elements
-                                    .extend(custom.iter().map(DesktopStack::Shell));
+                                let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
+                                    state, renderer, &output,
+                                ) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            target: "derp_shell_dmabuf",
+                                            ?e,
+                                            "winit render path: shell dma-buf layer skipped"
+                                        );
+                                        None
+                                    }
+                                };
+                                if let Some(ref el) = shell_dma {
+                                    render_elements.push(DesktopStack::ShellDma(el));
+                                }
 
                                 damage_tracker.render_output(
                                     renderer,
@@ -245,13 +216,26 @@ pub fn init_winit(
                         }
                     };
                     if submitted && content_advanced {
-                        state.space.elements().for_each(|window| {
-                            window.send_frame(
-                                &output,
-                                state.start_time.elapsed(),
-                                Some(Duration::ZERO),
-                                |_, _| Some(output.clone()),
-                            )
+                        state.space.elements().for_each(|elem| match elem {
+                            DerpSpaceElem::Wayland(window) => {
+                                window.send_frame(
+                                    &output,
+                                    state.start_time.elapsed(),
+                                    Some(Duration::ZERO),
+                                    |_, _| Some(output.clone()),
+                                );
+                            }
+                            DerpSpaceElem::X11(x11) => {
+                                if let Some(surf) = x11.wl_surface() {
+                                    smithay::desktop::utils::send_frames_surface_tree(
+                                        &surf,
+                                        &output,
+                                        state.start_time.elapsed(),
+                                        Some(Duration::ZERO),
+                                        |_, _| Some(output.clone()),
+                                    );
+                                }
+                            }
                         });
                     }
 
@@ -259,8 +243,7 @@ pub fn init_winit(
                     state.popups.cleanup();
                     let _ = display.flush_clients();
 
-                    // Do not tie the redraw loop to `shell_has_frame` — that forces compositing every
-                    // winit tick while Chrome has ever sent a frame. New frames set `needs_winit_redraw`.
+                    // Client commits and explicit `needs_winit_redraw` schedule the next redraw.
                     let schedule_next = content_advanced || state.needs_winit_redraw;
                     state.needs_winit_redraw = false;
                     if schedule_next {

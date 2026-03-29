@@ -231,6 +231,7 @@ fn headless_emits_chrome_bridge_window_lifecycle() {
             seat_name: "chrome-bridge-test".to_string(),
             chrome_bridge: bridge_for_thread,
             shell_ipc_socket: None,
+            shell_ipc_embedded: None,
             shell_e2e_status_path: None,
             shell_e2e_screenshot_path: None,
             shell_ipc_stall_timeout: None,

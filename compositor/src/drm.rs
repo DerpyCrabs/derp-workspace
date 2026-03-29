@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use smithay::backend::renderer::{ImportDma, ImportEgl};
@@ -16,10 +17,7 @@ use smithay::backend::{
     libinput::{LibinputInputBackend, LibinputSessionInterface},
     renderer::{
         damage::{Error as OutputDamageError, OutputDamageTracker, RenderOutputResult},
-        element::{
-            memory::MemoryRenderBufferRenderElement,
-            AsRenderElements, Kind,
-        },
+        element::AsRenderElements,
         gles::{GlesError, GlesRenderer},
         Bind, Renderer,
     },
@@ -29,38 +27,66 @@ use smithay::backend::{
     },
     udev::primary_gpu,
 };
-use smithay::desktop::{space::space_render_elements, Window};
+use smithay::desktop::space::space_render_elements;
+
+use crate::derp_space::DerpSpaceElem;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::{
     calloop::{
         timer::{TimeoutAction, Timer},
         EventLoop, LoopHandle,
     },
-    drm::control::{
-        connector::{self, State as ConnectorState},
-        crtc,
-        Device as ControlDevice,
-        Mode as DrmCtlMode,
+    drm::{
+        control::{
+            connector::{self, State as ConnectorState},
+            crtc,
+            Device as ControlDevice,
+            Mode as DrmCtlMode,
+        },
+        Device as DrmFdDevice,
     },
     input::Libinput,
     rustix::fs::OFlags,
 };
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{DeviceFd, Physical, Point, Rectangle, Size, Transform};
-use tracing::{error, info, warn};
+use smithay::utils::{DeviceFd, Physical, Rectangle, Size, Transform};
+use tracing::{debug, error, info, warn};
+
+/// How many `(drm_fourcc, modifier)` pairs to log when sampling EGL import caps (avoid huge logs).
+const DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN: usize = 32;
+
+fn log_egl_dmabuf_caps_after_drm_init(renderer: &GlesRenderer) {
+    let rf = renderer.egl_context().dmabuf_render_formats();
+    let tf = renderer.dmabuf_formats();
+    let render_sample: Vec<(u32, u64)> = rf
+        .iter()
+        .take(DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN)
+        .map(|f| (f.code as u32, u64::from(f.modifier)))
+        .collect();
+    let texture_sample: Vec<(u32, u64)> = tf
+        .iter()
+        .take(DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN)
+        .map(|f| (f.code as u32, u64::from(f.modifier)))
+        .collect();
+    debug!(
+        target: "derp_drm",
+        egl_render_format_count = rf.iter().count(),
+        egl_texture_import_format_count = tf.iter().count(),
+        sample_egl_render_formats = ?render_sample,
+        sample_egl_texture_import_formats = ?texture_sample,
+        "EGL dma-buf capability snapshot (enable RUST_LOG=derp_drm=debug)"
+    );
+}
 
 use crate::{
-    desktop_stack::DesktopStack,
-    pointer_render,
-    shell_ipc, shell_letterbox,
-    CalloopData, CompositorState,
+    desktop_stack::DesktopStack, pointer_render, shell_ipc, CalloopData, CompositorState,
 };
 
 /// Live DRM presentation state (one CRTC / connector set, v1).
 pub struct DrmSession {
     pub drm: DrmDevice,
     pub gbm_surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
-    pub renderer: GlesRenderer,
+    pub renderer: Arc<Mutex<GlesRenderer>>,
     damage_tracker: OutputDamageTracker,
     pub output: Output,
     _crtc: crtc::Handle,
@@ -128,10 +154,6 @@ impl DrmSession {
         };
 
         let output = &self.output;
-        let size = output
-            .current_mode()
-            .map(|m| m.size)
-            .unwrap_or(Size::from((800, 800)));
 
         enum PendingSubmit {
             None,
@@ -140,63 +162,30 @@ impl DrmSession {
         }
 
         let (submit, sync_for_queue) = {
-            let mut fb_target = match self.renderer.bind(&mut dmabuf) {
+            let Ok(mut renderer_guard) = self.renderer.lock() else {
+                warn!("drm renderer mutex poisoned");
+                return;
+            };
+            let renderer = &mut *renderer_guard;
+            let mut fb_target = match renderer.bind(&mut dmabuf) {
                 Ok(b) => b,
                 Err(e) => {
                     warn!(?e, "drm bind dmabuf");
+                    drop(renderer_guard);
                     self.schedule_render();
                     return;
                 }
             };
-            let renderer = &mut self.renderer;
-
-            let geo = state.space.output_geometry(output);
-            let scale_f = output.current_scale().fractional_scale();
-            let (shell_loc_phys, shell_size_logical) = if let Some(g) = geo {
-                if let Some((ox_l, oy_l, cw_l, ch_l)) = state.shell_letterbox_logical(g.size) {
-                    let px = (g.loc.x as f64 + ox_l as f64) * scale_f;
-                    let py = (g.loc.y as f64 + oy_l as f64) * scale_f;
-                    (Point::from((px, py)), Size::from((cw_l, ch_l)))
-                } else {
-                    (Point::from((0.0f64, 0.0f64)), g.size)
-                }
-            } else {
-                (
-                    Point::from((0.0f64, 0.0f64)),
-                    Size::from((size.w, size.h)),
-                )
-            };
-
-            let mut custom: Vec<MemoryRenderBufferRenderElement<GlesRenderer>> = Vec::new();
-            if state.shell_has_frame {
-                let src_full_buffer = state
-                    .shell_view_px
-                    .map(|(bw, bh)| shell_letterbox::full_buffer_src_rect(bw, bh));
-                match MemoryRenderBufferRenderElement::from_buffer(
-                    renderer,
-                    shell_loc_phys,
-                    &state.shell_memory_buffer,
-                    None,
-                    src_full_buffer,
-                    Some(shell_size_logical),
-                    Kind::Unspecified,
-                ) {
-                    Ok(el) => custom.push(el),
-                    Err(e) => warn!(?e, "shell overlay (drm)"),
-                }
-            }
 
             let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
                 match space_render_elements(renderer, [&state.space], output, 1.0) {
                     Ok(space_els) => {
-                        let mut render_elements: Vec<
-                            DesktopStack<
-                                '_,
-                                GlesRenderer,
-                                <Window as AsRenderElements<GlesRenderer>>::RenderElement,
-                                MemoryRenderBufferRenderElement<GlesRenderer>,
-                            >,
-                        > = Vec::with_capacity(space_els.len() + custom.len() + 2);
+                        type Desk<'a> = DesktopStack<
+                            'a,
+                            <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
+                        >;
+                        let mut render_elements: Vec<Desk<'_>> =
+                            Vec::with_capacity(space_els.len() + 2);
                         pointer_render::append_pointer_desktop_elements(
                             state,
                             renderer,
@@ -204,7 +193,22 @@ impl DrmSession {
                             &mut render_elements,
                         );
                         render_elements.extend(space_els.into_iter().map(DesktopStack::Space));
-                        render_elements.extend(custom.iter().map(DesktopStack::Shell));
+                        let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
+                            state, renderer, output,
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(
+                                    target: "derp_shell_dmabuf",
+                                    ?e,
+                                    "DRM render path: shell dma-buf layer skipped (details on this target above)"
+                                );
+                                None
+                            }
+                        };
+                        if let Some(ref el) = shell_dma {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
 
                         self.damage_tracker.render_output(
                             renderer,
@@ -223,7 +227,7 @@ impl DrmSession {
                     let submit = if let Some(damage) = result.damage {
                         PendingSubmit::Damage(damage.clone())
                     } else {
-                        let _ = self.renderer.cleanup_texture_cache();
+                        let _ = renderer.cleanup_texture_cache();
                         PendingSubmit::None
                     };
                     (submit, sync)
@@ -261,13 +265,26 @@ impl DrmSession {
         self.pending_frame_complete = true;
 
         if content_advanced || state.needs_winit_redraw {
-            state.space.elements().for_each(|window| {
-                window.send_frame(
-                    output,
-                    state.start_time.elapsed(),
-                    Some(Duration::ZERO),
-                    |_, _| Some(output.clone()),
-                );
+            state.space.elements().for_each(|elem| match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    window.send_frame(
+                        output,
+                        state.start_time.elapsed(),
+                        Some(Duration::ZERO),
+                        |_, _| Some(output.clone()),
+                    );
+                }
+                DerpSpaceElem::X11(x11) => {
+                    if let Some(surf) = x11.wl_surface() {
+                        smithay::desktop::utils::send_frames_surface_tree(
+                            &surf,
+                            output,
+                            state.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output.clone()),
+                        );
+                    }
+                }
             });
         }
         state.needs_winit_redraw = false;
@@ -330,6 +347,46 @@ pub fn init_drm(
     let loop_handle_static: LoopHandle<'static, CalloopData> =
         unsafe { std::mem::transmute(loop_handle.clone()) };
 
+    // Libseat enables the seat asynchronously. Opening the DRM node before `SeatEvent::Enable`
+    // is processed often prevents `DRM_IOCTL_SET_MASTER` (Smithay logs "assuming unprivileged mode").
+    event_loop
+        .handle()
+        .insert_source(session_notifier, move |event, _, d| match event {
+            SessionEvent::PauseSession => {
+                if let Some(drms) = d.drm.as_mut() {
+                    drms.pause();
+                }
+            }
+            SessionEvent::ActivateSession => {
+                if let Some(drms) = d.drm.as_mut() {
+                    drms.activate();
+                }
+                drm_idle_render(d);
+            }
+        })
+        .map_err(|e| format!("session notifier: {e}"))?;
+
+    let seat_wait = std::time::Duration::from_millis(
+        std::env::var("DERP_DRM_SEAT_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5_000),
+    );
+    let seat_deadline = std::time::Instant::now() + seat_wait;
+    while !session.is_active() && std::time::Instant::now() < seat_deadline {
+        event_loop
+            .dispatch(Some(std::time::Duration::from_millis(20)), data)
+            .map_err(|e| format!("event_loop.dispatch (wait for libseat): {e}"))?;
+    }
+    if session.is_active() {
+        info!("libseat session active before DRM device open");
+    } else {
+        warn!(
+            ?seat_wait,
+            "libseat session still inactive; DRM master may fail if another process holds it or logind has not activated this seat"
+        );
+    }
+
     let path: PathBuf = if let Some(p) = drm_device_override {
         p
     } else if let Ok(p) = std::env::var("DERP_DRM_DEVICE") {
@@ -348,6 +405,23 @@ pub fn init_drm(
     let gbm_drm_fd = drm_fd.clone();
     let (mut drm, drm_notifier) =
         DrmDevice::new(drm_fd, true).map_err(|e| format!("DrmDevice::new: {e}"))?;
+
+    let drm_driver_name = drm
+        .get_driver()
+        .ok()
+        .map(|d| d.name.to_string_lossy().into_owned());
+    let drm_client_authenticated = drm.authenticated().ok();
+    debug!(
+        target: "derp_drm",
+        seat = %session.seat(),
+        drm_path = %path.display(),
+        libseat_active = session.is_active(),
+        drm_atomic = drm.is_atomic(),
+        drm_driver_name = drm_driver_name.as_deref(),
+        drm_client_authenticated,
+        smithay_master_hint = "if drm master acquisition failed, Smithay logs WARN 'Unable to become drm master, assuming unprivileged mode' immediately before 'DrmDevice initializing'",
+        "DRM device opened"
+    );
 
     let (drm_surface, crtc_h, drm_mode, conns) = pick_crtc_and_surface(&mut drm)?;
     let conn_info = drm
@@ -373,6 +447,8 @@ pub fn init_drm(
     let mut renderer =
         unsafe { GlesRenderer::new(egl_ctx).map_err(|e| format!("GlesRenderer: {e}"))? };
 
+    log_egl_dmabuf_caps_after_drm_init(&renderer);
+
     let dh = data.display_handle.clone();
     if let Err(e) = renderer.bind_wl_display(&dh) {
         warn!(?e, "bind_wl_display (drm); clients may lack EGL buffers");
@@ -389,6 +465,13 @@ pub fn init_drm(
         formats = renderer.dmabuf_formats().iter().copied().collect();
     }
     let format_vec: Vec<Format> = formats.into_iter().collect();
+
+    let linux_dmabuf_formats = crate::state::formats_for_linux_dmabuf_global(&renderer);
+
+    let renderer = Arc::new(Mutex::new(renderer));
+    data.state.dmabuf_import_renderer = Some(Arc::downgrade(&renderer));
+    data.state
+        .init_linux_dmabuf_global(linux_dmabuf_formats.iter().copied());
 
     let color_formats = [
         Fourcc::Xrgb8888,
@@ -434,6 +517,7 @@ pub fn init_drm(
     data.state.space.map_output(&output, (0, 0));
     data.state.shell_window_physical_px = (mode.size.w, mode.size.h);
     data.state.send_shell_output_geometry();
+    data.state.shell_embedded_notify_output_ready();
     data.state.refresh_all_surface_fractional_scales();
 
     let damage_tracker = OutputDamageTracker::from_output(&output);
@@ -467,25 +551,6 @@ pub fn init_drm(
             _ => {}
         })
         .map_err(|e| format!("drm notifier: {e}"))?;
-
-    event_loop
-        .handle()
-        .insert_source(session_notifier, move |event, _, d| {
-            match event {
-                SessionEvent::PauseSession => {
-                    if let Some(drms) = d.drm.as_mut() {
-                        drms.pause();
-                    }
-                }
-                SessionEvent::ActivateSession => {
-                    if let Some(drms) = d.drm.as_mut() {
-                        drms.activate();
-                    }
-                    drm_idle_render(d);
-                }
-            }
-        })
-        .map_err(|e| format!("session notifier: {e}"))?;
 
     let drm_session = DrmSession {
         drm,

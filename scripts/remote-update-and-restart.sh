@@ -5,6 +5,10 @@
 # Requires on the remote: derp-session from this tree (default: respawn when compositor exits 42).
 # Compositor must handle SIGUSR2 and exit 42 after teardown. See scripts/remote-install.sample.md.
 #
+# Session tuning without GDM edits: optional `scripts/derp-session.local.env` in the repo (see
+# `derp-session.local.env.example`); rsync ships it; derp-session re-sources it on every compositor
+# start, including each SIGUSR2 reload.
+#
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
 # REMOTE_HOST, REMOTE_REPO.
 #
@@ -129,3 +133,8 @@ if [[ "$NO_RESTART" -eq 0 ]]; then
 fi
 
 echo "Done."
+echo ""
+printf '%s\n' \
+  "remote-update-and-restart: SIGUSR2 reloads the compositor process only." \
+  "If scripts/derp-session.sh changed, or you added scripts/derp-session.local.env / CEF_* overrides," \
+  "log out of GDM and back in once (the derp-session supervisor is the old bash until then)."

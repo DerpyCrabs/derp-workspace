@@ -12,7 +12,9 @@
 #   INSTALL_SKIP_GIT=1     — skip `git pull`
 #   INSTALL_PREFIX=/usr/local — install root (default /usr/local)
 #
-# Rendering / OSR baseline (optional):
+# Solid OSR: dma-buf only in cef_host + compositor (no CEF_HOST_USE_GPU / CEF_HOST_OSR_DMABUF env).
+#
+# Rendering / OSR debug (optional):
 #   Export DERP_PERF_SESSION=1 before GDM login (e.g. ~/.config/environment.d/derp-perf.conf with
 #   DERP_PERF_SESSION=1) so scripts/derp-session.sh appends shell_ipc=trace to RUST_LOG and sets
 #   CEF_HOST_PERF=1 for cef_host. Logs: DERP_COMPOSITOR_LOG (default ~/.local/state/derp/compositor.log).
@@ -25,10 +27,11 @@
 # `derp-session` will run `npm install && npm run build` in shell/ if `shell/dist/index.html` is missing
 # (requires Node on the login machine). Prefer a successful install here so GDM start is fast.
 #
-# Session logging: `derp-session` appends compositor + cef_host stdout/stderr to DERP_COMPOSITOR_LOG
-# (default ~/.local/state/derp/compositor.log). Set DERP_COMPOSITOR_LOG to override or inspect that
-# file from a TTY/SSH (`scripts/list-derp-logs.sh`) when debugging. `derp-session` sets RUST_LOG to
-# include derp_input=debug; the compositor binary uses the same default if RUST_LOG is unset.
+# Session logging: each compositor start truncates DERP_COMPOSITOR_LOG (incl. reload after exit 42)
+# unless DERP_COMPOSITOR_LOG_APPEND=1; then compositor + cef_host stdout/stderr append. Default file:
+# ~/.local/state/derp/compositor.log — inspect via `scripts/list-derp-logs.sh`. `derp-session` sets
+# Optional: DERP_SESSION_DMABUF_LOGS=1 in derp-session.local.env for derp_shell_dmabuf=debug,
+# CEF_HOST_DMABUF_TRACE, CEF_HOST_CHROMIUM_VERBOSE (see scripts/derp-session.sh).
 #
 # Flags:
 #   --no-git               — same as INSTALL_SKIP_GIT=1

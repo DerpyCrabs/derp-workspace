@@ -8,7 +8,7 @@ use cef::{
 };
 use serde_json::json;
 
-use cef_host::osr_view_state::OsrViewState;
+use cef_host::osr_view_state::{OsrViewState, OSR_VIEW_DIP_H, OSR_VIEW_DIP_W};
 
 /// Window `x,y,w,h` on the shell wire are **OSR buffer** pixels (same space as pointer IPC); map to CEF view/DIP for `position:fixed` + `clientX`/`clientY`.
 fn shell_window_rect_buffer_to_view(vs: &OsrViewState, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
@@ -46,8 +46,8 @@ pub fn apply_message(
             physical_h,
         } => {
             if let Ok(mut g) = view_state.lock() {
-                g.dip_w = logical_w as i32;
-                g.dip_h = logical_h as i32;
+                g.dip_w = OSR_VIEW_DIP_W;
+                g.dip_h = OSR_VIEW_DIP_H;
                 let pw = physical_w.max(1) as i32;
                 let ph = physical_h.max(1) as i32;
                 g.set_buffer_size(pw, ph);

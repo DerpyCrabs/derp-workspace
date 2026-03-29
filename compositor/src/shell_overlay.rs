@@ -1,19 +1,13 @@
-//! Shell / CEF OSR overlay: pixel format invariants for GLES import.
+//! Shell / CEF OSR: pixel format invariants for GLES import.
 //!
-//! CEF delivers BGRA samples; we store them in a [`smithay`] memory buffer. The buffer **DRM
-//! fourcc** must be `Argb8888` (AR24): `Bgra8888` (BA24) is not imported by the GLES path on
-//! llvmpipe, which produced `UnsupportedPixelFormat(BA24)` and a blank overlay.
+//! The live path is **dma-buf** from CEF (`MSG_FRAME_DMABUF_COMMIT`). **`SHELL_OSR_MEMORY_FOURCC`**
+//! (`Argb8888` / AR24) is shared with cursor / memory-buffer import paths; `Bgra8888` (BA24) is not
+//! reliably importable on GLES/llvmpipe.
 
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::utils::Transform;
 
-/// [`MemoryRenderBuffer`] format for shell frames (`apply_shell_frame_bgra` copies BGRA bytes).
+/// Memory buffer DRM fourcc for cursor/shell-adjacent GLES import (ARGB byte order).
 pub const SHELL_OSR_MEMORY_FOURCC: Fourcc = Fourcc::Argb8888;
-
-pub(crate) fn new_shell_memory_buffer() -> MemoryRenderBuffer {
-    MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (4, 4), 1, Transform::Normal, None)
-}
 
 #[cfg(test)]
 mod tests {
@@ -32,6 +26,5 @@ mod tests {
             MemoryBuffer::new(SHELL_OSR_MEMORY_FOURCC, (1, 1)).format(),
             Fourcc::Argb8888
         );
-        let _ = new_shell_memory_buffer();
     }
 }

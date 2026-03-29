@@ -1,4 +1,5 @@
 //! Binary entry: winit-backed compositor or `--headless` for CI / integration tests.
+#![cfg(unix)]
 
 use std::{
     path::PathBuf,
@@ -15,7 +16,10 @@ use compositor::{
     drm,
     headless,
     state::{CompositorInitOptions, SocketConfig},
-    winit, CalloopData, CompositorState,
+    winit,
+    xwayland,
+    CalloopData,
+    CompositorState,
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::Session;
@@ -115,9 +119,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             chrome_bridge: std::sync::Arc::new(NoOpChromeBridge),
             shell_ipc_socket: cli.shell_ipc_socket.clone(),
             shell_ipc_embedded: None,
+            shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
             shell_e2e_status_path: shell_e2e_status_from_env(),
             shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
-            shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
         };
         let run_for = cli.run_for_ms.map(Duration::from_millis);
         headless::run(opts, run_for)?;
@@ -152,9 +156,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| "derp-shell.sock".to_string()),
         ),
         shell_ipc_embedded: None,
+        shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
         shell_e2e_status_path: shell_e2e_status_from_env(),
         shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
-        shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
     };
 
     let state = CompositorState::new(&mut event_loop, display, init);
@@ -164,6 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state,
         display_handle,
         command_child: None,
+        pending_sidecar_cmd: None,
         drm: None,
     };
 
@@ -192,14 +197,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(cmd) = cli.command {
-        match compositor::sidecar::spawn_shell_command_line(&cmd) {
-            Ok(child) => {
-                data.command_child = Some(child);
-                tracing::info!("spawned --command sidecar (pid will own a new process group)");
-            }
-            Err(e) => tracing::warn!(%e, "failed to spawn --command"),
+    data.pending_sidecar_cmd = cli.command.clone();
+    if xwayland::enabled() {
+        if let Err(e) = xwayland::start_xwayland(&mut event_loop, &mut data) {
+            tracing::error!(%e, "XWayland failed to spawn; continuing without DISPLAY");
+            xwayland::spawn_pending_sidecar(&mut data);
         }
+    } else {
+        xwayland::spawn_pending_sidecar(&mut data);
     }
 
     // Without this, SIGINT/SIGTERM (terminal, systemd, pkill) aborts the process before

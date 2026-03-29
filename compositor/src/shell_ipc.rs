@@ -5,7 +5,7 @@
 //! compositor tick.
 
 use std::{
-    io::{self, Read},
+    io,
     os::unix::io::AsRawFd,
     os::unix::net::UnixListener,
     path::{Path, PathBuf},
@@ -34,9 +34,12 @@ fn tune_shell_accepted_stream(stream: &std::os::unix::net::UnixStream) {
 }
 
 use smithay::reexports::calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::CalloopData;
+
+/// One-shot `derp_shell_osr` INFO after the first accepted dma-buf shell frame.
+static SOLID_SHELL_FIRST_DMABUF_LOG: std::sync::Once = std::sync::Once::new();
 
 /// Duplex path to the CEF / shell side (OSR ingress + chrome commands).
 pub enum ShellIpcConn {
@@ -78,10 +81,78 @@ pub(crate) fn disconnect_shell_client(state: &mut crate::state::CompositorState)
     state.shell_disconnect_end_move_if_any();
     state.shell_ipc_conn = ShellIpcConn::Disconnected;
     state.shell_read_buf.clear();
-    state.shell_shm = None;
+    state.shell_ipc_pending_fds.clear();
     state.shell_clear_ipc_last_rx();
     state.shell_ipc_last_compositor_ping = None;
     state.clear_shell_frame();
+}
+
+fn dispatch_frame_dmabuf_commit(
+    state: &mut crate::state::CompositorState,
+    width: u32,
+    height: u32,
+    drm_format: u32,
+    modifier: u64,
+    flags: u32,
+    generation: u32,
+    planes: Vec<shell_wire::FrameDmabufPlane>,
+    apply: bool,
+) {
+    let _ = generation;
+    state.shell_note_shell_ipc_rx();
+    if matches!(state.shell_ipc_conn, ShellIpcConn::Embedded { .. }) {
+        warn!(
+            target: "shell_ipc",
+            "dma-buf shell frame over embedded IPC is unsupported (no FD passing); ignoring"
+        );
+        return;
+    }
+    let n = planes.len();
+    if n == 0 {
+        return;
+    }
+    if n > shell_wire::MAX_DMABUF_PLANES as usize {
+        warn!(n, "shell ipc: dma-buf plane count invalid");
+        state.shell_ipc_pending_fds.clear();
+        return;
+    }
+    if state.shell_ipc_pending_fds.len() < n {
+        warn!(
+            have = state.shell_ipc_pending_fds.len(),
+            need = n,
+            "shell ipc: dma-buf commit missing fds"
+        );
+        state.shell_ipc_pending_fds.clear();
+        return;
+    }
+    let mut fds: Vec<std::os::fd::OwnedFd> = state.shell_ipc_pending_fds.drain(..n).collect();
+    if !apply {
+        return;
+    }
+    match state.apply_shell_frame_dmabuf(
+        width,
+        height,
+        drm_format,
+        modifier,
+        flags,
+        &planes,
+        &mut fds,
+    ) {
+        Ok(()) => {
+            SOLID_SHELL_FIRST_DMABUF_LOG.call_once(|| {
+                info!(
+                    target: "derp_shell_osr",
+                    width,
+                    height,
+                    drm_format,
+                    modifier,
+                    plane_count = planes.len(),
+                    "solid shell OSR: dma-buf path active (first frame accepted)"
+                );
+            });
+        }
+        Err(e) => warn!(?e, "shell ipc: dma-buf frame rejected"),
+    }
 }
 
 fn dispatch_shell_message(
@@ -91,73 +162,6 @@ fn dispatch_shell_message(
     state.shell_note_shell_ipc_rx();
     use shell_wire::DecodedMessage::*;
     match msg {
-        ShellShmRegion {
-            basename,
-            total_bytes,
-        } => {
-            let Some(rd) = state.shell_ipc_runtime_dir.as_ref() else {
-                warn!("shell ipc: shm region but no runtime dir");
-                return;
-            };
-            state.shell_shm = None;
-            match crate::shell_shm::ShellShmMapping::open(rd, &basename, total_bytes) {
-                Ok(m) => {
-                    tracing::debug!(%basename, total_bytes, "shell ipc: mapped shm region");
-                    state.shell_shm = Some(m);
-                }
-                Err(e) => warn!(?e, %basename, "shell ipc: shm map failed"),
-            }
-        }
-        FrameShmCommit {
-            width,
-            height,
-            stride,
-            offset,
-            data_len,
-            dirty_rects,
-        } => {
-            let slot = state.shell_shm.take();
-            let Some(ref shm) = slot else {
-                warn!("shell ipc: shm commit without region");
-                return;
-            };
-            let o = offset as usize;
-            let end = match o.checked_add(data_len as usize) {
-                Some(e) => e,
-                None => {
-                    warn!("shell ipc: shm commit overflow");
-                    state.shell_shm = slot;
-                    return;
-                }
-            };
-            if end > shm.len() {
-                warn!(
-                    end,
-                    len = shm.len(),
-                    "shell ipc: shm commit out of range"
-                );
-                state.shell_shm = slot;
-                return;
-            }
-            let slice = &shm.as_slice()[o..end];
-            let res =
-                state.apply_shell_frame_bgra(width, height, stride, slice, dirty_rects.as_slice());
-            state.shell_shm = slot;
-            if let Err(e) = res {
-                warn!(?e, "shell ipc: bad shm frame");
-            }
-        }
-        Frame {
-            width,
-            height,
-            stride,
-            format: _,
-            pixels,
-        } => {
-            if let Err(e) = state.apply_shell_frame_bgra(width, height, stride, &pixels, &[]) {
-                warn!(?e, "shell ipc: bad frame");
-            }
-        }
         SpawnWaylandClient { command } => {
             if let Err(e) = state.try_spawn_wayland_client_sh(&command) {
                 warn!(%e, "shell ipc: spawn");
@@ -192,6 +196,8 @@ fn dispatch_shell_message(
             state.loop_signal.wakeup();
         }
         ShellPong => {}
+        // `drain_decoded_messages` peels this off first; kept so the match stays exhaustive.
+        FrameDmabufCommit { .. } => {}
     }
 }
 
@@ -212,22 +218,33 @@ fn drain_decoded_messages(state: &mut crate::state::CompositorState) {
     if batch.is_empty() {
         return;
     }
-    let last_socket_frame = batch
+    let last_dmabuf = batch
         .iter()
-        .rposition(|m| matches!(m, shell_wire::DecodedMessage::Frame { .. }));
-    let last_shm_commit = batch
-        .iter()
-        .rposition(|m| matches!(m, shell_wire::DecodedMessage::FrameShmCommit { .. }));
+        .rposition(|m| matches!(m, shell_wire::DecodedMessage::FrameDmabufCommit { .. }));
     for (i, msg) in batch.into_iter().enumerate() {
-        if let Some(j) = last_socket_frame {
-            if i != j && matches!(msg, shell_wire::DecodedMessage::Frame { .. }) {
-                continue;
-            }
-        }
-        if let Some(j) = last_shm_commit {
-            if i != j && matches!(msg, shell_wire::DecodedMessage::FrameShmCommit { .. }) {
-                continue;
-            }
+        if let shell_wire::DecodedMessage::FrameDmabufCommit {
+            width,
+            height,
+            drm_format,
+            modifier,
+            flags,
+            generation,
+            planes,
+        } = msg
+        {
+            let apply = last_dmabuf == Some(i);
+            dispatch_frame_dmabuf_commit(
+                state,
+                width,
+                height,
+                drm_format,
+                modifier,
+                flags,
+                generation,
+                planes,
+                apply,
+            );
+            continue;
         }
         dispatch_shell_message(state, msg);
     }
@@ -254,7 +271,7 @@ pub fn register_shell_ipc_listener(
                         tune_shell_accepted_stream(&stream);
                         data.state.shell_ipc_conn = ShellIpcConn::Unix(stream);
                         data.state.shell_read_buf.clear();
-                        data.state.shell_shm = None;
+                        data.state.shell_ipc_pending_fds.clear();
                         data.state.shell_on_shell_client_connected();
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -331,18 +348,31 @@ fn drain_shell_unix_stream(state: &mut crate::state::CompositorState) {
         }
         let cap = std::cmp::min(want, state.shell_read_scratch.len());
         let n = match &mut state.shell_ipc_conn {
-            ShellIpcConn::Unix(stream) => match stream.read(&mut state.shell_read_scratch[..cap]) {
-                Ok(0) => {
-                    disconnect_shell_client(state);
-                    return;
+            ShellIpcConn::Unix(stream) => {
+                match crate::shell_unix_msg::recv_stream_with_fds(stream, &mut state.shell_read_scratch[..cap])
+                {
+                    Ok((0, fds)) if fds.is_empty() => {
+                        disconnect_shell_client(state);
+                        return;
+                    }
+                    Ok((0, fds)) => {
+                        state.shell_ipc_pending_fds.extend(fds);
+                        break 'drain;
+                    }
+                    Ok((n, fds)) => {
+                        state.shell_ipc_pending_fds.extend(fds);
+                        n
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        break 'drain;
+                    }
+                    Err(e) => {
+                        warn!(?e, "shell ipc: recvmsg");
+                        disconnect_shell_client(state);
+                        return;
+                    }
                 }
-                Ok(n) => n,
-                Err(e) => {
-                    warn!(?e, "shell ipc: read");
-                    disconnect_shell_client(state);
-                    return;
-                }
-            },
+            }
             _ => return,
         };
         total_read += n;
@@ -383,7 +413,7 @@ fn fionread_zero_when_receive_queue_empty() {
 #[cfg(all(test, unix))]
 #[test]
 fn fionread_matches_queued_byte_count() {
-    use std::io::Write;
+    use std::io::{Read, Write};
     let (mut a, mut b) = std::os::unix::net::UnixStream::pair().unwrap();
     assert_eq!(unix_bytes_available(&b).unwrap(), 0);
     a.write_all(&[0u8; 123]).unwrap();
@@ -391,4 +421,58 @@ fn fionread_matches_queued_byte_count() {
     let mut got = [0u8; 123];
     b.read_exact(&mut got).unwrap();
     assert_eq!(unix_bytes_available(&b).unwrap(), 0);
+}
+
+/// [`MSG_FRAME_DMABUF_COMMIT`] bytes + [`SCM_RIGHTS`] must arrive in one `recvmsg`, matching `cef_host` + [`crate::shell_unix_msg::recv_stream_with_fds`].
+#[cfg(all(test, unix))]
+#[test]
+fn dmabuf_wire_payload_arrives_with_fds_in_one_recvmsg() {
+    use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
+    use std::fs::File;
+    use std::io::IoSlice;
+    use std::os::fd::AsRawFd;
+
+    let (tx, rx) = std::os::unix::net::UnixStream::pair().unwrap();
+    rx.set_nonblocking(true).unwrap();
+
+    let file = File::open("/dev/null").unwrap();
+    let planes = [shell_wire::FrameDmabufPlane {
+        plane_idx: 0,
+        stride: 256,
+        offset: 0,
+    }];
+    let pkt = shell_wire::encode_frame_dmabuf_commit(64, 64, 0x34324241, 0, 0, 7, &planes).unwrap();
+    let fds = [file.as_raw_fd()];
+    let iov = [IoSlice::new(pkt.as_slice())];
+    let cmsgs = [ControlMessage::ScmRights(&fds)];
+    sendmsg::<()>(tx.as_raw_fd(), &iov, &cmsgs, MsgFlags::empty(), None).unwrap();
+    drop(tx);
+
+    let mut scratch = vec![0u8; 4096];
+    let (n, received) = crate::shell_unix_msg::recv_stream_with_fds(&rx, &mut scratch).unwrap();
+    assert_eq!(n, pkt.len());
+    assert_eq!(&scratch[..n], pkt.as_slice());
+    assert_eq!(received.len(), 1);
+
+    let mut buf: Vec<u8> = scratch[..n].to_vec();
+    match shell_wire::pop_message(&mut buf).unwrap() {
+        Some(shell_wire::DecodedMessage::FrameDmabufCommit {
+            width,
+            height,
+            drm_format,
+            modifier,
+            flags,
+            generation,
+            planes: pl,
+        }) => {
+            assert_eq!((width, height), (64, 64));
+            assert_eq!(drm_format, 0x34324241);
+            assert_eq!(modifier, 0);
+            assert_eq!(flags, 0);
+            assert_eq!(generation, 7);
+            assert_eq!(pl, planes);
+        }
+        o => panic!("expected FrameDmabufCommit: {o:?}"),
+    }
+    assert!(buf.is_empty());
 }

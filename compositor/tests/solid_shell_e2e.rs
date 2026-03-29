@@ -20,7 +20,7 @@
 //! `RUNPATH` selects the matching `libcef.so`.
 //!
 //! Faster regression checks (no Chromium): `cargo test -p compositor --lib shell_osr` and
-//! `cargo test -p cef_host --lib`.
+//! `cargo test -p cef_host --lib`. This PNG/luma test is disabled: dma-buf frames are not read back to CPU for E2E yet.
 
 #![cfg(target_os = "linux")]
 
@@ -175,7 +175,7 @@ fn looks_like_shell_content(st: &ShellE2eStatus) -> bool {
 }
 
 #[test]
-#[ignore = "set RUN_SOLID_SHELL_E2E=1; needs CEF + shell/dist + cef_host (see module doc)"]
+#[ignore = "dma-buf OSR: no DERP_SHELL_E2E CPU screenshot/luma yet; also set RUN_SOLID_SHELL_E2E=1 if re-enabled"]
 fn solid_shell_overlay_drawn() {
     assert_eq!(
         std::env::var("RUN_SOLID_SHELL_E2E").as_deref(),

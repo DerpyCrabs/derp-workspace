@@ -1,4 +1,9 @@
-use crate::{grabs::resize_grab, state::ClientState, CompositorState};
+use crate::{
+    derp_space::DerpSpaceElem,
+    grabs::resize_grab,
+    state::ClientState,
+    CompositorState,
+};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -14,6 +19,7 @@ use smithay::{
         },
         shm::{ShmHandler, ShmState},
     },
+    xwayland::XWaylandClientData,
 };
 
 use super::xdg_shell;
@@ -24,7 +30,15 @@ impl CompositorHandler for CompositorState {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        client
+            .get_data::<ClientState>()
+            .map(|s| &s.compositor_state)
+            .or_else(|| {
+                client
+                    .get_data::<XWaylandClientData>()
+                    .map(|x| &x.compositor_state)
+            })
+            .expect("wayland client missing compositor state")
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -34,11 +48,13 @@ impl CompositorHandler for CompositorState {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            if let Some(window) = self
-                .space
-                .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == &root)
-            {
+            if let Some(window) = self.space.elements().find_map(|e| {
+                if let DerpSpaceElem::Wayland(w) = e {
+                    (w.toplevel().unwrap().wl_surface() == &root).then_some(w)
+                } else {
+                    None
+                }
+            }) {
                 window.on_commit();
             }
         }
@@ -51,11 +67,13 @@ impl CompositorHandler for CompositorState {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            let window = self
-                .space
-                .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == &root)
-                .cloned();
+            let window = self.space.elements().find_map(|e| {
+                if let DerpSpaceElem::Wayland(w) = e {
+                    (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())
+                } else {
+                    None
+                }
+            });
             if let Some(window) = window {
                 self.notify_geometry_if_changed(&window);
             }

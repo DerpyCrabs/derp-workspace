@@ -4,7 +4,6 @@
 use std::time::Duration;
 
 use smithay::{
-    desktop::Window,
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::{
         timer::{TimeoutAction, Timer},
@@ -13,7 +12,7 @@ use smithay::{
     utils::Transform,
 };
 
-use crate::{shell_ipc, CalloopData, CompositorInitOptions, CompositorState};
+use crate::{derp_space::DerpSpaceElem, shell_ipc, CalloopData, CompositorInitOptions, CompositorState};
 
 pub fn run(
     options: CompositorInitOptions,
@@ -28,6 +27,7 @@ pub fn run(
         state,
         display_handle,
         command_child: None,
+        pending_sidecar_cmd: None,
         drm: None,
     };
 
@@ -54,6 +54,8 @@ pub fn run(
     );
     output.set_preferred(mode);
     data.state.space.map_output(&output, (0, 0));
+    data.state.shell_window_physical_px = (mode.size.w, mode.size.h);
+    data.state.shell_embedded_notify_output_ready();
 
     let output_for_timer = output.clone();
     let deadline = run_for.map(|d| std::time::Instant::now() + d);
@@ -69,17 +71,31 @@ pub fn run(
                 }
 
                 shell_ipc::drain_shell_stream(&mut data.state);
+                shell_ipc::run_post_drain_hooks(&mut data.state);
                 data.state.shell_check_ipc_watchdog();
                 data.state.space.refresh();
                 data.state.popups.cleanup();
 
-                data.state.space.elements().for_each(|window: &Window| {
-                    window.send_frame(
-                        &output_for_timer,
-                        data.state.start_time.elapsed(),
-                        Some(Duration::ZERO),
-                        |_, _| Some(output_for_timer.clone()),
-                    );
+                data.state.space.elements().for_each(|elem| match elem {
+                    DerpSpaceElem::Wayland(window) => {
+                        window.send_frame(
+                            &output_for_timer,
+                            data.state.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output_for_timer.clone()),
+                        );
+                    }
+                    DerpSpaceElem::X11(x11) => {
+                        if let Some(surf) = x11.wl_surface() {
+                            smithay::desktop::utils::send_frames_surface_tree(
+                                &surf,
+                                &output_for_timer,
+                                data.state.start_time.elapsed(),
+                                Some(Duration::ZERO),
+                                |_, _| Some(output_for_timer.clone()),
+                            );
+                        }
+                    }
                 });
 
                 let _ = data.display_handle.flush_clients();

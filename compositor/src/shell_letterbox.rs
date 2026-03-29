@@ -1,14 +1,9 @@
-//! Letterboxing and pointer → OSR buffer mapping (pure math, used by [`crate::state::CompositorState`]).
-//!
-//! [`crate::winit`] must pass [`full_buffer_src_rect`] into
-//! [`smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer`]
-//! so the GPU samples the entire BGRA bitmap while `size` is the on-screen letterbox — same space
-//! as pointer normalization here.
+//! Letterboxing and pointer → OSR **buffer-pixel** mapping ([`crate::state::CompositorState`] / dma-buf overlay).
 
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Size};
 
 /// Fit `buf_w`×`buf_h` inside `output_logical`, preserve aspect, center; returns output-local `(ox, oy, cw, ch)` in **logical** pixels.
-pub fn letterbox_logical(
+pub(crate) fn letterbox_logical(
     output_logical: Size<i32, Logical>,
     buf_w: u32,
     buf_h: u32,
@@ -44,7 +39,7 @@ pub fn norm_to_buffer_px(nx: f64, ny: f64, buf_w: u32, buf_h: u32) -> (i32, i32)
 }
 
 /// Pointer in **output-local** logical coords relative to letterbox origin `(0,0)` at top-left of letterbox.
-pub fn local_in_letterbox_to_buffer_px(
+pub(crate) fn local_in_letterbox_to_buffer_px(
     lx: f64,
     ly: f64,
     cw_l: i32,
@@ -52,8 +47,8 @@ pub fn local_in_letterbox_to_buffer_px(
     buf_w: u32,
     buf_h: u32,
 ) -> Option<(i32, i32)> {
-    let cw_f = cw_l as f64;
-    let ch_f = ch_l as f64;
+    let cw_f = cw_l.max(1) as f64;
+    let ch_f = ch_l.max(1) as f64;
     if lx < 0.0 || ly < 0.0 || lx >= cw_f || ly >= ch_f {
         return None;
     }
@@ -64,17 +59,10 @@ pub fn local_in_letterbox_to_buffer_px(
     Some((x.clamp(0, xmax), y.clamp(0, ymax)))
 }
 
-/// `src` rectangle for [`MemoryRenderBufferRenderElement::from_buffer`] — entire OSR bitmap in logical texture coordinates (`buffer_scale` 1).
-pub fn full_buffer_src_rect(buf_w: u32, buf_h: u32) -> Rectangle<f64, Logical> {
-    Rectangle::new(
-        Point::from((0.0f64, 0.0f64)),
-        Size::<f64, Logical>::from((buf_w as f64, buf_h as f64)),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smithay::utils::{Point, Rectangle};
 
     #[test]
     fn letterbox_preserves_buffer_aspect() {
@@ -84,7 +72,6 @@ mod tests {
         assert_eq!((cw, ch), (800, 533));
         let ar_buf = 900.0 / 600.0;
         let ar_box = cw as f64 / ch as f64;
-        // Integer floor on `ch` can skew ratio by ~1e‑3 vs ideal contain-scale.
         assert!(
             (ar_buf - ar_box).abs() < 0.002,
             "ar_buf={ar_buf} ar_box={ar_box}"
@@ -98,7 +85,6 @@ mod tests {
         assert_eq!((ox, oy, cw, ch), (0, 0, 1280, 720));
     }
 
-    /// High-DPI-style buffer: more bitmap pixels than “logical” output span; letterbox still matches aspect.
     #[test]
     fn letterbox_with_larger_buffer_same_aspect() {
         let out = Size::<i32, Logical>::from((400, 300));
@@ -124,14 +110,16 @@ mod tests {
     }
 
     #[test]
-    fn full_buffer_src_matches_dimensions() {
-        let r = full_buffer_src_rect(1200, 800);
+    fn full_logical_rect_for_buffer_matches_dimensions() {
+        let r = Rectangle::new(
+            Point::<f64, Logical>::from((0.0, 0.0)),
+            Size::<f64, Logical>::from((1200.0, 800.0)),
+        );
         assert_eq!(r.loc.x, 0.0);
         assert_eq!(r.size.w, 1200.0);
         assert_eq!(r.size.h, 800.0);
     }
 
-    /// Compositor sends **buffer** pixels; `cef_host` maps with `bx * dip / buffer` (see `OsrViewState::buffer_to_view`).
     #[test]
     fn normalized_pointer_pipeline_matches_buffer_to_view_math() {
         let dip_w = 800i32;
