@@ -1,5 +1,3 @@
-//! Spawn [`smithay::xwayland::XWayland`], run Smithay’s X11 WM, set `DISPLAY`, then start `--command` (CEF).
-
 use std::io;
 use std::process::Stdio;
 
@@ -7,11 +5,6 @@ use smithay::reexports::calloop::{EventLoop, LoopHandle};
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 use crate::{sidecar, CalloopData};
 
-pub fn enabled() -> bool {
-    std::env::var("DERP_XWAYLAND").ok().as_deref() != Some("0")
-}
-
-/// If `pending_sidecar_cmd` is set, spawn it (e.g. after XWayland ready or on failure).
 pub fn spawn_pending_sidecar(data: &mut CalloopData) {
     if let Some(cmd) = data.pending_sidecar_cmd.take() {
         match sidecar::spawn_shell_command_line(&cmd) {
@@ -24,13 +17,7 @@ pub fn spawn_pending_sidecar(data: &mut CalloopData) {
     }
 }
 
-/// Spawn XWayland when [`enabled`]; defer `--command` until `DISPLAY` is set.
-/// With `DERP_XWAYLAND=0`, does nothing — caller spawns the sidecar separately.
 pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData) -> io::Result<()> {
-    if !enabled() {
-        return Ok(());
-    }
-
     let dh = data.display_handle.clone();
     let (xwayland, client) = XWayland::spawn(
         &dh,

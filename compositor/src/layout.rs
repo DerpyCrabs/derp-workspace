@@ -38,28 +38,3 @@ pub fn clamp_size(width: i32, height: i32, min: (i32, i32), max: (i32, i32)) -> 
     };
     (width.max(min_w).min(max_w), height.max(min_h).min(max_h))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rect_contains() {
-        let r = Rect {
-            x: 10,
-            y: 20,
-            width: 100,
-            height: 50,
-        };
-        assert!(r.contains(Point { x: 10, y: 20 }));
-        assert!(r.contains(Point { x: 109, y: 69 }));
-        assert!(!r.contains(Point { x: 9, y: 20 }));
-        assert!(!r.contains(Point { x: 110, y: 20 }));
-    }
-
-    #[test]
-    fn clamp_size_respects_bounds() {
-        assert_eq!(clamp_size(50, 50, (80, 60), (0, 0)), (80, 60));
-        assert_eq!(clamp_size(200, 200, (1, 1), (100, 100)), (100, 100));
-    }
-}

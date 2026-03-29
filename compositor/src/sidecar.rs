@@ -135,8 +135,6 @@ pub fn terminate_sidecar(child: &mut Option<Child>) {
     let Some(mut c) = child.take() else {
         return;
     };
-    #[cfg(target_os = "linux")]
-    {
         let pid = c.id() as libc::pid_t;
         let order = linux_subtree_postorder_kill_list(pid);
         unsafe {
@@ -154,28 +152,4 @@ pub fn terminate_sidecar(child: &mut Option<Child>) {
             linux_signal_pids(&order, libc::SIGKILL);
         }
         let _ = c.wait();
-    }
-    #[cfg(all(unix, not(target_os = "linux")))]
-    {
-        let pid = c.id() as libc::pid_t;
-        unsafe {
-            let _ = libc::kill(-pid, libc::SIGTERM);
-        }
-        for _ in 0..80 {
-            match c.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
-        }
-        unsafe {
-            let _ = libc::kill(-pid, libc::SIGKILL);
-        }
-        let _ = c.wait();
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
 }

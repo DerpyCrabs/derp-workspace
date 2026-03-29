@@ -1,5 +1,3 @@
-//! KMS/DRM session: libseat session, GBM scanout, EGL GLES, libinput. For GDM / tty logins.
-
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -350,14 +348,11 @@ pub fn init_drm(
     data: &mut CalloopData,
     mut session: LibSeatSession,
     session_notifier: LibSeatSessionNotifier,
-    drm_device_override: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let loop_handle = event_loop.handle().clone();
     let loop_handle_static: LoopHandle<'static, CalloopData> =
         unsafe { std::mem::transmute(loop_handle.clone()) };
 
-    // Libseat enables the seat asynchronously. Opening the DRM node before `SeatEvent::Enable`
-    // is processed often prevents `DRM_IOCTL_SET_MASTER` (Smithay logs "assuming unprivileged mode").
     event_loop
         .handle()
         .insert_source(session_notifier, move |event, _, d| match event {
@@ -375,12 +370,7 @@ pub fn init_drm(
         })
         .map_err(|e| format!("session notifier: {e}"))?;
 
-    let seat_wait = std::time::Duration::from_millis(
-        std::env::var("DERP_DRM_SEAT_WAIT_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(5_000),
-    );
+    let seat_wait = std::time::Duration::from_millis(5_000);
     let seat_deadline = std::time::Instant::now() + seat_wait;
     while !session.is_active() && std::time::Instant::now() < seat_deadline {
         event_loop
@@ -396,15 +386,9 @@ pub fn init_drm(
         );
     }
 
-    let path: PathBuf = if let Some(p) = drm_device_override {
-        p
-    } else if let Ok(p) = std::env::var("DERP_DRM_DEVICE") {
-        PathBuf::from(p)
-    } else {
-        primary_gpu(session.seat())
-            .map_err(|e| format!("primary_gpu: {e}"))?
-            .ok_or_else(|| "no DRM device for seat (try DERP_DRM_DEVICE=/dev/dri/card0)".to_string())?
-    };
+    let path: PathBuf = primary_gpu(session.seat())
+        .map_err(|e| format!("primary_gpu: {e}"))?
+        .ok_or_else(|| "no DRM device for seat".to_string())?;
 
     info!(path = %path.display(), "Opening DRM device via session");
     let fd = session
@@ -518,7 +502,7 @@ pub fn init_drm(
     output.change_current_state(
         Some(mode),
         Some(Transform::Normal),
-        Some(Scale::Integer(1)),
+        Some(Scale::Fractional(1.0)),
         Some((0, 0).into()),
     );
     output.set_preferred(mode);

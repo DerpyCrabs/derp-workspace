@@ -107,7 +107,7 @@ derp_session_build_args() {
   export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
   derp_session_merge_rust_log
 
-  ARGS=( --backend drm --socket "$SOCKET" )
+  ARGS=( --socket "$SOCKET" )
   if [[ -n "$URL" ]]; then
     local CEF_DIR="" cmd
     CEF_DIR="$(resolve_cef_dir)" || CEF_DIR="${CEF_PATH:-}"

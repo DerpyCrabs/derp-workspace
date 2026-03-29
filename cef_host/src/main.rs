@@ -1,24 +1,3 @@
-//! Chromium Embedded Framework host: windowless (OSR) browser → [`shell_wire`] → compositor Unix socket.
-//!
-//! Requires a matching CEF binary distribution (see workspace README). Set `CEF_PATH` to the
-//! unpack directory (Resources, locales, `libcef.so`). The binary embeds `RUNPATH` for `libcef.so`;
-//! use `XDG_RUNTIME_DIR` for the compositor Unix socket.
-//!
-//! On **Linux**, Chromium flags **`--use-angle=gl-egl`** and **`--ozone-platform=wayland`** are always
-//! appended (dma-buf OSR). **`WAYLAND_DISPLAY`** must name the compositor socket.
-//!
-//! **Gray / blank shell:** enable **`CEF_HOST_DIAG=1`** for stderr layout checks (`CEF_PATH`,
-//! `libcef.so`, pack files), **`CEF_HOST_TRACE_PAINT=1`** to log the first OSR paint size, and
-//! optional **`CEF_HOST_LOG_FILE` / `CEF_HOST_LOG_SEVERITY`** (e.g. `verbose`) for Chromium’s log.
-//! **`CEF_HOST_DMABUF_TRACE=1`** logs **every** `OnAcceleratedPaint` (dma-buf planes/modifier) to stderr.
-//! **`CEF_HOST_CHROMIUM_VERBOSE=1`** adds Chromium **`--enable-logging=stderr --v=2`** (GPU/EGL noise).
-//! Navigation failures are always logged from [`LoadHandler::on_load_error`].
-//!
-//! **dma-buf OSR only**: CEF shares textures as dma-bufs → [`shell_wire::MSG_FRAME_DMABUF_COMMIT`].
-//! ANGLE defaults to **`gl-egl`** (override **`CEF_HOST_ANGLE_BACKEND`**).
-//! Chromium flags: **`--no-sandbox`**, **`--disable-gpu-sandbox`**, **`--disable-gpu-memory-buffer-video-frames`**,
-//! and **`--in-process-gpu`** unless **`CEF_HOST_IN_PROCESS_GPU=0`** (`Settings::no_sandbox` is also set).
-
 mod compositor_downlink;
 mod control_server;
 mod desktop_apps;
@@ -27,7 +6,7 @@ mod shell_uplink;
 use std::{
     io::{self, Read},
     os::unix::net::UnixStream,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
@@ -47,13 +26,6 @@ use cef_host::osr_view_state::{OsrViewState, OSR_BOOTSTRAP_DIP_H, OSR_BOOTSTRAP_
 #[cfg(unix)]
 static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
 
-/// Maps CEF [`ColorType`] to the **Linux dma-buf DRM fourcc** for the shared texture.
-///
-/// Chromium’s `GetFourCCFormatFromSharedImageFormat` in `ui/gfx/linux/drm_util_linux.cc`
-/// (https://chromium.googlesource.com/chromium/src/+/main/ui/gfx/linux/drm_util_linux.cc)
-/// maps Viz `kBGRA_8888` → `DRM_FORMAT_ARGB8888` and `kRGBA_8888` → `DRM_FORMAT_ABGR8888` (naming reflects
-/// channel assignment, not a literal “BGRA bytes” drm code). Using `Bgra8888` / `Rgba8888` here breaks
-/// `eglCreateImageKHR` on drivers that import `AR24`/`AB24` but not `BA24`/`RA24`.
 #[cfg(unix)]
 fn cef_color_to_drm_format(ct: ColorType) -> u32 {
     use drm_fourcc::DrmFourcc;
@@ -66,32 +38,14 @@ fn cef_color_to_drm_format(ct: ColorType) -> u32 {
     }
 }
 
-static FIRST_OSR_PAINT_LOG: Once = Once::new();
-
 #[cfg(unix)]
 static FIRST_ACCELERATED_PAINT_LOG: Once = Once::new();
 
 #[derive(Parser, Debug)]
 #[command(name = "cef_host", about = "CEF OSR → compositor shell IPC")]
 struct Cli {
-    /// Page URL (`file://...` to `shell/dist/index.html` or any http(s) URL).
-    #[arg(long)]
+    #[arg(value_name = "URL")]
     url: String,
-
-    /// Shell IPC socket *name* under `XDG_RUNTIME_DIR` (matches compositor `--shell-ipc-socket`).
-    #[arg(long, default_value = "derp-shell.sock")]
-    compositor_socket: String,
-
-    /// Reserved; OSR DIP comes from compositor `OutputGeometry` (`logical_*`), with
-    /// `OSR_BOOTSTRAP_DIP_*` only until that message is applied.
-    #[arg(long, default_value_t = 800)]
-    #[allow(dead_code)]
-    width: i32,
-
-    /// Reserved; see `width`.
-    #[arg(long, default_value_t = 600)]
-    #[allow(dead_code)]
-    height: i32,
 }
 
 wrap_app! {
@@ -105,10 +59,8 @@ wrap_app! {
             if let Some(cmd) = command_line {
                 cmd.append_switch(Some(&CefString::from("no-sandbox")));
                 cmd.append_switch(Some(&CefString::from("allow-file-access-from-files")));
-                // OSR shared-texture / dma-buf: avoid blocklists and prefer native GPU buffers on Linux.
                 cmd.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
                 cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
-                // Wayland zero-copy: compositor must advertise `zwp_linux_dmabuf_v1` (Derp: `CompositorState::init_linux_dmabuf_global`).
                 cmd.append_switch(Some(&CefString::from("enable-native-gpu-memory-buffers")));
                 cmd.append_switch(Some(&CefString::from("disable-gpu-sandbox")));
                 cmd.append_switch(Some(&CefString::from(
@@ -127,22 +79,12 @@ wrap_app! {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    let angle_backend = cef_host::angle_backend_for_osr();
                     cmd.append_switch_with_value(
                         Some(&CefString::from("use-angle")),
-                        Some(&CefString::from(angle_backend.as_str())),
+                        Some(&CefString::from(cef_host::angle_backend_for_osr())),
                     );
                 }
-                if std::env::var("CEF_HOST_IN_PROCESS_GPU").as_deref() != Ok("0") {
-                    cmd.append_switch(Some(&CefString::from("in-process-gpu")));
-                }
-                if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1") {
-                    cmd.append_switch(Some(&CefString::from("enable-logging=stderr")));
-                    cmd.append_switch_with_value(
-                        Some(&CefString::from("v")),
-                        Some(&CefString::from("2")),
-                    );
-                }
+                cmd.append_switch(Some(&CefString::from("in-process-gpu")));
             }
         }
 
@@ -201,7 +143,6 @@ wrap_load_handler! {
                 return;
             };
             host.notify_screen_info_changed();
-            // Windowless browsers do not take focus from the OS; DOM input needs an explicit focus bit.
             host.set_focus(1);
             host.invalidate(PaintElementType::VIEW);
         }
@@ -294,39 +235,16 @@ wrap_render_handler! {
             let drm_fmt = cef_color_to_drm_format(info.format);
             let w = info.extra.coded_size.width as u32;
             let h = info.extra.coded_size.height as u32;
-            let dmabuf_trace = std::env::var("CEF_HOST_DMABUF_TRACE").as_deref() == Ok("1");
-            if dmabuf_trace {
-                let planes_s: Vec<String> = (0..pc)
-                    .map(|i| {
-                        let p = &info.planes[i];
-                        format!(
-                            "plane[{}]: stride={} offset={} fd={}",
-                            i, p.stride, p.offset, p.fd
-                        )
-                    })
-                    .collect();
+            FIRST_ACCELERATED_PAINT_LOG.call_once(|| {
                 eprintln!(
-                    "cef_host: OnAcceleratedPaint dma-buf {}x{} planes={} cef_color={:?} drm_fourcc={:#x} modifier={:#x} | {}",
+                    "cef_host: OnAcceleratedPaint dma-buf {}x{} planes={} drm_format={:#x} modifier={:#x}",
                     w,
                     h,
                     pc,
-                    info.format,
                     drm_fmt,
-                    info.modifier,
-                    planes_s.join("; ")
+                    info.modifier
                 );
-            } else {
-                FIRST_ACCELERATED_PAINT_LOG.call_once(|| {
-                    eprintln!(
-                        "cef_host: OnAcceleratedPaint dma-buf {}x{} planes={} drm_format={:#x} modifier={:#x} (CEF_HOST_DMABUF_TRACE=1 for every frame + plane fds)",
-                        w,
-                        h,
-                        pc,
-                        drm_fmt,
-                        info.modifier
-                    );
-                });
-            }
+            });
             SHELL_USE_ACCELERATED_FRAMES.store(true, Ordering::Relaxed);
             let mut planes = Vec::with_capacity(pc);
             let mut fds: Vec<std::os::raw::c_int> = Vec::with_capacity(pc);
@@ -372,16 +290,6 @@ wrap_render_handler! {
             if buffer.is_null() {
                 return;
             }
-            FIRST_OSR_PAINT_LOG.call_once(|| {
-                if std::env::var("CEF_HOST_DIAG").as_deref() == Ok("1")
-                    || std::env::var("CEF_HOST_TRACE_PAINT").as_deref() == Ok("1")
-                {
-                    eprintln!(
-                        "cef_host: software OSR paint {}x{} (no IPC — waiting on OnAcceleratedPaint / dma-buf)",
-                        width, height
-                    );
-                }
-            });
             let notify = {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;
@@ -397,13 +305,6 @@ wrap_render_handler! {
                 g.maybe_take_undersized_paint_nudge(width, height, std::time::Duration::from_millis(200))
             };
             if notify || undersized_nudge {
-                if undersized_nudge && std::env::var("CEF_HOST_TRACE_PAINT").as_deref() == Ok("1") {
-                    eprintln!(
-                        "cef_host: undersized OSR paint {}x{} vs DIP (nudging was_resized/notify/invalidate)",
-                        width,
-                        height
-                    );
-                }
                 if let Some(b) = browser {
                     if let Some(host) = b.host() {
                         if undersized_nudge {
@@ -422,7 +323,6 @@ wrap_render_handler! {
     }
 }
 
-// Mirror **all** Blink console messages to stderr → `derp-session` tee → `DERP_COMPOSITOR_LOG`.
 wrap_display_handler! {
     struct DerpJsConsoleDisplayHandler;
 
@@ -498,84 +398,7 @@ wrap_client! {
     }
 }
 
-fn cef_host_diag_enabled() -> bool {
-    std::env::var("CEF_HOST_DIAG").as_deref() == Ok("1")
-}
-
-fn log_cef_layout(cef_path: Option<&Path>) {
-    if !cef_host_diag_enabled() {
-        return;
-    }
-    eprintln!("cef_host: CEF_HOST_DIAG layout check");
-    if let Ok(exe) = std::env::current_exe() {
-        eprintln!("cef_host:   executable: {}", exe.display());
-        if let Some(parent) = exe.parent() {
-            let lib = parent.join("libcef.so");
-            eprintln!(
-                "cef_host:   libcef next to exe [{}]: {}",
-                lib.display(),
-                lib.is_file()
-            );
-        }
-    }
-    match cef_path {
-        Some(root) => {
-            eprintln!("cef_host:   CEF_PATH: {}", root.display());
-            for name in [
-                "libcef.so",
-                "icudtl.dat",
-                "v8_context_snapshot.bin",
-                "resources.pak",
-                "locales",
-            ] {
-                let p = root.join(name);
-                eprintln!(
-                    "cef_host:     [{}] {}",
-                    name,
-                    if p.exists() { "ok" } else { "MISSING" }
-                );
-            }
-        }
-        None => eprintln!(
-            "cef_host:   CEF_PATH unset (resources from RUNPATH libcef dir / CEF defaults)"
-        ),
-    }
-}
-
-fn apply_cef_log_env(settings: &mut Settings) {
-    if let Ok(path) = std::env::var("CEF_HOST_LOG_FILE") {
-        if !path.is_empty() {
-            settings.log_file = CefString::from(path.as_str());
-            eprintln!("cef_host: CEF_HOST_LOG_FILE -> {path}");
-        }
-    }
-    if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1")
-        && std::env::var("CEF_HOST_LOG_SEVERITY").is_err()
-    {
-        settings.log_severity = LogSeverity::VERBOSE;
-        eprintln!("cef_host: CEF_HOST_CHROMIUM_VERBOSE -> Settings.log_severity=VERBOSE (override with CEF_HOST_LOG_SEVERITY)");
-    }
-    if let Ok(sev) = std::env::var("CEF_HOST_LOG_SEVERITY") {
-        settings.log_severity = match sev.to_ascii_lowercase().as_str() {
-            "verbose" => LogSeverity::VERBOSE,
-            "info" => LogSeverity::INFO,
-            "warning" => LogSeverity::WARNING,
-            "error" => LogSeverity::ERROR,
-            "fatal" => LogSeverity::FATAL,
-            "disable" => LogSeverity::DISABLE,
-            "default" | _ => LogSeverity::DEFAULT,
-        };
-    }
-}
-
 fn main() {
-    // Multiprocess bootstrap (see CEF `CefExecuteProcess`):
-    // - Renderer / GPU / utility subprocesses must run `execute_process` first and usually exit
-    //   with its return code. They still need the same `CefApp` so `render_process_handler()`
-    //   runs in the renderer — otherwise V8 hooks like `__derpShellWireSend` are never installed.
-    // - Browser process: `execute_process` returns -1, then `initialize` with the *same* app.
-    // - Parse CLI only in the browser process (subprocess argv has no `--url`).
-
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
     let mut app = DerpApp::new();
@@ -626,26 +449,15 @@ fn main() {
         );
         eprintln!("cef_host: ozone-platform not set on this target");
     }
-    eprintln!("cef_host: --disable-gpu-sandbox --disable-gpu-memory-buffer-video-frames");
-    if std::env::var("CEF_HOST_IN_PROCESS_GPU").as_deref() != Ok("0") {
-        eprintln!("cef_host: --in-process-gpu (set CEF_HOST_IN_PROCESS_GPU=0 for separate gpu-process)");
-    }
-    if std::env::var("CEF_HOST_CHROMIUM_VERBOSE").as_deref() == Ok("1") {
-        eprintln!("cef_host: CEF_HOST_CHROMIUM_VERBOSE → Chromium --enable-logging=stderr --v=2");
-    }
-    if std::env::var("CEF_HOST_DMABUF_TRACE").as_deref() == Ok("1") {
-        eprintln!("cef_host: CEF_HOST_DMABUF_TRACE → every OnAcceleratedPaint on stderr");
-    }
+    eprintln!("cef_host: --disable-gpu-sandbox --disable-gpu-memory-buffer-video-frames --in-process-gpu");
 
     let cef_path = std::env::var("CEF_PATH").ok().map(PathBuf::from);
-    log_cef_layout(cef_path.as_deref());
 
     let mut settings = Settings::default();
     settings.no_sandbox = 1;
     settings.windowless_rendering_enabled = 1;
     settings.external_message_pump = 1;
     settings.log_severity = LogSeverity::INFO;
-    apply_cef_log_env(&mut settings);
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(s) = exe.to_str() {
@@ -676,14 +488,13 @@ fn main() {
         let exit_code = get_exit_code();
         eprintln!(
             "cef_host: CefInitialize failed (ret={init_ret}, exit_code={exit_code}), cache={}\n\
-             hints: CEF_PATH must match this build’s libcef (Resources/, locales/); \
-             for singleton lock / \"Opening in existing browser session\" try CEF_HOST_CACHE_DIR=\"$(mktemp -d)\"",
+             hints: CEF_PATH must match this build’s libcef (Resources/, locales/)",
             cef_cache.display()
         );
         std::process::exit(1);
     }
 
-    let sock_path = cef_host::runtime_dir().join(&cli.compositor_socket);
+    let sock_path = cef_host::runtime_dir().join("derp-shell.sock");
     let stream = UnixStream::connect(&sock_path).unwrap_or_else(|e| {
         eprintln!(
             "cef_host: connect {}: {e} (start compositor first)",
@@ -754,7 +565,6 @@ fn main() {
     let lh = ShellLoadHandler::new(Some(inject_js));
     let mut client = ShellClient::new(rh, lh, capture, ipc.clone(), view_state.clone());
 
-    // Compositor sends `OutputGeometry` soon after connect; logical size → DIP, physical → buffer/target.
     {
         let deadline = Instant::now() + Duration::from_millis(300);
         while Instant::now() < deadline {
@@ -790,8 +600,7 @@ fn main() {
     let window_info = window_info.set_as_windowless(0);
 
     let mut browser_settings = BrowserSettings::default();
-    browser_settings.windowless_frame_rate = 60;
-    // Transparent background so native windows show through undecorated areas of the shell overlay.
+    browser_settings.windowless_frame_rate = 120;
     browser_settings.background_color = 0x0000_0000;
 
     browser_host_create_browser(
@@ -827,7 +636,6 @@ fn main() {
             }
             compositor_downlink::apply_message(msg, &browser_holder, &view_state);
         }
-        // Bursty pointer + `execute_java_script` HUD: coalesce above; when idle, sleep like a typical CEF pump.
         if had_ipc {
             std::thread::sleep(Duration::from_millis(1));
         } else {

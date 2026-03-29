@@ -1,5 +1,3 @@
-//! Default pointer bitmap from the Xcursor theme (`left_ptr` / …) or a small built-in arrow.
-
 use smithay::{
     backend::renderer::element::memory::MemoryRenderBuffer,
     utils::{Rectangle, Size, Transform},
@@ -7,7 +5,6 @@ use smithay::{
 
 use crate::shell_overlay::SHELL_OSR_MEMORY_FOURCC;
 
-/// Match CEF/shell path: **B,G,R,A** bytes per pixel for [`SHELL_OSR_MEMORY_FOURCC`] (shell overlay buffer format).
 fn rgba_strip_to_shell_bgra(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     let n = (width as usize)
         .checked_mul(height as usize)?
@@ -37,11 +34,7 @@ fn pick_image(images: &[xcursor::parser::Image]) -> Option<&xcursor::parser::Ima
 }
 
 fn load_system_cursor() -> Option<(MemoryRenderBuffer, (i32, i32))> {
-    let theme_name = std::env::var("XCURSOR_THEME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".to_string());
-    let theme = xcursor::CursorTheme::load(&theme_name);
+    let theme = xcursor::CursorTheme::load("default");
     for icon in ["left_ptr", "default", "arrow"] {
         let path = theme.load_icon(icon)?;
         let data = std::fs::read(&path).ok()?;
@@ -79,7 +72,6 @@ fn build_vector_fallback() -> (MemoryRenderBuffer, (i32, i32)) {
             mem.fill(0);
             let outline = [24u8, 24u8, 28u8, 255u8];
             let fill = [0xf8u8, 0xf8u8, 0xfcu8, 255u8];
-            // Left stem
             for y in 0..17 {
                 let i = ((y * W) * 4) as usize;
                 mem[i..i + 4].copy_from_slice(&outline);
@@ -88,7 +80,6 @@ fn build_vector_fallback() -> (MemoryRenderBuffer, (i32, i32)) {
                     mem[i2..i2 + 4].copy_from_slice(&fill);
                 }
             }
-            // Diagonal bottom flare + hypotenuse
             for x in 1..12 {
                 let y = x;
                 if y >= H {
@@ -112,8 +103,6 @@ pub fn load_cursor_fallback() -> (MemoryRenderBuffer, (i32, i32)) {
     if let Some(pair) = load_system_cursor() {
         return pair;
     }
-    tracing::warn!(
-        "cursor_fallback: no Xcursor icon (install icon theme or set XCURSOR_THEME); using builtin arrow"
-    );
+    tracing::warn!("cursor_fallback: no Xcursor icon; using builtin arrow");
     build_vector_fallback()
 }

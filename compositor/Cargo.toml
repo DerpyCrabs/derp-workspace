@@ -2,13 +2,8 @@
 name = "compositor"
 version = "0.1.0"
 edition = "2021"
-description = "Minimal Smithay Wayland compositor with testing hooks and CEF IPC stub"
+description = "Minimal Smithay Wayland compositor with CEF IPC"
 default-run = "compositor"
-
-[features]
-default = ["winit-backend"]
-winit-backend = []
-gpu-tests = []
 
 [dependencies]
 bitflags = "2.2.1"
@@ -16,14 +11,14 @@ clap = { version = "4", features = ["derive"] }
 shell_wire = { path = "../shell_wire" }
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm",
+    "backend_egl",
     "backend_gbm",
     "backend_libinput",
     "backend_session_libseat",
     "backend_udev",
-    "backend_winit",
+    "renderer_gl",
     "wayland_frontend",
     "desktop",
-    "renderer_test",
     "use_system_lib",
     "xwayland",
 ] }
@@ -35,15 +30,6 @@ xcursor = "0.3.10"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 nix = { version = "0.29", default-features = false, features = ["socket", "uio"] }
-
-[dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-shell_wire = { path = "../shell_wire" }
-tempfile = "3"
-wayland-client = "0.31.13"
-wayland-protocols = { version = "0.32.11", features = ["client"] }
 
 [[bin]]
 name = "compositor"

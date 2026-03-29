@@ -124,12 +124,8 @@ pub struct CompositorInitOptions {
         std::sync::mpsc::Sender<Vec<u8>>,
         std::sync::mpsc::Receiver<Vec<u8>>,
     )>,
-    /// If set while shell IPC is enabled, exit the compositor when `cef_host` sends nothing for this long (see `DERP_SHELL_WATCHDOG_SEC`).
+    /// If set while shell IPC is enabled, exit the compositor when `cef_host` sends nothing for this long.
     pub shell_ipc_stall_timeout: Option<Duration>,
-    /// Headless / E2E hooks (`DERP_SHELL_E2E_*`). BGRA upload was removed; dma-buf path does not populate these yet.
-    pub shell_e2e_status_path: Option<PathBuf>,
-    /// Headless / E2E: PNG screenshot path (`DERP_SHELL_E2E_SCREENSHOT`).
-    pub shell_e2e_screenshot_path: Option<PathBuf>,
 }
 
 impl Default for CompositorInitOptions {
@@ -141,8 +137,6 @@ impl Default for CompositorInitOptions {
             shell_ipc_socket: None,
             shell_ipc_embedded: None,
             shell_ipc_stall_timeout: None,
-            shell_e2e_status_path: None,
-            shell_e2e_screenshot_path: None,
         }
     }
 }
@@ -272,11 +266,6 @@ pub struct CompositorState {
     pub shell_dmabuf: Option<Dmabuf>,
     pub(crate) shell_dmabuf_overlay_id: Id,
     pub shell_post_drain_hook: Option<Box<dyn FnMut() + Send>>,
-    /// Set from `DERP_SHELL_E2E_*` (no CPU output on dma-buf path until readback exists).
-    #[allow(dead_code)]
-    shell_e2e_status_path: Option<PathBuf>,
-    #[allow(dead_code)]
-    shell_e2e_screenshot_path: Option<PathBuf>,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -314,8 +303,6 @@ impl CompositorState {
         let shell_ipc_socket = options.shell_ipc_socket.clone();
         let shell_ipc_embedded = options.shell_ipc_embedded;
         let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
-        let shell_e2e_status_path = options.shell_e2e_status_path.clone();
-        let shell_e2e_screenshot_path = options.shell_e2e_screenshot_path.clone();
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
         let (cursor_fallback_buffer, cursor_fallback_hotspot) = crate::cursor_fallback::load_cursor_fallback();
@@ -391,8 +378,6 @@ impl CompositorState {
             shell_dmabuf: None,
             shell_dmabuf_overlay_id: Id::new(),
             shell_post_drain_hook: None,
-            shell_e2e_status_path,
-            shell_e2e_screenshot_path,
             vt_session: None,
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
@@ -1382,10 +1367,20 @@ impl CompositorState {
         true
     }
 
-    /// Map normalized pointer (`nx`, `ny` over the output) to **shell layout** pixels (see `MSG_OUTPUT_GEOMETRY`).
+    /// Map normalized pointer (`nx`, `ny` over the output) to **shell OSR buffer** pixels (letterbox-aware).
+    ///
+    /// Historically this wrongly used **logical** output size as if it were the dma-buf size, which breaks
+    /// under fractional output scale. Prefer [`Self::shell_pointer_view_px`] from a global logical `pos`.
     pub fn shell_pointer_buffer_pixels(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
-        let (w, h) = self.shell_output_logical_size()?;
-        Some(crate::shell_letterbox::norm_to_buffer_px(nx, ny, w, h))
+        let (buf_w, buf_h) = self.shell_view_px?;
+        let (lw, lh) = self.shell_output_logical_size()?;
+        let (ox, oy, cw, ch) =
+            crate::shell_letterbox::letterbox_logical(Size::from((lw as i32, lh as i32)), buf_w, buf_h)?;
+        let nx = nx.clamp(0.0, 1.0);
+        let ny = ny.clamp(0.0, 1.0);
+        let lx = nx * lw as f64 - ox as f64;
+        let ly = ny * lh as f64 - oy as f64;
+        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, buf_h)
     }
 
     pub(crate) fn shell_pointer_norm_from_global(
@@ -2347,6 +2342,30 @@ impl CompositorState {
             fourcc_resolved = ?format,
             "apply_shell_frame_dmabuf (IPC from cef_host)"
         );
+
+        if let Some((lw, lh)) = self.shell_output_logical_size() {
+            let (pw, ph) = self.shell_window_physical_px;
+            if lw > 0 && lh > 0 && pw > 0 && ph > 0 {
+                let exp_w = u32::try_from(pw).unwrap_or(width).max(1);
+                let exp_h = u32::try_from(ph).unwrap_or(height).max(1);
+                if width * 100 < exp_w * 97 || height * 100 < exp_h * 97 {
+                    use std::sync::Once;
+                    static SHELL_DMABUF_UNDERSIZED: Once = Once::new();
+                    SHELL_DMABUF_UNDERSIZED.call_once(|| {
+                        tracing::warn!(
+                            target: "derp_shell_dmabuf",
+                            width,
+                            height,
+                            exp_w,
+                            exp_h,
+                            logical_w = lw,
+                            logical_h = lh,
+                            "shell dma-buf is smaller than primary output physical size — Solid is being upscaled (soft)."
+                        );
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2512,15 +2531,7 @@ impl CompositorState {
     }
 
     /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).
-    ///
-    /// Disabled unless `DERP_ALLOW_SHELL_SPAWN=1` (trusted local shell IPC only).
     pub fn try_spawn_wayland_client_sh(&self, shell_command: &str) -> Result<(), String> {
-        if std::env::var("DERP_ALLOW_SHELL_SPAWN").as_deref() != Ok("1") {
-            return Err(
-                "spawning from shell IPC requires DERP_ALLOW_SHELL_SPAWN=1 (trusted local connection)"
-                    .into(),
-            );
-        }
         let trimmed = shell_command.trim();
         if trimmed.is_empty() {
             return Err("empty command".into());

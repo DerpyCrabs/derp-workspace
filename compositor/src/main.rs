@@ -1,22 +1,17 @@
-//! Binary entry: winit-backed compositor or `--headless` for CI / integration tests.
 #![cfg(unix)]
 
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
+use libc;
+
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use clap::Parser;
 use compositor::{
     chrome_bridge::NoOpChromeBridge,
     drm,
-    headless,
     state::{CompositorInitOptions, SocketConfig},
-    winit,
     xwayland,
     CalloopData,
     CompositorState,
@@ -25,73 +20,24 @@ use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::Session;
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 
-#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
-enum CompositorBackend {
-    /// Nested window via winit (development).
-    #[default]
-    Winit,
-    /// KMS/DRM session (GDM, tty). Requires libseat/logind and a seat.
-    Drm,
-}
-
 #[derive(Parser, Debug)]
 #[command(name = "compositor", about = "Minimal Smithay Wayland compositor")]
 struct Cli {
-    /// Fixed `WAYLAND_DISPLAY` socket name (under `XDG_RUNTIME_DIR`). Default: auto `wayland-N`.
     #[arg(long, value_name = "NAME")]
     socket: Option<String>,
 
-    /// Run without a winit window (socket + software tick only).
-    #[arg(long)]
-    headless: bool,
-
-    /// Exit after this many milliseconds (headless only; integration tests).
-    #[arg(long, value_name = "MS")]
-    run_for_ms: Option<u64>,
-
-    /// Spawn `sh -c CMD` after startup (optional). The process group is signaled when the window
-    /// closes / the event loop exits (e.g. tears down `cef_host`).
     #[arg(short, long, value_name = "CMD")]
     command: Option<String>,
-
-    /// Shell pixel IPC socket name under `XDG_RUNTIME_DIR` (winit and headless; default on winit: derp-shell.sock).
-    #[arg(long, value_name = "NAME")]
-    shell_ipc_socket: Option<String>,
-
-    /// Graphics backend when not using `--headless`.
-    #[arg(long, value_enum, default_value_t = CompositorBackend::Winit)]
-    backend: CompositorBackend,
-
-    /// DRM node path (`--backend drm`). Overrides `DERP_DRM_DEVICE` and primary GPU detection.
-    #[arg(long, value_name = "PATH")]
-    drm_device: Option<PathBuf>,
 }
 
-fn shell_e2e_status_from_env() -> Option<PathBuf> {
-    std::env::var_os("DERP_SHELL_E2E_STATUS").map(PathBuf::from)
-}
-
-fn shell_e2e_screenshot_from_env() -> Option<PathBuf> {
-    std::env::var_os("DERP_SHELL_E2E_SCREENSHOT").map(PathBuf::from)
-}
-
-/// If set to a positive integer, exit when `cef_host` sends no shell IPC messages for this many seconds.
-fn shell_ipc_stall_timeout_from_env() -> Option<Duration> {
-    let Ok(raw) = std::env::var("DERP_SHELL_WATCHDOG_SEC") else {
-        return None;
-    };
-    let secs: u64 = raw.trim().parse().ok()?;
-    if secs == 0 {
-        return None;
-    }
-    Some(Duration::from_secs(secs))
+fn default_wayland_socket_name() -> String {
+    format!("wayland-d{}", unsafe { libc::getuid() })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        // GDM / nested runs often have no RUST_LOG; keep input diagnostics without extra env.
-        tracing_subscriber::EnvFilter::new("warn,derp_input=debug")
-    });
+    let env_filter = tracing_subscriber::EnvFilter::new(
+        "warn,derp_input=debug,derp_shell_osr=info",
+    );
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .init();
@@ -102,63 +48,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let cli = Cli::parse();
-
-    if cli.headless {
-        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
-            let fallback = PathBuf::from("/tmp");
-            tracing::warn!("XDG_RUNTIME_DIR unset; using /tmp (set per-test for isolation)");
-            std::env::set_var("XDG_RUNTIME_DIR", fallback);
-        }
-
-        let opts = CompositorInitOptions {
-            socket: cli
-                .socket
-                .map(SocketConfig::Fixed)
-                .unwrap_or(SocketConfig::Auto),
-            seat_name: "headless".to_string(),
-            chrome_bridge: std::sync::Arc::new(NoOpChromeBridge),
-            shell_ipc_socket: cli.shell_ipc_socket.clone(),
-            shell_ipc_embedded: None,
-            shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
-            shell_e2e_status_path: shell_e2e_status_from_env(),
-            shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
-        };
-        let run_for = cli.run_for_ms.map(Duration::from_millis);
-        headless::run(opts, run_for)?;
-        return Ok(());
-    }
+    let socket_name = cli
+        .socket
+        .unwrap_or_else(default_wayland_socket_name);
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
     let display: Display<CompositorState> = Display::new()?;
     let display_handle = display.handle();
 
-    let drm_session_setup = match cli.backend {
-        CompositorBackend::Drm => {
-            let (session, notifier) = LibSeatSession::new()?;
-            Some((session, notifier))
-        }
-        CompositorBackend::Winit => None,
-    };
+    let (session, notifier) = LibSeatSession::new()?;
 
     let init = CompositorInitOptions {
-        socket: cli
-            .socket
-            .map(SocketConfig::Fixed)
-            .unwrap_or(SocketConfig::Auto),
-        seat_name: drm_session_setup
-            .as_ref()
-            .map(|(s, _)| s.seat())
-            .unwrap_or_else(|| "winit".to_string()),
+        socket: SocketConfig::Fixed(socket_name),
+        seat_name: session.seat().to_string(),
         chrome_bridge: std::sync::Arc::new(NoOpChromeBridge),
-        shell_ipc_socket: Some(
-            cli.shell_ipc_socket
-                .clone()
-                .unwrap_or_else(|| "derp-shell.sock".to_string()),
-        ),
+        shell_ipc_socket: Some("derp-shell.sock".to_string()),
         shell_ipc_embedded: None,
-        shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
-        shell_e2e_status_path: shell_e2e_status_from_env(),
-        shell_e2e_screenshot_path: shell_e2e_screenshot_from_env(),
+        shell_ipc_stall_timeout: Some(std::time::Duration::from_secs(5)),
     };
 
     let state = CompositorState::new(&mut event_loop, display, init);
@@ -172,45 +78,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         drm: None,
     };
 
-    match cli.backend {
-        CompositorBackend::Winit => {
-            #[cfg(feature = "winit-backend")]
-            {
-                winit::init_winit(&mut event_loop, &mut data)?;
-            }
-            #[cfg(not(feature = "winit-backend"))]
-            {
-                return Err("compositor built without winit-backend".into());
-            }
-        }
-        CompositorBackend::Drm => {
-            let (session, notifier) = drm_session_setup.expect("drm session");
-            let vt_session = session.clone();
-            drm::init_drm(
-                &mut event_loop,
-                &mut data,
-                session,
-                notifier,
-                cli.drm_device.clone(),
-            )?;
-            data.state.set_vt_session(Some(vt_session));
-        }
-    }
+    let vt_session = session.clone();
+    drm::init_drm(&mut event_loop, &mut data, session, notifier)?;
+    data.state.set_vt_session(Some(vt_session));
 
     data.pending_sidecar_cmd = cli.command.clone();
-    if xwayland::enabled() {
-        if let Err(e) = xwayland::start_xwayland(&mut event_loop, &mut data) {
-            tracing::error!(%e, "XWayland failed to spawn; continuing without DISPLAY");
-            xwayland::spawn_pending_sidecar(&mut data);
-        }
-    } else {
+    if let Err(e) = xwayland::start_xwayland(&mut event_loop, &mut data) {
+        tracing::error!(%e, "XWayland failed to spawn; continuing without DISPLAY");
         xwayland::spawn_pending_sidecar(&mut data);
     }
 
-    // Without this, SIGINT/SIGTERM (terminal, systemd, pkill) aborts the process before
-    // `event_loop.run` returns and `terminate_sidecar` never runs — CEF subprocesses linger.
-    // SIGUSR2 requests the same graceful stop but exits with code 42 so derp-session can respawn
-    // after a new binary is installed (scripts/remote-update-and-restart.sh).
     let loop_stop = data.state.loop_signal.clone();
     let request_restart = Arc::new(AtomicBool::new(false));
     let request_restart_thread = Arc::clone(&request_restart);

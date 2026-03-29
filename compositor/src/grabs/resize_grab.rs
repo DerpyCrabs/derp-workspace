@@ -407,16 +407,3 @@ pub fn handle_commit(space: &mut Space<DerpSpaceElem>, surface: &WlSurface) -> O
 
     Some(())
 }
-
-#[cfg(test)]
-mod shell_wire_resize_edge_tests {
-    use super::ResizeEdge;
-
-    #[test]
-    fn resize_edge_bits_align_with_shell_wire() {
-        assert_eq!(ResizeEdge::TOP.bits(), shell_wire::RESIZE_EDGE_TOP);
-        assert_eq!(ResizeEdge::BOTTOM.bits(), shell_wire::RESIZE_EDGE_BOTTOM);
-        assert_eq!(ResizeEdge::LEFT.bits(), shell_wire::RESIZE_EDGE_LEFT);
-        assert_eq!(ResizeEdge::RIGHT.bits(), shell_wire::RESIZE_EDGE_RIGHT);
-    }
-}

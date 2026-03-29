@@ -1,9 +1,3 @@
-//! Renderer ↔ browser process bridge: JS calls `__derpShellWireSend(op, arg?, arg2?)` → compositor `shell_wire` on the Unix stream (no HTTP).
-//!
-//! After `move_delta` / `resize_delta`, optionally `BrowserHost::invalidate(VIEW)` throttled so OSR keeps up with shell chrome
-//! during drag or resize. Disable with `CEF_HOST_SHELL_DRAG_INVALIDATE=0`, or tune ms with `CEF_HOST_SHELL_DRAG_INVALIDATE_MS`
-//! (default 8, clamped 1–50).
-
 use std::{
     io::Write,
     os::unix::net::UnixStream,
@@ -29,17 +23,8 @@ pub fn write_shell_packet(ipc: &Arc<Mutex<UnixStream>>, packet: &[u8]) {
 
 static LAST_DRAG_VIEW_INVALIDATE: Mutex<Option<Instant>> = Mutex::new(None);
 
-fn drag_invalidate_shell_view_enabled() -> bool {
-    std::env::var("CEF_HOST_SHELL_DRAG_INVALIDATE").as_deref() != Ok("0")
-}
-
 fn drag_invalidate_min_interval() -> Duration {
-    let ms: u64 = std::env::var("CEF_HOST_SHELL_DRAG_INVALIDATE_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8)
-        .clamp(1, 50);
-    Duration::from_millis(ms)
+    Duration::from_millis(8)
 }
 
 fn reset_drag_invalidate_throttle() {
@@ -47,9 +32,6 @@ fn reset_drag_invalidate_throttle() {
 }
 
 fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
-    if !drag_invalidate_shell_view_enabled() {
-        return;
-    }
     let min_gap = drag_invalidate_min_interval();
     let now = Instant::now();
     {
@@ -69,9 +51,6 @@ fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
 }
 
 fn invalidate_shell_view_unthrottled(browser: Option<&mut Browser>) {
-    if !drag_invalidate_shell_view_enabled() {
-        return;
-    }
     reset_drag_invalidate_throttle();
     if let Some(b) = browser {
         if let Some(host) = b.host() {
