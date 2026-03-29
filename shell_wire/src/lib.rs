@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn round_trip_output_geometry() {
-        let mut buf = encode_output_geometry(960, 540, 1920, 1080);
+        let mut buf = encode_output_geometry(2880, 1920, 2880, 1920);
         match pop_compositor_to_shell_message(&mut buf).unwrap() {
             Some(DecodedCompositorToShellMessage::OutputGeometry {
                 logical_w,
@@ -1324,7 +1324,7 @@ mod tests {
             }) => {
                 assert_eq!(
                     (logical_w, logical_h, physical_w, physical_h),
-                    (960, 540, 1920, 1080)
+                    (2880, 1920, 2880, 1920)
                 );
             }
             _ => panic!("expected OutputGeometry"),
@@ -1546,17 +1546,17 @@ mod tests {
         let planes = vec![
             FrameDmabufPlane {
                 plane_idx: 0,
-                stride: 7680,
+                stride: 11_520,
                 offset: 0,
             },
             FrameDmabufPlane {
                 plane_idx: 1,
                 stride: 0,
-                offset: 8_294_400,
+                offset: 22_118_400,
             },
         ];
         let drm_format = 0x34324241u32;
-        let enc = encode_frame_dmabuf_commit(1920, 1080, drm_format, 0, 0, 42, &planes).unwrap();
+        let enc = encode_frame_dmabuf_commit(2880, 1920, drm_format, 0, 0, 42, &planes).unwrap();
         let mut buf = enc;
         match pop_message(&mut buf).unwrap() {
             Some(DecodedMessage::FrameDmabufCommit {
@@ -1568,7 +1568,7 @@ mod tests {
                 generation,
                 planes: pl,
             }) => {
-                assert_eq!((width, height), (1920, 1080));
+                assert_eq!((width, height), (2880, 1920));
                 assert_eq!(f, drm_format);
                 assert_eq!(modifier, 0);
                 assert_eq!(flags, 0);

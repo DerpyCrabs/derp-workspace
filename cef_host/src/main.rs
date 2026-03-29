@@ -42,7 +42,7 @@ use clap::Parser;
 #[cfg(unix)]
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 
-use cef_host::osr_view_state::{OsrViewState, OSR_VIEW_DIP_H, OSR_VIEW_DIP_W};
+use cef_host::osr_view_state::{OsrViewState, OSR_BOOTSTRAP_DIP_H, OSR_BOOTSTRAP_DIP_W};
 
 #[cfg(unix)]
 static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
@@ -82,7 +82,8 @@ struct Cli {
     #[arg(long, default_value = "derp-shell.sock")]
     compositor_socket: String,
 
-    /// Reserved; OSR DIP is fixed in `cef_host::osr_view_state` (`OSR_VIEW_DIP_*`) for now.
+    /// Reserved; OSR DIP comes from compositor `OutputGeometry` (`logical_*`), with
+    /// `OSR_BOOTSTRAP_DIP_*` only until that message is applied.
     #[arg(long, default_value_t = 800)]
     #[allow(dead_code)]
     width: i32,
@@ -238,9 +239,11 @@ wrap_render_handler! {
             if let Some(r) = rect {
                 r.x = 0;
                 r.y = 0;
-                // Fixed DIP for now (avoids 0×0 before geometry); keep in sync with `screen_info` and `OsrViewState` dip.
-                r.width = OSR_VIEW_DIP_W;
-                r.height = OSR_VIEW_DIP_H;
+                let Ok(g) = self.view_state.lock() else {
+                    return;
+                };
+                r.width = g.dip_w.max(1);
+                r.height = g.dip_h.max(1);
             }
         }
 
@@ -257,11 +260,13 @@ wrap_render_handler! {
             };
             let mut out = ScreenInfo::default();
             out.device_scale_factor = g.device_scale_factor();
+            let w = g.dip_w.max(1);
+            let h = g.dip_h.max(1);
             out.rect = Rect {
                 x: 0,
                 y: 0,
-                width: OSR_VIEW_DIP_W,
-                height: OSR_VIEW_DIP_H,
+                width: w,
+                height: h,
             };
             out.available_rect = out.rect.clone();
             *si = out;
@@ -742,12 +747,12 @@ fn main() {
         }
     });
 
-    let view_state = Arc::new(Mutex::new(OsrViewState::new(OSR_VIEW_DIP_W, OSR_VIEW_DIP_H)));
+    let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let rh = OsrToCompositor::new(ipc.clone(), view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(Some(inject_js));
     let mut client = ShellClient::new(rh, lh, capture, ipc.clone());
 
-    // Compositor sends `OutputGeometry` soon after connect; buffer size is applied there while DIP stays fixed.
+    // Compositor sends `OutputGeometry` soon after connect; logical size → DIP, physical → buffer/target.
     {
         let deadline = Instant::now() + Duration::from_millis(300);
         while Instant::now() < deadline {
@@ -776,7 +781,7 @@ fn main() {
     let (init_w, init_h) = view_state
         .lock()
         .map(|g| (g.dip_w, g.dip_h))
-        .unwrap_or((OSR_VIEW_DIP_W, OSR_VIEW_DIP_H));
+        .unwrap_or((OSR_BOOTSTRAP_DIP_W, OSR_BOOTSTRAP_DIP_H));
     window_info.bounds.width = init_w;
     window_info.bounds.height = init_h;
     window_info.shared_texture_enabled = 1;

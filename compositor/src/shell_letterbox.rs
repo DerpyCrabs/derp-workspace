@@ -80,9 +80,9 @@ mod tests {
 
     #[test]
     fn letterbox_fills_output_when_aspect_matches() {
-        let out = Size::<i32, Logical>::from((1280, 720));
-        let (ox, oy, cw, ch) = letterbox_logical(out, 1920, 1080).unwrap();
-        assert_eq!((ox, oy, cw, ch), (0, 0, 1280, 720));
+        let out = Size::<i32, Logical>::from((2880, 1920));
+        let (ox, oy, cw, ch) = letterbox_logical(out, 2880, 1920).unwrap();
+        assert_eq!((ox, oy, cw, ch), (0, 0, 2880, 1920));
     }
 
     #[test]

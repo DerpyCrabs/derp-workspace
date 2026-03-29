@@ -2,9 +2,9 @@
 
 use std::time::{Duration, Instant};
 
-/// Fixed OSR view / DIP size for CEF until compositor-driven logical size is reliable at startup.
-pub const OSR_VIEW_DIP_W: i32 = 2880;
-pub const OSR_VIEW_DIP_H: i32 = 1920;
+/// Placeholder DIP before the compositor sends [`shell_wire::MSG_OUTPUT_GEOMETRY`].
+pub const OSR_BOOTSTRAP_DIP_W: i32 = 800;
+pub const OSR_BOOTSTRAP_DIP_H: i32 = 600;
 
 /// DIP (CSS / “view”) size of the browser plus last OSR paint dimensions.
 ///
@@ -38,6 +38,11 @@ impl OsrViewState {
             target_buf_h: dip_h,
             last_undersized_nudge: None,
         }
+    }
+
+    /// Initial state before the compositor sends `OutputGeometry` (logical size → DIP).
+    pub fn new_bootstrap() -> Self {
+        Self::new(OSR_BOOTSTRAP_DIP_W, OSR_BOOTSTRAP_DIP_H)
     }
 
     pub fn set_target_buffer(&mut self, w: i32, h: i32) {
@@ -135,11 +140,11 @@ mod tests {
 
     #[test]
     fn undersized_nudge_fires_once_then_rate_limits() {
-        let mut s = OsrViewState::new(1920, 1080);
+        let mut s = OsrViewState::new(2880, 1920);
         let min = Duration::from_millis(100);
         assert!(s.maybe_take_undersized_paint_nudge(800, 600, min));
         assert!(!s.maybe_take_undersized_paint_nudge(800, 600, min));
-        assert!(!s.maybe_take_undersized_paint_nudge(1920, 1080, min));
+        assert!(!s.maybe_take_undersized_paint_nudge(2880, 1920, min));
     }
 
     #[test]
