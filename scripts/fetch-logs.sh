@@ -14,7 +14,7 @@
 #   RUST_LOG=warn,derp_input=debug,derp_shell_sync=debug
 #
 # Usage:
-#   bash scripts/list-derp-logs.sh [-n N] [-f|--follow] [-H|--head] [-h|--help]
+#   bash scripts/fetch-logs.sh [-n N] [-f|--follow] [-H|--head] [-h|--help]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,7 +97,7 @@ fi
 [[ -f "$SCRIPT_DIR/remote-install.env" ]] && source "$SCRIPT_DIR/remote-install.env"
 
 REMOTE_USER="${REMOTE_USER:-$USER}"
-REMOTE_HOST="${REMOTE_HOST:?list-derp-logs: set REMOTE_HOST (see scripts/remote-install.sample.md or scripts/remote-install.env)}"
+REMOTE_HOST="${REMOTE_HOST:?fetch-logs: set REMOTE_HOST (see scripts/remote-install.sample.md or scripts/remote-install.env)}"
 REMOTE_REPO="${REMOTE_REPO:-/home/${REMOTE_USER}/derp-workspace}"
 
 SSH_TTY=()
@@ -115,5 +115,5 @@ exec ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 export LIST_DERP_LOGS_INTERNAL=1
-exec bash scripts/list-derp-logs.sh -n $(printf '%q' "$LINES") ${head_arg} ${follow_arg}
+exec bash scripts/fetch-logs.sh -n $(printf '%q' "$LINES") ${head_arg} ${follow_arg}
 EOF

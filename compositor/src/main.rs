@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::warn!(
         target: "derp_shell_sync",
-        "compositor startup — second+ toplevels tile right-of / below existing stack (reinstall binary if you still see overlap)"
+        "compositor startup"
     );
 
     let cli = Cli::parse();
