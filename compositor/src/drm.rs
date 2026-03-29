@@ -1,6 +1,9 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::os::unix::io::{AsFd, BorrowedFd};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use smithay::backend::renderer::{ImportDma, ImportEgl};
@@ -444,7 +447,7 @@ pub fn init_drm(
 
     let dh = data.display_handle.clone();
     if let Err(e) = renderer.bind_wl_display(&dh) {
-        warn!(?e, "bind_wl_display (drm); clients may lack EGL buffers");
+        debug!(?e, "bind_wl_display failed");
     }
 
     let mut formats: HashSet<Format> = renderer.dmabuf_formats().iter().copied().collect();

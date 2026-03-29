@@ -19,6 +19,9 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
   exit 1
 fi
 
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-logind}"
+
 # GDM runs `/usr/local/bin/derp-session` — a symlink to `…/scripts/derp-session.sh`. Without
 # resolving it, `dirname` is `/usr/local/bin` and ROOT becomes `/usr/local` (no `shell/dist`).
 _session="${BASH_SOURCE[0]}"
