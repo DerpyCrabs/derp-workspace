@@ -25,8 +25,8 @@ done
 
 cd "$REPO_ROOT"
 
-echo "=== cargo build --release (compositor + cef_host) ==="
-cargo build --release -p compositor -p cef_host
+echo "=== cargo build --release (compositor) ==="
+cargo build --release -p compositor
 
 SHELL_INDEX="shell/dist/index.html"
 if [[ -f shell/package.json ]]; then
@@ -71,20 +71,19 @@ fi
 echo "=== install to $INSTALL_PREFIX (sudo) ==="
 sudo install -d "$BIN_DIR" "$SESSION_DIR"
 sudo install -Dm755 "$REPO_ROOT/target/release/compositor" "$BIN_DIR/compositor"
-sudo install -Dm755 "$REPO_ROOT/target/release/cef_host" "$BIN_DIR/cef_host"
 sudo install -Dm644 "$DESKTOP_SRC" "$DESKTOP_DST"
 chmod +x "$REPO_ROOT/scripts/derp-session.sh" 2>/dev/null || true
 sudo ln -sf "$REPO_ROOT/scripts/derp-session.sh" "$BIN_DIR/derp-session"
 
 echo ""
 echo "Done. Log out and choose «Derp Compositor» in GDM."
-echo "Repo (shell/dist + launcher): $REPO_ROOT"
+echo "Repo (shell/dist + derp-session): $REPO_ROOT"
 if [[ -f "$SHELL_INDEX" ]]; then
-  echo "CEF shell: $REPO_ROOT/$SHELL_INDEX (derp-session will pass --command to compositor)."
+  echo "CEF shell: $REPO_ROOT/$SHELL_INDEX (derp-session passes --cef-shell-url to compositor)."
 else
   echo "CEF shell: not built — add shell/ and re-run this script, or run nested without Solid."
 fi
 echo "Session log (default): ~/.local/state/derp/compositor.log — truncated each compositor start (and SIGUSR2 respawn) unless DERP_COMPOSITOR_LOG_APPEND=1."
 echo "dma-buf / Chromium verbose logs: off by default; set DERP_SESSION_DMABUF_LOGS=1 in scripts/derp-session.local.env when debugging import/EGL."
-echo "CEF Solid OSR: dma-buf only (built into cef_host; derp-session does not set toggle env vars)."
+echo "CEF Solid OSR: dma-buf only (in compositor; derp-session does not set toggle env vars)."
 echo "Optional overrides only: scripts/derp-session.local.env (see derp-session.local.env.example). Default session is dma-buf OSR without this file."

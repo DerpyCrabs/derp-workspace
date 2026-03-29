@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# GDM/session entry: DRM compositor (+ optional cef_host shell). Install to /usr/local/bin/derp-session (755).
-# Requires: built `compositor` and (for overlay) `cef_host`, `shell/dist` (Solid loads via file://).
+# GDM/session entry: DRM compositor with in-process CEF Solid shell. Install to /usr/local/bin/derp-session (755).
+# Requires: built `compositor`, `shell/dist` (Solid loads via file://).
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
 #
-# Logging: compositor + `--command` (cef_host) stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
+# Logging: compositor stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
 # Unless DERP_COMPOSITOR_LOG_APPEND=1: the log is truncated at each compositor start (GDM login and each
 # supervisor respawn after exit 42). Override path with DERP_COMPOSITOR_LOG=...
 #
-# dma-buf / Chromium debug: set DERP_SESSION_DMABUF_LOGS=1 (or use derp-session.local.env) to export
-# CEF_HOST_DMABUF_TRACE=1, CEF_HOST_CHROMIUM_VERBOSE=1, and derp_shell_dmabuf=debug on RUST_LOG.
+# dma-buf / Chromium debug: set DERP_SESSION_DMABUF_LOGS=1 (or derp-session.local.env) to export
+# CEF_HOST_DMABUF_TRACE / CEF_HOST_CHROMIUM_VERBOSE (Chromium env names) and derp_shell_dmabuf=debug on RUST_LOG.
 #
 # Optional machine overrides: `scripts/derp-session.local.env` (gitignored; see
 # `derp-session.local.env.example`). Sourced before every compositor start (SIGUSR2 respawn too).
@@ -31,14 +31,12 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 ROOT="$(cd "$(dirname "$_session")/.." && pwd)"
 COMPOSITOR_BIN="${COMPOSITOR_BIN:-/usr/local/bin/compositor}"
-CEF_HOST_BIN="${CEF_HOST_BIN:-/usr/local/bin/cef_host}"
-LAUNCHER="${DERP_CEF_LAUNCHER:-$ROOT/scripts/launch-cef-to-compositor.sh}"
 INDEX="${ROOT}/shell/dist/index.html"
 SOCKET="${DERP_WAYLAND_SOCKET:-wayland-d$UID}"
 
 URL=""
 
-# If Solid wasn’t built after clone, build it now so `cef_host` can start (same as install-system.sh).
+# If Solid wasn’t built after clone, build it now (same as install-system.sh).
 ensure_shell_dist() {
   [[ "${DERP_SESSION_SHELL:-1}" == "1" ]] || return 0
   [[ -f "$INDEX" ]] && return 0
@@ -74,8 +72,8 @@ derp_session_merge_rust_log() {
     export RUST_LOG="${RUST_LOG},derp_shell_osr=info"
   fi
   if [[ "${DERP_PERF_SESSION:-0}" == "1" ]]; then
-    if [[ "${RUST_LOG}" != *shell_ipc=* ]]; then
-      export RUST_LOG="${RUST_LOG},shell_ipc=trace"
+    if [[ "${RUST_LOG}" != *derp_shell_sync=* ]]; then
+      export RUST_LOG="${RUST_LOG},derp_shell_sync=trace"
     fi
   fi
   if [[ "${DERP_SESSION_DMABUF_LOGS:-0}" == "1" ]]; then
@@ -89,7 +87,7 @@ derp_session_merge_rust_log() {
 
 resolve_cef_dir() {
   local bin rp
-  bin="${CEF_HOST_BIN:-$ROOT/target/debug/cef_host}"
+  bin="${COMPOSITOR_BIN:-$ROOT/target/debug/compositor}"
   [[ -x "$bin" ]] || return 1
   rp="$(readelf -d "$bin" 2>/dev/null | awk -F'[][]' '/RUNPATH/ { print $2; exit }')"
   [[ -n "$rp" && -f "$rp/libcef.so" ]] || return 1
@@ -99,7 +97,7 @@ resolve_cef_dir() {
 # Solid UI is a static Vite build (`base: './'`, no crossorigin on module scripts) — load from disk.
 resolve_shell_document_url_if_needed() {
   URL=""
-  [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]] || return 0
+  [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$COMPOSITOR_BIN" ]] || return 0
   URL="file://${INDEX}"
 }
 
@@ -112,16 +110,14 @@ derp_session_build_args() {
 
   ARGS=( --socket "$SOCKET" )
   if [[ -n "$URL" ]]; then
-    local CEF_DIR="" cmd
+    local CEF_DIR=""
     CEF_DIR="$(resolve_cef_dir)" || CEF_DIR="${CEF_PATH:-}"
     if [[ -n "$CEF_DIR" && -f "$CEF_DIR/libcef.so" ]]; then
-      # cef_host forces --ozone-platform=wayland --use-angle=gl-egl; dma-buf OSR uses in-process GPU (see cef_host).
+      export CEF_PATH="$CEF_DIR"
       if [[ "${DERP_PERF_SESSION:-0}" == "1" ]]; then
-        cmd="$(printf 'env CEF_HOST_PERF=1 CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
-      else
-        cmd="$(printf 'env CEF_PATH=%q CEF_SHELL_URL=%q CEF_HOST_BIN=%q %q' "$CEF_DIR" "$URL" "$CEF_HOST_BIN" "$LAUNCHER")"
+        export CEF_HOST_PERF=1
       fi
-      ARGS+=( --command "$cmd" )
+      ARGS+=( --cef-shell-url "$URL" )
     fi
   fi
 }

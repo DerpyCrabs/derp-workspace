@@ -171,7 +171,7 @@ impl CompositorState {
                 },
             );
             pointer.frame(self);
-            if route_cef && !self.shell_ipc_conn.is_disconnected() {
+            if route_cef && self.shell_cef_active() {
                 if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                     if button_state == ButtonState::Pressed {
                         self.shell_ipc_keyboard_to_cef = true;
@@ -186,19 +186,19 @@ impl CompositorState {
                     let mouse_up = button_state == ButtonState::Released;
                     let mod_flags = self.shell_cef_event_flags();
                     self.shell_last_pointer_ipc_px = Some((bx, by));
-                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(
-                        bx,
-                        by,
-                        mod_flags,
-                    ));
-                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_button(
-                        bx,
-                        by,
-                        shell_btn,
+                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
+                        x: bx,
+                        y: by,
+                        modifiers: mod_flags,
+                    });
+                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerButton {
+                        x: bx,
+                        y: by,
+                        button: shell_btn,
                         mouse_up,
-                        0,
-                        mod_flags,
-                    ));
+                        titlebar_drag_window_id: 0,
+                        modifiers: mod_flags,
+                    });
                 }
             }
             if button == BTN_LEFT && button_state == ButtonState::Released {
@@ -301,7 +301,7 @@ impl CompositorState {
                             }
                         }
                         if state.shell_ipc_keyboard_to_cef
-                            && !state.shell_ipc_conn.is_disconnected()
+                            && state.shell_cef_active()
                             && state.shell_has_frame
                         {
                             state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym);
@@ -390,7 +390,7 @@ impl CompositorState {
                 let pos = output_geo.loc.to_f64() + local;
                 let cef_touch = self.shell_pointer_route_to_cef(pos)
                     && self.shell_has_frame
-                    && !self.shell_ipc_conn.is_disconnected()
+                    && self.shell_cef_active()
                     && self.shell_pointer_view_px(pos).is_some();
                 self.touch_routes_to_cef = cef_touch;
                 tracing::debug!(
@@ -410,12 +410,12 @@ impl CompositorState {
                 if cef_touch {
                     if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
-                            tid,
-                            shell_wire::TOUCH_PHASE_PRESSED,
-                            bx,
-                            by,
-                        ));
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
+                            touch_id: tid,
+                            phase: shell_wire::TOUCH_PHASE_PRESSED,
+                            x: bx,
+                            y: by,
+                        });
                     }
                     self.shell_ipc_keyboard_to_cef = true;
                 } else {
@@ -449,12 +449,12 @@ impl CompositorState {
                     let pos = output_geo.loc.to_f64() + local;
                     if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
-                            tid,
-                            shell_wire::TOUCH_PHASE_MOVED,
-                            bx,
-                            by,
-                        ));
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
+                            touch_id: tid,
+                            phase: shell_wire::TOUCH_PHASE_MOVED,
+                            x: bx,
+                            y: by,
+                        });
                     }
                 }
                 self.needs_winit_redraw = true;
@@ -475,12 +475,12 @@ impl CompositorState {
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
-                            tid,
-                            shell_wire::TOUCH_PHASE_RELEASED,
-                            bx,
-                            by,
-                        ));
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
+                            touch_id: tid,
+                            phase: shell_wire::TOUCH_PHASE_RELEASED,
+                            x: bx,
+                            y: by,
+                        });
                     }
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Released, time);
@@ -505,12 +505,12 @@ impl CompositorState {
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
-                            tid,
-                            shell_wire::TOUCH_PHASE_CANCELLED,
-                            bx,
-                            by,
-                        ));
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
+                            touch_id: tid,
+                            phase: shell_wire::TOUCH_PHASE_CANCELLED,
+                            x: bx,
+                            y: by,
+                        });
                     }
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Released, time);

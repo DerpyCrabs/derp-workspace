@@ -1,24 +1,15 @@
-use std::{
-    io::Write,
-    os::unix::net::UnixStream,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cef::{sys, *};
 
-use cef_host::osr_view_state::OsrViewState;
+use crate::cef::osr_view_state::OsrViewState;
+use crate::cef::uplink::UplinkToCompositor;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_uplink";
 
 pub(crate) fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
     CefStringUtf8::from(&CefStringUtf16::from(s)).to_string()
-}
-
-pub fn write_shell_packet(ipc: &Arc<Mutex<UnixStream>>, packet: &[u8]) {
-    let mut g = ipc.lock().expect("compositor ipc");
-    let _ = g.write_all(packet);
-    let _ = g.flush();
 }
 
 static LAST_DRAG_VIEW_INVALIDATE: Mutex<Option<Instant>> = Mutex::new(None);
@@ -60,7 +51,7 @@ fn invalidate_shell_view_unthrottled(browser: Option<&mut Browser>) {
 }
 
 fn handle_uplink_list(
-    ipc: &Arc<Mutex<UnixStream>>,
+    uplink: &UplinkToCompositor,
     browser: Option<&mut Browser>,
     _view_state: Option<&Arc<Mutex<OsrViewState>>>,
     args: &ListValue,
@@ -69,75 +60,71 @@ fn handle_uplink_list(
     match op.as_str() {
         "close" => {
             let wid = args.int(1) as u32;
-            write_shell_packet(ipc, &shell_wire::encode_shell_close(wid));
+            uplink.shell_close(wid);
         }
-        "quit" => {
-            write_shell_packet(ipc, &shell_wire::encode_shell_quit_compositor());
-        }
+        "quit" => uplink.quit_compositor(),
         "spawn" => {
             let cmd = cef_string_userfree_to_string(&args.string(1));
-            if let Some(pkt) = shell_wire::encode_spawn_wayland_client(&cmd) {
-                write_shell_packet(ipc, &pkt);
-            }
+            uplink.spawn_wayland_client(cmd);
         }
         "move_begin" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-move] cef_host uplink: move_begin window_id={wid}");
+            eprintln!("[derp-shell-move] cef uplink: move_begin window_id={wid}");
             reset_drag_invalidate_throttle();
-            write_shell_packet(ipc, &shell_wire::encode_shell_move_begin(wid));
+            uplink.shell_move_begin(wid);
         }
         "move_delta" => {
             let dx = args.int(1) as i32;
             let dy = args.int(2) as i32;
-            eprintln!("[derp-shell-move] cef_host uplink: move_delta dx={dx} dy={dy}");
-            write_shell_packet(ipc, &shell_wire::encode_shell_move_delta(dx, dy));
+            eprintln!("[derp-shell-move] cef uplink: move_delta dx={dx} dy={dy}");
+            uplink.shell_move_delta(dx, dy);
             maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "move_end" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-move] cef_host uplink: move_end window_id={wid}");
-            write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
+            eprintln!("[derp-shell-move] cef uplink: move_end window_id={wid}");
+            uplink.shell_move_end(wid);
             invalidate_shell_view_unthrottled(browser);
         }
         "resize_begin" => {
             let wid = args.int(1) as u32;
             let edges = args.int(2) as u32;
-            eprintln!("[derp-shell-resize] cef_host uplink: resize_begin window_id={wid} edges={edges}");
+            eprintln!("[derp-shell-resize] cef uplink: resize_begin window_id={wid} edges={edges}");
             reset_drag_invalidate_throttle();
-            if let Some(pkt) = shell_wire::encode_shell_resize_begin(wid, edges) {
-                write_shell_packet(ipc, &pkt);
+            if shell_wire::encode_shell_resize_begin(wid, edges).is_some() {
+                uplink.shell_resize_begin(wid, edges);
             }
         }
         "resize_delta" => {
             let dx = args.int(1) as i32;
             let dy = args.int(2) as i32;
-            eprintln!("[derp-shell-resize] cef_host uplink: resize_delta dx={dx} dy={dy}");
-            write_shell_packet(ipc, &shell_wire::encode_shell_resize_delta(dx, dy));
+            eprintln!("[derp-shell-resize] cef uplink: resize_delta dx={dx} dy={dy}");
+            uplink.shell_resize_delta(dx, dy);
             maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "resize_end" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-resize] cef_host uplink: resize_end window_id={wid}");
-            write_shell_packet(ipc, &shell_wire::encode_shell_resize_end(wid));
+            eprintln!("[derp-shell-resize] cef uplink: resize_end window_id={wid}");
+            uplink.shell_resize_end(wid);
             invalidate_shell_view_unthrottled(browser);
         }
         "taskbar_activate" => {
             let wid = args.int(1) as u32;
-            write_shell_packet(ipc, &shell_wire::encode_shell_taskbar_activate(wid));
+            uplink.shell_taskbar_activate(wid);
         }
         "minimize" => {
             let wid = args.int(1) as u32;
-            write_shell_packet(ipc, &shell_wire::encode_shell_minimize(wid));
+            uplink.shell_minimize(wid);
         }
         "set_fullscreen" => {
             let wid = args.int(1) as u32;
             let en = args.int(2) != 0;
-            write_shell_packet(ipc, &shell_wire::encode_shell_set_fullscreen(wid, en));
+            uplink.shell_set_fullscreen(wid, en);
         }
         "set_maximized" => {
             let wid = args.int(1) as u32;
             let en = args.int(2) != 0;
-            write_shell_packet(ipc, &shell_wire::encode_shell_set_maximized(wid, en));
+            uplink.shell_set_maximized(wid, en);
         }
         "set_geometry" => {
             let wid = args.int(1) as u32;
@@ -146,26 +133,18 @@ fn handle_uplink_list(
             let vw = args.int(4).max(1);
             let vh = args.int(5).max(1);
             let layout = args.int(6) as u32;
-            // Same **output-local layout / DIP** integers as compositor → shell `window_geometry` (no buffer scaling).
-            write_shell_packet(
-                ipc,
-                &shell_wire::encode_shell_set_geometry_with_layout(wid, vx, vy, vw, vh, layout),
-            );
+            uplink.shell_set_geometry(wid, vx, vy, vw, vh, layout);
         }
         "presentation_fullscreen" => {
             let en = args.int(1) != 0;
-            write_shell_packet(
-                ipc,
-                &shell_wire::encode_shell_set_presentation_fullscreen(en),
-            );
+            uplink.shell_set_presentation_fullscreen(en);
         }
         _ => {}
     }
 }
 
-/// Browser process: handle message from the render process.
 pub fn on_browser_process_message(
-    ipc: &Arc<Mutex<UnixStream>>,
+    uplink: &UplinkToCompositor,
     browser: Option<&mut Browser>,
     source_process: ProcessId,
     message: Option<&mut ProcessMessage>,
@@ -183,7 +162,7 @@ pub fn on_browser_process_message(
     let Some(args) = msg.argument_list() else {
         return true;
     };
-    handle_uplink_list(ipc, browser, view_state, &args);
+    handle_uplink_list(uplink, browser, view_state, &args);
     true
 }
 
@@ -528,7 +507,7 @@ wrap_render_process_handler! {
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
-            eprintln!("cef_host: __derpShellWireSend bound (frame is_main={is_main})");
+            eprintln!("cef: __derpShellWireSend bound (frame is_main={is_main})");
         }
     }
 }

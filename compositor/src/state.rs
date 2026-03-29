@@ -1,11 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
-    io::Write,
     os::fd::OwnedFd,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Stdio,
-    sync::{Arc, Mutex, Weak},
+    sync::{atomic::AtomicBool, Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 
@@ -28,7 +27,15 @@ use smithay::{
         Seat, SeatState,
     },
     reexports::{
-        calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
+        calloop::{
+            channel::{self, Event as CalloopChannelEvent},
+            generic::Generic,
+            EventLoop,
+            Interest,
+            LoopSignal,
+            Mode,
+            PostAction,
+        },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -116,15 +123,8 @@ pub struct CompositorInitOptions {
     pub socket: SocketConfig,
     pub seat_name: String,
     pub chrome_bridge: SharedChromeBridge,
-    /// When set, listen on `XDG_RUNTIME_DIR`/name for shell pixel IPC ([`shell_wire`]).
-    pub shell_ipc_socket: Option<String>,
-    /// In-process shell bridge: `(compositor → peer tx, peer → compositor rx)`. When set, Unix
-    /// shell socket is not bound (`shell_ipc_socket` ignored for listen).
-    pub shell_ipc_embedded: Option<(
-        std::sync::mpsc::Sender<Vec<u8>>,
-        std::sync::mpsc::Receiver<Vec<u8>>,
-    )>,
-    /// If set while shell IPC is enabled, exit the compositor when `cef_host` sends nothing for this long.
+    pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
+    pub shell_cef_handshake: Option<Arc<AtomicBool>>,
     pub shell_ipc_stall_timeout: Option<Duration>,
 }
 
@@ -134,8 +134,8 @@ impl Default for CompositorInitOptions {
             socket: SocketConfig::Auto,
             seat_name: "compositor".to_string(),
             chrome_bridge: Arc::new(NoOpChromeBridge),
-            shell_ipc_socket: None,
-            shell_ipc_embedded: None,
+            shell_to_cef: Arc::new(Mutex::new(None)),
+            shell_cef_handshake: None,
             shell_ipc_stall_timeout: None,
         }
     }
@@ -201,16 +201,12 @@ pub struct CompositorState {
     pub chrome_bridge: SharedChromeBridge,
     pub window_registry: WindowRegistry,
 
-    /// Unix stream peer, in-process channel pair, or disconnected.
-    pub shell_ipc_conn: crate::shell_ipc::ShellIpcConn,
-    /// Linux [`SO_PEERCRED::pid`] of the shell IPC peer (`cef_host`), when connected via Unix socket.
+    pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
+    pub cef_to_compositor_tx: channel::Sender<crate::cef::compositor_tx::CefToCompositor>,
+    pub shell_cef_handshake: Option<Arc<AtomicBool>>,
     pub(crate) shell_ipc_peer_pid: Option<i32>,
-    /// After first mapped output: run [`Self::shell_on_shell_client_connected`] once for embedded IPC.
     shell_embedded_initial_handshake_done: bool,
-    pub shell_read_buf: Vec<u8>,
-    /// `XDG_RUNTIME_DIR` when shell IPC is enabled.
     pub shell_ipc_runtime_dir: Option<PathBuf>,
-    pub(crate) shell_read_scratch: Vec<u8>,
     /// Winit [`Window::inner_size`](https://docs.rs/winit/latest/winit/window/struct.Window.html#method-inner_size) —
     /// same denominator the backend uses for pointer normalization ([`crate::winit`] updates on resize).
     pub(crate) shell_window_physical_px: (i32, i32),
@@ -257,15 +253,11 @@ pub struct CompositorState {
     shell_ipc_last_rx: Option<Instant>,
     /// Last [`shell_wire::encode_compositor_ping`] sent (throttle while waiting for [`shell_wire::MSG_SHELL_PONG`]).
     pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
-
-    /// Fds from the last `recvmsg` batch (dma-buf plane handles), drained in message order.
-    pub shell_ipc_pending_fds: Vec<std::os::fd::OwnedFd>,
     pub shell_has_frame: bool,
     pub shell_view_px: Option<(u32, u32)>,
     pub shell_frame_is_dmabuf: bool,
     pub shell_dmabuf: Option<Dmabuf>,
     pub(crate) shell_dmabuf_overlay_id: Id,
-    pub shell_post_drain_hook: Option<Box<dyn FnMut() + Send>>,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -300,8 +292,8 @@ impl CompositorState {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
-        let shell_ipc_socket = options.shell_ipc_socket.clone();
-        let shell_ipc_embedded = options.shell_ipc_embedded;
+        let shell_to_cef = options.shell_to_cef;
+        let shell_cef_handshake = options.shell_cef_handshake;
         let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
@@ -317,7 +309,44 @@ impl CompositorState {
 
         let loop_signal = event_loop.get_signal();
 
-        let mut s = Self {
+        let (cef_to_compositor_tx, cef_rx) = channel::channel();
+        event_loop
+            .handle()
+            .insert_source(cef_rx, |ev, _, d: &mut CalloopData| {
+                match ev {
+                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::ShellRxNote) => {
+                        d.state.shell_note_shell_ipc_rx();
+                    }
+                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Dmabuf {
+                        width,
+                        height,
+                        drm_format,
+                        modifier,
+                        flags,
+                        generation,
+                        planes,
+                        fds,
+                    }) => {
+                        d.state.accept_shell_dmabuf_from_cef(
+                            width,
+                            height,
+                            drm_format,
+                            modifier,
+                            flags,
+                            generation,
+                            &planes,
+                            fds,
+                        );
+                    }
+                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
+                        f(&mut d.state);
+                    }
+                    CalloopChannelEvent::Closed => {}
+                }
+            })
+            .expect("cef from-shell channel");
+
+        let s = Self {
             start_time,
             display_handle: dh,
             space,
@@ -341,12 +370,12 @@ impl CompositorState {
             seat,
             chrome_bridge,
             window_registry,
-            shell_ipc_conn: crate::shell_ipc::ShellIpcConn::Disconnected,
+            shell_to_cef,
+            cef_to_compositor_tx,
+            shell_cef_handshake,
             shell_ipc_peer_pid: None,
             shell_embedded_initial_handshake_done: false,
-            shell_read_buf: Vec::new(),
-            shell_ipc_runtime_dir: None,
-            shell_read_scratch: Vec::with_capacity(256 * 1024),
+            shell_ipc_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
             shell_window_physical_px: (1, 1),
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
@@ -371,47 +400,69 @@ impl CompositorState {
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
-            shell_ipc_pending_fds: Vec::new(),
             shell_has_frame: false,
             shell_view_px: None,
             shell_frame_is_dmabuf: false,
             shell_dmabuf: None,
             shell_dmabuf_overlay_id: Id::new(),
-            shell_post_drain_hook: None,
             vt_session: None,
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
             shell_presentation_fullscreen: false,
         };
 
-        if let Some((to_peer, from_peer)) = shell_ipc_embedded {
-            if let Ok(rd) = std::env::var("XDG_RUNTIME_DIR") {
-                let rd_path = PathBuf::from(&rd);
-                s.shell_ipc_conn = crate::shell_ipc::ShellIpcConn::Embedded {
-                    to_peer,
-                    from_peer,
-                };
-                s.shell_ipc_runtime_dir = Some(rd_path);
-                tracing::info!("shell ipc embedded (in-process channel)");
-            } else {
-                tracing::warn!("XDG_RUNTIME_DIR unset; embedded shell ipc not started");
-            }
-        } else if let Some(name) = shell_ipc_socket {
-            if let Ok(rd) = std::env::var("XDG_RUNTIME_DIR") {
-                let rd_path = PathBuf::from(&rd);
-                if let Err(e) =
-                    shell_ipc::register_shell_ipc_listener(event_loop, Path::new(&rd), &name)
-                {
-                    tracing::warn!(?e, name, "failed to bind shell ipc socket");
-                } else {
-                    s.shell_ipc_runtime_dir = Some(rd_path);
-                    tracing::info!(%name, "shell ipc listening");
-                }
-            } else {
-                tracing::warn!("XDG_RUNTIME_DIR unset; shell ipc not started");
-            }
-        }
         s
+    }
+
+    pub(crate) fn shell_cef_active(&self) -> bool {
+        self.shell_to_cef.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    pub(crate) fn shell_send_to_cef(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        let Ok(g) = self.shell_to_cef.lock() else {
+            return;
+        };
+        if let Some(link) = g.as_ref() {
+            link.send(msg);
+        }
+    }
+
+    pub(crate) fn accept_shell_dmabuf_from_cef(
+        &mut self,
+        width: u32,
+        height: u32,
+        drm_format: u32,
+        modifier: u64,
+        flags: u32,
+        _generation: u32,
+        planes: &[shell_wire::FrameDmabufPlane],
+        mut fds: Vec<OwnedFd>,
+    ) {
+        self.shell_note_shell_ipc_rx();
+        if width == 0 || height == 0 || planes.is_empty() || planes.len() != fds.len() {
+            fds.clear();
+            return;
+        }
+        match self.apply_shell_frame_dmabuf(
+            width,
+            height,
+            drm_format,
+            modifier,
+            flags,
+            planes,
+            &mut fds,
+        ) {
+            Ok(()) => {
+                shell_ipc::log_first_shell_dmabuf(
+                    width,
+                    height,
+                    drm_format,
+                    modifier,
+                    planes.len(),
+                );
+            }
+            Err(e) => tracing::warn!(?e, "shell: dma-buf frame rejected"),
+        }
     }
 
     /// Advertise `zwp_linux_dmabuf_v1` using formats from the live GLES stack (call after `bind_wl_display`).
@@ -961,8 +1012,9 @@ impl CompositorState {
             window_id,
             "shell ipc WindowUnmapped (retract phantom shell host)"
         );
-        let p = shell_wire::encode_window_unmapped(window_id);
-        self.shell_ipc_try_write(&p);
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
+            window_id,
+        });
         self.chrome_bridge
             .notify(ChromeEvent::WindowUnmapped { window_id });
     }
@@ -1117,9 +1169,10 @@ impl CompositorState {
         }
 
         if !skip_shell_packet {
-            if let Some(p) = crate::shell_encode::chrome_event_to_shell_packet(&shell_packet_source)
+            if let Some(msg) =
+                crate::shell_encode::chrome_event_to_shell_message(&shell_packet_source)
             {
-                self.shell_ipc_try_write(&p);
+                self.shell_send_to_cef(msg);
             }
         }
         self.chrome_bridge.notify(event);
@@ -1141,16 +1194,17 @@ impl CompositorState {
         let (pw, ph) = self.shell_window_physical_px;
         let physical_w = u32::try_from(pw).unwrap_or(lw).max(1);
         let physical_h = u32::try_from(ph).unwrap_or(lh).max(1);
-        let pkt = shell_wire::encode_output_geometry(lw, lh, physical_w, physical_h);
-        self.shell_ipc_try_write(&pkt);
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
+            logical_w: lw,
+            logical_h: lh,
+            physical_w,
+            physical_h,
+        });
     }
 
     /// Embedded shell IPC: first full handshake after [`Space::map_output`] so output geometry is non-empty.
     pub fn shell_embedded_notify_output_ready(&mut self) {
-        if !matches!(
-            self.shell_ipc_conn,
-            crate::shell_ipc::ShellIpcConn::Embedded { .. }
-        ) {
+        if self.shell_cef_handshake.is_none() {
             return;
         }
         if self.shell_embedded_initial_handshake_done {
@@ -1166,7 +1220,7 @@ impl CompositorState {
     /// After shell Unix `SO_PEERCRED` is set: snap host toplevel(s) to the output origin and drop any HUD row
     /// from an early map (Wayland before shell IPC).
     pub(crate) fn resync_embedded_shell_host_after_ipc_connect(&mut self) {
-        if self.shell_ipc_peer_pid.is_none() {
+        if self.shell_ipc_peer_pid.is_none() && !self.shell_cef_active() {
             return;
         }
         let host_ids: Vec<u32> = self
@@ -1205,18 +1259,16 @@ impl CompositorState {
             let ipc_info = self
                 .shell_window_info_to_output_local_layout(&info)
                 .unwrap_or_else(|| info.clone());
-            if let Some(p) = shell_wire::encode_window_mapped(
-                ipc_info.window_id,
-                ipc_info.surface_id,
-                ipc_info.x,
-                ipc_info.y,
-                ipc_info.width,
-                ipc_info.height,
-                &ipc_info.title,
-                &ipc_info.app_id,
-            ) {
-                self.shell_ipc_try_write(&p);
-            }
+            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+                window_id: ipc_info.window_id,
+                surface_id: ipc_info.surface_id,
+                x: ipc_info.x,
+                y: ipc_info.y,
+                w: ipc_info.width,
+                h: ipc_info.height,
+                title: ipc_info.title.clone(),
+                app_id: ipc_info.app_id.clone(),
+            });
         }
         let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus()) {
             Some(surf) => {
@@ -1234,16 +1286,14 @@ impl CompositorState {
             }
             None => (None, None),
         };
-        let pkt = shell_wire::encode_focus_changed(surface_id, window_id);
-        self.shell_ipc_try_write(&pkt);
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id,
+            window_id,
+        });
     }
 
     pub(crate) fn shell_note_shell_ipc_rx(&mut self) {
         self.shell_ipc_last_rx = Some(Instant::now());
-    }
-
-    pub(crate) fn shell_clear_ipc_last_rx(&mut self) {
-        self.shell_ipc_last_rx = None;
     }
 
     /// Stops the compositor if a shell IPC client is connected but has been silent longer than [`Self::shell_ipc_stall_timeout`].
@@ -1251,7 +1301,7 @@ impl CompositorState {
         let Some(limit) = self.shell_ipc_stall_timeout else {
             return;
         };
-        if self.shell_ipc_conn.is_disconnected() {
+        if !self.shell_cef_active() {
             self.shell_ipc_last_compositor_ping = None;
             return;
         }
@@ -1259,7 +1309,7 @@ impl CompositorState {
             return;
         };
         let idle = last_rx.elapsed();
-        // Silence does not reset `shell_ipc_last_rx`; prod `cef_host` answers ping → pong.
+        // Silence does not reset `shell_ipc_last_rx`; in-process shell handles Ping without a socket round-trip.
         let prod_after = std::cmp::max(limit / 2, Duration::from_millis(500))
             .min(Duration::from_secs(2));
         if idle >= prod_after {
@@ -1269,7 +1319,7 @@ impl CompositorState {
                 .map(|t| t.elapsed() >= throttle)
                 .unwrap_or(true)
             {
-                self.shell_ipc_try_write(&shell_wire::encode_compositor_ping());
+                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Ping);
                 self.shell_ipc_last_compositor_ping = Some(Instant::now());
             }
         }
@@ -1278,7 +1328,7 @@ impl CompositorState {
         }
         tracing::warn!(
             timeout_secs = limit.as_secs(),
-            "shell ipc: no message from cef_host within timeout; stopping compositor (stuck shell IPC / JS)"
+            "shell watchdog: no CEF/compositor activity within timeout; stopping compositor (stuck shell / JS)"
         );
         self.loop_signal.stop();
         self.loop_signal.wakeup();
@@ -1642,26 +1692,11 @@ impl CompositorState {
         );
     }
 
-    /// End an in-progress shell move when the shell IPC client disconnects (avoid stuck state).
-    pub(crate) fn shell_disconnect_end_move_if_any(&mut self) {
-        let Some(wid) = self.shell_move_window_id else {
-            return;
-        };
-        self.shell_move_end(wid);
-    }
-
     pub(crate) fn shell_resize_is_active(&self) -> bool {
         self.shell_resize_window_id.is_some()
     }
 
     pub(crate) fn shell_resize_end_active(&mut self) {
-        let Some(wid) = self.shell_resize_window_id else {
-            return;
-        };
-        self.shell_resize_end(wid);
-    }
-
-    pub(crate) fn shell_disconnect_end_resize_if_any(&mut self) {
         let Some(wid) = self.shell_resize_window_id else {
             return;
         };
@@ -1900,9 +1935,7 @@ impl CompositorState {
                 }
             })
             .collect();
-        if let Some(pkt) = shell_wire::encode_window_list(&windows) {
-            self.shell_ipc_try_write(&pkt);
-        }
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowList { windows });
     }
 
     /// Output-local **layout** rect from the shell (same integers as HUD `fixed` CSS / CEF DIP) → global logical.
@@ -2416,7 +2449,7 @@ impl CompositorState {
         mods: &ModifiersState,
         keysym: &KeysymHandle<'_>,
     ) {
-        if self.shell_ipc_conn.is_disconnected() || !self.shell_has_frame {
+        if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
         let sym = keysym.modified_sym();
@@ -2424,44 +2457,44 @@ impl CompositorState {
         let native = sym.raw() as i32;
         match key_state {
             KeyState::Pressed => {
-                self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
-                    shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
-                    mods_u,
-                    0,
-                    native,
-                    0,
-                    0,
-                ));
+                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                    cef_key_type: shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
+                    modifiers: mods_u,
+                    windows_key_code: 0,
+                    native_key_code: native,
+                    character: 0,
+                    unmodified_character: 0,
+                });
                 if let Some(ch) = sym.key_char() {
                     if !ch.is_control() {
                         let cu = ch as u32;
-                        self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
-                            shell_wire::CEF_KEYEVENT_CHAR,
-                            mods_u,
-                            0,
-                            native,
-                            cu,
-                            cu,
-                        ));
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                            modifiers: mods_u,
+                            windows_key_code: 0,
+                            native_key_code: native,
+                            character: cu,
+                            unmodified_character: cu,
+                        });
                     }
                 }
             }
             KeyState::Released => {
-                self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
-                    shell_wire::CEF_KEYEVENT_KEYUP,
-                    mods_u,
-                    0,
-                    native,
-                    0,
-                    0,
-                ));
+                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                    cef_key_type: shell_wire::CEF_KEYEVENT_KEYUP,
+                    modifiers: mods_u,
+                    windows_key_code: 0,
+                    native_key_code: native,
+                    character: 0,
+                    unmodified_character: 0,
+                });
             }
         }
     }
 
     /// Solid / CEF OSR is composited from dma-buf, not a Wayland surface under the cursor — forward moves to `cef_host`.
     pub(crate) fn shell_ipc_maybe_forward_pointer_move(&mut self, pos: Point<f64, Logical>) {
-        if self.shell_ipc_conn.is_disconnected() || !self.shell_has_frame {
+        if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
         let route = self.shell_pointer_route_to_cef(pos);
@@ -2475,16 +2508,16 @@ impl CompositorState {
             return;
         }
         self.shell_last_pointer_ipc_px = Some((bx, by));
-        self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(
-            bx,
-            by,
-            self.shell_cef_event_flags(),
-        ));
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
+            x: bx,
+            y: by,
+            modifiers: self.shell_cef_event_flags(),
+        });
     }
 
     /// Forward scroll / pointer axis to `cef_host` when the pointer is over the Solid shell (OSR).
     pub(crate) fn shell_ipc_maybe_forward_pointer_axis(&mut self, delta_x: i32, delta_y: i32) {
-        if self.shell_ipc_conn.is_disconnected() || !self.shell_has_frame {
+        if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
         if delta_x == 0 && delta_y == 0 {
@@ -2499,35 +2532,13 @@ impl CompositorState {
         let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
             return;
         };
-        self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_axis(
-            bx,
-            by,
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerAxis {
+            x: bx,
+            y: by,
             delta_x,
             delta_y,
-            self.shell_cef_event_flags(),
-        ));
-    }
-
-    /// Send compositor → `cef_host` message. No-op if shell IPC is disconnected.
-    pub fn shell_ipc_try_write(&mut self, packet: &[u8]) {
-        match &mut self.shell_ipc_conn {
-            crate::shell_ipc::ShellIpcConn::Disconnected => {}
-            crate::shell_ipc::ShellIpcConn::Unix(stream) => {
-                if let Err(e) = stream.write_all(packet) {
-                    tracing::warn!(?e, "shell ipc: write to client failed");
-                    return;
-                }
-                if let Err(e) = stream.flush() {
-                    tracing::warn!(?e, "shell ipc: flush failed");
-                }
-            }
-            crate::shell_ipc::ShellIpcConn::Embedded { to_peer, .. } => {
-                if to_peer.send(packet.to_vec()).is_err() {
-                    tracing::warn!("shell ipc: embedded peer disconnected (tx)");
-                    shell_ipc::disconnect_shell_client(self);
-                }
-            }
-        }
+            modifiers: self.shell_cef_event_flags(),
+        });
     }
 
     /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).

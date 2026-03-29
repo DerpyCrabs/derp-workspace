@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["cef_host", "compositor", "shell_wire"]
+members = ["compositor", "shell_wire"]

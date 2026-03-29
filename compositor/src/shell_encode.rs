@@ -1,42 +1,56 @@
-//! Map [`crate::chrome_bridge::ChromeEvent`] to `shell_wire` packets for the shell Unix socket.
-
 use crate::chrome_bridge::ChromeEvent;
 
-pub fn chrome_event_to_shell_packet(ev: &ChromeEvent) -> Option<Vec<u8>> {
+pub fn chrome_event_to_shell_message(
+    ev: &ChromeEvent,
+) -> Option<shell_wire::DecodedCompositorToShellMessage> {
     Some(match ev {
-        ChromeEvent::WindowMapped { info } => shell_wire::encode_window_mapped(
-            info.window_id,
-            info.surface_id,
-            info.x,
-            info.y,
-            info.width,
-            info.height,
-            &info.title,
-            &info.app_id,
-        )?,
-        ChromeEvent::WindowUnmapped { window_id } => shell_wire::encode_window_unmapped(*window_id),
-        ChromeEvent::WindowGeometryChanged { info } => shell_wire::encode_window_geometry(
-            info.window_id,
-            info.surface_id,
-            info.x,
-            info.y,
-            info.width,
-            info.height,
-            info.maximized,
-            info.fullscreen,
-        ),
-        ChromeEvent::WindowMetadataChanged { info } => shell_wire::encode_window_metadata(
-            info.window_id,
-            info.surface_id,
-            &info.title,
-            &info.app_id,
-        )?,
+        ChromeEvent::WindowMapped { info } => shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+            window_id: info.window_id,
+            surface_id: info.surface_id,
+            x: info.x,
+            y: info.y,
+            w: info.width,
+            h: info.height,
+            title: info.title.clone(),
+            app_id: info.app_id.clone(),
+        },
+        ChromeEvent::WindowUnmapped { window_id } => {
+            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
+                window_id: *window_id,
+            }
+        }
+        ChromeEvent::WindowGeometryChanged { info } => {
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id: info.window_id,
+                surface_id: info.surface_id,
+                x: info.x,
+                y: info.y,
+                w: info.width,
+                h: info.height,
+                maximized: info.maximized,
+                fullscreen: info.fullscreen,
+            }
+        }
+        ChromeEvent::WindowMetadataChanged { info } => {
+            shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                window_id: info.window_id,
+                surface_id: info.surface_id,
+                title: info.title.clone(),
+                app_id: info.app_id.clone(),
+            }
+        }
         ChromeEvent::FocusChanged {
             surface_id,
             window_id,
-        } => shell_wire::encode_focus_changed(*surface_id, *window_id),
+        } => shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id: *surface_id,
+            window_id: *window_id,
+        },
         ChromeEvent::WindowStateChanged { info, minimized } => {
-            shell_wire::encode_window_state(info.window_id, *minimized)
+            shell_wire::DecodedCompositorToShellMessage::WindowState {
+                window_id: info.window_id,
+                minimized: *minimized,
+            }
         }
     })
 }

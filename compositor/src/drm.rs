@@ -1,9 +1,6 @@
 use std::collections::HashSet;
-use std::io::ErrorKind;
-use std::os::unix::io::{AsFd, BorrowedFd};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use smithay::backend::renderer::{ImportDma, ImportEgl};

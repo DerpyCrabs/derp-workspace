@@ -216,22 +216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cef_host"
-version = "0.1.0"
-dependencies = [
- "cef",
- "cef-dll-sys",
- "clap",
- "drm-fourcc",
- "libc",
- "nix",
- "serde",
- "serde_json",
- "shell_wire",
- "signal-hook",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -313,9 +297,14 @@ name = "compositor"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "cef",
+ "cef-dll-sys",
  "clap",
+ "drm-fourcc",
  "libc",
  "nix",
+ "serde",
+ "serde_json",
  "shell_wire",
  "signal-hook",
  "smithay",

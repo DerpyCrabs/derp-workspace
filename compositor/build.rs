@@ -1,5 +1,3 @@
-//! Embed RUNPATH to the `libcef.so` directory for this crate's resolved `cef-dll-sys` build.
-
 fn main() {
     println!("cargo::rerun-if-env-changed=CEF_PATH");
 

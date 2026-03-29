@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 pub mod chrome_bridge;
+pub mod cef;
 pub mod layout;
 pub mod window_registry;
 
@@ -17,7 +18,6 @@ mod handlers;
 mod input;
 mod shell_encode;
 mod shell_ipc;
-mod shell_unix_msg;
 mod shell_letterbox;
 mod shell_overlay;
 mod shell_render;

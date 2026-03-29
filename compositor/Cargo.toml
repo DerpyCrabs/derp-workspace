@@ -2,12 +2,18 @@
 name = "compositor"
 version = "0.1.0"
 edition = "2021"
-description = "Minimal Smithay Wayland compositor with CEF IPC"
+build = "build.rs"
+description = "Minimal Smithay Wayland compositor with embedded CEF shell"
 default-run = "compositor"
 
 [dependencies]
 bitflags = "2.2.1"
-clap = { version = "4", features = ["derive"] }
+cef = { version = "146", default-features = false }
+cef-dll-sys = { version = "146", default-features = true }
+clap = { version = "4", features = ["derive", "env"] }
+drm-fourcc = "2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 shell_wire = { path = "../shell_wire" }
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm",

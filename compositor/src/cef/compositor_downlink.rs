@@ -1,8 +1,3 @@
-//! Read compositor → shell messages from the duplex Unix socket and forward to CEF OSR (`BrowserHost` input + JS `derp-shell` for shell state only).
-//!
-//! Window `x,y,w,h` use **output-local layout** (DIP, integers) — same space as HUD `position:fixed`.
-//! Pointer events stay in **physical** px and are converted with [`OsrViewState::physical_to_logical`].
-
 use std::sync::Mutex;
 
 use cef::{
@@ -11,7 +6,7 @@ use cef::{
 };
 use serde_json::json;
 
-use cef_host::osr_view_state::OsrViewState;
+use crate::cef::osr_view_state::OsrViewState;
 
 fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Ok(js) = serde_json::to_string(&detail) else {
@@ -21,7 +16,6 @@ fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     let Some(frame) = browser.main_frame() else {
         return;
     };
-    // `None` script URL runs in the loaded document (fake https://derp/ origins were ignored for OSR HUD).
     frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
 }
 
@@ -294,7 +288,6 @@ pub fn apply_message(
                 2 => MouseButtonType::RIGHT,
                 _ => MouseButtonType::LEFT,
             };
-            // OSR: Blink's last synthetic position must match the click or hit-testing targets the wrong node.
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_click_event(Some(&ev), ty, if mouse_up { 1 } else { 0 }, 1);
         }
@@ -329,7 +322,6 @@ pub fn apply_message(
                 modifiers,
             };
             host.send_mouse_move_event(Some(&ev), 0);
-            // Libinput/Wayland axis signs are opposite of what Blink OSR expects for wheel deltas.
             host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
         }
         shell_wire::DecodedCompositorToShellMessage::Key {
