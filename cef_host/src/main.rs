@@ -21,7 +21,9 @@ use clap::Parser;
 #[cfg(unix)]
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 
-use cef_host::osr_view_state::{OsrViewState, OSR_BOOTSTRAP_DIP_H, OSR_BOOTSTRAP_DIP_W};
+use cef_host::osr_view_state::{
+    OsrViewState, OSR_BOOTSTRAP_LOGICAL_HEIGHT, OSR_BOOTSTRAP_LOGICAL_WIDTH,
+};
 
 #[cfg(unix)]
 static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
@@ -183,8 +185,8 @@ wrap_render_handler! {
                 let Ok(g) = self.view_state.lock() else {
                     return;
                 };
-                r.width = g.dip_w.max(1);
-                r.height = g.dip_h.max(1);
+                r.width = g.logical_width.max(1);
+                r.height = g.logical_height.max(1);
             }
         }
 
@@ -201,8 +203,8 @@ wrap_render_handler! {
             };
             let mut out = ScreenInfo::default();
             out.device_scale_factor = g.device_scale_factor();
-            let w = g.dip_w.max(1);
-            let h = g.dip_h.max(1);
+            let w = g.logical_width.max(1);
+            let h = g.logical_height.max(1);
             out.rect = Rect {
                 x: 0,
                 y: 0,
@@ -294,28 +296,14 @@ wrap_render_handler! {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;
                 };
-                let prev = g.buffer_dimensions();
-                g.set_buffer_size(width, height);
-                prev != g.buffer_dimensions()
+                let prev = g.physical_dimensions();
+                g.set_physical_size(width, height);
+                prev != g.physical_dimensions()
             };
-            let undersized_nudge = {
-                let Ok(mut g) = self.view_state.lock() else {
-                    return;
-                };
-                g.maybe_take_undersized_paint_nudge(width, height, std::time::Duration::from_millis(200))
-            };
-            if notify || undersized_nudge {
+            if notify {
                 if let Some(b) = browser {
                     if let Some(host) = b.host() {
-                        if undersized_nudge {
-                            host.was_resized();
-                        }
-                        if notify || undersized_nudge {
-                            host.notify_screen_info_changed();
-                        }
-                        if undersized_nudge {
-                            host.invalidate(PaintElementType::VIEW);
-                        }
+                        host.notify_screen_info_changed();
                     }
                 }
             }
@@ -592,8 +580,8 @@ fn main() {
     let mut window_info = WindowInfo::default();
     let (init_w, init_h) = view_state
         .lock()
-        .map(|g| (g.dip_w, g.dip_h))
-        .unwrap_or((OSR_BOOTSTRAP_DIP_W, OSR_BOOTSTRAP_DIP_H));
+        .map(|g| (g.logical_width, g.logical_height))
+        .unwrap_or((OSR_BOOTSTRAP_LOGICAL_WIDTH, OSR_BOOTSTRAP_LOGICAL_HEIGHT));
     window_info.bounds.width = init_w;
     window_info.bounds.height = init_h;
     window_info.shared_texture_enabled = 1;

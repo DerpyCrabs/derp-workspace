@@ -1,7 +1,7 @@
 //! Read compositor → shell messages from the duplex Unix socket and forward to CEF OSR (`BrowserHost` input + JS `derp-shell` for shell state only).
 //!
 //! Window `x,y,w,h` use **output-local layout** (DIP, integers) — same space as HUD `position:fixed`.
-//! Pointer events stay in **physical buffer** px and are converted with [`OsrViewState::buffer_to_view`].
+//! Pointer events stay in **physical** px and are converted with [`OsrViewState::physical_to_logical`].
 
 use std::sync::Mutex;
 
@@ -38,13 +38,11 @@ pub fn apply_message(
             physical_h,
         } => {
             if let Ok(mut g) = view_state.lock() {
-                g.dip_w = logical_w.max(1) as i32;
-                g.dip_h = logical_h.max(1) as i32;
+                g.logical_width = logical_w.max(1) as i32;
+                g.logical_height = logical_h.max(1) as i32;
                 let pw = physical_w.max(1) as i32;
                 let ph = physical_h.max(1) as i32;
-                g.set_buffer_size(pw, ph);
-                g.set_target_buffer(pw, ph);
-                g.reset_undersized_nudge();
+                g.set_physical_size(pw, ph);
             }
             let Ok(guard) = browser.lock() else {
                 return;
@@ -248,7 +246,7 @@ pub fn apply_message(
             let map_xy = |x: i32, y: i32| -> (i32, i32) {
                 view_state
                     .lock()
-                    .map(|s| s.buffer_to_view(x, y))
+                    .map(|s| s.physical_to_logical(x, y))
                     .unwrap_or((x, y))
             };
 
@@ -281,7 +279,7 @@ pub fn apply_message(
             let map_xy = |x: i32, y: i32| -> (i32, i32) {
                 view_state
                     .lock()
-                    .map(|s| s.buffer_to_view(x, y))
+                    .map(|s| s.physical_to_logical(x, y))
                     .unwrap_or((x, y))
             };
 
@@ -320,7 +318,7 @@ pub fn apply_message(
             let map_xy = |x: i32, y: i32| -> (i32, i32) {
                 view_state
                     .lock()
-                    .map(|s| s.buffer_to_view(x, y))
+                    .map(|s| s.physical_to_logical(x, y))
                     .unwrap_or((x, y))
             };
 
@@ -387,7 +385,7 @@ pub fn apply_message(
 
             let (vx, vy) = view_state
                 .lock()
-                .map(|s| s.buffer_to_view(x, y))
+                .map(|s| s.physical_to_logical(x, y))
                 .unwrap_or((x, y));
 
             let ty = match phase {
