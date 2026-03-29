@@ -1,7 +1,7 @@
 //! Renderer ↔ browser process bridge: JS calls `__derpShellWireSend(op, arg?, arg2?)` → compositor `shell_wire` on the Unix stream (no HTTP).
 //!
-//! After `move_delta`, optionally `BrowserHost::invalidate(VIEW)` throttled so OSR keeps up with shell chrome
-//! during drag. Disable with `CEF_HOST_SHELL_DRAG_INVALIDATE=0`, or tune ms with `CEF_HOST_SHELL_DRAG_INVALIDATE_MS`
+//! After `move_delta` / `resize_delta`, optionally `BrowserHost::invalidate(VIEW)` throttled so OSR keeps up with shell chrome
+//! during drag or resize. Disable with `CEF_HOST_SHELL_DRAG_INVALIDATE=0`, or tune ms with `CEF_HOST_SHELL_DRAG_INVALIDATE_MS`
 //! (default 8, clamped 1–50).
 
 use std::{
@@ -117,6 +117,28 @@ fn handle_uplink_list(
             write_shell_packet(ipc, &shell_wire::encode_shell_move_end(wid));
             invalidate_shell_view_unthrottled(browser);
         }
+        "resize_begin" => {
+            let wid = args.int(1) as u32;
+            let edges = args.int(2) as u32;
+            eprintln!("[derp-shell-resize] cef_host uplink: resize_begin window_id={wid} edges={edges}");
+            reset_drag_invalidate_throttle();
+            if let Some(pkt) = shell_wire::encode_shell_resize_begin(wid, edges) {
+                write_shell_packet(ipc, &pkt);
+            }
+        }
+        "resize_delta" => {
+            let dx = args.int(1) as i32;
+            let dy = args.int(2) as i32;
+            eprintln!("[derp-shell-resize] cef_host uplink: resize_delta dx={dx} dy={dy}");
+            write_shell_packet(ipc, &shell_wire::encode_shell_resize_delta(dx, dy));
+            maybe_invalidate_shell_view_after_move_delta(browser);
+        }
+        "resize_end" => {
+            let wid = args.int(1) as u32;
+            eprintln!("[derp-shell-resize] cef_host uplink: resize_end window_id={wid}");
+            write_shell_packet(ipc, &shell_wire::encode_shell_resize_end(wid));
+            invalidate_shell_view_unthrottled(browser);
+        }
         "taskbar_activate" => {
             let wid = args.int(1) as u32;
             write_shell_packet(ipc, &shell_wire::encode_shell_taskbar_activate(wid));
@@ -225,9 +247,9 @@ wrap_v8_handler! {
                     let cmd = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(cmd.as_str())));
                 }
-                "move_begin" | "move_end" | "taskbar_activate" | "minimize" => {
+                "move_begin" | "move_end" | "taskbar_activate" | "minimize" | "resize_end" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_begin/move_end/taskbar_activate/minimize require window id");
+                        return_exception!("move_begin/move_end/resize_end/taskbar_activate/minimize require window id");
                     };
                     let id = if a1.is_int() != 0 {
                         a1.int_value()
@@ -236,12 +258,46 @@ wrap_v8_handler! {
                     } else if a1.is_double() != 0 {
                         a1.double_value() as i32
                     } else {
-                        return_exception!("move_begin/move_end/taskbar_activate/minimize: second arg must be a number");
+                        return_exception!("move_begin/move_end/resize_end/taskbar_activate/minimize: second arg must be a number");
                     };
                     if id < 0 {
                         return_exception!("window id must be non-negative");
                     }
                     let _ = list.set_int(1, id);
+                }
+                "resize_begin" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("resize_begin requires window id");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("resize_begin requires edges bitmask");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("resize_begin: window id must be a number");
+                    };
+                    if id < 0 {
+                        return_exception!("window id must be non-negative");
+                    }
+                    let edges = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_uint() != 0 {
+                        a2.uint_value() as i32
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("resize_begin: edges must be a number");
+                    };
+                    if edges <= 0 || edges > 15 {
+                        return_exception!("resize_begin: edges must be 1..=15 (bitmask)");
+                    }
+                    let _ = list.set_int(1, id);
+                    let _ = list.set_int(2, edges);
                 }
                 "move_delta" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
@@ -267,9 +323,33 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, dx);
                     let _ = list.set_int(2, dy);
                 }
+                "resize_delta" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("resize_delta requires dx");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("resize_delta requires dy");
+                    };
+                    let dx = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("resize_delta: dx must be a number");
+                    };
+                    let dy = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("resize_delta: dy must be a number");
+                    };
+                    let _ = list.set_int(1, dx);
+                    let _ = list.set_int(2, dy);
+                }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, taskbar_activate, minimize)"
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize)"
                     );
                 }
             }

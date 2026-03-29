@@ -19,7 +19,8 @@
 //! - [`MSG_SPAWN_WAYLAND_CLIENT`], [`MSG_FRAME_DMABUF_COMMIT`],
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
-//!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`])
+//!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
+//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
 //! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -71,6 +72,18 @@ pub const MSG_SHELL_TASKBAR_ACTIVATE: u32 = 36;
 pub const MSG_WINDOW_STATE: u32 = 37;
 /// Shell → compositor: minimize a toplevel (unmap + stash).
 pub const MSG_SHELL_MINIMIZE: u32 = 38;
+/// Shell → compositor: start interactive resize (`edges` = bitmask matching `xdg_toplevel::resize_edge` / Smithay resize bits).
+pub const MSG_SHELL_RESIZE_BEGIN: u32 = 39;
+/// Shell → compositor: pointer delta while resizing (same coordinate spirit as [`MSG_SHELL_MOVE_DELTA`]).
+pub const MSG_SHELL_RESIZE_DELTA: u32 = 40;
+/// Shell → compositor: end interactive resize for `window_id`.
+pub const MSG_SHELL_RESIZE_END: u32 = 41;
+
+/// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
+pub const RESIZE_EDGE_TOP: u32 = 1;
+pub const RESIZE_EDGE_BOTTOM: u32 = 2;
+pub const RESIZE_EDGE_LEFT: u32 = 4;
+pub const RESIZE_EDGE_RIGHT: u32 = 8;
 
 /// CEF [`cef_key_event_type_t`] values (composite → shell → `cef_host`).
 pub const CEF_KEYEVENT_RAWKEYDOWN: u32 = 0;
@@ -324,6 +337,38 @@ pub fn encode_shell_move_end(window_id: u32) -> Vec<u8> {
     v
 }
 
+pub fn encode_shell_resize_begin(window_id: u32, edges: u32) -> Option<Vec<u8>> {
+    if edges == 0 || edges > 15 {
+        return None;
+    }
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_RESIZE_BEGIN.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&edges.to_le_bytes());
+    Some(v)
+}
+
+pub fn encode_shell_resize_delta(dx: i32, dy: i32) -> Vec<u8> {
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_RESIZE_DELTA.to_le_bytes());
+    v.extend_from_slice(&dx.to_le_bytes());
+    v.extend_from_slice(&dy.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_resize_end(window_id: u32) -> Vec<u8> {
+    let body_len = 8u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_RESIZE_END.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v
+}
+
 /// One row in [`MSG_WINDOW_LIST`] / [`DecodedCompositorToShellMessage::WindowList`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellWindowSnapshot {
@@ -477,6 +522,17 @@ pub enum DecodedMessage {
         dy: i32,
     },
     ShellMoveEnd {
+        window_id: u32,
+    },
+    ShellResizeBegin {
+        window_id: u32,
+        edges: u32,
+    },
+    ShellResizeDelta {
+        dx: i32,
+        dy: i32,
+    },
+    ShellResizeEnd {
         window_id: u32,
     },
     ShellListWindows,
@@ -971,6 +1027,9 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_MOVE_BEGIN
         | MSG_SHELL_MOVE_DELTA
         | MSG_SHELL_MOVE_END
+        | MSG_SHELL_RESIZE_BEGIN
+        | MSG_SHELL_RESIZE_DELTA
+        | MSG_SHELL_RESIZE_END
         | MSG_SHELL_LIST_WINDOWS
         | MSG_SHELL_SET_GEOMETRY
         | MSG_SHELL_CLOSE
@@ -1096,6 +1155,32 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             }
             let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
             Ok(DecodedMessage::ShellMoveEnd { window_id })
+        }
+        MSG_SHELL_RESIZE_BEGIN => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let edges = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            if edges == 0 || edges > 15 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(DecodedMessage::ShellResizeBegin { window_id, edges })
+        }
+        MSG_SHELL_RESIZE_DELTA => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let dx = i32::from_le_bytes(body[4..8].try_into().unwrap());
+            let dy = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            Ok(DecodedMessage::ShellResizeDelta { dx, dy })
+        }
+        MSG_SHELL_RESIZE_END => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            Ok(DecodedMessage::ShellResizeEnd { window_id })
         }
         MSG_SHELL_LIST_WINDOWS => {
             if body.len() != 4 {
@@ -1463,6 +1548,62 @@ mod tests {
             Some(DecodedMessage::ShellMoveDelta { dx, dy }) => assert_eq!((dx, dy), (3, -5)),
             _ => panic!("expected delta"),
         }
+    }
+
+    #[test]
+    fn round_trip_shell_resize_messages() {
+        let mut buf = encode_shell_resize_begin(5, RESIZE_EDGE_RIGHT | RESIZE_EDGE_BOTTOM).unwrap();
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeBegin { window_id, edges }) => {
+                assert_eq!(window_id, 5);
+                assert_eq!(edges, RESIZE_EDGE_RIGHT | RESIZE_EDGE_BOTTOM);
+            }
+            o => panic!("expected ShellResizeBegin: {o:?}"),
+        }
+        assert!(buf.is_empty());
+
+        buf = encode_shell_resize_delta(-2, 7);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeDelta { dx, dy }) => assert_eq!((dx, dy), (-2, 7)),
+            o => panic!("expected ShellResizeDelta: {o:?}"),
+        }
+
+        buf = encode_shell_resize_end(5);
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeEnd { window_id }) => assert_eq!(window_id, 5),
+            o => panic!("expected ShellResizeEnd: {o:?}"),
+        }
+        assert!(buf.is_empty());
+
+        assert!(encode_shell_resize_begin(1, 0).is_none());
+    }
+
+    #[test]
+    fn concatenated_shell_resize_decode_order() {
+        let mut buf = Vec::new();
+        buf.extend(encode_shell_resize_begin(2, RESIZE_EDGE_LEFT).unwrap());
+        buf.extend(encode_shell_resize_delta(3, 0));
+        buf.extend(encode_shell_resize_delta(0, -1));
+        buf.extend(encode_shell_resize_end(2));
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeBegin { window_id, edges }) => {
+                assert_eq!((window_id, edges), (2, RESIZE_EDGE_LEFT));
+            }
+            o => panic!("expected begin: {o:?}"),
+        }
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeDelta { dx, dy }) => assert_eq!((dx, dy), (3, 0)),
+            o => panic!("expected delta: {o:?}"),
+        }
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeDelta { dx, dy }) => assert_eq!((dx, dy), (0, -1)),
+            o => panic!("expected delta2: {o:?}"),
+        }
+        match pop_message(&mut buf).unwrap() {
+            Some(DecodedMessage::ShellResizeEnd { window_id }) => assert_eq!(window_id, 2),
+            o => panic!("expected end: {o:?}"),
+        }
+        assert!(buf.is_empty());
     }
 
     #[test]

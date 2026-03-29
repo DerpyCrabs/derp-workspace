@@ -71,7 +71,7 @@ impl CompositorState {
 
         let grabbed = pointer.is_grabbed();
 
-        let under = if grabbed || self.shell_move_is_active() {
+        let under = if grabbed || self.shell_move_is_active() || self.shell_resize_is_active() {
             None
         } else {
             self.surface_under(pos)
@@ -139,7 +139,7 @@ impl CompositorState {
         );
         const BTN_LEFT: u32 = 0x110;
 
-        let shell_px = if route_cef || self.shell_move_is_active() {
+        let shell_px = if route_cef || self.shell_move_is_active() || self.shell_resize_is_active() {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
                 self.shell_pointer_norm_from_global(pos)
                     .and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
@@ -241,6 +241,7 @@ impl CompositorState {
                 }
             }
             if button == BTN_LEFT && button_state == ButtonState::Released {
+                self.shell_resize_end_active();
                 self.shell_move_end_active();
             }
             return;
@@ -298,6 +299,7 @@ impl CompositorState {
         );
         pointer.frame(self);
         if button == BTN_LEFT && button_state == ButtonState::Released {
+            self.shell_resize_end_active();
             self.shell_move_end_active();
         }
     }

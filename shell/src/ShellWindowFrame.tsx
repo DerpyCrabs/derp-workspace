@@ -1,4 +1,12 @@
-import { CHROME_BORDER_PX, CHROME_TITLEBAR_PX } from './chromeConstants'
+import {
+  CHROME_BORDER_PX,
+  CHROME_RESIZE_HANDLE_PX,
+  CHROME_TITLEBAR_PX,
+  SHELL_RESIZE_BOTTOM,
+  SHELL_RESIZE_LEFT,
+  SHELL_RESIZE_RIGHT,
+  SHELL_RESIZE_TOP,
+} from './chromeConstants'
 import './App.css'
 
 /** Mirrors compositor window geometry + metadata (OSR overlay chrome). */
@@ -19,6 +27,8 @@ type ShellWindowFrameProps = {
   /** Stacking vs other chrome (focused window should use the largest). */
   stackZ: number
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
+  /** Bitmask: [`SHELL_RESIZE_TOP`] \| … (see chromeConstants). */
+  onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
   onMinimize: () => void
   onClose: () => void
 }
@@ -26,6 +36,12 @@ type ShellWindowFrameProps = {
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
+  const rh = CHROME_RESIZE_HANDLE_PX
+  const outerW = props.win.width + bd * 2
+
+  const startResize = (edges: number, clientX: number, clientY: number) => {
+    props.onResizeEdgeDown(edges, clientX, clientY)
+  }
 
   return (
     <div
@@ -126,6 +142,199 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           top: `${bd + th + props.win.height}px`,
           width: `${props.win.width + bd * 2}px`,
           height: `${bd}px`,
+        }}
+      />
+      {/* Resize hits: corners + edges (compositor owns geometry; deltas via wire). */}
+      <div
+        class="shell-resize-handle"
+        title="Resize"
+        style={{
+          left: '0',
+          top: '0',
+          width: `${rh}px`,
+          height: `${rh}px`,
+          cursor: 'nwse-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP | SHELL_RESIZE_LEFT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP | SHELL_RESIZE_LEFT, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize"
+        style={{
+          right: '0',
+          top: '0',
+          width: `${rh}px`,
+          height: `${rh}px`,
+          cursor: 'nesw-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP | SHELL_RESIZE_RIGHT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP | SHELL_RESIZE_RIGHT, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize"
+        style={{
+          left: '0',
+          bottom: '0',
+          width: `${rh}px`,
+          height: `${rh}px`,
+          cursor: 'nesw-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize"
+        style={{
+          right: '0',
+          bottom: '0',
+          width: `${rh}px`,
+          height: `${rh}px`,
+          cursor: 'nwse-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize height"
+        style={{
+          left: `${rh}px`,
+          top: '0',
+          width: `${Math.max(0, outerW - 2 * rh)}px`,
+          height: `${rh}px`,
+          cursor: 'ns-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_TOP, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize height"
+        style={{
+          left: `${rh}px`,
+          bottom: '0',
+          width: `${Math.max(0, outerW - 2 * rh)}px`,
+          height: `${rh}px`,
+          cursor: 'ns-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_BOTTOM, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize width"
+        style={{
+          left: '0',
+          top: `${rh}px`,
+          width: `${rh}px`,
+          bottom: `${rh}px`,
+          cursor: 'ew-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_LEFT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_LEFT, t.clientX, t.clientY)
+        }}
+      />
+      <div
+        class="shell-resize-handle"
+        title="Resize width"
+        style={{
+          right: '0',
+          top: `${rh}px`,
+          width: `${rh}px`,
+          bottom: `${rh}px`,
+          cursor: 'ew-resize',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_RIGHT, e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          startResize(SHELL_RESIZE_RIGHT, t.clientX, t.clientY)
         }}
       />
     </div>

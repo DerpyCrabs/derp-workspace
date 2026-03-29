@@ -26,6 +26,9 @@ declare global {
         | 'move_begin'
         | 'move_delta'
         | 'move_end'
+        | 'resize_begin'
+        | 'resize_delta'
+        | 'resize_end'
         | 'taskbar_activate'
         | 'minimize',
       arg?: number | string,
@@ -212,6 +215,9 @@ function shellWireSend(
     | 'move_begin'
     | 'move_delta'
     | 'move_end'
+    | 'resize_begin'
+    | 'resize_delta'
+    | 'resize_end'
     | 'taskbar_activate'
     | 'minimize',
   arg?: number | string,
@@ -220,12 +226,21 @@ function shellWireSend(
   const fn = window.__derpShellWireSend
   const hasWire = typeof fn === 'function'
   if (!hasWire) {
-    if (op === 'move_begin' || op === 'move_delta' || op === 'move_end') {
+    if (
+      op === 'move_begin' ||
+      op === 'move_delta' ||
+      op === 'move_end' ||
+      op === 'resize_begin' ||
+      op === 'resize_delta' ||
+      op === 'resize_end'
+    ) {
       shellMoveLog('wire_missing', { op, arg, arg2 })
     }
     return false
   }
-  if (op === 'move_delta' && arg2 !== undefined) {
+  if ((op === 'move_delta' || op === 'resize_delta') && arg2 !== undefined) {
+    fn(op, arg as number, arg2)
+  } else if (op === 'resize_begin' && arg2 !== undefined) {
     fn(op, arg as number, arg2)
   } else if (op === 'quit') {
     fn(op)
@@ -305,18 +320,11 @@ function App() {
   let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
   let shellMoveDeltaLogSeq = 0
 
-  /** Solid owns (x,y) during drag; compositor mirrors via `move_delta` after this state commits (`batch` flushes first). */
-  function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
-    setWindows((m) => {
-      const w = m.get(windowId)
-      if (!w) return m
-      const next = new Map(m)
-      next.set(windowId, { ...w, x: w.x + dx, y: w.y + dy })
-      return next
-    })
-  }
+  let shellWindowResize: { windowId: number; lastX: number; lastY: number } | null = null
+  let shellResizeDeltaLogSeq = 0
 
   function beginShellWindowMove(windowId: number, clientX: number, clientY: number) {
+    if (shellWindowResize !== null) return
     shellMoveLog('titlebar_begin_request', { windowId, clientX, clientY })
     shellMoveDeltaLogSeq = 0
     if (!shellWireSend('move_begin', windowId)) {
@@ -325,6 +333,17 @@ function App() {
     }
     shellWindowDrag = { windowId, lastX: clientX, lastY: clientY }
     shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
+  }
+
+  /** Match titlebar to pointer in view space; `window_geometry` still overwrites when it lands (compositor truth). */
+  function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
+    setWindows((m) => {
+      const w = m.get(windowId)
+      if (!w) return m
+      const next = new Map(m)
+      next.set(windowId, { ...w, x: w.x + dx, y: w.y + dy })
+      return next
+    })
   }
 
   function applyShellWindowMove(clientX: number, clientY: number) {
@@ -337,8 +356,10 @@ function App() {
       shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
     }
     const wid = shellWindowDrag.windowId
-    batch(() => bumpShellWindowPosition(wid, dx, dy))
-    shellWireSend('move_delta', dx, dy)
+    batch(() => {
+      bumpShellWindowPosition(wid, dx, dy)
+      shellWireSend('move_delta', dx, dy)
+    })
     shellWindowDrag.lastX = clientX
     shellWindowDrag.lastY = clientY
   }
@@ -349,6 +370,36 @@ function App() {
     shellMoveLog('titlebar_end', { windowId: id, reason })
     shellWindowDrag = null
     shellWireSend('move_end', id)
+  }
+
+  function beginShellWindowResize(windowId: number, edges: number, clientX: number, clientY: number) {
+    if (shellWindowResize !== null || shellWindowDrag !== null) return
+    shellResizeDeltaLogSeq = 0
+    if (!shellWireSend('resize_begin', windowId, edges)) return
+    shellWindowResize = { windowId, lastX: clientX, lastY: clientY }
+    shellMoveLog('resize_begin', { windowId, edges, clientX, clientY })
+  }
+
+  function applyShellWindowResize(clientX: number, clientY: number) {
+    if (!shellWindowResize) return
+    const dx = Math.round(clientX - shellWindowResize.lastX)
+    const dy = Math.round(clientY - shellWindowResize.lastY)
+    if (dx === 0 && dy === 0) return
+    shellResizeDeltaLogSeq += 1
+    if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
+      shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
+    }
+    shellWireSend('resize_delta', dx, dy)
+    shellWindowResize.lastX = clientX
+    shellWindowResize.lastY = clientY
+  }
+
+  function endShellWindowResize(reason: string) {
+    if (!shellWindowResize) return
+    const id = shellWindowResize.windowId
+    shellMoveLog('resize_end', { windowId: id, reason })
+    shellWindowResize = null
+    shellWireSend('resize_end', id)
   }
 
   /** Readable in `~/.local/state/derp/compositor.log` when `cef_host` runs under `derp-session` (stderr tee). */
@@ -432,12 +483,6 @@ function App() {
         setWindows((m) => applyDetail(m, d))
         return
       }
-      if (d.type === 'window_geometry' && shellWindowDrag !== null) {
-        const gw = coerceShellWindowId(d.window_id)
-        if (gw !== null && gw === shellWindowDrag.windowId) {
-          return
-        }
-      }
       setWindows((m) => applyDetail(m, d))
     }
     window.addEventListener('derp-shell', onDerpShell as EventListener)
@@ -455,6 +500,7 @@ function App() {
       }
       applyDragDemoMove(e.clientX, e.clientY)
       applyShellWindowMove(e.clientX, e.clientY)
+      applyShellWindowResize(e.clientX, e.clientY)
       setPointerClient({ x: e.clientX, y: e.clientY })
       const el = mainRef
       if (el) {
@@ -488,18 +534,21 @@ function App() {
     const onWindowPointerUp = (e: PointerEvent) => {
       if (!e.isPrimary) return
       disarmDragDemo('window-pointerup')
+      endShellWindowResize('window-pointerup')
       endShellWindowMove('window-pointerup')
     }
 
     const onWindowMouseUp = (e: MouseEvent) => {
       if (e.button !== 0) return
       disarmDragDemo('window-mouseup')
+      endShellWindowResize('window-mouseup')
       endShellWindowMove('window-mouseup')
     }
 
     const onWindowPointerCancel = (e: PointerEvent) => {
       if (!e.isPrimary) return
       disarmDragDemo('window-pointercancel')
+      endShellWindowResize('window-pointercancel')
       endShellWindowMove('window-pointercancel')
     }
 
@@ -510,10 +559,16 @@ function App() {
           windowId: shellWindowDrag.windowId,
         })
       }
+      if (shellWindowResize) {
+        shellMoveLog('window_blur_while_shell_resize', {
+          windowId: shellWindowResize.windowId,
+        })
+      }
     }
 
     const onWindowTouchEnd = () => {
       disarmDragDemo('window-touchend')
+      endShellWindowResize('window-touchend')
       endShellWindowMove('window-touchend')
     }
 
@@ -526,6 +581,10 @@ function App() {
       }
       if (shellWindowDrag) {
         applyShellWindowMove(t.clientX, t.clientY)
+        e.preventDefault()
+      }
+      if (shellWindowResize) {
+        applyShellWindowResize(t.clientX, t.clientY)
         e.preventDefault()
       }
       setPointerClient({ x: t.clientX, y: t.clientY })
@@ -630,6 +689,9 @@ function App() {
               }
               focused={focusedWindowId() === win().window_id}
               onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win().window_id, cx, cy)}
+              onResizeEdgeDown={(edges, cx, cy) =>
+                beginShellWindowResize(win().window_id, edges, cx, cy)
+              }
               onMinimize={() => {
                 shellWireSend('minimize', win().window_id)
               }}

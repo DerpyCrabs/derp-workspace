@@ -39,6 +39,85 @@ impl From<xdg_toplevel::ResizeEdge> for ResizeEdge {
     }
 }
 
+/// Cumulative pointer delta in compositor logical space (same construction as [`ResizeSurfaceGrab::motion`]).
+pub fn compute_clamped_resize_size(
+    wl_surface: &WlSurface,
+    edges: ResizeEdge,
+    initial_size: Size<i32, Logical>,
+    accum_dx: f64,
+    accum_dy: f64,
+) -> Size<i32, Logical> {
+    let mut delta_x = accum_dx;
+    let mut delta_y = accum_dy;
+
+    if edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) && edges.intersects(ResizeEdge::LEFT) {
+        delta_x = -delta_x;
+    }
+
+    if edges.intersects(ResizeEdge::TOP | ResizeEdge::BOTTOM) && edges.intersects(ResizeEdge::TOP) {
+        delta_y = -delta_y;
+    }
+
+    let mut new_window_width = initial_size.w;
+    let mut new_window_height = initial_size.h;
+
+    if edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) {
+        new_window_width = (initial_size.w as f64 + delta_x) as i32;
+    }
+
+    if edges.intersects(ResizeEdge::TOP | ResizeEdge::BOTTOM) {
+        new_window_height = (initial_size.h as f64 + delta_y) as i32;
+    }
+
+    let (min_size, max_size) = compositor::with_states(wl_surface, |states| {
+        let mut guard = states.cached_state.get::<SurfaceCachedState>();
+        let data = guard.current();
+        (data.min_size, data.max_size)
+    });
+
+    let min_width = min_size.w.max(1);
+    let min_height = min_size.h.max(1);
+
+    let max_width = if max_size.w == 0 {
+        i32::MAX
+    } else {
+        max_size.w
+    };
+    let max_height = if max_size.h == 0 {
+        i32::MAX
+    } else {
+        max_size.h
+    };
+
+    Size::from((
+        new_window_width.max(min_width).min(max_width),
+        new_window_height.max(min_height).min(max_height),
+    ))
+}
+
+pub fn resize_tracking_set_resizing(
+    surface: &WlSurface,
+    edges: ResizeEdge,
+    initial_rect: Rectangle<i32, Logical>,
+) {
+    ResizeSurfaceState::with(surface, |state| {
+        *state = ResizeSurfaceState::Resizing {
+            edges,
+            initial_rect,
+        };
+    });
+}
+
+pub fn resize_tracking_set_waiting_last_commit(
+    surface: &WlSurface,
+    edges: ResizeEdge,
+    initial_rect: Rectangle<i32, Logical>,
+) {
+    ResizeSurfaceState::with(surface, |state| {
+        *state = ResizeSurfaceState::WaitingForLastCommit { edges, initial_rect };
+    });
+}
+
 pub struct ResizeSurfaceGrab {
     start_data: PointerGrabStartData<CompositorState>,
     window: Window,
@@ -85,52 +164,14 @@ impl PointerGrab<CompositorState> for ResizeSurfaceGrab {
     ) {
         handle.motion(data, None, event);
 
-        let mut delta = event.location - self.start_data.location;
-
-        let mut new_window_width = self.initial_rect.size.w;
-        let mut new_window_height = self.initial_rect.size.h;
-
-        if self.edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) {
-            if self.edges.intersects(ResizeEdge::LEFT) {
-                delta.x = -delta.x;
-            }
-
-            new_window_width = (self.initial_rect.size.w as f64 + delta.x) as i32;
-        }
-
-        if self.edges.intersects(ResizeEdge::TOP | ResizeEdge::BOTTOM) {
-            if self.edges.intersects(ResizeEdge::TOP) {
-                delta.y = -delta.y;
-            }
-
-            new_window_height = (self.initial_rect.size.h as f64 + delta.y) as i32;
-        }
-
-        let (min_size, max_size) =
-            compositor::with_states(self.window.toplevel().unwrap().wl_surface(), |states| {
-                let mut guard = states.cached_state.get::<SurfaceCachedState>();
-                let data = guard.current();
-                (data.min_size, data.max_size)
-            });
-
-        let min_width = min_size.w.max(1);
-        let min_height = min_size.h.max(1);
-
-        let max_width = if max_size.w == 0 {
-            i32::MAX
-        } else {
-            max_size.w
-        };
-        let max_height = if max_size.h == 0 {
-            i32::MAX
-        } else {
-            max_size.h
-        };
-
-        self.last_window_size = Size::from((
-            new_window_width.max(min_width).min(max_width),
-            new_window_height.max(min_height).min(max_height),
-        ));
+        let delta = event.location - self.start_data.location;
+        self.last_window_size = compute_clamped_resize_size(
+            self.window.toplevel().unwrap().wl_surface(),
+            self.edges,
+            self.initial_rect.size,
+            delta.x,
+            delta.y,
+        );
 
         let xdg = self.window.toplevel().unwrap();
         xdg.with_pending_state(|state| {
@@ -365,4 +406,17 @@ pub fn handle_commit(space: &mut Space<DerpSpaceElem>, surface: &WlSurface) -> O
     }
 
     Some(())
+}
+
+#[cfg(test)]
+mod shell_wire_resize_edge_tests {
+    use super::ResizeEdge;
+
+    #[test]
+    fn resize_edge_bits_align_with_shell_wire() {
+        assert_eq!(ResizeEdge::TOP.bits(), shell_wire::RESIZE_EDGE_TOP);
+        assert_eq!(ResizeEdge::BOTTOM.bits(), shell_wire::RESIZE_EDGE_BOTTOM);
+        assert_eq!(ResizeEdge::LEFT.bits(), shell_wire::RESIZE_EDGE_LEFT);
+        assert_eq!(ResizeEdge::RIGHT.bits(), shell_wire::RESIZE_EDGE_RIGHT);
+    }
 }

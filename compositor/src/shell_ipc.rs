@@ -78,6 +78,7 @@ fn unix_bytes_available(stream: &std::os::unix::net::UnixStream) -> io::Result<u
 }
 
 pub(crate) fn disconnect_shell_client(state: &mut crate::state::CompositorState) {
+    state.shell_disconnect_end_resize_if_any();
     state.shell_disconnect_end_move_if_any();
     state.shell_ipc_conn = ShellIpcConn::Disconnected;
     state.shell_read_buf.clear();
@@ -178,6 +179,18 @@ fn dispatch_shell_message(
         ShellMoveEnd { window_id } => {
             tracing::warn!(target: "derp_shell_move", window_id, "shell ipc rx: move_end");
             state.shell_move_end(window_id);
+        }
+        ShellResizeBegin { window_id, edges } => {
+            tracing::debug!(target: "derp_shell_resize", window_id, edges, "shell ipc rx: resize_begin");
+            state.shell_resize_begin(window_id, edges);
+        }
+        ShellResizeDelta { dx, dy } => {
+            tracing::trace!(target: "derp_shell_resize", dx, dy, "shell ipc rx: resize_delta");
+            state.shell_resize_delta(dx, dy);
+        }
+        ShellResizeEnd { window_id } => {
+            tracing::debug!(target: "derp_shell_resize", window_id, "shell ipc rx: resize_end");
+            state.shell_resize_end(window_id);
         }
         ShellListWindows => state.shell_reply_window_list(),
         ShellSetGeometry {

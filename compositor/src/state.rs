@@ -233,6 +233,11 @@ pub struct CompositorState {
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
     /// (immediate flush) and from [`Self::shell_move_end`].
     shell_move_pending_delta: (i32, i32),
+    /// Shell-initiated interactive resize ([`shell_wire::MSG_SHELL_RESIZE_*`]).
+    shell_resize_window_id: Option<u32>,
+    shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
+    shell_resize_initial_rect: Option<Rectangle<i32, Logical>>,
+    shell_resize_accum: (f64, f64),
     /// Drives nested winit repaints when Wayland clients commit or on first frame.
     pub(crate) needs_winit_redraw: bool,
 
@@ -348,6 +353,10 @@ impl CompositorState {
             shell_minimized_windows: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
+            shell_resize_window_id: None,
+            shell_resize_edges: None,
+            shell_resize_initial_rect: None,
+            shell_resize_accum: (0.0, 0.0),
             needs_winit_redraw: true,
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
@@ -627,6 +636,14 @@ impl CompositorState {
 
     /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
     pub fn notify_geometry_if_changed(&mut self, window: &Window) {
+        self.notify_geometry_for_window(window, false);
+    }
+
+    /// Like [`Self::notify_geometry_if_changed`], but when `force_shell_emit` is true always sends
+    /// [`ChromeEvent::WindowGeometryChanged`] after updating the registry so the Solid shell can
+    /// reconcile optimistic titlebar bumps even when `set_geometry` reports no delta (e.g. duplicate
+    /// compositor updates vs. last-emitted shell state).
+    pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
@@ -641,7 +658,7 @@ impl CompositorState {
         let changed = self
             .window_registry
             .set_geometry(wl, loc.x, loc.y, size.w, size.h);
-        if let Some(true) = changed {
+        if force_shell_emit || changed == Some(true) {
             if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
@@ -1331,6 +1348,9 @@ impl CompositorState {
     }
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
+        if let Some(rid) = self.shell_resize_window_id {
+            self.shell_resize_end(rid);
+        }
         let Some(info) = self.window_registry.window_info(window_id) else {
             tracing::warn!(
                 target: "derp_shell_move",
@@ -1438,7 +1458,7 @@ impl CompositorState {
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), after, true);
         self.shell_move_pending_delta = (0, 0);
-        self.notify_geometry_if_changed(&window);
+        self.notify_geometry_for_window(&window, true);
         self.needs_winit_redraw = true;
         tracing::debug!(
             target: "derp_shell_move",
@@ -1499,7 +1519,7 @@ impl CompositorState {
             return;
         }
         self.shell_move_window_id = None;
-        self.notify_geometry_if_changed(window);
+        self.notify_geometry_for_window(window, true);
         self.needs_winit_redraw = true;
     }
 
@@ -1551,6 +1571,230 @@ impl CompositorState {
             return;
         };
         self.shell_move_end(wid);
+    }
+
+    pub(crate) fn shell_resize_is_active(&self) -> bool {
+        self.shell_resize_window_id.is_some()
+    }
+
+    pub(crate) fn shell_resize_end_active(&mut self) {
+        let Some(wid) = self.shell_resize_window_id else {
+            return;
+        };
+        self.shell_resize_end(wid);
+    }
+
+    pub(crate) fn shell_disconnect_end_resize_if_any(&mut self) {
+        let Some(wid) = self.shell_resize_window_id else {
+            return;
+        };
+        self.shell_resize_end(wid);
+    }
+
+    pub fn shell_resize_begin(&mut self, window_id: u32, edges_wire: u32) {
+        use crate::grabs::resize_grab::{resize_tracking_set_resizing, ResizeEdge as GrabResizeEdge};
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+
+        if let Some(mid) = self.shell_move_window_id {
+            self.shell_move_end(mid);
+        }
+        if self.shell_resize_window_id == Some(window_id) {
+            tracing::warn!(
+                target: "derp_shell_resize",
+                window_id,
+                "shell_resize_begin: already active (no-op)"
+            );
+            return;
+        }
+        if let Some(prev) = self.shell_resize_window_id {
+            self.shell_resize_end(prev);
+        }
+
+        let Some(edges) = GrabResizeEdge::from_bits(edges_wire) else {
+            tracing::warn!(
+                target: "derp_shell_resize",
+                edges_wire,
+                "shell_resize_begin: invalid edges"
+            );
+            return;
+        };
+        if edges.is_empty() {
+            return;
+        }
+
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            tracing::warn!(
+                target: "derp_shell_resize",
+                window_id,
+                "shell_resize_begin: unknown window"
+            );
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) {
+            tracing::warn!(
+                target: "derp_shell_resize",
+                window_id,
+                "shell_resize_begin: ignored (shell host)"
+            );
+            return;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            return;
+        };
+        let Some(loc) = self
+            .space
+            .element_location(&DerpSpaceElem::Wayland(window.clone()))
+        else {
+            return;
+        };
+        let geo = window.geometry();
+        let initial_rect = Rectangle::new(loc, geo.size);
+        let tl = window.toplevel().unwrap();
+        let wl = tl.wl_surface();
+        resize_tracking_set_resizing(wl, edges, initial_rect);
+        tl.with_pending_state(|state| {
+            state.states.set(xdg_toplevel::State::Resizing);
+        });
+        tl.send_pending_configure();
+
+        self.shell_resize_window_id = Some(window_id);
+        self.shell_resize_edges = Some(edges);
+        self.shell_resize_initial_rect = Some(initial_rect);
+        self.shell_resize_accum = (0.0, 0.0);
+
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        let k_serial = SERIAL_COUNTER.next_serial();
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Some(wl.clone()), k_serial);
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn shell_resize_delta(&mut self, dx: i32, dy: i32) {
+        use crate::grabs::resize_grab::compute_clamped_resize_size;
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+
+        let Some(wid) = self.shell_resize_window_id else {
+            return;
+        };
+        let Some(edges) = self.shell_resize_edges else {
+            return;
+        };
+        let Some(initial_rect) = self.shell_resize_initial_rect else {
+            return;
+        };
+        let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_edges = None;
+            self.shell_resize_initial_rect = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_edges = None;
+            self.shell_resize_initial_rect = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+
+        self.shell_resize_accum.0 += dx as f64;
+        self.shell_resize_accum.1 += dy as f64;
+
+        let tl = window.toplevel().unwrap();
+        let wl = tl.wl_surface();
+        let last_size = compute_clamped_resize_size(
+            wl,
+            edges,
+            initial_rect.size,
+            self.shell_resize_accum.0,
+            self.shell_resize_accum.1,
+        );
+
+        tl.with_pending_state(|state| {
+            state.states.set(xdg_toplevel::State::Resizing);
+            state.size = Some(last_size);
+        });
+        tl.send_pending_configure();
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn shell_resize_end(&mut self, window_id: u32) {
+        use crate::grabs::resize_grab::{
+            compute_clamped_resize_size, resize_tracking_set_waiting_last_commit,
+        };
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+
+        if self.shell_resize_window_id != Some(window_id) {
+            tracing::debug!(
+                target: "derp_shell_resize",
+                window_id,
+                active = ?self.shell_resize_window_id,
+                "shell_resize_end: ignored"
+            );
+            return;
+        }
+
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_edges = None;
+            self.shell_resize_initial_rect = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_edges = None;
+            self.shell_resize_initial_rect = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+
+        let Some(edges) = self.shell_resize_edges else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+        let Some(initial_rect) = self.shell_resize_initial_rect else {
+            self.shell_resize_window_id = None;
+            self.shell_resize_edges = None;
+            self.shell_resize_accum = (0.0, 0.0);
+            return;
+        };
+
+        let tl = window.toplevel().unwrap();
+        let wl = tl.wl_surface();
+        let last_size = compute_clamped_resize_size(
+            wl,
+            edges,
+            initial_rect.size,
+            self.shell_resize_accum.0,
+            self.shell_resize_accum.1,
+        );
+
+        tl.with_pending_state(|state| {
+            state.states.unset(xdg_toplevel::State::Resizing);
+            state.size = Some(last_size);
+        });
+        tl.send_pending_configure();
+        resize_tracking_set_waiting_last_commit(wl, edges, initial_rect);
+
+        self.shell_resize_window_id = None;
+        self.shell_resize_edges = None;
+        self.shell_resize_initial_rect = None;
+        self.shell_resize_accum = (0.0, 0.0);
+
+        self.needs_winit_redraw = true;
+        tracing::debug!(
+            target: "derp_shell_resize",
+            window_id,
+            "shell_resize_end: finished"
+        );
     }
 
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
@@ -1619,6 +1863,12 @@ impl CompositorState {
         let Some(window) = self.find_window_by_surface_id(sid) else {
             return;
         };
+        if self.shell_move_window_id == Some(window_id) {
+            self.shell_move_end(window_id);
+        }
+        if self.shell_resize_window_id == Some(window_id) {
+            self.shell_resize_end(window_id);
+        }
         window.toplevel().unwrap().send_close();
         self.needs_winit_redraw = true;
     }
@@ -1720,6 +1970,9 @@ impl CompositorState {
 
         if self.shell_move_window_id == Some(window_id) {
             self.shell_move_end(window_id);
+        }
+        if self.shell_resize_window_id == Some(window_id) {
+            self.shell_resize_end(window_id);
         }
 
         let _ = window.set_activated(false);
@@ -2010,7 +2263,7 @@ impl CompositorState {
             return;
         }
         let route = self.shell_pointer_route_to_cef(pos);
-        if !route && !self.shell_move_is_active() {
+        if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
         let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
@@ -2038,7 +2291,7 @@ impl CompositorState {
         let pointer = self.seat.get_pointer().unwrap();
         let pos = pointer.current_location();
         let route = self.shell_pointer_route_to_cef(pos);
-        if !route && !self.shell_move_is_active() {
+        if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
         let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
