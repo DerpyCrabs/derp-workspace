@@ -4,7 +4,7 @@
 //! - `u32 msg_type`, `u32 command_len`, then `command_len` UTF-8 bytes (no NUL).
 //!
 //! Compositor → shell process, same length-prefixed framing:
-//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_TOUCH`] (legacy; current session uses `wl_seat` only)
+//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_POINTER_AXIS`], [`MSG_COMPOSITOR_KEY`], [`MSG_COMPOSITOR_TOUCH`] (legacy; current session uses `wl_seat` only)
 //! - [`MSG_OUTPUT_GEOMETRY`]: logical size (DIP / layout) plus physical pixel size for HiDPI shell HUD math
 //! - [`MSG_WINDOW_MAPPED`], [`MSG_WINDOW_UNMAPPED`], [`MSG_WINDOW_GEOMETRY`], [`MSG_WINDOW_METADATA`], [`MSG_FOCUS_CHANGED`]
 //!
@@ -61,6 +61,16 @@ pub const MSG_SHELL_PONG: u32 = 30;
 
 /// Shell → compositor: dma-buf frame metadata (`drm_format` = raw DRM FourCC). Plane fds follow via `SCM_RIGHTS`.
 pub const MSG_FRAME_DMABUF_COMMIT: u32 = 33;
+/// Compositor → shell: mouse wheel / scroll (libinput pointer axis) at buffer-space `(x,y)`; `delta_*` are CEF wheel units (often same scale as libinput `amount_v120`).
+pub const MSG_COMPOSITOR_POINTER_AXIS: u32 = 34;
+/// Compositor → shell: keyboard for CEF OSR (`cef_event_flags_t` modifiers + CEF key event types).
+pub const MSG_COMPOSITOR_KEY: u32 = 35;
+
+/// CEF [`cef_key_event_type_t`] values (composite → shell → `cef_host`).
+pub const CEF_KEYEVENT_RAWKEYDOWN: u32 = 0;
+pub const CEF_KEYEVENT_KEYDOWN: u32 = 1;
+pub const CEF_KEYEVENT_KEYUP: u32 = 2;
+pub const CEF_KEYEVENT_CHAR: u32 = 3;
 
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
@@ -471,6 +481,8 @@ pub enum DecodedCompositorToShellMessage {
     PointerMove {
         x: i32,
         y: i32,
+        /// `cef_event_flags_t` bitfield (shift/ctrl/alt/meta, etc.).
+        modifiers: u32,
     },
     PointerButton {
         x: i32,
@@ -479,6 +491,7 @@ pub enum DecodedCompositorToShellMessage {
         mouse_up: bool,
         /// Compositor-assigned window id when this is a **left press** in the server titlebar-drag strip; `0` otherwise.
         titlebar_drag_window_id: u32,
+        modifiers: u32,
     },
     /// Buffer-space coords (same as pointer move); `touch_id` is the Wayland/libinput touch slot (`i32`, `-1` if unknown).
     Touch {
@@ -486,6 +499,23 @@ pub enum DecodedCompositorToShellMessage {
         phase: u32,
         x: i32,
         y: i32,
+    },
+    /// Scroll wheel / pointer axis at buffer-space `(x,y)`; forwarded to CEF [`send_mouse_wheel_event`].
+    PointerAxis {
+        x: i32,
+        y: i32,
+        delta_x: i32,
+        delta_y: i32,
+        modifiers: u32,
+    },
+    /// CEF [`KeyEvent`]: `cef_key_type` is [`CEF_KEYEVENT_RAWKEYDOWN`] etc.; UTF-16 code units in `character` / `unmodified_character`.
+    Key {
+        cef_key_type: u32,
+        modifiers: u32,
+        windows_key_code: i32,
+        native_key_code: i32,
+        character: u32,
+        unmodified_character: u32,
     },
     OutputGeometry {
         logical_w: u32,
@@ -532,13 +562,14 @@ pub enum DecodedCompositorToShellMessage {
     Ping,
 }
 
-pub fn encode_compositor_pointer_move(x: i32, y: i32) -> Vec<u8> {
-    let body_len = 12u32;
+pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
+    let body_len = 16u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_POINTER_MOVE.to_le_bytes());
     v.extend_from_slice(&x.to_le_bytes());
     v.extend_from_slice(&y.to_le_bytes());
+    v.extend_from_slice(&modifiers.to_le_bytes());
     v
 }
 
@@ -548,8 +579,9 @@ pub fn encode_compositor_pointer_button(
     button: u32,
     mouse_up: bool,
     titlebar_drag_window_id: u32,
+    modifiers: u32,
 ) -> Vec<u8> {
-    let body_len = 24u32;
+    let body_len = 28u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_POINTER_BUTTON.to_le_bytes());
@@ -558,6 +590,7 @@ pub fn encode_compositor_pointer_button(
     v.extend_from_slice(&button.to_le_bytes());
     v.extend_from_slice(&(if mouse_up { 1u32 } else { 0 }).to_le_bytes());
     v.extend_from_slice(&titlebar_drag_window_id.to_le_bytes());
+    v.extend_from_slice(&modifiers.to_le_bytes());
     v
 }
 
@@ -586,6 +619,46 @@ pub fn encode_compositor_touch(touch_id: i32, phase: u32, x: i32, y: i32) -> Vec
     v.extend_from_slice(&phase.to_le_bytes());
     v.extend_from_slice(&x.to_le_bytes());
     v.extend_from_slice(&y.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_pointer_axis(
+    x: i32,
+    y: i32,
+    delta_x: i32,
+    delta_y: i32,
+    modifiers: u32,
+) -> Vec<u8> {
+    let body_len = 24u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_POINTER_AXIS.to_le_bytes());
+    v.extend_from_slice(&x.to_le_bytes());
+    v.extend_from_slice(&y.to_le_bytes());
+    v.extend_from_slice(&delta_x.to_le_bytes());
+    v.extend_from_slice(&delta_y.to_le_bytes());
+    v.extend_from_slice(&modifiers.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_key(
+    cef_key_type: u32,
+    modifiers: u32,
+    windows_key_code: i32,
+    native_key_code: i32,
+    character: u32,
+    unmodified_character: u32,
+) -> Vec<u8> {
+    let body_len = 28u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_KEY.to_le_bytes());
+    v.extend_from_slice(&cef_key_type.to_le_bytes());
+    v.extend_from_slice(&modifiers.to_le_bytes());
+    v.extend_from_slice(&windows_key_code.to_le_bytes());
+    v.extend_from_slice(&native_key_code.to_le_bytes());
+    v.extend_from_slice(&character.to_le_bytes());
+    v.extend_from_slice(&unmodified_character.to_le_bytes());
     v
 }
 
@@ -671,15 +744,20 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
     let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
     match msg {
         MSG_COMPOSITOR_POINTER_MOVE => {
-            if body.len() != 12 {
+            if body.len() != 12 && body.len() != 16 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let x = i32::from_le_bytes(body[4..8].try_into().unwrap());
             let y = i32::from_le_bytes(body[8..12].try_into().unwrap());
-            Ok(DecodedCompositorToShellMessage::PointerMove { x, y })
+            let modifiers = if body.len() >= 16 {
+                u32::from_le_bytes(body[12..16].try_into().unwrap())
+            } else {
+                0
+            };
+            Ok(DecodedCompositorToShellMessage::PointerMove { x, y, modifiers })
         }
         MSG_COMPOSITOR_POINTER_BUTTON => {
-            if body.len() != 24 {
+            if body.len() != 24 && body.len() != 28 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let titlebar_drag_window_id = u32::from_le_bytes(body[20..24].try_into().unwrap());
@@ -690,12 +768,18 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             if button > 2 || up_flag > 1 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
+            let modifiers = if body.len() >= 28 {
+                u32::from_le_bytes(body[24..28].try_into().unwrap())
+            } else {
+                0
+            };
             Ok(DecodedCompositorToShellMessage::PointerButton {
                 x,
                 y,
                 button,
                 mouse_up: up_flag != 0,
                 titlebar_drag_window_id,
+                modifiers,
             })
         }
         MSG_COMPOSITOR_TOUCH => {
@@ -714,6 +798,49 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 phase,
                 x,
                 y,
+            })
+        }
+        MSG_COMPOSITOR_POINTER_AXIS => {
+            if body.len() != 20 && body.len() != 24 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let x = i32::from_le_bytes(body[4..8].try_into().unwrap());
+            let y = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let delta_x = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let delta_y = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let modifiers = if body.len() >= 24 {
+                u32::from_le_bytes(body[20..24].try_into().unwrap())
+            } else {
+                0
+            };
+            Ok(DecodedCompositorToShellMessage::PointerAxis {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                modifiers,
+            })
+        }
+        MSG_COMPOSITOR_KEY => {
+            if body.len() != 28 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let cef_key_type = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            if cef_key_type > 3 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let modifiers = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            let windows_key_code = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let native_key_code = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let character = u32::from_le_bytes(body[20..24].try_into().unwrap());
+            let unmodified_character = u32::from_le_bytes(body[24..28].try_into().unwrap());
+            Ok(DecodedCompositorToShellMessage::Key {
+                cef_key_type,
+                modifiers,
+                windows_key_code,
+                native_key_code,
+                character,
+                unmodified_character,
             })
         }
         MSG_OUTPUT_GEOMETRY => {
@@ -1071,7 +1198,7 @@ mod tests {
 
     #[test]
     fn round_trip_compositor_pointer_button_with_titlebar_id() {
-        let mut buf = encode_compositor_pointer_button(3, 4, 0, false, 99);
+        let mut buf = encode_compositor_pointer_button(3, 4, 0, false, 99, 8);
         match pop_compositor_to_shell_message(&mut buf).unwrap() {
             Some(DecodedCompositorToShellMessage::PointerButton {
                 x,
@@ -1079,8 +1206,12 @@ mod tests {
                 button,
                 mouse_up,
                 titlebar_drag_window_id,
+                modifiers,
             }) => {
-                assert_eq!((x, y, button, mouse_up, titlebar_drag_window_id), (3, 4, 0, false, 99));
+                assert_eq!(
+                    (x, y, button, mouse_up, titlebar_drag_window_id, modifiers),
+                    (3, 4, 0, false, 99, 8)
+                );
             }
             _ => panic!("expected PointerButton"),
         }
@@ -1089,15 +1220,30 @@ mod tests {
 
     #[test]
     fn round_trip_compositor_pointer_move() {
-        let mut buf = encode_compositor_pointer_move(42, -3);
+        let mut buf = encode_compositor_pointer_move(42, -3, 4);
         match pop_compositor_to_shell_message(&mut buf).unwrap() {
-            Some(DecodedCompositorToShellMessage::PointerMove { x, y }) => {
-                assert_eq!(x, 42);
-                assert_eq!(y, -3);
+            Some(DecodedCompositorToShellMessage::PointerMove { x, y, modifiers }) => {
+                assert_eq!((x, y, modifiers), (42, -3, 4));
             }
             _ => panic!("expected PointerMove"),
         }
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn decode_legacy_pointer_move_without_modifiers_field() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&12u32.to_le_bytes());
+        body.extend_from_slice(&MSG_COMPOSITOR_POINTER_MOVE.to_le_bytes());
+        body.extend_from_slice(&1i32.to_le_bytes());
+        body.extend_from_slice(&2i32.to_le_bytes());
+        let mut buf = body;
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::PointerMove { x, y, modifiers }) => {
+                assert_eq!((x, y, modifiers), (1, 2, 0));
+            }
+            _ => panic!("expected PointerMove"),
+        }
     }
 
     #[test]
@@ -1113,6 +1259,55 @@ mod tests {
                 assert_eq!((touch_id, phase, x, y), (-1, TOUCH_PHASE_PRESSED, 100, 200));
             }
             _ => panic!("expected Touch"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn round_trip_compositor_pointer_axis() {
+        let mut buf = encode_compositor_pointer_axis(10, 20, 0, -120, 2);
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::PointerAxis {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                modifiers,
+            }) => {
+                assert_eq!((x, y, delta_x, delta_y, modifiers), (10, 20, 0, -120, 2));
+            }
+            _ => panic!("expected PointerAxis"),
+        }
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn round_trip_compositor_key() {
+        let mut buf = encode_compositor_key(
+            CEF_KEYEVENT_CHAR,
+            4,
+            0,
+            0x61,
+            'z' as u32,
+            'z' as u32,
+        );
+        match pop_compositor_to_shell_message(&mut buf).unwrap() {
+            Some(DecodedCompositorToShellMessage::Key {
+                cef_key_type,
+                modifiers,
+                windows_key_code,
+                native_key_code,
+                character,
+                unmodified_character,
+            }) => {
+                assert_eq!(cef_key_type, CEF_KEYEVENT_CHAR);
+                assert_eq!(modifiers, 4);
+                assert_eq!(windows_key_code, 0);
+                assert_eq!(native_key_code, 0x61);
+                assert_eq!(character, 'z' as u32);
+                assert_eq!(unmodified_character, 'z' as u32);
+            }
+            _ => panic!("expected Key"),
         }
         assert!(buf.is_empty());
     }
@@ -1275,12 +1470,12 @@ mod tests {
     fn concatenated_compositor_pointer_messages_decode_in_order() {
         let mut buf = Vec::new();
         for i in 0i32..50 {
-            buf.extend(encode_compositor_pointer_move(i, -i));
+            buf.extend(encode_compositor_pointer_move(i, -i, 0));
         }
         for i in 0i32..50 {
             match pop_compositor_to_shell_message(&mut buf).unwrap() {
-                Some(DecodedCompositorToShellMessage::PointerMove { x, y }) => {
-                    assert_eq!((x, y), (i, -i));
+                Some(DecodedCompositorToShellMessage::PointerMove { x, y, modifiers }) => {
+                    assert_eq!((x, y, modifiers), (i, -i, 0));
                 }
                 other => panic!("expected PointerMove at {i}, got {other:?}"),
             }

@@ -1,6 +1,8 @@
 .shell-root {
   margin: 0;
   min-height: 100vh;
+  padding-bottom: 52px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -397,4 +399,118 @@
   opacity: 0.9;
   max-width: 22rem;
   line-height: 1.35;
+}
+
+/* Bottom taskbar + Programs flyout (above focused window chrome). */
+.shell-taskbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  z-index: 50000;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  background: hsla(210, 28%, 14%, 0.94);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.shell-taskbar__programs {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: hsl(0, 0%, 12%);
+  background: hsl(var(--shell-hue), 70%, 78%);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+
+.shell-taskbar__programs:hover {
+  filter: brightness(1.06);
+}
+
+.shell-programs-menu {
+  position: absolute;
+  left: 10px;
+  bottom: 48px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(420px, 55vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: hsla(210, 26%, 12%, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.shell-programs-menu__error,
+.shell-programs-menu__loading,
+.shell-programs-menu__empty {
+  margin: 0;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.shell-programs-menu__error {
+  color: hsl(0, 85%, 80%);
+}
+
+.shell-programs-menu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.shell-programs-menu__item {
+  margin: 0;
+  padding: 0;
+}
+
+.shell-programs-menu__entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.88rem;
+  color: hsl(0, 0%, 94%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.shell-programs-menu__entry:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shell-programs-menu__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-programs-menu__badge {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  background: rgba(255, 255, 255, 0.12);
+  opacity: 0.85;
 }

@@ -11,8 +11,8 @@ use std::{
 use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
+    backend::input::{KeyState, TouchSlot},
     backend::renderer::{gles::GlesRenderer, ImportDma},
-    backend::input::TouchSlot,
     backend::{
         renderer::element::{memory::MemoryRenderBuffer, Id},
         session::libseat::LibSeatSession,
@@ -22,7 +22,10 @@ use smithay::{
         utils::under_from_surface_tree,
         PopupManager, Window, WindowSurfaceType,
     },
-    input::{Seat, SeatState},
+    input::{
+        keyboard::{KeysymHandle, ModifiersState},
+        Seat, SeatState,
+    },
     reexports::{
         calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
         wayland_server::{
@@ -203,6 +206,10 @@ pub struct CompositorState {
     pub(crate) touch_abs_is_window_pixels: bool,
     /// Touch→pointer emulation: slot of the emulated finger (first finger only).
     pub(crate) touch_emulation_slot: Option<TouchSlot>,
+    /// First-finger touch is translated to [`shell_wire::MSG_COMPOSITOR_TOUCH`] (no synthetic LMB to CEF).
+    pub(crate) touch_routes_to_cef: bool,
+    /// Typing and shortcuts go to `cef_host` after interacting with the Solid shell layer.
+    pub(crate) shell_ipc_keyboard_to_cef: bool,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
@@ -320,6 +327,8 @@ impl CompositorState {
             shell_window_physical_px: (1, 1),
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
+            touch_routes_to_cef: false,
+            shell_ipc_keyboard_to_cef: false,
             shell_pointer_norm: None,
             shell_last_pointer_ipc_px: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
@@ -1656,7 +1665,88 @@ impl CompositorState {
         self.shell_frame_is_dmabuf = false;
         self.shell_dmabuf = None;
         self.shell_last_pointer_ipc_px = None;
+        self.touch_routes_to_cef = false;
         self.needs_winit_redraw = true;
+    }
+
+    /// Current keyboard → `cef_event_flags_t` (shift/control/alt/meta/caps/AltGr).
+    pub(crate) fn shell_cef_event_flags(&self) -> u32 {
+        let Some(kb) = self.seat.get_keyboard() else {
+            return 0;
+        };
+        Self::cef_flags_from_modifiers(&kb.modifier_state())
+    }
+
+    fn cef_flags_from_modifiers(m: &ModifiersState) -> u32 {
+        let mut f = 0u32;
+        if m.caps_lock {
+            f |= 1;
+        }
+        if m.shift {
+            f |= 2;
+        }
+        if m.ctrl {
+            f |= 4;
+        }
+        if m.alt {
+            f |= 8;
+        }
+        if m.logo {
+            f |= 128;
+        }
+        if m.iso_level3_shift {
+            f |= 4096;
+        }
+        f
+    }
+
+    pub(crate) fn shell_ipc_forward_keyboard_to_cef(
+        &mut self,
+        key_state: KeyState,
+        mods: &ModifiersState,
+        keysym: &KeysymHandle<'_>,
+    ) {
+        if self.shell_ipc_conn.is_disconnected() || !self.shell_has_frame {
+            return;
+        }
+        let sym = keysym.modified_sym();
+        let mods_u = Self::cef_flags_from_modifiers(mods);
+        let native = sym.raw() as i32;
+        match key_state {
+            KeyState::Pressed => {
+                self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
+                    shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
+                    mods_u,
+                    0,
+                    native,
+                    0,
+                    0,
+                ));
+                if let Some(ch) = sym.key_char() {
+                    if !ch.is_control() {
+                        let cu = ch as u32;
+                        self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
+                            shell_wire::CEF_KEYEVENT_CHAR,
+                            mods_u,
+                            0,
+                            native,
+                            cu,
+                            cu,
+                        ));
+                    }
+                }
+            }
+            KeyState::Released => {
+                self.shell_ipc_try_write(&shell_wire::encode_compositor_key(
+                    shell_wire::CEF_KEYEVENT_KEYUP,
+                    mods_u,
+                    0,
+                    native,
+                    0,
+                    0,
+                ));
+            }
+        }
     }
 
     /// Solid / CEF OSR is composited from dma-buf, not a Wayland surface under the cursor — forward moves to `cef_host`.
@@ -1675,7 +1765,37 @@ impl CompositorState {
             return;
         }
         self.shell_last_pointer_ipc_px = Some((bx, by));
-        self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(bx, by));
+        self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(
+            bx,
+            by,
+            self.shell_cef_event_flags(),
+        ));
+    }
+
+    /// Forward scroll / pointer axis to `cef_host` when the pointer is over the Solid shell (OSR).
+    pub(crate) fn shell_ipc_maybe_forward_pointer_axis(&mut self, delta_x: i32, delta_y: i32) {
+        if self.shell_ipc_conn.is_disconnected() || !self.shell_has_frame {
+            return;
+        }
+        if delta_x == 0 && delta_y == 0 {
+            return;
+        }
+        let pointer = self.seat.get_pointer().unwrap();
+        let pos = pointer.current_location();
+        let route = self.shell_pointer_route_to_cef(pos);
+        if !route && !self.shell_move_is_active() {
+            return;
+        }
+        let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
+            return;
+        };
+        self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_axis(
+            bx,
+            by,
+            delta_x,
+            delta_y,
+            self.shell_cef_event_flags(),
+        ));
     }
 
     /// Send compositor → `cef_host` message. No-op if shell IPC is disconnected.

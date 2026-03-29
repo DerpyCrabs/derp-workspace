@@ -3,8 +3,8 @@
 use std::sync::Mutex;
 
 use cef::{
-    Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, MouseButtonType, MouseEvent,
-    PointerType, TouchEvent, TouchEventType,
+    Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
+    MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
 };
 use serde_json::json;
 
@@ -228,7 +228,7 @@ pub fn apply_message(
                 }),
             );
         }
-        shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y } => {
+        shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
             let Ok(guard) = browser.lock() else {
                 return;
             };
@@ -250,7 +250,7 @@ pub fn apply_message(
             let ev = MouseEvent {
                 x: vx,
                 y: vy,
-                modifiers: 0,
+                modifiers,
             };
             host.send_mouse_move_event(Some(&ev), 0);
         }
@@ -260,6 +260,7 @@ pub fn apply_message(
             button,
             mouse_up,
             titlebar_drag_window_id: _,
+            modifiers,
         } => {
             let Ok(guard) = browser.lock() else {
                 return;
@@ -282,7 +283,7 @@ pub fn apply_message(
             let ev = MouseEvent {
                 x: vx,
                 y: vy,
-                modifiers: 0,
+                modifiers,
             };
             let ty = match button {
                 1 => MouseButtonType::MIDDLE,
@@ -292,6 +293,75 @@ pub fn apply_message(
             // OSR: Blink's last synthetic position must match the click or hit-testing targets the wrong node.
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_click_event(Some(&ev), ty, if mouse_up { 1 } else { 0 }, 1);
+        }
+        shell_wire::DecodedCompositorToShellMessage::PointerAxis {
+            x,
+            y,
+            delta_x,
+            delta_y,
+            modifiers,
+        } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            let Some(host) = b.host() else {
+                return;
+            };
+
+            let map_xy = |x: i32, y: i32| -> (i32, i32) {
+                view_state
+                    .lock()
+                    .map(|s| s.buffer_to_view(x, y))
+                    .unwrap_or((x, y))
+            };
+
+            let (vx, vy) = map_xy(x, y);
+            let ev = MouseEvent {
+                x: vx,
+                y: vy,
+                modifiers,
+            };
+            host.send_mouse_move_event(Some(&ev), 0);
+            // Libinput/Wayland axis signs are opposite of what Blink OSR expects for wheel deltas.
+            host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
+        }
+        shell_wire::DecodedCompositorToShellMessage::Key {
+            cef_key_type,
+            modifiers,
+            windows_key_code,
+            native_key_code,
+            character,
+            unmodified_character,
+        } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            let Some(host) = b.host() else {
+                return;
+            };
+
+            let ty = match cef_key_type {
+                shell_wire::CEF_KEYEVENT_RAWKEYDOWN => KeyEventType::RAWKEYDOWN,
+                shell_wire::CEF_KEYEVENT_KEYDOWN => KeyEventType::KEYDOWN,
+                shell_wire::CEF_KEYEVENT_KEYUP => KeyEventType::KEYUP,
+                shell_wire::CEF_KEYEVENT_CHAR => KeyEventType::CHAR,
+                _ => return,
+            };
+            let clamp_u16 = |v: u32| -> u16 { v.min(u32::from(u16::MAX)) as u16 };
+            let mut ev = KeyEvent::default();
+            ev.type_ = ty;
+            ev.modifiers = modifiers;
+            ev.windows_key_code = windows_key_code;
+            ev.native_key_code = native_key_code;
+            ev.character = clamp_u16(character);
+            ev.unmodified_character = clamp_u16(unmodified_character);
+            host.send_key_event(Some(&ev));
         }
         shell_wire::DecodedCompositorToShellMessage::Touch {
             touch_id,

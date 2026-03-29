@@ -1,6 +1,7 @@
 import { batch, createMemo, createSignal, onCleanup, onMount, For, Index, Show } from 'solid-js'
 import './App.css'
 import { ShellWindowFrame } from './ShellWindowFrame'
+import { Taskbar } from './Taskbar'
 
 declare global {
   interface Window {
@@ -482,17 +483,14 @@ function App() {
     if (spawnPoll !== undefined) clearInterval(spawnPoll)
   })
 
-  async function runNativeInCompositor() {
-    setSpawnClicks((c) => c + 1)
-    const cmd = spawnCommand().trim()
-    if (!cmd) {
-      setSpawnStatus('Enter a command above (e.g. foot).')
+  async function spawnInCompositor(cmd: string, emptyMessage = 'Empty command.') {
+    const trimmed = cmd.trim()
+    if (!trimmed) {
+      setSpawnStatus(emptyMessage)
       return
     }
-    if (shellWireSend('spawn', cmd)) {
-      setSpawnBusy(true)
-      setSpawnStatus(`Started: ${cmd}`)
-      setSpawnBusy(false)
+    if (shellWireSend('spawn', trimmed)) {
+      setSpawnStatus(`Started: ${trimmed}`)
       return
     }
     const url = window.__DERP_SPAWN_URL
@@ -506,14 +504,14 @@ function App() {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd }),
+        body: JSON.stringify({ command: trimmed }),
       })
       const text = await res.text()
       if (!res.ok) {
         setSpawnStatus(`Spawn failed (${res.status}): ${text}`)
         return
       }
-      setSpawnStatus(`Started: ${cmd}`)
+      setSpawnStatus(`Started: ${trimmed}`)
     } catch (e) {
       setSpawnStatus(`Network error: ${e}`)
     } finally {
@@ -521,9 +519,15 @@ function App() {
     }
   }
 
+  async function runNativeInCompositor() {
+    setSpawnClicks((c) => c + 1)
+    await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
+  }
+
   return (
     <main
       class="shell-root"
+      style={panelHueStyle()}
       ref={(el) => {
         mainRef = el
       }}
@@ -725,6 +729,8 @@ function App() {
           )
         })()}
       </div>
+
+      <Taskbar onLaunch={(exec) => void spawnInCompositor(exec)} />
     </main>
   )
 }

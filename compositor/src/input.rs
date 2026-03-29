@@ -18,6 +18,16 @@ use smithay::{
 
 use crate::{derp_space::DerpSpaceElem, state::CompositorState};
 
+/// Map libinput / Smithay pointer-axis values to integers for CEF [`send_mouse_wheel_event`].
+fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
+    if let Some(v) = discrete_v120 {
+        if v != 0.0 {
+            return (v.round() as i32).clamp(-6000, 6000);
+        }
+    }
+    ((amount * 40.0).round() as i32).clamp(-6000, 6000)
+}
+
 /// Ctrl+Alt+F*n* → Linux VT *n* (1..=12) for [`Session::change_vt`].
 fn vt_number_from_fkey(sym: u32) -> Option<i32> {
     match sym {
@@ -148,6 +158,7 @@ impl CompositorState {
                         self.shell_close_window(wid);
                     }
                 } else if let Some(window) = self.window_for_titlebar_drag_at(pos) {
+                    self.shell_ipc_keyboard_to_cef = false;
                     self.space
                         .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
                     keyboard.set_focus(
@@ -173,6 +184,7 @@ impl CompositorState {
                     }
                 });
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                self.shell_ipc_keyboard_to_cef = true;
             }
             pointer.button(
                 self,
@@ -194,6 +206,9 @@ impl CompositorState {
                 && !self.shell_ipc_conn.is_disconnected()
             {
                 if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    if button_state == ButtonState::Pressed {
+                        self.shell_ipc_keyboard_to_cef = true;
+                    }
                     const BTN_RIGHT: u32 = 0x111;
                     const BTN_MIDDLE: u32 = 0x112;
                     let shell_btn = match button {
@@ -202,14 +217,20 @@ impl CompositorState {
                         _ => 0u32,
                     };
                     let mouse_up = button_state == ButtonState::Released;
+                    let mod_flags = self.shell_cef_event_flags();
                     self.shell_last_pointer_ipc_px = Some((bx, by));
-                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(bx, by));
+                    self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_move(
+                        bx,
+                        by,
+                        mod_flags,
+                    ));
                     self.shell_ipc_try_write(&shell_wire::encode_compositor_pointer_button(
                         bx,
                         by,
                         shell_btn,
                         mouse_up,
                         0,
+                        mod_flags,
                     ));
                 }
             }
@@ -220,6 +241,7 @@ impl CompositorState {
         }
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+            self.shell_ipc_keyboard_to_cef = false;
             if let Some((elem, _loc)) = self
                 .space
                 .element_under(pointer.current_location())
@@ -309,6 +331,13 @@ impl CompositorState {
                                 return FilterResult::Intercept(());
                             }
                         }
+                        if state.shell_ipc_keyboard_to_cef
+                            && !state.shell_ipc_conn.is_disconnected()
+                            && state.shell_has_frame
+                        {
+                            state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym);
+                            return FilterResult::Intercept(());
+                        }
                         FilterResult::Forward
                     },
                 );
@@ -388,6 +417,13 @@ impl CompositorState {
                 let output_geo = self.space.output_geometry(output).unwrap();
                 self.touch_emulation_slot = Some(event.slot());
                 let local = self.touch_output_local(&event, output_geo);
+                let time = Event::time_msec(&event);
+                let pos = output_geo.loc.to_f64() + local;
+                let cef_touch = self.shell_pointer_route_to_cef(pos)
+                    && self.shell_has_frame
+                    && !self.shell_ipc_conn.is_disconnected()
+                    && self.shell_pointer_view_px(pos).is_some();
+                self.touch_routes_to_cef = cef_touch;
                 tracing::debug!(
                     target: "derp_input",
                     slot = ?event.slot(),
@@ -398,14 +434,24 @@ impl CompositorState {
                     touch_window_px = self.touch_abs_is_window_pixels,
                     shell_pw = self.shell_window_physical_px.0,
                     shell_ph = self.shell_window_physical_px.1,
-                    "TouchDown → emulate left press"
+                    cef_touch,
+                    "TouchDown"
                 );
-                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
-                self.process_pointer_button(
-                    0x110,
-                    ButtonState::Pressed,
-                    Event::time_msec(&event),
-                );
+                self.pointer_motion_output_local(output_geo, local, time);
+                if cef_touch {
+                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                        let tid = i32::from(event.slot());
+                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
+                            tid,
+                            shell_wire::TOUCH_PHASE_PRESSED,
+                            bx,
+                            by,
+                        ));
+                    }
+                    self.shell_ipc_keyboard_to_cef = true;
+                } else {
+                    self.process_pointer_button(0x110, ButtonState::Pressed, time);
+                }
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchMotion { event, .. } => {
@@ -430,6 +476,18 @@ impl CompositorState {
                     "TouchMotion"
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                if self.touch_routes_to_cef {
+                    let pos = output_geo.loc.to_f64() + local;
+                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                        let tid = i32::from(event.slot());
+                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
+                            tid,
+                            shell_wire::TOUCH_PHASE_MOVED,
+                            bx,
+                            by,
+                        ));
+                    }
+                }
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchUp { event, .. } => {
@@ -442,13 +500,24 @@ impl CompositorState {
                     );
                     return;
                 }
-                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp → emulate release");
+                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchUp");
+                let time = Event::time_msec(&event);
+                let pos = self.seat.get_pointer().unwrap().current_location();
+                if self.touch_routes_to_cef {
+                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                        let tid = i32::from(event.slot());
+                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
+                            tid,
+                            shell_wire::TOUCH_PHASE_RELEASED,
+                            bx,
+                            by,
+                        ));
+                    }
+                } else {
+                    self.process_pointer_button(0x110, ButtonState::Released, time);
+                }
                 self.touch_emulation_slot = None;
-                self.process_pointer_button(
-                    0x110,
-                    ButtonState::Released,
-                    Event::time_msec(&event),
-                );
+                self.touch_routes_to_cef = false;
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchCancel { event, .. } => {
@@ -461,13 +530,24 @@ impl CompositorState {
                     );
                     return;
                 }
-                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel → emulate release");
+                tracing::debug!(target: "derp_input", slot = ?event.slot(), "TouchCancel");
+                let time = Event::time_msec(&event);
+                let pos = self.seat.get_pointer().unwrap().current_location();
+                if self.touch_routes_to_cef {
+                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                        let tid = i32::from(event.slot());
+                        self.shell_ipc_try_write(&shell_wire::encode_compositor_touch(
+                            tid,
+                            shell_wire::TOUCH_PHASE_CANCELLED,
+                            bx,
+                            by,
+                        ));
+                    }
+                } else {
+                    self.process_pointer_button(0x110, ButtonState::Released, time);
+                }
                 self.touch_emulation_slot = None;
-                self.process_pointer_button(
-                    0x110,
-                    ButtonState::Released,
-                    Event::time_msec(&event),
-                );
+                self.touch_routes_to_cef = false;
                 self.needs_winit_redraw = true;
             }
             InputEvent::TouchFrame { .. } => {}
@@ -513,6 +593,10 @@ impl CompositorState {
                         frame = frame.stop(Axis::Vertical);
                     }
                 }
+
+                let delta_x = pointer_axis_to_cef_delta(horizontal_amount, horizontal_amount_discrete);
+                let delta_y = pointer_axis_to_cef_delta(vertical_amount, vertical_amount_discrete);
+                self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
 
                 let pointer = self.seat.get_pointer().unwrap();
                 pointer.axis(self, frame);

@@ -7,7 +7,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
 fn cors_headers() -> &'static str {
-    "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
+    "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
 }
 
 /// Spawn a background thread listening on `127.0.0.1:0`. Receive the port from the returned channel.
@@ -109,6 +109,12 @@ fn handle_one(
 
     if method.eq_ignore_ascii_case("OPTIONS") {
         write_http_no_content(stream).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && path == "/desktop_applications" {
+        let json = crate::desktop_apps::list_applications_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 

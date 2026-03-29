@@ -324,6 +324,7 @@ dependencies = [
  "drm-fourcc",
  "libc",
  "nix",
+ "serde",
  "serde_json",
  "shell_wire",
  "signal-hook",

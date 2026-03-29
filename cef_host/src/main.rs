@@ -21,6 +21,7 @@
 
 mod compositor_downlink;
 mod control_server;
+mod desktop_apps;
 mod shell_uplink;
 
 use std::{
