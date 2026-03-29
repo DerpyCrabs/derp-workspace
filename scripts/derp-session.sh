@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GDM/session entry: DRM compositor (+ optional cef_host shell). Install to /usr/local/bin/derp-session (755).
-# Requires: built `compositor` and (for overlay) `cef_host`, `shell/dist`, python3 for loopback HTTP.
+# Requires: built `compositor` and (for overlay) `cef_host`, `shell/dist` (Solid loads via file://).
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
 #
 # Logging: compositor + `--command` (cef_host) stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
@@ -31,19 +31,9 @@ COMPOSITOR_BIN="${COMPOSITOR_BIN:-/usr/local/bin/compositor}"
 CEF_HOST_BIN="${CEF_HOST_BIN:-/usr/local/bin/cef_host}"
 LAUNCHER="${DERP_CEF_LAUNCHER:-$ROOT/scripts/launch-cef-to-compositor.sh}"
 INDEX="${ROOT}/shell/dist/index.html"
-DIST="${ROOT}/shell/dist"
 SOCKET="${DERP_WAYLAND_SOCKET:-wayland-d$UID}"
 
-SHELL_HTTP_PID=""
 URL=""
-SHELL_PORT=""
-cleanup_shell_http() {
-  if [[ -n "${SHELL_HTTP_PID:-}" ]] && kill -0 "$SHELL_HTTP_PID" 2>/dev/null; then
-    kill "$SHELL_HTTP_PID" 2>/dev/null || true
-    wait "$SHELL_HTTP_PID" 2>/dev/null || true
-  fi
-}
-trap cleanup_shell_http EXIT INT TERM HUP
 
 # If Solid wasn’t built after clone, build it now so `cef_host` can start (same as install-system.sh).
 ensure_shell_dist() {
@@ -103,17 +93,11 @@ resolve_cef_dir() {
   printf '%s' "$rp"
 }
 
-# Loopback HTTP for shell/dist — one process for the whole GDM session (same port across SIGUSR2 reloads).
-start_shell_http_if_needed() {
+# Solid UI is a static Vite build (`base: './'`, no crossorigin on module scripts) — load from disk.
+resolve_shell_document_url_if_needed() {
   URL=""
-  SHELL_PORT=""
   [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$CEF_HOST_BIN" ]] || return 0
-  command -v python3 >/dev/null 2>&1 || return 0
-  SHELL_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-  ( cd "$DIST" && python3 -m http.server "$SHELL_PORT" --bind 127.0.0.1 >/dev/null 2>&1 ) &
-  SHELL_HTTP_PID=$!
-  sleep 0.2
-  URL="http://127.0.0.1:${SHELL_PORT}/index.html"
+  URL="file://${INDEX}"
 }
 
 # Rebuild compositor argv from current env + optional `derp-session.local.env` (for remote-update + SIGUSR2).
@@ -139,7 +123,7 @@ derp_session_build_args() {
   fi
 }
 
-start_shell_http_if_needed
+resolve_shell_document_url_if_needed
 
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
 DERP_COMPOSITOR_LOG="${DERP_COMPOSITOR_LOG:-$STATE_BASE/derp/compositor.log}"

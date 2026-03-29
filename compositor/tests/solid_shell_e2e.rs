@@ -12,12 +12,12 @@
 //! Set `DERP_SHELL_E2E_KEEP_SCREENSHOT=1` to copy the PNG to `target/solid_e2e_last.png` under
 //! the workspace root for manual inspection.
 //!
-//! Serves `shell/dist` with `python3 -m http.server` and loads `http://127.0.0.1:…/index.html`.
-//! Chromium does not reliably execute `type="module"` scripts from `file://`, which leaves the
-//! OSR buffer as the flat `background_color` (looks like a black/empty window).
+//! Loads `shell/dist/index.html` via `file://` (absolute path). The Vite build uses `base: './'` and
+//! strips `crossorigin` on scripts so ES modules work from `file://`. Paths with unusual characters
+//! may need RFC 8089 percent-encoding; typical workspace paths are fine.
 //!
-//! Requires `readelf` and `python3` on `PATH`. Clears `LD_LIBRARY_PATH` for `cef_host` so its
-//! `RUNPATH` selects the matching `libcef.so`.
+//! Requires `readelf` on `PATH`. Clears `LD_LIBRARY_PATH` for `cef_host` so its `RUNPATH` selects
+//! the matching `libcef.so`.
 //!
 //! Faster regression checks (no Chromium): `cargo test -p compositor --lib shell_osr` and
 //! `cargo test -p cef_host --lib`. This PNG/luma test is disabled: dma-buf frames are not read back to CPU for E2E yet.
@@ -26,9 +26,8 @@
 
 use std::{
     fs,
-    net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -57,34 +56,9 @@ fn workspace_shell_index() -> PathBuf {
     workspace_root().join("shell/dist/index.html")
 }
 
-fn workspace_shell_dist() -> PathBuf {
-    workspace_root().join("shell/dist")
-}
-
-/// Free TCP port on loopback (race window is OK for this integration test).
-fn pick_localhost_port() -> u16 {
-    let listener =
-        TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind 127.0.0.1:0");
-    listener.local_addr().expect("local_addr").port()
-}
-
-fn spawn_shell_http(dist: &Path) -> (Child, u16) {
-    let port = pick_localhost_port();
-    let child = Command::new("python3")
-        .args([
-            "-m",
-            "http.server",
-            &port.to_string(),
-            "--bind",
-            "127.0.0.1",
-        ])
-        .current_dir(dist)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("python3 -m http.server (install Python 3 for Solid E2E)");
-    thread::sleep(Duration::from_millis(200));
-    (child, port)
+fn shell_index_file_url(index: &Path) -> String {
+    let abs = index.canonicalize().unwrap_or_else(|_| index.to_path_buf());
+    format!("file://{}", abs.display())
 }
 
 fn workspace_target_debug_bin(name: &str) -> PathBuf {
@@ -208,14 +182,7 @@ fn solid_shell_overlay_drawn() {
     let runtime = dir.path();
     let status_path = runtime.join("shell_e2e_status.json");
     let screenshot_path = runtime.join("solid_shell_overlay.png");
-    let dist = workspace_shell_dist();
-    assert!(
-        dist.is_dir(),
-        "missing {} — run: (cd shell && npm run build)",
-        dist.display()
-    );
-    let (mut httpd, port) = spawn_shell_http(&dist);
-    let url = format!("http://127.0.0.1:{port}/index.html");
+    let url = shell_index_file_url(&index);
 
     let compositor_bin = env!("CARGO_BIN_EXE_compositor");
     let mut compositor = Command::new(compositor_bin)
@@ -246,7 +213,7 @@ fn solid_shell_overlay_drawn() {
         .env_remove("LD_LIBRARY_PATH")
         .args([
             "--url",
-            &url,
+            url.as_str(),
             "--compositor-socket",
             SHELL_SOCK,
             "--width",
@@ -269,8 +236,6 @@ fn solid_shell_overlay_drawn() {
     let _ = cef_host.wait();
     let _ = compositor.kill();
     let _ = compositor.wait();
-    let _ = httpd.kill();
-    let _ = httpd.wait();
 
     assert!(
         screenshot_path.is_file(),
