@@ -4,7 +4,7 @@
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
 #
 # Logging: compositor stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
-# The compositor binary uses RUST_LOG from the environment (see derp_session_merge_rust_log); unset falls back to warn,derp_input=debug,derp_shell_osr=info inside the binary.
+# The compositor binary uses RUST_LOG from the environment; unset defaults to `warn` only (see derp_session_merge_rust_log + compositor main).
 # Unless DERP_COMPOSITOR_LOG_APPEND=1: the log is truncated at each compositor start (GDM login and each
 # supervisor respawn after exit 42). Override path with DERP_COMPOSITOR_LOG=...
 #
@@ -65,12 +65,7 @@ derp_session_source_local_env() {
 
 derp_session_merge_rust_log() {
   if [[ -z "${RUST_LOG:-}" ]]; then
-    export RUST_LOG="warn,derp_input=debug,derp_shell_osr=info"
-  elif [[ "${RUST_LOG}" != *derp_input=* ]]; then
-    export RUST_LOG="${RUST_LOG},derp_input=debug"
-  fi
-  if [[ "${RUST_LOG}" != *derp_shell_osr=* ]]; then
-    export RUST_LOG="${RUST_LOG},derp_shell_osr=info"
+    export RUST_LOG="warn"
   fi
   if [[ "${DERP_PERF_SESSION:-0}" == "1" ]]; then
     if [[ "${RUST_LOG}" != *derp_shell_sync=* ]]; then

@@ -60,6 +60,7 @@ type LayoutScreen = {
   width: number
   height: number
   transform: number
+  refresh_milli_hz: number
 }
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
@@ -81,6 +82,7 @@ function screensListForLayout(rows: LayoutScreen[], canvas: { w: number; h: numb
         name: '',
         x: 0,
         y: 0,
+        refresh_milli_hz: 0,
         width: canvas.w,
         height: canvas.h,
         transform: 0,
@@ -88,6 +90,13 @@ function screensListForLayout(rows: LayoutScreen[], canvas: { w: number; h: numb
     ]
   }
   return []
+}
+
+function monitorRefreshLabel(milli: number): string {
+  if (!milli || milli <= 0) return '—'
+  const hz = milli / 1000
+  const t = hz.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
+  return `${t} Hz`
 }
 
 function unionBBoxFromScreens(rows: LayoutScreen[]): { x: number; y: number; w: number; h: number } | null {
@@ -128,6 +137,7 @@ type DerpShellDetail =
         width: number
         height: number
         transform: number
+        refresh_milli_hz?: number
       }>
     }
   | {
@@ -449,6 +459,7 @@ function App() {
         width: cw,
         height: ch,
         transform: 0,
+        refresh_milli_hz: 0,
       }
       return { primary: single, secondary: [] as LayoutScreen[] }
     }
@@ -711,6 +722,7 @@ function App() {
               width: s.width,
               height: s.height,
               transform: s.transform,
+              refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
             })),
           )
         })
@@ -1120,7 +1132,8 @@ function App() {
                           <li class="shell-monitor-list__item">
                             <span class="shell-monitor-list__name">{row.name || '—'}</span>
                             <span class="shell-monitor-list__meta">
-                              @ {row.x},{row.y} · {row.width}×{row.height} · orientation {row.transform}
+                              @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
+                              {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
                             </span>
                           </li>
                         )}
@@ -1181,7 +1194,7 @@ function App() {
                               />
                             </label>
                             <span class="shell-screen-hint">
-                              {row.width}×{row.height}
+                              {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
                             </span>
                           </div>
                         )}

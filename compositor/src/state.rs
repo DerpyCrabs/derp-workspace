@@ -523,7 +523,7 @@ impl CompositorState {
             .dmabuf_state
             .create_global::<Self>(&self.display_handle, formats);
         self.dmabuf_global = Some(global);
-        tracing::info!("linux-dmabuf global created (native client buffers)");
+        tracing::debug!("linux-dmabuf global created (native client buffers)");
     }
 
     /// DRM session handle for **Ctrl+Alt+F1–F12** VT switching ([`crate::input`]).
@@ -1053,7 +1053,7 @@ impl CompositorState {
 
     /// When title/app_id becomes that of the Solid host after an earlier map with empty metadata, retract the phantom HUD entry.
     pub(crate) fn shell_retract_phantom_shell_window(&mut self, window_id: u32) {
-        tracing::info!(
+        tracing::debug!(
             target: "derp_shell_sync",
             window_id,
             "shell ipc WindowUnmapped (retract phantom shell host)"
@@ -1107,7 +1107,7 @@ impl CompositorState {
         // Filter compositor.log with: `derp_shell_sync` (see scripts/list-derp-logs.sh).
         match &ipc_event {
             ChromeEvent::WindowMapped { info } if !suppress => {
-                tracing::info!(
+                tracing::debug!(
                     target: "derp_shell_sync",
                     window_id = info.window_id,
                     surface_id = info.surface_id,
@@ -1145,7 +1145,7 @@ impl CompositorState {
                 );
             }
             ChromeEvent::WindowUnmapped { window_id } if !suppress => {
-                tracing::info!(
+                tracing::debug!(
                     target: "derp_shell_sync",
                     window_id,
                     "shell ipc WindowUnmapped"
@@ -1315,6 +1315,8 @@ impl CompositorState {
             .filter_map(|o| {
                 let g = self.space.output_geometry(o)?;
                 let tf = o.current_transform();
+                let mode = o.current_mode()?;
+                let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
                     x: g.loc.x,
@@ -1322,6 +1324,7 @@ impl CompositorState {
                     w: u32::try_from(g.size.w).ok()?.max(1),
                     h: u32::try_from(g.size.h).ok()?.max(1),
                     transform: transform_to_wire(tf),
+                    refresh_milli_hz,
                 })
             })
             .collect();
@@ -2871,7 +2874,7 @@ impl CompositorState {
             .env("XDG_RUNTIME_DIR", runtime)
             .stdin(Stdio::null());
         let child = cmd.spawn().map_err(|e| e.to_string())?;
-        tracing::info!(pid = child.id(), "spawned Wayland client via shell IPC");
+        tracing::debug!(pid = child.id(), "spawned Wayland client via shell IPC");
         Ok(())
     }
 }

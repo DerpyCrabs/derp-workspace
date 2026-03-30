@@ -205,6 +205,7 @@ pub struct OutputLayoutScreen {
     pub w: u32,
     pub h: u32,
     pub transform: u32,
+    pub refresh_milli_hz: u32,
 }
 
 pub fn encode_output_layout(
@@ -224,7 +225,7 @@ pub fn encode_output_layout(
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES {
             return None;
         }
-        body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(24)?;
+        body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(28)?;
     }
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
@@ -248,6 +249,7 @@ pub fn encode_output_layout(
         v.extend_from_slice(&s.w.to_le_bytes());
         v.extend_from_slice(&s.h.to_le_bytes());
         v.extend_from_slice(&s.transform.to_le_bytes());
+        v.extend_from_slice(&s.refresh_milli_hz.to_le_bytes());
     }
     Some(v)
 }
@@ -297,7 +299,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
-        if off + nl + 24 > body.len() {
+        if off + nl + 28 > body.len() {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
         let name = std::str::from_utf8(&body[off..off + nl])
@@ -309,7 +311,8 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         let w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
         let h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
         let transform = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
-        off += 20;
+        let refresh_milli_hz = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
+        off += 24;
         screens.push(OutputLayoutScreen {
             name,
             x,
@@ -317,6 +320,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             w,
             h,
             transform,
+            refresh_milli_hz,
         });
     }
     if off != body.len() {

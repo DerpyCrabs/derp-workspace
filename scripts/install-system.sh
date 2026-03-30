@@ -16,7 +16,7 @@
 #
 # Rendering / OSR debug (optional):
 #   Export DERP_PERF_SESSION=1 before GDM login (e.g. ~/.config/environment.d/derp-perf.conf with
-#   DERP_PERF_SESSION=1) so scripts/derp-session.sh appends shell_ipc=trace to RUST_LOG and sets
+#   DERP_PERF_SESSION=1) so scripts/derp-session.sh appends derp_shell_sync=trace to RUST_LOG and sets
 #   CEF_HOST_PERF=1 for cef_host. Logs: DERP_COMPOSITOR_LOG (default ~/.local/state/derp/compositor.log).
 #   Deploy to a test host: bash scripts/remote-update-and-restart.sh
 #   Fetch logs: bash scripts/list-derp-logs.sh -n 2000  (uses scripts/remote-install.env)

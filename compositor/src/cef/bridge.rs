@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use cef::{post_task, wrap_task, rc::Rc, Browser, ImplTask, Task, ThreadId, WrapTask};
+use cef::{
+    post_task, wrap_task, rc::Rc, Browser, ImplBrowser, ImplBrowserHost, ImplTask, Task, ThreadId,
+    WrapTask,
+};
 
 use smithay::reexports::calloop::channel::Sender;
 
@@ -22,6 +25,27 @@ wrap_task! {
                 &self.browser_holder,
                 &self.view_state,
             );
+        }
+    }
+}
+
+wrap_task! {
+    struct ExternalBeginFrameTask {
+        browser_holder: Arc<Mutex<Option<Browser>>>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            let Ok(guard) = self.browser_holder.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            if let Some(host) = b.host() {
+                host.send_external_begin_frame();
+                crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
+            }
         }
     }
 }
@@ -63,6 +87,12 @@ impl ShellToCefLink {
             self.view_state.clone(),
             msg,
         );
+        let _ = post_task(ThreadId::UI, Some(&mut task));
+    }
+
+    pub fn schedule_external_begin_frame(&self) {
+        crate::cef::begin_frame_diag::note_schedule_from_compositor();
+        let mut task = ExternalBeginFrameTask::new(self.browser_holder.clone());
         let _ = post_task(ThreadId::UI, Some(&mut task));
     }
 }

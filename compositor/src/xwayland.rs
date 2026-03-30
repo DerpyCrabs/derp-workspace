@@ -10,7 +10,7 @@ pub fn spawn_pending_sidecar(data: &mut CalloopData) {
         match sidecar::spawn_shell_command_line(&cmd) {
             Ok(child) => {
                 data.command_child = Some(child);
-                tracing::info!("spawned --command sidecar");
+                tracing::debug!("spawned --command sidecar");
             }
             Err(e) => tracing::warn!(%e, "failed to spawn --command"),
         }
@@ -32,7 +32,7 @@ pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut Calloo
     let loop_handle: LoopHandle<'static, CalloopData> =
         unsafe { std::mem::transmute(event_loop.handle().clone()) };
 
-    tracing::info!("XWayland subprocess spawned (waiting for DISPLAY; needs `Xwayland` on PATH)");
+    tracing::debug!("XWayland subprocess spawned (waiting for DISPLAY; needs `Xwayland` on PATH)");
 
     event_loop
         .handle()
@@ -43,7 +43,7 @@ pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut Calloo
                     display_number,
                 } => {
                     std::env::set_var("DISPLAY", format!(":{}", display_number));
-                    tracing::info!(
+                    tracing::debug!(
                         display = display_number,
                         "XWayland ready; DISPLAY set for OSR / child processes"
                     );

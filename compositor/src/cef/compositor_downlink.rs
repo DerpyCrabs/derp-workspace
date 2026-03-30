@@ -93,6 +93,7 @@ pub fn apply_message(
                         "width": s.w,
                         "height": s.h,
                         "transform": s.transform,
+                        "refresh_milli_hz": s.refresh_milli_hz,
                     })
                 })
                 .collect();

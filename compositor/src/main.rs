@@ -44,13 +44,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("warn,derp_input=debug,derp_shell_osr=info")
+        tracing_subscriber::EnvFilter::new("warn")
     });
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .init();
 
-    tracing::warn!(
+    tracing::debug!(
         target: "derp_shell_sync",
         "compositor startup"
     );
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let state = CompositorState::new(&mut event_loop, display, init);
-    tracing::info!(socket = ?state.socket_name, "Compositor listening");
+    tracing::debug!(socket = ?state.socket_name, "Compositor listening");
 
     let mut data = CalloopData {
         state,
@@ -124,11 +124,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(sig) = signals.forever().next() {
                     if sig == SIGUSR2 {
                         request_restart_thread.store(true, Ordering::SeqCst);
-                        tracing::info!(
+                        tracing::warn!(
                             "SIGUSR2: graceful stop for reload (exit 42 after --command teardown)"
                         );
                     } else {
-                        tracing::info!(
+                        tracing::debug!(
                             sig,
                             "caught, stopping compositor and tearing down --command"
                         );

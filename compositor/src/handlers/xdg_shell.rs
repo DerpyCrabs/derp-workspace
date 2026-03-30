@@ -81,7 +81,7 @@ impl XdgShellHandler for CompositorState {
         } else {
             self.new_toplevel_initial_location()
         };
-        tracing::info!(
+        tracing::debug!(
             target: "derp_shell_sync",
             window_id = info.window_id,
             surface_id = info.surface_id,

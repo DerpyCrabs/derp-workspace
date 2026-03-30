@@ -47,7 +47,7 @@ use smithay::reexports::{
     rustix::fs::OFlags,
 };
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{DeviceFd, Physical, Rectangle, Size, Transform};
+use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
 use tracing::{debug, error, info, warn};
 
 const DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN: usize = 32;
@@ -280,6 +280,7 @@ pub struct DrmSession {
     pub drm: DrmDevice,
     pub renderer: Arc<Mutex<GlesRenderer>>,
     pub heads: Vec<DrmHead>,
+    cef_begin_frame_drm_serial: u64,
     libinput: Libinput,
     loop_handle: LoopHandle<'static, CalloopData>,
     _egl_display: EGLDisplay,
@@ -318,6 +319,18 @@ impl DrmSession {
             return;
         }
 
+        crate::cef::begin_frame_diag::note_drm_render_tick();
+
+        self.cef_begin_frame_drm_serial = self.cef_begin_frame_drm_serial.wrapping_add(1);
+        let n = self.heads.len().max(1) as u64;
+        if self.cef_begin_frame_drm_serial % n == 0 {
+            if let Ok(g) = state.shell_to_cef.lock() {
+                if let Some(link) = g.as_ref() {
+                    link.schedule_external_begin_frame();
+                }
+            }
+        }
+
         let renderer = self.renderer.clone();
         let loop_handle = self.loop_handle.clone();
         let drm_ref = &self.drm;
@@ -331,6 +344,8 @@ impl DrmSession {
 
         let _ = any_advanced;
         state.needs_winit_redraw = false;
+
+        crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 
         state.space.refresh();
         state.popups.cleanup();
@@ -560,11 +575,7 @@ pub fn init_drm(
         )
         .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
 
-        let (mw, mh) = drm_mode.size();
-        let mode = OutputMode {
-            size: Size::from((mw as i32, mh as i32)),
-            refresh: (drm_mode.vrefresh() as i32).saturating_mul(1000).max(1),
-        };
+        let mode = OutputMode::from(drm_mode);
         let output = Output::new(
             output_name.clone(),
             PhysicalProperties {
@@ -638,6 +649,7 @@ pub fn init_drm(
         drm,
         renderer,
         heads,
+        cef_begin_frame_drm_serial: 0,
         libinput: libinput_context,
         loop_handle: loop_handle_static,
         _egl_display: egl_display,

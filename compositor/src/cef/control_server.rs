@@ -17,7 +17,7 @@ fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<u16>) {
     let listener = match TcpListener::bind("127.0.0.1:0") {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("compositor cef: control server bind: {e}");
+            tracing::error!("compositor cef: control server bind: {e}");
             return;
         }
     };

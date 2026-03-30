@@ -1,3 +1,4 @@
+pub(crate) mod begin_frame_diag;
 mod bridge;
 pub mod compositor_tx;
 mod compositor_downlink;

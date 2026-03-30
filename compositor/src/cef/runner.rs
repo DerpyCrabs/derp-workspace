@@ -143,9 +143,12 @@ wrap_load_handler! {
             let main = frame.map(|f| f.is_main() == 1).unwrap_or(false);
             let text = error_text.map(ToString::to_string).unwrap_or_default();
             let url = failed_url.map(ToString::to_string).unwrap_or_default();
-            eprintln!(
-                "cef: on_load_error (main_frame={main}) code={} text={text:?} url={url:?}",
-                error_code.get_raw(),
+            tracing::warn!(
+                main_frame = main,
+                code = error_code.get_raw(),
+                text = %text,
+                url = %url,
+                "cef: on_load_error"
             );
         }
 
@@ -274,13 +277,14 @@ wrap_render_handler! {
             let w = info.extra.coded_size.width as u32;
             let h = info.extra.coded_size.height as u32;
             FIRST_ACCELERATED_PAINT_LOG.call_once(|| {
-                eprintln!(
-                    "cef: OnAcceleratedPaint dma-buf {}x{} planes={} drm_format={:#x} modifier={:#x}",
+                tracing::debug!(
+                    target: "derp_shell_osr",
                     w,
                     h,
-                    pc,
-                    drm_fmt,
-                    info.modifier
+                    planes = pc,
+                    drm_format = drm_fmt,
+                    modifier = info.modifier,
+                    "cef: OnAcceleratedPaint dma-buf"
                 );
             });
             SHELL_USE_ACCELERATED_FRAMES.store(true, Ordering::Relaxed);
@@ -307,7 +311,7 @@ wrap_render_handler! {
                 &fds,
                 dirty_buffer,
             ) {
-                eprintln!("cef: dma-buf frame: {e}");
+                tracing::warn!(target: "derp_shell_osr", "cef: dma-buf frame: {e}");
             }
         }
 
@@ -366,11 +370,26 @@ wrap_display_handler! {
             };
             let text = msg.to_string();
             let src = source.map(|s| s.to_string()).unwrap_or_default();
-            eprintln!(
-                "cef_js_console: sev={} line={} src={src:?} msg={text}",
-                level.get_raw(),
-                line
-            );
+            let raw = level.get_raw();
+            if raw >= LogSeverity::WARNING.get_raw() {
+                tracing::warn!(
+                    target: "derp_shell_js",
+                    raw_sev = raw,
+                    line,
+                    src = %src,
+                    msg = %text,
+                    "cef_js_console"
+                );
+            } else {
+                tracing::debug!(
+                    target: "derp_shell_js",
+                    raw_sev = raw,
+                    line,
+                    src = %src,
+                    msg = %text,
+                    "cef_js_console"
+                );
+            }
             0
         }
     }
@@ -470,13 +489,14 @@ fn run_cef(
     shell_slot: Arc<Mutex<Option<Arc<ShellToCefLink>>>>,
     handshake: Arc<AtomicBool>,
 ) {
-    eprintln!("cef: dma-buf OSR (in-process)");
+    tracing::debug!(target: "derp_shell_osr", "cef: dma-buf OSR (in-process)");
     #[cfg(target_os = "linux")]
     {
-        eprintln!(
-            "cef: --use-angle=gl-egl --ozone-platform=wayland DISPLAY={:?} WAYLAND_DISPLAY={:?}",
-            std::env::var_os("DISPLAY"),
-            std::env::var_os("WAYLAND_DISPLAY")
+        tracing::debug!(
+            target: "derp_shell_osr",
+            display = ?std::env::var_os("DISPLAY"),
+            wayland_display = ?std::env::var_os("WAYLAND_DISPLAY"),
+            "cef: ANGLE/Wayland env"
         );
     }
     let cef_path = std::env::var("CEF_PATH").ok().map(PathBuf::from);
@@ -485,7 +505,7 @@ fn run_cef(
     settings.no_sandbox = 1;
     settings.windowless_rendering_enabled = 1;
     settings.external_message_pump = 1;
-    settings.log_severity = LogSeverity::INFO;
+    settings.log_severity = LogSeverity::WARNING;
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(s) = exe.to_str() {
@@ -516,10 +536,11 @@ fn run_cef(
     );
     if init_ret != 1 {
         let exit_code = get_exit_code();
-        eprintln!(
-            "cef: CefInitialize failed (ret={init_ret}, exit_code={exit_code}), cache={}\n\
-             hints: CEF_PATH must match this build's libcef (Resources/, locales/)",
-            cef_cache.display()
+        tracing::error!(
+            ret = init_ret,
+            exit_code,
+            cache = %cef_cache.display(),
+            "cef: CefInitialize failed; CEF_PATH must match libcef (Resources/, locales/)"
         );
         return;
     }
@@ -527,7 +548,7 @@ fn run_cef(
     let uplink = UplinkToCompositor::new(cef_tx.clone());
     let control_rx = crate::cef::control_server::start(uplink.clone());
     let port = control_rx.recv().unwrap_or_else(|_| {
-        eprintln!("cef: control server thread exited before binding");
+        tracing::error!("cef: control server thread exited before binding");
         0
     });
     let inject_js = format!(
@@ -577,7 +598,12 @@ fn run_cef(
     window_info.bounds.width = init_w;
     window_info.bounds.height = init_h;
     window_info.shared_texture_enabled = 1;
-    let window_info = window_info.set_as_windowless(0);
+    let mut window_info = window_info.set_as_windowless(0);
+    window_info.external_begin_frame_enabled = 1;
+    tracing::debug!(
+        target: "derp_cef_begin_frame",
+        "browser create: window_info.external_begin_frame_enabled=1 (compositor drives BeginFrame)"
+    );
 
     let mut browser_settings = BrowserSettings::default();
     browser_settings.windowless_frame_rate = 120;
@@ -596,7 +622,7 @@ fn run_cef(
     if flag::register(SIGINT, Arc::clone(&shutdown_requested)).is_err()
         || flag::register(SIGTERM, Arc::clone(&shutdown_requested)).is_err()
     {
-        eprintln!("cef: warning: could not register SIGINT/SIGTERM handlers");
+        tracing::warn!("cef: could not register SIGINT/SIGTERM handlers");
     }
 
     while !shutdown_requested.load(Ordering::Relaxed) {

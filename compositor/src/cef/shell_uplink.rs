@@ -73,27 +73,27 @@ fn handle_uplink_list(
         }
         "move_begin" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-move] cef uplink: move_begin window_id={wid}");
+            tracing::debug!(target: "derp_shell_move", wid, "cef uplink: move_begin");
             reset_drag_invalidate_throttle();
             uplink.shell_move_begin(wid);
         }
         "move_delta" => {
             let dx = args.int(1) as i32;
             let dy = args.int(2) as i32;
-            eprintln!("[derp-shell-move] cef uplink: move_delta dx={dx} dy={dy}");
+            tracing::debug!(target: "derp_shell_move", dx, dy, "cef uplink: move_delta");
             uplink.shell_move_delta(dx, dy);
             maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "move_end" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-move] cef uplink: move_end window_id={wid}");
+            tracing::debug!(target: "derp_shell_move", wid, "cef uplink: move_end");
             uplink.shell_move_end(wid);
             invalidate_shell_view_unthrottled(browser);
         }
         "resize_begin" => {
             let wid = args.int(1) as u32;
             let edges = args.int(2) as u32;
-            eprintln!("[derp-shell-resize] cef uplink: resize_begin window_id={wid} edges={edges}");
+            tracing::debug!(target: "derp_shell_resize", wid, edges, "cef uplink: resize_begin");
             reset_drag_invalidate_throttle();
             if shell_wire::encode_shell_resize_begin(wid, edges).is_some() {
                 uplink.shell_resize_begin(wid, edges);
@@ -102,13 +102,13 @@ fn handle_uplink_list(
         "resize_delta" => {
             let dx = args.int(1) as i32;
             let dy = args.int(2) as i32;
-            eprintln!("[derp-shell-resize] cef uplink: resize_delta dx={dx} dy={dy}");
+            tracing::debug!(target: "derp_shell_resize", dx, dy, "cef uplink: resize_delta");
             uplink.shell_resize_delta(dx, dy);
             maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "resize_end" => {
             let wid = args.int(1) as u32;
-            eprintln!("[derp-shell-resize] cef uplink: resize_end window_id={wid}");
+            tracing::debug!(target: "derp_shell_resize", wid, "cef uplink: resize_end");
             uplink.shell_resize_end(wid);
             invalidate_shell_view_unthrottled(browser);
         }
@@ -525,7 +525,11 @@ wrap_render_process_handler! {
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
-            eprintln!("cef: __derpShellWireSend bound (frame is_main={is_main})");
+            tracing::debug!(
+                target: "derp_shell_osr",
+                is_main,
+                "cef: __derpShellWireSend bound"
+            );
         }
     }
 }
