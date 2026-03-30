@@ -42,7 +42,8 @@ declare global {
         | 'set_fullscreen'
         | 'set_maximized'
         | 'presentation_fullscreen'
-        | 'set_output_layout',
+        | 'set_output_layout'
+        | 'set_ui_scale',
       arg?: number | string,
       arg2?: number,
       arg3?: number,
@@ -352,7 +353,8 @@ function shellWireSend(
     | 'set_fullscreen'
     | 'set_maximized'
     | 'presentation_fullscreen'
-    | 'set_output_layout',
+    | 'set_output_layout'
+    | 'set_ui_scale',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -399,6 +401,8 @@ function shellWireSend(
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'set_ui_scale' && typeof arg === 'number') {
+    fn(op, arg)
   } else {
     fn(op, arg)
   }
@@ -434,6 +438,7 @@ function App() {
   const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
+  const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150>(150)
 
   const rulerStepPx = 100
 
@@ -712,6 +717,15 @@ function App() {
             setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
           } else {
             setLayoutCanvasOrigin(null)
+          }
+          {
+            const lw = Math.max(1, d.canvas_logical_width)
+            const pw = Math.max(1, d.canvas_physical_width)
+            let pct = Math.round((pw / lw) * 100)
+            if (pct !== 100 && pct !== 150) {
+              pct = pct > 120 ? 150 : 100
+            }
+            setUiScalePercent(pct as 100 | 150)
           }
           setScreenDraft(
             'rows',
@@ -1118,6 +1132,33 @@ function App() {
                   </span>
                   <div class="shell-screens-panel">
                     <h2 class="shell-screens-title">Monitors</h2>
+                    <div class="shell-ui-scale-row">
+                      <span class="shell-ui-scale-label">UI scale (all heads)</span>
+                      <button
+                        type="button"
+                        class="shell-ui-scale-btn"
+                        classList={{ 'shell-ui-scale-btn--active': uiScalePercent() === 100 }}
+                        disabled={!canSessionControl() || uiScalePercent() === 100}
+                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+                        onClick={() => {
+                          shellWireSend('set_ui_scale', 100)
+                        }}
+                      >
+                        100%
+                      </button>
+                      <button
+                        type="button"
+                        class="shell-ui-scale-btn"
+                        classList={{ 'shell-ui-scale-btn--active': uiScalePercent() === 150 }}
+                        disabled={!canSessionControl() || uiScalePercent() === 150}
+                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+                        onClick={() => {
+                          shellWireSend('set_ui_scale', 150)
+                        }}
+                      >
+                        150%
+                      </button>
+                    </div>
                     <ul class="shell-monitor-list">
                       <For
                         each={screenDraft.rows}

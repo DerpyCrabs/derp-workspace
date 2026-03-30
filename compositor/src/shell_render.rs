@@ -175,7 +175,7 @@ pub fn compositor_shell_dmabuf_element(
 
     let shell_loc_phys = Point::<f64, Physical>::from((0.0_f64, 0.0_f64));
     let shell_size_logical = output_geo.size;
-    let output_scale = Scale::from(1.0);
+    let output_scale = Scale::from(output.current_scale().fractional_scale());
 
     let damage_phys = if state.shell_dmabuf_dirty_force_full {
         None

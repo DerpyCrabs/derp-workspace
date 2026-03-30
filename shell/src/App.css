@@ -755,6 +755,48 @@
   font-weight: 600;
 }
 
+.shell-ui-scale-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.shell-ui-scale-label {
+  margin-right: 0.25rem;
+  opacity: 0.9;
+}
+
+.shell-ui-scale-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell-ui-scale-btn:hover:not(:disabled) {
+  background: rgba(40, 100, 170, 0.45);
+}
+
+.shell-ui-scale-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.shell-ui-scale-btn--active {
+  background: rgba(30, 80, 140, 0.55);
+  border-color: rgba(160, 200, 255, 0.45);
+}
+
+.shell-ui-scale-btn--active:disabled {
+  opacity: 0.85;
+}
+
 .shell-screens-hint--muted {
   margin: 0 0 0.5rem;
   font-size: 0.78rem;

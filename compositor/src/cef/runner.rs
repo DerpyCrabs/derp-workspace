@@ -107,6 +107,10 @@ wrap_app! {
                         Some(&CefString::from("ozone-platform")),
                         Some(&CefString::from("wayland")),
                     );
+                    cmd.append_switch_with_value(
+                        Some(&CefString::from("disable-features")),
+                        Some(&CefString::from("WaylandFractionalScaleV1")),
+                    );
                 }
                 #[cfg(not(target_os = "linux"))]
                 {

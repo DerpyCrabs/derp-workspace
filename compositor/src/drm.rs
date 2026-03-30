@@ -589,7 +589,7 @@ pub fn init_drm(
         output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
-            Some(Scale::Fractional(1.0)),
+            Some(Scale::Fractional(data.state.shell_ui_scale)),
             Some((cursor_x, cursor_y).into()),
         );
         output.set_preferred(mode);

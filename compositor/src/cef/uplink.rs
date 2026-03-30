@@ -125,4 +125,10 @@ impl UplinkToCompositor {
             s.apply_shell_output_layout_json(&json);
         });
     }
+
+    pub fn shell_set_ui_scale(&self, scale: f64) {
+        self.run(move |s| {
+            s.set_shell_ui_scale(scale);
+        });
+    }
 }

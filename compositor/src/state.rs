@@ -242,6 +242,7 @@ pub struct CompositorState {
     pub(crate) shell_window_physical_px: (i32, i32),
     pub(crate) shell_canvas_logical_origin: (i32, i32),
     pub(crate) shell_canvas_logical_size: (u32, u32),
+    pub(crate) shell_ui_scale: f64,
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
     /// (Smithay winit). When false (DRM libinput), touch coords use libinput mm / [`position_transformed`].
     pub(crate) touch_abs_is_window_pixels: bool,
@@ -416,6 +417,7 @@ impl CompositorState {
             shell_window_physical_px: (1, 1),
             shell_canvas_logical_origin: (0, 0),
             shell_canvas_logical_size: (1, 1),
+            shell_ui_scale: 1.5,
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
@@ -1248,6 +1250,38 @@ impl CompositorState {
         ))
     }
 
+    pub(crate) fn apply_shell_ui_scale_to_outputs(&mut self) {
+        let outs: Vec<Output> = self.space.outputs().cloned().collect();
+        for out in outs {
+            let Some(mode) = out.current_mode() else {
+                continue;
+            };
+            let tf = out.current_transform();
+            let Some(g) = self.space.output_geometry(&out) else {
+                continue;
+            };
+            let loc = g.loc;
+            out.change_current_state(
+                Some(mode),
+                Some(tf),
+                Some(Scale::Fractional(self.shell_ui_scale)),
+                Some(loc.into()),
+            );
+            self.space.map_output(&out, (loc.x, loc.y));
+        }
+    }
+
+    pub(crate) fn set_shell_ui_scale(&mut self, scale: f64) {
+        if (scale - 1.0).abs() > f64::EPSILON && (scale - 1.5).abs() > f64::EPSILON {
+            return;
+        }
+        self.shell_ui_scale = scale;
+        self.apply_shell_ui_scale_to_outputs();
+        self.send_shell_output_layout();
+        self.refresh_all_surface_fractional_scales();
+        self.needs_winit_redraw = true;
+    }
+
     pub(crate) fn recompute_shell_canvas_from_outputs(&mut self) {
         let Some(bounds) = self.workspace_logical_bounds() else {
             return;
@@ -1374,7 +1408,7 @@ impl CompositorState {
             out.change_current_state(
                 Some(mode),
                 Some(tf),
-                Some(Scale::Fractional(1.0)),
+                Some(Scale::Fractional(self.shell_ui_scale)),
                 Some((s.x, s.y).into()),
             );
             self.space.map_output(out, (s.x, s.y));
@@ -1411,7 +1445,7 @@ impl CompositorState {
             out.change_current_state(
                 Some(mode),
                 Some(tf),
-                Some(Scale::Fractional(1.0)),
+                Some(Scale::Fractional(self.shell_ui_scale)),
                 Some((nx, ny).into()),
             );
             self.space.map_output(out, (nx, ny));
