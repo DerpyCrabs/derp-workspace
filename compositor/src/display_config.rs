@@ -1,0 +1,280 @@
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use smithay::backend::drm::DrmDevice;
+use smithay::reexports::drm::control::{connector, Device as ControlDevice};
+
+use crate::drm::{DrmHead, DrmSession};
+use crate::state::{transform_to_wire, CompositorState};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorRef {
+    pub connector: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenEntry {
+    pub connector: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor_id: Option<String>,
+    pub x: i32,
+    pub y: i32,
+    #[serde(default)]
+    pub transform: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayConfigFile {
+    pub version: u32,
+    pub ui_scale: f64,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_chrome_primary: Option<MonitorRef>,
+    #[serde(default)]
+    pub screens: Vec<ScreenEntry>,
+}
+
+struct LiveHead {
+    name: String,
+    monitor_id: Option<String>,
+}
+
+pub fn display_config_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("DERP_DISPLAY_CONFIG") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    let mut p = dirs::config_dir()?;
+    p.push("derp-workspace");
+    p.push("display.json");
+    Some(p)
+}
+
+fn read_connector_edid<D: ControlDevice>(drm: &D, conn: connector::Handle) -> Option<Vec<u8>> {
+    let props = drm.get_properties(conn).ok()?;
+    for (prop_id, raw_val) in props.iter() {
+        let info = drm.get_property(*prop_id).ok()?;
+        let name = info.name().to_str().ok()?;
+        if name != "EDID" {
+            continue;
+        }
+        let val_type = info.value_type();
+        let val = val_type.convert_value(*raw_val);
+        let blob_id = val.as_blob()?;
+        return drm.get_property_blob(blob_id).ok();
+    }
+    None
+}
+
+pub fn monitor_id_from_edid(edid: &[u8]) -> Option<String> {
+    if edid.len() < 16 {
+        return None;
+    }
+    let prod = u16::from_le_bytes([edid[10], edid[11]]);
+    let serial = u32::from_le_bytes([edid[12], edid[13], edid[14], edid[15]]);
+    Some(format!(
+        "m{:02x}{:02x}-{:04x}-{:08x}",
+        edid[8], edid[9], prod, serial
+    ))
+}
+
+fn live_heads_from_drm(drm: &DrmDevice, heads: &[DrmHead]) -> Vec<LiveHead> {
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut out = Vec::with_capacity(heads.len());
+    for h in heads {
+        let edid = read_connector_edid(drm, h.connector);
+        let mut monitor_id = edid.as_deref().and_then(monitor_id_from_edid);
+        if let Some(ref id) = monitor_id {
+            if seen_ids.contains(id) {
+                tracing::warn!(
+                    target: "derp_display_config",
+                    monitor_id = %id,
+                    connector = %h.connector_name,
+                    "duplicate EDID monitor_id on live heads"
+                );
+                monitor_id = None;
+            } else {
+                seen_ids.insert(id.clone());
+            }
+        }
+        out.push(LiveHead {
+            name: h.connector_name.clone(),
+            monitor_id,
+        });
+    }
+    out
+}
+
+fn resolve_entry(name: &str, monitor_id: Option<&String>, live: &[LiveHead]) -> Option<String> {
+    if let Some(mid) = monitor_id {
+        if let Some(h) = live
+            .iter()
+            .find(|h| h.monitor_id.as_ref().map(|s| s.as_str()) == Some(mid.as_str()))
+        {
+            return Some(h.name.clone());
+        }
+    }
+    live.iter()
+        .find(|h| h.name == name)
+        .map(|h| h.name.clone())
+}
+
+fn resolve_monitor_ref(pref: &MonitorRef, live: &[LiveHead]) -> Option<String> {
+    resolve_entry(&pref.connector, pref.monitor_id.as_ref(), live)
+}
+
+pub fn apply_stored_from_heads(
+    state: &mut CompositorState,
+    drm: &DrmDevice,
+    heads: &[DrmHead],
+) -> bool {
+    let Some(path) = display_config_path() else {
+        return false;
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            tracing::warn!(target: "derp_display_config", ?e, path = %path.display(), "read display config");
+            return false;
+        }
+    };
+    let cfg: DisplayConfigFile = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(target: "derp_display_config", ?e, "parse display config");
+            return false;
+        }
+    };
+    if cfg.version != 1 {
+        tracing::warn!(
+            target: "derp_display_config",
+            version = cfg.version,
+            "unsupported display config version"
+        );
+        return false;
+    }
+
+    state.display_config_save_suppressed = true;
+
+    let live = live_heads_from_drm(drm, heads);
+
+    let scale = cfg.ui_scale;
+    if (scale - 1.0).abs() <= f64::EPSILON || (scale - 1.5).abs() <= f64::EPSILON {
+        state.set_shell_ui_scale(scale);
+    }
+
+    let mut by_name: HashMap<String, (i32, i32, u32)> = HashMap::new();
+    for s in &cfg.screens {
+        if let Some(n) = resolve_entry(&s.connector, s.monitor_id.as_ref(), &live) {
+            by_name.insert(n, (s.x, s.y, s.transform));
+        }
+    }
+    if !by_name.is_empty() {
+        let screens: Vec<serde_json::Value> = by_name
+            .into_iter()
+            .map(|(name, (x, y, transform))| {
+                serde_json::json!({
+                    "name": name,
+                    "x": x,
+                    "y": y,
+                    "transform": transform,
+                })
+            })
+            .collect();
+        let json = serde_json::json!({ "screens": screens }).to_string();
+        state.apply_shell_output_layout_json(&json);
+    }
+
+    match &cfg.shell_chrome_primary {
+        None => {
+            state.set_shell_primary_output_name(String::new());
+        }
+        Some(pref) => {
+            let name = resolve_monitor_ref(pref, &live).unwrap_or_default();
+            state.set_shell_primary_output_name(name);
+        }
+    }
+
+    state.display_config_save_suppressed = false;
+    true
+}
+
+fn write_atomic(path: &Path, src: &DisplayConfigFile) -> std::io::Result<()> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(p) = parent {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut tmp = path.to_path_buf();
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| std::ffi::OsString::from("display.json"));
+    tmp.set_file_name({
+        let mut s = file_name;
+        s.push(".tmp");
+        s
+    });
+    let data = serde_json::to_vec_pretty(src).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    })?;
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&data)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
+    let Some(path) = display_config_path() else {
+        return;
+    };
+    let screens: Vec<ScreenEntry> = session
+        .heads
+        .iter()
+        .filter_map(|h| {
+            let out = &h.output;
+            let g = state.space.output_geometry(out)?;
+            let edid = read_connector_edid(&session.drm, h.connector);
+            let monitor_id = edid.as_deref().and_then(monitor_id_from_edid);
+            Some(ScreenEntry {
+                connector: h.connector_name.clone(),
+                monitor_id,
+                x: g.loc.x,
+                y: g.loc.y,
+                transform: transform_to_wire(out.current_transform()),
+            })
+        })
+        .collect();
+
+    let shell_chrome_primary = state.shell_primary_output_name.as_ref().map(|name| {
+        let pref = session.heads.iter().find(|h| h.connector_name == *name);
+        let monitor_id = pref.and_then(|h| {
+            read_connector_edid(&session.drm, h.connector).and_then(|b| monitor_id_from_edid(&b))
+        });
+        MonitorRef {
+            connector: name.clone(),
+            monitor_id,
+        }
+    });
+
+    let file = DisplayConfigFile {
+        version: 1,
+        ui_scale: state.shell_ui_scale,
+        shell_chrome_primary,
+        screens,
+    };
+
+    if let Err(e) = write_atomic(&path, &file) {
+        tracing::warn!(target: "derp_display_config", ?e, path = %path.display(), "write display config");
+    }
+}

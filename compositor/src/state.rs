@@ -114,7 +114,7 @@ pub(crate) fn transform_from_wire(t: u32) -> Transform {
     }
 }
 
-fn transform_to_wire(t: Transform) -> u32 {
+pub(crate) fn transform_to_wire(t: Transform) -> u32 {
     match t {
         Transform::Normal => 0,
         Transform::_90 => 1,
@@ -243,7 +243,9 @@ pub struct CompositorState {
     pub(crate) shell_canvas_logical_origin: (i32, i32),
     pub(crate) shell_canvas_logical_size: (u32, u32),
     pub(crate) shell_ui_scale: f64,
-    shell_primary_output_name: Option<String>,
+    pub(crate) shell_primary_output_name: Option<String>,
+    pub(crate) display_config_save_pending: bool,
+    pub(crate) display_config_save_suppressed: bool,
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
     /// (Smithay winit). When false (DRM libinput), touch coords use libinput mm / [`position_transformed`].
     pub(crate) touch_abs_is_window_pixels: bool,
@@ -420,6 +422,8 @@ impl CompositorState {
             shell_canvas_logical_size: (1, 1),
             shell_ui_scale: 1.5,
             shell_primary_output_name: None,
+            display_config_save_pending: false,
+            display_config_save_suppressed: false,
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
@@ -1296,6 +1300,13 @@ impl CompositorState {
         self.send_shell_output_layout();
         self.refresh_all_surface_fractional_scales();
         self.needs_winit_redraw = true;
+        self.display_config_request_save();
+    }
+
+    pub(crate) fn display_config_request_save(&mut self) {
+        if !self.display_config_save_suppressed {
+            self.display_config_save_pending = true;
+        }
     }
 
     pub(crate) fn recompute_shell_canvas_from_outputs(&mut self) {
@@ -1423,6 +1434,7 @@ impl CompositorState {
         self.resync_embedded_shell_host_after_ipc_connect();
         self.send_shell_output_layout();
         self.needs_winit_redraw = true;
+        self.display_config_request_save();
     }
 
     pub fn apply_shell_output_layout_json(&mut self, json: &str) {
@@ -1517,6 +1529,7 @@ impl CompositorState {
         self.send_shell_output_layout();
         self.refresh_all_surface_fractional_scales();
         self.needs_winit_redraw = true;
+        self.display_config_request_save();
     }
 
     /// Logical size matching [`Space::output_geometry`] / pointer normalization (not raw `current_mode` when they differ).

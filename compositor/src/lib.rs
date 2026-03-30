@@ -9,6 +9,7 @@ pub mod window_registry;
 
 mod calloop_xwm;
 mod cursor_fallback;
+mod display_config;
 pub mod derp_space;
 mod desktop_stack;
 pub mod drm;

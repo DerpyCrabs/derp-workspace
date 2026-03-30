@@ -84,6 +84,7 @@ pub struct DrmHead {
     damage_tracker: OutputDamageTracker,
     pub output: Output,
     pub connector_name: String,
+    pub connector: connector::Handle,
     crtc: crtc::Handle,
     pending_frame_complete: bool,
 }
@@ -314,6 +315,11 @@ impl DrmSession {
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
         shell_ipc::drain_shell_stream(state);
         state.shell_check_ipc_watchdog();
+
+        if state.display_config_save_pending && !state.display_config_save_suppressed {
+            state.display_config_save_pending = false;
+            crate::display_config::save_from_drm_session(state, self);
+        }
 
         if !self.drm.is_active() {
             return;
@@ -607,11 +613,13 @@ pub fn init_drm(
             damage_tracker,
             output,
             connector_name: output_name,
+            connector: conns[0],
             crtc: crtc_h,
             pending_frame_complete: false,
         });
     }
 
+    let _ = crate::display_config::apply_stored_from_heads(&mut data.state, &drm, &heads);
     data.state.recompute_shell_canvas_from_outputs();
     data.state.send_shell_output_layout();
     data.state.shell_embedded_notify_output_ready();
