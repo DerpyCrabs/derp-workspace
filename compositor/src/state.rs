@@ -43,7 +43,7 @@ use smithay::{
         },
         wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
-    utils::{Buffer, Logical, Point, Rectangle, Size, SERIAL_COUNTER},
+    utils::{Buffer, Logical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
@@ -64,7 +64,7 @@ use smithay::{
         X11Surface, X11Wm, XwmHandler,
     },
 };
-use smithay::output::Output;
+use smithay::output::{Output, Scale};
 use smithay::reexports::wayland_server::Resource;
 
 use crate::{
@@ -97,6 +97,32 @@ pub(crate) fn window_is_solid_shell_host(title: &str, app_id: &str) -> bool {
 }
 
 /// Current maximize/fullscreen flags from the compositor’s xdg pending/current state.
+pub(crate) fn transform_from_wire(t: u32) -> Transform {
+    match t {
+        1 => Transform::_90,
+        2 => Transform::_180,
+        3 => Transform::_270,
+        4 => Transform::Flipped,
+        5 => Transform::Flipped90,
+        6 => Transform::Flipped180,
+        7 => Transform::Flipped270,
+        _ => Transform::Normal,
+    }
+}
+
+fn transform_to_wire(t: Transform) -> u32 {
+    match t {
+        Transform::Normal => 0,
+        Transform::_90 => 1,
+        Transform::_180 => 2,
+        Transform::_270 => 3,
+        Transform::Flipped => 4,
+        Transform::Flipped90 => 5,
+        Transform::Flipped180 => 6,
+        Transform::Flipped270 => 7,
+    }
+}
+
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     smithay::wayland::compositor::with_states(wl, |states| {
         let data = states
@@ -210,6 +236,8 @@ pub struct CompositorState {
     /// Winit [`Window::inner_size`](https://docs.rs/winit/latest/winit/window/struct.Window.html#method-inner_size) —
     /// same denominator the backend uses for pointer normalization ([`crate::winit`] updates on resize).
     pub(crate) shell_window_physical_px: (i32, i32),
+    pub(crate) shell_canvas_logical_origin: (i32, i32),
+    pub(crate) shell_canvas_logical_size: (u32, u32),
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
     /// (Smithay winit). When false (DRM libinput), touch coords use libinput mm / [`position_transformed`].
     pub(crate) touch_abs_is_window_pixels: bool,
@@ -377,6 +405,8 @@ impl CompositorState {
             shell_embedded_initial_handshake_done: false,
             shell_ipc_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
             shell_window_physical_px: (1, 1),
+            shell_canvas_logical_origin: (0, 0),
+            shell_canvas_logical_size: (1, 1),
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
@@ -532,9 +562,8 @@ impl CompositorState {
         let scale = self
             .space
             .outputs()
-            .next()
             .map(|o| o.current_scale().fractional_scale())
-            .unwrap_or(1.0);
+            .fold(1.0f64, f64::max);
         smithay::wayland::compositor::with_states(surface, |states| {
             smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
                 fs.set_preferred_scale(scale);
@@ -546,9 +575,8 @@ impl CompositorState {
         let scale = self
             .space
             .outputs()
-            .next()
             .map(|o| o.current_scale().fractional_scale())
-            .unwrap_or(1.0);
+            .fold(1.0f64, f64::max);
         for elem in self.space.elements() {
             if let DerpSpaceElem::Wayland(window) = elem {
                 let surf = window.toplevel().unwrap().wl_surface();
@@ -590,10 +618,7 @@ impl CompositorState {
         const GAP: i32 = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
         const MIN_PLACEHOLDER_W: i32 = 240;
 
-        let Some(output) = self.space.outputs().next() else {
-            return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
-        };
-        let Some(geo) = self.space.output_geometry(output) else {
+        let Some(geo) = self.workspace_logical_bounds() else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
 
@@ -658,12 +683,11 @@ impl CompositorState {
         (x, y)
     }
 
-    /// Top-left of the first mapped output in compositor logical space (shell host expects 0,0 here).
     pub(crate) fn primary_output_logical_origin(&self) -> (i32, i32) {
-        let Some(output) = self.space.outputs().next() else {
+        let Some(output) = self.leftmost_output() else {
             return (0, 0);
         };
-        let Some(geo) = self.space.output_geometry(output) else {
+        let Some(geo) = self.space.output_geometry(&output) else {
             return (0, 0);
         };
         (geo.loc.x, geo.loc.y)
@@ -747,14 +771,14 @@ impl CompositorState {
     }
 
     fn primary_output_geometry_rect(&self) -> Option<Rectangle<i32, Logical>> {
-        let o = self.space.outputs().next()?;
-        self.space.output_geometry(o)
+        let o = self.leftmost_output()?;
+        self.space.output_geometry(&o)
     }
 
     fn resolve_smithay_output(&self, wl_output: Option<&WlOutput>) -> Option<Output> {
         wl_output
             .and_then(Output::from_resource)
-            .or_else(|| self.space.outputs().next().cloned())
+            .or_else(|| self.leftmost_output())
     }
 
     fn client_wl_output_for(&self, wl_surface: &WlSurface, output: &Output) -> Option<WlOutput> {
@@ -770,13 +794,22 @@ impl CompositorState {
         Some((loc.x, loc.y, sz.w, sz.h))
     }
 
-    /// Apply maximize without saving a restore snapshot (caller handles snapshot policy).
     pub(crate) fn apply_toplevel_maximize_layout(&mut self, window: &Window) -> bool {
-        let Some(geo) = self.primary_output_geometry_rect() else {
-            return false;
-        };
         let Some(tl) = window.toplevel() else {
             return false;
+        };
+        let geo = {
+            let o = self
+                .toplevel_rect_snapshot(window)
+                .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
+                .or_else(|| self.leftmost_output());
+            let Some(ref out) = o else {
+                return false;
+            };
+            let Some(g) = self.space.output_geometry(out) else {
+                return false;
+            };
+            g
         };
         let wl = tl.wl_surface();
         let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
@@ -930,23 +963,22 @@ impl CompositorState {
     }
 
     /// [`WindowInfo`] in the registry uses **global** compositor logical pixels. Solid shell / CEF view (DIP)
-    /// uses **output-local logical** coordinates — same integers as `clientX`/`clientY` for the HUD when the
-    /// view size matches [`Self::shell_output_logical_size`]. No normalized rounding (that caused 1–2px drift
-    /// vs Wayland clients). Pointer IPC remains in physical **buffer** px and is converted only in `cef_host`.
+    /// uses **canvas-local logical** coordinates. Pointer IPC uses OSR buffer pixels; the CEF UI thread maps
+    /// them to view logical via [`crate::cef::osr_view_state::OsrViewState::physical_to_logical`], with
+    /// physical size kept in sync from each received dma-buf.
     pub(crate) fn shell_window_info_to_output_local_layout(
         &self,
         info: &crate::chrome_bridge::WindowInfo,
     ) -> Option<crate::chrome_bridge::WindowInfo> {
-        let output = self.space.outputs().next()?;
-        let geo = self.space.output_geometry(output)?;
+        let (ox, oy) = self.shell_canvas_logical_origin;
         Some(crate::chrome_bridge::WindowInfo {
             window_id: info.window_id,
             surface_id: info.surface_id,
             title: info.title.clone(),
             app_id: info.app_id.clone(),
             wayland_client_pid: info.wayland_client_pid,
-            x: info.x.saturating_sub(geo.loc.x),
-            y: info.y.saturating_sub(geo.loc.y),
+            x: info.x.saturating_sub(ox),
+            y: info.y.saturating_sub(oy),
             width: info.width.max(1),
             height: info.height.max(1),
             minimized: info.minimized,
@@ -1178,28 +1210,170 @@ impl CompositorState {
         self.chrome_bridge.notify(event);
     }
 
-    /// Logical size matching [`Space::output_geometry`] / pointer normalization (not raw `current_mode` when they differ).
-    pub fn shell_output_logical_size(&self) -> Option<(u32, u32)> {
-        let output = self.space.outputs().next()?;
-        let geo = self.space.output_geometry(output)?;
-        let w = u32::try_from(geo.size.w).ok()?.max(1);
-        let h = u32::try_from(geo.size.h).ok()?.max(1);
-        Some((w, h))
+    pub(crate) fn workspace_logical_bounds(&self) -> Option<Rectangle<i32, Logical>> {
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        for o in self.space.outputs() {
+            let g = self.space.output_geometry(o)?;
+            min_x = min_x.min(g.loc.x);
+            min_y = min_y.min(g.loc.y);
+            max_x = max_x.max(g.loc.x.saturating_add(g.size.w));
+            max_y = max_y.max(g.loc.y.saturating_add(g.size.h));
+        }
+        if min_x == i32::MAX {
+            return None;
+        }
+        Some(Rectangle::new(
+            Point::<i32, Logical>::from((min_x, min_y)),
+            Size::<i32, Logical>::from((
+                (max_x - min_x).max(1),
+                (max_y - min_y).max(1),
+            )),
+        ))
     }
 
-    pub fn send_shell_output_geometry(&mut self) {
-        let Some((lw, lh)) = self.shell_output_logical_size() else {
+    pub(crate) fn recompute_shell_canvas_from_outputs(&mut self) {
+        let Some(bounds) = self.workspace_logical_bounds() else {
             return;
         };
+        let cw = bounds.size.w.max(1) as u32;
+        let ch = bounds.size.h.max(1) as u32;
+        self.shell_canvas_logical_origin = (bounds.loc.x, bounds.loc.y);
+        self.shell_canvas_logical_size = (cw, ch);
+        let mut max_scale = 1.0f64;
+        for o in self.space.outputs() {
+            max_scale = max_scale.max(o.current_scale().fractional_scale() as f64);
+        }
+        let pw = ((cw as f64) * max_scale).round().max(1.0) as i32;
+        let ph = ((ch as f64) * max_scale).round().max(1.0) as i32;
+        self.shell_window_physical_px = (pw, ph);
+    }
+
+    pub(crate) fn leftmost_output(&self) -> Option<Output> {
+        self.space
+            .outputs()
+            .min_by_key(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|g| g.loc.x)
+                    .unwrap_or(i32::MAX)
+            })
+            .cloned()
+    }
+
+    pub(crate) fn output_containing_global_point(&self, p: Point<f64, Logical>) -> Option<Output> {
+        let ix = p.x.floor() as i32;
+        let iy = p.y.floor() as i32;
+        for o in self.space.outputs() {
+            let g = self.space.output_geometry(o)?;
+            if ix >= g.loc.x
+                && iy >= g.loc.y
+                && ix < g.loc.x.saturating_add(g.size.w)
+                && iy < g.loc.y.saturating_add(g.size.h)
+            {
+                return Some(o.clone());
+            }
+        }
+        None
+    }
+
+    pub(crate) fn output_for_global_xywh(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Output> {
+        let cx = x.saturating_add(w.saturating_div(2));
+        let cy = y.saturating_add(h.saturating_div(2));
+        self.output_containing_global_point(Point::from((cx as f64, cy as f64)))
+            .or_else(|| self.leftmost_output())
+    }
+
+    pub fn send_shell_output_layout(&mut self) {
+        if self.workspace_logical_bounds().is_none() {
+            return;
+        }
+        self.recompute_shell_canvas_from_outputs();
+        let (lw, lh) = self.shell_canvas_logical_size;
         let (pw, ph) = self.shell_window_physical_px;
         let physical_w = u32::try_from(pw).unwrap_or(lw).max(1);
         let physical_h = u32::try_from(ph).unwrap_or(lh).max(1);
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
-            logical_w: lw,
-            logical_h: lh,
-            physical_w,
-            physical_h,
+        let screens: Vec<shell_wire::OutputLayoutScreen> = self
+            .space
+            .outputs()
+            .filter_map(|o| {
+                let g = self.space.output_geometry(o)?;
+                let tf = o.current_transform();
+                Some(shell_wire::OutputLayoutScreen {
+                    name: o.name(),
+                    x: g.loc.x,
+                    y: g.loc.y,
+                    w: u32::try_from(g.size.w).ok()?.max(1),
+                    h: u32::try_from(g.size.h).ok()?.max(1),
+                    transform: transform_to_wire(tf),
+                })
+            })
+            .collect();
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            canvas_logical_w: lw.max(1),
+            canvas_logical_h: lh.max(1),
+            canvas_physical_w: physical_w,
+            canvas_physical_h: physical_h,
+            screens,
         });
+    }
+
+    pub fn apply_shell_output_layout_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct Scr {
+            name: String,
+            x: i32,
+            y: i32,
+            #[serde(default)]
+            transform: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Root {
+            screens: Vec<Scr>,
+        }
+        let Ok(root) = serde_json::from_str::<Root>(json) else {
+            return;
+        };
+        for s in root.screens {
+            let Some(out) = self
+                .space
+                .outputs()
+                .find(|o| o.name() == s.name)
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(mode) = out.current_mode() else {
+                continue;
+            };
+            let tf = transform_from_wire(s.transform);
+            out.change_current_state(
+                Some(mode),
+                Some(tf),
+                Some(Scale::Fractional(1.0)),
+                Some((s.x, s.y).into()),
+            );
+            self.space.map_output(&out, (s.x, s.y));
+        }
+        self.recompute_shell_canvas_from_outputs();
+        self.send_shell_output_layout();
+        self.refresh_all_surface_fractional_scales();
+        self.needs_winit_redraw = true;
+    }
+
+    /// Logical size matching [`Space::output_geometry`] / pointer normalization (not raw `current_mode` when they differ).
+    pub fn shell_output_logical_size(&self) -> Option<(u32, u32)> {
+        let b = self.workspace_logical_bounds()?;
+        Some((
+            u32::try_from(b.size.w).ok()?.max(1),
+            u32::try_from(b.size.h).ok()?.max(1),
+        ))
+    }
+
+    pub fn send_shell_output_geometry(&mut self) {
+        self.send_shell_output_layout();
     }
 
     /// Embedded shell IPC: first full handshake after [`Space::map_output`] so output geometry is non-empty.
@@ -1417,10 +1591,7 @@ impl CompositorState {
         true
     }
 
-    /// Map normalized pointer (`nx`, `ny` over the output) to **shell OSR buffer** pixels (letterbox-aware).
-    ///
-    /// Historically this wrongly used **logical** output size as if it were the dma-buf size, which breaks
-    /// under fractional output scale. Prefer [`Self::shell_pointer_view_px`] from a global logical `pos`.
+    /// Map normalized pointer (`nx`, `ny` over the canvas) to **shell OSR buffer** pixels (letterbox-aware).
     pub fn shell_pointer_buffer_pixels(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
         let (buf_w, buf_h) = self.shell_view_px?;
         let (lw, lh) = self.shell_output_logical_size()?;
@@ -1437,11 +1608,10 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(f64, f64)> {
-        let output = self.space.outputs().next()?;
-        let output_geo = self.space.output_geometry(output)?;
-        let local = pos - output_geo.loc.to_f64();
-        let gw = output_geo.size.w.max(1) as f64;
-        let gh = output_geo.size.h.max(1) as f64;
+        let ws = self.workspace_logical_bounds()?;
+        let local = pos - ws.loc.to_f64();
+        let gw = ws.size.w.max(1) as f64;
+        let gh = ws.size.h.max(1) as f64;
         Some((
             (local.x / gw).clamp(0.0, 1.0),
             (local.y / gh).clamp(0.0, 1.0),
@@ -1946,11 +2116,10 @@ impl CompositorState {
         lw: i32,
         lh: i32,
     ) -> Option<(i32, i32, i32, i32)> {
-        let output = self.space.outputs().next()?;
-        let geo = self.space.output_geometry(output)?;
+        let (ox, oy) = self.shell_canvas_logical_origin;
         Some((
-            geo.loc.x.saturating_add(lx),
-            geo.loc.y.saturating_add(ly),
+            ox.saturating_add(lx),
+            oy.saturating_add(ly),
             lw.max(1),
             lh.max(1),
         ))
@@ -2294,16 +2463,24 @@ impl CompositorState {
         crate::shell_letterbox::letterbox_logical(output_logical_size, buf_w, buf_h)
     }
 
-    /// Map global logical pointer position to **shell view / buffer** pixels (letterboxed HUD).
-    pub(crate) fn shell_pointer_view_px(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {
-        let output = self.space.outputs().next()?;
-        let output_geo = self.space.output_geometry(output)?;
-        let local = pos - output_geo.loc.to_f64();
-        let (buf_w, buf_h) = self.shell_view_px?;
-        let (ox, oy, cw, ch) = self.shell_letterbox_logical(output_geo.size)?;
-        let lx = local.x - ox as f64;
-        let ly = local.y - oy as f64;
-        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, buf_h)
+    pub(crate) fn shell_pointer_ipc_for_cef(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(i32, i32)> {
+        let (cox, coy) = self.shell_canvas_logical_origin;
+        let (clw, clh) = self.shell_canvas_logical_size;
+        let clwf = clw.max(1) as f64;
+        let clhf = clh.max(1) as f64;
+        let lx = pos.x - cox as f64;
+        let ly = pos.y - coy as f64;
+        if lx < 0.0 || ly < 0.0 || lx >= clwf || ly >= clhf {
+            return None;
+        }
+        let xmax = clw.saturating_sub(1) as i32;
+        let ymax = clh.saturating_sub(1) as i32;
+        let x = (lx.round() as i32).clamp(0, xmax);
+        let y = (ly.round() as i32).clamp(0, ymax);
+        Some((x, y))
     }
 
     /// Build a dma-buf from plane metadata + [`OwnedFd`]s (same order as `planes`). On success, drains `fds`.
@@ -2356,6 +2533,11 @@ impl CompositorState {
         self.shell_frame_is_dmabuf = true;
         self.shell_has_frame = true;
         self.shell_view_px = Some((width, height));
+        if let Ok(g) = self.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.sync_osr_physical_from_dmabuf(width as i32, height as i32);
+            }
+        }
         self.needs_winit_redraw = true;
         self.shell_move_flush_pending_deltas();
         tracing::debug!(
@@ -2393,7 +2575,7 @@ impl CompositorState {
                             exp_h,
                             logical_w = lw,
                             logical_h = lh,
-                            "shell dma-buf is smaller than primary output physical size — Solid is being upscaled (soft)."
+                            "shell dma-buf is smaller than canvas physical size — Solid is being upscaled (soft)."
                         );
                     });
                 }
@@ -2501,7 +2683,7 @@ impl CompositorState {
         if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
-        let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
+        let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) else {
             return;
         };
         if self.shell_last_pointer_ipc_px == Some((bx, by)) {
@@ -2529,7 +2711,7 @@ impl CompositorState {
         if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
-        let Some((bx, by)) = self.shell_pointer_view_px(pos) else {
+        let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) else {
             return;
         };
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerAxis {

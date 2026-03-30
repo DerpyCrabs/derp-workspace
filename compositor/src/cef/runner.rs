@@ -86,6 +86,7 @@ wrap_app! {
 wrap_load_handler! {
     struct ShellLoadHandler {
         spawn_inject_js: Option<String>,
+        cef_tx: Sender<CefToCompositor>,
     }
 
     impl LoadHandler {
@@ -134,6 +135,9 @@ wrap_load_handler! {
             host.notify_screen_info_changed();
             host.set_focus(1);
             host.invalidate(PaintElementType::VIEW);
+            let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
+                state.send_shell_output_layout();
+            })));
         }
     }
 }
@@ -141,6 +145,7 @@ wrap_load_handler! {
 wrap_life_span_handler! {
     struct CaptureBrowser {
         browser_holder: Arc<Mutex<Option<Browser>>>,
+        cef_tx: Sender<CefToCompositor>,
     }
 
     impl LifeSpanHandler {
@@ -153,6 +158,9 @@ wrap_life_span_handler! {
                     *g = Some(b.clone());
                 }
             }
+            let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
+                state.send_shell_output_layout();
+            })));
         }
     }
 }
@@ -484,7 +492,7 @@ fn run_cef(
     );
 
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
-    let capture = CaptureBrowser::new(browser_holder.clone());
+    let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone());
 
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(cef_tx.clone())));
@@ -514,7 +522,7 @@ fn run_cef(
     }
 
     let rh = OsrToCompositor::new(view_state.clone(), frame_sink);
-    let lh = ShellLoadHandler::new(Some(inject_js));
+    let lh = ShellLoadHandler::new(Some(inject_js), cef_tx.clone());
     let mut client = ShellClient::new(rh, lh, capture, uplink.clone(), view_state.clone());
 
     let mut window_info = WindowInfo::default();

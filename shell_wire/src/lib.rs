@@ -82,6 +82,8 @@ pub const MSG_SHELL_RESIZE_END: u32 = 41;
 pub const MSG_SHELL_SET_MAXIMIZED: u32 = 42;
 /// Shell → compositor: OSR shell plane above native windows (HTML5 presentation fullscreen).
 pub const MSG_SHELL_SET_PRESENTATION_FULLSCREEN: u32 = 43;
+pub const MSG_OUTPUT_LAYOUT: u32 = 44;
+pub const MSG_SHELL_SET_OUTPUT_LAYOUT: u32 = 45;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -99,6 +101,12 @@ pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
+/// Max entries in [`MSG_OUTPUT_LAYOUT`].
+pub const MAX_OUTPUT_LAYOUT_SCREENS: u32 = 16;
+/// Max UTF-8 bytes for [`OutputLayoutScreen::name`].
+pub const MAX_OUTPUT_LAYOUT_NAME_BYTES: u32 = 128;
+/// Max UTF-8 bytes in [`MSG_SHELL_SET_OUTPUT_LAYOUT`] JSON payload.
+pub const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES: u32 = 4096;
 /// Max planes in [`MSG_FRAME_DMABUF_COMMIT`] (matches Linux dma-buf multi-plane caps).
 pub const MAX_DMABUF_PLANES: u32 = 4;
 
@@ -187,6 +195,140 @@ pub fn encode_output_geometry(
     v.extend_from_slice(&physical_w.to_le_bytes());
     v.extend_from_slice(&physical_h.to_le_bytes());
     v
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputLayoutScreen {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub transform: u32,
+}
+
+pub fn encode_output_layout(
+    canvas_logical_w: u32,
+    canvas_logical_h: u32,
+    canvas_physical_w: u32,
+    canvas_physical_h: u32,
+    screens: &[OutputLayoutScreen],
+) -> Option<Vec<u8>> {
+    let n = u32::try_from(screens.len()).ok()?;
+    if n == 0 || n > MAX_OUTPUT_LAYOUT_SCREENS {
+        return None;
+    }
+    let mut body_sz: usize = 4 + 16 + 4;
+    for s in screens {
+        let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
+        if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES {
+            return None;
+        }
+        body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(24)?;
+    }
+    let body_len = u32::try_from(body_sz).ok()?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_sz);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_OUTPUT_LAYOUT.to_le_bytes());
+    v.extend_from_slice(&canvas_logical_w.to_le_bytes());
+    v.extend_from_slice(&canvas_logical_h.to_le_bytes());
+    v.extend_from_slice(&canvas_physical_w.to_le_bytes());
+    v.extend_from_slice(&canvas_physical_h.to_le_bytes());
+    v.extend_from_slice(&n.to_le_bytes());
+    for s in screens {
+        let nb = s.name.as_bytes();
+        let nl = nb.len() as u32;
+        v.extend_from_slice(&nl.to_le_bytes());
+        v.extend_from_slice(nb);
+        v.extend_from_slice(&s.x.to_le_bytes());
+        v.extend_from_slice(&s.y.to_le_bytes());
+        v.extend_from_slice(&s.w.to_le_bytes());
+        v.extend_from_slice(&s.h.to_le_bytes());
+        v.extend_from_slice(&s.transform.to_le_bytes());
+    }
+    Some(v)
+}
+
+pub fn encode_shell_set_output_layout_json(json: &str) -> Option<Vec<u8>> {
+    let b = json.as_bytes();
+    let jl = u32::try_from(b.len()).ok()?;
+    if jl == 0 || jl > MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(jl)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_SET_OUTPUT_LAYOUT.to_le_bytes());
+    v.extend_from_slice(&jl.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
+fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
+    if body.len() < 24 {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    if msg != MSG_OUTPUT_LAYOUT {
+        return Err(DecodeError::UnknownMsgType);
+    }
+    let canvas_logical_w = u32::from_le_bytes(body[4..8].try_into().unwrap());
+    let canvas_logical_h = u32::from_le_bytes(body[8..12].try_into().unwrap());
+    let canvas_physical_w = u32::from_le_bytes(body[12..16].try_into().unwrap());
+    let canvas_physical_h = u32::from_le_bytes(body[16..20].try_into().unwrap());
+    let count = u32::from_le_bytes(body[20..24].try_into().unwrap());
+    if count == 0 || count > MAX_OUTPUT_LAYOUT_SCREENS {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    let mut off = 24usize;
+    let mut screens = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        if off + nl + 24 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let name = std::str::from_utf8(&body[off..off + nl])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += nl;
+        let x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+        let y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
+        let w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
+        let h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+        let transform = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
+        off += 20;
+        screens.push(OutputLayoutScreen {
+            name,
+            x,
+            y,
+            w,
+            h,
+            transform,
+        });
+    }
+    if off != body.len() {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    Ok(DecodedCompositorToShellMessage::OutputLayout {
+        canvas_logical_w: canvas_logical_w.max(1),
+        canvas_logical_h: canvas_logical_h.max(1),
+        canvas_physical_w: canvas_physical_w.max(1),
+        canvas_physical_h: canvas_physical_h.max(1),
+        screens,
+    })
 }
 
 fn encode_window_strings(
@@ -611,6 +753,9 @@ pub enum DecodedMessage {
     ShellQuitCompositor,
     /// Reply to [`MSG_COMPOSITOR_PING`].
     ShellPong,
+    ShellSetOutputLayout {
+        layout_json: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -624,6 +769,7 @@ pub enum DecodeError {
     BadWindowPayload,
     BadWindowListPayload,
     BadDmabufCommitPayload,
+    BadOutputLayoutPayload,
 }
 
 /// Messages the **compositor** writes on the shell Unix socket for `cef_host` to read.
@@ -674,6 +820,13 @@ pub enum DecodedCompositorToShellMessage {
         /// Backing-store / framebuffer pixels for this output (≥ logical on HiDPI).
         physical_w: u32,
         physical_h: u32,
+    },
+    OutputLayout {
+        canvas_logical_w: u32,
+        canvas_logical_h: u32,
+        canvas_physical_w: u32,
+        canvas_physical_h: u32,
+        screens: Vec<OutputLayoutScreen>,
     },
     WindowMapped {
         window_id: u32,
@@ -1015,6 +1168,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 physical_h: physical_h.max(1),
             })
         }
+        MSG_OUTPUT_LAYOUT => decode_output_layout_body(body),
         MSG_WINDOW_MAPPED => decode_window_strings_body(body, MSG_WINDOW_MAPPED),
         MSG_WINDOW_UNMAPPED => {
             if body.len() != 8 {
@@ -1102,6 +1256,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_SET_FULLSCREEN
         | MSG_SHELL_SET_MAXIMIZED
         | MSG_SHELL_SET_PRESENTATION_FULLSCREEN
+        | MSG_SHELL_SET_OUTPUT_LAYOUT
         | MSG_SHELL_TASKBAR_ACTIVATE
         | MSG_SHELL_MINIMIZE
         | MSG_SHELL_QUIT_COMPOSITOR
@@ -1354,6 +1509,23 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 return Err(DecodeError::BadWindowPayload);
             }
             Ok(DecodedMessage::ShellPong)
+        }
+        MSG_SHELL_SET_OUTPUT_LAYOUT => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let jl = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            if jl == 0 || jl > MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES as usize {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            if body.len() != 8 + jl {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let layout_json =
+                std::str::from_utf8(&body[8..8 + jl]).map_err(|_| DecodeError::BadUtf8Command)?;
+            Ok(DecodedMessage::ShellSetOutputLayout {
+                layout_json: layout_json.to_string(),
+            })
         }
         MSG_FRAME_DMABUF_COMMIT => decode_frame_dmabuf_commit_body(body),
         _ => Err(DecodeError::UnknownMsgType),

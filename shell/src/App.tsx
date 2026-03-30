@@ -8,6 +8,7 @@ import {
   Index,
   Show,
 } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import './App.css'
 import {
   CHROME_TASKBAR_RESERVE_PX,
@@ -16,6 +17,7 @@ import {
 } from './chromeConstants'
 import { ShellWindowFrame } from './ShellWindowFrame'
 import { Taskbar } from './Taskbar'
+import { TransformPicker } from './TransformPicker'
 
 declare global {
   interface Window {
@@ -39,7 +41,8 @@ declare global {
         | 'set_geometry'
         | 'set_fullscreen'
         | 'set_maximized'
-        | 'presentation_fullscreen',
+        | 'presentation_fullscreen'
+        | 'set_output_layout',
       arg?: number | string,
       arg2?: number,
       arg3?: number,
@@ -50,20 +53,83 @@ declare global {
   }
 }
 
-/** Work-area client rect in view/DIP: flush to output left/right/top; room for titlebar above + taskbar below. */
-function shellMaximizedWorkAreaClientRect(outW: number, outH: number) {
+type LayoutScreen = {
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  transform: number
+}
+
+function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
   const th = CHROME_TITLEBAR_PX
-  const tb = CHROME_TASKBAR_RESERVE_PX
+  const tb = reserveTaskbar ? CHROME_TASKBAR_RESERVE_PX : 0
   return {
-    x: 0,
-    y: th,
-    w: Math.max(1, outW),
-    h: Math.max(1, outH - tb - th),
+    x: mon.x,
+    y: mon.y + th,
+    w: Math.max(1, mon.width),
+    h: Math.max(1, mon.height - th - tb),
+  }
+}
+
+function screensListForLayout(rows: LayoutScreen[], canvas: { w: number; h: number } | null): LayoutScreen[] {
+  if (rows.length > 0) return rows
+  if (canvas && canvas.w > 0 && canvas.h > 0) {
+    return [
+      {
+        name: '',
+        x: 0,
+        y: 0,
+        width: canvas.w,
+        height: canvas.h,
+        transform: 0,
+      },
+    ]
+  }
+  return []
+}
+
+function unionBBoxFromScreens(rows: LayoutScreen[]): { x: number; y: number; w: number; h: number } | null {
+  if (rows.length === 0) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxR = -Infinity
+  let maxB = -Infinity
+  for (const r of rows) {
+    minX = Math.min(minX, r.x)
+    minY = Math.min(minY, r.y)
+    maxR = Math.max(maxR, r.x + r.width)
+    maxB = Math.max(maxB, r.y + r.height)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(1, Math.round(maxR - minX)),
+    h: Math.max(1, Math.round(maxB - minY)),
   }
 }
 
 type DerpShellDetail =
   | { type: 'output_geometry'; logical_width: number; logical_height: number }
+  | {
+      type: 'output_layout'
+      canvas_logical_width: number
+      canvas_logical_height: number
+      canvas_logical_origin_x?: number
+      canvas_logical_origin_y?: number
+      canvas_physical_width: number
+      canvas_physical_height: number
+      screens: Array<{
+        name: string
+        x: number
+        y: number
+        width: number
+        height: number
+        transform: number
+      }>
+    }
   | {
       type: 'window_mapped'
       window_id: number
@@ -110,6 +176,23 @@ type DerpWindow = {
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
+}
+
+function pickScreenForWindowGlobal(win: DerpWindow, list: LayoutScreen[]): LayoutScreen | null {
+  if (list.length === 0) return null
+  const cx = win.x + Math.floor(win.width / 2)
+  const cy = win.y + Math.floor(win.height / 2)
+  for (const s of list) {
+    if (
+      cx >= s.x &&
+      cy >= s.y &&
+      cx < s.x + s.width &&
+      cy < s.y + s.height
+    ) {
+      return s
+    }
+  }
+  return list[0]
 }
 
 /** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
@@ -258,7 +341,8 @@ function shellWireSend(
     | 'set_geometry'
     | 'set_fullscreen'
     | 'set_maximized'
-    | 'presentation_fullscreen',
+    | 'presentation_fullscreen'
+    | 'set_output_layout',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -303,6 +387,8 @@ function shellWireSend(
     fn(op, arg as number, arg2)
   } else if (op === 'quit') {
     fn(op)
+  } else if (op === 'set_output_layout' && typeof arg === 'string') {
+    fn(op, arg)
   } else {
     fn(op, arg)
   }
@@ -325,13 +411,64 @@ function App() {
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
-  const [viewportCss, setViewportCss] = createSignal({ w: 0, h: 0 })
+  const [viewportCss, setViewportCss] = createSignal({
+    w: typeof window !== 'undefined' ? window.innerWidth : 800,
+    h: typeof window !== 'undefined' ? window.innerHeight : 600,
+  })
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
+  const [layoutCanvasOrigin, setLayoutCanvasOrigin] = createSignal<{ x: number; y: number } | null>(
+    null,
+  )
+  const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
+  const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
 
   const rulerStepPx = 100
+
+  const canvasCss = createMemo(() => {
+    const g = outputGeom()
+    const v = viewportCss()
+    const w = Math.max(1, g?.w ?? v.w ?? 1)
+    const h = Math.max(1, g?.h ?? v.h ?? 1)
+    return { w, h }
+  })
+
+  const workspacePartition = createMemo(() => {
+    const rows = screenDraft.rows
+    const g = outputGeom()
+    const v = viewportCss()
+    const cw = Math.max(1, g?.w ?? v.w ?? 1)
+    const ch = Math.max(1, g?.h ?? v.h ?? 1)
+    if (rows.length === 0) {
+      const single: LayoutScreen = {
+        name: '',
+        x: 0,
+        y: 0,
+        width: cw,
+        height: ch,
+        transform: 0,
+      }
+      return { primary: single, secondary: [] as LayoutScreen[] }
+    }
+    let pi = 0
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i]
+      const b = rows[pi]
+      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i
+    }
+    const primary = rows[pi]
+    const secondary = rows.filter((_, i) => i !== pi)
+    return { primary, secondary }
+  })
+
+  const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(screenDraft.rows))
+
+  const panelHostForHud = createMemo(() => {
+    if (screenDraft.rows.length === 0) return null
+    return workspacePartition().primary
+  })
 
   /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
    * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
@@ -557,6 +694,28 @@ function App() {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
         return
       }
+      if (d.type === 'output_layout') {
+        batch(() => {
+          setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
+          if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
+            setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
+          } else {
+            setLayoutCanvasOrigin(null)
+          }
+          setScreenDraft(
+            'rows',
+            d.screens.map((s) => ({
+              name: s.name,
+              x: s.x,
+              y: s.y,
+              width: s.width,
+              height: s.height,
+              transform: s.transform,
+            })),
+          )
+        })
+        return
+      }
       if (d.type === 'window_list') {
         setWindows(buildWindowsMapFromList(d.windows))
         return
@@ -768,7 +927,11 @@ function App() {
         'shell-root': true,
         'shell-root--crosshair': crosshairCursor(),
       }}
-      style={panelHueStyle()}
+      style={{
+        ...panelHueStyle(),
+        width: `${canvasCss().w}px`,
+        'min-height': `${canvasCss().h}px`,
+      }}
       ref={(el) => {
         mainRef = el
       }}
@@ -798,14 +961,17 @@ function App() {
                   shellWireSend('set_maximized', w.window_id, 0)
                   return
                 }
-                const g = outputGeom()
-                const vc = viewportCss()
-                const outW = g?.w ?? vc.w
-                const outH = g?.h ?? vc.h
-                if (outW <= 0 || outH <= 0) {
-                  return
-                }
-                const r = shellMaximizedWorkAreaClientRect(outW, outH)
+                const list = screensListForLayout(screenDraft.rows, outputGeom())
+                const mon = pickScreenForWindowGlobal(w, list) ?? list[0] ?? null
+                if (!mon) return
+                const prim = workspacePartition().primary
+                const reserveTb =
+                  !!prim &&
+                  mon.x === prim.x &&
+                  mon.y === prim.y &&
+                  mon.width === prim.width &&
+                  mon.height === prim.height
+                const r = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
                 shellWireSend(
                   'set_geometry',
                   w.window_id,
@@ -824,137 +990,309 @@ function App() {
         )}
       </Index>
 
-      <div class="shell-panel" style={panelHueStyle()}>
-        <h1 class="shell-title">derp shell</h1>
-        <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
-        <label class="shell-crosshair-toggle">
-          <input
-            type="checkbox"
-            checked={crosshairCursor()}
-            onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
-          />
-          <span>Crosshair cursor</span>
-        </label>
-        <Show when={outputGeom()}>
-          {(g) => (
-            <p class="shell-output-geom">
-              Compositor output (logical):{' '}
-              <strong>
-                {g().w}×{g().h}
-              </strong>
-            </p>
-          )}
-        </Show>
-        <p class="shell-input-hud" aria-live="polite">
-          <span class="shell-input-hud__label">input debug</span>
-          <span class="shell-input-hud__row">
-            Viewport (CSS):{' '}
-            <strong>
-              {viewportCss().w}×{viewportCss().h}
-            </strong>{' '}
-            · devicePixelRatio <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
-          </span>
-          <span class="shell-input-hud__row">
-            Windows (native): <strong>{windowsList().length}</strong>
-          </span>
-          <Show when={crosshairCursor()}>
-            <span class="shell-input-hud__row">
-              Pointer (clientX/Y):{' '}
-              <strong>{pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}</strong>
+      <For each={workspacePartition().secondary}>
+        {(s) => (
+          <div
+            class="shell-monitor-alt"
+            style={{
+              left: `${s.x}px`,
+              top: `${s.y}px`,
+              width: `${s.width}px`,
+              height: `${s.height}px`,
+            }}
+          >
+            <span class="shell-monitor-alt__label">
+              {s.name || 'Display'}
             </span>
-            <span class="shell-input-hud__row">
-              Pointer (in &lt;main&gt;):{' '}
-              <strong>
-                {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
-              </strong>
-            </span>
-          </Show>
-          <span class="shell-input-hud__row">
-            Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
-          </span>
-          <span class="shell-input-hud__row">
-            Pointer downs (button): <strong>{btnPointerDowns()}</strong>
-          </span>
-          <span class="shell-input-hud__row">
-            Spawn clicks handled: <strong>{spawnClicks()}</strong>
-          </span>
-        </p>
-        <p class="shell-spawn-url">{spawnUrlLine()}</p>
-        <label class="shell-cmd-label">
-          <span class="shell-cmd-label__text">Command (`sh -c`, nested Wayland display)</span>
-          <input
-            class="shell-cmd-input"
-            type="text"
-            value={spawnCommand()}
-            onInput={(e) => setSpawnCommand(e.currentTarget.value)}
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </label>
-        <button
-          type="button"
-          class="shell-spawn-btn"
-          disabled={spawnBusy()}
-          onPointerDown={() => setBtnPointerDowns((n) => n + 1)}
-          onClick={() => void runNativeInCompositor()}
-        >
-          {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
-        </button>
-        <button
-          type="button"
-          class="shell-exit-session-btn"
-          disabled={!canSessionControl()}
-          title={
-            canSessionControl()
-              ? 'Tell compositor to exit (ends session)'
-              : 'Needs cef_host control server'
-          }
-          onClick={() => {
-            if (!shellWireSend('quit')) void postShell('/session_quit', {})
-          }}
-        >
-          Exit session
-        </button>
-        {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
-      </div>
+          </div>
+        )}
+      </For>
 
-      <div
-        class="shell-drag-demo"
-        style={{
-          left: `${dragDemoPos().x}px`,
-          top: `${dragDemoPos().y}px`,
-        }}
-        onPointerDown={(e) => {
-          if (!e.isPrimary) return
-          if (e.button !== 0) return
-          e.preventDefault()
-          e.stopPropagation()
-          armDragDemo(e.clientX, e.clientY)
-        }}
-        onMouseDown={(e) => {
-          if (e.button !== 0) return
-          e.preventDefault()
-          e.stopPropagation()
-          armDragDemo(e.clientX, e.clientY)
-        }}
-        onTouchStart={(e) => {
-          const t = e.changedTouches[0]
-          if (!t) return
-          e.preventDefault()
-          e.stopPropagation()
-          armDragDemo(t.clientX, t.clientY)
-        }}
-        onPointerUp={(e) => {
-          if (!e.isPrimary) return
-          disarmDragDemo('demo-pointerup')
-        }}
-        onMouseUp={(e) => {
-          if (e.button !== 0) return
-          disarmDragDemo('demo-mouseup')
-        }}
-      >
-        Drag me (DOM only)
-      </div>
+      <Show when={workspacePartition().primary}>
+        {(prim) => (
+          <div
+            class="shell-primary-chrome"
+            style={{
+              left: `${prim().x}px`,
+              top: `${prim().y}px`,
+              width: `${prim().width}px`,
+              height: `${prim().height}px`,
+            }}
+          >
+            <div class="shell-primary-chrome__fill">
+              <div class="shell-panel" style={panelHueStyle()}>
+                <h1 class="shell-title">derp shell</h1>
+                <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
+                <label class="shell-crosshair-toggle">
+                  <input
+                    type="checkbox"
+                    checked={crosshairCursor()}
+                    onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
+                  />
+                  <span>Crosshair cursor</span>
+                </label>
+                <Show when={outputGeom()}>
+                  {(g) => (
+                    <p class="shell-output-geom">
+                      {`OSR / compositor canvas (logical): `}
+                      <strong>
+                        {g().w}×{g().h}
+                      </strong>
+                    </p>
+                  )}
+                </Show>
+                <div class="shell-input-hud" aria-live="polite">
+                  <span class="shell-input-hud__label">input debug</span>
+                  <span class="shell-input-hud__row">
+                    <span>
+                      Union from <code>screens[]</code>
+                      {': '}
+                    </span>
+                    <strong>
+                      {layoutUnionBbox()
+                        ? `@ ${layoutUnionBbox()!.x},${layoutUnionBbox()!.y} (${layoutUnionBbox()!.w}×${layoutUnionBbox()!.h})`
+                        : '—'}
+                    </strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    <span>Compositor union min corner: </span>
+                    <strong>
+                      {layoutCanvasOrigin()
+                        ? `@ ${layoutCanvasOrigin()!.x},${layoutCanvasOrigin()!.y}`
+                        : '—'}
+                    </strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    <span>Panel + taskbar host (min x, then y): </span>
+                    <strong>
+                      {panelHostForHud()
+                        ? `${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
+                        : '—'}
+                    </strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    {`Viewport (CSS): `}
+                    <strong>
+                      {viewportCss().w}×{viewportCss().h}
+                    </strong>
+                    {` · devicePixelRatio `}
+                    <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    Windows (native): <strong>{windowsList().length}</strong>
+                  </span>
+                  <Show when={crosshairCursor()}>
+                    <span class="shell-input-hud__row">
+                      {`Pointer (clientX/Y): `}
+                      <strong>
+                        {pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}
+                      </strong>
+                    </span>
+                    <span class="shell-input-hud__row">
+                      {`Pointer (in <main>): `}
+                      <strong>
+                        {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
+                      </strong>
+                    </span>
+                  </Show>
+                  <span class="shell-input-hud__row">
+                    Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    Pointer downs (button): <strong>{btnPointerDowns()}</strong>
+                  </span>
+                  <span class="shell-input-hud__row">
+                    Spawn clicks handled: <strong>{spawnClicks()}</strong>
+                  </span>
+                  <div class="shell-screens-panel">
+                    <h2 class="shell-screens-title">Monitors</h2>
+                    <ul class="shell-monitor-list">
+                      <For
+                        each={screenDraft.rows}
+                        fallback={
+                          <li class="shell-monitor-list__empty">
+                            No outputs listed — compositor should send <code>output_layout</code> with one entry per
+                            head.
+                          </li>
+                        }
+                      >
+                        {(row) => (
+                          <li class="shell-monitor-list__item">
+                            <span class="shell-monitor-list__name">{row.name || '—'}</span>
+                            <span class="shell-monitor-list__meta">
+                              @ {row.x},{row.y} · {row.width}×{row.height} · orientation {row.transform}
+                            </span>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                    <Show
+                      when={screenDraft.rows.length > 0}
+                      fallback={
+                        <p class="shell-screens-hint shell-screens-hint--muted">
+                          Position/orientation editor unlocks once screens are known.
+                        </p>
+                      }
+                    >
+                      <For each={screenDraft.rows}>
+                        {(row, i) => (
+                          <div class="shell-screen-row">
+                            <span class="shell-screen-name">{row.name}</span>
+                            <label class="shell-screen-field">
+                              x
+                              <input
+                                type="number"
+                                class="shell-screen-input"
+                                value={row.x}
+                                onInput={(e) =>
+                                  setScreenDraft(
+                                    'rows',
+                                    i(),
+                                    'x',
+                                    Number(e.currentTarget.value) || 0,
+                                  )
+                                }
+                              />
+                            </label>
+                            <label class="shell-screen-field">
+                              y
+                              <input
+                                type="number"
+                                class="shell-screen-input"
+                                value={row.y}
+                                onInput={(e) =>
+                                  setScreenDraft(
+                                    'rows',
+                                    i(),
+                                    'y',
+                                    Number(e.currentTarget.value) || 0,
+                                  )
+                                }
+                              />
+                            </label>
+                            <label class="shell-screen-field shell-screen-field--picker">
+                              orientation
+                              <TransformPicker
+                                value={row.transform}
+                                rowIndex={i()}
+                                openIndex={orientationPickerOpen}
+                                setOpenIndex={setOrientationPickerOpen}
+                                onChange={(v) => setScreenDraft('rows', i(), 'transform', v)}
+                              />
+                            </label>
+                            <span class="shell-screen-hint">
+                              {row.width}×{row.height}
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                      <button
+                        type="button"
+                        class="shell-layout-apply-btn"
+                        onClick={() => {
+                          const screens = screenDraft.rows.map((r) => ({
+                            name: r.name,
+                            x: r.x,
+                            y: r.y,
+                            transform: r.transform,
+                          }))
+                          shellWireSend('set_output_layout', JSON.stringify({ screens }))
+                        }}
+                      >
+                        Apply layout to compositor
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+                <p class="shell-spawn-url">{spawnUrlLine()}</p>
+                <label class="shell-cmd-label">
+                  <span class="shell-cmd-label__text">Command (`sh -c`, nested Wayland display)</span>
+                  <input
+                    class="shell-cmd-input"
+                    type="text"
+                    value={spawnCommand()}
+                    onInput={(e) => setSpawnCommand(e.currentTarget.value)}
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </label>
+                <button
+                  type="button"
+                  class="shell-spawn-btn"
+                  disabled={spawnBusy()}
+                  onPointerDown={() => setBtnPointerDowns((n) => n + 1)}
+                  onClick={() => void runNativeInCompositor()}
+                >
+                  {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
+                </button>
+                <button
+                  type="button"
+                  class="shell-exit-session-btn"
+                  disabled={!canSessionControl()}
+                  title={
+                    canSessionControl()
+                      ? 'Tell compositor to exit (ends session)'
+                      : 'Needs cef_host control server'
+                  }
+                  onClick={() => {
+                    if (!shellWireSend('quit')) void postShell('/session_quit', {})
+                  }}
+                >
+                  Exit session
+                </button>
+                {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
+              </div>
+            </div>
+
+            <Taskbar
+              onLaunch={(exec) => void spawnInCompositor(exec)}
+              windows={taskbarWindows()}
+              focusedWindowId={focusedWindowId()}
+              onTaskbarActivate={(id) => {
+                shellWireSend('taskbar_activate', id)
+              }}
+            />
+
+            <div
+              class="shell-drag-demo"
+              style={{
+                left: `${dragDemoPos().x}px`,
+                top: `${dragDemoPos().y}px`,
+              }}
+              onPointerDown={(e) => {
+                if (!e.isPrimary) return
+                if (e.button !== 0) return
+                e.preventDefault()
+                e.stopPropagation()
+                armDragDemo(e.clientX, e.clientY)
+              }}
+              onMouseDown={(e) => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                e.stopPropagation()
+                armDragDemo(e.clientX, e.clientY)
+              }}
+              onTouchStart={(e) => {
+                const t = e.changedTouches[0]
+                if (!t) return
+                e.preventDefault()
+                e.stopPropagation()
+                armDragDemo(t.clientX, t.clientY)
+              }}
+              onPointerUp={(e) => {
+                if (!e.isPrimary) return
+                disarmDragDemo('demo-pointerup')
+              }}
+              onMouseUp={(e) => {
+                if (e.button !== 0) return
+                disarmDragDemo('demo-mouseup')
+              }}
+            >
+              Drag me (DOM only)
+            </div>
+          </div>
+        )}
+      </Show>
 
       <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">
         <Show when={crosshairCursor()}>
@@ -994,15 +1332,6 @@ function App() {
         </Show>
         {crosshairDebugOverlay()}
       </div>
-
-      <Taskbar
-        onLaunch={(exec) => void spawnInCompositor(exec)}
-        windows={taskbarWindows()}
-        focusedWindowId={focusedWindowId()}
-        onTaskbarActivate={(id) => {
-          shellWireSend('taskbar_activate', id)
-        }}
-      />
     </main>
   )
 }

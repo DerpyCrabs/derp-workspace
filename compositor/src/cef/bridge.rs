@@ -45,6 +45,14 @@ impl ShellToCefLink {
         }
     }
 
+    pub fn sync_osr_physical_from_dmabuf(&self, w: i32, h: i32) {
+        if w > 0 && h > 0 {
+            if let Ok(mut g) = self.view_state.lock() {
+                g.set_physical_size(w, h);
+            }
+        }
+    }
+
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
         if matches!(msg, shell_wire::DecodedCompositorToShellMessage::Ping) {
             let _ = self.cef_tx.send(CefToCompositor::ShellRxNote);

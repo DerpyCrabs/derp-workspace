@@ -119,4 +119,10 @@ impl UplinkToCompositor {
             s.shell_set_presentation_fullscreen(enabled);
         });
     }
+
+    pub fn shell_apply_output_layout(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_output_layout_json(&json);
+        });
+    }
 }

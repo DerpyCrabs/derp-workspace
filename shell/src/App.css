@@ -1,11 +1,10 @@
 .shell-root {
   margin: 0;
   min-height: 100vh;
-  padding-bottom: 44px;
+  padding-bottom: 0;
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  position: relative;
   font-family: system-ui, sans-serif;
   /*
    * Muted “paper” desk: cell size grows with viewport so the grid stays legible on 2560–2880px+.
@@ -37,7 +36,104 @@
     max(96px, 7.5vw) max(96px, 7.5vw),
     max(96px, 7.5vw) max(96px, 7.5vw);
   color: hsl(0, 0%, 96%);
-  position: relative;
+}
+
+.shell-monitor-alt {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px dashed rgba(40, 55, 90, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.shell-monitor-list {
+  margin: 0 0 10px;
+  padding: 0 0 0 18px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: hsl(0, 0%, 88%);
+}
+
+.shell-monitor-list__item {
+  margin-bottom: 4px;
+}
+
+.shell-monitor-list__name {
+  font-weight: 600;
+  color: hsl(0, 0%, 96%);
+}
+
+.shell-monitor-list__meta {
+  opacity: 0.92;
+}
+
+.shell-monitor-list__empty {
+  list-style: disc;
+  color: hsl(45, 85%, 72%);
+}
+
+.shell-monitor-alt__label {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(0, 0%, 96%);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.shell-primary-chrome {
+  position: absolute;
+  z-index: 400000;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.shell-primary-chrome__fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px 52px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.shell-primary-chrome__fill .shell-panel {
+  pointer-events: auto;
+  max-width: min(28rem, 100%);
+}
+
+.shell-primary-chrome .shell-taskbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: auto;
+}
+
+.shell-primary-chrome .shell-drag-demo {
+  position: absolute;
+}
+
+.shell-input-hud .shell-screens-panel {
+  margin-top: 0.5rem;
+  max-width: none;
+}
+
+.shell-input-hud .shell-screens-title {
+  font-size: 0.72rem;
 }
 
 .shell-root.shell-root--crosshair {
@@ -643,4 +739,137 @@
   border-radius: 0.25rem;
   background: rgba(255, 255, 255, 0.12);
   opacity: 0.85;
+}
+
+.shell-screens-panel {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.22);
+  max-width: 32rem;
+}
+
+.shell-screens-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.shell-screens-hint--muted {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  opacity: 0.88;
+}
+
+.shell-screen-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.82rem;
+}
+
+.shell-screen-name {
+  flex: 1 1 6rem;
+  min-width: 0;
+  font-family: ui-monospace, monospace;
+  opacity: 0.92;
+}
+
+.shell-screen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+.shell-screen-input {
+  width: 4.5rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+}
+
+.shell-screen-field--picker .shell-transform-picker {
+  margin-top: 0.15rem;
+}
+
+.shell-transform-picker {
+  position: relative;
+  align-self: flex-start;
+}
+
+.shell-transform-picker__toggle {
+  min-width: 6.5rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-transform-picker__toggle:hover {
+  background: rgba(0, 0, 0, 0.48);
+}
+
+.shell-transform-picker__menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 2px);
+  z-index: 500000;
+  min-width: 100%;
+  padding: 0.2rem 0;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(22, 30, 48, 0.98);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.shell-transform-picker__opt {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-transform-picker__opt:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.shell-transform-picker__opt--active {
+  background: rgba(60, 120, 200, 0.35);
+}
+
+.shell-screen-hint {
+  opacity: 0.65;
+  font-size: 0.75rem;
+}
+
+.shell-layout-apply-btn {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(30, 80, 140, 0.55);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.shell-layout-apply-btn:hover {
+  background: rgba(40, 100, 170, 0.65);
 }

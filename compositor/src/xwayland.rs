@@ -51,9 +51,9 @@ pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut Calloo
                         Ok(wm) => {
                             let id = wm.id();
                             d.state.x11_wm_slot = Some((id, wm));
-                            if let Some(out) = d.state.space.outputs().next() {
+                            if let Some(out) = d.state.leftmost_output() {
                                 if let Some((_, ref mut wm)) = d.state.x11_wm_slot {
-                                    if let Err(e) = wm.set_randr_primary_output(Some(out)) {
+                                    if let Err(e) = wm.set_randr_primary_output(Some(&out)) {
                                         tracing::debug!(?e, "xwm set_randr_primary_output");
                                     }
                                 }

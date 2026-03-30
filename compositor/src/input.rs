@@ -13,7 +13,7 @@ use smithay::{
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Logical, Point, Rectangle, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
 };
 
 use crate::{derp_space::DerpSpaceElem, state::CompositorState};
@@ -55,15 +55,8 @@ impl CompositorState {
         local: Point<f64, Logical>,
         time_msec: u32,
     ) {
-        let gw = output_geo.size.w.max(1) as f64;
-        let gh = output_geo.size.h.max(1) as f64;
-        let (nx, ny) = (
-            (local.x / gw).clamp(0.0, 1.0),
-            (local.y / gh).clamp(0.0, 1.0),
-        );
-        self.shell_pointer_norm = Some((nx, ny));
-
         let pos = local + output_geo.loc.to_f64();
+        self.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
 
         let serial = SERIAL_COUNTER.next_serial();
 
@@ -90,11 +83,10 @@ impl CompositorState {
         self.shell_ipc_maybe_forward_pointer_move(pos);
     }
 
-    /// Touch position in **output-local logical** coords (matches [`Self::pointer_motion_output_local`]).
-    fn touch_output_local<I: InputBackend>(
+    fn touch_workspace_local<I: InputBackend>(
         &self,
         event: &impl AbsolutePositionEvent<I>,
-        output_geo: Rectangle<i32, Logical>,
+        workspace_size: Size<i32, Logical>,
     ) -> Point<f64, Logical> {
         if self.touch_abs_is_window_pixels {
             let (pw, ph) = self.shell_window_physical_px;
@@ -103,11 +95,11 @@ impl CompositorState {
             let nx = (event.x() / pw).clamp(0.0, 1.0);
             let ny = (event.y() / ph).clamp(0.0, 1.0);
             Point::from((
-                nx * output_geo.size.w as f64,
-                ny * output_geo.size.h as f64,
+                nx * workspace_size.w.max(1) as f64,
+                ny * workspace_size.h.max(1) as f64,
             ))
         } else {
-            event.position_transformed(output_geo.size)
+            event.position_transformed(workspace_size)
         }
     }
 
@@ -139,6 +131,7 @@ impl CompositorState {
         );
         const BTN_LEFT: u32 = 0x110;
 
+        let cef_ipc = self.shell_pointer_ipc_for_cef(pos);
         let shell_px = if route_cef || self.shell_move_is_active() || self.shell_resize_is_active() {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
                 self.shell_pointer_norm_from_global(pos)
@@ -147,7 +140,11 @@ impl CompositorState {
         } else {
             None
         };
-        if shell_px.is_some() {
+        let take_shell = shell_px.is_some()
+            || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
+            || self.shell_move_is_active()
+            || self.shell_resize_is_active();
+        if take_shell {
             if ButtonState::Pressed == button_state
                 && !pointer.is_grabbed()
                 && !self.shell_point_in_any_window_decoration(pos)
@@ -172,7 +169,7 @@ impl CompositorState {
             );
             pointer.frame(self);
             if route_cef && self.shell_cef_active() {
-                if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                if let Some((bx, by)) = cef_ipc {
                     if button_state == ButtonState::Pressed {
                         self.shell_ipc_keyboard_to_cef = true;
                     }
@@ -312,8 +309,9 @@ impl CompositorState {
                 );
             }
             InputEvent::PointerMotion { event, .. } => {
-                let output = self.space.outputs().next().unwrap();
-                let output_geo = self.space.output_geometry(output).unwrap();
+                let Some(ws) = self.workspace_logical_bounds() else {
+                    return;
+                };
                 let pointer = self.seat.get_pointer().unwrap();
                 let d = event.delta();
                 tracing::trace!(
@@ -326,12 +324,17 @@ impl CompositorState {
                     "PointerMotion (relative)"
                 );
                 let mut pos = pointer.current_location() + event.delta();
-                let min_x = output_geo.loc.x as f64;
-                let min_y = output_geo.loc.y as f64;
-                let max_x = min_x + output_geo.size.w.max(0) as f64;
-                let max_y = min_y + output_geo.size.h.max(0) as f64;
+                let min_x = ws.loc.x as f64;
+                let min_y = ws.loc.y as f64;
+                let max_x = (min_x + ws.size.w.max(0) as f64 - 1.0e-4).max(min_x);
+                let max_y = (min_y + ws.size.h.max(0) as f64 - 1.0e-4).max(min_y);
                 pos.x = pos.x.clamp(min_x, max_x);
                 pos.y = pos.y.clamp(min_y, max_y);
+                let output = self
+                    .output_containing_global_point(pos)
+                    .or_else(|| self.leftmost_output())
+                    .unwrap();
+                let output_geo = self.space.output_geometry(&output).unwrap();
                 let local = pos - output_geo.loc.to_f64();
                 tracing::trace!(
                     target: "derp_input",
@@ -347,11 +350,17 @@ impl CompositorState {
                 self.needs_winit_redraw = true;
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
-                let output = self.space.outputs().next().unwrap();
-
-                let output_geo = self.space.output_geometry(output).unwrap();
-
-                let local = event.position_transformed(output_geo.size);
+                let Some(ws) = self.workspace_logical_bounds() else {
+                    return;
+                };
+                let local_ws = event.position_transformed(ws.size);
+                let pos = ws.loc.to_f64() + local_ws;
+                let output = self
+                    .output_containing_global_point(pos)
+                    .or_else(|| self.leftmost_output())
+                    .unwrap();
+                let output_geo = self.space.output_geometry(&output).unwrap();
+                let local = pos - output_geo.loc.to_f64();
                 tracing::trace!(
                     target: "derp_input",
                     raw_x = event.x(),
@@ -382,16 +391,23 @@ impl CompositorState {
                     );
                     return;
                 }
-                let output = self.space.outputs().next().unwrap();
-                let output_geo = self.space.output_geometry(output).unwrap();
+                let Some(ws) = self.workspace_logical_bounds() else {
+                    return;
+                };
                 self.touch_emulation_slot = Some(event.slot());
-                let local = self.touch_output_local(&event, output_geo);
+                let local_ws = self.touch_workspace_local(&event, ws.size);
+                let pos = ws.loc.to_f64() + local_ws;
+                let output = self
+                    .output_containing_global_point(pos)
+                    .or_else(|| self.leftmost_output())
+                    .unwrap();
+                let output_geo = self.space.output_geometry(&output).unwrap();
+                let local = pos - output_geo.loc.to_f64();
                 let time = Event::time_msec(&event);
-                let pos = output_geo.loc.to_f64() + local;
                 let cef_touch = self.shell_pointer_route_to_cef(pos)
                     && self.shell_has_frame
                     && self.shell_cef_active()
-                    && self.shell_pointer_view_px(pos).is_some();
+                    && self.shell_pointer_ipc_for_cef(pos).is_some();
                 self.touch_routes_to_cef = cef_touch;
                 tracing::debug!(
                     target: "derp_input",
@@ -408,7 +424,7 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, time);
                 if cef_touch {
-                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -433,9 +449,17 @@ impl CompositorState {
                     );
                     return;
                 }
-                let output = self.space.outputs().next().unwrap();
-                let output_geo = self.space.output_geometry(output).unwrap();
-                let local = self.touch_output_local(&event, output_geo);
+                let Some(ws) = self.workspace_logical_bounds() else {
+                    return;
+                };
+                let local_ws = self.touch_workspace_local(&event, ws.size);
+                let pos = ws.loc.to_f64() + local_ws;
+                let output = self
+                    .output_containing_global_point(pos)
+                    .or_else(|| self.leftmost_output())
+                    .unwrap();
+                let output_geo = self.space.output_geometry(&output).unwrap();
+                let local = pos - output_geo.loc.to_f64();
                 tracing::trace!(
                     target: "derp_input",
                     raw_x = event.x(),
@@ -446,8 +470,7 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 if self.touch_routes_to_cef {
-                    let pos = output_geo.loc.to_f64() + local;
-                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -473,7 +496,7 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -503,7 +526,7 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_view_px(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,

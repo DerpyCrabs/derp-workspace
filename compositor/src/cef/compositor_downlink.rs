@@ -58,6 +58,67 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            canvas_logical_w,
+            canvas_logical_h,
+            canvas_physical_w,
+            canvas_physical_h,
+            screens,
+        } => {
+            if let Ok(mut g) = view_state.lock() {
+                g.logical_width = canvas_logical_w.max(1) as i32;
+                g.logical_height = canvas_logical_h.max(1) as i32;
+                let pw = canvas_physical_w.max(1) as i32;
+                let ph = canvas_physical_h.max(1) as i32;
+                g.set_physical_size(pw, ph);
+            }
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            if let Some(host) = b.host() {
+                host.was_resized();
+                host.notify_screen_info_changed();
+                host.invalidate(cef::PaintElementType::VIEW);
+            }
+            let screens_j: Vec<serde_json::Value> = screens
+                .iter()
+                .map(|s| {
+                    json!({
+                        "name": &s.name,
+                        "x": s.x,
+                        "y": s.y,
+                        "width": s.w,
+                        "height": s.h,
+                        "transform": s.transform,
+                    })
+                })
+                .collect();
+            let (mut cox, mut coy) = (0i32, 0i32);
+            if !screens.is_empty() {
+                cox = screens[0].x;
+                coy = screens[0].y;
+                for s in screens.iter().skip(1) {
+                    cox = cox.min(s.x);
+                    coy = coy.min(s.y);
+                }
+            }
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "output_layout",
+                    "canvas_logical_width": canvas_logical_w,
+                    "canvas_logical_height": canvas_logical_h,
+                    "canvas_logical_origin_x": cox,
+                    "canvas_logical_origin_y": coy,
+                    "canvas_physical_width": canvas_physical_w,
+                    "canvas_physical_height": canvas_physical_h,
+                    "screens": screens_j,
+                }),
+            );
+        }
         shell_wire::DecodedCompositorToShellMessage::WindowMapped {
             window_id,
             surface_id,
@@ -237,17 +298,9 @@ pub fn apply_message(
                 return;
             };
 
-            let map_xy = |x: i32, y: i32| -> (i32, i32) {
-                view_state
-                    .lock()
-                    .map(|s| s.physical_to_logical(x, y))
-                    .unwrap_or((x, y))
-            };
-
-            let (vx, vy) = map_xy(x, y);
             let ev = MouseEvent {
-                x: vx,
-                y: vy,
+                x,
+                y,
                 modifiers,
             };
             host.send_mouse_move_event(Some(&ev), 0);
@@ -270,17 +323,9 @@ pub fn apply_message(
                 return;
             };
 
-            let map_xy = |x: i32, y: i32| -> (i32, i32) {
-                view_state
-                    .lock()
-                    .map(|s| s.physical_to_logical(x, y))
-                    .unwrap_or((x, y))
-            };
-
-            let (vx, vy) = map_xy(x, y);
             let ev = MouseEvent {
-                x: vx,
-                y: vy,
+                x,
+                y,
                 modifiers,
             };
             let ty = match button {
@@ -308,17 +353,9 @@ pub fn apply_message(
                 return;
             };
 
-            let map_xy = |x: i32, y: i32| -> (i32, i32) {
-                view_state
-                    .lock()
-                    .map(|s| s.physical_to_logical(x, y))
-                    .unwrap_or((x, y))
-            };
-
-            let (vx, vy) = map_xy(x, y);
             let ev = MouseEvent {
-                x: vx,
-                y: vy,
+                x,
+                y,
                 modifiers,
             };
             host.send_mouse_move_event(Some(&ev), 0);
@@ -375,11 +412,6 @@ pub fn apply_message(
                 return;
             };
 
-            let (vx, vy) = view_state
-                .lock()
-                .map(|s| s.physical_to_logical(x, y))
-                .unwrap_or((x, y));
-
             let ty = match phase {
                 shell_wire::TOUCH_PHASE_MOVED => TouchEventType::MOVED,
                 shell_wire::TOUCH_PHASE_PRESSED => TouchEventType::PRESSED,
@@ -396,8 +428,8 @@ pub fn apply_message(
 
             let ev = TouchEvent {
                 id: touch_id,
-                x: vx as f32,
-                y: vy as f32,
+                x: x as f32,
+                y: y as f32,
                 radius_x: 0.0,
                 radius_y: 0.0,
                 rotation_angle: 0.0,

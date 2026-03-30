@@ -23,14 +23,14 @@ type Desk<'a> = DesktopStack<'a, WinEl>;
 fn push_named_cursor_fallback(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
-    pos: Point<f64, Logical>,
+    pos_output_local: Point<f64, Logical>,
     scale_f: f64,
     out: &mut Vec<Desk<'_>>,
 ) {
     let (hx, hy) = state.cursor_fallback_hotspot;
     let phys = Point::<f64, Physical>::from((
-        ((pos.x - hx as f64) * scale_f),
-        ((pos.y - hy as f64) * scale_f),
+        ((pos_output_local.x - hx as f64) * scale_f),
+        ((pos_output_local.y - hy as f64) * scale_f),
     ));
     match MemoryRenderBufferRenderElement::from_buffer(
         renderer,
@@ -57,11 +57,27 @@ pub fn append_pointer_desktop_elements(
     let Some(pointer) = state.seat.get_pointer() else {
         return;
     };
-    let pos = pointer.current_location();
+    let pos_global = pointer.current_location();
     let scale_f = output.current_scale().fractional_scale();
 
+    if !matches!(
+        &state.pointer_cursor_image,
+        CursorImageStatus::Named(_) | CursorImageStatus::Surface(_)
+    ) {
+        return;
+    }
+    let Some(hit) = state.output_containing_global_point(pos_global) else {
+        return;
+    };
+    if hit.name() != output.name() {
+        return;
+    }
+    let Some(output_geo) = state.space.output_geometry(output) else {
+        return;
+    };
+    let pos = pos_global - output_geo.loc.to_f64();
+
     match &state.pointer_cursor_image {
-        CursorImageStatus::Hidden => {}
         CursorImageStatus::Named(_) => {
             push_named_cursor_fallback(state, renderer, pos, scale_f, out);
         }
@@ -91,5 +107,6 @@ pub fn append_pointer_desktop_elements(
                 out.push(DesktopStack::Pointer(el));
             }
         }
+        CursorImageStatus::Hidden => unreachable!(),
     }
 }

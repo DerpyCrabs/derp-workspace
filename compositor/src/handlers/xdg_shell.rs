@@ -466,12 +466,16 @@ impl CompositorState {
             return;
         };
 
-        let output = self.space.outputs().next().unwrap();
-        let output_geo = self.space.output_geometry(output).unwrap();
         let window_geo = self
             .space
             .element_geometry(&DerpSpaceElem::Wayland(window.clone()))
             .unwrap();
+        let wg = &window_geo;
+        let output = self
+            .output_for_global_xywh(wg.loc.x, wg.loc.y, wg.size.w, wg.size.h)
+            .or_else(|| self.leftmost_output())
+            .unwrap();
+        let output_geo = self.space.output_geometry(&output).unwrap();
 
         let mut target = output_geo;
         target.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));

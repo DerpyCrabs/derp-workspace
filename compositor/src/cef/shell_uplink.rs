@@ -139,6 +139,10 @@ fn handle_uplink_list(
             let en = args.int(1) != 0;
             uplink.shell_set_presentation_fullscreen(en);
         }
+        "set_output_layout" => {
+            let json = cef_string_userfree_to_string(&args.string(1));
+            uplink.shell_apply_output_layout(json);
+        }
         _ => {}
     }
 }
@@ -446,9 +450,19 @@ wrap_v8_handler! {
                     };
                     let _ = list.set_int(1, en);
                 }
+                "set_output_layout" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_output_layout requires JSON string");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("set_output_layout: second arg must be a string");
+                    }
+                    let json = cef_string_userfree_to_string(&a1.string_value());
+                    let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
+                }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen)"
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout)"
                     );
                 }
             }
