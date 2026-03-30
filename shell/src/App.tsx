@@ -1,5 +1,6 @@
 import {
   batch,
+  createEffect,
   createMemo,
   createSignal,
   onCleanup,
@@ -43,6 +44,7 @@ declare global {
         | 'set_maximized'
         | 'presentation_fullscreen'
         | 'set_output_layout'
+        | 'set_exclusion_zones'
         | 'set_shell_primary'
         | 'set_ui_scale',
       arg?: number | string,
@@ -63,6 +65,14 @@ type LayoutScreen = {
   height: number
   transform: number
   refresh_milli_hz: number
+}
+
+type ExclusionHudZone = {
+  label: string
+  x: number
+  y: number
+  w: number
+  h: number
 }
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
@@ -338,6 +348,33 @@ function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   console.log(`[derp-shell-move] ${msg}${extra}`)
 }
 
+function clientRectToGlobalLogical(
+  mainRect: DOMRect,
+  elRect: DOMRect,
+  canvasW: number,
+  canvasH: number,
+  origin: { x: number; y: number } | null,
+) {
+  const ox = origin?.x ?? 0
+  const oy = origin?.y ?? 0
+  const cw = Math.max(1, canvasW)
+  const ch = Math.max(1, canvasH)
+  const mw = Math.max(1, mainRect.width)
+  const mh = Math.max(1, mainRect.height)
+  const sx = cw / mw
+  const sy = ch / mh
+  const lx = (elRect.left - mainRect.left) * sx
+  const ly = (elRect.top - mainRect.top) * sy
+  const lw = elRect.width * sx
+  const lh = elRect.height * sy
+  return {
+    x: Math.round(lx + ox),
+    y: Math.round(ly + oy),
+    w: Math.max(1, Math.round(lw)),
+    h: Math.max(1, Math.round(lh)),
+  }
+}
+
 function shellWireSend(
   op:
     | 'close'
@@ -356,6 +393,7 @@ function shellWireSend(
     | 'set_maximized'
     | 'presentation_fullscreen'
     | 'set_output_layout'
+    | 'set_exclusion_zones'
     | 'set_shell_primary'
     | 'set_ui_scale',
   arg?: number | string,
@@ -404,6 +442,8 @@ function shellWireSend(
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'set_exclusion_zones' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
@@ -443,6 +483,7 @@ function App() {
   const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
+  const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
 
@@ -574,6 +615,46 @@ function App() {
 
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
+  let exclusionZonesRaf = 0
+
+  function syncExclusionZonesNow() {
+    const main = mainRef
+    if (!main) {
+      setExclusionZonesHud([])
+      return
+    }
+    const og = outputGeom()
+    if (!og) {
+      setExclusionZonesHud([])
+      return
+    }
+    const co = layoutCanvasOrigin()
+    const mainRect = main.getBoundingClientRect()
+    const rects: Array<{ x: number; y: number; w: number; h: number }> = []
+    const hud: ExclusionHudZone[] = []
+    const addEl = (el: Element | null | undefined, label: string) => {
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      if (r.width < 1 || r.height < 1) return
+      const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
+      rects.push({ x: z.x, y: z.y, w: z.w, h: z.h })
+      hud.push({ label, ...z })
+    }
+    addEl(main.querySelector('.shell-panel'), 'panel')
+    addEl(main.querySelector('.shell-taskbar'), 'taskbar')
+    setExclusionZonesHud(hud)
+    if (typeof window.__derpShellWireSend === 'function') {
+      window.__derpShellWireSend('set_exclusion_zones', JSON.stringify({ rects }))
+    }
+  }
+
+  function scheduleExclusionZonesSync() {
+    if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
+    exclusionZonesRaf = requestAnimationFrame(() => {
+      exclusionZonesRaf = 0
+      syncExclusionZonesNow()
+    })
+  }
 
   /** Local-only draggable box. CEF OSR often delivers mouse events to `window` more reliably than `PointerEvent` + capture on a node. */
   const [dragDemoPos, setDragDemoPos] = createSignal({ x: 48, y: 96 })
@@ -735,6 +816,7 @@ function App() {
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
+        queueMicrotask(() => scheduleExclusionZonesSync())
         return
       }
       if (d.type === 'output_layout') {
@@ -772,6 +854,7 @@ function App() {
               : null
           setShellChromePrimaryName(pr)
         })
+        queueMicrotask(() => scheduleExclusionZonesSync())
         return
       }
       if (d.type === 'window_list') {
@@ -795,6 +878,15 @@ function App() {
     const syncViewport = () =>
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
     syncViewport()
+
+    let exclusionResizeObserver: ResizeObserver | null = null
+    queueMicrotask(() => {
+      const main = mainRef
+      if (!main) return
+      exclusionResizeObserver = new ResizeObserver(() => scheduleExclusionZonesSync())
+      exclusionResizeObserver.observe(main, { box: 'border-box' })
+      scheduleExclusionZonesSync()
+    })
 
     const onPointerMove = (e: PointerEvent) => {
       if (dragDemoGrab && dragDemoMoveLogSeq < 3 && e.buttons === 0) {
@@ -912,7 +1004,11 @@ function App() {
     window.addEventListener('touchend', onWindowTouchEnd, { passive: true })
     window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
     window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
-    window.addEventListener('resize', syncViewport, { passive: true })
+    const onWindowResize = () => {
+      syncViewport()
+      scheduleExclusionZonesSync()
+    }
+    window.addEventListener('resize', onWindowResize, { passive: true })
 
     const onFullscreenChange = () => {
       shellWireSend('presentation_fullscreen', document.fullscreenElement ? 1 : 0)
@@ -930,7 +1026,8 @@ function App() {
       window.removeEventListener('touchend', onWindowTouchEnd)
       window.removeEventListener('touchcancel', onWindowTouchEnd)
       window.removeEventListener('touchmove', onWindowTouchMove)
-      window.removeEventListener('resize', syncViewport)
+      window.removeEventListener('resize', onWindowResize)
+      exclusionResizeObserver?.disconnect()
       document.removeEventListener('fullscreenchange', onFullscreenChange)
     })
   })
@@ -979,6 +1076,12 @@ function App() {
     await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
   }
 
+  createEffect(() => {
+    windowsList()
+    workspacePartition()
+    scheduleExclusionZonesSync()
+  })
+
   return (
     <main
       classList={{
@@ -992,6 +1095,7 @@ function App() {
       }}
       ref={(el) => {
         mainRef = el
+        queueMicrotask(() => scheduleExclusionZonesSync())
       }}
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
     >
@@ -1139,6 +1243,26 @@ function App() {
                   <span class="shell-input-hud__row">
                     Windows (native): <strong>{windowsList().length}</strong>
                   </span>
+                  <div class="shell-exclusion-zones-hud">
+                    <span class="shell-input-hud__label">Exclusion zones (global logical)</span>
+                    <Show
+                      when={exclusionZonesHud().length > 0}
+                      fallback={<span class="shell-input-hud__row shell-exclusion-zones-hud__empty">—</span>}
+                    >
+                      <ul class="shell-exclusion-zones-list">
+                        <For each={exclusionZonesHud()}>
+                          {(z) => (
+                            <li class="shell-exclusion-zones-list__item">
+                              <span class="shell-exclusion-zones-list__label">{z.label}</span>
+                              <code class="shell-exclusion-zones-list__coords">
+                                {z.x},{z.y} · {z.w}×{z.h}
+                              </code>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </Show>
+                  </div>
                   <Show when={crosshairCursor()}>
                     <span class="shell-input-hud__row">
                       {`Pointer (clientX/Y): `}

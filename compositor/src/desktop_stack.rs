@@ -19,7 +19,158 @@ use smithay::backend::renderer::{
 use smithay::desktop::space::SpaceRenderElements;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use std::convert::Infallible;
+use std::sync::Arc;
 use tracing::warn;
+
+use crate::exclusion_clip;
+
+pub struct SpaceExclusionClip<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    inner: SpaceRenderElements<GlesRenderer, E>,
+    exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+}
+
+impl<E> SpaceExclusionClip<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    pub fn new(
+        inner: SpaceRenderElements<GlesRenderer, E>,
+        exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+    ) -> Self {
+        Self { inner, exclusion }
+    }
+}
+
+impl<E> Element for SpaceExclusionClip<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        self.inner.location(scale)
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.inner.src()
+    }
+
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.inner.geometry(scale)
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        self.inner.damage_since(scale, commit)
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        if self.exclusion.zones.is_empty() {
+            return self.inner.opaque_regions(scale);
+        }
+        let geom = self.inner.geometry(scale);
+        let mut out: Vec<Rectangle<i32, Physical>> = Vec::new();
+        for r in self.inner.opaque_regions(scale).iter() {
+            if r.size.w <= 0 || r.size.h <= 0 {
+                continue;
+            }
+            let mut r_out = *r;
+            r_out.loc.x += geom.loc.x;
+            r_out.loc.y += geom.loc.y;
+            let g = self.exclusion.damage_output_phys_to_global_log(r_out);
+            for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones) {
+                if piece.size.w <= 0 || piece.size.h <= 0 {
+                    continue;
+                }
+                if let Some(local) = self
+                    .exclusion
+                    .global_log_rect_to_damage_local_phys(piece, geom)
+                {
+                    if local.size.w > 0 && local.size.h > 0 {
+                        out.push(local);
+                    }
+                }
+            }
+        }
+        OpaqueRegions::from_iter(out)
+    }
+
+    fn alpha(&self) -> f32 {
+        self.inner.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.inner.kind()
+    }
+}
+
+impl<E> RenderElement<GlesRenderer> for SpaceExclusionClip<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        if self.exclusion.zones.is_empty() {
+            return self.inner.draw(frame, src, dst, damage, opaque_regions);
+        }
+        let mut clipped: Vec<Rectangle<i32, Physical>> = Vec::new();
+        for d in damage {
+            if d.size.w <= 0 || d.size.h <= 0 {
+                continue;
+            }
+            let mut d_out = *d;
+            d_out.loc.x += dst.loc.x;
+            d_out.loc.y += dst.loc.y;
+            let g = self.exclusion.damage_output_phys_to_global_log(d_out);
+            for piece in exclusion_clip::subtract_holes_from_rect_log(g, &self.exclusion.zones) {
+                if piece.size.w <= 0 || piece.size.h <= 0 {
+                    continue;
+                }
+                if let Some(pl) = self
+                    .exclusion
+                    .global_log_rect_to_damage_local_phys(piece, dst)
+                {
+                    if pl.size.w > 0 && pl.size.h > 0 {
+                        clipped.push(pl);
+                    }
+                }
+            }
+        }
+        if clipped.is_empty() {
+            return Ok(());
+        }
+        self.inner.draw(frame, src, dst, &clipped, opaque_regions)
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut GlesRenderer,
+    ) -> Option<UnderlyingStorage<'_>> {
+        self.inner.underlying_storage(renderer)
+    }
+}
 
 pub struct ShellDmaElement {
     id: Id,
@@ -123,6 +274,7 @@ where
     E: Element + RenderElement<GlesRenderer>,
 {
     Space(SpaceRenderElements<GlesRenderer, E>),
+    SpaceClip(SpaceExclusionClip<E>),
     ShellDma(&'a ShellDmaElement),
     Pointer(E),
     CursorTex(ShellCursorElement),
@@ -137,6 +289,7 @@ where
     fn id(&self) -> &Id {
         match self {
             DesktopStack::Space(x) => x.id(),
+            DesktopStack::SpaceClip(x) => x.id(),
             DesktopStack::ShellDma(x) => (*x).id(),
             DesktopStack::Pointer(x) => x.id(),
             DesktopStack::CursorTex(x) => x.id(),
@@ -147,6 +300,7 @@ where
     fn current_commit(&self) -> CommitCounter {
         match self {
             DesktopStack::Space(x) => x.current_commit(),
+            DesktopStack::SpaceClip(x) => x.current_commit(),
             DesktopStack::ShellDma(x) => (*x).current_commit(),
             DesktopStack::Pointer(x) => x.current_commit(),
             DesktopStack::CursorTex(x) => x.current_commit(),
@@ -157,6 +311,7 @@ where
     fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
         match self {
             DesktopStack::Space(x) => x.location(scale),
+            DesktopStack::SpaceClip(x) => x.location(scale),
             DesktopStack::ShellDma(x) => (*x).location(scale),
             DesktopStack::Pointer(x) => x.location(scale),
             DesktopStack::CursorTex(x) => x.location(scale),
@@ -167,6 +322,7 @@ where
     fn src(&self) -> Rectangle<f64, Buffer> {
         match self {
             DesktopStack::Space(x) => x.src(),
+            DesktopStack::SpaceClip(x) => x.src(),
             DesktopStack::ShellDma(x) => (*x).src(),
             DesktopStack::Pointer(x) => x.src(),
             DesktopStack::CursorTex(x) => x.src(),
@@ -177,6 +333,7 @@ where
     fn transform(&self) -> Transform {
         match self {
             DesktopStack::Space(x) => x.transform(),
+            DesktopStack::SpaceClip(x) => x.transform(),
             DesktopStack::ShellDma(x) => (*x).transform(),
             DesktopStack::Pointer(x) => x.transform(),
             DesktopStack::CursorTex(x) => x.transform(),
@@ -187,6 +344,7 @@ where
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         match self {
             DesktopStack::Space(x) => x.geometry(scale),
+            DesktopStack::SpaceClip(x) => x.geometry(scale),
             DesktopStack::ShellDma(x) => (*x).geometry(scale),
             DesktopStack::Pointer(x) => x.geometry(scale),
             DesktopStack::CursorTex(x) => x.geometry(scale),
@@ -201,6 +359,7 @@ where
     ) -> DamageSet<i32, Physical> {
         match self {
             DesktopStack::Space(x) => x.damage_since(scale, commit),
+            DesktopStack::SpaceClip(x) => x.damage_since(scale, commit),
             DesktopStack::ShellDma(x) => (*x).damage_since(scale, commit),
             DesktopStack::Pointer(x) => x.damage_since(scale, commit),
             DesktopStack::CursorTex(x) => x.damage_since(scale, commit),
@@ -211,6 +370,7 @@ where
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         match self {
             DesktopStack::Space(x) => x.opaque_regions(scale),
+            DesktopStack::SpaceClip(x) => x.opaque_regions(scale),
             DesktopStack::ShellDma(x) => (*x).opaque_regions(scale),
             DesktopStack::Pointer(x) => x.opaque_regions(scale),
             DesktopStack::CursorTex(x) => x.opaque_regions(scale),
@@ -221,6 +381,7 @@ where
     fn alpha(&self) -> f32 {
         match self {
             DesktopStack::Space(x) => x.alpha(),
+            DesktopStack::SpaceClip(x) => x.alpha(),
             DesktopStack::ShellDma(x) => (*x).alpha(),
             DesktopStack::Pointer(x) => x.alpha(),
             DesktopStack::CursorTex(x) => x.alpha(),
@@ -231,6 +392,7 @@ where
     fn kind(&self) -> Kind {
         match self {
             DesktopStack::Space(x) => x.kind(),
+            DesktopStack::SpaceClip(x) => x.kind(),
             DesktopStack::ShellDma(x) => (*x).kind(),
             DesktopStack::Pointer(x) => x.kind(),
             DesktopStack::CursorTex(x) => x.kind(),
@@ -253,6 +415,7 @@ where
     ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
         match self {
             DesktopStack::Space(x) => x.draw(frame, src, dst, damage, opaque_regions),
+            DesktopStack::SpaceClip(x) => x.draw(frame, src, dst, damage, opaque_regions),
             DesktopStack::ShellDma(x) => {
                 RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
             }
@@ -268,6 +431,7 @@ where
     ) -> Option<UnderlyingStorage<'_>> {
         match self {
             DesktopStack::Space(x) => x.underlying_storage(renderer),
+            DesktopStack::SpaceClip(x) => x.underlying_storage(renderer),
             DesktopStack::ShellDma(x) => (*x).underlying_storage(renderer),
             DesktopStack::Pointer(x) => x.underlying_storage(renderer),
             DesktopStack::CursorTex(x) => x.underlying_storage(renderer),

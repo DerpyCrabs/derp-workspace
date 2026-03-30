@@ -76,7 +76,8 @@ fn log_egl_dmabuf_caps_after_drm_init(renderer: &GlesRenderer) {
 }
 
 use crate::{
-    desktop_stack::DesktopStack, pointer_render, shell_ipc, CalloopData, CompositorState,
+    desktop_stack::{DesktopStack, SpaceExclusionClip},
+    pointer_render, shell_ipc, CalloopData, CompositorState,
 };
 
 pub struct DrmHead {
@@ -181,6 +182,7 @@ impl DrmHead {
                                 None
                             }
                         };
+                        let excl_ctx = state.shell_exclusion_clip_ctx(output);
                         if state.shell_presentation_fullscreen {
                             if let Some(ref el) = shell_dma {
                                 render_elements.push(DesktopStack::ShellDma(el));
@@ -188,20 +190,37 @@ impl DrmHead {
                             render_elements
                                 .extend(space_els.into_iter().map(DesktopStack::Space));
                         } else {
-                            render_elements
-                                .extend(space_els.into_iter().map(DesktopStack::Space));
+                            match &excl_ctx {
+                                None => render_elements
+                                    .extend(space_els.into_iter().map(DesktopStack::Space)),
+                                Some(ctx) => render_elements.extend(space_els.into_iter().map(|el| {
+                                    DesktopStack::SpaceClip(SpaceExclusionClip::new(
+                                        el,
+                                        ctx.clone(),
+                                    ))
+                                })),
+                            }
                             if let Some(ref el) = shell_dma {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
                         }
 
-                        self.damage_tracker.render_output(
+                        let age_for_render = if state.shell_exclusion_zones_need_full_damage {
+                            0usize
+                        } else {
+                            buffer_age as usize
+                        };
+                        let out = self.damage_tracker.render_output(
                             renderer,
                             &mut fb_target,
-                            buffer_age as usize,
+                            age_for_render,
                             &render_elements,
                             [0.1, 0.1, 0.1, 1.0],
-                        )
+                        );
+                        if out.is_ok() {
+                            state.shell_exclusion_zones_need_full_damage = false;
+                        }
+                        out
                     }
                     Err(e) => Err(e.into()),
                 };

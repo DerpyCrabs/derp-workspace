@@ -137,4 +137,10 @@ impl UplinkToCompositor {
             s.set_shell_primary_output_name(name);
         });
     }
+
+    pub fn shell_set_exclusion_zones_json(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_exclusion_zones_json(&json);
+        });
+    }
 }

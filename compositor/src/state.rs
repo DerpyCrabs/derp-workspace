@@ -74,6 +74,7 @@ use smithay::reexports::wayland_server::Resource;
 use crate::{
     chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge, WindowInfo},
     derp_space::DerpSpaceElem,
+    exclusion_clip,
     shell_ipc,
     window_registry::WindowRegistry,
     CalloopData,
@@ -307,6 +308,8 @@ pub struct CompositorState {
     pub(crate) toplevel_fullscreen_return_maximized: HashSet<u32>,
     /// When true, render OSR shell above native Wayland windows (HTML5 / presentation fullscreen).
     pub shell_presentation_fullscreen: bool,
+    pub(crate) shell_exclusion_zones: Vec<Rectangle<i32, Logical>>,
+    pub(crate) shell_exclusion_zones_need_full_damage: bool,
 }
 
 impl CompositorState {
@@ -459,9 +462,110 @@ impl CompositorState {
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
             shell_presentation_fullscreen: false,
+            shell_exclusion_zones: Vec::new(),
+            shell_exclusion_zones_need_full_damage: false,
         };
 
         s
+    }
+
+    pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
+        let px = pos.x;
+        let py = pos.y;
+        if self.shell_exclusion_zones.is_empty() {
+            return false;
+        }
+        for r in &self.shell_exclusion_zones {
+            let x1 = r.loc.x as f64;
+            let y1 = r.loc.y as f64;
+            let x2 = x1 + r.size.w.max(0) as f64;
+            let y2 = y1 + r.size.h.max(0) as f64;
+            if px >= x1 && px < x2 && py >= y1 && py < y2 {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub(crate) fn native_hit_blocked_by_shell_exclusion(
+        &self,
+        _elem: &DerpSpaceElem,
+        pos: Point<f64, Logical>,
+    ) -> bool {
+        self.point_in_shell_exclusion_zones(pos)
+    }
+
+    pub fn apply_shell_exclusion_zones_json(&mut self, json: &str) {
+        pub const MAX_SHELL_EXCLUSION_ZONES: usize = 64;
+        #[derive(serde::Deserialize)]
+        struct EzRect {
+            x: i32,
+            y: i32,
+            w: i32,
+            h: i32,
+        }
+        #[derive(serde::Deserialize)]
+        struct EzRoot {
+            #[serde(default)]
+            rects: Vec<EzRect>,
+        }
+        let Ok(root) = serde_json::from_str::<EzRoot>(json) else {
+            return;
+        };
+        let Some(ws) = self.workspace_logical_bounds() else {
+            self.shell_exclusion_zones.clear();
+            self.shell_exclusion_zones_need_full_damage = true;
+            self.shell_dmabuf_dirty_force_full = true;
+            self.needs_winit_redraw = true;
+            return;
+        };
+        let mut next: Vec<Rectangle<i32, Logical>> = Vec::new();
+        for e in root.rects.into_iter().take(MAX_SHELL_EXCLUSION_ZONES) {
+            let w = e.w.max(1);
+            let h = e.h.max(1);
+            let r = Rectangle::new(
+                Point::<i32, Logical>::from((e.x, e.y)),
+                Size::<i32, Logical>::from((w, h)),
+            );
+            if let Some(clamped) = r.intersection(ws) {
+                next.push(clamped);
+            }
+        }
+        let changed = next != self.shell_exclusion_zones;
+        self.shell_exclusion_zones = next;
+        if changed {
+            self.shell_exclusion_zones_need_full_damage = true;
+            self.shell_dmabuf_dirty_force_full = true;
+            self.needs_winit_redraw = true;
+        }
+    }
+
+    pub(crate) fn shell_exclusion_clip_ctx(
+        &self,
+        output: &Output,
+    ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
+        if self.shell_exclusion_zones.is_empty() {
+            return None;
+        }
+        let Some(out_geo) = self.space.output_geometry(output) else {
+            return None;
+        };
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return None;
+        };
+        let zones: Vec<Rectangle<i32, Logical>> = self
+            .shell_exclusion_zones
+            .iter()
+            .filter_map(|z| z.intersection(ws))
+            .collect();
+        if zones.is_empty() {
+            return None;
+        }
+        Some(Arc::new(exclusion_clip::ShellExclusionClipCtx {
+            zones: Arc::from(zones.into_boxed_slice()),
+            output_logical: Rectangle::new(out_geo.loc, out_geo.size),
+            scale_f: output.current_scale().fractional_scale(),
+        }))
     }
 
     pub(crate) fn shell_cef_active(&self) -> bool {
@@ -615,9 +719,12 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(elem, location)| {
+        for elem in self.space.elements().rev() {
+            let Some(location) = self.space.element_location(elem) else {
+                continue;
+            };
             let local = pos - location.to_f64();
-            match elem {
+            let hit = match elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + location).to_f64())),
@@ -626,8 +733,35 @@ impl CompositorState {
                     under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL)
                         .map(|(s, p)| (s, (p + location).to_f64()))
                 }
+            };
+            let Some((surf, p_global)) = hit else {
+                continue;
+            };
+            if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
+                continue;
             }
-        })
+            return Some((surf, p_global));
+        }
+        None
+    }
+
+    pub fn element_under_respecting_shell_exclusions(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(DerpSpaceElem, Point<i32, Logical>)> {
+        for elem in self.space.elements().rev() {
+            let Some(loc) = self.space.element_location(elem) else {
+                continue;
+            };
+            if !elem.is_in_input_region(&pos) {
+                continue;
+            }
+            if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
+                continue;
+            }
+            return Some((elem.clone(), loc));
+        }
+        None
     }
 
     /// Logical top-left for mapping a new xdg toplevel (client rectangle origin).
@@ -1733,6 +1867,9 @@ impl CompositorState {
 
     /// True if the pointer is over the Solid shell layer (desktop + decoration chrome), not the native Wayland client beneath.
     pub fn shell_pointer_route_to_cef(&self, pos: Point<f64, Logical>) -> bool {
+        if self.point_in_shell_exclusion_zones(pos) {
+            return true;
+        }
         let px = pos.x;
         let py = pos.y;
 

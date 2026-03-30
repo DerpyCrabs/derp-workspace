@@ -545,6 +545,42 @@
   color: hsl(var(--shell-hue), 85%, 82%);
 }
 
+.shell-exclusion-zones-hud {
+  margin: 0.5rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.shell-exclusion-zones-hud__empty {
+  opacity: 0.65;
+}
+
+.shell-exclusion-zones-list {
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 1rem;
+  max-height: 11rem;
+  overflow: auto;
+  font-size: 0.72rem;
+}
+
+.shell-exclusion-zones-list__item {
+  margin: 0.2rem 0;
+  list-style: disc;
+}
+
+.shell-exclusion-zones-list__label {
+  display: inline-block;
+  min-width: 7.5rem;
+  margin-right: 0.35rem;
+  opacity: 0.9;
+}
+
+.shell-exclusion-zones-list__coords {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: hsl(var(--shell-hue), 75%, 78%);
+}
+
 .shell-spawn-url {
   margin: 0 0 0.85rem;
   font-size: 0.72rem;

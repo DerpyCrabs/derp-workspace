@@ -207,10 +207,8 @@ impl CompositorState {
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
             self.shell_ipc_keyboard_to_cef = false;
-            if let Some((elem, _loc)) = self
-                .space
-                .element_under(pointer.current_location())
-                .map(|(w, l)| (w.clone(), l))
+            if let Some((elem, _loc)) =
+                self.element_under_respecting_shell_exclusions(pointer.current_location())
             {
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
