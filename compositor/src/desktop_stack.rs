@@ -29,6 +29,7 @@ pub struct ShellDmaElement {
     texture: GlesTexture,
     buffer_src: Rectangle<f64, Buffer>,
     commit: CommitCounter,
+    damage_phys: Option<Vec<Rectangle<i32, Physical>>>,
 }
 
 impl ShellDmaElement {
@@ -57,8 +58,30 @@ impl Element for ShellDmaElement {
         Rectangle::new(self.location.to_i32_round(), self.physical_size(scale))
     }
 
-    fn damage_since(&self, scale: Scale<f64>, _commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
-        DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        let full_rect = Rectangle::new(
+            Point::<i32, Physical>::from((0, 0)),
+            self.physical_size(scale),
+        );
+        match self.current_commit().distance(commit) {
+            None => DamageSet::from_slice(&[full_rect]),
+            Some(0) => DamageSet::default(),
+            Some(1) => {
+                let Some(ref rects) = self.damage_phys else {
+                    return DamageSet::from_slice(&[full_rect]);
+                };
+                let v: Vec<_> = rects
+                    .iter()
+                    .filter_map(|r| r.intersection(full_rect))
+                    .collect();
+                if v.is_empty() {
+                    DamageSet::from_slice(&[full_rect])
+                } else {
+                    v.into_iter().collect()
+                }
+            }
+            Some(_) => DamageSet::from_slice(&[full_rect]),
+        }
     }
 
     fn kind(&self) -> Kind {
@@ -278,6 +301,8 @@ pub fn shell_dmabuf_overlay_element(
     shell_loc_phys: Point<f64, Physical>,
     shell_size_logical: Size<i32, Logical>,
     buffer_src: Rectangle<f64, Buffer>,
+    commit: CommitCounter,
+    damage_phys: Option<Vec<Rectangle<i32, Physical>>>,
 ) -> Result<ShellDmaElement, GlesError> {
     let texture = renderer.import_dmabuf(dmabuf, None)?;
     let context_id = renderer.context_id();
@@ -288,6 +313,7 @@ pub fn shell_dmabuf_overlay_element(
         dst_logical_size: shell_size_logical,
         texture,
         buffer_src,
-        commit: CommitCounter::default(),
+        commit,
+        damage_phys,
     })
 }

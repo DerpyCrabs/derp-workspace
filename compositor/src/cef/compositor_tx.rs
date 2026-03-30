@@ -11,6 +11,7 @@ pub enum CefToCompositor {
         generation: u32,
         planes: Vec<shell_wire::FrameDmabufPlane>,
         fds: Vec<OwnedFd>,
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     },
     Run(Box<dyn FnOnce(&mut crate::state::CompositorState) + Send>),
 }

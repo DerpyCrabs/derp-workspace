@@ -7,7 +7,7 @@ use smithay::{
         ImportDma,
     },
     output::Output,
-    utils::{Buffer as BufferCoord, Physical, Point, Rectangle, Size},
+    utils::{Buffer as BufferCoord, Logical, Physical, Point, Rectangle, Scale, Size},
 };
 
 use crate::desktop_stack::ShellDmaElement;
@@ -30,6 +30,96 @@ fn sample_egl_dmabuf_pairs(renderer: &GlesRenderer) -> (Vec<(u32, u64)>, Vec<(u3
         .map(|f| (f.code as u32, u64::from(f.modifier)))
         .collect();
     (render_sample, texture_sample)
+}
+
+pub(crate) fn shell_dmabuf_buffer_src_for_output(
+    state: &CompositorState,
+    output: &Output,
+    buf_w: u32,
+    buf_h: u32,
+) -> Option<Rectangle<f64, BufferCoord>> {
+    let output_geo = state.space.output_geometry(output)?;
+    let (cox, coy) = state.shell_canvas_logical_origin;
+    let (clw_u, clh_u) = state.shell_canvas_logical_size;
+    let clwf = clw_u.max(1) as f64;
+    let clhf = clh_u.max(1) as f64;
+    let bw = buf_w.max(1) as f64;
+    let bh = buf_h.max(1) as f64;
+    let rel_x = (output_geo.loc.x - cox) as f64;
+    let rel_y = (output_geo.loc.y - coy) as f64;
+    let scale_x = bw / clwf;
+    let scale_y = bh / clhf;
+    let ow = output_geo.size.w.max(1) as f64;
+    let oh = output_geo.size.h.max(1) as f64;
+    let mut bx0 = rel_x * scale_x;
+    let mut by0 = rel_y * scale_y;
+    let mut bww = ow * scale_x;
+    let mut bhh = oh * scale_y;
+    bx0 = bx0.clamp(0.0, bw);
+    by0 = by0.clamp(0.0, bh);
+    bww = bww.clamp(0.0, (bw - bx0).max(0.0));
+    bhh = bhh.clamp(0.0, (bh - by0).max(0.0));
+    Some(Rectangle::new(
+        Point::<f64, BufferCoord>::from((bx0, by0)),
+        Size::<f64, BufferCoord>::from((bww, bhh)),
+    ))
+}
+
+pub(crate) fn shell_dmabuf_dirty_buffer_to_physical(
+    buffer_src: Rectangle<f64, BufferCoord>,
+    output_geo: Rectangle<i32, Logical>,
+    output_scale: Scale<f64>,
+    dirty: &[Rectangle<i32, BufferCoord>],
+) -> Vec<Rectangle<i32, Physical>> {
+    let bx0 = buffer_src.loc.x;
+    let by0 = buffer_src.loc.y;
+    let bww = buffer_src.size.w.max(f64::EPSILON);
+    let bhh = buffer_src.size.h.max(f64::EPSILON);
+    let phys = output_geo.size.to_f64().to_physical(output_scale);
+    let ow_phys = phys.w;
+    let oh_phys = phys.h.max(f64::EPSILON);
+    let mut out = Vec::new();
+    for r in dirty {
+        let dx = r.loc.x as f64;
+        let dy = r.loc.y as f64;
+        let dw = r.size.w as f64;
+        let dh = r.size.h as f64;
+        if dw <= 0.0 || dh <= 0.0 {
+            continue;
+        }
+        let rx0 = dx.max(bx0).min(bx0 + bww);
+        let ry0 = dy.max(by0).min(by0 + bhh);
+        let rx1 = (dx + dw).max(bx0).min(bx0 + bww);
+        let ry1 = (dy + dh).max(by0).min(by0 + bhh);
+        if rx1 <= rx0 || ry1 <= ry0 {
+            continue;
+        }
+        let ox0 = (rx0 - bx0) / bww * ow_phys;
+        let oy0 = (ry0 - by0) / bhh * oh_phys;
+        let ox1 = (rx1 - bx0) / bww * ow_phys;
+        let oy1 = (ry1 - by0) / bhh * oh_phys;
+        let x0 = ox0.floor() as i32;
+        let y0 = oy0.floor() as i32;
+        let x1 = ox1.ceil() as i32;
+        let y1 = oy1.ceil() as i32;
+        let pw = (x1 - x0).max(0);
+        let ph = (y1 - y0).max(0);
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        let rect = Rectangle::new(
+            Point::<i32, Physical>::from((x0, y0)),
+            Size::<i32, Physical>::from((pw, ph)),
+        );
+        let full = Rectangle::new(
+            Point::<i32, Physical>::from((0, 0)),
+            Size::<i32, Physical>::from((ow_phys.ceil() as i32, oh_phys.ceil() as i32)),
+        );
+        if let Some(inter) = rect.intersection(full) {
+            out.push(inter);
+        }
+    }
+    out
 }
 
 fn log_shell_dmabuf_import_context(dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf, renderer: &GlesRenderer) {
@@ -77,33 +167,33 @@ pub fn compositor_shell_dmabuf_element(
         Some(p) => p,
         None => return Ok(None),
     };
-    let (cox, coy) = state.shell_canvas_logical_origin;
-    let (clw_u, clh_u) = state.shell_canvas_logical_size;
-    let clwf = clw_u.max(1) as f64;
-    let clhf = clh_u.max(1) as f64;
-    let bw = buf_w.max(1) as f64;
-    let bh = buf_h.max(1) as f64;
-    let rel_x = (output_geo.loc.x - cox) as f64;
-    let rel_y = (output_geo.loc.y - coy) as f64;
-    let scale_x = bw / clwf;
-    let scale_y = bh / clhf;
-    let ow = output_geo.size.w.max(1) as f64;
-    let oh = output_geo.size.h.max(1) as f64;
-    let mut bx0 = rel_x * scale_x;
-    let mut by0 = rel_y * scale_y;
-    let mut bww = ow * scale_x;
-    let mut bhh = oh * scale_y;
-    bx0 = bx0.clamp(0.0, bw);
-    by0 = by0.clamp(0.0, bh);
-    bww = bww.clamp(0.0, (bw - bx0).max(0.0));
-    bhh = bhh.clamp(0.0, (bh - by0).max(0.0));
-    let buffer_src = Rectangle::new(
-        Point::<f64, BufferCoord>::from((bx0, by0)),
-        Size::<f64, BufferCoord>::from((bww, bhh)),
-    );
+    let Some(buffer_src) =
+        shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h)
+    else {
+        return Ok(None);
+    };
 
     let shell_loc_phys = Point::<f64, Physical>::from((0.0_f64, 0.0_f64));
     let shell_size_logical = output_geo.size;
+    let output_scale = Scale::from(1.0);
+
+    let damage_phys = if state.shell_dmabuf_dirty_force_full {
+        None
+    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
+        None
+    } else {
+        let mapped = shell_dmabuf_dirty_buffer_to_physical(
+            buffer_src,
+            Rectangle::new(output_geo.loc, output_geo.size),
+            output_scale,
+            &state.shell_dmabuf_dirty_buffer,
+        );
+        if mapped.is_empty() {
+            None
+        } else {
+            Some(mapped)
+        }
+    };
 
     log_shell_dmabuf_import_context(dmabuf, renderer);
 
@@ -114,6 +204,8 @@ pub fn compositor_shell_dmabuf_element(
         shell_loc_phys,
         shell_size_logical,
         buffer_src,
+        state.shell_dmabuf_commit,
+        damage_phys,
     ) {
         Ok(el) => Ok(Some(el)),
         Err(e) => {

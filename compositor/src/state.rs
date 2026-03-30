@@ -12,7 +12,11 @@ use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
     backend::input::{KeyState, TouchSlot},
-    backend::renderer::{gles::GlesRenderer, ImportDma},
+    backend::renderer::{
+        gles::GlesRenderer,
+        utils::CommitCounter,
+        ImportDma,
+    },
     backend::{
         renderer::element::{memory::MemoryRenderBuffer, Id},
         session::libseat::LibSeatSession,
@@ -286,6 +290,9 @@ pub struct CompositorState {
     pub shell_frame_is_dmabuf: bool,
     pub shell_dmabuf: Option<Dmabuf>,
     pub(crate) shell_dmabuf_overlay_id: Id,
+    pub(crate) shell_dmabuf_commit: CommitCounter,
+    pub(crate) shell_dmabuf_dirty_buffer: Vec<Rectangle<i32, Buffer>>,
+    pub(crate) shell_dmabuf_dirty_force_full: bool,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -354,6 +361,7 @@ impl CompositorState {
                         generation,
                         planes,
                         fds,
+                        dirty_buffer,
                     }) => {
                         d.state.accept_shell_dmabuf_from_cef(
                             width,
@@ -364,6 +372,7 @@ impl CompositorState {
                             generation,
                             &planes,
                             fds,
+                            dirty_buffer,
                         );
                     }
                     CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
@@ -435,6 +444,9 @@ impl CompositorState {
             shell_frame_is_dmabuf: false,
             shell_dmabuf: None,
             shell_dmabuf_overlay_id: Id::new(),
+            shell_dmabuf_commit: CommitCounter::default(),
+            shell_dmabuf_dirty_buffer: Vec::new(),
+            shell_dmabuf_dirty_force_full: true,
             vt_session: None,
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
@@ -467,6 +479,7 @@ impl CompositorState {
         _generation: u32,
         planes: &[shell_wire::FrameDmabufPlane],
         mut fds: Vec<OwnedFd>,
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) {
         self.shell_note_shell_ipc_rx();
         if width == 0 || height == 0 || planes.is_empty() || planes.len() != fds.len() {
@@ -481,6 +494,7 @@ impl CompositorState {
             flags,
             planes,
             &mut fds,
+            dirty_buffer,
         ) {
             Ok(()) => {
                 shell_ipc::log_first_shell_dmabuf(
@@ -2525,7 +2539,29 @@ impl CompositorState {
         Some((x, y))
     }
 
-    /// Build a dma-buf from plane metadata + [`OwnedFd`]s (same order as `planes`). On success, drains `fds`.
+    fn shell_osr_dirty_bbox_covers_buffer(dirty: &[(i32, i32, i32, i32)], buf_w: u32, buf_h: u32) -> bool {
+        const FRAC_NUM: i64 = 97;
+        const FRAC_DEN: i64 = 100;
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        for &(x, y, w, h) in dirty {
+            max_x = max_x.max(x.saturating_add(w));
+            max_y = max_y.max(y.saturating_add(h));
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+        }
+        let bw = buf_w as i64;
+        let bh = buf_h as i64;
+        if bw <= 0 || bh <= 0 {
+            return true;
+        }
+        let rw = (max_x as i64 - min_x as i64).max(0);
+        let rh = (max_y as i64 - min_y as i64).max(0);
+        rw * rh * FRAC_DEN >= bw * bh * FRAC_NUM
+    }
+
     pub fn apply_shell_frame_dmabuf(
         &mut self,
         width: u32,
@@ -2535,6 +2571,7 @@ impl CompositorState {
         flags: u32,
         planes: &[shell_wire::FrameDmabufPlane],
         fds: &mut Vec<OwnedFd>,
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) -> Result<(), &'static str> {
         if width == 0 || height == 0 {
             fds.clear();
@@ -2544,6 +2581,36 @@ impl CompositorState {
             fds.clear();
             return Err("dmabuf plane/fd mismatch");
         }
+        let force_env = std::env::var_os("DERP_SHELL_OSR_FULL_DAMAGE").is_some_and(|v| {
+            v.as_os_str() == std::ffi::OsStr::new("1")
+                || v.as_os_str().eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
+        });
+        let resized = self.shell_view_px.is_some_and(|p| p != (width, height));
+        let dirty_supplied_len = dirty_buffer.as_ref().map(|v| v.len());
+        let dirty_list = dirty_buffer.filter(|v| !v.is_empty());
+        let bbox_full = dirty_list
+            .as_ref()
+            .map(|v| Self::shell_osr_dirty_bbox_covers_buffer(v, width, height))
+            .unwrap_or(true);
+        let mut force_full = force_env || resized || dirty_list.is_none() || bbox_full;
+        let buffer_rects: Vec<Rectangle<i32, Buffer>> = if let Some(ref dl) = dirty_list {
+            let mut rects = Vec::with_capacity(dl.len());
+            for &(x, y, w, h) in dl {
+                if w > 0 && h > 0 {
+                    rects.push(Rectangle::new(
+                        Point::<i32, Buffer>::from((x, y)),
+                        Size::<i32, Buffer>::from((w, h)),
+                    ));
+                }
+            }
+            if !force_full && rects.is_empty() {
+                force_full = true;
+            }
+            rects
+        } else {
+            Vec::new()
+        };
+
         let format = Fourcc::try_from(drm_format).map_err(|_| "unrecognized drm fourcc")?;
         let modifier_u64_raw = modifier;
         let modifier = Modifier::from(modifier_u64_raw);
@@ -2567,10 +2634,14 @@ impl CompositorState {
         let Some(dmabuf) = b.build() else {
             return Err("dmabuf build");
         };
-        // Fresh [`Id`] each frame: static dma-buf textures use an empty damage snapshot with a stable
-        // commit counter, otherwise [`OutputDamageTracker`] stops marking the shell plane damaged and
-        // only the cursor region repaints (streaks / stale CEF under the pointer).
-        self.shell_dmabuf_overlay_id = Id::new();
+        self.shell_dmabuf_dirty_force_full = force_full;
+        if force_full {
+            self.shell_dmabuf_dirty_buffer.clear();
+        } else {
+            self.shell_dmabuf_dirty_buffer = buffer_rects;
+        }
+        self.shell_dmabuf_commit.increment();
+
         self.shell_dmabuf = Some(dmabuf);
         self.shell_frame_is_dmabuf = true;
         self.shell_has_frame = true;
@@ -2582,6 +2653,19 @@ impl CompositorState {
         }
         self.needs_winit_redraw = true;
         self.shell_move_flush_pending_deltas();
+        tracing::debug!(
+            target: "derp_shell_osr_damage",
+            width,
+            height,
+            force_full,
+            force_env,
+            resized,
+            dirty_supplied = dirty_supplied_len,
+            bbox_full,
+            partial_rects = self.shell_dmabuf_dirty_buffer.len(),
+            commit = ?self.shell_dmabuf_commit,
+            "apply_shell_frame_dmabuf damage"
+        );
         tracing::debug!(
             target: "derp_shell_dmabuf",
             width,
@@ -2631,6 +2715,10 @@ impl CompositorState {
         self.shell_view_px = None;
         self.shell_frame_is_dmabuf = false;
         self.shell_dmabuf = None;
+        self.shell_dmabuf_overlay_id = Id::new();
+        self.shell_dmabuf_commit = CommitCounter::default();
+        self.shell_dmabuf_dirty_buffer.clear();
+        self.shell_dmabuf_dirty_force_full = true;
         self.shell_last_pointer_ipc_px = None;
         self.touch_routes_to_cef = false;
         self.needs_winit_redraw = true;

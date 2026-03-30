@@ -43,9 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
-    let env_filter = tracing_subscriber::EnvFilter::new(
-        "warn,derp_input=debug,derp_shell_osr=info",
-    );
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("warn,derp_input=debug,derp_shell_osr=info")
+    });
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .init();

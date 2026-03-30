@@ -19,14 +19,18 @@ fn drag_invalidate_min_interval() -> Duration {
 }
 
 fn reset_drag_invalidate_throttle() {
-    *LAST_DRAG_VIEW_INVALIDATE.lock().expect("LAST_DRAG_VIEW_INVALIDATE") = None;
+    *LAST_DRAG_VIEW_INVALIDATE
+        .lock()
+        .expect("LAST_DRAG_VIEW_INVALIDATE") = None;
 }
 
 fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
     let min_gap = drag_invalidate_min_interval();
     let now = Instant::now();
     {
-        let mut last = LAST_DRAG_VIEW_INVALIDATE.lock().expect("LAST_DRAG_VIEW_INVALIDATE");
+        let mut last = LAST_DRAG_VIEW_INVALIDATE
+            .lock()
+            .expect("LAST_DRAG_VIEW_INVALIDATE");
         if let Some(t) = *last {
             if now.duration_since(t) < min_gap {
                 return;

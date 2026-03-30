@@ -4,6 +4,7 @@
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
 #
 # Logging: compositor stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
+# The compositor binary uses RUST_LOG from the environment (see derp_session_merge_rust_log); unset falls back to warn,derp_input=debug,derp_shell_osr=info inside the binary.
 # Unless DERP_COMPOSITOR_LOG_APPEND=1: the log is truncated at each compositor start (GDM login and each
 # supervisor respawn after exit 42). Override path with DERP_COMPOSITOR_LOG=...
 #

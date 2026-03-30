@@ -37,6 +37,48 @@ fn cef_color_to_drm_format(ct: ColorType) -> u32 {
 #[cfg(unix)]
 static FIRST_ACCELERATED_PAINT_LOG: std::sync::Once = std::sync::Once::new();
 
+#[cfg(unix)]
+fn cef_dirty_rects_for_dmabuf(
+    dirty_rects: Option<&[Rect]>,
+    buf_w: u32,
+    buf_h: u32,
+) -> Option<Vec<(i32, i32, i32, i32)>> {
+    let bw = buf_w as i64;
+    let bh = buf_h as i64;
+    let rects = dirty_rects?;
+    if rects.is_empty() {
+        return None;
+    }
+    let mut v = Vec::new();
+    for r in rects {
+        if r.width <= 0 || r.height <= 0 {
+            continue;
+        }
+        let x0 = r.x as i64;
+        let y0 = r.y as i64;
+        let x1 = x0 + r.width as i64;
+        let y1 = y0 + r.height as i64;
+        let x0c = x0.clamp(0, bw);
+        let y0c = y0.clamp(0, bh);
+        let x1c = x1.clamp(0, bw);
+        let y1c = y1.clamp(0, bh);
+        if x1c <= x0c || y1c <= y0c {
+            continue;
+        }
+        v.push((
+            x0c as i32,
+            y0c as i32,
+            (x1c - x0c) as i32,
+            (y1c - y0c) as i32,
+        ));
+    }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 wrap_app! {
     struct DerpApp;
     impl App {
@@ -215,7 +257,7 @@ wrap_render_handler! {
             &self,
             _browser: Option<&mut Browser>,
             type_: PaintElementType,
-            _dirty_rects: Option<&[Rect]>,
+            dirty_rects: Option<&[Rect]>,
             info: Option<&AcceleratedPaintInfo>,
         ) {
             if type_ != PaintElementType::VIEW {
@@ -254,6 +296,7 @@ wrap_render_handler! {
                 fds.push(p.fd);
             }
             let flags = 0u32;
+            let dirty_buffer = cef_dirty_rects_for_dmabuf(dirty_rects, w, h);
             if let Err(e) = self.frame_sink.lock().expect("frame_sink").push_dmabuf_planes(
                 w,
                 h,
@@ -262,6 +305,7 @@ wrap_render_handler! {
                 flags,
                 &planes,
                 &fds,
+                dirty_buffer,
             ) {
                 eprintln!("cef: dma-buf frame: {e}");
             }

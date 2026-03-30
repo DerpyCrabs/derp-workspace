@@ -29,6 +29,7 @@ impl DirectDmabufSink {
         flags: u32,
         planes: &[shell_wire::FrameDmabufPlane],
         src_fds: &[RawFd],
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) -> io::Result<()> {
         if planes.is_empty() || planes.len() != src_fds.len() {
             return Err(io::Error::new(
@@ -65,6 +66,7 @@ impl DirectDmabufSink {
                 generation,
                 planes: planes_vec,
                 fds: owned,
+                dirty_buffer,
             })
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "compositor channel closed"))
     }
