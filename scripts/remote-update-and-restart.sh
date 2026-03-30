@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Rsync this repo to a remote host, run install-system-run.sh there (build + sudo install),
+# Archive this repo over SSH to a remote host (tar|ssh, no rsync on the host), run install-system-run.sh there,
 # then signal the running compositor with SIGUSR2 for in-place restart.
 #
 # Requires on the remote: derp-session from this tree (default: respawn when compositor exits 42).
 # Compositor must handle SIGUSR2 and exit 42 after teardown. See scripts/remote-install.sample.md.
 #
-# Session tuning without GDM edits: optional `scripts/derp-session.local.env` in the repo (see
-# `derp-session.local.env.example`); rsync ships it; derp-session re-sources it on every compositor
-# start, including each SIGUSR2 reload.
+# Session tuning without GDM edits: optional `scripts/derp-session.local.env` in the repo;
+# derp-session re-sources it on every compositor start, including each SIGUSR2 reload.
 #
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
 # REMOTE_HOST, REMOTE_REPO.
@@ -55,26 +54,17 @@ if [[ -t 0 ]] && [[ -t 1 ]]; then
   SSH_TTY=(-t)
 fi
 
-RSYNC_FLAGS=(-a --delete)
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  RSYNC_FLAGS+=(-n -i)
-else
-  RSYNC_FLAGS+=(-z)
-fi
-
-RSYNC_EXCLUDES=(
-  --exclude=target/
-  --exclude=shell/node_modules/
-  --exclude=.git/
-)
-
 ssh_base() {
   ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "$@"
 }
 
-run_rsync() {
-  rsync "${RSYNC_FLAGS[@]}" "${RSYNC_EXCLUDES[@]}" -e ssh \
-    "$REPO_ROOT/" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_REPO}/"
+run_tar_sync() {
+  local remote_sh
+  remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && tar xzf -' "$REMOTE_REPO" "$REMOTE_REPO")
+  (
+    cd "$REPO_ROOT"
+    tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git .
+  ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh"
 }
 
 run_install() {
@@ -105,7 +95,7 @@ REMOTE
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Would: ssh ${REMOTE_USER}@${REMOTE_HOST} mkdir -p $(printf '%q' "$REMOTE_REPO")"
-  echo "Would: rsync ${RSYNC_FLAGS[*]} ${RSYNC_EXCLUDES[*]} -e ssh $REPO_ROOT/ ${REMOTE_USER}@${REMOTE_HOST}:$(printf '%q' "$REMOTE_REPO")/"
+  echo "Would: ( cd $(printf '%q' "$REPO_ROOT") && tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git . ) | ssh … tar xzf - in $(printf '%q' "$REMOTE_REPO")"
   echo "Would: ssh … cd $REMOTE_REPO && bash scripts/install-system-run.sh $remote_install_args"
   if [[ "$NO_RESTART" -eq 0 ]]; then
     echo "Would: ssh … pkill-style SIGUSR2 to compositor"
@@ -113,16 +103,18 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-if ! command -v rsync >/dev/null 2>&1; then
-  echo "remote-update-and-restart: rsync not found" >&2
-  exit 1
-fi
+for cmd in ssh tar; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "remote-update-and-restart: $cmd not found" >&2
+    exit 1
+  fi
+done
 
 echo "=== remote mkdir ==="
 ssh_base mkdir -p "$REMOTE_REPO"
 
-echo "=== rsync $REPO_ROOT/ -> ${REMOTE_HOST}:$REMOTE_REPO/ ==="
-run_rsync
+echo "=== tar (gzip) $REPO_ROOT/ -> ${REMOTE_HOST}:$REMOTE_REPO/ ==="
+run_tar_sync
 
 echo "=== remote install-system-run.sh ==="
 run_install
