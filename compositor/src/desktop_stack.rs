@@ -4,26 +4,94 @@
 //! order (first = topmost). The DRM/winit paths build: **pointer → `Space` (toplevels) → shell OSR** so the
 //! cursor draws above the Solid overlay, while native windows still stack above the full-screen shell plane.
 //!
-//! This enum is written out by hand: Smithay’s `render_elements!` with [`TextureRenderElement<GlesTexture>`]
-//! pins `R = GlesRenderer`; [`DesktopStack`] lists variants explicitly to match.
+//! This enum is written out by hand: Smithay’s `render_elements!` pins `R = GlesRenderer`; [`DesktopStack`]
+//! lists variants explicitly to match.
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{
     element::{
-        memory::MemoryRenderBufferRenderElement,
-        texture::TextureRenderElement,
-        Element, Id, Kind, RenderElement, UnderlyingStorage,
+        memory::MemoryRenderBufferRenderElement, Element, Id, Kind, RenderElement, UnderlyingStorage,
     },
     gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
     utils::{CommitCounter, DamageSet, OpaqueRegions},
-    ImportDma, Renderer,
+    ContextId, Frame, ImportDma, Renderer,
 };
 use smithay::desktop::space::SpaceRenderElements;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use std::convert::Infallible;
+use tracing::warn;
 
-/// Dma-buf-backed shell plane (`TextureRenderElement` over an imported GLES texture).
-pub type ShellDmaElement = TextureRenderElement<GlesTexture>;
+pub struct ShellDmaElement {
+    id: Id,
+    context_id: ContextId<GlesTexture>,
+    location: Point<f64, Physical>,
+    dst_logical_size: Size<i32, Logical>,
+    texture: GlesTexture,
+    buffer_src: Rectangle<f64, Buffer>,
+    commit: CommitCounter,
+}
+
+impl ShellDmaElement {
+    fn physical_size(&self, scale: Scale<f64>) -> Size<i32, Physical> {
+        let logical_size = self.dst_logical_size;
+        ((logical_size.to_f64().to_physical(scale).to_point() + self.location).to_i32_round()
+            - self.location.to_i32_round())
+        .to_size()
+    }
+}
+
+impl Element for ShellDmaElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.buffer_src
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        Rectangle::new(self.location.to_i32_round(), self.physical_size(scale))
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, _commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+}
+
+impl RenderElement<GlesRenderer> for ShellDmaElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        if frame.context_id() != self.context_id {
+            warn!("trying to render texture from different renderer context");
+            return Ok(());
+        }
+        Frame::render_texture_from_to(
+            frame,
+            &self.texture,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            Transform::Normal,
+            1.0,
+        )
+    }
+}
+
 pub type ShellCursorElement = MemoryRenderBufferRenderElement<GlesRenderer>;
 
 #[allow(clippy::large_enum_variant)]
@@ -203,28 +271,23 @@ where
     }
 }
 
-/// Letterboxed dma-buf shell plane: [`GlesRenderer::import_dmabuf`] + [`TextureRenderElement::from_static_texture`].
 pub fn shell_dmabuf_overlay_element(
     renderer: &mut GlesRenderer,
     dmabuf: &Dmabuf,
     overlay_id: Id,
     shell_loc_phys: Point<f64, Physical>,
     shell_size_logical: Size<i32, Logical>,
-    src_full_buffer: Option<Rectangle<f64, Logical>>,
+    buffer_src: Rectangle<f64, Buffer>,
 ) -> Result<ShellDmaElement, GlesError> {
     let texture = renderer.import_dmabuf(dmabuf, None)?;
     let context_id = renderer.context_id();
-    Ok(TextureRenderElement::from_static_texture(
-        overlay_id,
+    Ok(ShellDmaElement {
+        id: overlay_id,
         context_id,
-        shell_loc_phys,
+        location: shell_loc_phys,
+        dst_logical_size: shell_size_logical,
         texture,
-        1,
-        Transform::Normal,
-        None,
-        src_full_buffer,
-        Some(shell_size_logical),
-        None,
-        Kind::Unspecified,
-    ))
+        buffer_src,
+        commit: CommitCounter::default(),
+    })
 }

@@ -1336,6 +1336,7 @@ impl CompositorState {
         let Ok(root) = serde_json::from_str::<Root>(json) else {
             return;
         };
+        let mut resolved: Vec<(Scr, Output)> = Vec::new();
         for s in root.screens {
             let Some(out) = self
                 .space
@@ -1345,6 +1346,47 @@ impl CompositorState {
             else {
                 continue;
             };
+            if out.current_mode().is_none() {
+                continue;
+            }
+            resolved.push((s, out));
+        }
+        for (s, out) in &resolved {
+            let mode = out.current_mode().unwrap();
+            let tf = transform_from_wire(s.transform);
+            out.change_current_state(
+                Some(mode),
+                Some(tf),
+                Some(Scale::Fractional(1.0)),
+                Some((s.x, s.y).into()),
+            );
+            self.space.map_output(out, (s.x, s.y));
+        }
+        let mut row_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
+        for (i, (s, _)) in resolved.iter().enumerate() {
+            row_buckets.entry(s.y).or_default().push(i);
+        }
+        let mut new_xy: Vec<(i32, i32)> = resolved
+            .iter()
+            .map(|(s, _)| (s.x, s.y))
+            .collect();
+        for mut indices in row_buckets.into_values() {
+            indices.sort_by_key(|&i| resolved[i].0.x);
+            let mut cx = resolved[indices[0]].0.x;
+            for &i in &indices {
+                let (s, out) = &resolved[i];
+                let w = self
+                    .space
+                    .output_geometry(out)
+                    .map(|g| g.size.w)
+                    .unwrap_or(0)
+                    .max(0);
+                new_xy[i] = (cx, s.y);
+                cx += w;
+            }
+        }
+        for (i, (s, out)) in resolved.iter().enumerate() {
+            let (nx, ny) = new_xy[i];
             let Some(mode) = out.current_mode() else {
                 continue;
             };
@@ -1353,9 +1395,9 @@ impl CompositorState {
                 Some(mode),
                 Some(tf),
                 Some(Scale::Fractional(1.0)),
-                Some((s.x, s.y).into()),
+                Some((nx, ny).into()),
             );
-            self.space.map_output(&out, (s.x, s.y));
+            self.space.map_output(out, (nx, ny));
         }
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();

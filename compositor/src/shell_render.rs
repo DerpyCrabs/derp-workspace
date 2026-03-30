@@ -7,7 +7,7 @@ use smithay::{
         ImportDma,
     },
     output::Output,
-    utils::{Logical, Physical, Point, Rectangle, Size},
+    utils::{Buffer as BufferCoord, Physical, Point, Rectangle, Size},
 };
 
 use crate::desktop_stack::ShellDmaElement;
@@ -85,13 +85,21 @@ pub fn compositor_shell_dmabuf_element(
     let bh = buf_h.max(1) as f64;
     let rel_x = (output_geo.loc.x - cox) as f64;
     let rel_y = (output_geo.loc.y - coy) as f64;
-    let sx0 = (rel_x / clwf * bw).clamp(0.0, bw - 1.0);
-    let sy0 = (rel_y / clhf * bh).clamp(0.0, bh - 1.0);
-    let sw = ((output_geo.size.w.max(1) as f64) / clwf * bw).min((bw - sx0).max(1.0));
-    let sh = ((output_geo.size.h.max(1) as f64) / clhf * bh).min((bh - sy0).max(1.0));
-    let src = Rectangle::new(
-        Point::<f64, Logical>::from((sx0, sy0)),
-        Size::<f64, Logical>::from((sw, sh)),
+    let scale_x = bw / clwf;
+    let scale_y = bh / clhf;
+    let ow = output_geo.size.w.max(1) as f64;
+    let oh = output_geo.size.h.max(1) as f64;
+    let mut bx0 = rel_x * scale_x;
+    let mut by0 = rel_y * scale_y;
+    let mut bww = ow * scale_x;
+    let mut bhh = oh * scale_y;
+    bx0 = bx0.clamp(0.0, bw);
+    by0 = by0.clamp(0.0, bh);
+    bww = bww.clamp(0.0, (bw - bx0).max(0.0));
+    bhh = bhh.clamp(0.0, (bh - by0).max(0.0));
+    let buffer_src = Rectangle::new(
+        Point::<f64, BufferCoord>::from((bx0, by0)),
+        Size::<f64, BufferCoord>::from((bww, bhh)),
     );
 
     let shell_loc_phys = Point::<f64, Physical>::from((0.0_f64, 0.0_f64));
@@ -105,7 +113,7 @@ pub fn compositor_shell_dmabuf_element(
         state.shell_dmabuf_overlay_id.clone(),
         shell_loc_phys,
         shell_size_logical,
-        Some(src),
+        buffer_src,
     ) {
         Ok(el) => Ok(Some(el)),
         Err(e) => {
