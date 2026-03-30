@@ -64,6 +64,7 @@ pub fn apply_message(
             canvas_physical_w,
             canvas_physical_h,
             screens,
+            shell_chrome_primary,
         } => {
             if let Ok(mut g) = view_state.lock() {
                 g.logical_width = canvas_logical_w.max(1) as i32;
@@ -117,6 +118,7 @@ pub fn apply_message(
                     "canvas_physical_width": canvas_physical_w,
                     "canvas_physical_height": canvas_physical_h,
                     "screens": screens_j,
+                    "shell_chrome_primary": shell_chrome_primary,
                 }),
             );
         }

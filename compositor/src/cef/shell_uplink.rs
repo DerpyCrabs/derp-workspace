@@ -147,6 +147,10 @@ fn handle_uplink_list(
             let json = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_apply_output_layout(json);
         }
+        "set_shell_primary" => {
+            let name = cef_string_userfree_to_string(&args.string(1));
+            uplink.shell_set_shell_primary(name);
+        }
         "set_ui_scale" => {
             let pct = args.int(1);
             let scale = match pct {
@@ -473,6 +477,16 @@ wrap_v8_handler! {
                     let json = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
                 }
+                "set_shell_primary" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_shell_primary requires output name string (empty = auto)");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("set_shell_primary: second arg must be a string");
+                    }
+                    let name = cef_string_userfree_to_string(&a1.string_value());
+                    let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
+                }
                 "set_ui_scale" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("set_ui_scale requires percent (100 or 150)");
@@ -493,7 +507,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_ui_scale)"
+                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale)"
                     );
                 }
             }

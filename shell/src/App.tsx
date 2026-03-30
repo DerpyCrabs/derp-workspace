@@ -43,6 +43,7 @@ declare global {
         | 'set_maximized'
         | 'presentation_fullscreen'
         | 'set_output_layout'
+        | 'set_shell_primary'
         | 'set_ui_scale',
       arg?: number | string,
       arg2?: number,
@@ -140,6 +141,7 @@ type DerpShellDetail =
         transform: number
         refresh_milli_hz?: number
       }>
+      shell_chrome_primary?: string | null
     }
   | {
       type: 'window_mapped'
@@ -354,6 +356,7 @@ function shellWireSend(
     | 'set_maximized'
     | 'presentation_fullscreen'
     | 'set_output_layout'
+    | 'set_shell_primary'
     | 'set_ui_scale',
   arg?: number | string,
   arg2?: number,
@@ -401,6 +404,8 @@ function shellWireSend(
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'set_shell_primary' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
     fn(op, arg)
   } else {
@@ -439,6 +444,7 @@ function App() {
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150>(150)
+  const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
 
   const rulerStepPx = 100
 
@@ -468,6 +474,15 @@ function App() {
       }
       return { primary: single, secondary: [] as LayoutScreen[] }
     }
+    const explicit = shellChromePrimaryName()
+    if (explicit) {
+      const ei = rows.findIndex((r) => r.name === explicit)
+      if (ei >= 0) {
+        const primary = rows[ei]
+        const secondary = rows.filter((_, i) => i !== ei)
+        return { primary, secondary }
+      }
+    }
     let pi = 0
     for (let i = 1; i < rows.length; i++) {
       const a = rows[i]
@@ -480,6 +495,18 @@ function App() {
   })
 
   const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(screenDraft.rows))
+
+  const autoShellChromeMonitorName = createMemo(() => {
+    const rows = screenDraft.rows
+    if (rows.length === 0) return null
+    let pi = 0
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i]
+      const b = rows[pi]
+      if (a.x < b.x || (a.x === b.x && a.y < b.y)) pi = i
+    }
+    return rows[pi]?.name ?? null
+  })
 
   const panelHostForHud = createMemo(() => {
     if (screenDraft.rows.length === 0) return null
@@ -739,6 +766,11 @@ function App() {
               refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
             })),
           )
+          const pr =
+            typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
+              ? d.shell_chrome_primary
+              : null
+          setShellChromePrimaryName(pr)
         })
         return
       }
@@ -1089,10 +1121,10 @@ function App() {
                     </strong>
                   </span>
                   <span class="shell-input-hud__row">
-                    <span>Panel + taskbar host (min x, then y): </span>
+                    <span>Panel + taskbar host: </span>
                     <strong>
                       {panelHostForHud()
-                        ? `${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
+                        ? `${shellChromePrimaryName() ? `${shellChromePrimaryName()} (explicit) · ` : ''}${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
                         : '—'}
                     </strong>
                   </span>
@@ -1132,6 +1164,21 @@ function App() {
                   </span>
                   <div class="shell-screens-panel">
                     <h2 class="shell-screens-title">Monitors</h2>
+                    <div class="shell-chrome-host-row">
+                      <span class="shell-chrome-host-label">Shell panel + taskbar</span>
+                      <button
+                        type="button"
+                        class="shell-chrome-host-btn"
+                        classList={{
+                          'shell-chrome-host-btn--active': !shellChromePrimaryName(),
+                        }}
+                        disabled={!canSessionControl() || !shellChromePrimaryName()}
+                        title={!canSessionControl() ? 'Needs cef_host wire' : 'Use top-left output (min x, then y)'}
+                        onClick={() => shellWireSend('set_shell_primary', '')}
+                      >
+                        Auto
+                      </button>
+                    </div>
                     <div class="shell-ui-scale-row">
                       <span class="shell-ui-scale-label">UI scale (all heads)</span>
                       <button
@@ -1171,11 +1218,33 @@ function App() {
                       >
                         {(row) => (
                           <li class="shell-monitor-list__item">
-                            <span class="shell-monitor-list__name">{row.name || '—'}</span>
-                            <span class="shell-monitor-list__meta">
-                              @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
-                              {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
-                            </span>
+                            <div class="shell-monitor-list__row">
+                              <div class="shell-monitor-list__text">
+                                <span class="shell-monitor-list__name">{row.name || '—'}</span>
+                                <span class="shell-monitor-list__meta">
+                                  @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
+                                  {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
+                                  {!shellChromePrimaryName() &&
+                                  row.name &&
+                                  row.name === autoShellChromeMonitorName() ? (
+                                    <span class="shell-monitor-list__auto-badge"> · auto</span>
+                                  ) : null}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                class="shell-monitor-list__chrome-btn"
+                                classList={{
+                                  'shell-monitor-list__chrome-btn--active':
+                                    !!shellChromePrimaryName() && shellChromePrimaryName() === row.name,
+                                }}
+                                disabled={!canSessionControl()}
+                                title={!canSessionControl() ? 'Needs cef_host wire' : 'Show panel and taskbar on this head'}
+                                onClick={() => shellWireSend('set_shell_primary', row.name)}
+                              >
+                                Shell chrome
+                              </button>
+                            </div>
                           </li>
                         )}
                       </For>

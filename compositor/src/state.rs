@@ -243,6 +243,7 @@ pub struct CompositorState {
     pub(crate) shell_canvas_logical_origin: (i32, i32),
     pub(crate) shell_canvas_logical_size: (u32, u32),
     pub(crate) shell_ui_scale: f64,
+    shell_primary_output_name: Option<String>,
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
     /// (Smithay winit). When false (DRM libinput), touch coords use libinput mm / [`position_transformed`].
     pub(crate) touch_abs_is_window_pixels: bool,
@@ -418,6 +419,7 @@ impl CompositorState {
             shell_canvas_logical_origin: (0, 0),
             shell_canvas_logical_size: (1, 1),
             shell_ui_scale: 1.5,
+            shell_primary_output_name: None,
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
@@ -699,8 +701,22 @@ impl CompositorState {
         (x, y)
     }
 
+    pub(crate) fn shell_effective_primary_output(&self) -> Option<Output> {
+        if let Some(ref name) = self.shell_primary_output_name {
+            if let Some(o) = self
+                .space
+                .outputs()
+                .find(|o| o.name() == name.as_str())
+                .cloned()
+            {
+                return Some(o);
+            }
+        }
+        self.leftmost_output()
+    }
+
     pub(crate) fn primary_output_logical_origin(&self) -> (i32, i32) {
-        let Some(output) = self.leftmost_output() else {
+        let Some(output) = self.shell_effective_primary_output() else {
             return (0, 0);
         };
         let Some(geo) = self.space.output_geometry(&output) else {
@@ -787,7 +803,7 @@ impl CompositorState {
     }
 
     fn primary_output_geometry_rect(&self) -> Option<Rectangle<i32, Logical>> {
-        let o = self.leftmost_output()?;
+        let o = self.shell_effective_primary_output()?;
         self.space.output_geometry(&o)
     }
 
@@ -1335,6 +1351,20 @@ impl CompositorState {
     }
 
     pub fn send_shell_output_layout(&mut self) {
+        let cleared_stale_primary = if let Some(ref n) = self.shell_primary_output_name {
+            if !self
+                .space
+                .outputs()
+                .any(|o| o.name() == n.as_str())
+            {
+                self.shell_primary_output_name = None;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         if self.workspace_logical_bounds().is_none() {
             return;
         }
@@ -1368,7 +1398,31 @@ impl CompositorState {
             canvas_physical_w: physical_w,
             canvas_physical_h: physical_h,
             screens,
+            shell_chrome_primary: self.shell_primary_output_name.clone(),
         });
+        if cleared_stale_primary {
+            self.resync_embedded_shell_host_after_ipc_connect();
+            self.needs_winit_redraw = true;
+        }
+    }
+
+    pub fn set_shell_primary_output_name(&mut self, name: String) {
+        let pref = if name.is_empty() {
+            None
+        } else {
+            if !self
+                .space
+                .outputs()
+                .any(|o| o.name() == name.as_str())
+            {
+                return;
+            }
+            Some(name)
+        };
+        self.shell_primary_output_name = pref;
+        self.resync_embedded_shell_host_after_ipc_connect();
+        self.send_shell_output_layout();
+        self.needs_winit_redraw = true;
     }
 
     pub fn apply_shell_output_layout_json(&mut self, json: &str) {
@@ -1449,6 +1503,15 @@ impl CompositorState {
                 Some((nx, ny).into()),
             );
             self.space.map_output(out, (nx, ny));
+        }
+        if let Some(ref n) = self.shell_primary_output_name {
+            if !self
+                .space
+                .outputs()
+                .any(|o| o.name() == n.as_str())
+            {
+                self.shell_primary_output_name = None;
+            }
         }
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();

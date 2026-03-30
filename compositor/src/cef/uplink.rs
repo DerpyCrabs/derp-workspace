@@ -131,4 +131,10 @@ impl UplinkToCompositor {
             s.set_shell_ui_scale(scale);
         });
     }
+
+    pub fn shell_set_shell_primary(&self, name: String) {
+        self.run(move |s| {
+            s.set_shell_primary_output_name(name);
+        });
+    }
 }

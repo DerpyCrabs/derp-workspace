@@ -56,7 +56,59 @@
 }
 
 .shell-monitor-list__item {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  list-style: disc;
+}
+
+.shell-monitor-list__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.shell-monitor-list__text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.shell-monitor-list__chrome-btn {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.shell-monitor-list__chrome-btn:hover:not(:disabled) {
+  background: rgba(40, 100, 170, 0.45);
+}
+
+.shell-monitor-list__chrome-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.shell-monitor-list__chrome-btn--active {
+  background: rgba(30, 80, 140, 0.55);
+  border-color: rgba(160, 200, 255, 0.45);
+}
+
+.shell-monitor-list__chrome-btn--active:disabled {
+  opacity: 0.85;
+}
+
+.shell-monitor-list__auto-badge {
+  font-weight: 600;
+  color: hsl(var(--shell-hue), 55%, 72%);
 }
 
 .shell-monitor-list__name {
@@ -753,6 +805,48 @@
   margin: 0 0 0.5rem;
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+.shell-chrome-host-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.shell-chrome-host-label {
+  margin-right: 0.25rem;
+  opacity: 0.9;
+}
+
+.shell-chrome-host-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell-chrome-host-btn:hover:not(:disabled) {
+  background: rgba(40, 100, 170, 0.45);
+}
+
+.shell-chrome-host-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.shell-chrome-host-btn--active {
+  background: rgba(30, 80, 140, 0.55);
+  border-color: rgba(160, 200, 255, 0.45);
+}
+
+.shell-chrome-host-btn--active:disabled {
+  opacity: 0.85;
 }
 
 .shell-ui-scale-row {

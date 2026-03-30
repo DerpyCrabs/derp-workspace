@@ -214,11 +214,23 @@ pub fn encode_output_layout(
     canvas_physical_w: u32,
     canvas_physical_h: u32,
     screens: &[OutputLayoutScreen],
+    shell_chrome_primary: Option<&str>,
 ) -> Option<Vec<u8>> {
     let n = u32::try_from(screens.len()).ok()?;
     if n == 0 || n > MAX_OUTPUT_LAYOUT_SCREENS {
         return None;
     }
+    let prim_bytes: &[u8] = match shell_chrome_primary {
+        None => &[],
+        Some(s) if s.is_empty() => &[],
+        Some(s) => {
+            let b = s.as_bytes();
+            if b.is_empty() || b.len() > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+                return None;
+            }
+            b
+        }
+    };
     let mut body_sz: usize = 4 + 16 + 4;
     for s in screens {
         let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
@@ -227,6 +239,7 @@ pub fn encode_output_layout(
         }
         body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(28)?;
     }
+    body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -251,6 +264,9 @@ pub fn encode_output_layout(
         v.extend_from_slice(&s.transform.to_le_bytes());
         v.extend_from_slice(&s.refresh_milli_hz.to_le_bytes());
     }
+    let pl = u32::try_from(prim_bytes.len()).ok()?;
+    v.extend_from_slice(&pl.to_le_bytes());
+    v.extend_from_slice(prim_bytes);
     Some(v)
 }
 
@@ -323,6 +339,32 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             refresh_milli_hz,
         });
     }
+    let shell_chrome_primary = if off == body.len() {
+        None
+    } else {
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let pl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if pl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        if off + pl > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let name = if pl == 0 {
+            None
+        } else {
+            Some(
+                std::str::from_utf8(&body[off..off + pl])
+                    .map_err(|_| DecodeError::BadUtf8Command)?
+                    .to_string(),
+            )
+        };
+        off += pl;
+        name
+    };
     if off != body.len() {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
@@ -332,6 +374,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         canvas_physical_w: canvas_physical_w.max(1),
         canvas_physical_h: canvas_physical_h.max(1),
         screens,
+        shell_chrome_primary,
     })
 }
 
@@ -831,6 +874,7 @@ pub enum DecodedCompositorToShellMessage {
         canvas_physical_w: u32,
         canvas_physical_h: u32,
         screens: Vec<OutputLayoutScreen>,
+        shell_chrome_primary: Option<String>,
     },
     WindowMapped {
         window_id: u32,
