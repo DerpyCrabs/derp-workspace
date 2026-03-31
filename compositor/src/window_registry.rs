@@ -12,6 +12,10 @@ pub type WindowId = u32;
 
 type Key = (ClientId, u32);
 
+pub(crate) fn wl_surface_key(wl: &WlSurface) -> Option<Key> {
+    key(wl)
+}
+
 fn key(wl: &WlSurface) -> Option<Key> {
     let c = wl.client()?;
     Some((c.id(), wl.id().protocol_id()))

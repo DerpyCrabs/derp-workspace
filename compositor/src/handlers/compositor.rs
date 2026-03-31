@@ -57,6 +57,7 @@ impl CompositorHandler for CompositorState {
             }) {
                 window.on_commit();
             }
+            self.xdg_sync_pending_deferred_toplevel(&root);
         }
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);

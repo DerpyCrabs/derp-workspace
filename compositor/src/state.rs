@@ -129,6 +129,29 @@ pub(crate) fn transform_to_wire(t: Transform) -> u32 {
     }
 }
 
+pub(crate) fn toplevel_should_defer_initial_map(
+    parent: Option<&WlSurface>,
+    _title: &str,
+    app_id: &str,
+    is_embedded_shell_host: bool,
+) -> bool {
+    if is_embedded_shell_host || parent.is_some() {
+        return false;
+    }
+    app_id.trim().is_empty()
+}
+
+pub(crate) fn shell_window_row_should_show(info: &WindowInfo) -> bool {
+    !info.app_id.trim().is_empty()
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingDeferredToplevel {
+    pub window: Window,
+    pub map_x: i32,
+    pub map_y: i32,
+}
+
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     smithay::wayland::compositor::with_states(wl, |states| {
         let data = states
@@ -233,6 +256,7 @@ pub struct CompositorState {
 
     pub chrome_bridge: SharedChromeBridge,
     pub window_registry: WindowRegistry,
+    pub(crate) pending_deferred_toplevels: HashMap<(ClientId, u32), PendingDeferredToplevel>,
 
     pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
     pub cef_to_compositor_tx: channel::Sender<crate::cef::compositor_tx::CefToCompositor>,
@@ -438,6 +462,7 @@ impl CompositorState {
             seat,
             chrome_bridge,
             window_registry,
+            pending_deferred_toplevels: HashMap::new(),
             shell_to_cef,
             cef_to_compositor_tx,
             shell_cef_handshake,
@@ -1060,6 +1085,132 @@ impl CompositorState {
             || self.shell_ipc_peer_matches_wayland_pid(info.wayland_client_pid)
     }
 
+    pub(crate) fn xdg_sync_pending_deferred_toplevel(&mut self, root: &WlSurface) {
+        let Some(key) = crate::window_registry::wl_surface_key(root) else {
+            return;
+        };
+        if !self.pending_deferred_toplevels.contains_key(&key) {
+            return;
+        }
+        let reg_win_id = self.window_registry.window_id_for_wl_surface(root);
+        tracing::warn!(
+            target: "derp_toplevel",
+            wl_surface_protocol_id = root.id().protocol_id(),
+            window_id = ?reg_win_id,
+            "xdg sync deferred toplevel entry"
+        );
+        {
+            let pending = self
+                .pending_deferred_toplevels
+                .get_mut(&key)
+                .expect("checked");
+            pending.window.on_commit();
+        }
+        let initial_configure_sent = smithay::wayland::compositor::with_states(root, |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .initial_configure_sent
+        });
+        if !initial_configure_sent {
+            let pending = self
+                .pending_deferred_toplevels
+                .get(&key)
+                .expect("checked");
+            if let Some(tl) = pending.window.toplevel() {
+                tl.send_configure();
+            }
+        }
+        let (has_identity, title, app_id) = {
+            let pending = self
+                .pending_deferred_toplevels
+                .get(&key)
+                .expect("checked");
+            let bbox = pending.window.bbox();
+            let has_buffer_extent = bbox.size.w >= 1 && bbox.size.h >= 1;
+            let (title, app_id) = smithay::wayland::compositor::with_states(root, |states| {
+                let attrs = states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap();
+                (
+                    attrs.title.clone().unwrap_or_default(),
+                    attrs.app_id.clone().unwrap_or_default(),
+                )
+            });
+            let parent_p = pending.window.toplevel().and_then(|t| t.parent());
+            let ident = !app_id.trim().is_empty();
+            let geo = pending.window.geometry();
+            tracing::warn!(
+                target: "derp_toplevel",
+                title = %title,
+                app_id = %app_id,
+                bbox_w = bbox.size.w,
+                bbox_h = bbox.size.h,
+                geo = ?geo,
+                has_buffer_extent,
+                has_identity = ident,
+                will_map_now = ident,
+                "xdg sync deferred toplevel state"
+            );
+            tracing::warn!(
+                target: "derp_toplevel",
+                wl_surface_protocol_id = root.id().protocol_id(),
+                window_id = ?reg_win_id,
+                title = %title,
+                app_id = %app_id,
+                parent_wl_surface_protocol_id = ?parent_p.as_ref().map(|p| p.id().protocol_id()),
+                has_buffer_extent,
+                has_identity = ident,
+                will_map_now = ident,
+                "xdg sync deferred toplevel detail"
+            );
+            (ident, title, app_id)
+        };
+        if has_identity {
+            let pending = self.pending_deferred_toplevels.remove(&key).unwrap();
+            let wl0 = pending.window.toplevel().unwrap().wl_surface();
+            let _ = self.window_registry.set_title(wl0, title);
+            let _ = self.window_registry.set_app_id(wl0, app_id);
+            let wl0 = wl0.clone();
+            self.space.map_element(
+                DerpSpaceElem::Wayland(pending.window.clone()),
+                (pending.map_x, pending.map_y),
+                false,
+            );
+            self.notify_geometry_if_changed(&pending.window);
+            let info = self
+                .window_registry
+                .snapshot_for_wl_surface(&wl0)
+                .expect("pending map: registry row");
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id = info.window_id,
+                title = %info.title,
+                app_id = %info.app_id,
+                wl_surface_protocol_id = wl0.id().protocol_id(),
+                map_x = pending.map_x,
+                map_y = pending.map_y,
+                "deferred toplevel mapped WindowMapped emitted"
+            );
+            self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
+        }
+    }
+
+    pub(crate) fn wayland_window_id_is_pending_deferred_toplevel(&self, window_id: u32) -> bool {
+        self.pending_deferred_toplevels.values().any(|p| {
+            p.window
+                .toplevel()
+                .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface()))
+                == Some(window_id)
+        })
+    }
+
     /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
     pub fn notify_geometry_if_changed(&mut self, window: &Window) {
         self.notify_geometry_for_window(window, false);
@@ -1076,17 +1227,8 @@ impl CompositorState {
         let elem = DerpSpaceElem::Wayland(window.clone());
         let map_loc = self.space.element_location(&elem)?;
         let geo = window.geometry();
-        let bbox = window.bbox();
-        if bbox.size.w == 0 || bbox.size.h == 0 {
-            return Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, false));
-        }
-        if !Self::wayland_window_has_client_side_decoration(window) {
-            return Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, false));
-        }
-        let render_loc = map_loc - geo.loc;
-        let mut r = bbox;
-        r.loc += render_loc;
-        Some((r.loc.x, r.loc.y, r.size.w, r.size.h, true))
+        let csd = Self::wayland_window_has_client_side_decoration(window);
+        Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, csd))
     }
 
     pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {
@@ -1375,14 +1517,19 @@ impl CompositorState {
             | ChromeEvent::WindowGeometryChanged { info }
             | ChromeEvent::WindowMetadataChanged { info } => {
                 self.window_info_is_solid_shell_host(info)
+                    || !shell_window_row_should_show(info)
             }
             ChromeEvent::WindowUnmapped { window_id } => {
                 if let Some(i) = unmap_removed_info {
-                    return self.window_info_is_solid_shell_host(i);
+                    return self.window_info_is_solid_shell_host(i)
+                        || !shell_window_row_should_show(i);
                 }
                 self.window_registry
                     .window_info(*window_id)
-                    .map(|i| self.window_info_is_solid_shell_host(&i))
+                    .map(|i| {
+                        self.window_info_is_solid_shell_host(&i)
+                            || !shell_window_row_should_show(&i)
+                    })
                     .unwrap_or(false)
             }
             ChromeEvent::FocusChanged { window_id, .. } => window_id
@@ -1391,6 +1538,7 @@ impl CompositorState {
                 .unwrap_or(false),
             ChromeEvent::WindowStateChanged { info, .. } => {
                 self.window_info_is_solid_shell_host(info)
+                    || !shell_window_row_should_show(info)
             }
         }
     }
@@ -2001,6 +2149,12 @@ impl CompositorState {
         self.resync_embedded_shell_host_after_ipc_connect();
         for info in self.window_registry.all_infos() {
             if self.window_info_is_solid_shell_host(&info) {
+                continue;
+            }
+            if self.wayland_window_id_is_pending_deferred_toplevel(info.window_id) {
+                continue;
+            }
+            if !shell_window_row_should_show(&info) {
                 continue;
             }
             let ipc_info = self
@@ -2662,6 +2816,8 @@ impl CompositorState {
             .all_infos()
             .into_iter()
             .filter(|i| !self.window_info_is_solid_shell_host(i))
+            .filter(|i| shell_window_row_should_show(i))
+            .filter(|i| !self.wayland_window_id_is_pending_deferred_toplevel(i.window_id))
             .map(|i| {
                 let i = self
                     .shell_window_info_to_output_local_layout(&i)
@@ -2766,24 +2922,65 @@ impl CompositorState {
 
     pub fn shell_close_window(&mut self, window_id: u32) {
         let Some(info) = self.window_registry.window_info(window_id) else {
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id,
+                "shell_close_window abort: no window_registry.window_info"
+            );
             return;
         };
         if self.window_info_is_solid_shell_host(&info) {
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id,
+                "shell_close_window abort: solid shell host"
+            );
             return;
         }
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id,
+                title = %info.title,
+                "shell_close_window abort: no surface_id_for_window"
+            );
             return;
         };
-        let Some(window) = self.find_window_by_surface_id(sid) else {
-            return;
-        };
+        if let Some(w) = self.find_window_by_surface_id(sid) {
+            self.space
+                .raise_element(&DerpSpaceElem::Wayland(w.clone()), true);
+            let wl_surf = w.toplevel().unwrap().wl_surface().clone();
+            let k_serial = SERIAL_COUNTER.next_serial();
+            if let Some(kb) = self.seat.get_keyboard() {
+                kb.set_focus(self, Some(wl_surf), k_serial);
+            }
+        }
         if self.shell_move_window_id == Some(window_id) {
             self.shell_move_end(window_id);
         }
         if self.shell_resize_window_id == Some(window_id) {
             self.shell_resize_end(window_id);
         }
-        window.toplevel().unwrap().send_close();
+        let Some(window) = self.find_window_by_surface_id(sid) else {
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id,
+                "shell_close_window abort: no mapped Wayland window"
+            );
+            return;
+        };
+        let Some(tl) = window.toplevel() else {
+            return;
+        };
+        tracing::warn!(
+            target: "derp_toplevel",
+            window_id,
+            wl_surface_protocol_id = tl.wl_surface().id().protocol_id(),
+            title = %info.title,
+            app_id = %info.app_id,
+            "shell_close_window send_close"
+        );
+        tl.send_close();
         self.needs_winit_redraw = true;
     }
 

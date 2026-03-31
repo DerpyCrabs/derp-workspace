@@ -10,7 +10,9 @@
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{
     element::{
-        memory::MemoryRenderBufferRenderElement, Element, Id, Kind, RenderElement, UnderlyingStorage,
+        memory::MemoryRenderBufferRenderElement,
+        surface::WaylandSurfaceRenderElement,
+        Element, Id, Kind, RenderElement, UnderlyingStorage,
     },
     gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
     utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -276,7 +278,7 @@ where
     Space(SpaceRenderElements<GlesRenderer, E>),
     SpaceClip(SpaceExclusionClip<E>),
     ShellDma(&'a ShellDmaElement),
-    Pointer(E),
+    Pointer(WaylandSurfaceRenderElement<GlesRenderer>),
     CursorTex(ShellCursorElement),
     #[doc(hidden)]
     _Catcher(Infallible),

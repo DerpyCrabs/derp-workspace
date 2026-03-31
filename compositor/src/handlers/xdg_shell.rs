@@ -55,12 +55,21 @@ impl XdgShellHandler for CompositorState {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let wl0 = surface.wl_surface().clone();
         let (title, app_id) = toplevel_title_app_id(&surface);
+        let parent = surface.parent();
         let wayland_client_pid = wl0
             .client()
             .and_then(|c: Client| c.get_credentials(&self.display_handle).ok())
             .map(|cr| cr.pid);
         let map_at_output_origin =
             self.toplevel_is_embedded_shell_host(&title, &app_id, wayland_client_pid);
+        let defer_map = crate::state::toplevel_should_defer_initial_map(
+            parent.as_ref(),
+            &title,
+            &app_id,
+            map_at_output_origin,
+        );
+        let window = Window::new_wayland_window(surface);
+        let parent_protocol_id = parent.as_ref().map(|p| p.id().protocol_id());
         self.window_registry.register_toplevel(
             &wl0,
             title,
@@ -71,8 +80,6 @@ impl XdgShellHandler for CompositorState {
             .window_registry
             .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
-
-        let window = Window::new_wayland_window(surface);
 
         let existing_before = self.space.elements().count();
         let (map_x, map_y) = if map_at_output_origin {
@@ -89,19 +96,84 @@ impl XdgShellHandler for CompositorState {
             map_y,
             "xdg new_toplevel initial map (logical)"
         );
-        self.space
-            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), false);
+        tracing::warn!(
+            target: "derp_toplevel",
+            window_id = reg.window_id,
+            surface_id = reg.surface_id,
+            title = %reg.title,
+            app_id = %reg.app_id,
+            wayland_client_pid = ?wayland_client_pid,
+            parent_protocol_id = ?parent_protocol_id,
+            defer_map,
+            bbox = ?window.bbox(),
+            geometry = ?window.geometry(),
+            "xdg new_toplevel"
+        );
+        tracing::warn!(
+            target: "derp_toplevel",
+            window_id = reg.window_id,
+            compositor_surface_id = reg.surface_id,
+            wl_surface_protocol_id = wl0.id().protocol_id(),
+            wayland_client_id = ?wl0.client().map(|c| c.id()),
+            wayland_client_pid = ?wayland_client_pid,
+            title_len = reg.title.len(),
+            parent_wl_surface_protocol_id = ?parent.as_ref().map(|p| p.id().protocol_id()),
+            defer_map,
+            map_at_output_origin,
+            will_emit_WindowMapped_immediately = !defer_map,
+            "xdg new_toplevel staging check"
+        );
+        if defer_map {
+            let key = crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
+            self.pending_deferred_toplevels.insert(
+                key,
+                crate::state::PendingDeferredToplevel {
+                    window: window.clone(),
+                    map_x,
+                    map_y,
+                },
+            );
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id = reg.window_id,
+                wl_surface_protocol_id = wl0.id().protocol_id(),
+                "xdg new_toplevel deferred until app_id"
+            );
+        } else {
+            self.space
+                .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), false);
 
-        self.notify_geometry_if_changed(&window);
-        let info = self
-            .window_registry
-            .snapshot_for_wl_surface(&wl0)
-            .expect("xdg new_toplevel: registry row after notify");
-        self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
+            self.notify_geometry_if_changed(&window);
+            let info = self
+                .window_registry
+                .snapshot_for_wl_surface(&wl0)
+                .expect("xdg new_toplevel: registry row after notify");
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id = reg.window_id,
+                title = %info.title,
+                app_id = %info.app_id,
+                "xdg new_toplevel emitted WindowMapped immediate map"
+            );
+            self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
+        }
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
+        let removed_pre = self.window_registry.snapshot_for_wl_surface(wl);
+        let mut had_pending_deferred = false;
+        if let Some(k) = crate::window_registry::wl_surface_key(wl) {
+            had_pending_deferred = self.pending_deferred_toplevels.remove(&k).is_some();
+            if had_pending_deferred {
+                tracing::warn!(
+                    target: "derp_toplevel",
+                    wl_surface_protocol_id = wl.id().protocol_id(),
+                    ?removed_pre,
+                    "toplevel_destroyed removed pending deferred surface"
+                );
+            }
+        }
         let window_opt = self.space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 (w.toplevel().unwrap().wl_surface() == wl).then_some(w.clone())
@@ -121,7 +193,19 @@ impl XdgShellHandler for CompositorState {
                 self.shell_last_non_shell_focus_window_id = None;
             }
             self.shell_minimized_windows.remove(&window_id);
-            self.shell_emit_chrome_window_unmapped(window_id, removed);
+            if let Some(ref meta) = removed {
+                tracing::warn!(
+                    target: "derp_toplevel",
+                    window_id,
+                    title = %meta.title,
+                    app_id = %meta.app_id,
+                    wl_surface_protocol_id = wl.id().protocol_id(),
+                    "toplevel_destroyed registry removed"
+                );
+            }
+            if !had_pending_deferred {
+                self.shell_emit_chrome_window_unmapped(window_id, removed);
+            }
         }
     }
 
@@ -145,6 +229,7 @@ impl XdgShellHandler for CompositorState {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
+        self.xdg_sync_pending_deferred_toplevel(wl);
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
@@ -167,6 +252,7 @@ impl XdgShellHandler for CompositorState {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
             }
         }
+        self.xdg_sync_pending_deferred_toplevel(wl);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

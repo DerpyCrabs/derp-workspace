@@ -100,5 +100,6 @@ else
 fi
 echo "Session log (default): ~/.local/state/derp/compositor.log — truncated each compositor start (and SIGUSR2 respawn) unless DERP_COMPOSITOR_LOG_APPEND=1."
 echo "dma-buf / Chromium verbose logs: off by default; set DERP_SESSION_DMABUF_LOGS=1 in scripts/derp-session.local.env when debugging import/EGL."
+echo "Compositor logs xdg/shell window diagnostics at WARN (derp_toplevel); default RUST_LOG=warn is enough."
 echo "CEF Solid OSR: dma-buf only (in compositor; derp-session does not set toggle env vars)."
 echo "Optional overrides only: scripts/derp-session.local.env (see derp-session.local.env.example). Default session is dma-buf OSR without this file."
