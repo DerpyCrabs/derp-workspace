@@ -6,9 +6,7 @@ import {
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
 } from './chromeConstants'
-import './App.css'
 
-/** Mirrors compositor window geometry + metadata (OSR overlay chrome). */
 export type ShellWindowModel = {
   window_id: number
   surface_id: number
@@ -25,10 +23,8 @@ export type ShellWindowModel = {
 type ShellWindowFrameProps = {
   win: ShellWindowModel
   focused: boolean
-  /** Stacking vs other chrome (focused window should use the largest). */
   stackZ: number
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
-  /** Bitmask: [`SHELL_RESIZE_BOTTOM`] \| … (see chromeConstants). */
   onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
   onMinimize: () => void
   onMaximize: () => void
@@ -40,7 +36,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const bd = CHROME_BORDER_PX
   const rh = CHROME_RESIZE_HANDLE_PX
   const tiling = props.win.maximized || props.win.fullscreen
-  /** Tiling hides borders; don’t reserve outer inset or gaps stay visible around the frame. */
   const inset = tiling ? 0 : bd
   const outerW = props.win.width + inset * 2
 
@@ -48,14 +43,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     props.onResizeEdgeDown(edges, clientX, clientY)
   }
 
+  const chromeBg = props.focused ? 'hsla(210, 38%, 26%, 0.96)' : 'hsla(210, 18%, 15%, 0.88)'
+
   return (
     <div
-      class="shell-window-chrome"
-      classList={{
-        'shell-window-chrome--focused': props.focused,
-        'shell-window-chrome--tiling':
-          props.win.maximized || props.win.fullscreen,
-      }}
+      class="pointer-events-none box-border"
       style={{
         position: 'fixed',
         'z-index': props.stackZ,
@@ -65,18 +57,26 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         height: `${props.win.height + th + inset * 2}px`,
         'box-sizing': 'border-box',
         'pointer-events': 'none',
+        '--shell-chrome-bg': chromeBg,
       }}
     >
       <div
-        class="shell-titlebar"
+        class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
+        classList={{
+          'rounded-t-md': !tiling,
+          'rounded-none': tiling,
+        }}
         style={{
           top: `${inset}px`,
           height: `${th}px`,
+          'z-index': 6,
+          background: 'var(--shell-chrome-bg)',
+          'pointer-events': 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
-          if ((e.target as HTMLElement).closest('.shell-titlebar__controls')) return
+          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           e.preventDefault()
           e.stopPropagation()
           console.log(
@@ -85,7 +85,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
-          if ((e.target as HTMLElement).closest('.shell-titlebar__controls')) return
+          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
@@ -96,13 +96,19 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(t.clientX, t.clientY)
         }}
       >
-        <span class="shell-titlebar__text">
+        <span
+          class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
+          classList={{
+            'opacity-[0.72]': !props.focused,
+            'opacity-[0.95]': props.focused,
+          }}
+        >
           {props.win.title || props.win.app_id || `window ${props.win.window_id}`}
         </span>
-        <div class="shell-titlebar__controls">
+        <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
-            class="shell-titlebar__minimize"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -111,7 +117,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="shell-titlebar__maximize-tile"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
             title={props.win.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMaximize()}
@@ -127,7 +133,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
                 />
               </svg>
             ) : (
-              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <svg class="block shrink-0" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
                 <rect
                   x="2"
                   y="2"
@@ -142,7 +148,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="shell-titlebar__close"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}
@@ -152,7 +158,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         </div>
       </div>
       <div
-        class="shell-border shell-border--left"
+        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        classList={{ hidden: tiling }}
         style={{
           position: 'absolute',
           left: '0',
@@ -162,7 +169,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-border shell-border--right"
+        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        classList={{ hidden: tiling }}
         style={{
           position: 'absolute',
           right: '0',
@@ -172,7 +180,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-border shell-border--bottom"
+        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        classList={{ hidden: tiling }}
         style={{
           position: 'absolute',
           left: '0',
@@ -181,11 +190,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           height: `${bd}px`,
         }}
       />
-      {/* Resize hits: bottom + sides only. Side strips start below titlebar so the top band is not a resize target. */}
       <div
-        class="shell-resize-handle"
+        class="pointer-events-auto touch-none z-[3] box-border"
+        classList={{ hidden: tiling }}
         title="Resize"
         style={{
+          position: 'absolute',
           left: '0',
           bottom: '0',
           width: `${rh}px`,
@@ -207,9 +217,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-resize-handle"
+        class="pointer-events-auto touch-none z-[3] box-border"
+        classList={{ hidden: tiling }}
         title="Resize"
         style={{
+          position: 'absolute',
           right: '0',
           bottom: '0',
           width: `${rh}px`,
@@ -231,9 +243,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-resize-handle"
+        class="pointer-events-auto touch-none z-[3] box-border"
+        classList={{ hidden: tiling }}
         title="Resize height"
         style={{
+          position: 'absolute',
           left: `${rh}px`,
           bottom: '0',
           width: `${Math.max(0, outerW - 2 * rh)}px`,
@@ -255,9 +269,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-resize-handle"
+        class="pointer-events-auto touch-none z-[3] box-border"
+        classList={{ hidden: tiling }}
         title="Resize width"
         style={{
+          position: 'absolute',
           left: '0',
           top: `${inset + th}px`,
           width: `${rh}px`,
@@ -279,9 +295,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="shell-resize-handle"
+        class="pointer-events-auto touch-none z-[3] box-border"
+        classList={{ hidden: tiling }}
         title="Resize width"
         style={{
+          position: 'absolute',
           right: '0',
           top: `${inset + th}px`,
           width: `${rh}px`,

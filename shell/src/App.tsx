@@ -10,7 +10,6 @@ import {
   Show,
 } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import './App.css'
 import {
   CHROME_TASKBAR_RESERVE_PX,
   CHROME_TITLEBAR_PX,
@@ -331,7 +330,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
   return next
 }
 
-/** Ruler insets — must match `.shell-ruler--top` / `.shell-ruler--left` in `App.css`. */
+/** Ruler insets — match corner cell (w×h) and ruler bar placement in App layout. */
 const RULER_GUTTER_X = 28
 const RULER_GUTTER_Y = 22
 
@@ -498,7 +497,6 @@ function canSessionControl(): boolean {
 }
 
 function App() {
-  const panelHue = 210
   const [spawnStatus, setSpawnStatus] = createSignal<string | null>(null)
   const [spawnBusy, setSpawnBusy] = createSignal(false)
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
@@ -663,10 +661,16 @@ function App() {
     const vph = viewportCss().h
     return (
       <>
-        <div class="shell-crosshair shell-crosshair--v" style={{ left: `${p.x}px` }} />
-        <div class="shell-crosshair shell-crosshair--h" style={{ top: `${p.y}px` }} />
         <div
-          class="shell-cursor-readout"
+          class="pointer-events-none fixed top-0 bottom-0 z-53 w-px -translate-x-[0.5px] bg-shell-crosshair shadow-[0_0_4px_rgba(0,0,0,0.4)]"
+          style={{ left: `${p.x}px` }}
+        />
+        <div
+          class="pointer-events-none fixed left-0 right-0 z-53 h-px -translate-y-[0.5px] bg-shell-crosshair shadow-[0_0_4px_rgba(0,0,0,0.4)]"
+          style={{ top: `${p.y}px` }}
+        />
+        <div
+          class="pointer-events-none fixed z-54 rounded border border-black/20 bg-shell-cursor-readout px-1.5 py-0.5 text-[11px] whitespace-nowrap text-neutral-900 tabular-nums"
           style={{
             left: `${Math.min(p.x + 14, Math.max(0, vpw - 128))}px`,
             top: `${Math.min(p.y + 14, Math.max(0, vph - 40))}px`,
@@ -707,8 +711,8 @@ function App() {
       rects.push({ x: z.x, y: z.y, w: z.w, h: z.h })
       hud.push({ label, ...z })
     }
-    addEl(main.querySelector('.shell-panel'), 'panel')
-    addEl(main.querySelector('.shell-taskbar'), 'taskbar')
+    addEl(main.querySelector('[data-shell-panel]'), 'panel')
+    addEl(main.querySelector('[data-shell-taskbar]'), 'taskbar')
     setExclusionZonesHud(hud)
     if (typeof window.__derpShellWireSend === 'function') {
       window.__derpShellWireSend('set_exclusion_zones', JSON.stringify({ rects }))
@@ -854,8 +858,6 @@ function App() {
     }
     dragDemoGrab = null
   }
-
-  const panelHueStyle = () => ({ '--shell-hue': `${panelHue}` } as const)
 
   onMount(() => {
     console.log(
@@ -1296,11 +1298,10 @@ function App() {
   return (
     <main
       classList={{
-        'shell-root': true,
-        'shell-root--crosshair': crosshairCursor(),
+        'shell-desk m-0 block min-h-screen box-border pb-0 text-neutral-100': true,
+        'cursor-crosshair': crosshairCursor(),
       }}
       style={{
-        ...panelHueStyle(),
         width: `${canvasCss().w}px`,
         'min-height': `${canvasCss().h}px`,
       }}
@@ -1380,7 +1381,7 @@ function App() {
       <For each={workspacePartition().secondary}>
         {(s) => (
           <div
-            class="shell-monitor-alt"
+            class="pointer-events-none absolute z-[1] box-border border border-dashed border-[rgba(40,55,90,0.45)] bg-white/[0.04]"
             style={{
               left: `${s.x}px`,
               top: `${s.y}px`,
@@ -1388,7 +1389,7 @@ function App() {
               height: `${s.height}px`,
             }}
           >
-            <span class="shell-monitor-alt__label">
+            <span class="absolute top-2 left-2 rounded border border-white/12 bg-black/35 px-2 py-1 text-[11px] font-semibold tracking-wider text-neutral-100 uppercase">
               {s.name || 'Display'}
             </span>
           </div>
@@ -1398,7 +1399,7 @@ function App() {
       <Show when={workspacePartition().primary}>
         {(prim) => (
           <div
-            class="shell-primary-chrome"
+            class="pointer-events-none absolute z-[400000] box-border flex flex-col items-stretch overflow-hidden"
             style={{
               left: `${prim().x}px`,
               top: `${prim().y}px`,
@@ -1406,13 +1407,17 @@ function App() {
               height: `${prim().height}px`,
             }}
           >
-            <div class="shell-primary-chrome__fill">
-              <div class="shell-panel" style={panelHueStyle()}>
-                <h1 class="shell-title">derp shell</h1>
-                <p class="shell-sub">SolidJS → CEF OSR → compositor</p>
-                <label class="shell-crosshair-toggle">
+            <div class="box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px] pointer-events-none">
+              <div
+                class="relative z-[12] max-w-[min(28rem,100%)] rounded-2xl border border-white/12 bg-black/55 px-12 py-10 text-center shadow-[0_0.5rem_2rem_rgba(0,0,0,0.45)] pointer-events-auto"
+                data-shell-panel
+              >
+                <h1 class="mb-2 text-[2rem] font-bold tracking-wider">derp shell</h1>
+                <p class="mb-4 text-base opacity-[0.85]">SolidJS → CEF OSR → compositor</p>
+                <label class="mb-4 inline-flex cursor-pointer items-center justify-center gap-2 text-sm select-none opacity-92">
                   <input
                     type="checkbox"
+                    class="h-4 w-4 accent-shell-accent-ring"
                     checked={crosshairCursor()}
                     onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
                   />
@@ -1420,7 +1425,7 @@ function App() {
                 </label>
                 <Show when={outputGeom()}>
                   {(g) => (
-                    <p class="shell-output-geom">
+                    <p class="mb-3 text-[0.8rem] opacity-90">
                       {`OSR / compositor canvas (logical): `}
                       <strong>
                         {g().w}×{g().h}
@@ -1428,9 +1433,14 @@ function App() {
                     </p>
                   )}
                 </Show>
-                <div class="shell-input-hud" aria-live="polite">
-                  <span class="shell-input-hud__label">input debug</span>
-                  <span class="shell-input-hud__row">
+                <div
+                  class="mb-3 rounded-[0.45rem] border border-white/15 bg-black/40 px-[0.85rem] py-[0.65rem] text-left text-[0.8rem] leading-snug tabular-nums [&_strong]:text-shell-hud-strong"
+                  aria-live="polite"
+                >
+                  <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
+                    input debug
+                  </span>
+                  <span class="block">
                     <span>
                       Union from <code>screens[]</code>
                       {': '}
@@ -1441,7 +1451,7 @@ function App() {
                         : '—'}
                     </strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     <span>Compositor union min corner: </span>
                     <strong>
                       {layoutCanvasOrigin()
@@ -1449,7 +1459,7 @@ function App() {
                         : '—'}
                     </strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     <span>Panel + taskbar host: </span>
                     <strong>
                       {panelHostForHud()
@@ -1457,7 +1467,7 @@ function App() {
                         : '—'}
                     </strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     {`Viewport (CSS): `}
                     <strong>
                       {viewportCss().w}×{viewportCss().h}
@@ -1465,21 +1475,25 @@ function App() {
                     {` · devicePixelRatio `}
                     <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     Windows (native): <strong>{windowsList().length}</strong>
                   </span>
-                  <div class="shell-exclusion-zones-hud">
-                    <span class="shell-input-hud__label">Exclusion zones (global logical)</span>
+                  <div class="mt-2 border-t border-white/12 pt-[0.45rem]">
+                    <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
+                      Exclusion zones (global logical)
+                    </span>
                     <Show
                       when={exclusionZonesHud().length > 0}
-                      fallback={<span class="shell-input-hud__row shell-exclusion-zones-hud__empty">—</span>}
+                      fallback={<span class="block opacity-[0.65]">—</span>}
                     >
-                      <ul class="shell-exclusion-zones-list">
+                      <ul class="mt-1 max-h-[11rem] list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
                         <For each={exclusionZonesHud()}>
                           {(z) => (
-                            <li class="shell-exclusion-zones-list__item">
-                              <span class="shell-exclusion-zones-list__label">{z.label}</span>
-                              <code class="shell-exclusion-zones-list__coords">
+                            <li class="my-0.5 list-disc">
+                              <span class="mr-[0.35rem] inline-block min-w-[7.5rem] opacity-90">
+                                {z.label}
+                              </span>
+                              <code class="font-mono text-[0.7rem] text-shell-hud-mono">
                                 {z.x},{z.y} · {z.w}×{z.h}
                               </code>
                             </li>
@@ -1489,37 +1503,38 @@ function App() {
                     </Show>
                   </div>
                   <Show when={crosshairCursor()}>
-                    <span class="shell-input-hud__row">
+                    <span class="block">
                       {`Pointer (clientX/Y): `}
                       <strong>
                         {pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}
                       </strong>
                     </span>
-                    <span class="shell-input-hud__row">
+                    <span class="block">
                       {`Pointer (in <main>): `}
                       <strong>
                         {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
                       </strong>
                     </span>
                   </Show>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     Pointer downs (button): <strong>{btnPointerDowns()}</strong>
                   </span>
-                  <span class="shell-input-hud__row">
+                  <span class="block">
                     Spawn clicks handled: <strong>{spawnClicks()}</strong>
                   </span>
-                  <div class="shell-screens-panel">
-                    <h2 class="shell-screens-title">Monitors</h2>
-                    <div class="shell-chrome-host-row">
-                      <span class="shell-chrome-host-label">Shell panel + taskbar</span>
+                  <div class="mt-2 max-w-none rounded-lg bg-black/25 px-3 py-[0.65rem]">
+                    <h2 class="mb-2 text-[0.72rem] font-semibold">Monitors</h2>
+                    <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
+                      <span class="mr-1 opacity-90">Shell panel + taskbar</span>
                       <button
                         type="button"
-                        class="shell-chrome-host-btn"
+                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
                         classList={{
-                          'shell-chrome-host-btn--active': !shellChromePrimaryName(),
+                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                            !shellChromePrimaryName(),
                         }}
                         disabled={!canSessionControl() || !shellChromePrimaryName()}
                         title={!canSessionControl() ? 'Needs cef_host wire' : 'Use top-left output (min x, then y)'}
@@ -1528,12 +1543,15 @@ function App() {
                         Auto
                       </button>
                     </div>
-                    <div class="shell-ui-scale-row">
-                      <span class="shell-ui-scale-label">UI scale (all heads)</span>
+                    <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
+                      <span class="mr-1 opacity-90">UI scale (all heads)</span>
                       <button
                         type="button"
-                        class="shell-ui-scale-btn"
-                        classList={{ 'shell-ui-scale-btn--active': uiScalePercent() === 100 }}
+                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+                        classList={{
+                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                            uiScalePercent() === 100,
+                        }}
                         disabled={!canSessionControl() || uiScalePercent() === 100}
                         title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
                         onClick={() => {
@@ -1544,8 +1562,11 @@ function App() {
                       </button>
                       <button
                         type="button"
-                        class="shell-ui-scale-btn"
-                        classList={{ 'shell-ui-scale-btn--active': uiScalePercent() === 150 }}
+                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+                        classList={{
+                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                            uiScalePercent() === 150,
+                        }}
                         disabled={!canSessionControl() || uiScalePercent() === 150}
                         title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
                         onClick={() => {
@@ -1555,36 +1576,36 @@ function App() {
                         150%
                       </button>
                     </div>
-                    <ul class="shell-monitor-list">
+                    <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-neutral-200">
                       <For
                         each={screenDraft.rows}
                         fallback={
-                          <li class="shell-monitor-list__empty">
+                          <li class="list-disc text-[hsl(45,85%,72%)]">
                             No outputs listed — compositor should send <code>output_layout</code> with one entry per
                             head.
                           </li>
                         }
                       >
                         {(row) => (
-                          <li class="shell-monitor-list__item">
-                            <div class="shell-monitor-list__row">
-                              <div class="shell-monitor-list__text">
-                                <span class="shell-monitor-list__name">{row.name || '—'}</span>
-                                <span class="shell-monitor-list__meta">
+                          <li class="mb-1.5 list-disc">
+                            <div class="flex flex-wrap items-start justify-between gap-x-2.5 gap-y-1.5">
+                              <div class="min-w-0 flex-[1_1_12rem]">
+                                <span class="font-semibold text-neutral-100">{row.name || '—'}</span>
+                                <span class="opacity-92">
                                   @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
                                   {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
                                   {!shellChromePrimaryName() &&
                                   row.name &&
                                   row.name === autoShellChromeMonitorName() ? (
-                                    <span class="shell-monitor-list__auto-badge"> · auto</span>
+                                    <span class="font-semibold text-shell-accent-badge"> · auto</span>
                                   ) : null}
                                 </span>
                               </div>
                               <button
                                 type="button"
-                                class="shell-monitor-list__chrome-btn"
+                                class="shrink-0 cursor-pointer whitespace-nowrap rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.45rem] py-0.5 text-[0.72rem] font-semibold tracking-wide text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
                                 classList={{
-                                  'shell-monitor-list__chrome-btn--active':
+                                  'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
                                     !!shellChromePrimaryName() && shellChromePrimaryName() === row.name,
                                 }}
                                 disabled={!canSessionControl()}
@@ -1601,20 +1622,20 @@ function App() {
                     <Show
                       when={screenDraft.rows.length > 0}
                       fallback={
-                        <p class="shell-screens-hint shell-screens-hint--muted">
+                        <p class="mb-2 text-[0.78rem] opacity-[0.88]">
                           Position/orientation editor unlocks once screens are known.
                         </p>
                       }
                     >
                       <For each={screenDraft.rows}>
                         {(row, i) => (
-                          <div class="shell-screen-row">
-                            <span class="shell-screen-name">{row.name}</span>
-                            <label class="shell-screen-field">
+                          <div class="mb-[0.45rem] flex flex-wrap items-center gap-x-[0.65rem] gap-y-[0.45rem] text-[0.82rem]">
+                            <span class="min-w-0 flex-[1_1_6rem] font-mono opacity-92">{row.name}</span>
+                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
                               x
                               <input
                                 type="number"
-                                class="shell-screen-input"
+                                class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
                                 value={row.x}
                                 onInput={(e) =>
                                   setScreenDraft(
@@ -1626,11 +1647,11 @@ function App() {
                                 }
                               />
                             </label>
-                            <label class="shell-screen-field">
+                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
                               y
                               <input
                                 type="number"
-                                class="shell-screen-input"
+                                class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
                                 value={row.y}
                                 onInput={(e) =>
                                   setScreenDraft(
@@ -1642,7 +1663,7 @@ function App() {
                                 }
                               />
                             </label>
-                            <label class="shell-screen-field shell-screen-field--picker">
+                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide opacity-80 [&_.relative]:mt-[0.15rem]">
                               orientation
                               <TransformPicker
                                 value={row.transform}
@@ -1652,7 +1673,7 @@ function App() {
                                 onChange={(v) => setScreenDraft('rows', i(), 'transform', v)}
                               />
                             </label>
-                            <span class="shell-screen-hint">
+                            <span class="text-[0.75rem] opacity-65">
                               {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
                             </span>
                           </div>
@@ -1660,7 +1681,7 @@ function App() {
                       </For>
                       <button
                         type="button"
-                        class="shell-layout-apply-btn"
+                        class="mt-2 cursor-pointer rounded-[0.35rem] border border-white/28 bg-[rgba(30,80,140,0.55)] px-3 py-1.5 text-[0.85rem] hover:bg-[rgba(40,100,170,0.65)]"
                         onClick={() => {
                           const screens = screenDraft.rows.map((r) => ({
                             name: r.name,
@@ -1676,11 +1697,15 @@ function App() {
                     </Show>
                   </div>
                 </div>
-                <p class="shell-spawn-url">{spawnUrlLine()}</p>
-                <label class="shell-cmd-label">
-                  <span class="shell-cmd-label__text">Command (`sh -c`, nested Wayland display)</span>
+                <p class="mb-[0.85rem] max-w-[22rem] text-left text-[0.72rem] leading-snug break-all opacity-[0.88]">
+                  {spawnUrlLine()}
+                </p>
+                <label class="mb-[0.65rem] block max-w-[22rem] text-left">
+                  <span class="mb-[0.35rem] block text-[0.72rem] opacity-[0.88]">
+                    Command (`sh -c`, nested Wayland display)
+                  </span>
                   <input
-                    class="shell-cmd-input"
+                    class="box-border w-full rounded-[0.4rem] border border-white/25 bg-black/35 px-[0.55rem] py-[0.45rem] text-[0.9rem] text-inherit"
                     type="text"
                     value={spawnCommand()}
                     onInput={(e) => setSpawnCommand(e.currentTarget.value)}
@@ -1690,7 +1715,7 @@ function App() {
                 </label>
                 <button
                   type="button"
-                  class="shell-spawn-btn"
+                  class="mt-1 cursor-pointer rounded-lg border-0 bg-shell-btn-primary px-[1.2rem] py-[0.6rem] text-[0.95rem] font-semibold tracking-wide text-neutral-900 shadow-[0_0.15rem_0.5rem_rgba(0,0,0,0.25)] hover:brightness-[1.06] disabled:cursor-wait disabled:opacity-65"
                   disabled={spawnBusy()}
                   onPointerDown={() => setBtnPointerDowns((n) => n + 1)}
                   onClick={() => void runNativeInCompositor()}
@@ -1699,7 +1724,7 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  class="shell-exit-session-btn"
+                  class="mt-[0.65rem] cursor-pointer rounded-[0.45rem] border border-white/20 bg-[hsl(0,55%,42%)] px-4 py-[0.45rem] text-[0.85rem] font-semibold text-neutral-100 hover:brightness-[1.08] disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={!canSessionControl()}
                   title={
                     canSessionControl()
@@ -1712,7 +1737,11 @@ function App() {
                 >
                   Exit session
                 </button>
-                {spawnStatus() ? <p class="shell-spawn-status">{spawnStatus()}</p> : null}
+                {spawnStatus() ? (
+                  <p class="mt-[0.85rem] max-w-[22rem] text-[0.875rem] leading-snug opacity-90">
+                    {spawnStatus()}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -1727,7 +1756,7 @@ function App() {
             />
 
             <div
-              class="shell-drag-demo"
+              class="pointer-events-auto fixed z-[15] min-w-[160px] cursor-grab touch-none rounded-lg border border-white/25 bg-[hsla(280,45%,35%,0.92)] px-3.5 py-2.5 text-[13px] font-semibold select-none text-neutral-100 shadow-[0_4px_16px_rgba(0,0,0,0.35)] active:cursor-grabbing"
               style={{
                 left: `${dragDemoPos().x}px`,
                 top: `${dragDemoPos().y}px`,
@@ -1768,7 +1797,11 @@ function App() {
       </Show>
 
       <div
-        class="shell-menu-atlas"
+        class="relative z-[90000] contain-layout contain-paint overflow-hidden"
+        classList={{
+          'pointer-events-auto': ctxMenuOpen(),
+          'pointer-events-none': !ctxMenuOpen(),
+        }}
         ref={(el) => {
           menuAtlasHostRef = el
         }}
@@ -1778,14 +1811,11 @@ function App() {
           right: '0',
           top: `${shellMenuAtlasTop()}px`,
           bottom: '0',
-          overflow: 'hidden',
-          'pointer-events': ctxMenuOpen() ? 'auto' : 'none',
-          'z-index': '90000',
         }}
       >
         <Show when={ctxMenuOpen()}>
           <div
-            class="shell-context-menu-panel"
+            class="absolute top-2 left-2 z-[90000] box-border max-h-[min(420px,55vh,calc(100%-16px))] min-w-[10rem] overflow-x-hidden overflow-y-auto rounded-[0.35rem] border border-black/35 bg-[rgba(28,32,42,0.96)] py-1 shadow-[0_6px_24px_rgba(0,0,0,0.35)]"
             role="menu"
             aria-label={ctxMenuKind() === 'programs' ? 'Applications' : 'Menu'}
             ref={(el) => {
@@ -1796,16 +1826,20 @@ function App() {
               {(item) => (
                 <button
                   type="button"
-                  class="shell-context-menu-item"
+                  class="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent px-3 py-[0.45rem] text-left font-inherit text-inherit hover:bg-white/12"
                   role="menuitem"
                   onClick={() => {
                     item.action()
                     setCtxMenuOpen(false)
                   }}
                 >
-                  <span class="shell-context-menu-item__label">{item.label}</span>
+                  <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
                   <Show when={item.badge}>
-                    {(b) => <span class="shell-context-menu-item__badge">{b()}</span>}
+                    {(b) => (
+                      <span class="shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85 bg-white/12">
+                        {b()}
+                      </span>
+                    )}
                   </Show>
                 </button>
               )}
@@ -1814,18 +1848,18 @@ function App() {
         </Show>
       </div>
 
-      <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">
+      <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">
         <Show when={crosshairCursor()}>
-          <div class="shell-ruler-corner" />
+          <div class="pointer-events-none fixed top-0 left-0 z-[52] h-[22px] w-7 border-r border-b border-white/20 bg-black/55" />
           <div
-            class="shell-ruler shell-ruler--top"
+            class="pointer-events-none fixed top-0 left-7 z-[51] box-border h-[22px] border-b border-white/20 bg-black/45"
             style={{ width: `${Math.max(0, viewportCss().w - RULER_GUTTER_X)}px` }}
           >
-            <div class="shell-ruler__ticks shell-ruler__ticks--h" />
+            <div class="shell-ruler-ticks-h absolute inset-0 opacity-85" />
             <For each={horizontalRulerTicks()}>
               {(x) => (
                 <span
-                  class="shell-ruler__label shell-ruler__label--h"
+                  class="pointer-events-none absolute bottom-px text-[9px] leading-none text-white/82 tabular-nums -translate-x-1/2"
                   style={{ left: `${x - RULER_GUTTER_X}px` }}
                 >
                   {x}
@@ -1834,14 +1868,14 @@ function App() {
             </For>
           </div>
           <div
-            class="shell-ruler shell-ruler--left"
+            class="pointer-events-none fixed top-[22px] left-0 z-[51] w-7 box-border border-r border-white/20 bg-black/45"
             style={{ height: `${Math.max(0, viewportCss().h - RULER_GUTTER_Y)}px` }}
           >
-            <div class="shell-ruler__ticks shell-ruler__ticks--v" />
+            <div class="shell-ruler-ticks-v absolute inset-0 opacity-85" />
             <For each={verticalRulerTicks()}>
               {(y) => (
                 <span
-                  class="shell-ruler__label shell-ruler__label--v"
+                  class="pointer-events-none absolute left-0.5 w-[22px] -translate-y-1/2 text-right text-[9px] leading-none text-white/82 tabular-nums"
                   style={{ top: `${y - RULER_GUTTER_Y}px` }}
                 >
                   {y}

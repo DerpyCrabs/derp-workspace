@@ -36,10 +36,10 @@ export const TransformPicker: Component<{
   })
 
   return (
-    <div class="shell-transform-picker" ref={(el) => (root = el)}>
+    <div class="relative self-start" ref={(el) => (root = el)}>
       <button
         type="button"
-        class="shell-transform-picker__toggle"
+        class="min-w-[6.5rem] cursor-pointer rounded border border-white/25 bg-black/35 py-0.5 px-[0.45rem] text-left font-inherit text-inherit hover:bg-black/[0.48]"
         onPointerDown={(e) => {
           e.preventDefault()
           props.setOpenIndex(open() ? null : props.rowIndex)
@@ -48,13 +48,16 @@ export const TransformPicker: Component<{
         {label()}
       </button>
       <Show when={open()}>
-        <div class="shell-transform-picker__menu" role="listbox">
+        <div
+          class="absolute left-0 top-[calc(100%+2px)] z-[500000] min-w-full rounded-[0.3rem] border border-white/28 bg-[rgba(22,30,48,0.98)] py-0.5 shadow-[0_6px_20px_rgba(0,0,0,0.45)]"
+          role="listbox"
+        >
           <For each={OPTIONS}>
             {(opt) => (
               <button
                 type="button"
-                class="shell-transform-picker__opt"
-                classList={{ 'shell-transform-picker__opt--active': opt.v === props.value }}
+                class="block w-full cursor-pointer border-0 bg-transparent px-[0.6rem] py-[0.35rem] text-left font-inherit text-inherit hover:bg-white/10"
+                classList={{ 'bg-[rgba(60,120,200,0.35)]': opt.v === props.value }}
                 role="option"
                 aria-selected={opt.v === props.value}
                 onPointerDown={(e) => {
