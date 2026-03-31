@@ -771,16 +771,25 @@ impl CompositorState {
         pos: Point<f64, Logical>,
     ) -> Option<(DerpSpaceElem, Point<i32, Logical>)> {
         for elem in self.space.elements().rev() {
-            let Some(loc) = self.space.element_location(elem) else {
+            let Some(location) = self.space.element_location(elem) else {
                 continue;
             };
-            if !elem.is_in_input_region(&pos) {
-                continue;
-            }
             if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
                 continue;
             }
-            return Some((elem.clone(), loc));
+            let local = pos - location.to_f64();
+            let hit = match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    window.surface_under(local, WindowSurfaceType::ALL).is_some()
+                }
+                DerpSpaceElem::X11(x11) => x11.wl_surface().is_some_and(|surf| {
+                    under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL).is_some()
+                }),
+            };
+            if !hit {
+                continue;
+            }
+            return Some((elem.clone(), location));
         }
         None
     }
@@ -1909,25 +1918,12 @@ impl CompositorState {
             }
         }
 
-        for elem in self.space.elements().rev() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            let Some(loc) = self.space.element_location(elem) else {
-                continue;
-            };
-            let geo = window.geometry();
-            let x0 = loc.x;
-            let y0 = loc.y;
-            let w = geo.size.w;
-            let h = geo.size.h;
+        if self.shell_point_in_any_window_decoration(pos) {
+            return true;
+        }
 
-            if self.shell_point_in_decoration_chrome(px, py, x0, y0, w, h) {
-                return true;
-            }
-            if px >= x0 as f64 && px < (x0 + w) as f64 && py >= y0 as f64 && py < (y0 + h) as f64 {
-                return false;
-            }
+        if self.surface_under(pos).is_some() {
+            return false;
         }
 
         true
@@ -3136,6 +3132,19 @@ impl CompositorState {
         let strip_log = clh_u.saturating_sub(ch_work).max(1);
         let gw_adj = (((bw as u64) * (clw_u as u64)) / (buf_w.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
         let gh_adj = (((bh as u64) * (strip_log as u64)) / (atlas.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
+        let ws_w = ws.size.w.max(1) as u32;
+        let ws_h = ws.size.h.max(1) as u32;
+        if gw_adj > ws_w || gh_adj > ws_h {
+            tracing::warn!(
+                target: "derp_shell_menu",
+                gw_adj,
+                gh_adj,
+                ws_w,
+                ws_h,
+                "context menu logical size exceeds workspace (ignored)"
+            );
+            return;
+        }
         let gr = Rectangle::new(Point::new(gx, gy), Size::new(gw_adj as i32, gh_adj as i32));
         let bounds = Rectangle::new(ws.loc, ws.size);
         if gr.intersection(bounds).is_none() {

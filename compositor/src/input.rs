@@ -115,26 +115,18 @@ impl CompositorState {
         let serial = SERIAL_COUNTER.next_serial();
 
         let pos = pointer.current_location();
+        let mut route_cef = self.shell_pointer_route_to_cef(pos);
         if button_state == ButtonState::Pressed
             && self.shell_context_menu.is_some()
             && !self.shell_point_in_context_menu_global(pos)
+            && !route_cef
         {
             self.shell_dismiss_context_menu_from_compositor();
+            route_cef = self.shell_pointer_route_to_cef(pos);
         }
         let norm = self
             .shell_pointer_norm
             .or_else(|| self.shell_pointer_norm_from_global(pos));
-        let route_cef = self.shell_pointer_route_to_cef(pos);
-        tracing::debug!(
-            target: "derp_input",
-            button,
-            ?button_state,
-            pos_x = pos.x,
-            pos_y = pos.y,
-            route_cef,
-            shell_norm = ?norm,
-            "PointerButton"
-        );
         const BTN_LEFT: u32 = 0x110;
 
         let cef_ipc = self.shell_pointer_coords_for_cef(pos);
@@ -146,10 +138,35 @@ impl CompositorState {
         } else {
             None
         };
-        let take_shell = shell_px.is_some()
+        let in_excl = self.point_in_shell_exclusion_zones(pos);
+        let in_menu = self.shell_point_in_context_menu_global(pos);
+        let in_decs = self.shell_point_in_any_window_decoration(pos);
+        let under_native = self.surface_under(pos).is_some();
+        let force_native_buttons = under_native && !in_excl && !in_menu && !in_decs;
+        let take_shell_base = shell_px.is_some()
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()
             || self.shell_resize_is_active();
+        let take_shell = if force_native_buttons
+            && !self.shell_move_is_active()
+            && !self.shell_resize_is_active()
+        {
+            false
+        } else {
+            take_shell_base
+        };
+        tracing::debug!(
+            target: "derp_input",
+            button,
+            ?button_state,
+            pos_x = pos.x,
+            pos_y = pos.y,
+            route_cef,
+            shell_norm = ?norm,
+            force_native_buttons,
+            take_shell,
+            "PointerButton"
+        );
         if take_shell {
             if ButtonState::Pressed == button_state
                 && !pointer.is_grabbed()
@@ -209,6 +226,21 @@ impl CompositorState {
                 self.shell_move_end_active();
             }
             return;
+        }
+
+        if !pointer.is_grabbed() {
+            let sync_serial = SERIAL_COUNTER.next_serial();
+            let under = self.surface_under(pos);
+            pointer.motion(
+                self,
+                under,
+                &MotionEvent {
+                    location: pos,
+                    serial: sync_serial,
+                    time: time_msec,
+                },
+            );
+            pointer.frame(self);
         }
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
@@ -401,7 +433,10 @@ impl CompositorState {
                 self.touch_emulation_slot = Some(event.slot());
                 let local_ws = self.touch_workspace_local(&event, ws.size);
                 let pos = ws.loc.to_f64() + local_ws;
-                if self.shell_context_menu.is_some() && !self.shell_point_in_context_menu_global(pos) {
+                if self.shell_context_menu.is_some()
+                    && !self.shell_point_in_context_menu_global(pos)
+                    && !self.shell_pointer_route_to_cef(pos)
+                {
                     self.shell_dismiss_context_menu_from_compositor();
                 }
                 let output = self

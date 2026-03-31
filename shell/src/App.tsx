@@ -535,7 +535,6 @@ function App() {
     y: number
     alignAboveY?: number
   }>({ x: 0, y: 0 })
-  let skipNextContextMenuHideWire = false
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
 
   const rulerStepPx = 100
@@ -893,7 +892,6 @@ function App() {
       const d = ce.detail
       if (!d || typeof d !== 'object' || !('type' in d)) return
       if (d.type === 'context_menu_dismiss') {
-        skipNextContextMenuHideWire = true
         setCtxMenuOpen(false)
         return
       }
@@ -1260,10 +1258,6 @@ function App() {
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
-      if (skipNextContextMenuHideWire) {
-        skipNextContextMenuHideWire = false
-        return
-      }
       shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
       return
     }
