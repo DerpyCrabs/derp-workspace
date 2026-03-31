@@ -26,11 +26,118 @@ use tracing::warn;
 
 use crate::exclusion_clip;
 
-pub struct SpaceExclusionClip<E>
+pub(crate) fn fractional_output_damage_inflate_enabled(scale: f64) -> bool {
+    (scale - scale.round()).abs() > 1e-6
+}
+
+fn inflate_phys_rect_1px(r: Rectangle<i32, Physical>) -> Rectangle<i32, Physical> {
+    Rectangle::new(
+        Point::from((r.loc.x - 1, r.loc.y - 1)),
+        Size::from((r.size.w + 2, r.size.h + 2)),
+    )
+}
+
+fn inflate_damage_set_phys(d: DamageSet<i32, Physical>) -> DamageSet<i32, Physical> {
+    d.into_iter().map(inflate_phys_rect_1px).collect()
+}
+
+pub struct FractionalDamageSpaceElements<E>
 where
     E: Element + RenderElement<GlesRenderer>,
 {
     inner: SpaceRenderElements<GlesRenderer, E>,
+    output_scale: f64,
+}
+
+impl<E> FractionalDamageSpaceElements<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    pub fn new(inner: SpaceRenderElements<GlesRenderer, E>, output_scale: f64) -> Self {
+        Self { inner, output_scale }
+    }
+}
+
+impl<E> Element for FractionalDamageSpaceElements<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        self.inner.location(scale)
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.inner.src()
+    }
+
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.inner.geometry(scale)
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        let d = self.inner.damage_since(scale, commit);
+        if fractional_output_damage_inflate_enabled(self.output_scale) {
+            inflate_damage_set_phys(d)
+        } else {
+            d
+        }
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        self.inner.opaque_regions(scale)
+    }
+
+    fn alpha(&self) -> f32 {
+        self.inner.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.inner.kind()
+    }
+}
+
+impl<E> RenderElement<GlesRenderer> for FractionalDamageSpaceElements<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        self.inner
+            .draw(frame, src, dst, damage, opaque_regions)
+    }
+
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.inner.underlying_storage(renderer)
+    }
+}
+
+pub struct SpaceExclusionClip<E>
+where
+    E: Element + RenderElement<GlesRenderer>,
+{
+    inner: FractionalDamageSpaceElements<E>,
     exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
 }
 
@@ -40,9 +147,13 @@ where
 {
     pub fn new(
         inner: SpaceRenderElements<GlesRenderer, E>,
+        output_scale: f64,
         exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
     ) -> Self {
-        Self { inner, exclusion }
+        Self {
+            inner: FractionalDamageSpaceElements::new(inner, output_scale),
+            exclusion,
+        }
     }
 }
 
@@ -216,24 +327,29 @@ impl Element for ShellDmaElement {
             Point::<i32, Physical>::from((0, 0)),
             self.physical_size(scale),
         );
-        match self.current_commit().distance(commit) {
+        let set = match self.current_commit().distance(commit) {
             None => DamageSet::from_slice(&[full_rect]),
             Some(0) => DamageSet::default(),
-            Some(1) => {
-                let Some(ref rects) = self.damage_phys else {
-                    return DamageSet::from_slice(&[full_rect]);
-                };
-                let v: Vec<_> = rects
-                    .iter()
-                    .filter_map(|r| r.intersection(full_rect))
-                    .collect();
-                if v.is_empty() {
-                    DamageSet::from_slice(&[full_rect])
-                } else {
-                    v.into_iter().collect()
+            Some(1) => match &self.damage_phys {
+                None => DamageSet::from_slice(&[full_rect]),
+                Some(rects) => {
+                    let v: Vec<_> = rects
+                        .iter()
+                        .filter_map(|r| r.intersection(full_rect))
+                        .collect();
+                    if v.is_empty() {
+                        DamageSet::from_slice(&[full_rect])
+                    } else {
+                        v.into_iter().collect()
+                    }
                 }
-            }
+            },
             Some(_) => DamageSet::from_slice(&[full_rect]),
+        };
+        if fractional_output_damage_inflate_enabled(scale.x) {
+            inflate_damage_set_phys(set)
+        } else {
+            set
         }
     }
 
@@ -270,16 +386,96 @@ impl RenderElement<GlesRenderer> for ShellDmaElement {
 
 pub type ShellCursorElement = MemoryRenderBufferRenderElement<GlesRenderer>;
 
+pub struct FractionalDamageElement<E> {
+    inner: E,
+    output_scale: f64,
+}
+
+impl<E> FractionalDamageElement<E> {
+    pub fn new(inner: E, output_scale: f64) -> Self {
+        Self { inner, output_scale }
+    }
+}
+
+impl<E: Element> Element for FractionalDamageElement<E> {
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        self.inner.location(scale)
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.inner.src()
+    }
+
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.inner.geometry(scale)
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        let d = self.inner.damage_since(scale, commit);
+        if fractional_output_damage_inflate_enabled(self.output_scale) {
+            inflate_damage_set_phys(d)
+        } else {
+            d
+        }
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        self.inner.opaque_regions(scale)
+    }
+
+    fn alpha(&self) -> f32 {
+        self.inner.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.inner.kind()
+    }
+}
+
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for FractionalDamageElement<E> {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        self.inner
+            .draw(frame, src, dst, damage, opaque_regions)
+    }
+
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.inner.underlying_storage(renderer)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum DesktopStack<'a, E>
 where
     E: Element + RenderElement<GlesRenderer>,
 {
-    Space(SpaceRenderElements<GlesRenderer, E>),
+    Space(FractionalDamageSpaceElements<E>),
     SpaceClip(SpaceExclusionClip<E>),
     ShellDma(&'a ShellDmaElement),
-    Pointer(WaylandSurfaceRenderElement<GlesRenderer>),
-    CursorTex(ShellCursorElement),
+    Pointer(FractionalDamageElement<WaylandSurfaceRenderElement<GlesRenderer>>),
+    CursorTex(FractionalDamageElement<ShellCursorElement>),
     #[doc(hidden)]
     _Catcher(Infallible),
 }
@@ -447,7 +643,7 @@ where
     E: Element + RenderElement<GlesRenderer>,
 {
     fn from(x: SpaceRenderElements<GlesRenderer, E>) -> Self {
-        DesktopStack::Space(x)
+        DesktopStack::Space(FractionalDamageSpaceElements::new(x, 1.0))
     }
 }
 
@@ -456,7 +652,7 @@ where
     E: Element + RenderElement<GlesRenderer>,
 {
     fn from(x: ShellCursorElement) -> Self {
-        DesktopStack::CursorTex(x)
+        DesktopStack::CursorTex(FractionalDamageElement::new(x, 1.0))
     }
 }
 

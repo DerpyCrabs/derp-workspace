@@ -15,7 +15,11 @@ use smithay::{
     wayland::compositor,
 };
 
-use crate::{derp_space::DerpSpaceElem, desktop_stack::DesktopStack, CompositorState};
+use crate::{
+    derp_space::DerpSpaceElem,
+    desktop_stack::{DesktopStack, FractionalDamageElement},
+    CompositorState,
+};
 
 type WinEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
 type Desk<'a> = DesktopStack<'a, WinEl>;
@@ -28,10 +32,12 @@ fn push_named_cursor_fallback(
     out: &mut Vec<Desk<'_>>,
 ) {
     let (hx, hy) = state.cursor_fallback_hotspot;
-    let phys = Point::<f64, Physical>::from((
-        ((pos_output_local.x - hx as f64) * scale_f),
-        ((pos_output_local.y - hy as f64) * scale_f),
+    let top_left = Point::from((
+        pos_output_local.x - hx as f64,
+        pos_output_local.y - hy as f64,
     ));
+    let phys_i: Point<i32, Physical> = top_left.to_physical_precise_round(Scale::from(scale_f));
+    let phys = phys_i.to_f64();
     match MemoryRenderBufferRenderElement::from_buffer(
         renderer,
         phys,
@@ -41,7 +47,7 @@ fn push_named_cursor_fallback(
         None,
         Kind::Cursor,
     ) {
-        Ok(el) => out.push(DesktopStack::CursorTex(el)),
+        Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(el, scale_f))),
         Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
     }
 }
@@ -92,10 +98,11 @@ pub fn append_pointer_desktop_elements(
                     .map(|m| m.lock().unwrap().hotspot)
                     .unwrap_or_default()
             });
-            let phys = Point::<i32, Physical>::from((
-                ((pos.x - hotspot.x as f64) * scale_f).round() as i32,
-                ((pos.y - hotspot.y as f64) * scale_f).round() as i32,
+            let top_left = Point::from((
+                pos.x - hotspot.x as f64,
+                pos.y - hotspot.y as f64,
             ));
+            let phys = top_left.to_physical_precise_round(Scale::from(scale_f));
             for el in render_elements_from_surface_tree(
                 renderer,
                 surface,
@@ -104,7 +111,7 @@ pub fn append_pointer_desktop_elements(
                 1.0,
                 Kind::Cursor,
             ) {
-                out.push(DesktopStack::Pointer(el));
+                out.push(DesktopStack::Pointer(FractionalDamageElement::new(el, scale_f)));
             }
         }
         CursorImageStatus::Hidden => unreachable!(),

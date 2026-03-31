@@ -161,6 +161,7 @@ impl DrmHead {
                             'a,
                             <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
                         >;
+                        let output_scale = output.current_scale().fractional_scale();
                         let mut render_elements: Vec<Desk<'_>> =
                             Vec::with_capacity(space_els.len() + 3);
                         pointer_render::append_pointer_desktop_elements(
@@ -203,18 +204,31 @@ impl DrmHead {
                             if let Some(ref el) = shell_dma {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
-                            render_elements
-                                .extend(space_els.into_iter().map(DesktopStack::Space));
+                            render_elements.extend(
+                                space_els.into_iter().map(|el| {
+                                    DesktopStack::Space(
+                                        crate::desktop_stack::FractionalDamageSpaceElements::new(
+                                            el, output_scale,
+                                        ),
+                                    )
+                                }),
+                            );
                         } else {
                             if let Some(ref el) = shell_menu {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
                             match &excl_ctx {
-                                None => render_elements
-                                    .extend(space_els.into_iter().map(DesktopStack::Space)),
+                                None => render_elements.extend(space_els.into_iter().map(|el| {
+                                    DesktopStack::Space(
+                                        crate::desktop_stack::FractionalDamageSpaceElements::new(
+                                            el, output_scale,
+                                        ),
+                                    )
+                                })),
                                 Some(ctx) => render_elements.extend(space_els.into_iter().map(|el| {
                                     DesktopStack::SpaceClip(SpaceExclusionClip::new(
                                         el,
+                                        output_scale,
                                         ctx.clone(),
                                     ))
                                 })),
