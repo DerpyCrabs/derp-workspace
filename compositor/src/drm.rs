@@ -287,7 +287,7 @@ impl DrmHead {
 
         self.pending_frame_complete = true;
 
-        if content_advanced || state.needs_winit_redraw {
+        if content_advanced {
             state.space.elements().for_each(|elem| match elem {
                 DerpSpaceElem::Wayland(window) => {
                     window.send_frame(
@@ -388,7 +388,6 @@ impl DrmSession {
         }
 
         let _ = any_advanced;
-        state.needs_winit_redraw = false;
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 

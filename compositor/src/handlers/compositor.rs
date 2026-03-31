@@ -79,8 +79,6 @@ impl CompositorHandler for CompositorState {
                 self.notify_geometry_if_changed(&window);
             }
         }
-
-        self.needs_winit_redraw = true;
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {
