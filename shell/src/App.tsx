@@ -19,6 +19,12 @@ import {
 import { ShellWindowFrame } from './ShellWindowFrame'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
+import {
+  atlasTopFromLayout,
+  logicalWorkspaceBoundsFromScreens,
+  menuPlacementForCompositor,
+  type ShellContextMenuItem,
+} from './contextMenu'
 
 declare global {
   interface Window {
@@ -46,7 +52,8 @@ declare global {
         | 'set_output_layout'
         | 'set_exclusion_zones'
         | 'set_shell_primary'
-        | 'set_ui_scale',
+        | 'set_ui_scale'
+        | 'context_menu',
       arg?: number | string,
       arg2?: number,
       arg3?: number,
@@ -152,6 +159,7 @@ type DerpShellDetail =
         refresh_milli_hz?: number
       }>
       shell_chrome_primary?: string | null
+      context_menu_atlas_buffer_h?: number
     }
   | {
       type: 'window_mapped'
@@ -186,6 +194,7 @@ type DerpShellDetail =
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; windows: unknown[] }
+  | { type: 'context_menu_dismiss' }
 
 type DerpWindow = {
   window_id: number
@@ -454,6 +463,36 @@ function shellWireSend(
   return true
 }
 
+function shellContextMenuWire(
+  visible: boolean,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  gx: number,
+  gy: number,
+  gw: number,
+  gh: number,
+): boolean {
+  const fn = window.__derpShellWireSend as
+    | ((
+        op: 'context_menu',
+        vis: number,
+        bx: number,
+        by: number,
+        bw: number,
+        bh: number,
+        gx: number,
+        gy: number,
+        gw: number,
+        gh: number,
+      ) => void)
+    | undefined
+  if (typeof fn !== 'function') return false
+  fn('context_menu', visible ? 1 : 0, bx, by, bw, bh, gx, gy, gw, gh)
+  return true
+}
+
 function canSessionControl(): boolean {
   return typeof window.__derpShellWireSend === 'function' || shellHttpBase() !== null
 }
@@ -486,8 +525,24 @@ function App() {
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
+  const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
+  const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
+  const [ctxMenuOpen, setCtxMenuOpen] = createSignal(false)
+  const [ctxMenuKind, setCtxMenuKind] = createSignal<'demo' | 'programs' | null>(null)
+  const [ctxMenuItems, setCtxMenuItems] = createSignal<ShellContextMenuItem[]>([])
+  const [ctxMenuAnchor, setCtxMenuAnchor] = createSignal<{
+    x: number
+    y: number
+    alignAboveY?: number
+  }>({ x: 0, y: 0 })
+  let skipNextContextMenuHideWire = false
+  const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
 
   const rulerStepPx = 100
+
+  createEffect(() => {
+    if (!ctxMenuOpen()) setCtxMenuKind(null)
+  })
 
   const canvasCss = createMemo(() => {
     const g = outputGeom()
@@ -495,6 +550,16 @@ function App() {
     const w = Math.max(1, g?.w ?? v.w ?? 1)
     const h = Math.max(1, g?.h ?? v.h ?? 1)
     return { w, h }
+  })
+
+  const shellMenuAtlasTop = createMemo(() => {
+    const g = outputGeom()
+    const p = outputPhysical()
+    const ah = contextMenuAtlasBufferH()
+    const v = canvasCss()
+    const clh = Math.max(1, g?.h ?? v.h)
+    const cph = Math.max(1, p?.h ?? Math.round(clh * 1.5))
+    return atlasTopFromLayout(clh, cph, ah)
   })
 
   const workspacePartition = createMemo(() => {
@@ -615,6 +680,8 @@ function App() {
 
   let spawnPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
+  let menuAtlasHostRef: HTMLElement | undefined
+  let menuPanelRef: HTMLElement | undefined
   let exclusionZonesRaf = 0
 
   function syncExclusionZonesNow() {
@@ -809,6 +876,11 @@ function App() {
       const ce = ev as CustomEvent<DerpShellDetail>
       const d = ce.detail
       if (!d || typeof d !== 'object' || !('type' in d)) return
+      if (d.type === 'context_menu_dismiss') {
+        skipNextContextMenuHideWire = true
+        setCtxMenuOpen(false)
+        return
+      }
       if (d.type === 'focus_changed') {
         const fw = coerceShellWindowId(d.window_id)
         setFocusedWindowId((prev) => (prev === fw ? prev : fw))
@@ -822,6 +894,16 @@ function App() {
       if (d.type === 'output_layout') {
         batch(() => {
           setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
+          setOutputPhysical({
+            w: d.canvas_physical_width,
+            h: d.canvas_physical_height,
+          })
+          if (
+            typeof d.context_menu_atlas_buffer_h === 'number' &&
+            d.context_menu_atlas_buffer_h > 0
+          ) {
+            setContextMenuAtlasBufferH(d.context_menu_atlas_buffer_h)
+          }
           if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
             setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
           } else {
@@ -1015,7 +1097,27 @@ function App() {
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
 
+    const hideContextMenu = () => {
+      setCtxMenuOpen(false)
+      shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    const onCtxKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') hideContextMenu()
+    }
+    const onCtxPointerDown = (e: PointerEvent) => {
+      if (!ctxMenuOpen()) return
+      const t = e.target
+      if (t instanceof Element && t.closest('[data-shell-programs-toggle]')) return
+      const p = menuPanelRef
+      if (p && t instanceof Node && p.contains(t)) return
+      hideContextMenu()
+    }
+    document.addEventListener('keydown', onCtxKeyDown)
+    document.addEventListener('pointerdown', onCtxPointerDown, true)
+
     onCleanup(() => {
+      document.removeEventListener('keydown', onCtxKeyDown)
+      document.removeEventListener('pointerdown', onCtxPointerDown, true)
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('mousemove', onMouseMove)
@@ -1076,10 +1178,119 @@ function App() {
     await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
   }
 
+  async function refreshProgramsMenuItems() {
+    const base = shellHttpBase()
+    if (!base) {
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      setCtxMenuItems([{ label: 'Programs list needs cef_host (no shell HTTP).', action: () => {} }])
+      return
+    }
+    try {
+      const res = await fetch(`${base}/desktop_applications`)
+      const text = await res.text()
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      if (!res.ok) {
+        setCtxMenuItems([
+          {
+            label: `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+            action: () => {},
+          },
+        ])
+        return
+      }
+      const data = JSON.parse(text) as {
+        apps?: Array<{ name: string; exec: string; terminal: boolean; desktop_id: string }>
+      }
+      const list = Array.isArray(data.apps) ? data.apps : []
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      if (list.length === 0) {
+        setCtxMenuItems([{ label: 'No applications found.', action: () => {} }])
+        return
+      }
+      setCtxMenuItems(
+        list.map((app) => ({
+          label: app.name,
+          badge: app.terminal ? 'tty' : undefined,
+          action: () => {
+            void spawnInCompositor(app.exec)
+          },
+        })),
+      )
+    } catch (e) {
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      setCtxMenuItems([{ label: `Network error: ${e}`, action: () => {} }])
+    }
+  }
+
+  function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
+    e.preventDefault()
+    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
+      setCtxMenuOpen(false)
+      return
+    }
+    const r = e.currentTarget.getBoundingClientRect()
+    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
+    setCtxMenuKind('programs')
+    setCtxMenuItems([{ label: 'Loading…', action: () => {} }])
+    setCtxMenuOpen(true)
+    void refreshProgramsMenuItems()
+  }
+
   createEffect(() => {
     windowsList()
     workspacePartition()
     scheduleExclusionZonesSync()
+  })
+
+  createEffect(() => {
+    if (!ctxMenuOpen()) {
+      if (skipNextContextMenuHideWire) {
+        skipNextContextMenuHideWire = false
+        return
+      }
+      shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+      return
+    }
+    void ctxMenuItems().length
+    void screenDraft.rows.length
+    const anch = ctxMenuAnchor()
+    const ax = anch.x
+    const ay = anch.y
+    const alignAboveY = anch.alignAboveY ?? null
+    const rid = requestAnimationFrame(() => {
+      const main = mainRef
+      const atlas = menuAtlasHostRef
+      const panel = menuPanelRef
+      const og = outputGeom()
+      const ph = outputPhysical()
+      if (!main || !atlas || !panel || !og || !ph) return
+      const mainRect = main.getBoundingClientRect()
+      const wsBounds = logicalWorkspaceBoundsFromScreens(
+        screenDraft.rows,
+        layoutCanvasOrigin(),
+        og.w,
+        og.h,
+        ph.h,
+        contextMenuAtlasBufferH(),
+      )
+      const args = menuPlacementForCompositor(
+        mainRect,
+        atlas.getBoundingClientRect(),
+        panel.getBoundingClientRect(),
+        og.w,
+        og.h,
+        ph.w,
+        ph.h,
+        contextMenuAtlasBufferH(),
+        ax,
+        ay,
+        alignAboveY,
+        layoutCanvasOrigin(),
+        wsBounds,
+      )
+      shellContextMenuWire(true, args.bx, args.by, args.bw, args.bh, args.gx, args.gy, args.gw, args.gh)
+    })
+    onCleanup(() => cancelAnimationFrame(rid))
   })
 
   return (
@@ -1098,6 +1309,20 @@ function App() {
         queueMicrotask(() => scheduleExclusionZonesSync())
       }}
       onPointerDown={() => setRootPointerDowns((n) => n + 1)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setCtxMenuKind('demo')
+        setCtxMenuItems([
+          {
+            label: 'Demo: log to console',
+            action: () => {
+              console.log('[derp-shell] context menu demo item')
+            },
+          },
+        ])
+        setCtxMenuAnchor({ x: e.clientX, y: e.clientY })
+        setCtxMenuOpen(true)
+      }}
     >
       <Index each={windowsList()}>
         {(win) => (
@@ -1492,7 +1717,8 @@ function App() {
             </div>
 
             <Taskbar
-              onLaunch={(exec) => void spawnInCompositor(exec)}
+              programsMenuOpen={programsMenuOpen()}
+              onProgramsMenuClick={onProgramsMenuClick}
               windows={taskbarWindows()}
               focusedWindowId={focusedWindowId()}
               onTaskbarActivate={(id) => {
@@ -1540,6 +1766,53 @@ function App() {
           </div>
         )}
       </Show>
+
+      <div
+        class="shell-menu-atlas"
+        ref={(el) => {
+          menuAtlasHostRef = el
+        }}
+        style={{
+          position: 'absolute',
+          left: '0',
+          right: '0',
+          top: `${shellMenuAtlasTop()}px`,
+          bottom: '0',
+          overflow: 'hidden',
+          'pointer-events': ctxMenuOpen() ? 'auto' : 'none',
+          'z-index': '90000',
+        }}
+      >
+        <Show when={ctxMenuOpen()}>
+          <div
+            class="shell-context-menu-panel"
+            role="menu"
+            aria-label={ctxMenuKind() === 'programs' ? 'Applications' : 'Menu'}
+            ref={(el) => {
+              menuPanelRef = el
+            }}
+          >
+            <For each={ctxMenuItems()}>
+              {(item) => (
+                <button
+                  type="button"
+                  class="shell-context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    item.action()
+                    setCtxMenuOpen(false)
+                  }}
+                >
+                  <span class="shell-context-menu-item__label">{item.label}</span>
+                  <Show when={item.badge}>
+                    {(b) => <span class="shell-context-menu-item__badge">{b()}</span>}
+                  </Show>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
 
       <div class="shell-debug-overlay" style={panelHueStyle()} aria-hidden="true">
         <Show when={crosshairCursor()}>

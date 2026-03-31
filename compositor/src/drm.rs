@@ -162,13 +162,26 @@ impl DrmHead {
                             <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
                         >;
                         let mut render_elements: Vec<Desk<'_>> =
-                            Vec::with_capacity(space_els.len() + 2);
+                            Vec::with_capacity(space_els.len() + 3);
                         pointer_render::append_pointer_desktop_elements(
                             state,
                             renderer,
                             output,
                             &mut render_elements,
                         );
+                        let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
+                            state, renderer, output,
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(
+                                    target: "derp_shell_dmabuf",
+                                    ?e,
+                                    "DRM render path: shell context-menu dma-buf layer skipped"
+                                );
+                                None
+                            }
+                        };
                         let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
                             state, renderer, output,
                         ) {
@@ -184,12 +197,18 @@ impl DrmHead {
                         };
                         let excl_ctx = state.shell_exclusion_clip_ctx(output);
                         if state.shell_presentation_fullscreen {
+                            if let Some(ref el) = shell_menu {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
                             if let Some(ref el) = shell_dma {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
                             render_elements
                                 .extend(space_els.into_iter().map(DesktopStack::Space));
                         } else {
+                            if let Some(ref el) = shell_menu {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
                             match &excl_ctx {
                                 None => render_elements
                                     .extend(space_els.into_iter().map(DesktopStack::Space)),

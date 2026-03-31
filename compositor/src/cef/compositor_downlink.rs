@@ -63,6 +63,7 @@ pub fn apply_message(
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
+            context_menu_atlas_buffer_h,
             screens,
             shell_chrome_primary,
         } => {
@@ -117,6 +118,7 @@ pub fn apply_message(
                     "canvas_logical_origin_y": coy,
                     "canvas_physical_width": canvas_physical_w,
                     "canvas_physical_height": canvas_physical_h,
+                    "context_menu_atlas_buffer_h": context_menu_atlas_buffer_h,
                     "screens": screens_j,
                     "shell_chrome_primary": shell_chrome_primary,
                 }),
@@ -442,6 +444,20 @@ pub fn apply_message(
                 pointer_type: PointerType::TOUCH,
             };
             host.send_touch_event(Some(&ev));
+        }
+        shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "context_menu_dismiss",
+                }),
+            );
         }
         shell_wire::DecodedCompositorToShellMessage::Ping => {}
     }

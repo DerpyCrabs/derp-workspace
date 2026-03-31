@@ -115,6 +115,12 @@ impl CompositorState {
         let serial = SERIAL_COUNTER.next_serial();
 
         let pos = pointer.current_location();
+        if button_state == ButtonState::Pressed
+            && self.shell_context_menu.is_some()
+            && !self.shell_point_in_context_menu_global(pos)
+        {
+            self.shell_dismiss_context_menu_from_compositor();
+        }
         let norm = self
             .shell_pointer_norm
             .or_else(|| self.shell_pointer_norm_from_global(pos));
@@ -131,7 +137,7 @@ impl CompositorState {
         );
         const BTN_LEFT: u32 = 0x110;
 
-        let cef_ipc = self.shell_pointer_ipc_for_cef(pos);
+        let cef_ipc = self.shell_pointer_coords_for_cef(pos);
         let shell_px = if route_cef || self.shell_move_is_active() || self.shell_resize_is_active() {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
                 self.shell_pointer_norm_from_global(pos)
@@ -395,6 +401,9 @@ impl CompositorState {
                 self.touch_emulation_slot = Some(event.slot());
                 let local_ws = self.touch_workspace_local(&event, ws.size);
                 let pos = ws.loc.to_f64() + local_ws;
+                if self.shell_context_menu.is_some() && !self.shell_point_in_context_menu_global(pos) {
+                    self.shell_dismiss_context_menu_from_compositor();
+                }
                 let output = self
                     .output_containing_global_point(pos)
                     .or_else(|| self.leftmost_output())
@@ -405,7 +414,7 @@ impl CompositorState {
                 let cef_touch = self.shell_pointer_route_to_cef(pos)
                     && self.shell_has_frame
                     && self.shell_cef_active()
-                    && self.shell_pointer_ipc_for_cef(pos).is_some();
+                    && self.shell_pointer_coords_for_cef(pos).is_some();
                 self.touch_routes_to_cef = cef_touch;
                 tracing::debug!(
                     target: "derp_input",
@@ -422,7 +431,7 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, time);
                 if cef_touch {
-                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -468,7 +477,7 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 if self.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -494,7 +503,7 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,
@@ -524,7 +533,7 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    if let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) {
+                    if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
                             touch_id: tid,

@@ -20,8 +20,8 @@
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
-//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive)
+//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
+//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -84,6 +84,10 @@ pub const MSG_SHELL_SET_MAXIMIZED: u32 = 42;
 pub const MSG_SHELL_SET_PRESENTATION_FULLSCREEN: u32 = 43;
 pub const MSG_OUTPUT_LAYOUT: u32 = 44;
 pub const MSG_SHELL_SET_OUTPUT_LAYOUT: u32 = 45;
+/// Shell → compositor: context menu atlas placement (buffer rect + global logical rect).
+pub const MSG_SHELL_CONTEXT_MENU: u32 = 46;
+/// Compositor → shell: close context menu (e.g. click outside); shell must hide UI without echoing [`MSG_SHELL_CONTEXT_MENU`].
+pub const MSG_COMPOSITOR_CONTEXT_MENU_DISMISS: u32 = 47;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -213,6 +217,7 @@ pub fn encode_output_layout(
     canvas_logical_h: u32,
     canvas_physical_w: u32,
     canvas_physical_h: u32,
+    context_menu_atlas_buffer_h: u32,
     screens: &[OutputLayoutScreen],
     shell_chrome_primary: Option<&str>,
 ) -> Option<Vec<u8>> {
@@ -240,6 +245,7 @@ pub fn encode_output_layout(
         body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(28)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
+    body_sz = body_sz.checked_add(4)?;
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -267,6 +273,7 @@ pub fn encode_output_layout(
     let pl = u32::try_from(prim_bytes.len()).ok()?;
     v.extend_from_slice(&pl.to_le_bytes());
     v.extend_from_slice(prim_bytes);
+    v.extend_from_slice(&context_menu_atlas_buffer_h.to_le_bytes());
     Some(v)
 }
 
@@ -339,32 +346,32 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             refresh_milli_hz,
         });
     }
-    let shell_chrome_primary = if off == body.len() {
+    if off + 4 > body.len() {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    let pl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+    off += 4;
+    if pl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    if off + pl > body.len() {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    let shell_chrome_primary = if pl == 0 {
         None
     } else {
-        if off + 4 > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let pl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-        off += 4;
-        if pl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        if off + pl > body.len() {
-            return Err(DecodeError::BadOutputLayoutPayload);
-        }
-        let name = if pl == 0 {
-            None
-        } else {
-            Some(
-                std::str::from_utf8(&body[off..off + pl])
-                    .map_err(|_| DecodeError::BadUtf8Command)?
-                    .to_string(),
-            )
-        };
-        off += pl;
-        name
+        Some(
+            std::str::from_utf8(&body[off..off + pl])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string(),
+        )
     };
+    off += pl;
+    if off + 4 > body.len() {
+        return Err(DecodeError::BadOutputLayoutPayload);
+    }
+    let context_menu_atlas_buffer_h = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+    off += 4;
     if off != body.len() {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
@@ -373,6 +380,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         canvas_logical_h: canvas_logical_h.max(1),
         canvas_physical_w: canvas_physical_w.max(1),
         canvas_physical_h: canvas_physical_h.max(1),
+        context_menu_atlas_buffer_h,
         screens,
         shell_chrome_primary,
     })
@@ -803,6 +811,17 @@ pub enum DecodedMessage {
     ShellSetOutputLayout {
         layout_json: String,
     },
+    ShellContextMenu {
+        visible: bool,
+        bx: i32,
+        by: i32,
+        bw: u32,
+        bh: u32,
+        gx: i32,
+        gy: i32,
+        gw: u32,
+        gh: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -873,6 +892,7 @@ pub enum DecodedCompositorToShellMessage {
         canvas_logical_h: u32,
         canvas_physical_w: u32,
         canvas_physical_h: u32,
+        context_menu_atlas_buffer_h: u32,
         screens: Vec<OutputLayoutScreen>,
         shell_chrome_primary: Option<String>,
     },
@@ -918,6 +938,7 @@ pub enum DecodedCompositorToShellMessage {
     },
     /// Compositor requests [`encode_shell_pong`] from `cef_host`.
     Ping,
+    ContextMenuDismiss,
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -957,6 +978,14 @@ pub fn encode_compositor_ping() -> Vec<u8> {
     let mut v = Vec::with_capacity(12);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_PING.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_context_menu_dismiss() -> Vec<u8> {
+    let body_len = 4u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_CONTEXT_MENU_DISMISS.to_le_bytes());
     v
 }
 
@@ -1291,6 +1320,12 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             }
             Ok(DecodedCompositorToShellMessage::Ping)
         }
+        MSG_COMPOSITOR_CONTEXT_MENU_DISMISS => {
+            if body.len() != 4 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            Ok(DecodedCompositorToShellMessage::ContextMenuDismiss)
+        }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
         | MSG_SHELL_MOVE_DELTA
@@ -1576,6 +1611,34 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             })
         }
         MSG_FRAME_DMABUF_COMMIT => decode_frame_dmabuf_commit_body(body),
+        MSG_SHELL_CONTEXT_MENU => {
+            if body.len() != 40 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let vis = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            if vis > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let bx = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let by = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let bw = u32::from_le_bytes(body[16..20].try_into().unwrap());
+            let bh = u32::from_le_bytes(body[20..24].try_into().unwrap());
+            let gx = i32::from_le_bytes(body[24..28].try_into().unwrap());
+            let gy = i32::from_le_bytes(body[28..32].try_into().unwrap());
+            let gw = u32::from_le_bytes(body[32..36].try_into().unwrap());
+            let gh = u32::from_le_bytes(body[36..40].try_into().unwrap());
+            Ok(DecodedMessage::ShellContextMenu {
+                visible: vis != 0,
+                bx,
+                by,
+                bw,
+                bh,
+                gx,
+                gy,
+                gw,
+                gh,
+            })
+        }
         _ => Err(DecodeError::UnknownMsgType),
     }
 }

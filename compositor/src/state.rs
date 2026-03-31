@@ -310,9 +310,27 @@ pub struct CompositorState {
     pub shell_presentation_fullscreen: bool,
     pub(crate) shell_exclusion_zones: Vec<Rectangle<i32, Logical>>,
     pub(crate) shell_exclusion_zones_need_full_damage: bool,
+    pub(crate) shell_context_menu_atlas_buffer_h: u32,
+    pub(crate) shell_context_menu_overlay_id: Id,
+    pub(crate) shell_context_menu: Option<ShellContextMenuPlacement>,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct ShellContextMenuPlacement {
+    pub buffer_rect: Rectangle<i32, Buffer>,
+    pub global_rect: Rectangle<i32, Logical>,
 }
 
 impl CompositorState {
+    pub fn shell_context_menu_atlas_px() -> u32 {
+        std::env::var("DERP_SHELL_CONTEXT_MENU_ATLAS_PX")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1536u32)
+            .max(256)
+            .min(16384)
+    }
     pub fn new(
         event_loop: &mut EventLoop<CalloopData>,
         display: Display<Self>,
@@ -464,6 +482,9 @@ impl CompositorState {
             shell_presentation_fullscreen: false,
             shell_exclusion_zones: Vec::new(),
             shell_exclusion_zones_need_full_damage: false,
+            shell_context_menu_atlas_buffer_h: 0,
+            shell_context_menu_overlay_id: Id::new(),
+            shell_context_menu: None,
         };
 
         s
@@ -1448,15 +1469,20 @@ impl CompositorState {
             return;
         };
         let cw = bounds.size.w.max(1) as u32;
-        let ch = bounds.size.h.max(1) as u32;
+        let ch_work = bounds.size.h.max(1) as u32;
+        let atlas_px = Self::shell_context_menu_atlas_px();
         self.shell_canvas_logical_origin = (bounds.loc.x, bounds.loc.y);
-        self.shell_canvas_logical_size = (cw, ch);
         let mut max_scale = 1.0f64;
         for o in self.space.outputs() {
             max_scale = max_scale.max(o.current_scale().fractional_scale() as f64);
         }
+        let atlas_log = ((atlas_px as f64) / max_scale).ceil().max(1.0) as u32;
+        let ch_canvas = ch_work.saturating_add(atlas_log).max(1);
+        self.shell_canvas_logical_size = (cw, ch_canvas);
+        self.shell_context_menu_atlas_buffer_h = atlas_px;
         let pw = ((cw as f64) * max_scale).round().max(1.0) as i32;
-        let ph = ((ch as f64) * max_scale).round().max(1.0) as i32;
+        let ph_work = ((ch_work as f64) * max_scale).round().max(1.0);
+        let ph = (ph_work + atlas_px as f64).round().max(1.0) as i32;
         self.shell_window_physical_px = (pw, ph);
     }
 
@@ -1542,6 +1568,7 @@ impl CompositorState {
             canvas_logical_h: lh.max(1),
             canvas_physical_w: physical_w,
             canvas_physical_h: physical_h,
+            context_menu_atlas_buffer_h: self.shell_context_menu_atlas_buffer_h,
             screens,
             shell_chrome_primary: self.shell_primary_output_name.clone(),
         });
@@ -1872,6 +1899,14 @@ impl CompositorState {
         }
         let px = pos.x;
         let py = pos.y;
+        if let Some(ref menu) = self.shell_context_menu {
+            let g = &menu.global_rect;
+            let x2 = g.loc.x.saturating_add(g.size.w) as f64;
+            let y2 = g.loc.y.saturating_add(g.size.h) as f64;
+            if px >= g.loc.x as f64 && px < x2 && py >= g.loc.y as f64 && py < y2 {
+                return true;
+            }
+        }
 
         for elem in self.space.elements().rev() {
             let DerpSpaceElem::Wayland(window) = elem else {
@@ -1897,17 +1932,78 @@ impl CompositorState {
         true
     }
 
+    pub fn shell_point_in_context_menu_global(&self, pos: Point<f64, Logical>) -> bool {
+        let Some(ref menu) = self.shell_context_menu else {
+            return false;
+        };
+        let g = &menu.global_rect;
+        let px = pos.x;
+        let py = pos.y;
+        let x2 = g.loc.x.saturating_add(g.size.w) as f64;
+        let y2 = g.loc.y.saturating_add(g.size.h) as f64;
+        const EPS: f64 = 1.0e-6;
+        px >= g.loc.x as f64 - EPS
+            && px < x2 + EPS
+            && py >= g.loc.y as f64 - EPS
+            && py < y2 + EPS
+    }
+
+    pub(crate) fn shell_dismiss_context_menu_from_compositor(&mut self) {
+        if self.shell_context_menu.is_none() {
+            return;
+        }
+        self.shell_context_menu = None;
+        self.shell_context_menu_overlay_id = Id::new();
+        self.needs_winit_redraw = true;
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss);
+    }
+
     /// Map normalized pointer (`nx`, `ny` over the canvas) to **shell OSR buffer** pixels (letterbox-aware).
     pub fn shell_pointer_buffer_pixels(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
         let (buf_w, buf_h) = self.shell_view_px?;
+        let content_h = buf_h.saturating_sub(self.shell_context_menu_atlas_buffer_h).max(1);
         let (lw, lh) = self.shell_output_logical_size()?;
-        let (ox, oy, cw, ch) =
-            crate::shell_letterbox::letterbox_logical(Size::from((lw as i32, lh as i32)), buf_w, buf_h)?;
+        let (ox, oy, cw, ch) = crate::shell_letterbox::letterbox_logical(
+            Size::from((lw as i32, lh as i32)),
+            buf_w,
+            content_h,
+        )?;
         let nx = nx.clamp(0.0, 1.0);
         let ny = ny.clamp(0.0, 1.0);
         let lx = nx * lw as f64 - ox as f64;
         let ly = ny * lh as f64 - oy as f64;
-        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, buf_h)
+        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, content_h)
+    }
+
+    pub(crate) fn shell_pointer_coords_for_cef(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(i32, i32)> {
+        if let Some(ref menu) = self.shell_context_menu {
+            let g = &menu.global_rect;
+            let gw = g.size.w.max(1) as f64;
+            let gh = g.size.h.max(1) as f64;
+            let px = pos.x - g.loc.x as f64;
+            let py = pos.y - g.loc.y as f64;
+            if px >= 0.0 && py >= 0.0 && px < gw && py < gh {
+                let br = &menu.buffer_rect;
+                let bw = br.size.w.max(1) as f64;
+                let bh = br.size.h.max(1) as f64;
+                let bx = br.loc.x as f64 + (px / gw) * bw;
+                let by = br.loc.y as f64 + (py / gh) * bh;
+                let (buf_w, buf_h) = self.shell_view_px?;
+                if buf_w == 0 || buf_h == 0 {
+                    return None;
+                }
+                let (clw, clh) = self.shell_canvas_logical_size;
+                let vlx = ((bx / buf_w as f64) * clw as f64).round() as i32;
+                let vly = ((by / buf_h as f64) * clh as f64).round() as i32;
+                let xmax = clw.saturating_sub(1) as i32;
+                let ymax = clh.saturating_sub(1) as i32;
+                return Some((vlx.clamp(0, xmax), vly.clamp(0, ymax)));
+            }
+        }
+        self.shell_pointer_ipc_for_cef(pos)
     }
 
     pub(crate) fn shell_pointer_norm_from_global(
@@ -2971,6 +3067,85 @@ impl CompositorState {
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_last_pointer_ipc_px = None;
         self.touch_routes_to_cef = false;
+        self.shell_context_menu = None;
+        self.shell_context_menu_overlay_id = Id::new();
+        self.needs_winit_redraw = true;
+    }
+
+    pub fn apply_shell_context_menu(
+        &mut self,
+        visible: bool,
+        bx: i32,
+        by: i32,
+        bw: u32,
+        bh: u32,
+        gx: i32,
+        gy: i32,
+        gw: u32,
+        gh: u32,
+    ) {
+        const MAX_MENU: u32 = 4096;
+        if !visible {
+            self.shell_context_menu = None;
+            self.shell_context_menu_overlay_id = Id::new();
+            self.needs_winit_redraw = true;
+            return;
+        }
+        if bw == 0 || bh == 0 || gw == 0 || gh == 0 {
+            self.shell_context_menu = None;
+            self.shell_context_menu_overlay_id = Id::new();
+            self.needs_winit_redraw = true;
+            return;
+        }
+        if bw > MAX_MENU || bh > MAX_MENU || gw > MAX_MENU || gh > MAX_MENU {
+            tracing::warn!(target: "derp_shell_menu", bw, bh, gw, gh, "context menu rect too large");
+            return;
+        }
+        let Some((buf_w, buf_h)) = self.shell_view_px else {
+            return;
+        };
+        let atlas = self.shell_context_menu_atlas_buffer_h;
+        if atlas == 0 || buf_h <= atlas {
+            return;
+        }
+        let atlas_y0 = buf_h.saturating_sub(atlas);
+        if by < atlas_y0 as i32
+            || bx < 0
+            || bx.saturating_add(bw as i32) > buf_w as i32
+            || by.saturating_add(bh as i32) > buf_h as i32
+        {
+            tracing::warn!(
+                target: "derp_shell_menu",
+                bx,
+                by,
+                bw,
+                bh,
+                atlas_y0,
+                buf_w,
+                buf_h,
+                "context menu buffer rect outside atlas"
+            );
+            return;
+        }
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return;
+        };
+        let (clw_u, clh_u) = self.shell_canvas_logical_size;
+        let ch_work = ws.size.h.max(1) as u32;
+        let strip_log = clh_u.saturating_sub(ch_work).max(1);
+        let gw_adj = (((bw as u64) * (clw_u as u64)) / (buf_w.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
+        let gh_adj = (((bh as u64) * (strip_log as u64)) / (atlas.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
+        let gr = Rectangle::new(Point::new(gx, gy), Size::new(gw_adj as i32, gh_adj as i32));
+        let bounds = Rectangle::new(ws.loc, ws.size);
+        if gr.intersection(bounds).is_none() {
+            tracing::warn!(target: "derp_shell_menu", gx, gy, gw_adj, gh_adj, "context menu global rect off workspace");
+            return;
+        }
+        self.shell_context_menu = Some(ShellContextMenuPlacement {
+            buffer_rect: Rectangle::new(Point::new(bx, by), Size::new(bw as i32, bh as i32)),
+            global_rect: gr,
+        });
+        self.shell_context_menu_overlay_id = Id::new();
         self.needs_winit_redraw = true;
     }
 
@@ -3063,7 +3238,7 @@ impl CompositorState {
         if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
-        let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) else {
+        let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) else {
             return;
         };
         if self.shell_last_pointer_ipc_px == Some((bx, by)) {
@@ -3091,7 +3266,7 @@ impl CompositorState {
         if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() {
             return;
         }
-        let Some((bx, by)) = self.shell_pointer_ipc_for_cef(pos) else {
+        let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) else {
             return;
         };
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerAxis {

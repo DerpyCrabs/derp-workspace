@@ -246,3 +246,115 @@ pub fn compositor_shell_dmabuf_element(
         }
     }
 }
+
+pub fn compositor_shell_context_menu_element(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<Option<ShellDmaElement>, GlesError> {
+    if state.shell_context_menu.is_none() {
+        return Ok(None);
+    }
+    if !state.shell_has_frame || !state.shell_frame_is_dmabuf {
+        return Ok(None);
+    }
+    let Some(ref dmabuf) = state.shell_dmabuf else {
+        return Ok(None);
+    };
+    let Some(output_geo) = state.space.output_geometry(output) else {
+        return Ok(None);
+    };
+    let Some(placement) = state.shell_context_menu.as_ref() else {
+        return Ok(None);
+    };
+
+    let menu_g = placement.global_rect;
+    let Some(inter) = menu_g.intersection(Rectangle::new(output_geo.loc, output_geo.size)) else {
+        return Ok(None);
+    };
+    if inter.size.w <= 0 || inter.size.h <= 0 {
+        return Ok(None);
+    }
+
+    let bx = placement.buffer_rect.loc.x as f64;
+    let by = placement.buffer_rect.loc.y as f64;
+    let bw = placement.buffer_rect.size.w.max(1) as f64;
+    let bh = placement.buffer_rect.size.h.max(1) as f64;
+    let gx = menu_g.loc.x as f64;
+    let gy = menu_g.loc.y as f64;
+    let gw = menu_g.size.w.max(1) as f64;
+    let gh = menu_g.size.h.max(1) as f64;
+
+    let ix0 = inter.loc.x as f64;
+    let iy0 = inter.loc.y as f64;
+    let ix1 = ix0 + inter.size.w as f64;
+    let iy1 = iy0 + inter.size.h as f64;
+
+    let u0 = ((ix0 - gx) / gw).clamp(0.0, 1.0);
+    let v0 = ((iy0 - gy) / gh).clamp(0.0, 1.0);
+    let u1 = ((ix1 - gx) / gw).clamp(0.0, 1.0);
+    let v1 = ((iy1 - gy) / gh).clamp(0.0, 1.0);
+
+    let bsrc_x0 = bx + u0 * bw;
+    let bsrc_y0 = by + v0 * bh;
+    let bsrc_w = (u1 - u0) * bw;
+    let bsrc_h = (v1 - v0) * bh;
+    if bsrc_w < 0.5 || bsrc_h < 0.5 {
+        return Ok(None);
+    }
+
+    let buffer_src = Rectangle::new(
+        Point::<f64, BufferCoord>::from((bsrc_x0, bsrc_y0)),
+        Size::<f64, BufferCoord>::from((bsrc_w, bsrc_h)),
+    );
+
+    let output_scale = Scale::from(output.current_scale().fractional_scale());
+    let scale_f = output.current_scale().fractional_scale();
+    let d = inter.loc - output_geo.loc;
+    let shell_loc_phys = Point::<f64, Physical>::from((
+        d.x as f64 * scale_f,
+        d.y as f64 * scale_f,
+    ));
+    let shell_size_logical = inter.size;
+
+    let damage_phys = if state.shell_dmabuf_dirty_force_full {
+        None
+    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
+        None
+    } else {
+        let mapped = shell_dmabuf_dirty_buffer_to_physical(
+            buffer_src,
+            Rectangle::new(inter.loc, inter.size),
+            output_scale,
+            &state.shell_dmabuf_dirty_buffer,
+        );
+        if mapped.is_empty() {
+            None
+        } else {
+            Some(mapped)
+        }
+    };
+
+    log_shell_dmabuf_import_context(dmabuf, renderer);
+
+    match crate::desktop_stack::shell_dmabuf_overlay_element(
+        renderer,
+        dmabuf,
+        state.shell_context_menu_overlay_id.clone(),
+        shell_loc_phys,
+        shell_size_logical,
+        buffer_src,
+        state.shell_dmabuf_commit,
+        damage_phys,
+    ) {
+        Ok(el) => Ok(Some(el)),
+        Err(e) => {
+            tracing::warn!(
+                target: "derp_shell_dmabuf",
+                ?e,
+                "context menu dma-buf layer import failed"
+            );
+            Ok(None)
+        }
+    }
+}
