@@ -48,9 +48,15 @@ Use this when you want **uncommitted local changes** on the remote **without** r
 bash scripts/remote-update-and-restart.sh
 ```
 
-- **`--no-restart`** — rsync and install only (no `SIGUSR2`).
+- **`--no-restart`** — sync and install only (no `SIGUSR2`).
 - **`--dry-run`** — print the operations without running them.
+- **`--full`** — always run full `install-system-run.sh` and `SIGUSR2` (ignore git change classification).
+- **`--quick-shell`** — always shell-only classification: `tar` sync, no `SIGUSR2`; remote **`npm run build` is skipped by default** (HMR / external Vite). Set `DERP_REMOTE_BUILD_SHELL=1` in `remote-install.env` if the remote loads `file://`/`shell/dist` and needs a rebuild.
 - Forward extra args to `install-system-run.sh` after `--`, same idea as `remote-install.sh`.
+
+**Auto classification (default):** compares the **working tree on disk** to `scripts/.derp-remote-update-snapshot` (created after each successful run; gitignored). If only `shell/` changed vs the snapshot → **quick_shell**: `tar` to remote, **no remote npm/cargo**, no `SIGUSR2` (for HMR, UI is served by Vite on the machine where you run `npm run dev`, not by rebuilding `dist` on the remote). If nothing changed → **sync_only**: `tar` only. Any change under `compositor/`, `shell_wire/`, `resources/`, root `Cargo.toml` / `Cargo.lock`, `scripts/derp-session.sh`, or `scripts/install-system-run.sh` → full install + `SIGUSR2`. If **sync_only** but you expected a quick path, your tree matches the snapshot—edit files or delete `scripts/.derp-remote-update-snapshot` to re-baseline. To run `install-system-run.sh --shell-only` on quick pushes (remote `file://`), set `DERP_REMOTE_BUILD_SHELL=1` in `remote-install.env`.
+
+**HMR / Vite:** set `DERP_CEF_SHELL_DOCUMENT_URL` in `scripts/derp-session.local.env` on the compositor host (see `derp-session.local.env.example`). If the URL host is **that same machine** (localhost, `127.0.0.1`, its hostname, or an IP from `hostname -I`), `derp-session.sh` starts `npm run dev` in the repo `shell/` when the chosen port is free. Use a URL like `http://192.168.x.x:5173/` with the compositor’s LAN IP so CEF can load it. For a **different** dev PC, put that machine’s URL in the env and run Vite there. Tune bind/HMR in `shell/vite.config.ts` (`VITE_DEV_HOST`, `VITE_HMR_*`). Disable autostart with `DERP_SESSION_VITE_AUTOSTART=0`.
 
 **In-place reload** needs a **current** `derp-session.sh` and compositor from this tree:
 

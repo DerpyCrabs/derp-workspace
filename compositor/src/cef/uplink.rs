@@ -160,4 +160,10 @@ impl UplinkToCompositor {
             s.apply_shell_context_menu(visible, bx, by, bw, bh, gx, gy, gw, gh);
         });
     }
+
+    pub fn shell_request_compositor_sync(&self) {
+        self.run(move |s| {
+            s.shell_on_shell_client_connected();
+        });
+    }
 }

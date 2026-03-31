@@ -176,6 +176,9 @@ fn handle_uplink_list(
             let gh = args.int(9) as u32;
             uplink.shell_context_menu(vis, bx, by, bw, bh, gx, gy, gw, gh);
         }
+        "request_compositor_sync" => {
+            uplink.shell_request_compositor_sync();
+        }
         _ => {}
     }
 }
@@ -266,6 +269,7 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                 }
                 "quit" => {}
+                "request_compositor_sync" => {}
                 "spawn" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("spawn requires command string");
@@ -575,7 +579,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_primary, set_ui_scale, context_menu)"
+                        "unknown op (use close, quit, request_compositor_sync, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_primary, set_ui_scale, context_menu)"
                     );
                 }
             }

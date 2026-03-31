@@ -1794,6 +1794,7 @@ impl CompositorState {
             surface_id,
             window_id,
         });
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_note_shell_ipc_rx(&mut self) {

@@ -8,12 +8,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 
+SHELL_ONLY=0
 for arg in "$@"; do
   case "$arg" in
-    --no-git) ;; # no-op: bootstrap already decided whether to pull
+    --no-git) ;;
+    --shell-only) SHELL_ONLY=1 ;;
     -h|--help)
       echo "Run: bash $REPO_ROOT/scripts/install-system.sh [--no-git]"
       sed -n '1,26p' "$REPO_ROOT/scripts/install-system.sh"
+      echo ""
+      echo "install-system-run.sh only:"
+      echo "  --shell-only     npm build shell/dist only; skip cargo and sudo install"
       exit 0
       ;;
     *)
@@ -25,8 +30,12 @@ done
 
 cd "$REPO_ROOT"
 
-echo "=== cargo build --release (compositor) ==="
-cargo build --release -p compositor
+if [[ "$SHELL_ONLY" -eq 0 ]]; then
+  echo "=== cargo build --release (compositor) ==="
+  cargo build --release -p compositor
+else
+  echo "=== (--shell-only) skip cargo ==="
+fi
 
 SHELL_INDEX="shell/dist/index.html"
 if [[ -f shell/package.json ]]; then
@@ -50,6 +59,12 @@ if [[ -f shell/package.json ]]; then
   echo "=== Solid bundle ok: $SHELL_INDEX ==="
 else
   echo "No shell/package.json; skipping Solid build (GDM session will not load CEF until shell/ exists)." >&2
+fi
+
+if [[ "$SHELL_ONLY" -eq 1 ]]; then
+  echo ""
+  echo "Done (--shell-only). Re-run full install-system-run.sh for compositor binary and /usr/local symlinks."
+  exit 0
 fi
 
 BIN_DIR="$INSTALL_PREFIX/bin"

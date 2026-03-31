@@ -35,6 +35,7 @@ declare global {
       op:
         | 'close'
         | 'quit'
+        | 'request_compositor_sync'
         | 'spawn'
         | 'move_begin'
         | 'move_delta'
@@ -387,6 +388,7 @@ function shellWireSend(
   op:
     | 'close'
     | 'quit'
+    | 'request_compositor_sync'
     | 'spawn'
     | 'move_begin'
     | 'move_delta'
@@ -446,7 +448,7 @@ function shellWireSend(
     arg2 !== undefined
   ) {
     fn(op, arg as number, arg2)
-  } else if (op === 'quit') {
+  } else if (op === 'quit' || op === 'request_compositor_sync') {
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
@@ -873,6 +875,18 @@ function App() {
     }
     refreshSpawnUrl()
     spawnPoll = setInterval(refreshSpawnUrl, 400)
+
+    let compositorSyncAttempts = 0
+    const tryRequestCompositorSync = () => {
+      if (shellWireSend('request_compositor_sync')) {
+        return
+      }
+      compositorSyncAttempts += 1
+      if (compositorSyncAttempts < 80) {
+        setTimeout(tryRequestCompositorSync, 100)
+      }
+    }
+    queueMicrotask(tryRequestCompositorSync)
 
     const onDerpShell = (ev: Event) => {
       const ce = ev as CustomEvent<DerpShellDetail>

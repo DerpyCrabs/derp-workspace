@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # GDM/session entry: DRM compositor with in-process CEF Solid shell. Install to /usr/local/bin/derp-session (755).
-# Requires: built `compositor`, `shell/dist` (Solid loads via file://).
+# Default: `shell/dist` via file://. HMR: DERP_CEF_SHELL_DOCUMENT_URL=http(s)… in derp-session.local.env;
+# for URLs targeting this host, Vite is started automatically when the port is free. Re-read each compositor start.
 # Install desktop: sudo install -Dm644 resources/derp-wayland.desktop /usr/share/wayland-sessions/derp-wayland.desktop
 #
 # Logging: compositor stdout/stderr go to DERP_COMPOSITOR_LOG (default below).
@@ -12,7 +13,7 @@
 # CEF_HOST_DMABUF_TRACE / CEF_HOST_CHROMIUM_VERBOSE (Chromium env names) and derp_shell_dmabuf=debug on RUST_LOG.
 #
 # Optional machine overrides: `scripts/derp-session.local.env` (gitignored; see
-# `derp-session.local.env.example`). Sourced before every compositor start (SIGUSR2 respawn too).
+# `scripts/derp-session.local.env.example`). Sourced before every compositor start (SIGUSR2 respawn too).
 set -euo pipefail
 
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
@@ -52,7 +53,6 @@ ensure_shell_dist() {
     return 0
   }
 }
-ensure_shell_dist
 
 derp_session_source_local_env() {
   local f="$ROOT/scripts/derp-session.local.env"
@@ -90,19 +90,119 @@ resolve_cef_dir() {
   printf '%s' "$rp"
 }
 
-# Solid UI is a static Vite build (`base: './'`, no crossorigin on module scripts) — load from disk.
-resolve_shell_document_url_if_needed() {
+derp_session_resolve_shell_document_url() {
   URL=""
-  [[ "${DERP_SESSION_SHELL:-1}" == "1" && -f "$INDEX" && -x "$COMPOSITOR_BIN" ]] || return 0
+  if [[ -n "${DERP_CEF_SHELL_DOCUMENT_URL:-}" ]]; then
+    URL="${DERP_CEF_SHELL_DOCUMENT_URL}"
+    return 0
+  fi
+  if [[ "${DERP_SESSION_SHELL:-1}" != "1" || ! -x "$COMPOSITOR_BIN" ]]; then
+    return 0
+  fi
+  ensure_shell_dist
+  [[ -f "$INDEX" ]] || return 0
   URL="file://${INDEX}"
 }
 
-# Rebuild compositor argv from current env + optional `derp-session.local.env` (for remote-update + SIGUSR2).
+derp_session_http_document_host_port() {
+  local u="$1" r h p=5173
+  case "$u" in
+    http://*) r="${u#http://}" ;;
+    https://*) r="${u#https://}" ;;
+    *) return 1 ;;
+  esac
+  r="${r%%/*}"
+  r="${r%%\?*}"
+  if [[ "$r" == *:* ]]; then
+    h="${r%%:*}"
+    p="${r##*:}"
+    p="${p%\]*}"
+  else
+    h="$r"
+  fi
+  [[ -z "$h" ]] && return 1
+  printf '%s %s' "$h" "$p"
+}
+
+derp_session_http_host_is_this_machine() {
+  local h="$1"
+  [[ "$h" == localhost || "$h" == 127.0.0.1 || "$h" == ::1 ]] && return 0
+  local hn s
+  hn="$(hostname -f 2>/dev/null)" || true
+  [[ -n "$hn" && "$h" == "$hn" ]] && return 0
+  s="$(hostname -s 2>/dev/null)" || true
+  [[ -n "$s" && "$h" == "$s" ]] && return 0
+  local ip
+  for ip in $(hostname -I 2>/dev/null); do
+    [[ "$h" == "$ip" ]] && return 0
+  done
+  return 1
+}
+
+derp_session_tcp_listening() {
+  local port="$1"
+  command -v ss >/dev/null 2>&1 || return 1
+  if ss -ltn 2>/dev/null | grep -qE "LISTEN[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+.*:${port}([[:space:]]|$)"; then
+    return 0
+  fi
+  return 1
+}
+
+derp_session_ensure_vite_dev_server() {
+  local doc_url="$1" hp h p
+  [[ "${DERP_SESSION_VITE_AUTOSTART:-1}" == "1" ]] || return 0
+  case "$doc_url" in
+    http://*|https://*) ;;
+    *) return 0 ;;
+  esac
+  hp="$(derp_session_http_document_host_port "$doc_url")" || return 0
+  h="${hp% *}"
+  p="${hp##* }"
+  derp_session_http_host_is_this_machine "$h" || return 0
+  if derp_session_tcp_listening "$p"; then
+    return 0
+  fi
+  [[ -f "$ROOT/shell/package.json" ]] || {
+    echo "derp-session: $doc_url needs Vite but $ROOT/shell/package.json is missing" >&2
+    return 0
+  }
+  command -v npm >/dev/null 2>&1 || {
+    echo "derp-session: $doc_url needs Vite but npm is not in PATH" >&2
+    return 0
+  }
+  if [[ ! -d "$ROOT/shell/node_modules" ]]; then
+    (cd "$ROOT/shell" && npm install) || {
+      echo "derp-session: npm install in shell failed" >&2
+      return 0
+    }
+  fi
+  (
+    cd "$ROOT/shell" || exit 1
+    export VITE_DEV_HOST="$h"
+    export VITE_HMR_HOST="$h"
+    export VITE_DEV_PORT="$p"
+    export VITE_HMR_PORT="$p"
+    exec npm run dev -- --port "$p" --strictPort
+  ) &
+  disown "$!" 2>/dev/null || true
+  local i=0
+  while [[ $i -lt 150 ]]; do
+    derp_session_tcp_listening "$p" && return 0
+    sleep 0.05
+    i=$((i + 1))
+  done
+  echo "derp-session: Vite did not listen on :$p" >&2
+}
+
 derp_session_build_args() {
   derp_session_source_local_env
   export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
   export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
   derp_session_merge_rust_log
+  derp_session_resolve_shell_document_url
+  if [[ -n "$URL" ]]; then
+    derp_session_ensure_vite_dev_server "$URL"
+  fi
 
   ARGS=( --socket "$SOCKET" )
   if [[ -n "$URL" ]]; then
@@ -117,8 +217,6 @@ derp_session_build_args() {
     fi
   fi
 }
-
-resolve_shell_document_url_if_needed
 
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
 DERP_COMPOSITOR_LOG="${DERP_COMPOSITOR_LOG:-$STATE_BASE/derp/compositor.log}"
