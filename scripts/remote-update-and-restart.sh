@@ -208,10 +208,24 @@ if [[ ${#pids[@]} -eq 0 ]]; then
   echo "remote-update-and-restart: log into Derp session first; derp-session defaults to respawn-on-exit-42 (see remote-install.sample.md)." >&2
   exit 0
 fi
-if [[ ${#pids[@]} -gt 1 ]]; then
-  echo "remote-update-and-restart: warning: multiple compositor PIDs (${pids[*]}); sending SIGUSR2 to each." >&2
-fi
+roots=()
 for pid in "${pids[@]}"; do
+  ppid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+  if ! printf '%s\n' "${pids[@]}" | grep -qx "$ppid"; then
+    roots+=("$pid")
+  fi
+done
+if [[ ${#roots[@]} -eq 0 ]]; then
+  echo "remote-update-and-restart: no root compositor among PIDs (${pids[*]}); skipping SIGUSR2." >&2
+  exit 0
+fi
+if [[ ${#pids[@]} -gt ${#roots[@]} ]]; then
+  echo "remote-update-and-restart: note: signaling ${#roots[@]} root compositor PID(s) (${roots[*]}), not ${#pids[@]} total (CEF/Chromium children share the same process name)." >&2
+fi
+if [[ ${#roots[@]} -gt 1 ]]; then
+  echo "remote-update-and-restart: warning: multiple root compositor PIDs (${roots[*]}); sending SIGUSR2 to each." >&2
+fi
+for pid in "${roots[@]}"; do
   kill -USR2 "$pid"
 done
 REMOTE

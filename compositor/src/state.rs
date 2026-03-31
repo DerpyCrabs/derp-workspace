@@ -41,7 +41,7 @@ use smithay::{
             PostAction,
         },
         wayland_server::{
-            backend::{ClientData, ClientId, DisconnectReason},
+            backend::{ClientData, ClientId, DisconnectReason, ObjectId},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
             Display, DisplayHandle,
         },
@@ -58,6 +58,7 @@ use smithay::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
+        viewporter::ViewporterState,
         shm::ShmState,
         socket::ListeningSocketSource,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
@@ -212,6 +213,7 @@ pub struct CompositorState {
     pub xdg_shell_state: XdgShellState,
     pub xdg_decoration_state: XdgDecorationState,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
+    pub viewporter_state: ViewporterState,
     pub cursor_shape_manager_state: CursorShapeManagerState,
     pub shm_state: ShmState,
     pub dmabuf_state: DmabufState,
@@ -283,6 +285,8 @@ pub struct CompositorState {
     shell_resize_accum: (f64, f64),
     /// Drives nested winit repaints when Wayland clients commit or on first frame.
     pub(crate) needs_winit_redraw: bool,
+    wp_fractional_scale_surface_ids: HashSet<ObjectId>,
+    pending_fractional_child_windows: HashSet<u32>,
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
     shell_ipc_stall_timeout: Option<Duration>,
@@ -340,10 +344,11 @@ impl CompositorState {
 
         let dh = display.handle();
 
-        let compositor_state = WlCompositorState::new::<Self>(&dh);
+        let compositor_state = WlCompositorState::new_v6::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
         let cursor_shape_manager_state = CursorShapeManagerState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let dmabuf_state = DmabufState::new();
@@ -418,6 +423,7 @@ impl CompositorState {
             xdg_shell_state,
             xdg_decoration_state,
             fractional_scale_manager_state,
+            viewporter_state,
             cursor_shape_manager_state,
             shm_state,
             dmabuf_state,
@@ -465,6 +471,8 @@ impl CompositorState {
             shell_resize_initial_rect: None,
             shell_resize_accum: (0.0, 0.0),
             needs_winit_redraw: true,
+            wp_fractional_scale_surface_ids: HashSet::new(),
+            pending_fractional_child_windows: HashSet::new(),
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
@@ -705,34 +713,164 @@ impl CompositorState {
         socket_name
     }
 
-    pub(crate) fn apply_fractional_scale_to_surface(&self, surface: &WlSurface) {
-        let scale = self
-            .space
-            .outputs()
+    pub(crate) fn fractional_scale_for_space_element(&self, elem: &DerpSpaceElem) -> f64 {
+        let fallback = || {
+            self.space
+                .outputs()
+                .map(|o| o.current_scale().fractional_scale())
+                .fold(1.0f64, f64::max)
+        };
+        let Some(bbox) = self.space.element_bbox(elem) else {
+            return fallback();
+        };
+        if bbox.size.w == 0 || bbox.size.h == 0 {
+            return fallback();
+        }
+        let cx = bbox.loc.x + bbox.size.w / 2;
+        let cy = bbox.loc.y + bbox.size.h / 2;
+        self.output_containing_global_point(Point::from((cx as f64, cy as f64)))
             .map(|o| o.current_scale().fractional_scale())
-            .fold(1.0f64, f64::max);
-        smithay::wayland::compositor::with_states(surface, |states| {
+            .unwrap_or_else(fallback)
+    }
+
+    pub(crate) fn wayland_window_containing_surface(&self, surface: &WlSurface) -> Option<Window> {
+        let mut root = surface.clone();
+        while let Some(p) = smithay::wayland::compositor::get_parent(&root) {
+            root = p;
+        }
+        self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel()
+                    .is_some_and(|t| t.wl_surface() == &root)
+                    .then_some(w.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub(crate) fn refresh_fractional_scale_for_wayland_window(&mut self, window: &Window) {
+        let scale =
+            self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window.clone()));
+        let Some(tl) = window.toplevel() else {
+            return;
+        };
+        let surf = tl.wl_surface();
+        smithay::wayland::compositor::with_states(surf, |states| {
             smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
                 fs.set_preferred_scale(scale);
             });
         });
     }
 
-    pub(crate) fn refresh_all_surface_fractional_scales(&self) {
-        let scale = self
-            .space
-            .outputs()
-            .map(|o| o.current_scale().fractional_scale())
-            .fold(1.0f64, f64::max);
-        for elem in self.space.elements() {
-            if let DerpSpaceElem::Wayland(window) = elem {
-                let surf = window.toplevel().unwrap().wl_surface();
-                smithay::wayland::compositor::with_states(surf, |states| {
+    fn schedule_fractional_children_refresh(&mut self, window: &Window) {
+        let Some(tl) = window.toplevel() else {
+            return;
+        };
+        let Some(wid) = self.window_registry.window_id_for_wl_surface(tl.wl_surface()) else {
+            return;
+        };
+        self.pending_fractional_child_windows.insert(wid);
+    }
+
+    pub(crate) fn flush_pending_fractional_child_scales(&mut self) {
+        if self.pending_fractional_child_windows.is_empty() {
+            return;
+        }
+        let ids: Vec<u32> = self.pending_fractional_child_windows.drain().collect();
+        for window_id in ids {
+            let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+                continue;
+            };
+            let Some(window) = self.find_window_by_surface_id(sid) else {
+                continue;
+            };
+            let scale =
+                self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window.clone()));
+            let Some(tl) = window.toplevel() else {
+                continue;
+            };
+            let tl_surf = tl.wl_surface().clone();
+            window.with_surfaces(|surface, _| {
+                if *surface == tl_surf {
+                    return;
+                }
+                smithay::wayland::compositor::with_states(surface, |states| {
                     smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
                         fs.set_preferred_scale(scale);
                     });
                 });
+            });
+        }
+    }
+
+    pub(crate) fn refresh_all_surface_fractional_scales(&mut self) {
+        let windows: Vec<Window> = self
+            .space
+            .elements()
+            .filter_map(|e| {
+                if let DerpSpaceElem::Wayland(w) = e {
+                    Some(w.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for window in windows {
+            self.refresh_fractional_scale_for_wayland_window(&window);
+            if Self::wayland_window_has_client_side_decoration(&window) {
+                self.schedule_fractional_children_refresh(&window);
             }
+        }
+    }
+
+    pub(crate) fn on_wl_surface_destroyed(&mut self, surface: &WlSurface) {
+        self.wp_fractional_scale_surface_ids.remove(&surface.id());
+    }
+
+    pub(crate) fn sync_preferred_buffer_scales(&self) {
+        use smithay::wayland::compositor::send_surface_state;
+
+        let frac_shell = self.shell_ui_scale.fract().abs() > f64::EPSILON;
+        for elem in self.space.elements() {
+            let DerpSpaceElem::Wayland(window) = elem else {
+                continue;
+            };
+            if window.toplevel().is_none() {
+                continue;
+            }
+            let outs = self.space.outputs_for_element(elem);
+            let mut tf = Transform::Normal;
+            if outs.is_empty() {
+                if let Some(o) = self.leftmost_output() {
+                    tf = o.current_transform();
+                }
+            } else {
+                let mut best_s = 0.0f64;
+                for o in outs {
+                    let s = o.current_scale().fractional_scale();
+                    if s > best_s {
+                        best_s = s;
+                        tf = o.current_transform();
+                    }
+                }
+            }
+            let ceil_pref = self.shell_ui_scale.ceil() as i32;
+            let round_pref = self.shell_ui_scale.round() as i32;
+            window.with_surfaces(|surface, data| {
+                let uses_wp_frac = self
+                    .wp_fractional_scale_surface_ids
+                    .contains(&surface.id());
+                let pref = if frac_shell && uses_wp_frac {
+                    1
+                } else if frac_shell {
+                    ceil_pref
+                } else {
+                    round_pref
+                }
+                .max(1);
+                send_surface_state(surface, data, pref, tf);
+            });
         }
     }
 
@@ -741,18 +879,19 @@ impl CompositorState {
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         for elem in self.space.elements().rev() {
-            let Some(location) = self.space.element_location(elem) else {
+            let Some(map_loc) = self.space.element_location(elem) else {
                 continue;
             };
-            let local = pos - location.to_f64();
+            let render_loc = map_loc - elem.geometry().loc;
+            let local = pos - render_loc.to_f64();
             let hit = match elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
-                    .map(|(s, p)| (s, (p + location).to_f64())),
+                    .map(|(s, p)| (s, (p + render_loc).to_f64())),
                 DerpSpaceElem::X11(x11) => {
                     let surf = x11.wl_surface()?;
                     under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL)
-                        .map(|(s, p)| (s, (p + location).to_f64()))
+                        .map(|(s, p)| (s, (p + render_loc).to_f64()))
                 }
             };
             let Some((surf, p_global)) = hit else {
@@ -771,13 +910,14 @@ impl CompositorState {
         pos: Point<f64, Logical>,
     ) -> Option<(DerpSpaceElem, Point<i32, Logical>)> {
         for elem in self.space.elements().rev() {
-            let Some(location) = self.space.element_location(elem) else {
+            let Some(map_loc) = self.space.element_location(elem) else {
                 continue;
             };
             if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
                 continue;
             }
-            let local = pos - location.to_f64();
+            let render_loc = map_loc - elem.geometry().loc;
+            let local = pos - render_loc.to_f64();
             let hit = match elem {
                 DerpSpaceElem::Wayland(window) => {
                     window.surface_under(local, WindowSurfaceType::ALL).is_some()
@@ -789,7 +929,7 @@ impl CompositorState {
             if !hit {
                 continue;
             }
-            return Some((elem.clone(), location));
+            return Some((elem.clone(), map_loc));
         }
         None
     }
@@ -929,30 +1069,53 @@ impl CompositorState {
     /// [`ChromeEvent::WindowGeometryChanged`] after updating the registry so the Solid shell can
     /// reconcile optimistic titlebar bumps even when `set_geometry` reports no delta (e.g. duplicate
     /// compositor updates vs. last-emitted shell state).
+    pub(crate) fn wayland_window_shell_rect_and_deco(
+        &self,
+        window: &Window,
+    ) -> Option<(i32, i32, i32, i32, bool)> {
+        let elem = DerpSpaceElem::Wayland(window.clone());
+        let map_loc = self.space.element_location(&elem)?;
+        let geo = window.geometry();
+        let bbox = window.bbox();
+        if bbox.size.w == 0 || bbox.size.h == 0 {
+            return Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, false));
+        }
+        if !Self::wayland_window_has_client_side_decoration(window) {
+            return Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, false));
+        }
+        let render_loc = map_loc - geo.loc;
+        let mut r = bbox;
+        r.loc += render_loc;
+        Some((r.loc.x, r.loc.y, r.size.w, r.size.h, true))
+    }
+
     pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
         let wl = toplevel.wl_surface();
-        let Some(loc) = self
-            .space
-            .element_location(&DerpSpaceElem::Wayland(window.clone()))
-        else {
+        let Some((gx, gy, gw, gh, csd)) = self.wayland_window_shell_rect_and_deco(window) else {
             return;
         };
-        let size = window.geometry().size;
         let changed = self
             .window_registry
-            .set_geometry(wl, loc.x, loc.y, size.w, size.h);
+            .set_shell_layout(wl, gx, gy, gw, gh, csd);
         let (max, fs) = read_toplevel_tiling(wl);
         let tiling_changed = self
             .window_registry
             .set_tiling_state(wl, max, fs)
             .unwrap_or(false);
-        if force_shell_emit || changed == Some(true) || tiling_changed {
+        let layout_or_tiling = changed == Some(true) || tiling_changed;
+        if force_shell_emit || layout_or_tiling {
             if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
+        }
+        self.refresh_fractional_scale_for_wayland_window(window);
+        if (force_shell_emit || layout_or_tiling)
+            && Self::wayland_window_has_client_side_decoration(window)
+        {
+            self.schedule_fractional_children_refresh(window);
         }
     }
 
@@ -1016,15 +1179,22 @@ impl CompositorState {
             return false;
         };
         self.cancel_shell_move_resize_for_window(window_id);
+        let csd = Self::wayland_window_has_client_side_decoration(window);
+        let gx = geo.loc.x;
+        let gy = geo.loc.y;
+        let gw = geo.size.w;
+        let gh = geo.size.h;
+        let (map_x, map_y, content_w, content_h) =
+            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, gw, gh);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Fullscreen);
             st.fullscreen_output = None;
             st.states.set(xdg_toplevel::State::Maximized);
-            st.size = Some(geo.size);
+            st.size = Some(Size::from((content_w, content_h)));
         });
         self.space.map_element(
             DerpSpaceElem::Wayland(window.clone()),
-            (geo.loc.x, geo.loc.y),
+            (map_x, map_y),
             true,
         );
         self.space
@@ -1055,15 +1225,22 @@ impl CompositorState {
         };
         self.cancel_shell_move_resize_for_window(window_id);
         let wl_out = wl_output_hint.or_else(|| self.client_wl_output_for(wl, &sm_out));
+        let csd = Self::wayland_window_has_client_side_decoration(window);
+        let gx = geo.loc.x;
+        let gy = geo.loc.y;
+        let gw = geo.size.w;
+        let gh = geo.size.h;
+        let (map_x, map_y, content_w, content_h) =
+            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, gw, gh);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Maximized);
             st.states.set(xdg_toplevel::State::Fullscreen);
             st.fullscreen_output = wl_out;
-            st.size = Some(geo.size);
+            st.size = Some(Size::from((content_w, content_h)));
         });
         self.space.map_element(
             DerpSpaceElem::Wayland(window.clone()),
-            (geo.loc.x, geo.loc.y),
+            (map_x, map_y),
             true,
         );
         self.space
@@ -1184,6 +1361,7 @@ impl CompositorState {
             minimized: info.minimized,
             maximized: info.maximized,
             fullscreen: info.fullscreen,
+            client_side_decoration: info.client_side_decoration,
         })
     }
 
@@ -1434,8 +1612,60 @@ impl CompositorState {
         ))
     }
 
+    pub(crate) fn wayland_scale_for_shell_ui(shell_ui_scale: f64) -> Scale {
+        if (shell_ui_scale - 1.0).abs() < f64::EPSILON {
+            return Scale::Integer(1);
+        }
+        if shell_ui_scale.fract().abs() < f64::EPSILON {
+            return Scale::Integer(shell_ui_scale.round() as i32);
+        }
+        Scale::Fractional(shell_ui_scale)
+    }
+
+    pub(crate) fn wayland_window_has_client_side_decoration(window: &Window) -> bool {
+        let geo = window.geometry();
+        let bbox = window.bbox();
+        if bbox.size.w == 0 || bbox.size.h == 0 {
+            return false;
+        }
+        bbox.size.w != geo.size.w
+            || bbox.size.h != geo.size.h
+            || geo.loc.x != 0
+            || geo.loc.y != 0
+            || bbox.loc.x != 0
+            || bbox.loc.y != 0
+    }
+
+    pub(crate) fn wayland_toplevel_map_and_content_for_shell_frame(
+        window: &Window,
+        client_side_decoration: bool,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> (i32, i32, i32, i32) {
+        if !client_side_decoration {
+            return (x, y, w, h);
+        }
+        let geo = window.geometry();
+        let bbox = window.bbox();
+        if bbox.size.w == 0 || bbox.size.h == 0 {
+            return (x, y, w, h);
+        }
+        let deco_extra_w = bbox.size.w.saturating_sub(geo.size.w);
+        let deco_extra_h = bbox.size.h.saturating_sub(geo.size.h);
+        let content_w = w.saturating_sub(deco_extra_w).max(geo.size.w.max(1));
+        let content_h = h.saturating_sub(deco_extra_h).max(geo.size.h.max(1));
+        let render_x = x.saturating_sub(bbox.loc.x);
+        let render_y = y.saturating_sub(bbox.loc.y);
+        let map_x = render_x.saturating_add(geo.loc.x);
+        let map_y = render_y.saturating_add(geo.loc.y);
+        (map_x, map_y, content_w, content_h)
+    }
+
     pub(crate) fn apply_shell_ui_scale_to_outputs(&mut self) {
         let outs: Vec<Output> = self.space.outputs().cloned().collect();
+        let sc = Self::wayland_scale_for_shell_ui(self.shell_ui_scale);
         for out in outs {
             let Some(mode) = out.current_mode() else {
                 continue;
@@ -1448,7 +1678,7 @@ impl CompositorState {
             out.change_current_state(
                 Some(mode),
                 Some(tf),
-                Some(Scale::Fractional(self.shell_ui_scale)),
+                Some(sc),
                 Some(loc.into()),
             );
             self.space.map_output(&out, (loc.x, loc.y));
@@ -1456,7 +1686,10 @@ impl CompositorState {
     }
 
     pub(crate) fn set_shell_ui_scale(&mut self, scale: f64) {
-        if (scale - 1.0).abs() > f64::EPSILON && (scale - 1.5).abs() > f64::EPSILON {
+        if (scale - 1.0).abs() > f64::EPSILON
+            && (scale - 1.5).abs() > f64::EPSILON
+            && (scale - 2.0).abs() > f64::EPSILON
+        {
             return;
         }
         self.shell_ui_scale = scale;
@@ -1638,13 +1871,14 @@ impl CompositorState {
             }
             resolved.push((s, out));
         }
+        let sc = Self::wayland_scale_for_shell_ui(self.shell_ui_scale);
         for (s, out) in &resolved {
             let mode = out.current_mode().unwrap();
             let tf = transform_from_wire(s.transform);
             out.change_current_state(
                 Some(mode),
                 Some(tf),
-                Some(Scale::Fractional(self.shell_ui_scale)),
+                Some(sc),
                 Some((s.x, s.y).into()),
             );
             self.space.map_output(out, (s.x, s.y));
@@ -1681,7 +1915,7 @@ impl CompositorState {
             out.change_current_state(
                 Some(mode),
                 Some(tf),
-                Some(Scale::Fractional(self.shell_ui_scale)),
+                Some(sc),
                 Some((nx, ny).into()),
             );
             self.space.map_output(out, (nx, ny));
@@ -1781,6 +2015,7 @@ impl CompositorState {
                 h: ipc_info.height,
                 title: ipc_info.title.clone(),
                 app_id: ipc_info.app_id.clone(),
+                client_side_decoration: ipc_info.client_side_decoration,
             });
         }
         let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus()) {
@@ -2441,6 +2676,7 @@ impl CompositorState {
                     minimized: if i.minimized { 1 } else { 0 },
                     maximized: if i.maximized { 1 } else { 0 },
                     fullscreen: if i.fullscreen { 1 } else { 0 },
+                    client_side_decoration: if i.client_side_decoration { 1 } else { 0 },
                     title: i.title,
                     app_id: i.app_id,
                 }
@@ -2506,6 +2742,10 @@ impl CompositorState {
             }
         }
 
+        let csd = Self::wayland_window_has_client_side_decoration(&window);
+        let (map_x, map_y, content_w, content_h) =
+            Self::wayland_toplevel_map_and_content_for_shell_frame(&window, csd, x, y, w, h);
+
         let tl = window.toplevel().unwrap();
         tl.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Fullscreen);
@@ -2515,11 +2755,11 @@ impl CompositorState {
             } else {
                 state.states.unset(xdg_toplevel::State::Maximized);
             }
-            state.size = Some(smithay::utils::Size::from((w, h)));
+            state.size = Some(smithay::utils::Size::from((content_w, content_h)));
         });
         tl.send_pending_configure();
         self.space
-            .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
         self.notify_geometry_if_changed(&window);
         self.needs_winit_redraw = true;
     }
@@ -3404,7 +3644,24 @@ impl XdgDecorationHandler for CompositorState {
     }
 }
 
-impl FractionalScaleHandler for CompositorState {}
+impl FractionalScaleHandler for CompositorState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        self.wp_fractional_scale_surface_ids.insert(surface.id());
+        let scale = self
+            .wayland_window_containing_surface(&surface)
+            .map(|w| self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(w)))
+            .unwrap_or_else(|| {
+                self.leftmost_output()
+                    .map(|o| o.current_scale().fractional_scale())
+                    .unwrap_or(1.0)
+            });
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+    }
+}
 
 impl DmabufHandler for CompositorState {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
@@ -3444,6 +3701,7 @@ impl DmabufHandler for CompositorState {
 
 smithay::delegate_xdg_decoration!(CompositorState);
 smithay::delegate_fractional_scale!(CompositorState);
+smithay::delegate_viewporter!(CompositorState);
 smithay::delegate_cursor_shape!(CompositorState);
 smithay::delegate_xwayland_shell!(CompositorState);
 smithay::delegate_dmabuf!(CompositorState);

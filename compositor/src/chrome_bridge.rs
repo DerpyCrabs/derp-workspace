@@ -28,6 +28,7 @@ pub struct WindowInfo {
     pub minimized: bool,
     pub maximized: bool,
     pub fullscreen: bool,
+    pub client_side_decoration: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

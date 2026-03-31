@@ -437,18 +437,41 @@ pub fn encode_window_mapped(
     h: i32,
     title: &str,
     app_id: &str,
+    client_side_decoration: bool,
 ) -> Option<Vec<u8>> {
-    encode_window_strings(
-        MSG_WINDOW_MAPPED,
-        window_id,
-        surface_id,
-        x,
-        y,
-        w,
-        h,
-        title,
-        app_id,
-    )
+    let tb = title.as_bytes();
+    let ab = app_id.as_bytes();
+    if tb.contains(&0) || ab.contains(&0) {
+        return None;
+    }
+    let tl = u32::try_from(tb.len()).ok()?;
+    let al = u32::try_from(ab.len()).ok()?;
+    if tl > MAX_WINDOW_STRING_BYTES || al > MAX_WINDOW_STRING_BYTES {
+        return None;
+    }
+    let header = 4u32 * 9;
+    let body_len = header
+        .checked_add(tl)?
+        .checked_add(al)?
+        .checked_add(4)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_WINDOW_MAPPED.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&surface_id.to_le_bytes());
+    v.extend_from_slice(&x.to_le_bytes());
+    v.extend_from_slice(&y.to_le_bytes());
+    v.extend_from_slice(&w.to_le_bytes());
+    v.extend_from_slice(&h.to_le_bytes());
+    v.extend_from_slice(&tl.to_le_bytes());
+    v.extend_from_slice(&al.to_le_bytes());
+    v.extend_from_slice(tb);
+    v.extend_from_slice(ab);
+    v.extend_from_slice(&(if client_side_decoration { 1u32 } else { 0 }).to_le_bytes());
+    Some(v)
 }
 
 pub fn encode_window_unmapped(window_id: u32) -> Vec<u8> {
@@ -469,8 +492,9 @@ pub fn encode_window_geometry(
     h: i32,
     maximized: bool,
     fullscreen: bool,
+    client_side_decoration: bool,
 ) -> Vec<u8> {
-    let body_len = 36u32;
+    let body_len = 40u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_WINDOW_GEOMETRY.to_le_bytes());
@@ -482,6 +506,7 @@ pub fn encode_window_geometry(
     v.extend_from_slice(&h.to_le_bytes());
     v.extend_from_slice(&(if maximized { 1u32 } else { 0 }).to_le_bytes());
     v.extend_from_slice(&(if fullscreen { 1u32 } else { 0 }).to_le_bytes());
+    v.extend_from_slice(&(if client_side_decoration { 1u32 } else { 0 }).to_le_bytes());
     v
 }
 
@@ -587,6 +612,7 @@ pub struct ShellWindowSnapshot {
     pub minimized: u32,
     pub maximized: u32,
     pub fullscreen: u32,
+    pub client_side_decoration: u32,
     pub title: String,
     pub app_id: String,
 }
@@ -616,6 +642,7 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(&w.minimized.to_le_bytes());
         body.extend_from_slice(&w.maximized.to_le_bytes());
         body.extend_from_slice(&w.fullscreen.to_le_bytes());
+        body.extend_from_slice(&w.client_side_decoration.to_le_bytes());
         body.extend_from_slice(&tl.to_le_bytes());
         body.extend_from_slice(&al.to_le_bytes());
         body.extend_from_slice(tb);
@@ -905,6 +932,7 @@ pub enum DecodedCompositorToShellMessage {
         h: i32,
         title: String,
         app_id: String,
+        client_side_decoration: bool,
     },
     WindowUnmapped {
         window_id: u32,
@@ -918,6 +946,7 @@ pub enum DecodedCompositorToShellMessage {
         h: i32,
         maximized: bool,
         fullscreen: bool,
+        client_side_decoration: bool,
     },
     WindowMetadata {
         window_id: u32,
@@ -1075,15 +1104,33 @@ fn decode_window_strings_body(
         .checked_add(title_len)
         .and_then(|a| a.checked_add(app_len))
         .ok_or(DecodeError::BadWindowPayload)?;
-    if body.len() != end {
-        return Err(DecodeError::BadWindowPayload);
-    }
+    let (trailing, client_side_decoration) = if expect_type == MSG_WINDOW_MAPPED {
+        if body.len() == end + 4 {
+            let c = u32::from_le_bytes(body[end..end + 4].try_into().unwrap());
+            if c > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            (end + 4, c != 0)
+        } else if body.len() == end {
+            (end, false)
+        } else {
+            return Err(DecodeError::BadWindowPayload);
+        }
+    } else {
+        if body.len() != end {
+            return Err(DecodeError::BadWindowPayload);
+        }
+        (end, false)
+    };
     let title = std::str::from_utf8(&body[36..36 + title_len])
         .map_err(|_| DecodeError::BadUtf8Command)?
         .to_string();
     let app_id = std::str::from_utf8(&body[36 + title_len..end])
         .map_err(|_| DecodeError::BadUtf8Command)?
         .to_string();
+    if trailing != body.len() {
+        return Err(DecodeError::BadWindowPayload);
+    }
     Ok(match expect_type {
         MSG_WINDOW_MAPPED => DecodedCompositorToShellMessage::WindowMapped {
             window_id,
@@ -1094,6 +1141,7 @@ fn decode_window_strings_body(
             h,
             title,
             app_id,
+            client_side_decoration,
         },
         MSG_WINDOW_METADATA => DecodedCompositorToShellMessage::WindowMetadata {
             window_id,
@@ -1257,7 +1305,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             })
         }
         MSG_WINDOW_GEOMETRY => {
-            if body.len() != 28 && body.len() != 36 {
+            if body.len() != 28 && body.len() != 36 && body.len() != 40 {
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
@@ -1276,6 +1324,15 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             } else {
                 (false, false)
             };
+            let client_side_decoration = if body.len() >= 40 {
+                let c = u32::from_le_bytes(body[36..40].try_into().unwrap());
+                if c > 1 {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                c != 0
+            } else {
+                false
+            };
             Ok(DecodedCompositorToShellMessage::WindowGeometry {
                 window_id,
                 surface_id,
@@ -1285,6 +1342,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 h,
                 maximized,
                 fullscreen,
+                client_side_decoration,
             })
         }
         MSG_WINDOW_METADATA => decode_window_strings_body(body, MSG_WINDOW_METADATA),
@@ -1363,7 +1421,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
     let mut off = 8usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 44 > body.len() {
+        if off + 48 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -1375,15 +1433,16 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         let minimized = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
         let maximized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
         let fullscreen = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
-        if minimized > 1 || maximized > 1 || fullscreen > 1 {
+        let client_side_decoration = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
+        if minimized > 1 || maximized > 1 || fullscreen > 1 || client_side_decoration > 1 {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()) as usize;
+        let title_len = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 44;
+        off += 48;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -1410,6 +1469,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
             minimized,
             maximized,
             fullscreen,
+            client_side_decoration,
             title,
             app_id,
         });

@@ -81,6 +81,10 @@ impl CompositorHandler for CompositorState {
 
         self.needs_winit_redraw = true;
     }
+
+    fn destroyed(&mut self, surface: &WlSurface) {
+        self.on_wl_surface_destroyed(surface);
+    }
 }
 
 impl BufferHandler for CompositorState {

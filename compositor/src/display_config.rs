@@ -167,7 +167,10 @@ pub fn apply_stored_from_heads(
     let live = live_heads_from_drm(drm, heads);
 
     let scale = cfg.ui_scale;
-    if (scale - 1.0).abs() <= f64::EPSILON || (scale - 1.5).abs() <= f64::EPSILON {
+    if (scale - 1.0).abs() <= f64::EPSILON
+        || (scale - 1.5).abs() <= f64::EPSILON
+        || (scale - 2.0).abs() <= f64::EPSILON
+    {
         state.set_shell_ui_scale(scale);
     }
 

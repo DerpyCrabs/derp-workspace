@@ -171,6 +171,7 @@ type DerpShellDetail =
       height: number
       title: string
       app_id: string
+      client_side_decoration?: boolean
     }
   | { type: 'window_unmapped'; window_id: number }
   | {
@@ -183,6 +184,7 @@ type DerpShellDetail =
       height: number
       maximized?: boolean
       fullscreen?: boolean
+      client_side_decoration?: boolean
     }
   | {
       type: 'window_metadata'
@@ -208,6 +210,7 @@ type DerpWindow = {
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
+  client_side_decoration?: boolean
 }
 
 function pickScreenForWindowGlobal(win: DerpWindow, list: LayoutScreen[]): LayoutScreen | null {
@@ -258,6 +261,7 @@ function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
+      client_side_decoration: !!r.client_side_decoration,
     })
   }
   return next
@@ -282,6 +286,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         minimized: false,
         maximized: false,
         fullscreen: false,
+        client_side_decoration: !!detail.client_side_decoration,
       })
       break
     }
@@ -303,6 +308,10 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
           height: detail.height,
           maximized: detail.maximized ?? w.maximized,
           fullscreen: detail.fullscreen ?? w.fullscreen,
+          client_side_decoration:
+            detail.client_side_decoration !== undefined
+              ? !!detail.client_side_decoration
+              : w.client_side_decoration,
         })
       }
       break
@@ -523,7 +532,7 @@ function App() {
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
-  const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150>(150)
+  const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
   const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
   const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
@@ -926,11 +935,18 @@ function App() {
           {
             const lw = Math.max(1, d.canvas_logical_width)
             const pw = Math.max(1, d.canvas_physical_width)
-            let pct = Math.round((pw / lw) * 100)
-            if (pct !== 100 && pct !== 150) {
-              pct = pct > 120 ? 150 : 100
+            const s = (pw / lw) * 100
+            const candidates = [100, 150, 200] as const
+            let best: (typeof candidates)[number] = 150
+            let bestD = Number.POSITIVE_INFINITY
+            for (const c of candidates) {
+              const dist = Math.abs(s - c)
+              if (dist < bestD) {
+                bestD = dist
+                best = c
+              }
             }
-            setUiScalePercent(pct as 100 | 150)
+            setUiScalePercent(best)
           }
           setScreenDraft(
             'rows',
@@ -1582,6 +1598,21 @@ function App() {
                         }}
                       >
                         150%
+                      </button>
+                      <button
+                        type="button"
+                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+                        classList={{
+                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                            uiScalePercent() === 200,
+                        }}
+                        disabled={!canSessionControl() || uiScalePercent() === 200}
+                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+                        onClick={() => {
+                          shellWireSend('set_ui_scale', 200)
+                        }}
+                      >
+                        200%
                       </button>
                     </div>
                     <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-neutral-200">

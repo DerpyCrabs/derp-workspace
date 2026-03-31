@@ -46,7 +46,7 @@ impl SpaceElement for DerpSpaceElem {
 
     fn bbox(&self) -> Rectangle<i32, Logical> {
         match self {
-            DerpSpaceElem::Wayland(w) => w.bbox(),
+            DerpSpaceElem::Wayland(w) => w.bbox_with_popups(),
             DerpSpaceElem::X11(x) => x.bbox(),
         }
     }

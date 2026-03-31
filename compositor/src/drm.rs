@@ -28,7 +28,7 @@ use smithay::backend::{
 use smithay::desktop::space::space_render_elements;
 
 use crate::derp_space::DerpSpaceElem;
-use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel};
+use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::{
     calloop::{
         timer::{TimeoutAction, Timer},
@@ -352,6 +352,7 @@ impl DrmSession {
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
         shell_ipc::drain_shell_stream(state);
+        state.flush_pending_fractional_child_scales();
         state.shell_check_ipc_watchdog();
 
         if state.display_config_save_pending && !state.display_config_save_suppressed {
@@ -392,6 +393,7 @@ impl DrmSession {
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 
         state.space.refresh();
+        state.sync_preferred_buffer_scales();
         state.popups.cleanup();
         let _ = display.flush_clients();
     }
@@ -620,6 +622,15 @@ pub fn init_drm(
         .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
 
         let mode = OutputMode::from(drm_mode);
+        let shell_sc = CompositorState::wayland_scale_for_shell_ui(data.state.shell_ui_scale);
+        let logical_stride_w = {
+            let sz = Transform::Normal
+                .transform_size(mode.size)
+                .to_f64()
+                .to_logical(shell_sc.fractional_scale())
+                .to_i32_ceil();
+            std::cmp::max(sz.w, 0)
+        };
         let output = Output::new(
             output_name.clone(),
             PhysicalProperties {
@@ -633,7 +644,7 @@ pub fn init_drm(
         output.change_current_state(
             Some(mode),
             Some(Transform::Normal),
-            Some(Scale::Fractional(data.state.shell_ui_scale)),
+            Some(shell_sc),
             Some((cursor_x, cursor_y).into()),
         );
         output.set_preferred(mode);
@@ -642,7 +653,7 @@ pub fn init_drm(
             .space
             .map_output(&output, (cursor_x, cursor_y));
 
-        cursor_x = cursor_x.saturating_add(mode.size.w.max(0));
+        cursor_x = cursor_x.saturating_add(logical_stride_w);
 
         let damage_tracker = OutputDamageTracker::from_output(&output);
 

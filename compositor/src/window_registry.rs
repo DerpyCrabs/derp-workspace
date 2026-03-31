@@ -59,6 +59,7 @@ impl WindowRegistry {
             minimized: false,
             maximized: false,
             fullscreen: false,
+            client_side_decoration: false,
         };
         self.by_surface.insert(k, window_id);
         self.records.insert(window_id, info);
@@ -99,21 +100,27 @@ impl WindowRegistry {
         Some(changed)
     }
 
-    pub fn set_geometry(
+    pub fn set_shell_layout(
         &mut self,
         wl: &WlSurface,
         x: i32,
         y: i32,
         width: i32,
         height: i32,
+        client_side_decoration: bool,
     ) -> Option<bool> {
         let wid = *self.by_surface.get(&key(wl)?)?;
         let info = self.records.get_mut(&wid)?;
-        let changed = info.x != x || info.y != y || info.width != width || info.height != height;
+        let changed = info.x != x
+            || info.y != y
+            || info.width != width
+            || info.height != height
+            || info.client_side_decoration != client_side_decoration;
         info.x = x;
         info.y = y;
         info.width = width;
         info.height = height;
+        info.client_side_decoration = client_side_decoration;
         Some(changed)
     }
 

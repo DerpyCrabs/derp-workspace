@@ -160,6 +160,7 @@ fn handle_uplink_list(
             let scale = match pct {
                 100 => 1.0,
                 150 => 1.5,
+                200 => 2.0,
                 _ => return,
             };
             uplink.shell_set_ui_scale(scale);
@@ -519,7 +520,7 @@ wrap_v8_handler! {
                 }
                 "set_ui_scale" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("set_ui_scale requires percent (100 or 150)");
+                        return_exception!("set_ui_scale requires percent (100, 150, or 200)");
                     };
                     let pct = if a1.is_int() != 0 {
                         a1.int_value()
@@ -530,8 +531,8 @@ wrap_v8_handler! {
                     } else {
                         return_exception!("set_ui_scale: percent must be a number");
                     };
-                    if pct != 100 && pct != 150 {
-                        return_exception!("set_ui_scale: percent must be 100 or 150");
+                    if pct != 100 && pct != 150 && pct != 200 {
+                        return_exception!("set_ui_scale: percent must be 100, 150, or 200");
                     }
                     let _ = list.set_int(1, pct);
                 }

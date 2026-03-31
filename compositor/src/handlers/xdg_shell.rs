@@ -53,7 +53,7 @@ impl XdgShellHandler for CompositorState {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let wl0 = surface.wl_surface();
+        let wl0 = surface.wl_surface().clone();
         let (title, app_id) = toplevel_title_app_id(&surface);
         let wayland_client_pid = wl0
             .client()
@@ -62,18 +62,17 @@ impl XdgShellHandler for CompositorState {
         let map_at_output_origin =
             self.toplevel_is_embedded_shell_host(&title, &app_id, wayland_client_pid);
         self.window_registry.register_toplevel(
-            wl0,
+            &wl0,
             title,
             app_id,
             wayland_client_pid,
         );
-        let info = self
+        let reg = self
             .window_registry
-            .snapshot_for_wl_surface(wl0)
+            .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
 
         let window = Window::new_wayland_window(surface);
-        let wl = window.toplevel().unwrap().wl_surface().clone();
 
         let existing_before = self.space.elements().count();
         let (map_x, map_y) = if map_at_output_origin {
@@ -83,8 +82,8 @@ impl XdgShellHandler for CompositorState {
         };
         tracing::debug!(
             target: "derp_shell_sync",
-            window_id = info.window_id,
-            surface_id = info.surface_id,
+            window_id = reg.window_id,
+            surface_id = reg.surface_id,
             existing_before,
             map_x,
             map_y,
@@ -93,10 +92,12 @@ impl XdgShellHandler for CompositorState {
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), false);
 
-        self.apply_fractional_scale_to_surface(&wl);
-
-        self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
         self.notify_geometry_if_changed(&window);
+        let info = self
+            .window_registry
+            .snapshot_for_wl_surface(&wl0)
+            .expect("xdg new_toplevel: registry row after notify");
+        self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
