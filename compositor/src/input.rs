@@ -140,9 +140,8 @@ impl CompositorState {
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_menu = self.shell_point_in_context_menu_global(pos);
-        let in_decs = self.shell_point_in_any_window_decoration(pos);
         let under_native = self.surface_under(pos).is_some();
-        let force_native_buttons = under_native && !in_excl && !in_menu && !in_decs;
+        let force_native_buttons = under_native && !in_excl && !in_menu;
         let take_shell_base = shell_px.is_some()
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()
@@ -168,10 +167,7 @@ impl CompositorState {
             "PointerButton"
         );
         if take_shell {
-            if ButtonState::Pressed == button_state
-                && !pointer.is_grabbed()
-                && !self.shell_point_in_any_window_decoration(pos)
-            {
+            if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
                 self.space.elements().for_each(|e| {
                     e.set_activate(false);
                     if let DerpSpaceElem::Wayland(w) = e {

@@ -1848,61 +1848,7 @@ impl CompositorState {
         self.loop_signal.wakeup();
     }
 
-    fn shell_point_in_decoration_chrome(
-        &self,
-        px: f64,
-        py: f64,
-        x0: i32,
-        y0: i32,
-        w: i32,
-        h: i32,
-    ) -> bool {
-        let th = SHELL_TITLEBAR_HEIGHT;
-        let b = SHELL_BORDER_THICKNESS;
-        let top = y0.saturating_sub(th);
-        if px >= x0 as f64 && px < (x0 + w) as f64 && py >= top as f64 && py < y0 as f64 {
-            return true;
-        }
-        if px >= (x0 - b) as f64
-            && px < (x0 + w + b) as f64
-            && py >= (y0 + h) as f64
-            && py < (y0 + h + b) as f64
-        {
-            return true;
-        }
-        if px >= (x0 - b) as f64 && px < x0 as f64 && py >= y0 as f64 && py < (y0 + h) as f64 {
-            return true;
-        }
-        if px >= (x0 + w) as f64
-            && px < (x0 + w + b) as f64
-            && py >= y0 as f64
-            && py < (y0 + h) as f64
-        {
-            return true;
-        }
-        false
-    }
-
-    /// Whether `pos` lies over shell-drawn per-window chrome (title strip or border frame) for any stacked window.
-    pub fn shell_point_in_any_window_decoration(&self, pos: Point<f64, Logical>) -> bool {
-        let px = pos.x;
-        let py = pos.y;
-        for elem in self.space.elements().rev() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            let Some(loc) = self.space.element_location(elem) else {
-                continue;
-            };
-            let geo = window.geometry();
-            if self.shell_point_in_decoration_chrome(px, py, loc.x, loc.y, geo.size.w, geo.size.h) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// True if the pointer is over the Solid shell layer (desktop + decoration chrome), not the native Wayland client beneath.
+    /// True if the pointer is over the Solid shell layer (desktop), not the native Wayland client beneath.
     pub fn shell_pointer_route_to_cef(&self, pos: Point<f64, Logical>) -> bool {
         if self.point_in_shell_exclusion_zones(pos) {
             return true;
@@ -1916,10 +1862,6 @@ impl CompositorState {
             if px >= g.loc.x as f64 && px < x2 && py >= g.loc.y as f64 && py < y2 {
                 return true;
             }
-        }
-
-        if self.shell_point_in_any_window_decoration(pos) {
-            return true;
         }
 
         if self.surface_under(pos).is_some() {
