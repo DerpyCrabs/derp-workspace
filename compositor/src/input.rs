@@ -379,6 +379,7 @@ impl CompositorState {
                     "PointerMotion → logical"
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(ws) = self.workspace_logical_bounds() else {
@@ -404,6 +405,7 @@ impl CompositorState {
                     "PointerMotionAbsolute"
                 );
                 self.pointer_motion_output_local(output_geo, local, event.time_msec());
+                self.needs_winit_redraw = true;
             }
             InputEvent::PointerButton { event, .. } => {
                 self.process_pointer_button(
@@ -473,6 +475,7 @@ impl CompositorState {
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Pressed, time);
                 }
+                self.needs_winit_redraw = true;
             }
             InputEvent::TouchMotion { event, .. } => {
                 if self.touch_emulation_slot != Some(event.slot()) {
@@ -504,6 +507,7 @@ impl CompositorState {
                     "TouchMotion"
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
+                self.needs_winit_redraw = true;
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
@@ -544,6 +548,7 @@ impl CompositorState {
                 }
                 self.touch_emulation_slot = None;
                 self.touch_routes_to_cef = false;
+                self.needs_winit_redraw = true;
             }
             InputEvent::TouchCancel { event, .. } => {
                 if self.touch_emulation_slot != Some(event.slot()) {
@@ -573,6 +578,7 @@ impl CompositorState {
                 }
                 self.touch_emulation_slot = None;
                 self.touch_routes_to_cef = false;
+                self.needs_winit_redraw = true;
             }
             InputEvent::TouchFrame { .. } => {}
             InputEvent::PointerAxis { event, .. } => {

@@ -108,15 +108,15 @@ impl DrmHead {
         loop_handle: &LoopHandle<'static, CalloopData>,
         state: &mut CompositorState,
         _display: &mut DisplayHandle,
-    ) -> bool {
+    ) -> (bool, bool) {
         let output = &self.output;
 
         if !drm.is_active() {
-            return false;
+            return (false, false);
         }
 
         if self.pending_frame_complete {
-            return false;
+            return (false, false);
         }
 
         let (mut dmabuf, buffer_age) = match self.gbm_surface.next_buffer() {
@@ -128,7 +128,7 @@ impl DrmHead {
                     drm_idle_render(d);
                     TimeoutAction::Drop
                 });
-                return false;
+                return (false, false);
             }
         };
 
@@ -141,7 +141,7 @@ impl DrmHead {
         let (submit, sync_for_queue) = {
             let Ok(mut renderer_guard) = renderer.lock() else {
                 warn!("drm renderer mutex poisoned");
-                return false;
+                return (false, false);
             };
             let renderer = &mut *renderer_guard;
             let mut fb_target = match renderer.bind(&mut dmabuf) {
@@ -150,7 +150,7 @@ impl DrmHead {
                     warn!(?e, "drm bind dmabuf");
                     drop(renderer_guard);
                     loop_handle.insert_idle(|d| drm_idle_render(d));
-                    return false;
+                    return (false, false);
                 }
             };
 
@@ -282,36 +282,34 @@ impl DrmHead {
         {
             warn!(?e, "drm queue_buffer");
             loop_handle.insert_idle(|d| drm_idle_render(d));
-            return false;
+            return (false, false);
         }
 
         self.pending_frame_complete = true;
 
-        if content_advanced {
-            state.space.elements().for_each(|elem| match elem {
-                DerpSpaceElem::Wayland(window) => {
-                    window.send_frame(
+        state.space.elements().for_each(|elem| match elem {
+            DerpSpaceElem::Wayland(window) => {
+                window.send_frame(
+                    output,
+                    state.start_time.elapsed(),
+                    Some(Duration::ZERO),
+                    |_, _| Some(output.clone()),
+                );
+            }
+            DerpSpaceElem::X11(x11) => {
+                if let Some(surf) = x11.wl_surface() {
+                    smithay::desktop::utils::send_frames_surface_tree(
+                        &surf,
                         output,
                         state.start_time.elapsed(),
                         Some(Duration::ZERO),
                         |_, _| Some(output.clone()),
                     );
                 }
-                DerpSpaceElem::X11(x11) => {
-                    if let Some(surf) = x11.wl_surface() {
-                        smithay::desktop::utils::send_frames_surface_tree(
-                            &surf,
-                            output,
-                            state.start_time.elapsed(),
-                            Some(Duration::ZERO),
-                            |_, _| Some(output.clone()),
-                        );
-                    }
-                }
-            });
-        }
+            }
+        });
 
-        content_advanced
+        (content_advanced, true)
     }
 }
 
@@ -381,13 +379,18 @@ impl DrmSession {
         let drm_ref = &self.drm;
 
         let mut any_advanced = false;
+        let mut any_presented = false;
         for head in &mut self.heads {
-            if head.render_one(drm_ref, &renderer, &loop_handle, state, display) {
-                any_advanced = true;
-            }
+            let (advanced, presented) =
+                head.render_one(drm_ref, &renderer, &loop_handle, state, display);
+            any_advanced |= advanced;
+            any_presented |= presented;
         }
 
         let _ = any_advanced;
+        if any_presented {
+            state.needs_winit_redraw = false;
+        }
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 
