@@ -379,18 +379,13 @@ impl DrmSession {
         let drm_ref = &self.drm;
 
         let mut any_advanced = false;
-        let mut any_presented = false;
         for head in &mut self.heads {
-            let (advanced, presented) =
+            let (advanced, _presented) =
                 head.render_one(drm_ref, &renderer, &loop_handle, state, display);
             any_advanced |= advanced;
-            any_presented |= presented;
         }
 
         let _ = any_advanced;
-        if any_presented {
-            state.needs_winit_redraw = false;
-        }
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 

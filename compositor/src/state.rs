@@ -307,7 +307,6 @@ pub struct CompositorState {
     shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
     shell_resize_initial_rect: Option<Rectangle<i32, Logical>>,
     shell_resize_accum: (f64, f64),
-    pub(crate) needs_winit_redraw: bool,
     wp_fractional_scale_surface_ids: HashSet<ObjectId>,
     pending_fractional_child_windows: HashSet<u32>,
 
@@ -494,7 +493,6 @@ impl CompositorState {
             shell_resize_edges: None,
             shell_resize_initial_rect: None,
             shell_resize_accum: (0.0, 0.0),
-            needs_winit_redraw: true,
             wp_fractional_scale_surface_ids: HashSet::new(),
             pending_fractional_child_windows: HashSet::new(),
             shell_ipc_stall_timeout,
@@ -569,7 +567,6 @@ impl CompositorState {
             self.shell_exclusion_zones.clear();
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
-            self.needs_winit_redraw = true;
             return;
         };
         let mut next: Vec<Rectangle<i32, Logical>> = Vec::new();
@@ -589,7 +586,6 @@ impl CompositorState {
         if changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
-            self.needs_winit_redraw = true;
         }
     }
 
@@ -1342,7 +1338,6 @@ impl CompositorState {
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
         self.notify_geometry_if_changed(window);
-        self.needs_winit_redraw = true;
         true
     }
 
@@ -1388,7 +1383,6 @@ impl CompositorState {
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
         self.notify_geometry_if_changed(window);
-        self.needs_winit_redraw = true;
         true
     }
 
@@ -1412,7 +1406,6 @@ impl CompositorState {
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
         self.notify_geometry_if_changed(window);
-        self.needs_winit_redraw = true;
         true
     }
 
@@ -1443,7 +1436,6 @@ impl CompositorState {
             .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
         tl.send_pending_configure();
         self.notify_geometry_if_changed(window);
-        self.needs_winit_redraw = true;
         true
     }
 
@@ -1475,7 +1467,6 @@ impl CompositorState {
                 .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
             tl.send_pending_configure();
             self.notify_geometry_if_changed(window);
-            self.needs_winit_redraw = true;
             true
         }
     }
@@ -1843,7 +1834,6 @@ impl CompositorState {
         self.apply_shell_ui_scale_to_outputs();
         self.send_shell_output_layout();
         self.refresh_all_surface_fractional_scales();
-        self.needs_winit_redraw = true;
         self.display_config_request_save();
     }
 
@@ -1963,7 +1953,6 @@ impl CompositorState {
         });
         if cleared_stale_primary {
             self.resync_embedded_shell_host_after_ipc_connect();
-            self.needs_winit_redraw = true;
         }
     }
 
@@ -1984,7 +1973,6 @@ impl CompositorState {
         self.resync_embedded_shell_host_after_ipc_connect();
         self.send_shell_output_layout();
         self.display_config_request_save();
-        self.needs_winit_redraw = true;
     }
 
     pub fn apply_shell_output_layout_json(&mut self, json: &str) {
@@ -2080,7 +2068,6 @@ impl CompositorState {
         self.send_shell_output_layout();
         self.refresh_all_surface_fractional_scales();
         self.display_config_request_save();
-        self.needs_winit_redraw = true;
     }
 
     /// Logical size matching [`Space::output_geometry`] / pointer normalization (not raw `current_mode` when they differ).
@@ -2136,7 +2123,6 @@ impl CompositorState {
             self.space
                 .map_element(DerpSpaceElem::Wayland(window.clone()), (ox, oy), true);
             self.notify_geometry_if_changed(&window);
-            self.needs_winit_redraw = true;
         }
     }
 
@@ -2281,7 +2267,6 @@ impl CompositorState {
         }
         self.shell_context_menu = None;
         self.shell_context_menu_overlay_id = Id::new();
-        self.needs_winit_redraw = true;
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss);
     }
 
@@ -2442,7 +2427,6 @@ impl CompositorState {
 
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = (0, 0);
-        self.needs_winit_redraw = true;
         let loc = self
             .space
             .element_location(&DerpSpaceElem::Wayland(window.clone()));
@@ -2485,7 +2469,6 @@ impl CompositorState {
             .map_element(DerpSpaceElem::Wayland(window.clone()), after, true);
         self.shell_move_pending_delta = (0, 0);
         self.notify_geometry_for_window(&window, true);
-        self.needs_winit_redraw = true;
         tracing::debug!(
             target: "derp_shell_move",
             wid,
@@ -2546,7 +2529,6 @@ impl CompositorState {
         }
         self.shell_move_window_id = None;
         self.notify_geometry_for_window(window, true);
-        self.needs_winit_redraw = true;
     }
 
     pub fn shell_move_end(&mut self, window_id: u32) {
@@ -2567,7 +2549,6 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
-            self.needs_winit_redraw = true;
             return;
         };
         let Some(window) = self.find_window_by_surface_id(sid) else {
@@ -2579,7 +2560,6 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
-            self.needs_winit_redraw = true;
             return;
         };
         self.shell_move_flush_pending_deltas();
@@ -2683,7 +2663,6 @@ impl CompositorState {
             .get_keyboard()
             .unwrap()
             .set_focus(self, Some(wl.clone()), k_serial);
-        self.needs_winit_redraw = true;
     }
 
     pub fn shell_resize_delta(&mut self, dx: i32, dy: i32) {
@@ -2732,7 +2711,6 @@ impl CompositorState {
             state.size = Some(last_size);
         });
         tl.send_pending_configure();
-        self.needs_winit_redraw = true;
     }
 
     pub fn shell_resize_end(&mut self, window_id: u32) {
@@ -2800,7 +2778,6 @@ impl CompositorState {
         self.shell_resize_initial_rect = None;
         self.shell_resize_accum = (0.0, 0.0);
 
-        self.needs_winit_redraw = true;
         tracing::debug!(
             target: "derp_shell_resize",
             window_id,
@@ -2916,7 +2893,6 @@ impl CompositorState {
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
         self.notify_geometry_if_changed(&window);
-        self.needs_winit_redraw = true;
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {
@@ -2980,7 +2956,6 @@ impl CompositorState {
             "shell_close_window send_close"
         );
         tl.send_close();
-        self.needs_winit_redraw = true;
     }
 
     pub fn shell_set_window_fullscreen(&mut self, window_id: u32, enabled: bool) {
@@ -3054,7 +3029,6 @@ impl CompositorState {
 
     pub fn shell_set_presentation_fullscreen(&mut self, enabled: bool) {
         self.shell_presentation_fullscreen = enabled;
-        self.needs_winit_redraw = true;
     }
 
     fn keyboard_focused_window_id(&self) -> Option<u32> {
@@ -3097,7 +3071,6 @@ impl CompositorState {
                 w.toplevel().unwrap().send_pending_configure();
             }
         });
-        self.needs_winit_redraw = true;
     }
 
     fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {
@@ -3151,7 +3124,6 @@ impl CompositorState {
                 .set_focus(self, Option::<WlSurface>::None, serial);
         }
 
-        self.needs_winit_redraw = true;
         self.shell_emit_window_state(window_id, true);
     }
 
@@ -3202,7 +3174,6 @@ impl CompositorState {
         });
 
         self.notify_geometry_if_changed(&window);
-        self.needs_winit_redraw = true;
         self.shell_emit_window_state(window_id, false);
     }
 
@@ -3373,7 +3344,6 @@ impl CompositorState {
             }
         }
         self.shell_move_flush_pending_deltas();
-        self.needs_winit_redraw = true;
         tracing::debug!(
             target: "derp_shell_osr_damage",
             width,
@@ -3444,7 +3414,6 @@ impl CompositorState {
         self.touch_routes_to_cef = false;
         self.shell_context_menu = None;
         self.shell_context_menu_overlay_id = Id::new();
-        self.needs_winit_redraw = true;
     }
 
     pub fn apply_shell_context_menu(
@@ -3463,13 +3432,11 @@ impl CompositorState {
         if !visible {
             self.shell_context_menu = None;
             self.shell_context_menu_overlay_id = Id::new();
-            self.needs_winit_redraw = true;
             return;
         }
         if bw == 0 || bh == 0 || gw == 0 || gh == 0 {
             self.shell_context_menu = None;
             self.shell_context_menu_overlay_id = Id::new();
-            self.needs_winit_redraw = true;
             return;
         }
         if bw > MAX_MENU || bh > MAX_MENU || gw > MAX_MENU || gh > MAX_MENU {
@@ -3534,7 +3501,6 @@ impl CompositorState {
             global_rect: gr,
         });
         self.shell_context_menu_overlay_id = Id::new();
-        self.needs_winit_redraw = true;
     }
 
     /// Current keyboard → `cef_event_flags_t` (shift/control/alt/meta/caps/AltGr).
@@ -3696,7 +3662,6 @@ impl XWaylandShellHandler for CompositorState {
 
     fn surface_associated(&mut self, _xwm_id: XwmId, _surface: WlSurface, _window: X11Surface) {
         self.loop_signal.wakeup();
-        self.needs_winit_redraw = true;
     }
 }
 
@@ -3729,7 +3694,6 @@ impl XwmHandler for CompositorState {
             false,
         );
         self.loop_signal.wakeup();
-        self.needs_winit_redraw = true;
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {
@@ -3740,12 +3704,10 @@ impl XwmHandler for CompositorState {
             false,
         );
         self.loop_signal.wakeup();
-        self.needs_winit_redraw = true;
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, window: X11Surface) {
         self.space.unmap_elem(&DerpSpaceElem::X11(window));
-        self.needs_winit_redraw = true;
     }
 
     fn destroyed_window(&mut self, xwm: XwmId, window: X11Surface) {
@@ -3791,7 +3753,6 @@ impl XwmHandler for CompositorState {
         if self.space.elements().any(|e| *e == elem) {
             self.space
                 .map_element(elem, (geometry.loc.x, geometry.loc.y), false);
-            self.needs_winit_redraw = true;
         }
     }
 
