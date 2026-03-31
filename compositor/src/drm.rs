@@ -350,7 +350,6 @@ impl DrmSession {
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
         shell_ipc::drain_shell_stream(state);
-        state.flush_pending_fractional_child_scales();
         state.shell_check_ipc_watchdog();
 
         if state.display_config_save_pending && !state.display_config_save_suppressed {
@@ -390,7 +389,6 @@ impl DrmSession {
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 
         state.space.refresh();
-        state.sync_preferred_buffer_scales();
         state.popups.cleanup();
         let _ = display.flush_clients();
     }
@@ -669,7 +667,6 @@ pub fn init_drm(
     data.state.recompute_shell_canvas_from_outputs();
     data.state.send_shell_output_layout();
     data.state.shell_embedded_notify_output_ready();
-    data.state.refresh_all_surface_fractional_scales();
 
     std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
 

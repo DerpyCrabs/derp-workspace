@@ -81,9 +81,7 @@ impl CompositorHandler for CompositorState {
         }
     }
 
-    fn destroyed(&mut self, surface: &WlSurface) {
-        self.on_wl_surface_destroyed(surface);
-    }
+    fn destroyed(&mut self, _surface: &WlSurface) {}
 }
 
 impl BufferHandler for CompositorState {

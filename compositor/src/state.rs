@@ -41,7 +41,7 @@ use smithay::{
             PostAction,
         },
         wayland_server::{
-            backend::{ClientData, ClientId, DisconnectReason, ObjectId},
+            backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
             Display, DisplayHandle,
         },
@@ -307,8 +307,6 @@ pub struct CompositorState {
     shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
     shell_resize_initial_rect: Option<Rectangle<i32, Logical>>,
     shell_resize_accum: (f64, f64),
-    wp_fractional_scale_surface_ids: HashSet<ObjectId>,
-    pending_fractional_child_windows: HashSet<u32>,
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
     shell_ipc_stall_timeout: Option<Duration>,
@@ -493,8 +491,6 @@ impl CompositorState {
             shell_resize_edges: None,
             shell_resize_initial_rect: None,
             shell_resize_accum: (0.0, 0.0),
-            wp_fractional_scale_surface_ids: HashSet::new(),
-            pending_fractional_child_windows: HashSet::new(),
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
@@ -746,11 +742,21 @@ impl CompositorState {
         if bbox.size.w == 0 || bbox.size.h == 0 {
             return fallback();
         }
-        let cx = bbox.loc.x + bbox.size.w / 2;
-        let cy = bbox.loc.y + bbox.size.h / 2;
-        self.output_containing_global_point(Point::from((cx as f64, cy as f64)))
-            .map(|o| o.current_scale().fractional_scale())
-            .unwrap_or_else(fallback)
+        let mut best = 1.0f64;
+        let mut hit = false;
+        for o in self.space.outputs() {
+            let Some(geo) = self.space.output_geometry(o) else {
+                continue;
+            };
+            let Some(ix) = geo.intersection(bbox) else {
+                continue;
+            };
+            if ix.size.w > 0 && ix.size.h > 0 {
+                hit = true;
+                best = best.max(o.current_scale().fractional_scale());
+            }
+        }
+        if hit { best } else { fallback() }
     }
 
     pub(crate) fn wayland_window_containing_surface(&self, surface: &WlSurface) -> Option<Window> {
@@ -767,131 +773,6 @@ impl CompositorState {
                 None
             }
         })
-    }
-
-    pub(crate) fn refresh_fractional_scale_for_wayland_window(&mut self, window: &Window) {
-        let scale =
-            self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window.clone()));
-        let Some(tl) = window.toplevel() else {
-            return;
-        };
-        let surf = tl.wl_surface();
-        smithay::wayland::compositor::with_states(surf, |states| {
-            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-                fs.set_preferred_scale(scale);
-            });
-        });
-    }
-
-    fn schedule_fractional_children_refresh(&mut self, window: &Window) {
-        let Some(tl) = window.toplevel() else {
-            return;
-        };
-        let Some(wid) = self.window_registry.window_id_for_wl_surface(tl.wl_surface()) else {
-            return;
-        };
-        self.pending_fractional_child_windows.insert(wid);
-    }
-
-    pub(crate) fn flush_pending_fractional_child_scales(&mut self) {
-        if self.pending_fractional_child_windows.is_empty() {
-            return;
-        }
-        let ids: Vec<u32> = self.pending_fractional_child_windows.drain().collect();
-        for window_id in ids {
-            let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
-                continue;
-            };
-            let Some(window) = self.find_window_by_surface_id(sid) else {
-                continue;
-            };
-            let scale =
-                self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(window.clone()));
-            let Some(tl) = window.toplevel() else {
-                continue;
-            };
-            let tl_surf = tl.wl_surface().clone();
-            window.with_surfaces(|surface, _| {
-                if *surface == tl_surf {
-                    return;
-                }
-                smithay::wayland::compositor::with_states(surface, |states| {
-                    smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-                        fs.set_preferred_scale(scale);
-                    });
-                });
-            });
-        }
-    }
-
-    pub(crate) fn refresh_all_surface_fractional_scales(&mut self) {
-        let windows: Vec<Window> = self
-            .space
-            .elements()
-            .filter_map(|e| {
-                if let DerpSpaceElem::Wayland(w) = e {
-                    Some(w.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for window in windows {
-            self.refresh_fractional_scale_for_wayland_window(&window);
-            if Self::wayland_window_has_client_side_decoration(&window) {
-                self.schedule_fractional_children_refresh(&window);
-            }
-        }
-    }
-
-    pub(crate) fn on_wl_surface_destroyed(&mut self, surface: &WlSurface) {
-        self.wp_fractional_scale_surface_ids.remove(&surface.id());
-    }
-
-    pub(crate) fn sync_preferred_buffer_scales(&self) {
-        use smithay::wayland::compositor::send_surface_state;
-
-        let frac_shell = self.shell_ui_scale.fract().abs() > f64::EPSILON;
-        for elem in self.space.elements() {
-            let DerpSpaceElem::Wayland(window) = elem else {
-                continue;
-            };
-            if window.toplevel().is_none() {
-                continue;
-            }
-            let outs = self.space.outputs_for_element(elem);
-            let mut tf = Transform::Normal;
-            if outs.is_empty() {
-                if let Some(o) = self.leftmost_output() {
-                    tf = o.current_transform();
-                }
-            } else {
-                let mut best_s = 0.0f64;
-                for o in outs {
-                    let s = o.current_scale().fractional_scale();
-                    if s > best_s {
-                        best_s = s;
-                        tf = o.current_transform();
-                    }
-                }
-            }
-            let ceil_pref = self.shell_ui_scale.ceil() as i32;
-            let round_pref = self.shell_ui_scale.round() as i32;
-            window.with_surfaces(|surface, data| {
-                let uses_wp_frac = self
-                    .wp_fractional_scale_surface_ids
-                    .contains(&surface.id());
-                let pref = if frac_shell && uses_wp_frac {
-                    1
-                } else if frac_shell {
-                    ceil_pref
-                } else {
-                    round_pref
-                }
-                .max(1);
-                send_surface_state(surface, data, pref, tf);
-            });
-        }
     }
 
     pub fn surface_under(
@@ -1247,12 +1128,6 @@ impl CompositorState {
             if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
-        }
-        self.refresh_fractional_scale_for_wayland_window(window);
-        if (force_shell_emit || layout_or_tiling)
-            && Self::wayland_window_has_client_side_decoration(window)
-        {
-            self.schedule_fractional_children_refresh(window);
         }
     }
 
@@ -1833,7 +1708,6 @@ impl CompositorState {
         self.shell_ui_scale = scale;
         self.apply_shell_ui_scale_to_outputs();
         self.send_shell_output_layout();
-        self.refresh_all_surface_fractional_scales();
         self.display_config_request_save();
     }
 
@@ -2066,7 +1940,6 @@ impl CompositorState {
         }
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();
-        self.refresh_all_surface_fractional_scales();
         self.display_config_request_save();
     }
 
@@ -3803,7 +3676,6 @@ impl XdgDecorationHandler for CompositorState {
 
 impl FractionalScaleHandler for CompositorState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        self.wp_fractional_scale_surface_ids.insert(surface.id());
         let scale = self
             .wayland_window_containing_surface(&surface)
             .map(|w| self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(w)))
