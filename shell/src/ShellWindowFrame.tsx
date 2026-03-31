@@ -7,6 +7,10 @@ import {
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
 } from './chromeConstants'
+import {
+  SHELL_CHROME_BG_FOCUSED_OPAQUE,
+  SHELL_CHROME_BG_UNFOCUSED_OPAQUE,
+} from './exclusionRects'
 
 export type ShellWindowModel = {
   window_id: number
@@ -46,7 +50,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     props.onResizeEdgeDown(edges, clientX, clientY)
   }
 
-  const chromeBg = props.focused ? 'hsla(210, 38%, 26%, 0.96)' : 'hsla(210, 18%, 15%, 0.88)'
+  const chromeBg = props.focused
+    ? SHELL_CHROME_BG_FOCUSED_OPAQUE
+    : SHELL_CHROME_BG_UNFOCUSED_OPAQUE
 
   return (
     <div
@@ -63,6 +69,16 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         '--shell-chrome-bg': chromeBg,
       }}
     >
+      <div
+        class="pointer-events-none absolute z-[4] box-border border-0"
+        style={{
+          left: `${inset}px`,
+          top: `${inset + th}px`,
+          width: `${props.win.width}px`,
+          height: `${props.win.height}px`,
+          background: 'var(--shell-chrome-bg)',
+        }}
+      />
       <Show when={!csd}>
         <div
           class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"

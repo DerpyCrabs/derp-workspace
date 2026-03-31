@@ -15,6 +15,7 @@ import {
   CHROME_TITLEBAR_PX,
   SHELL_LAYOUT_MAXIMIZED,
 } from './chromeConstants'
+import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './exclusionRects'
 import { ShellWindowFrame } from './ShellWindowFrame'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
@@ -711,7 +712,13 @@ function App() {
     }
     const co = layoutCanvasOrigin()
     const mainRect = main.getBoundingClientRect()
-    const rects: Array<{ x: number; y: number; w: number; h: number }> = []
+    const rects: Array<{
+      x: number
+      y: number
+      w: number
+      h: number
+      window_id?: number
+    }> = []
     const hud: ExclusionHudZone[] = []
     const addEl = (el: Element | null | undefined, label: string) => {
       if (!el) return
@@ -723,9 +730,26 @@ function App() {
     }
     addEl(main.querySelector('[data-shell-panel]'), 'panel')
     addEl(main.querySelector('[data-shell-taskbar]'), 'taskbar')
+    const stripLabels = ['t', 'l', 'r', 'b'] as const
+    for (const decoWin of windowsList()) {
+      if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
+      if (decoWin.minimized || decoWin.client_side_decoration) continue
+      const deco = ssdDecorationExclusionRects(decoWin)
+      const room = Math.max(0, SHELL_EXCLUSION_ZONES_SENT_MAX - rects.length)
+      const decoUsed = deco.slice(0, room)
+      for (let i = 0; i < decoUsed.length; i++) {
+        const r = decoUsed[i]
+        const tag = stripLabels[i] ?? `${i}`
+        hud.push({ label: `w${decoWin.window_id}-deco-${tag}`, ...r })
+        rects.push({ ...r, window_id: decoWin.window_id })
+      }
+    }
     setExclusionZonesHud(hud)
     if (typeof window.__derpShellWireSend === 'function') {
-      window.__derpShellWireSend('set_exclusion_zones', JSON.stringify({ rects }))
+      window.__derpShellWireSend(
+        'set_exclusion_zones',
+        JSON.stringify({ rects: rects.slice(0, SHELL_EXCLUSION_ZONES_SENT_MAX) }),
+      )
     }
   }
 
@@ -907,6 +931,7 @@ function App() {
       if (d.type === 'focus_changed') {
         const fw = coerceShellWindowId(d.window_id)
         setFocusedWindowId((prev) => (prev === fw ? prev : fw))
+        queueMicrotask(() => scheduleExclusionZonesSync())
         return
       }
       if (d.type === 'output_geometry') {

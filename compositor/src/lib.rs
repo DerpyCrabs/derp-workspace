@@ -11,6 +11,7 @@ mod calloop_xwm;
 mod cursor_fallback;
 mod display_config;
 pub mod derp_space;
+mod derp_space_render;
 mod exclusion_clip;
 mod desktop_stack;
 pub mod drm;

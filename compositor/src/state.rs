@@ -332,7 +332,8 @@ pub struct CompositorState {
     pub(crate) toplevel_fullscreen_return_maximized: HashSet<u32>,
     /// When true, render OSR shell above native Wayland windows (HTML5 / presentation fullscreen).
     pub shell_presentation_fullscreen: bool,
-    pub(crate) shell_exclusion_zones: Vec<Rectangle<i32, Logical>>,
+    pub(crate) shell_exclusion_global: Vec<Rectangle<i32, Logical>>,
+    pub(crate) shell_exclusion_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>>,
     pub(crate) shell_exclusion_zones_need_full_damage: bool,
     pub(crate) shell_context_menu_atlas_buffer_h: u32,
     pub(crate) shell_context_menu_overlay_id: Id,
@@ -506,7 +507,8 @@ impl CompositorState {
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
             shell_presentation_fullscreen: false,
-            shell_exclusion_zones: Vec::new(),
+            shell_exclusion_global: Vec::new(),
+            shell_exclusion_decor: HashMap::new(),
             shell_exclusion_zones_need_full_damage: false,
             shell_context_menu_atlas_buffer_h: 0,
             shell_context_menu_overlay_id: Id::new(),
@@ -519,16 +521,27 @@ impl CompositorState {
     pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
         let px = pos.x;
         let py = pos.y;
-        if self.shell_exclusion_zones.is_empty() {
+        if self.shell_exclusion_global.is_empty() && self.shell_exclusion_decor.is_empty() {
             return false;
         }
-        for r in &self.shell_exclusion_zones {
+        for r in &self.shell_exclusion_global {
             let x1 = r.loc.x as f64;
             let y1 = r.loc.y as f64;
             let x2 = x1 + r.size.w.max(0) as f64;
             let y2 = y1 + r.size.h.max(0) as f64;
             if px >= x1 && px < x2 && py >= y1 && py < y2 {
                 return true;
+            }
+        }
+        for rs in self.shell_exclusion_decor.values() {
+            for r in rs {
+                let x1 = r.loc.x as f64;
+                let y1 = r.loc.y as f64;
+                let x2 = x1 + r.size.w.max(0) as f64;
+                let y2 = y1 + r.size.h.max(0) as f64;
+                if px >= x1 && px < x2 && py >= y1 && py < y2 {
+                    return true;
+                }
             }
         }
         false
@@ -543,13 +556,15 @@ impl CompositorState {
     }
 
     pub fn apply_shell_exclusion_zones_json(&mut self, json: &str) {
-        pub const MAX_SHELL_EXCLUSION_ZONES: usize = 64;
+        pub const MAX_SHELL_EXCLUSION_ZONES: usize = 128;
         #[derive(serde::Deserialize)]
         struct EzRect {
             x: i32,
             y: i32,
             w: i32,
             h: i32,
+            #[serde(default)]
+            window_id: Option<u32>,
         }
         #[derive(serde::Deserialize)]
         struct EzRoot {
@@ -560,36 +575,110 @@ impl CompositorState {
             return;
         };
         let Some(ws) = self.workspace_logical_bounds() else {
-            self.shell_exclusion_zones.clear();
+            self.shell_exclusion_global.clear();
+            self.shell_exclusion_decor.clear();
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
             return;
         };
-        let mut next: Vec<Rectangle<i32, Logical>> = Vec::new();
-        for e in root.rects.into_iter().take(MAX_SHELL_EXCLUSION_ZONES) {
+        let mut next_global: Vec<Rectangle<i32, Logical>> = Vec::new();
+        let mut next_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>> = HashMap::new();
+        let mut used = 0usize;
+        for e in root.rects {
+            if used >= MAX_SHELL_EXCLUSION_ZONES {
+                break;
+            }
             let w = e.w.max(1);
             let h = e.h.max(1);
             let r = Rectangle::new(
                 Point::<i32, Logical>::from((e.x, e.y)),
                 Size::<i32, Logical>::from((w, h)),
             );
-            if let Some(clamped) = r.intersection(ws) {
-                next.push(clamped);
+            let Some(clamped) = r.intersection(ws) else {
+                continue;
+            };
+            used += 1;
+            match e.window_id.filter(|&id| id > 0) {
+                None => next_global.push(clamped),
+                Some(id) => next_decor.entry(id).or_default().push(clamped),
             }
         }
-        let changed = next != self.shell_exclusion_zones;
-        self.shell_exclusion_zones = next;
+        let changed =
+            next_global != self.shell_exclusion_global || next_decor != self.shell_exclusion_decor;
+        self.shell_exclusion_global = next_global;
+        self.shell_exclusion_decor = next_decor;
         if changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }
     }
 
-    pub(crate) fn shell_exclusion_clip_ctx(
+    pub(crate) fn derp_elem_window_id(&self, elem: &DerpSpaceElem) -> Option<u32> {
+        match elem {
+            DerpSpaceElem::Wayland(w) => w
+                .toplevel()
+                .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface())),
+            DerpSpaceElem::X11(x) => x
+                .wl_surface()
+                .as_ref()
+                .and_then(|s| self.window_registry.window_id_for_wl_surface(s)),
+        }
+    }
+
+    fn window_ids_strictly_above_on_output(&self, output: &Output, self_id: u32) -> Vec<u32> {
+        let stack: Vec<u32> = self
+            .space
+            .elements_for_output(output)
+            .filter_map(|e| self.derp_elem_window_id(e))
+            .collect();
+        let Some(idx) = stack.iter().position(|&id| id == self_id) else {
+            return Vec::new();
+        };
+        stack[(idx + 1)..].to_vec()
+    }
+
+    pub(crate) fn shell_exclusion_clip_rects_logical(
         &self,
         output: &Output,
+        elem_window: Option<u32>,
+    ) -> Vec<Rectangle<i32, Logical>> {
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return Vec::new();
+        };
+        let mut out: Vec<Rectangle<i32, Logical>> = self
+            .shell_exclusion_global
+            .iter()
+            .filter_map(|z| z.intersection(ws))
+            .collect();
+        let Some(self_id) = elem_window else {
+            for rs in self.shell_exclusion_decor.values() {
+                for r in rs {
+                    if let Some(i) = r.intersection(ws) {
+                        out.push(i);
+                    }
+                }
+            }
+            return out;
+        };
+        for ow in self.window_ids_strictly_above_on_output(output, self_id) {
+            if let Some(rs) = self.shell_exclusion_decor.get(&ow) {
+                for r in rs {
+                    if let Some(i) = r.intersection(ws) {
+                        out.push(i);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn shell_exclusion_clip_ctx_for_draw(
+        &self,
+        output: &Output,
+        elem_window: Option<u32>,
     ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
-        if self.shell_exclusion_zones.is_empty() {
+        let zones = self.shell_exclusion_clip_rects_logical(output, elem_window);
+        if zones.is_empty() {
             return None;
         }
         let Some(out_geo) = self.space.output_geometry(output) else {
@@ -598,16 +687,13 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return None;
         };
-        let zones: Vec<Rectangle<i32, Logical>> = self
-            .shell_exclusion_zones
-            .iter()
-            .filter_map(|z| z.intersection(ws))
-            .collect();
-        if zones.is_empty() {
+        let filtered: Vec<Rectangle<i32, Logical>> =
+            zones.iter().filter_map(|z| z.intersection(ws)).collect();
+        if filtered.is_empty() {
             return None;
         }
         Some(Arc::new(exclusion_clip::ShellExclusionClipCtx {
-            zones: Arc::from(zones.into_boxed_slice()),
+            zones: Arc::from(filtered.into_boxed_slice()),
             output_logical: Rectangle::new(out_geo.loc, out_geo.size),
             scale_f: output.current_scale().fractional_scale(),
         }))

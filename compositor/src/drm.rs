@@ -27,6 +27,8 @@ use smithay::backend::{
 };
 use smithay::desktop::space::space_render_elements;
 
+use crate::derp_space_render;
+
 use crate::derp_space::DerpSpaceElem;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::{
@@ -154,108 +156,120 @@ impl DrmHead {
                 }
             };
 
-            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
-                match space_render_elements(renderer, [&state.space], output, 1.0) {
-                    Ok(space_els) => {
-                        type Desk<'a> = DesktopStack<
-                            'a,
-                            <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
-                        >;
-                        let output_scale = output.current_scale().fractional_scale();
-                        let mut render_elements: Vec<Desk<'_>> =
-                            Vec::with_capacity(space_els.len() + 3);
-                        pointer_render::append_pointer_desktop_elements(
-                            state,
-                            renderer,
-                            output,
-                            &mut render_elements,
-                        );
-                        let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
-                            state, renderer, output,
-                        ) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(
-                                    target: "derp_shell_dmabuf",
-                                    ?e,
-                                    "DRM render path: shell context-menu dma-buf layer skipped"
-                                );
-                                None
-                            }
-                        };
-                        let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
-                            state, renderer, output,
-                        ) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(
-                                    target: "derp_shell_dmabuf",
-                                    ?e,
-                                    "DRM render path: shell dma-buf layer skipped (details on this target above)"
-                                );
-                                None
-                            }
-                        };
-                        let excl_ctx = state.shell_exclusion_clip_ctx(output);
-                        if state.shell_presentation_fullscreen {
-                            if let Some(ref el) = shell_menu {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            if let Some(ref el) = shell_dma {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            render_elements.extend(
-                                space_els.into_iter().map(|el| {
-                                    DesktopStack::Space(
-                                        crate::desktop_stack::FractionalDamageSpaceElements::new(
-                                            el, output_scale,
-                                        ),
-                                    )
-                                }),
-                            );
-                        } else {
-                            if let Some(ref el) = shell_menu {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            match &excl_ctx {
-                                None => render_elements.extend(space_els.into_iter().map(|el| {
-                                    DesktopStack::Space(
-                                        crate::desktop_stack::FractionalDamageSpaceElements::new(
-                                            el, output_scale,
-                                        ),
-                                    )
-                                })),
-                                Some(ctx) => render_elements.extend(space_els.into_iter().map(|el| {
-                                    DesktopStack::SpaceClip(SpaceExclusionClip::new(
-                                        el,
-                                        output_scale,
-                                        ctx.clone(),
-                                    ))
-                                })),
-                            }
-                            if let Some(ref el) = shell_dma {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                        }
+            type Desk<'a> = DesktopStack<
+                'a,
+                <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
+            >;
+            let output_scale = output.current_scale().fractional_scale();
 
-                        let age_for_render = if state.shell_exclusion_zones_need_full_damage {
-                            0usize
-                        } else {
-                            buffer_age as usize
-                        };
-                        let out = self.damage_tracker.render_output(
-                            renderer,
-                            &mut fb_target,
-                            age_for_render,
-                            &render_elements,
-                            [0.1, 0.1, 0.1, 1.0],
-                        );
-                        if out.is_ok() {
-                            state.shell_exclusion_zones_need_full_damage = false;
+            let mut render_elements: Vec<Desk<'_>> = Vec::new();
+            pointer_render::append_pointer_desktop_elements(state, renderer, output, &mut render_elements);
+            let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
+                state, renderer, output,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        target: "derp_shell_dmabuf",
+                        ?e,
+                        "DRM render path: shell context-menu dma-buf layer skipped"
+                    );
+                    None
+                }
+            };
+            let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
+                state, renderer, output,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        target: "derp_shell_dmabuf",
+                        ?e,
+                        "DRM render path: shell dma-buf layer skipped (details on this target above)"
+                    );
+                    None
+                }
+            };
+
+            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
+                if state.shell_presentation_fullscreen {
+                    match space_render_elements(renderer, [&state.space], output, 1.0) {
+                        Ok(space_els) => {
+                            if let Some(ref el) = shell_menu {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
+                            if let Some(ref el) = shell_dma {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
+                            render_elements.extend(space_els.into_iter().map(|el| {
+                                DesktopStack::Space(
+                                    crate::desktop_stack::FractionalDamageSpaceElements::new(
+                                        el, output_scale,
+                                    ),
+                                )
+                            }));
+                            let age_for_render = if state.shell_exclusion_zones_need_full_damage {
+                                0usize
+                            } else {
+                                buffer_age as usize
+                            };
+                            let out = self.damage_tracker.render_output(
+                                renderer,
+                                &mut fb_target,
+                                age_for_render,
+                                &render_elements,
+                                [0.1, 0.1, 0.1, 1.0],
+                            );
+                            if out.is_ok() {
+                                state.shell_exclusion_zones_need_full_damage = false;
+                            }
+                            out
                         }
-                        out
+                        Err(e) => Err(e.into()),
                     }
-                    Err(e) => Err(e.into()),
+                } else {
+                    let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
+                        &state.space,
+                        state,
+                        renderer,
+                        output,
+                        1.0,
+                    );
+                    if let Some(ref el) = shell_menu {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
+                    for (el, wid) in tagged {
+                        let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(output, wid);
+                        match excl_ctx {
+                            None => render_elements.push(DesktopStack::Space(
+                                crate::desktop_stack::FractionalDamageSpaceElements::new(
+                                    el, output_scale,
+                                ),
+                            )),
+                            Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
+                                SpaceExclusionClip::new(el, output_scale, ctx),
+                            )),
+                        }
+                    }
+                    if let Some(ref el) = shell_dma {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
+                    let age_for_render = if state.shell_exclusion_zones_need_full_damage {
+                        0usize
+                    } else {
+                        buffer_age as usize
+                    };
+                    let out = self.damage_tracker.render_output(
+                        renderer,
+                        &mut fb_target,
+                        age_for_render,
+                        &render_elements,
+                        [0.1, 0.1, 0.1, 1.0],
+                    );
+                    if out.is_ok() {
+                        state.shell_exclusion_zones_need_full_damage = false;
+                    }
+                    out
                 };
 
             match render_res {
