@@ -24,10 +24,12 @@ export type ShellWindowModel = {
   maximized: boolean
   fullscreen: boolean
   client_side_decoration?: boolean
+  snap_tiled?: boolean
 }
 
 type ShellWindowFrameProps = {
   win: ShellWindowModel
+  repaintKey?: number
   focused: boolean
   stackZ: number
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
@@ -42,7 +44,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const th = csd ? 0 : CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
   const rh = CHROME_RESIZE_HANDLE_PX
-  const tiling = props.win.maximized || props.win.fullscreen
+  const tiling = props.win.maximized || props.win.fullscreen || !!props.win.snap_tiled
   const inset = tiling ? 0 : bd
   const outerW = props.win.width + inset * 2
 
@@ -56,6 +58,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
 
   return (
     <div
+      data-shell-repaint={props.repaintKey ?? 0}
       class="pointer-events-none box-border"
       style={{
         position: 'fixed',
@@ -82,10 +85,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       <Show when={!csd}>
         <div
           class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
-          classList={{
-            'rounded-t-md': !tiling,
-            'rounded-none': tiling,
-          }}
           style={{
             top: `${inset}px`,
             height: `${th}px`,
@@ -128,7 +127,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
             <button
               type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
+              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
               title="Minimize window"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => props.onMinimize()}
@@ -137,7 +136,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             </button>
             <button
               type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
+              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
               title={props.win.maximized ? 'Restore' : 'Maximize'}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => props.onMaximize()}
@@ -168,7 +167,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             </button>
             <button
               type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
+              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
               title="Close window"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => props.onClose()}

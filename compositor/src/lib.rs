@@ -24,6 +24,7 @@ mod shell_ipc;
 mod shell_letterbox;
 mod shell_overlay;
 mod shell_render;
+mod tile_preview_render;
 pub mod sidecar;
 pub mod state;
 pub mod xwayland;

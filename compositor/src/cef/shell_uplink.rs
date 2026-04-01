@@ -177,6 +177,17 @@ fn handle_uplink_list(
             let gh = args.int(9) as u32;
             uplink.shell_context_menu(vis, bx, by, bw, bh, gx, gy, gw, gh);
         }
+        "set_tile_preview" => {
+            let vis = args.int(1) != 0;
+            let x = args.int(2);
+            let y = args.int(3);
+            let w = args.int(4);
+            let h = args.int(5);
+            uplink.shell_tile_preview_canvas(vis, x, y, w, h);
+        }
+        "set_chrome_metrics" => {
+            uplink.shell_chrome_metrics(args.int(1), args.int(2));
+        }
         "request_compositor_sync" => {
             uplink.shell_request_compositor_sync();
         }
@@ -578,9 +589,65 @@ wrap_v8_handler! {
                     let _ = list.set_int(8, gw);
                     let _ = list.set_int(9, gh);
                 }
+                "set_tile_preview" => {
+                    macro_rules! int_at_tp {
+                        ($idx:literal, $label:literal) => {{
+                            let Some(av) = args.get($idx).and_then(|a| a.as_ref()) else {
+                                return_exception!($label);
+                            };
+                            if av.is_int() != 0 {
+                                av.int_value()
+                            } else if av.is_uint() != 0 {
+                                av.uint_value() as i32
+                            } else if av.is_double() != 0 {
+                                av.double_value() as i32
+                            } else {
+                                return_exception!($label);
+                            }
+                        }};
+                    }
+                    let vis = int_at_tp!(1, "set_tile_preview: arg1 visible (0 or 1)");
+                    let x = int_at_tp!(2, "set_tile_preview: arg2 x");
+                    let y = int_at_tp!(3, "set_tile_preview: arg3 y");
+                    let w = int_at_tp!(4, "set_tile_preview: arg4 w");
+                    let h = int_at_tp!(5, "set_tile_preview: arg5 h");
+                    if vis < 0 || vis > 1 {
+                        return_exception!("set_tile_preview: visible must be 0 or 1");
+                    }
+                    let _ = list.set_int(1, vis);
+                    let _ = list.set_int(2, x);
+                    let _ = list.set_int(3, y);
+                    let _ = list.set_int(4, w);
+                    let _ = list.set_int(5, h);
+                }
+                "set_chrome_metrics" => {
+                    macro_rules! int_at_cm {
+                        ($idx:literal, $label:literal) => {{
+                            let Some(av) = args.get($idx).and_then(|a| a.as_ref()) else {
+                                return_exception!($label);
+                            };
+                            if av.is_int() != 0 {
+                                av.int_value()
+                            } else if av.is_uint() != 0 {
+                                av.uint_value() as i32
+                            } else if av.is_double() != 0 {
+                                av.double_value() as i32
+                            } else {
+                                return_exception!($label);
+                            }
+                        }};
+                    }
+                    let th = int_at_cm!(1, "set_chrome_metrics: arg1 titlebar height");
+                    let bd = int_at_cm!(2, "set_chrome_metrics: arg2 border width");
+                    if th < 0 || th > 256 || bd < 0 || bd > 64 {
+                        return_exception!("set_chrome_metrics: titlebar 0..=256 border 0..=64");
+                    }
+                    let _ = list.set_int(1, th);
+                    let _ = list.set_int(2, bd);
+                }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, request_compositor_sync, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_primary, set_ui_scale, context_menu)"
+                        "unknown op (use close, quit, request_compositor_sync, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, context_menu)"
                     );
                 }
             }

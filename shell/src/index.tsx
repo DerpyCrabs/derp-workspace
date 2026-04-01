@@ -6,3 +6,14 @@ import App from './App.tsx'
 const root = document.getElementById('root')
 
 render(() => <App />, root!)
+
+if (import.meta.hot) {
+  const resyncShellFromCompositor = () => {
+    queueMicrotask(() => {
+      const fn = window.__derpShellWireSend
+      if (typeof fn === 'function') fn('request_compositor_sync')
+    })
+  }
+  import.meta.hot.accept('./App.tsx', resyncShellFromCompositor)
+  import.meta.hot.accept('./ShellWindowFrame.tsx', resyncShellFromCompositor)
+}

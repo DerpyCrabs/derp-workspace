@@ -14,6 +14,7 @@ export type WindowChromeExclusionSource = {
   maximized: boolean
   fullscreen: boolean
   minimized: boolean
+  snap_tiled?: boolean
 }
 
 export function ssdDecorationExclusionRects(
@@ -23,7 +24,7 @@ export function ssdDecorationExclusionRects(
   if (w.client_side_decoration) return []
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
-  const tiling = w.maximized || w.fullscreen
+  const tiling = w.maximized || w.fullscreen || !!w.snap_tiled
   const inset = tiling ? 0 : bd
   const out: Array<{ x: number; y: number; w: number; h: number }> = []
   out.push({

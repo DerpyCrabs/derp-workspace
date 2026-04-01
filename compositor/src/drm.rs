@@ -164,6 +164,7 @@ impl DrmHead {
 
             let mut render_elements: Vec<Desk<'_>> = Vec::new();
             pointer_render::append_pointer_desktop_elements(state, renderer, output, &mut render_elements);
+            crate::tile_preview_render::append_tile_preview_for_output(state, output, &mut render_elements);
             let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
                 state, renderer, output,
             ) {

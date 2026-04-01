@@ -11,12 +11,24 @@ import {
 } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import {
+  CHROME_BORDER_PX,
   CHROME_TASKBAR_RESERVE_PX,
   CHROME_TITLEBAR_PX,
+  SHELL_LAYOUT_FLOATING,
   SHELL_LAYOUT_MAXIMIZED,
 } from './chromeConstants'
 import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './exclusionRects'
 import { ShellWindowFrame } from './ShellWindowFrame'
+import {
+  canvasOriginXY,
+  clientPointToCanvasLocal,
+  clientPointToGlobalLogical,
+  pickScreenContainingGlobalPoint,
+  pickScreenForWindow,
+  rectCanvasLocalToGlobal,
+  rectGlobalToCanvasLocal,
+} from './shellCoords'
+import { snapRectGlobalForPointerOnMonitor } from './tileSnap'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
 import {
@@ -54,6 +66,8 @@ declare global {
         | 'set_exclusion_zones'
         | 'set_shell_primary'
         | 'set_ui_scale'
+        | 'set_tile_preview'
+        | 'set_chrome_metrics'
         | 'context_menu',
       arg?: number | string,
       arg2?: number,
@@ -94,14 +108,19 @@ function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boo
   }
 }
 
-function screensListForLayout(rows: LayoutScreen[], canvas: { w: number; h: number } | null): LayoutScreen[] {
+function screensListForLayout(
+  rows: LayoutScreen[],
+  canvas: { w: number; h: number } | null,
+  origin: { x: number; y: number } | null,
+): LayoutScreen[] {
   if (rows.length > 0) return rows
   if (canvas && canvas.w > 0 && canvas.h > 0) {
+    const { ox, oy } = canvasOriginXY(origin)
     return [
       {
         name: '',
-        x: 0,
-        y: 0,
+        x: ox,
+        y: oy,
         refresh_milli_hz: 0,
         width: canvas.w,
         height: canvas.h,
@@ -214,23 +233,6 @@ type DerpWindow = {
   client_side_decoration?: boolean
 }
 
-function pickScreenForWindowGlobal(win: DerpWindow, list: LayoutScreen[]): LayoutScreen | null {
-  if (list.length === 0) return null
-  const cx = win.x + Math.floor(win.width / 2)
-  const cy = win.y + Math.floor(win.height / 2)
-  for (const s of list) {
-    if (
-      cx >= s.x &&
-      cy >= s.y &&
-      cx < s.x + s.width &&
-      cy < s.y + s.height
-    ) {
-      return s
-    }
-  }
-  return list[0]
-}
-
 /** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
 function coerceShellWindowId(raw: unknown): number | null {
   if (raw == null || raw === '') return null
@@ -241,7 +243,22 @@ function coerceShellWindowId(raw: unknown): number | null {
   return t > 0 ? t : null
 }
 
-function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
+function coerceOptionalClientSideDecoration(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (raw === true || raw === 1) return true
+  if (raw === false || raw === 0) return false
+  if (typeof raw === 'string') {
+    if (raw === '1' || raw === 'true') return true
+    if (raw === '0' || raw === 'false') return false
+  }
+  if (typeof raw === 'number') return raw !== 0
+  return !!raw
+}
+
+function buildWindowsMapFromList(
+  raw: unknown,
+  prev?: Map<number, DerpWindow>,
+): Map<number, DerpWindow> {
   const next = new Map<number, DerpWindow>()
   if (!Array.isArray(raw)) return next
   for (const row of raw) {
@@ -250,6 +267,11 @@ function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
     const wid = coerceShellWindowId(r.window_id)
     const sid = coerceShellWindowId(r.surface_id)
     if (wid === null || sid === null) continue
+    const csdExplicit = coerceOptionalClientSideDecoration(r.client_side_decoration)
+    const csd =
+      csdExplicit !== undefined
+        ? csdExplicit
+        : (prev?.get(wid)?.client_side_decoration ?? false)
     next.set(wid, {
       window_id: wid,
       surface_id: sid,
@@ -262,7 +284,7 @@ function buildWindowsMapFromList(raw: unknown): Map<number, DerpWindow> {
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
-      client_side_decoration: !!r.client_side_decoration,
+      client_side_decoration: csd,
     })
   }
   return next
@@ -341,6 +363,15 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
   return next
 }
 
+const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
+const tileRestore = new Map<number, { x: number; y: number; w: number; h: number }>()
+const shellTiled = new Set<number>()
+const dragPreTileSnapshot = new Map<number, { x: number; y: number; w: number; h: number }>()
+let activeSnapDropCanvas: { x: number; y: number; w: number; h: number } | null = null
+let activeSnapPreviewCanvas: { x: number; y: number; w: number; h: number } | null = null
+let tilePreviewRaf = 0
+let lastTilePreviewKey = ''
+
 /** Ruler insets — match corner cell (w×h) and ruler bar placement in App layout. */
 const RULER_GUTTER_X = 28
 const RULER_GUTTER_Y = 22
@@ -415,7 +446,9 @@ function shellWireSend(
     | 'set_output_layout'
     | 'set_exclusion_zones'
     | 'set_shell_primary'
-    | 'set_ui_scale',
+    | 'set_ui_scale'
+    | 'set_tile_preview'
+    | 'set_chrome_metrics',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -468,6 +501,17 @@ function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
     fn(op, arg)
+  } else if (
+    op === 'set_tile_preview' &&
+    typeof arg === 'number' &&
+    arg2 !== undefined &&
+    arg3 !== undefined &&
+    arg4 !== undefined &&
+    arg5 !== undefined
+  ) {
+    fn(op, arg, arg2, arg3, arg4, arg5)
+  } else if (op === 'set_chrome_metrics' && typeof arg === 'number' && arg2 !== undefined) {
+    fn(op, arg, arg2)
   } else {
     fn(op, arg)
   }
@@ -545,6 +589,7 @@ function App() {
     y: number
     alignAboveY?: number
   }>({ x: 0, y: 0 })
+  const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
 
   const rulerStepPx = 100
@@ -734,14 +779,18 @@ function App() {
     for (const decoWin of windowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       if (decoWin.minimized || decoWin.client_side_decoration) continue
-      const deco = ssdDecorationExclusionRects(decoWin)
+      const deco = ssdDecorationExclusionRects({
+        ...decoWin,
+        snap_tiled: shellTiled.has(decoWin.window_id),
+      })
       const room = Math.max(0, SHELL_EXCLUSION_ZONES_SENT_MAX - rects.length)
       const decoUsed = deco.slice(0, room)
       for (let i = 0; i < decoUsed.length; i++) {
         const r = decoUsed[i]
         const tag = stripLabels[i] ?? `${i}`
-        hud.push({ label: `w${decoWin.window_id}-deco-${tag}`, ...r })
-        rects.push({ ...r, window_id: decoWin.window_id })
+        const z = rectCanvasLocalToGlobal(r.x, r.y, r.w, r.h, co)
+        hud.push({ label: `w${decoWin.window_id}-deco-${tag}`, x: z.x, y: z.y, w: z.w, h: z.h })
+        rects.push({ x: z.x, y: z.y, w: z.w, h: z.h, window_id: decoWin.window_id })
       }
     }
     setExclusionZonesHud(hud)
@@ -761,6 +810,10 @@ function App() {
     })
   }
 
+  function bumpSnapChrome() {
+    setSnapChromeRev((n) => n + 1)
+  }
+
   /** Local-only draggable box. CEF OSR often delivers mouse events to `window` more reliably than `PointerEvent` + capture on a node. */
   const [dragDemoPos, setDragDemoPos] = createSignal({ x: 48, y: 96 })
   let dragDemoGrab: { offsetX: number; offsetY: number } | null = null
@@ -773,10 +826,128 @@ function App() {
   let shellWindowResize: { windowId: number; lastX: number; lastY: number } | null = null
   let shellResizeDeltaLogSeq = 0
 
+  function flushTilePreviewWire() {
+    tilePreviewRaf = 0
+    const snap = activeSnapPreviewCanvas
+    if (!snap) {
+      if (lastTilePreviewKey !== '0') {
+        lastTilePreviewKey = '0'
+        shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+      }
+      return
+    }
+    const k = `${snap.x},${snap.y},${snap.w},${snap.h}`
+    if (k !== lastTilePreviewKey) {
+      lastTilePreviewKey = k
+      shellWireSend('set_tile_preview', 1, snap.x, snap.y, snap.w, snap.h)
+    }
+  }
+
+  function scheduleTilePreviewSync() {
+    if (tilePreviewRaf) return
+    tilePreviewRaf = requestAnimationFrame(() => flushTilePreviewWire())
+  }
+
   function beginShellWindowMove(windowId: number, clientX: number, clientY: number) {
     if (shellWindowResize !== null) return
     shellMoveLog('titlebar_begin_request', { windowId, clientX, clientY })
     shellMoveDeltaLogSeq = 0
+    activeSnapDropCanvas = null
+    activeSnapPreviewCanvas = null
+    lastTilePreviewKey = ''
+    if (tilePreviewRaf) {
+      cancelAnimationFrame(tilePreviewRaf)
+      tilePreviewRaf = 0
+    }
+    shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+    const main = mainRef
+    const og = outputGeom()
+    const w = windows().get(windowId)
+    if (main && og && w) {
+      const mainRect = main.getBoundingClientRect()
+      const ptrCl = clientPointToCanvasLocal(clientX, clientY, mainRect, og.w, og.h)
+      const co = layoutCanvasOrigin()
+      if (w.maximized) {
+        const rest = floatBeforeMaximize.get(windowId) ?? {
+          x: w.x,
+          y: w.y,
+          w: Math.max(360, Math.floor(w.width * 0.55)),
+          h: Math.max(280, Math.floor(w.height * 0.55)),
+        }
+        const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
+        const globPtr = clientPointToGlobalLogical(clientX, clientY, mainRect, og.w, og.h, co)
+        const mon =
+          pickScreenContainingGlobalPoint(globPtr.x, globPtr.y, list) ?? list[0] ?? null
+        let maxCanvasX = w.x
+        let maxCanvasY = w.y
+        if (mon) {
+          const prim = workspacePartition().primary
+          const reserveTb =
+            !!prim &&
+            mon.x === prim.x &&
+            mon.y === prim.y &&
+            mon.width === prim.width &&
+            mon.height === prim.height
+          const mg = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
+          const loc = rectGlobalToCanvasLocal(mg.x, mg.y, mg.w, mg.h, co)
+          maxCanvasX = loc.x
+          maxCanvasY = loc.y
+        }
+        const grabDx = ptrCl.x - maxCanvasX
+        const grabDy = ptrCl.y - maxCanvasY
+        const nx = ptrCl.x - grabDx + CHROME_BORDER_PX
+        const ny = ptrCl.y - grabDy + CHROME_BORDER_PX
+        shellWireSend('set_geometry', windowId, nx, ny, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
+        floatBeforeMaximize.delete(windowId)
+        setWindows((m) => {
+          const cur = m.get(windowId)
+          if (!cur) return m
+          const next = new Map(m)
+          next.set(windowId, {
+            ...cur,
+            x: nx,
+            y: ny,
+            width: rest.w,
+            height: rest.h,
+            maximized: false,
+          })
+          return next
+        })
+        dragPreTileSnapshot.set(windowId, { x: nx, y: ny, w: rest.w, h: rest.h })
+        scheduleExclusionZonesSync()
+        bumpSnapChrome()
+      } else if (shellTiled.has(windowId)) {
+        const tr = tileRestore.get(windowId)
+        if (tr) {
+          const grabDx = ptrCl.x - w.x
+          const grabDy = ptrCl.y - w.y
+          const nx = ptrCl.x - grabDx + CHROME_BORDER_PX
+          const ny = ptrCl.y - grabDy + CHROME_BORDER_PX
+          shellWireSend('set_geometry', windowId, nx, ny, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
+          setWindows((m) => {
+            const cur = m.get(windowId)
+            if (!cur) return m
+            const next = new Map(m)
+            next.set(windowId, {
+              ...cur,
+              x: nx,
+              y: ny,
+              width: tr.w,
+              height: tr.h,
+              maximized: false,
+            })
+            return next
+          })
+        }
+        shellTiled.delete(windowId)
+        tileRestore.delete(windowId)
+        dragPreTileSnapshot.set(windowId, tr ?? { x: w.x, y: w.y, w: w.width, h: w.height })
+        scheduleExclusionZonesSync()
+        bumpSnapChrome()
+      } else {
+        dragPreTileSnapshot.set(windowId, { x: w.x, y: w.y, w: w.width, h: w.height })
+      }
+    }
     if (!shellWireSend('move_begin', windowId)) {
       shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
       return
@@ -814,6 +985,39 @@ function App() {
     })
     shellWindowDrag.lastX = cx
     shellWindowDrag.lastY = cy
+    const main = mainRef
+    const og = outputGeom()
+    const co = layoutCanvasOrigin()
+    if (!main || !og) return
+    const mainRect = main.getBoundingClientRect()
+    const glob = clientPointToGlobalLogical(cx, cy, mainRect, og.w, og.h, co)
+    const list = screenDraft.rows
+    if (list.length === 0) {
+      activeSnapDropCanvas = null
+      activeSnapPreviewCanvas = null
+      scheduleTilePreviewSync()
+      return
+    }
+    const mon = pickScreenContainingGlobalPoint(glob.x, glob.y, list) ?? list[0] ?? null
+    if (!mon) {
+      activeSnapDropCanvas = null
+      activeSnapPreviewCanvas = null
+      scheduleTilePreviewSync()
+      return
+    }
+    const prim = workspacePartition().primary
+    const snapG = snapRectGlobalForPointerOnMonitor(glob.x, glob.y, mon, prim)
+    if (!snapG) {
+      activeSnapDropCanvas = null
+      activeSnapPreviewCanvas = null
+      scheduleTilePreviewSync()
+      return
+    }
+    activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
+    const th = CHROME_TITLEBAR_PX
+    const previewG = { x: snapG.x, y: snapG.y - th, w: snapG.w, h: snapG.h + th }
+    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
+    scheduleTilePreviewSync()
   }
 
   function endShellWindowMove(reason: string) {
@@ -821,6 +1025,38 @@ function App() {
     const id = shellWindowDrag.windowId
     shellMoveLog('titlebar_end', { windowId: id, reason })
     shellWindowDrag = null
+    const snap = activeSnapDropCanvas
+    activeSnapDropCanvas = null
+    activeSnapPreviewCanvas = null
+    if (tilePreviewRaf) {
+      cancelAnimationFrame(tilePreviewRaf)
+      tilePreviewRaf = 0
+    }
+    lastTilePreviewKey = ''
+    shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+    if (snap) {
+      const pre = dragPreTileSnapshot.get(id)
+      if (pre) tileRestore.set(id, pre)
+      shellTiled.add(id)
+      shellWireSend('set_geometry', id, snap.x, snap.y, snap.w, snap.h, SHELL_LAYOUT_FLOATING)
+      setWindows((m) => {
+        const cur = m.get(id)
+        if (!cur) return m
+        const next = new Map(m)
+        next.set(id, {
+          ...cur,
+          x: snap.x,
+          y: snap.y,
+          width: snap.w,
+          height: snap.h,
+          maximized: false,
+        })
+        return next
+      })
+      scheduleExclusionZonesSync()
+      bumpSnapChrome()
+    }
+    dragPreTileSnapshot.delete(id)
     shellWireSend('move_end', id)
   }
 
@@ -919,6 +1155,9 @@ function App() {
       }
     }
     queueMicrotask(tryRequestCompositorSync)
+    queueMicrotask(() => {
+      shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
+    })
 
     const onDerpShell = (ev: Event) => {
       const ce = ev as CustomEvent<DerpShellDetail>
@@ -995,7 +1234,7 @@ function App() {
         return
       }
       if (d.type === 'window_list') {
-        setWindows(buildWindowsMapFromList(d.windows))
+        setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
         return
       }
       if (d.type === 'window_state') {
@@ -1378,7 +1617,8 @@ function App() {
         {(win) => (
           <Show when={!win().minimized}>
             <ShellWindowFrame
-              win={win()}
+              win={{ ...win(), snap_tiled: shellTiled.has(win().window_id) }}
+              repaintKey={snapChromeRev()}
               stackZ={
                 20 +
                 win().window_id +
@@ -1398,8 +1638,13 @@ function App() {
                   shellWireSend('set_maximized', w.window_id, 0)
                   return
                 }
-                const list = screensListForLayout(screenDraft.rows, outputGeom())
-                const mon = pickScreenForWindowGlobal(w, list) ?? list[0] ?? null
+                shellTiled.delete(w.window_id)
+                tileRestore.delete(w.window_id)
+                bumpSnapChrome()
+                scheduleExclusionZonesSync()
+                floatBeforeMaximize.set(w.window_id, { x: w.x, y: w.y, w: w.width, h: w.height })
+                const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
+                const mon = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
                 if (!mon) return
                 const prim = workspacePartition().primary
                 const reserveTb =

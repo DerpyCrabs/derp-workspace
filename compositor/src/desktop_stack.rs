@@ -11,6 +11,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{
     element::{
         memory::MemoryRenderBufferRenderElement,
+        solid::SolidColorRenderElement,
         surface::WaylandSurfaceRenderElement,
         Element, Id, Kind, RenderElement, UnderlyingStorage,
     },
@@ -476,6 +477,7 @@ where
     ShellDma(&'a ShellDmaElement),
     Pointer(FractionalDamageElement<WaylandSurfaceRenderElement<GlesRenderer>>),
     CursorTex(FractionalDamageElement<ShellCursorElement>),
+    TilePreview(SolidColorRenderElement),
     #[doc(hidden)]
     _Catcher(Infallible),
 }
@@ -491,6 +493,7 @@ where
             DesktopStack::ShellDma(x) => (*x).id(),
             DesktopStack::Pointer(x) => x.id(),
             DesktopStack::CursorTex(x) => x.id(),
+            DesktopStack::TilePreview(x) => x.id(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -502,6 +505,7 @@ where
             DesktopStack::ShellDma(x) => (*x).current_commit(),
             DesktopStack::Pointer(x) => x.current_commit(),
             DesktopStack::CursorTex(x) => x.current_commit(),
+            DesktopStack::TilePreview(x) => x.current_commit(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -513,6 +517,7 @@ where
             DesktopStack::ShellDma(x) => (*x).location(scale),
             DesktopStack::Pointer(x) => x.location(scale),
             DesktopStack::CursorTex(x) => x.location(scale),
+            DesktopStack::TilePreview(x) => x.location(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -524,6 +529,7 @@ where
             DesktopStack::ShellDma(x) => (*x).src(),
             DesktopStack::Pointer(x) => x.src(),
             DesktopStack::CursorTex(x) => x.src(),
+            DesktopStack::TilePreview(x) => x.src(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -535,6 +541,7 @@ where
             DesktopStack::ShellDma(x) => (*x).transform(),
             DesktopStack::Pointer(x) => x.transform(),
             DesktopStack::CursorTex(x) => x.transform(),
+            DesktopStack::TilePreview(x) => x.transform(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -546,6 +553,7 @@ where
             DesktopStack::ShellDma(x) => (*x).geometry(scale),
             DesktopStack::Pointer(x) => x.geometry(scale),
             DesktopStack::CursorTex(x) => x.geometry(scale),
+            DesktopStack::TilePreview(x) => x.geometry(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -561,6 +569,7 @@ where
             DesktopStack::ShellDma(x) => (*x).damage_since(scale, commit),
             DesktopStack::Pointer(x) => x.damage_since(scale, commit),
             DesktopStack::CursorTex(x) => x.damage_since(scale, commit),
+            DesktopStack::TilePreview(x) => x.damage_since(scale, commit),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -572,6 +581,7 @@ where
             DesktopStack::ShellDma(x) => (*x).opaque_regions(scale),
             DesktopStack::Pointer(x) => x.opaque_regions(scale),
             DesktopStack::CursorTex(x) => x.opaque_regions(scale),
+            DesktopStack::TilePreview(x) => x.opaque_regions(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -583,6 +593,7 @@ where
             DesktopStack::ShellDma(x) => (*x).alpha(),
             DesktopStack::Pointer(x) => x.alpha(),
             DesktopStack::CursorTex(x) => x.alpha(),
+            DesktopStack::TilePreview(x) => x.alpha(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -594,6 +605,7 @@ where
             DesktopStack::ShellDma(x) => (*x).kind(),
             DesktopStack::Pointer(x) => x.kind(),
             DesktopStack::CursorTex(x) => x.kind(),
+            DesktopStack::TilePreview(x) => x.kind(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -619,6 +631,9 @@ where
             }
             DesktopStack::Pointer(x) => x.draw(frame, src, dst, damage, opaque_regions),
             DesktopStack::CursorTex(x) => x.draw(frame, src, dst, damage, opaque_regions),
+            DesktopStack::TilePreview(x) => {
+                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+            }
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -633,6 +648,7 @@ where
             DesktopStack::ShellDma(x) => (*x).underlying_storage(renderer),
             DesktopStack::Pointer(x) => x.underlying_storage(renderer),
             DesktopStack::CursorTex(x) => x.underlying_storage(renderer),
+            DesktopStack::TilePreview(x) => x.underlying_storage(renderer),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }

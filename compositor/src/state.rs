@@ -13,8 +13,10 @@ use smithay::{
     backend::allocator::{Format, Fourcc, Modifier},
     backend::input::{KeyState, TouchSlot},
     backend::renderer::{
+        element::solid::SolidColorBuffer,
         gles::GlesRenderer,
         utils::CommitCounter,
+        Color32F,
         ImportDma,
     },
     backend::{
@@ -338,6 +340,10 @@ pub struct CompositorState {
     pub(crate) shell_context_menu_atlas_buffer_h: u32,
     pub(crate) shell_context_menu_overlay_id: Id,
     pub(crate) shell_context_menu: Option<ShellContextMenuPlacement>,
+    pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
+    pub(crate) tile_preview_solid: SolidColorBuffer,
+    pub(crate) shell_chrome_titlebar_h: i32,
+    pub(crate) shell_chrome_border_w: i32,
 }
 
 
@@ -513,9 +519,40 @@ impl CompositorState {
             shell_context_menu_atlas_buffer_h: 0,
             shell_context_menu_overlay_id: Id::new(),
             shell_context_menu: None,
+            tile_preview_rect_global: None,
+            tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
+            shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
+            shell_chrome_border_w: SHELL_BORDER_THICKNESS,
         };
 
         s
+    }
+
+    pub fn apply_shell_tile_preview_canvas(
+        &mut self,
+        visible: bool,
+        lx: i32,
+        ly: i32,
+        lw: i32,
+        lh: i32,
+    ) {
+        if !visible || lw < 1 || lh < 1 {
+            self.tile_preview_rect_global = None;
+        } else if let Some((gx, gy, gw, gh)) =
+            self.shell_output_local_rect_to_logical_global(lx, ly, lw, lh)
+        {
+            self.tile_preview_rect_global = Some(Rectangle::new(
+                Point::<i32, Logical>::from((gx, gy)),
+                Size::<i32, Logical>::from((gw, gh)),
+            ));
+        }
+        self.shell_exclusion_zones_need_full_damage = true;
+        self.shell_dmabuf_dirty_force_full = true;
+    }
+
+    pub fn apply_shell_chrome_metrics(&mut self, titlebar_h: i32, border_w: i32) {
+        self.shell_chrome_titlebar_h = titlebar_h.clamp(0, 256);
+        self.shell_chrome_border_w = border_w.clamp(0, 64);
     }
 
     pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
@@ -977,7 +1014,7 @@ impl CompositorState {
             )
         };
 
-        let min_y_client = geo.loc.y.saturating_add(SHELL_TITLEBAR_HEIGHT);
+        let min_y_client = geo.loc.y.saturating_add(self.shell_chrome_titlebar_h);
         let max_y_client = geo
             .loc
             .y
@@ -2833,9 +2870,7 @@ impl CompositorState {
             }
         }
 
-        let csd = Self::wayland_window_has_client_side_decoration(&window);
-        let (map_x, map_y, content_w, content_h) =
-            Self::wayland_toplevel_map_and_content_for_shell_frame(&window, csd, x, y, w, h);
+        let (map_x, map_y, content_w, content_h) = (x, y, w.max(1), h.max(1));
 
         let tl = window.toplevel().unwrap();
         tl.with_pending_state(|state| {

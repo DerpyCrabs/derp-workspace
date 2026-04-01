@@ -161,6 +161,25 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_tile_preview_canvas(
+        &self,
+        visible: bool,
+        lx: i32,
+        ly: i32,
+        lw: i32,
+        lh: i32,
+    ) {
+        self.run(move |s| {
+            s.apply_shell_tile_preview_canvas(visible, lx, ly, lw, lh);
+        });
+    }
+
+    pub fn shell_chrome_metrics(&self, titlebar_h: i32, border_w: i32) {
+        self.run(move |s| {
+            s.apply_shell_chrome_metrics(titlebar_h, border_w);
+        });
+    }
+
     pub fn shell_request_compositor_sync(&self) {
         self.run(move |s| {
             s.shell_on_shell_client_connected();

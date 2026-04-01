@@ -20,7 +20,7 @@
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
-//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
+//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
 //! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
@@ -88,6 +88,8 @@ pub const MSG_SHELL_SET_OUTPUT_LAYOUT: u32 = 45;
 pub const MSG_SHELL_CONTEXT_MENU: u32 = 46;
 /// Compositor → shell: close context menu (e.g. click outside); shell must hide UI without echoing [`MSG_SHELL_CONTEXT_MENU`].
 pub const MSG_COMPOSITOR_CONTEXT_MENU_DISMISS: u32 = 47;
+pub const MSG_SHELL_TILE_PREVIEW: u32 = 48;
+pub const MSG_SHELL_CHROME_METRICS: u32 = 49;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -765,6 +767,29 @@ pub fn encode_shell_quit_compositor() -> Vec<u8> {
     v
 }
 
+pub fn encode_shell_tile_preview(visible: bool, x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
+    let body_len = 24u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_TILE_PREVIEW.to_le_bytes());
+    v.extend_from_slice(&(if visible { 1u32 } else { 0 }).to_le_bytes());
+    v.extend_from_slice(&x.to_le_bytes());
+    v.extend_from_slice(&y.to_le_bytes());
+    v.extend_from_slice(&width.to_le_bytes());
+    v.extend_from_slice(&height.to_le_bytes());
+    v
+}
+
+pub fn encode_shell_chrome_metrics(titlebar_h: i32, border_w: i32) -> Vec<u8> {
+    let body_len = 12u32;
+    let mut v = Vec::with_capacity(20);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_CHROME_METRICS.to_le_bytes());
+    v.extend_from_slice(&titlebar_h.to_le_bytes());
+    v.extend_from_slice(&border_w.to_le_bytes());
+    v
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedMessage {
     /// CEF accelerated OSR: Linux dma-buf. Import [`FrameDmabufPlane`] fds after decode (same `recvmsg`).
@@ -848,6 +873,17 @@ pub enum DecodedMessage {
         gy: i32,
         gw: u32,
         gh: u32,
+    },
+    ShellTilePreview {
+        visible: bool,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+    ShellChromeMetrics {
+        titlebar_h: i32,
+        border_w: i32,
     },
 }
 
@@ -1401,7 +1437,9 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_TASKBAR_ACTIVATE
         | MSG_SHELL_MINIMIZE
         | MSG_SHELL_QUIT_COMPOSITOR
-        | MSG_SHELL_PONG => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_PONG
+        | MSG_SHELL_TILE_PREVIEW
+        | MSG_SHELL_CHROME_METRICS => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -1697,6 +1735,40 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 gy,
                 gw,
                 gh,
+            })
+        }
+        MSG_SHELL_TILE_PREVIEW => {
+            if body.len() != 24 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let vis = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            if vis > 1 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let x = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let y = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let width = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let height = i32::from_le_bytes(body[20..24].try_into().unwrap());
+            Ok(DecodedMessage::ShellTilePreview {
+                visible: vis != 0,
+                x,
+                y,
+                width,
+                height,
+            })
+        }
+        MSG_SHELL_CHROME_METRICS => {
+            if body.len() != 12 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let titlebar_h = i32::from_le_bytes(body[4..8].try_into().unwrap());
+            let border_w = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            if titlebar_h < 0 || titlebar_h > 256 || border_w < 0 || border_w > 64 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            Ok(DecodedMessage::ShellChromeMetrics {
+                titlebar_h,
+                border_w,
             })
         }
         _ => Err(DecodeError::UnknownMsgType),
