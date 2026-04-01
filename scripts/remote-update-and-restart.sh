@@ -9,8 +9,8 @@
 # derp-session re-sources it on every compositor start, including each SIGUSR2 reload.
 #
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
-# REMOTE_HOST, REMOTE_REPO. quick_shell / sync_only skip remote npm by default (HMR / external Vite).
-# Set DERP_REMOTE_BUILD_SHELL=1 to run install-system-run.sh --shell-only on quick_shell (file:// dist on remote).
+# REMOTE_HOST, REMOTE_REPO. quick_shell runs remote npm ci + build by default (tar excludes node_modules).
+# Set DERP_REMOTE_BUILD_SHELL=0 to skip remote npm (HMR: Vite on a dev machine).
 #
 # Auto mode compares the working tree to scripts/.derp-remote-update-snapshot (gitignored), not git:
 # uncommitted edits and multiple pushes between commits are detected from file contents.
@@ -60,7 +60,7 @@ derp_remote_list_full_paths() {
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done
-    for f in Cargo.toml Cargo.lock scripts/derp-session.sh scripts/install-system-run.sh; do
+    for f in Cargo.toml Cargo.lock scripts/derp-session.sh scripts/install-system-run.sh scripts/remote-update-and-restart.sh; do
       [[ -f "$f" ]] && printf '%s\n' "$f"
     done
   ) | LC_ALL=C sort -u
@@ -153,10 +153,10 @@ SKIP_REMOTE_INSTALL=0
 if [[ "$SYNC_ONLY" -eq 1 ]]; then
   SKIP_REMOTE_INSTALL=1
 elif [[ "$QUICK_SHELL" -eq 1 ]]; then
-  if [[ "${DERP_REMOTE_BUILD_SHELL:-0}" == "1" ]]; then
-    SKIP_REMOTE_INSTALL=0
-  else
+  if [[ "${DERP_REMOTE_BUILD_SHELL:-1}" == "0" ]]; then
     SKIP_REMOTE_INSTALL=1
+  else
+    SKIP_REMOTE_INSTALL=0
   fi
 fi
 
@@ -240,15 +240,17 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ "$SYNC_ONLY" -eq 1 ]]; then
       echo "Would: skip remote install-system-run.sh (sync_only)"
     else
-      echo "Would: skip remote install-system-run.sh (quick_shell default; DERP_REMOTE_BUILD_SHELL=1 for npm build on remote)"
+      echo "Would: skip remote install-system-run.sh (quick_shell + DERP_REMOTE_BUILD_SHELL=0)"
     fi
   else
     echo "Would: ssh … cd $REMOTE_REPO && bash scripts/install-system-run.sh $remote_install_args"
   fi
-  if [[ "$NO_RESTART" -eq 0 && "$UPDATE_CLASS" == full ]]; then
-    echo "Would: ssh … SIGUSR2 to compositor"
-  elif [[ "$NO_RESTART" -eq 0 ]]; then
-    echo "Would: skip SIGUSR2 (quick_shell or sync_only)"
+  if [[ "$NO_RESTART" -eq 0 ]]; then
+    if [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
+      echo "Would: ssh … SIGUSR2 to compositor"
+    else
+      echo "Would: skip SIGUSR2 (sync_only, or quick_shell with no remote install)"
+    fi
   fi
   exit 0
 fi
@@ -270,16 +272,18 @@ if [[ "$SKIP_REMOTE_INSTALL" -eq 1 ]]; then
   if [[ "$SYNC_ONLY" -eq 1 ]]; then
     echo "=== skip remote install (sync_only: same tree as snapshot after last successful run) ==="
   else
-    echo "=== skip remote install (quick_shell: tar only; DERP_REMOTE_BUILD_SHELL=1 for remote npm run build) ==="
+    echo "=== skip remote install (quick_shell + DERP_REMOTE_BUILD_SHELL=0: tar only) ==="
   fi
 else
   echo "=== remote install-system-run.sh ==="
   run_install
 fi
 
-if [[ "$NO_RESTART" -eq 0 && "$UPDATE_CLASS" == full ]]; then
-  echo "=== SIGUSR2 compositor (in-place restart) ==="
-  signal_compositor_restart
+if [[ "$NO_RESTART" -eq 0 ]]; then
+  if [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
+    echo "=== SIGUSR2 compositor (in-place restart) ==="
+    signal_compositor_restart
+  fi
 fi
 
 derp_remote_write_snapshot "$(derp_remote_digest_full)" "$(derp_remote_digest_shell)"

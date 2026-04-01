@@ -29,7 +29,7 @@ use smithay::{
         PopupManager, Window, WindowSurfaceType,
     },
     input::{
-        keyboard::{KeysymHandle, ModifiersState},
+        keyboard::{keysyms, KeysymHandle, ModifiersState},
         Seat, SeatState,
     },
     reexports::{
@@ -49,7 +49,7 @@ use smithay::{
         },
         wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
-    utils::{Buffer, Logical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
+    utils::{Buffer, Logical, Point, Rectangle, Serial, Size, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
@@ -284,6 +284,9 @@ pub struct CompositorState {
     pub(crate) touch_routes_to_cef: bool,
     /// Typing and shortcuts go to `cef_host` after interacting with the Solid shell layer.
     pub(crate) shell_ipc_keyboard_to_cef: bool,
+    /// Super key pressed; used with [`Self::programs_menu_super_chord`] for Programs menu tap detection.
+    pub(crate) programs_menu_super_armed: bool,
+    pub(crate) programs_menu_super_chord: bool,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
@@ -483,6 +486,8 @@ impl CompositorState {
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
             shell_ipc_keyboard_to_cef: false,
+            programs_menu_super_armed: false,
+            programs_menu_super_chord: false,
             shell_pointer_norm: None,
             shell_last_pointer_ipc_px: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
@@ -747,6 +752,20 @@ impl CompositorState {
         if let Some(link) = g.as_ref() {
             link.send(msg);
         }
+    }
+
+    pub(crate) fn programs_menu_toggle_from_super(&mut self, serial: Serial) {
+        tracing::debug!(target: "derp_shell_menu", "programs_menu_toggle_from_super");
+        self.space.elements().for_each(|e| {
+            e.set_activate(false);
+            if let DerpSpaceElem::Wayland(w) = e {
+                w.toplevel().unwrap().send_pending_configure();
+            }
+        });
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle);
     }
 
     pub(crate) fn accept_shell_dmabuf_from_cef(
@@ -3528,6 +3547,28 @@ impl CompositorState {
         f
     }
 
+    fn keysym_raw_to_windows_vkey(raw: u32) -> i32 {
+        match raw {
+            keysyms::KEY_BackSpace => 0x08,
+            keysyms::KEY_Tab => 0x09,
+            keysyms::KEY_ISO_Left_Tab => 0x09,
+            keysyms::KEY_Return => 0x0D,
+            keysyms::KEY_KP_Enter => 0x0D,
+            keysyms::KEY_Escape => 0x1B,
+            keysyms::KEY_Left => 0x25,
+            keysyms::KEY_Up => 0x26,
+            keysyms::KEY_Right => 0x27,
+            keysyms::KEY_Down => 0x28,
+            keysyms::KEY_Page_Up => 0x21,
+            keysyms::KEY_Page_Down => 0x22,
+            keysyms::KEY_Home => 0x24,
+            keysyms::KEY_End => 0x23,
+            keysyms::KEY_Insert => 0x2D,
+            keysyms::KEY_Delete => 0x2E,
+            _ => 0,
+        }
+    }
+
     pub(crate) fn shell_ipc_forward_keyboard_to_cef(
         &mut self,
         key_state: KeyState,
@@ -3540,35 +3581,35 @@ impl CompositorState {
         let sym = keysym.modified_sym();
         let mods_u = Self::cef_flags_from_modifiers(mods);
         let native = sym.raw() as i32;
+        let win_vk = Self::keysym_raw_to_windows_vkey(sym.raw());
         match key_state {
             KeyState::Pressed => {
                 self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
                     cef_key_type: shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
                     modifiers: mods_u,
-                    windows_key_code: 0,
+                    windows_key_code: win_vk,
                     native_key_code: native,
                     character: 0,
                     unmodified_character: 0,
                 });
-                if let Some(ch) = sym.key_char() {
-                    if !ch.is_control() {
-                        let cu = ch as u32;
-                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
-                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
-                            modifiers: mods_u,
-                            windows_key_code: 0,
-                            native_key_code: native,
-                            character: cu,
-                            unmodified_character: cu,
-                        });
-                    }
+                let printable = sym.key_char().filter(|c| !c.is_control());
+                if let Some(ch) = printable {
+                    let cu = ch as u32;
+                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                        cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                        modifiers: mods_u,
+                        windows_key_code: win_vk,
+                        native_key_code: native,
+                        character: cu,
+                        unmodified_character: cu,
+                    });
                 }
             }
             KeyState::Released => {
                 self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
                     cef_key_type: shell_wire::CEF_KEYEVENT_KEYUP,
                     modifiers: mods_u,
-                    windows_key_code: 0,
+                    windows_key_code: win_vk,
                     native_key_code: native,
                     character: 0,
                     unmodified_character: 0,

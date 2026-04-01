@@ -37,6 +37,7 @@ import {
   menuPlacementForCompositor,
   type ShellContextMenuItem,
 } from './contextMenu'
+import fuzzysort from 'fuzzysort'
 
 declare global {
   interface Window {
@@ -217,6 +218,14 @@ type DerpShellDetail =
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; windows: unknown[] }
   | { type: 'context_menu_dismiss' }
+  | { type: 'programs_menu_toggle' }
+
+type DesktopAppEntry = {
+  name: string
+  exec: string
+  terminal: boolean
+  desktop_id: string
+}
 
 type DerpWindow = {
   window_id: number
@@ -591,11 +600,22 @@ function App() {
   }>({ x: 0, y: 0 })
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
+  const [programsCatalog, setProgramsCatalog] = createStore<{ items: DesktopAppEntry[] }>({
+    items: [],
+  })
+  const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
+  const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
+  const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
+  const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
 
   const rulerStepPx = 100
 
   createEffect(() => {
-    if (!ctxMenuOpen()) setCtxMenuKind(null)
+    if (!ctxMenuOpen()) {
+      setCtxMenuKind(null)
+      setProgramsMenuQuery('')
+      setProgramsMenuHighlightIdx(0)
+    }
   })
 
   const canvasCss = createMemo(() => {
@@ -742,6 +762,7 @@ function App() {
   let mainRef: HTMLElement | undefined
   let menuAtlasHostRef: HTMLElement | undefined
   let menuPanelRef: HTMLElement | undefined
+  let programsMenuSearchRef: HTMLInputElement | undefined
   let exclusionZonesRaf = 0
 
   function syncExclusionZonesNow() {
@@ -1129,6 +1150,211 @@ function App() {
     dragDemoGrab = null
   }
 
+  async function spawnInCompositor(cmd: string, emptyMessage = 'Empty command.') {
+    const trimmed = cmd.trim()
+    if (!trimmed) {
+      setSpawnStatus(emptyMessage)
+      return
+    }
+    if (shellWireSend('spawn', trimmed)) {
+      setSpawnStatus(`Started: ${trimmed}`)
+      return
+    }
+    const url = window.__DERP_SPAWN_URL
+    if (!url) {
+      setSpawnStatus('Not running under cef_host (no spawn URL / wire).')
+      return
+    }
+    setSpawnBusy(true)
+    setSpawnStatus(null)
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: trimmed }),
+      })
+      const text = await res.text()
+      if (!res.ok) {
+        setSpawnStatus(`Spawn failed (${res.status}): ${text}`)
+        return
+      }
+      setSpawnStatus(`Started: ${trimmed}`)
+    } catch (e) {
+      setSpawnStatus(`Network error: ${e}`)
+    } finally {
+      setSpawnBusy(false)
+    }
+  }
+
+  async function runNativeInCompositor() {
+    setSpawnClicks((c) => c + 1)
+    await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
+  }
+
+  async function refreshProgramsMenuItems() {
+    const base = shellHttpBase()
+    if (!base) {
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      setProgramsCatalog('items', [])
+      setProgramsMenuErr('Programs list needs cef_host (no shell HTTP).')
+      setProgramsMenuBusy(false)
+      return
+    }
+    setProgramsMenuBusy(true)
+    setProgramsMenuErr(null)
+    try {
+      const res = await fetch(`${base}/desktop_applications`)
+      const text = await res.text()
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      if (!res.ok) {
+        setProgramsCatalog('items', [])
+        setProgramsMenuErr(
+          `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+        )
+        return
+      }
+      const data = JSON.parse(text) as {
+        apps?: Array<{ name: string; exec: string; terminal: boolean; desktop_id: string }>
+      }
+      const list = Array.isArray(data.apps) ? data.apps : []
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      setProgramsCatalog('items', list)
+      if (list.length === 0) {
+        setProgramsMenuErr(null)
+      }
+    } catch (e) {
+      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
+      setProgramsCatalog('items', [])
+      setProgramsMenuErr(`Network error: ${e}`)
+    } finally {
+      setProgramsMenuBusy(false)
+    }
+  }
+
+  function anchorProgramsMenuFromToggle() {
+    const el = document.querySelector('[data-shell-programs-toggle]')
+    if (el instanceof HTMLElement) {
+      const r = el.getBoundingClientRect()
+      setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
+    } else {
+      const v = viewportCss()
+      setCtxMenuAnchor({
+        x: 8,
+        y: Math.max(0, v.h - 48),
+        alignAboveY: Math.max(0, v.h - 56),
+      })
+    }
+  }
+
+  function openProgramsMenu() {
+    anchorProgramsMenuFromToggle()
+    setCtxMenuKind('programs')
+    setProgramsMenuBusy(true)
+    setProgramsMenuErr(null)
+    setProgramsCatalog('items', [])
+    setCtxMenuOpen(true)
+    setProgramsMenuQuery('')
+    setProgramsMenuHighlightIdx(0)
+    queueMicrotask(() => programsMenuSearchRef?.focus())
+    void refreshProgramsMenuItems()
+  }
+
+  function toggleProgramsMenuMeta() {
+    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
+      setCtxMenuOpen(false)
+      return
+    }
+    if (ctxMenuOpen() && ctxMenuKind() === 'demo') {
+      setCtxMenuOpen(false)
+    }
+    openProgramsMenu()
+  }
+
+  function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
+    e.preventDefault()
+    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
+      setCtxMenuOpen(false)
+      return
+    }
+    const r = e.currentTarget.getBoundingClientRect()
+    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
+    setCtxMenuKind('programs')
+    setProgramsMenuBusy(true)
+    setProgramsMenuErr(null)
+    setProgramsCatalog('items', [])
+    setCtxMenuOpen(true)
+    setProgramsMenuQuery('')
+    setProgramsMenuHighlightIdx(0)
+    queueMicrotask(() => programsMenuSearchRef?.focus())
+    void refreshProgramsMenuItems()
+  }
+
+  const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
+    if (!programsMenuOpen()) return []
+    if (programsMenuBusy()) return [{ label: 'Loading…', action: () => {} }]
+    const err = programsMenuErr()
+    if (err) return [{ label: err, action: () => {} }]
+    const q = programsMenuQuery().trim()
+    const raw = programsCatalog.items
+    if (raw.length === 0) return [{ label: 'No applications found.', action: () => {} }]
+    const rows =
+      q === ''
+        ? raw
+        : fuzzysort.go(q, raw, { key: 'name', threshold: -10000 }).map((x) => x.obj)
+    return rows.map((app) => ({
+      label: app.name,
+      badge: app.terminal ? 'tty' : undefined,
+      action: () => {
+        void spawnInCompositor(app.exec)
+      },
+    }))
+  })
+
+  const menuListItems = createMemo((): ShellContextMenuItem[] => {
+    if (ctxMenuKind() === 'programs') return programsMenuListItems()
+    return ctxMenuItems()
+  })
+
+  function programsMenuEnterShortcut(e: KeyboardEvent) {
+    return !e.repeat && !e.isComposing && e.key === 'Enter'
+  }
+
+  function activateProgramsMenuSelection() {
+    if (!programsMenuOpen()) return
+    const items = programsMenuListItems()
+    const n = items.length
+    const item = items[programsMenuHighlightIdx()]
+    if (!item || n === 0) return
+    item.action()
+    setCtxMenuOpen(false)
+    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+  }
+
+  createEffect(() => {
+    if (!programsMenuOpen()) return
+    const list = programsMenuListItems()
+    const n = list.length
+    const h = programsMenuHighlightIdx()
+    if (n === 0) {
+      if (h !== 0) setProgramsMenuHighlightIdx(0)
+      return
+    }
+    if (h >= n) setProgramsMenuHighlightIdx(n - 1)
+    if (h < 0) setProgramsMenuHighlightIdx(0)
+  })
+
+  createEffect(() => {
+    if (!programsMenuOpen()) return
+    const idx = programsMenuHighlightIdx()
+    void programsMenuListItems().length
+    queueMicrotask(() => {
+      const panel = menuPanelRef
+      if (!panel) return
+      const el = panel.querySelector(`[data-programs-menu-idx="${idx}"]`)
+      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    })
+  })
+
   onMount(() => {
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
@@ -1165,6 +1391,10 @@ function App() {
       if (!d || typeof d !== 'object' || !('type' in d)) return
       if (d.type === 'context_menu_dismiss') {
         setCtxMenuOpen(false)
+        return
+      }
+      if (d.type === 'programs_menu_toggle') {
+        toggleProgramsMenuMeta()
         return
       }
       if (d.type === 'focus_changed') {
@@ -1396,7 +1626,52 @@ function App() {
       shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
     }
     const onCtxKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') hideContextMenu()
+      if (e.key === 'Escape') {
+        hideContextMenu()
+        return
+      }
+      if (
+        !e.repeat &&
+        (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight')
+      ) {
+        e.preventDefault()
+        toggleProgramsMenuMeta()
+        return
+      }
+      if (programsMenuOpen()) {
+        const items = programsMenuListItems()
+        const n = items.length
+        if (e.key === 'ArrowDown') {
+          if (n > 0) {
+            e.preventDefault()
+            setProgramsMenuHighlightIdx((i) => (i + 1) % n)
+          }
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          if (n > 0) {
+            e.preventDefault()
+            setProgramsMenuHighlightIdx((i) => (i - 1 + n) % n)
+          }
+          return
+        }
+        if (programsMenuEnterShortcut(e)) {
+          e.preventDefault()
+          e.stopPropagation()
+          activateProgramsMenuSelection()
+          return
+        }
+        if (e.key === 'Home' && n > 0) {
+          e.preventDefault()
+          setProgramsMenuHighlightIdx(0)
+          return
+        }
+        if (e.key === 'End' && n > 0) {
+          e.preventDefault()
+          setProgramsMenuHighlightIdx(n - 1)
+          return
+        }
+      }
     }
     const onCtxPointerDown = (e: PointerEvent) => {
       if (!ctxMenuOpen()) return
@@ -1406,11 +1681,11 @@ function App() {
       if (p && t instanceof Node && p.contains(t)) return
       hideContextMenu()
     }
-    document.addEventListener('keydown', onCtxKeyDown)
+    document.addEventListener('keydown', onCtxKeyDown, true)
     document.addEventListener('pointerdown', onCtxPointerDown, true)
 
     onCleanup(() => {
-      document.removeEventListener('keydown', onCtxKeyDown)
+      document.removeEventListener('keydown', onCtxKeyDown, true)
       document.removeEventListener('pointerdown', onCtxPointerDown, true)
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
@@ -1431,105 +1706,6 @@ function App() {
     if (spawnPoll !== undefined) clearInterval(spawnPoll)
   })
 
-  async function spawnInCompositor(cmd: string, emptyMessage = 'Empty command.') {
-    const trimmed = cmd.trim()
-    if (!trimmed) {
-      setSpawnStatus(emptyMessage)
-      return
-    }
-    if (shellWireSend('spawn', trimmed)) {
-      setSpawnStatus(`Started: ${trimmed}`)
-      return
-    }
-    const url = window.__DERP_SPAWN_URL
-    if (!url) {
-      setSpawnStatus('Not running under cef_host (no spawn URL / wire).')
-      return
-    }
-    setSpawnBusy(true)
-    setSpawnStatus(null)
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: trimmed }),
-      })
-      const text = await res.text()
-      if (!res.ok) {
-        setSpawnStatus(`Spawn failed (${res.status}): ${text}`)
-        return
-      }
-      setSpawnStatus(`Started: ${trimmed}`)
-    } catch (e) {
-      setSpawnStatus(`Network error: ${e}`)
-    } finally {
-      setSpawnBusy(false)
-    }
-  }
-
-  async function runNativeInCompositor() {
-    setSpawnClicks((c) => c + 1)
-    await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
-  }
-
-  async function refreshProgramsMenuItems() {
-    const base = shellHttpBase()
-    if (!base) {
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      setCtxMenuItems([{ label: 'Programs list needs cef_host (no shell HTTP).', action: () => {} }])
-      return
-    }
-    try {
-      const res = await fetch(`${base}/desktop_applications`)
-      const text = await res.text()
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      if (!res.ok) {
-        setCtxMenuItems([
-          {
-            label: `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
-            action: () => {},
-          },
-        ])
-        return
-      }
-      const data = JSON.parse(text) as {
-        apps?: Array<{ name: string; exec: string; terminal: boolean; desktop_id: string }>
-      }
-      const list = Array.isArray(data.apps) ? data.apps : []
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      if (list.length === 0) {
-        setCtxMenuItems([{ label: 'No applications found.', action: () => {} }])
-        return
-      }
-      setCtxMenuItems(
-        list.map((app) => ({
-          label: app.name,
-          badge: app.terminal ? 'tty' : undefined,
-          action: () => {
-            void spawnInCompositor(app.exec)
-          },
-        })),
-      )
-    } catch (e) {
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      setCtxMenuItems([{ label: `Network error: ${e}`, action: () => {} }])
-    }
-  }
-
-  function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
-    e.preventDefault()
-    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
-      setCtxMenuOpen(false)
-      return
-    }
-    const r = e.currentTarget.getBoundingClientRect()
-    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
-    setCtxMenuKind('programs')
-    setCtxMenuItems([{ label: 'Loading…', action: () => {} }])
-    setCtxMenuOpen(true)
-    void refreshProgramsMenuItems()
-  }
-
   createEffect(() => {
     windowsList()
     workspacePartition()
@@ -1542,6 +1718,7 @@ function App() {
       return
     }
     void ctxMenuItems().length
+    void menuListItems().length
     void screenDraft.rows.length
     const anch = ctxMenuAnchor()
     const ax = anch.x
@@ -2124,35 +2301,85 @@ function App() {
       >
         <Show when={ctxMenuOpen()}>
           <div
-            class="absolute top-2 left-2 z-[90000] box-border max-h-[min(420px,55vh,calc(100%-16px))] min-w-[10rem] overflow-x-hidden overflow-y-auto rounded-[0.35rem] border border-black/35 bg-[rgba(28,32,42,0.96)] py-1 shadow-[0_6px_24px_rgba(0,0,0,0.35)]"
-            role="menu"
+            class="absolute top-2 left-2 z-[90000] flex max-h-[min(420px,55vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem] border border-black/35 bg-[rgba(28,32,42,0.96)] shadow-[0_6px_24px_rgba(0,0,0,0.35)]"
+            role={ctxMenuKind() === 'programs' ? 'group' : 'menu'}
             aria-label={ctxMenuKind() === 'programs' ? 'Applications' : 'Menu'}
             ref={(el) => {
               menuPanelRef = el
             }}
           >
-            <For each={ctxMenuItems()}>
-              {(item) => (
-                <button
-                  type="button"
-                  class="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent px-3 py-[0.45rem] text-left font-inherit text-inherit hover:bg-white/12"
-                  role="menuitem"
-                  onClick={() => {
-                    item.action()
-                    setCtxMenuOpen(false)
+            <Show when={ctxMenuKind() === 'programs'}>
+              <div class="shrink-0 border-b border-white/12 px-2 py-2">
+                <input
+                  type="text"
+                  inputMode="search"
+                  autocomplete="off"
+                  class="box-border w-full rounded-[0.3rem] border border-white/20 bg-black/35 px-2.5 py-1.5 text-[0.9rem] font-inherit text-inherit outline-none placeholder:text-neutral-500 focus:border-white/40"
+                  placeholder="Search applications"
+                  aria-label="Search applications"
+                  value={programsMenuQuery()}
+                  ref={(el) => {
+                    programsMenuSearchRef = el
                   }}
-                >
-                  <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
-                  <Show when={item.badge}>
-                    {(b) => (
-                      <span class="shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85 bg-white/12">
-                        {b()}
-                      </span>
-                    )}
-                  </Show>
-                </button>
-              )}
-            </For>
+                  onInput={(ev) => {
+                    setProgramsMenuQuery(ev.currentTarget.value)
+                    setProgramsMenuHighlightIdx(0)
+                  }}
+                  onKeyDown={(e) => {
+                    if (programsMenuEnterShortcut(e)) {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      activateProgramsMenuSelection()
+                      return
+                    }
+                    if (e.key === 'Backspace' || e.key === 'Delete') {
+                      e.stopPropagation()
+                    }
+                  }}
+                />
+              </div>
+            </Show>
+            <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
+              <For each={menuListItems()}>
+                {(item, idx) => (
+                  <button
+                    type="button"
+                    class="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent px-3 py-[0.45rem] text-left font-inherit text-inherit hover:bg-white/12"
+                    classList={{
+                      'bg-white/18':
+                        ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx(),
+                    }}
+                    role={ctxMenuKind() === 'programs' ? undefined : 'menuitem'}
+                    tabIndex={ctxMenuKind() === 'programs' ? -1 : undefined}
+                    data-programs-menu-idx={ctxMenuKind() === 'programs' ? idx() : undefined}
+                    onMouseDown={(e) => {
+                      if (ctxMenuKind() === 'programs') e.preventDefault()
+                    }}
+                    onFocus={(e) => {
+                      if (ctxMenuKind() !== 'programs') return
+                      if (e.target !== programsMenuSearchRef) {
+                        queueMicrotask(() => programsMenuSearchRef?.focus())
+                      }
+                    }}
+                    onClick={() => {
+                      item.action()
+                      setCtxMenuOpen(false)
+                    }}
+                  >
+                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+                      {item.label}
+                    </span>
+                    <Show when={item.badge}>
+                      {(b) => (
+                        <span class="shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85 bg-white/12">
+                          {b()}
+                        </span>
+                      )}
+                    </Show>
+                  </button>
+                )}
+              </For>
+            </div>
           </div>
         </Show>
       </div>

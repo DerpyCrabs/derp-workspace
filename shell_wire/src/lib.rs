@@ -90,6 +90,8 @@ pub const MSG_SHELL_CONTEXT_MENU: u32 = 46;
 pub const MSG_COMPOSITOR_CONTEXT_MENU_DISMISS: u32 = 47;
 pub const MSG_SHELL_TILE_PREVIEW: u32 = 48;
 pub const MSG_SHELL_CHROME_METRICS: u32 = 49;
+/// Compositor → shell: toggle Programs menu (Win/Super tap when keyboard was on a native client).
+pub const MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE: u32 = 50;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -1004,6 +1006,7 @@ pub enum DecodedCompositorToShellMessage {
     /// Compositor requests [`encode_shell_pong`] from `cef_host`.
     Ping,
     ContextMenuDismiss,
+    ProgramsMenuToggle,
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -1051,6 +1054,14 @@ pub fn encode_compositor_context_menu_dismiss() -> Vec<u8> {
     let mut v = Vec::with_capacity(12);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_CONTEXT_MENU_DISMISS.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_programs_menu_toggle() -> Vec<u8> {
+    let body_len = 4u32;
+    let mut v = Vec::with_capacity(12);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE.to_le_bytes());
     v
 }
 
@@ -1419,6 +1430,12 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             Ok(DecodedCompositorToShellMessage::ContextMenuDismiss)
+        }
+        MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE => {
+            if body.len() != 4 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            Ok(DecodedCompositorToShellMessage::ProgramsMenuToggle)
         }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN

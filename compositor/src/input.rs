@@ -308,11 +308,11 @@ impl CompositorState {
                     serial,
                     time,
                     move |state, mods, keysym| {
+                        let raw_sym = keysym.modified_sym().raw();
                         if key_state == KeyState::Pressed {
-                            let sym = keysym.modified_sym().raw();
                             if mods.ctrl && mods.alt {
                                 if let (Some(vt), Some(ref mut sess)) =
-                                    (vt_number_from_fkey(sym), state.vt_session.as_mut())
+                                    (vt_number_from_fkey(raw_sym), state.vt_session.as_mut())
                                 {
                                     if let Err(e) = sess.change_vt(vt) {
                                         tracing::warn!(?e, vt, "VT switch (Ctrl+Alt+F) failed");
@@ -322,11 +322,39 @@ impl CompositorState {
                             }
                             if mods.ctrl
                                 && mods.shift
-                                && matches!(sym, keysyms::KEY_q | keysyms::KEY_Q)
+                                && matches!(raw_sym, keysyms::KEY_q | keysyms::KEY_Q)
                             {
                                 state.loop_signal.stop();
                                 state.loop_signal.wakeup();
                                 return FilterResult::Intercept(());
+                            }
+                        }
+                        if state.shell_cef_active() && state.shell_has_frame {
+                            let is_super = matches!(
+                                raw_sym,
+                                keysyms::KEY_Super_L
+                                    | keysyms::KEY_Super_R
+                                    | keysyms::KEY_Meta_L
+                                    | keysyms::KEY_Meta_R
+                            );
+                            if key_state == KeyState::Pressed {
+                                if is_super {
+                                    state.programs_menu_super_armed = true;
+                                    state.programs_menu_super_chord = false;
+                                    return FilterResult::Intercept(());
+                                }
+                                if state.programs_menu_super_armed && !is_super {
+                                    state.programs_menu_super_chord = true;
+                                }
+                            } else if key_state == KeyState::Released && is_super {
+                                let armed = state.programs_menu_super_armed;
+                                let chord = state.programs_menu_super_chord;
+                                state.programs_menu_super_armed = false;
+                                state.programs_menu_super_chord = false;
+                                if armed && !chord {
+                                    state.programs_menu_toggle_from_super(serial);
+                                    return FilterResult::Intercept(());
+                                }
                             }
                         }
                         if state.shell_ipc_keyboard_to_cef

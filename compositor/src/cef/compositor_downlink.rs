@@ -464,6 +464,20 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "programs_menu_toggle",
+                }),
+            );
+        }
         shell_wire::DecodedCompositorToShellMessage::Ping => {}
     }
 }
