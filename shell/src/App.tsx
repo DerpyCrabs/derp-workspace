@@ -585,6 +585,7 @@ function App() {
   const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
+  const [debugPanelOpen, setDebugPanelOpen] = createSignal(false)
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
@@ -1879,10 +1880,11 @@ function App() {
             }}
           >
             <div class="box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px] pointer-events-none">
-              <div
-                class="relative z-[12] max-w-[min(28rem,100%)] rounded-2xl border border-white/12 bg-black/55 px-12 py-10 text-center shadow-[0_0.5rem_2rem_rgba(0,0,0,0.45)] pointer-events-auto"
-                data-shell-panel
-              >
+              <Show when={debugPanelOpen()}>
+                <div
+                  class="relative z-[12] max-w-[min(28rem,100%)] rounded-2xl border border-white/12 bg-black/55 px-12 py-10 text-center shadow-[0_0.5rem_2rem_rgba(0,0,0,0.45)] pointer-events-auto"
+                  data-shell-panel
+                >
                 <h1 class="mb-2 text-[2rem] font-bold tracking-wider">derp shell</h1>
                 <p class="mb-4 text-base opacity-[0.85]">SolidJS → CEF OSR → compositor</p>
                 <label class="mb-4 inline-flex cursor-pointer items-center justify-center gap-2 text-sm select-none opacity-92">
@@ -2228,7 +2230,8 @@ function App() {
                     {spawnStatus()}
                   </p>
                 ) : null}
-              </div>
+                </div>
+              </Show>
             </div>
 
             <Taskbar
@@ -2236,6 +2239,11 @@ function App() {
               onProgramsMenuClick={onProgramsMenuClick}
               windows={taskbarWindows()}
               focusedWindowId={focusedWindowId()}
+              debugPanelOpen={debugPanelOpen()}
+              onDebugPanelToggle={() => {
+                setDebugPanelOpen((v) => !v)
+                scheduleExclusionZonesSync()
+              }}
               onTaskbarActivate={(id) => {
                 shellWireSend('taskbar_activate', id)
               }}

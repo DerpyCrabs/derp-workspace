@@ -12,6 +12,8 @@ export type TaskbarProps = {
   onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
+  debugPanelOpen: boolean
+  onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
 }
 
@@ -57,6 +59,19 @@ export function Taskbar(props: TaskbarProps) {
           )}
         </For>
       </div>
+
+      <button
+        type="button"
+        class="ml-2.5 shrink-0 cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+        classList={{
+          'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.debugPanelOpen,
+        }}
+        aria-pressed={props.debugPanelOpen}
+        title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
+        onClick={() => props.onDebugPanelToggle()}
+      >
+        Debug
+      </button>
     </div>
   )
 }
