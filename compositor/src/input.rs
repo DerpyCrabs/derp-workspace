@@ -1,10 +1,13 @@
+use std::sync::OnceLock;
+
+use input as libinput;
+use smithay::backend::libinput::LibinputInputBackend;
 use smithay::desktop::space::SpaceElement;
 use smithay::{
     backend::{
         input::{
-            AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-            KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
-            TouchEvent,
+            AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
         },
         session::Session,
     },
@@ -17,6 +20,8 @@ use smithay::{
 };
 
 use crate::{derp_space::DerpSpaceElem, state::CompositorState};
+
+static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
 /// Map libinput / Smithay pointer-axis values to integers for CEF [`send_mouse_wheel_event`].
 fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
@@ -83,9 +88,9 @@ impl CompositorState {
         self.shell_ipc_maybe_forward_pointer_move(pos);
     }
 
-    fn touch_workspace_local<I: InputBackend>(
+    fn touch_workspace_local(
         &self,
-        event: &impl AbsolutePositionEvent<I>,
+        event: &impl AbsolutePositionEvent<LibinputInputBackend>,
         workspace_size: Size<i32, Logical>,
     ) -> Point<f64, Logical> {
         if self.touch_abs_is_window_pixels {
@@ -101,6 +106,73 @@ impl CompositorState {
         } else {
             event.position_transformed(workspace_size)
         }
+    }
+
+    fn touch_coordinate_geometry(&self, dev: &libinput::Device) -> Option<Rectangle<i32, Logical>> {
+        if let Ok(override_name) = std::env::var("DERP_TOUCH_OUTPUT") {
+            let override_name = override_name.trim();
+            if !override_name.is_empty() {
+                if let Some(out) = self
+                    .space
+                    .outputs()
+                    .find(|o| o.name() == override_name)
+                {
+                    return self.space.output_geometry(out);
+                }
+                tracing::warn!(
+                    target: "derp_input",
+                    name = %override_name,
+                    "DERP_TOUCH_OUTPUT did not match a compositor output"
+                );
+            }
+        }
+        if let Some(n) = dev.output_name() {
+            if let Some(out) = self.space.outputs().find(|o| o.name() == n) {
+                return self.space.output_geometry(out);
+            }
+            if let Some(out) = self
+                .space
+                .outputs()
+                .find(|o| o.name().eq_ignore_ascii_case(n))
+            {
+                return self.space.output_geometry(out);
+            }
+            let names: Vec<String> = self.space.outputs().map(|o| o.name()).collect();
+            tracing::warn!(
+                target: "derp_input",
+                libinput_output = %n,
+                compositor_outputs = ?names,
+                "touch output_name did not match; set DERP_TOUCH_OUTPUT"
+            );
+        }
+        let n_out = self.space.outputs().count();
+        if n_out >= 2 && dev.output_name().is_none() {
+            let left = self.leftmost_output()?;
+            TOUCH_LEFTMOST_FALLBACK_LOG.get_or_init(|| {
+                tracing::warn!(
+                    target: "derp_input",
+                    device = %dev.name(),
+                    "touch has no libinput output_name; mapping to leftmost output (DERP_TOUCH_OUTPUT to pick another)"
+                );
+            });
+            return self.space.output_geometry(&left);
+        }
+        None
+    }
+
+    fn touch_global_point(
+        &self,
+        event: &(impl AbsolutePositionEvent<LibinputInputBackend> + Event<LibinputInputBackend>),
+        workspace: Rectangle<i32, Logical>,
+    ) -> Point<f64, Logical> {
+        if self.touch_abs_is_window_pixels {
+            return workspace.loc.to_f64() + self.touch_workspace_local(event, workspace.size);
+        }
+        let dev: libinput::Device = event.device();
+        if let Some(geo) = self.touch_coordinate_geometry(&dev) {
+            return geo.loc.to_f64() + event.position_transformed(geo.size);
+        }
+        workspace.loc.to_f64() + event.position_transformed(workspace.size)
     }
 
     fn process_pointer_button(
@@ -294,7 +366,7 @@ impl CompositorState {
         }
     }
 
-    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+    pub fn process_input_event(&mut self, event: InputEvent<LibinputInputBackend>) {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -453,8 +525,7 @@ impl CompositorState {
                     return;
                 };
                 self.touch_emulation_slot = Some(event.slot());
-                let local_ws = self.touch_workspace_local(&event, ws.size);
-                let pos = ws.loc.to_f64() + local_ws;
+                let pos = self.touch_global_point(&event, ws);
                 if self.shell_context_menu.is_some()
                     && !self.shell_point_in_context_menu_global(pos)
                     && !self.shell_pointer_route_to_cef(pos)
@@ -515,8 +586,7 @@ impl CompositorState {
                 let Some(ws) = self.workspace_logical_bounds() else {
                     return;
                 };
-                let local_ws = self.touch_workspace_local(&event, ws.size);
-                let pos = ws.loc.to_f64() + local_ws;
+                let pos = self.touch_global_point(&event, ws);
                 let output = self
                     .output_containing_global_point(pos)
                     .or_else(|| self.leftmost_output())

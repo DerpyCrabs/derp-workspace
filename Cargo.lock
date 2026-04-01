@@ -302,6 +302,7 @@ dependencies = [
  "clap",
  "dirs",
  "drm-fourcc",
+ "input",
  "libc",
  "nix",
  "serde",
@@ -899,6 +900,7 @@ dependencies = [
  "bitflags",
  "input-sys",
  "libc",
+ "log",
  "udev",
 ]
 
