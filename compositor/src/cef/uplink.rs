@@ -26,23 +26,23 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn session_power_loginctl(&self, subcommand: String) {
+    pub fn session_power_systemctl(&self, verb: String) {
         std::thread::spawn(move || {
-            match std::process::Command::new("loginctl")
-                .arg(&subcommand)
+            match std::process::Command::new("systemctl")
+                .arg(&verb)
                 .output()
             {
                 Ok(out) if out.status.success() => {}
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     tracing::warn!(
-                        %subcommand,
+                        %verb,
                         code=?out.status,
                         %stderr,
-                        "session_power: loginctl failed"
+                        "session_power: systemctl failed"
                     );
                 }
-                Err(e) => tracing::warn!(%subcommand, %e, "session_power: loginctl spawn failed"),
+                Err(e) => tracing::warn!(%verb, %e, "session_power: systemctl spawn failed"),
             }
         });
     }

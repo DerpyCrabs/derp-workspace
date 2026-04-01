@@ -146,7 +146,7 @@ fn handle_one(
                 "hibernate" => "hibernate",
                 _ => return Err("invalid action".into()),
             };
-            uplink.session_power_loginctl(sub.to_string());
+            uplink.session_power_systemctl(sub.to_string());
         }
         "/spawn" => {
             let command = v
