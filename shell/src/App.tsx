@@ -401,6 +401,10 @@ async function postShell(path: string, body: object): Promise<void> {
   })
 }
 
+async function postSessionPower(action: string): Promise<void> {
+  await postShell('/session_power', { action })
+}
+
 /** Tee’d into `compositor.log` when `cef_host` stderr is captured (session). Filter: `derp-shell-move`. */
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   const extra = detail !== undefined ? ` ${JSON.stringify(detail)}` : ''
@@ -592,7 +596,7 @@ function App() {
   const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
   const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
   const [ctxMenuOpen, setCtxMenuOpen] = createSignal(false)
-  const [ctxMenuKind, setCtxMenuKind] = createSignal<'demo' | 'programs' | null>(null)
+  const [ctxMenuKind, setCtxMenuKind] = createSignal<'demo' | 'programs' | 'power' | null>(null)
   const [ctxMenuItems, setCtxMenuItems] = createSignal<ShellContextMenuItem[]>([])
   const [ctxMenuAnchor, setCtxMenuAnchor] = createSignal<{
     x: number
@@ -601,6 +605,7 @@ function App() {
   }>({ x: 0, y: 0 })
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
+  const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
   const [programsCatalog, setProgramsCatalog] = createStore<{ items: DesktopAppEntry[] }>({
     items: [],
   })
@@ -608,6 +613,7 @@ function App() {
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
+  const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
 
   const rulerStepPx = 100
 
@@ -616,6 +622,7 @@ function App() {
       setCtxMenuKind(null)
       setProgramsMenuQuery('')
       setProgramsMenuHighlightIdx(0)
+      setPowerMenuHighlightIdx(0)
     }
   })
 
@@ -1265,7 +1272,7 @@ function App() {
       setCtxMenuOpen(false)
       return
     }
-    if (ctxMenuOpen() && ctxMenuKind() === 'demo') {
+    if (ctxMenuOpen() && (ctxMenuKind() === 'demo' || ctxMenuKind() === 'power')) {
       setCtxMenuOpen(false)
     }
     openProgramsMenu()
@@ -1290,6 +1297,55 @@ function App() {
     void refreshProgramsMenuItems()
   }
 
+  function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
+    e.preventDefault()
+    if (ctxMenuOpen() && ctxMenuKind() === 'power') {
+      setCtxMenuOpen(false)
+      return
+    }
+    const r = e.currentTarget.getBoundingClientRect()
+    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
+    setCtxMenuKind('power')
+    setPowerMenuHighlightIdx(0)
+    setCtxMenuOpen(true)
+  }
+
+  const powerMenuListItems = createMemo((): ShellContextMenuItem[] => {
+    if (!powerMenuOpen()) return []
+    const http = shellHttpBase() !== null
+    const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
+    return [
+      {
+        label: 'Suspend',
+        disabled: !http,
+        title: sysTitle,
+        action: () => void postSessionPower('suspend'),
+      },
+      {
+        label: 'Restart',
+        disabled: !http,
+        title: sysTitle,
+        action: () => void postSessionPower('reboot'),
+      },
+      {
+        label: 'Shut down',
+        disabled: !http,
+        title: sysTitle,
+        action: () => void postSessionPower('poweroff'),
+      },
+      {
+        label: 'Exit session',
+        disabled: !canSessionControl(),
+        title: canSessionControl()
+          ? 'Tell compositor to exit (ends session)'
+          : 'Needs cef_host control server or wire',
+        action: () => {
+          if (!shellWireSend('quit')) void postShell('/session_quit', {})
+        },
+      },
+    ]
+  })
+
   const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!programsMenuOpen()) return []
     if (programsMenuBusy()) return [{ label: 'Loading…', action: () => {} }]
@@ -1313,6 +1369,7 @@ function App() {
 
   const menuListItems = createMemo((): ShellContextMenuItem[] => {
     if (ctxMenuKind() === 'programs') return programsMenuListItems()
+    if (ctxMenuKind() === 'power') return powerMenuListItems()
     return ctxMenuItems()
   })
 
@@ -1326,6 +1383,30 @@ function App() {
     const n = items.length
     const item = items[programsMenuHighlightIdx()]
     if (!item || n === 0) return
+    item.action()
+    setCtxMenuOpen(false)
+    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+  }
+
+  function movePowerMenuHighlight(delta: number) {
+    const items = powerMenuListItems()
+    const n = items.length
+    if (n === 0) return
+    let idx = powerMenuHighlightIdx()
+    for (let step = 0; step < n; step++) {
+      idx = (idx + delta + n) % n
+      if (!items[idx]?.disabled) {
+        setPowerMenuHighlightIdx(idx)
+        return
+      }
+    }
+  }
+
+  function activatePowerMenuSelection() {
+    if (!powerMenuOpen()) return
+    const items = powerMenuListItems()
+    const item = items[powerMenuHighlightIdx()]
+    if (!item || item.disabled) return
     item.action()
     setCtxMenuOpen(false)
     shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -1352,6 +1433,32 @@ function App() {
       const panel = menuPanelRef
       if (!panel) return
       const el = panel.querySelector(`[data-programs-menu-idx="${idx}"]`)
+      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    })
+  })
+
+  createEffect(() => {
+    if (!powerMenuOpen()) return
+    const list = powerMenuListItems()
+    const n = list.length
+    const h = powerMenuHighlightIdx()
+    if (n === 0) {
+      if (h !== 0) setPowerMenuHighlightIdx(0)
+      return
+    }
+    if (h >= n) setPowerMenuHighlightIdx(n - 1)
+    if (h < 0) setPowerMenuHighlightIdx(0)
+    if (list[h]?.disabled) movePowerMenuHighlight(1)
+  })
+
+  createEffect(() => {
+    if (!powerMenuOpen()) return
+    const idx = powerMenuHighlightIdx()
+    void powerMenuListItems().length
+    queueMicrotask(() => {
+      const panel = menuPanelRef
+      if (!panel) return
+      const el = panel.querySelector(`[data-power-menu-idx="${idx}"]`)
       if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
     })
   })
@@ -1673,11 +1780,54 @@ function App() {
           return
         }
       }
+      if (powerMenuOpen()) {
+        const items = powerMenuListItems()
+        const n = items.filter((x) => !x.disabled).length
+        if (e.key === 'ArrowDown') {
+          if (n > 0) {
+            e.preventDefault()
+            movePowerMenuHighlight(1)
+          }
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          if (n > 0) {
+            e.preventDefault()
+            movePowerMenuHighlight(-1)
+          }
+          return
+        }
+        if (!e.repeat && !e.isComposing && e.key === 'Enter') {
+          e.preventDefault()
+          e.stopPropagation()
+          activatePowerMenuSelection()
+          return
+        }
+        if (e.key === 'Home' && n > 0) {
+          e.preventDefault()
+          const first = items.findIndex((x) => !x.disabled)
+          if (first >= 0) setPowerMenuHighlightIdx(first)
+          return
+        }
+        if (e.key === 'End' && n > 0) {
+          e.preventDefault()
+          let last = -1
+          for (let i = items.length - 1; i >= 0; i--) {
+            if (!items[i]?.disabled) {
+              last = i
+              break
+            }
+          }
+          if (last >= 0) setPowerMenuHighlightIdx(last)
+          return
+        }
+      }
     }
     const onCtxPointerDown = (e: PointerEvent) => {
       if (!ctxMenuOpen()) return
       const t = e.target
       if (t instanceof Element && t.closest('[data-shell-programs-toggle]')) return
+      if (t instanceof Element && t.closest('[data-shell-power-toggle]')) return
       const p = menuPanelRef
       if (p && t instanceof Node && p.contains(t)) return
       hideContextMenu()
@@ -2210,21 +2360,6 @@ function App() {
                 >
                   {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
                 </button>
-                <button
-                  type="button"
-                  class="mt-[0.65rem] cursor-pointer rounded-[0.45rem] border border-white/20 bg-[hsl(0,55%,42%)] px-4 py-[0.45rem] text-[0.85rem] font-semibold text-neutral-100 hover:brightness-[1.08] disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!canSessionControl()}
-                  title={
-                    canSessionControl()
-                      ? 'Tell compositor to exit (ends session)'
-                      : 'Needs cef_host control server'
-                  }
-                  onClick={() => {
-                    if (!shellWireSend('quit')) void postShell('/session_quit', {})
-                  }}
-                >
-                  Exit session
-                </button>
                 {spawnStatus() ? (
                   <p class="mt-[0.85rem] max-w-[22rem] text-[0.875rem] leading-snug opacity-90">
                     {spawnStatus()}
@@ -2237,6 +2372,8 @@ function App() {
             <Taskbar
               programsMenuOpen={programsMenuOpen()}
               onProgramsMenuClick={onProgramsMenuClick}
+              powerMenuOpen={powerMenuOpen()}
+              onPowerMenuClick={onPowerMenuClick}
               windows={taskbarWindows()}
               focusedWindowId={focusedWindowId()}
               debugPanelOpen={debugPanelOpen()}
@@ -2311,7 +2448,13 @@ function App() {
           <div
             class="absolute top-2 left-2 z-[90000] flex max-h-[min(420px,55vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem] border border-black/35 bg-[rgba(28,32,42,0.96)] shadow-[0_6px_24px_rgba(0,0,0,0.35)]"
             role={ctxMenuKind() === 'programs' ? 'group' : 'menu'}
-            aria-label={ctxMenuKind() === 'programs' ? 'Applications' : 'Menu'}
+            aria-label={
+              ctxMenuKind() === 'programs'
+                ? 'Applications'
+                : ctxMenuKind() === 'power'
+                  ? 'Power'
+                  : 'Menu'
+            }
             ref={(el) => {
               menuPanelRef = el
             }}
@@ -2355,11 +2498,15 @@ function App() {
                     class="flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent px-3 py-[0.45rem] text-left font-inherit text-inherit hover:bg-white/12"
                     classList={{
                       'bg-white/18':
-                        ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx(),
+                        (ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx()) ||
+                        (ctxMenuKind() === 'power' && powerMenuHighlightIdx() === idx()),
+                      'cursor-not-allowed opacity-40': !!item.disabled,
                     }}
                     role={ctxMenuKind() === 'programs' ? undefined : 'menuitem'}
                     tabIndex={ctxMenuKind() === 'programs' ? -1 : undefined}
+                    title={item.title}
                     data-programs-menu-idx={ctxMenuKind() === 'programs' ? idx() : undefined}
+                    data-power-menu-idx={ctxMenuKind() === 'power' ? idx() : undefined}
                     onMouseDown={(e) => {
                       if (ctxMenuKind() === 'programs') e.preventDefault()
                     }}
@@ -2370,6 +2517,7 @@ function App() {
                       }
                     }}
                     onClick={() => {
+                      if (item.disabled) return
                       item.action()
                       setCtxMenuOpen(false)
                     }}

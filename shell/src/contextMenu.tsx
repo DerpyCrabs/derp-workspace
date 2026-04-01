@@ -2,6 +2,8 @@ export type ShellContextMenuItem = {
   label: string
   action: () => void
   badge?: string
+  disabled?: boolean
+  title?: string
 }
 
 export type LogicalWorkspaceBounds = {

@@ -134,6 +134,20 @@ fn handle_one(
 
     match path {
         "/session_quit" => uplink.quit_compositor(),
+        "/session_power" => {
+            let action = v
+                .get("action")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| "missing action".to_string())?;
+            let sub = match action {
+                "suspend" => "suspend",
+                "reboot" => "reboot",
+                "poweroff" => "poweroff",
+                "hibernate" => "hibernate",
+                _ => return Err("invalid action".into()),
+            };
+            uplink.session_power_loginctl(sub.to_string());
+        }
         "/spawn" => {
             let command = v
                 .get("command")

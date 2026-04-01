@@ -26,6 +26,27 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn session_power_loginctl(&self, subcommand: String) {
+        std::thread::spawn(move || {
+            match std::process::Command::new("loginctl")
+                .arg(&subcommand)
+                .output()
+            {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    tracing::warn!(
+                        %subcommand,
+                        code=?out.status,
+                        %stderr,
+                        "session_power: loginctl failed"
+                    );
+                }
+                Err(e) => tracing::warn!(%subcommand, %e, "session_power: loginctl spawn failed"),
+            }
+        });
+    }
+
     pub fn spawn_wayland_client(&self, command: String) {
         self.run(move |s| {
             if let Err(e) = s.try_spawn_wayland_client_sh(&command) {
