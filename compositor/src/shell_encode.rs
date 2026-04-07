@@ -14,6 +14,7 @@ pub fn chrome_event_to_shell_message(
             title: info.title.clone(),
             app_id: info.app_id.clone(),
             client_side_decoration: info.client_side_decoration,
+            output_name: info.output_name.clone(),
         },
         ChromeEvent::WindowUnmapped { window_id } => {
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
@@ -31,6 +32,7 @@ pub fn chrome_event_to_shell_message(
                 maximized: info.maximized,
                 fullscreen: info.fullscreen,
                 client_side_decoration: info.client_side_decoration,
+                output_name: info.output_name.clone(),
             }
         }
         ChromeEvent::WindowMetadataChanged { info } => {

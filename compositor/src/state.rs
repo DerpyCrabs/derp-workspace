@@ -2202,6 +2202,7 @@ impl CompositorState {
                 title: ipc_info.title.clone(),
                 app_id: ipc_info.app_id.clone(),
                 client_side_decoration: ipc_info.client_side_decoration,
+                output_name: ipc_info.output_name.clone(),
             });
         }
         let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus()) {
@@ -2858,6 +2859,7 @@ impl CompositorState {
                     client_side_decoration: if i.client_side_decoration { 1 } else { 0 },
                     title: i.title,
                     app_id: i.app_id,
+                    output_name: i.output_name,
                 }
             })
             .collect();

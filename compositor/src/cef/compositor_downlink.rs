@@ -134,6 +134,7 @@ pub fn apply_message(
             title,
             app_id,
             client_side_decoration,
+            output_name,
         } => {
             let Ok(guard) = browser.lock() else {
                 return;
@@ -154,6 +155,7 @@ pub fn apply_message(
                     "title": title,
                     "app_id": app_id,
                     "client_side_decoration": client_side_decoration,
+                    "output_name": output_name,
                 }),
             );
         }
@@ -179,6 +181,7 @@ pub fn apply_message(
             maximized,
             fullscreen,
             client_side_decoration,
+            output_name,
         } => {
             let Ok(guard) = browser.lock() else {
                 return;
@@ -199,6 +202,7 @@ pub fn apply_message(
                     "maximized": maximized,
                     "fullscreen": fullscreen,
                     "client_side_decoration": client_side_decoration,
+                    "output_name": output_name,
                 }),
             );
         }
@@ -248,6 +252,7 @@ pub fn apply_message(
                         "client_side_decoration": w.client_side_decoration != 0,
                         "title": &w.title,
                         "app_id": &w.app_id,
+                        "output_name": &w.output_name,
                     })
                 })
                 .collect();
