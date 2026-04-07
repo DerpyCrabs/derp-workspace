@@ -850,7 +850,11 @@ function App() {
       hud.push({ label, ...z })
     }
     addEl(main.querySelector('[data-shell-panel]'), 'panel')
-    addEl(main.querySelector('[data-shell-taskbar]'), 'taskbar')
+    for (const el of main.querySelectorAll('[data-shell-taskbar]')) {
+      if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
+      const mon = el.getAttribute('data-shell-taskbar-monitor') ?? ''
+      addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
+    }
     const stripLabels = ['t', 'l', 'r', 'b'] as const
     for (const decoWin of windowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
@@ -2081,6 +2085,7 @@ function App() {
               }}
             >
               <Taskbar
+                monitorName={s.name}
                 isPrimary={isPrim}
                 programsMenuOpen={programsMenuOpen()}
                 onProgramsMenuClick={onProgramsMenuClick}
