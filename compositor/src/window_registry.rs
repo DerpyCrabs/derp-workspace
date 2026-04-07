@@ -60,6 +60,7 @@ impl WindowRegistry {
             y: 0,
             width: 0,
             height: 0,
+            output_name: String::new(),
             minimized: false,
             maximized: false,
             fullscreen: false,
@@ -112,6 +113,7 @@ impl WindowRegistry {
         width: i32,
         height: i32,
         client_side_decoration: bool,
+        output_name: String,
     ) -> Option<bool> {
         let wid = *self.by_surface.get(&key(wl)?)?;
         let info = self.records.get_mut(&wid)?;
@@ -119,12 +121,14 @@ impl WindowRegistry {
             || info.y != y
             || info.width != width
             || info.height != height
-            || info.client_side_decoration != client_side_decoration;
+            || info.client_side_decoration != client_side_decoration
+            || info.output_name != output_name;
         info.x = x;
         info.y = y;
         info.width = width;
         info.height = height;
         info.client_side_decoration = client_side_decoration;
+        info.output_name = output_name;
         Some(changed)
     }
 

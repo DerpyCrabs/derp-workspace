@@ -8,3 +8,4 @@ Rules:
 - user can't change environment so you need to change scripts
 - after changes do ./scripts/remote-update-and-restart.sh
 - if you need logs use ./scripts/fetch-logs.sh
+- debug everything yourself on remote machine (but if you add logs use warn and delete after debugging)

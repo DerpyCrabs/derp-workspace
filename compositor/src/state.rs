@@ -1257,9 +1257,12 @@ impl CompositorState {
         let Some((gx, gy, gw, gh, csd)) = self.wayland_window_shell_rect_and_deco(window) else {
             return;
         };
+        let output_name = self
+            .output_for_window_position(gx, gy, gw, gh)
+            .unwrap_or_default();
         let changed = self
             .window_registry
-            .set_shell_layout(wl, gx, gy, gw, gh, csd);
+            .set_shell_layout(wl, gx, gy, gw, gh, csd, output_name);
         let (max, fs) = read_toplevel_tiling(wl);
         let tiling_changed = self
             .window_registry
@@ -1507,6 +1510,7 @@ impl CompositorState {
             y: info.y.saturating_sub(oy),
             width: info.width.max(1),
             height: info.height.max(1),
+            output_name: info.output_name.clone(),
             minimized: info.minimized,
             maximized: info.maximized,
             fullscreen: info.fullscreen,
@@ -1914,6 +1918,34 @@ impl CompositorState {
         let cy = y.saturating_add(h.saturating_div(2));
         self.output_containing_global_point(Point::from((cx as f64, cy as f64)))
             .or_else(|| self.leftmost_output())
+    }
+
+    pub(crate) fn output_for_window_position(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> Option<String> {
+        let cx = x.saturating_add(w.saturating_div(2));
+        let cy = y.saturating_add(h.saturating_div(2));
+        let mut first: Option<String> = None;
+        for o in self.space.outputs() {
+            if first.is_none() {
+                first = Some(o.name().into());
+            }
+            let Some(g) = self.space.output_geometry(o) else {
+                continue;
+            };
+            if cx >= g.loc.x
+                && cy >= g.loc.y
+                && cx < g.loc.x.saturating_add(g.size.w)
+                && cy < g.loc.y.saturating_add(g.size.h)
+            {
+                return Some(o.name().into());
+            }
+        }
+        first
     }
 
     pub fn send_shell_output_layout(&mut self) {

@@ -24,6 +24,7 @@ pub struct WindowInfo {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    pub output_name: String,
     /// Compositor-minimized: unmapped from space but still alive.
     pub minimized: bool,
     pub maximized: bool,
