@@ -5,6 +5,7 @@ export type TaskbarWindowRow = {
   title: string
   app_id: string
   minimized: boolean
+  output_name: string
 }
 
 export type TaskbarProps = {

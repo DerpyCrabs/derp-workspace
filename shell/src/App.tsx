@@ -192,6 +192,7 @@ type DerpShellDetail =
       height: number
       title: string
       app_id: string
+      output_name?: string
       client_side_decoration?: boolean
     }
   | { type: 'window_unmapped'; window_id: number }
@@ -203,6 +204,7 @@ type DerpShellDetail =
       y: number
       width: number
       height: number
+      output_name?: string
       maximized?: boolean
       fullscreen?: boolean
       client_side_decoration?: boolean
@@ -236,6 +238,7 @@ type DerpWindow = {
   height: number
   title: string
   app_id: string
+  output_name: string
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
@@ -281,6 +284,8 @@ function buildWindowsMapFromList(
       csdExplicit !== undefined
         ? csdExplicit
         : (prev?.get(wid)?.client_side_decoration ?? false)
+    const outputName =
+      typeof r.output_name === 'string' ? r.output_name : ''
     next.set(wid, {
       window_id: wid,
       surface_id: sid,
@@ -290,6 +295,7 @@ function buildWindowsMapFromList(
       height: Number(r.height) || 0,
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
+      output_name: outputName,
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
@@ -315,6 +321,8 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         height: detail.height,
         title: detail.title,
         app_id: detail.app_id,
+        output_name:
+          typeof detail.output_name === 'string' ? detail.output_name : '',
         minimized: false,
         maximized: false,
         fullscreen: false,
@@ -338,6 +346,12 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
           y: detail.y,
           width: detail.width,
           height: detail.height,
+          output_name:
+            detail.output_name !== undefined
+              ? typeof detail.output_name === 'string'
+                ? detail.output_name
+                : ''
+              : w.output_name,
           maximized: detail.maximized ?? w.maximized,
           fullscreen: detail.fullscreen ?? w.fullscreen,
           client_side_decoration:
@@ -707,12 +721,28 @@ function App() {
     Array.from(windows().values()).sort((a, b) => a.window_id - b.window_id),
   )
 
+  const windowsByMonitor = createMemo(() => {
+    const list = windowsList()
+    const part = workspacePartition()
+    const fallback =
+      part.primary.name || screenDraft.rows.find((r) => r.name)?.name || ''
+    const map = new Map<string, DerpWindow[]>()
+    for (const w of list) {
+      const key = w.output_name || fallback
+      const bucket = map.get(key)
+      if (bucket) bucket.push(w)
+      else map.set(key, [w])
+    }
+    return map
+  })
+
   const taskbarWindows = createMemo(() =>
     windowsList().map((w) => ({
       window_id: w.window_id,
       title: w.title,
       app_id: w.app_id,
       minimized: w.minimized,
+      output_name: w.output_name,
     })),
   )
 
@@ -1860,6 +1890,7 @@ function App() {
   createEffect(() => {
     windowsList()
     workspacePartition()
+    windowsByMonitor()
     scheduleExclusionZonesSync()
   })
 
