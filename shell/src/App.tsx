@@ -399,6 +399,8 @@ let lastTilePreviewKey = ''
 const RULER_GUTTER_X = 28
 const RULER_GUTTER_Y = 22
 
+const TASKBAR_HEIGHT = 44
+
 function shellHttpBase(): string | null {
   const u = window.__DERP_SHELL_HTTP
   if (u && u.startsWith('http://127.0.0.1:')) return u.replace(/\/$/, '')
@@ -736,15 +738,30 @@ function App() {
     return map
   })
 
-  const taskbarWindows = createMemo(() =>
-    windowsList().map((w) => ({
+  const taskbarScreens = createMemo(() =>
+    screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
+  )
+
+  function taskbarRowsForScreen(s: LayoutScreen) {
+    const list = windowsByMonitor().get(s.name) ?? []
+    return list.map((w) => ({
       window_id: w.window_id,
       title: w.title,
       app_id: w.app_id,
       minimized: w.minimized,
       output_name: w.output_name,
-    })),
-  )
+    }))
+  }
+
+  function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
+    return (
+      s.name === primary.name &&
+      s.x === primary.x &&
+      s.y === primary.y &&
+      s.width === primary.width &&
+      s.height === primary.height
+    )
+  }
 
   const horizontalRulerTicks = createMemo(() => {
     const w = viewportCss().w
@@ -2049,6 +2066,42 @@ function App() {
         )}
       </For>
 
+      <For each={taskbarScreens()}>
+        {(s) => {
+          const primary = workspacePartition().primary
+          const isPrim = isPrimaryTaskbarScreen(s, primary)
+          return (
+            <div
+              class="pointer-events-none absolute z-[400000]"
+              style={{
+                left: `${s.x}px`,
+                top: `${s.y + s.height - TASKBAR_HEIGHT}px`,
+                width: `${s.width}px`,
+                height: `${TASKBAR_HEIGHT}px`,
+              }}
+            >
+              <Taskbar
+                isPrimary={isPrim}
+                programsMenuOpen={programsMenuOpen()}
+                onProgramsMenuClick={onProgramsMenuClick}
+                powerMenuOpen={powerMenuOpen()}
+                onPowerMenuClick={onPowerMenuClick}
+                windows={taskbarRowsForScreen(s)}
+                focusedWindowId={focusedWindowId()}
+                debugPanelOpen={debugPanelOpen()}
+                onDebugPanelToggle={() => {
+                  setDebugPanelOpen((v) => !v)
+                  scheduleExclusionZonesSync()
+                }}
+                onTaskbarActivate={(id) => {
+                  shellWireSend('taskbar_activate', id)
+                }}
+              />
+            </div>
+          )
+        }}
+      </For>
+
       <Show when={workspacePartition().primary}>
         {(prim) => (
           <div
@@ -2399,23 +2452,6 @@ function App() {
                 </div>
               </Show>
             </div>
-
-            <Taskbar
-              programsMenuOpen={programsMenuOpen()}
-              onProgramsMenuClick={onProgramsMenuClick}
-              powerMenuOpen={powerMenuOpen()}
-              onPowerMenuClick={onPowerMenuClick}
-              windows={taskbarWindows()}
-              focusedWindowId={focusedWindowId()}
-              debugPanelOpen={debugPanelOpen()}
-              onDebugPanelToggle={() => {
-                setDebugPanelOpen((v) => !v)
-                scheduleExclusionZonesSync()
-              }}
-              onTaskbarActivate={(id) => {
-                shellWireSend('taskbar_activate', id)
-              }}
-            />
 
             <div
               class="pointer-events-auto fixed z-[15] min-w-[160px] cursor-grab touch-none rounded-lg border border-white/25 bg-[hsla(280,45%,35%,0.92)] px-3.5 py-2.5 text-[13px] font-semibold select-none text-neutral-100 shadow-[0_4px_16px_rgba(0,0,0,0.35)] active:cursor-grabbing"

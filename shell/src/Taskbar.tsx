@@ -1,4 +1,4 @@
-import { For } from 'solid-js'
+import { For, Show } from 'solid-js'
 
 export type TaskbarWindowRow = {
   window_id: number
@@ -9,6 +9,7 @@ export type TaskbarWindowRow = {
 }
 
 export type TaskbarProps = {
+  isPrimary: boolean
   programsMenuOpen: boolean
   onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   powerMenuOpen: boolean
@@ -26,18 +27,25 @@ export function Taskbar(props: TaskbarProps) {
       class="pointer-events-auto absolute bottom-0 left-0 right-0 z-[50000] box-border flex h-11 items-center border-t border-white/18 bg-[hsla(210,28%,14%,0.94)] px-2.5 shadow-[0_-4px_20px_rgba(0,0,0,0.35)]"
       data-shell-taskbar
     >
-      <button
-        type="button"
-        class="cursor-pointer rounded-md border border-white/35 bg-shell-btn-primary py-1.5 px-[0.9rem] text-sm font-semibold tracking-wide text-neutral-900 hover:brightness-[1.06]"
-        data-shell-programs-toggle
-        aria-expanded={props.programsMenuOpen}
-        aria-haspopup="menu"
-        onClick={(e) => props.onProgramsMenuClick(e)}
-      >
-        Programs
-      </button>
+      <Show when={props.isPrimary}>
+        <button
+          type="button"
+          class="cursor-pointer rounded-md border border-white/35 bg-shell-btn-primary py-1.5 px-[0.9rem] text-sm font-semibold tracking-wide text-neutral-900 hover:brightness-[1.06]"
+          data-shell-programs-toggle
+          aria-expanded={props.programsMenuOpen}
+          aria-haspopup="menu"
+          onClick={(e) => props.onProgramsMenuClick(e)}
+        >
+          Programs
+        </button>
+      </Show>
 
-      <div class="ml-2.5 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto overflow-y-hidden" role="list" aria-label="Windows">
+      <div
+        class="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto overflow-y-hidden"
+        classList={{ 'ml-2.5': props.isPrimary }}
+        role="list"
+        aria-label="Windows"
+      >
         <For each={props.windows}>
           {(w) => (
             <button
@@ -63,34 +71,36 @@ export function Taskbar(props: TaskbarProps) {
         </For>
       </div>
 
-      <div class="ml-auto flex shrink-0 items-center gap-2.5">
-        <button
-          type="button"
-          class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
-          classList={{
-            'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.debugPanelOpen,
-          }}
-          aria-pressed={props.debugPanelOpen}
-          title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
-          onClick={() => props.onDebugPanelToggle()}
-        >
-          Debug
-        </button>
-        <button
-          type="button"
-          class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
-          classList={{
-            'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.powerMenuOpen,
-          }}
-          data-shell-power-toggle
-          aria-expanded={props.powerMenuOpen}
-          aria-haspopup="menu"
-          title="Power"
-          onClick={(e) => props.onPowerMenuClick(e)}
-        >
-          Power
-        </button>
-      </div>
+      <Show when={props.isPrimary}>
+        <div class="ml-auto flex shrink-0 items-center gap-2.5">
+          <button
+            type="button"
+            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            classList={{
+              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.debugPanelOpen,
+            }}
+            aria-pressed={props.debugPanelOpen}
+            title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
+            onClick={() => props.onDebugPanelToggle()}
+          >
+            Debug
+          </button>
+          <button
+            type="button"
+            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            classList={{
+              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.powerMenuOpen,
+            }}
+            data-shell-power-toggle
+            aria-expanded={props.powerMenuOpen}
+            aria-haspopup="menu"
+            title="Power"
+            onClick={(e) => props.onPowerMenuClick(e)}
+          >
+            Power
+          </button>
+        </div>
+      </Show>
     </div>
   )
 }
