@@ -155,7 +155,9 @@ impl XdgShellHandler for CompositorState {
                 app_id = %info.app_id,
                 "xdg new_toplevel emitted WindowMapped immediate map"
             );
+            let spawn_focus_wid = info.window_id;
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
+            self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
         }
     }
 

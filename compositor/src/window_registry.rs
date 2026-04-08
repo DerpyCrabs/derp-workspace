@@ -78,6 +78,10 @@ impl WindowRegistry {
         Some(wid)
     }
 
+    pub fn highest_allocated_window_id(&self) -> WindowId {
+        self.next_id.saturating_sub(1)
+    }
+
     pub fn window_id_for_wl_surface(&self, wl: &WlSurface) -> Option<WindowId> {
         self.by_surface.get(&key(wl)?).copied()
     }

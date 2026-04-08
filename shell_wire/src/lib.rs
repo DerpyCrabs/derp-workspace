@@ -1040,7 +1040,10 @@ pub enum DecodedCompositorToShellMessage {
     Ping,
     ContextMenuDismiss,
     ProgramsMenuToggle,
-    Keybind { action: String },
+    Keybind {
+        action: String,
+        target_window_id: u32,
+    },
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -1099,7 +1102,7 @@ pub fn encode_compositor_programs_menu_toggle() -> Vec<u8> {
     v
 }
 
-pub fn encode_compositor_keybind(action: &str) -> Option<Vec<u8>> {
+pub fn encode_compositor_keybind(action: &str, target_window_id: u32) -> Option<Vec<u8>> {
     let b = action.as_bytes();
     if b.is_empty() || b.contains(&0) {
         return None;
@@ -1108,7 +1111,7 @@ pub fn encode_compositor_keybind(action: &str) -> Option<Vec<u8>> {
     if al > MAX_KEYBIND_ACTION_BYTES {
         return None;
     }
-    let body_len = 8u32.checked_add(al)?;
+    let body_len = 12u32.checked_add(al)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
@@ -1117,6 +1120,7 @@ pub fn encode_compositor_keybind(action: &str) -> Option<Vec<u8>> {
     v.extend_from_slice(&MSG_COMPOSITOR_KEYBIND.to_le_bytes());
     v.extend_from_slice(&al.to_le_bytes());
     v.extend_from_slice(b);
+    v.extend_from_slice(&target_window_id.to_le_bytes());
     Some(v)
 }
 
@@ -1558,13 +1562,21 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             let end = 8usize
                 .checked_add(al)
                 .ok_or(DecodeError::BadCompositorToShellPayload)?;
-            if body.len() != end {
+            if body.len() != end && body.len() != end + 4 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let action = std::str::from_utf8(&body[8..end])
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
-            Ok(DecodedCompositorToShellMessage::Keybind { action })
+            let target_window_id = if body.len() >= end + 4 {
+                u32::from_le_bytes(body[end..end + 4].try_into().unwrap())
+            } else {
+                0
+            };
+            Ok(DecodedCompositorToShellMessage::Keybind {
+                action,
+                target_window_id,
+            })
         }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN

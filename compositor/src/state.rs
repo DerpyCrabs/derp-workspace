@@ -86,6 +86,7 @@ use smithay::input::pointer::CursorImageStatus;
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
+pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
 /// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
@@ -300,6 +301,8 @@ pub struct CompositorState {
     /// Last Wayland client toplevel that had keyboard focus (non–solid-shell). Used for taskbar
     /// minimize when real keyboard focus is on the shell/CEF layer.
     pub(crate) shell_last_non_shell_focus_window_id: Option<u32>,
+    /// After [`Self::try_spawn_wayland_client_sh`]: focus the first new non-shell toplevel with a greater window id.
+    shell_spawn_focus_above_window_id: Option<u32>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
@@ -496,6 +499,7 @@ impl CompositorState {
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
             shell_last_non_shell_focus_window_id: None,
+            shell_spawn_focus_above_window_id: None,
             shell_minimized_windows: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
@@ -769,9 +773,81 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_keybind(&mut self, action: &str) {
+        self.shell_send_keybind_ex(action, None);
+    }
+
+    pub(crate) fn shell_send_keybind_ex(&mut self, action: &str, target_window_id: Option<u32>) {
         self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
+            target_window_id,
         });
+    }
+
+    fn super_keybind_target_window_id(&self) -> Option<u32> {
+        if let Some(wid) = self.keyboard_focused_window_id() {
+            if let Some(info) = self.window_registry.window_info(wid) {
+                if !self.window_info_is_solid_shell_host(&info) {
+                    return Some(wid);
+                }
+            }
+        }
+        self.shell_last_non_shell_focus_window_id
+    }
+
+    pub(crate) fn shell_consider_focus_spawned_toplevel(&mut self, window_id: u32) {
+        let Some(th) = self.shell_spawn_focus_above_window_id else {
+            return;
+        };
+        if window_id <= th {
+            return;
+        }
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            self.shell_spawn_focus_above_window_id = None;
+            return;
+        };
+        if self.window_info_is_solid_shell_host(&info) || !shell_window_row_should_show(&info) {
+            return;
+        }
+        self.shell_spawn_focus_above_window_id = None;
+        self.shell_raise_and_focus_window(window_id);
+    }
+
+    pub(crate) fn handle_super_keybind(&mut self, action: &str) {
+        match action {
+            "close_focused" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    self.shell_close_window(wid);
+                }
+            }
+            "toggle_fullscreen" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
+                        return;
+                    };
+                    let Some(window) = self.find_window_by_surface_id(sid) else {
+                        return;
+                    };
+                    let wl = window.toplevel().unwrap().wl_surface();
+                    let fs = read_toplevel_tiling(wl).1;
+                    self.shell_set_window_fullscreen(wid, !fs);
+                }
+            }
+            "toggle_maximize" => {
+                self.shell_send_keybind_ex(
+                    "toggle_maximize",
+                    self.super_keybind_target_window_id(),
+                );
+            }
+            "launch_terminal"
+            | "toggle_programs_menu"
+            | "tile_left"
+            | "tile_right"
+            | "tile_up"
+            | "tile_down"
+            | "move_monitor_left"
+            | "move_monitor_right" => self.shell_send_keybind(action),
+            _ => {}
+        }
     }
 
     pub(crate) fn accept_shell_dmabuf_from_cef(
@@ -1222,7 +1298,9 @@ impl CompositorState {
                 map_y = pending.map_y,
                 "deferred toplevel mapped WindowMapped emitted"
             );
+            let spawn_focus_wid = info.window_id;
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
+            self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
         }
     }
 
@@ -1320,6 +1398,21 @@ impl CompositorState {
         Some((loc.x, loc.y, sz.w, sz.h))
     }
 
+    pub(crate) fn shell_maximize_work_area_global_for_output(
+        &self,
+        output: &Output,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let g = self.space.output_geometry(output)?;
+        let th = self.shell_chrome_titlebar_h.max(0);
+        let tb = SHELL_TASKBAR_RESERVE_PX;
+        let h = g.size.h.saturating_sub(th).saturating_sub(tb).max(1);
+        let w = g.size.w.max(1);
+        Some(Rectangle::new(
+            Point::from((g.loc.x, g.loc.y.saturating_add(th))),
+            Size::from((w, h)),
+        ))
+    }
+
     pub(crate) fn apply_toplevel_maximize_layout(&mut self, window: &Window) -> bool {
         let Some(tl) = window.toplevel() else {
             return false;
@@ -1332,7 +1425,7 @@ impl CompositorState {
             let Some(ref out) = o else {
                 return false;
             };
-            let Some(g) = self.space.output_geometry(out) else {
+            let Some(g) = self.shell_maximize_work_area_global_for_output(out) else {
                 return false;
             };
             g
@@ -3069,7 +3162,6 @@ impl CompositorState {
         };
         let wl = window.toplevel().unwrap().wl_surface();
         if enabled {
-            // Maximize bounds come from the shell via [`MSG_SHELL_SET_GEOMETRY`] + `layout_state = 1`.
             return;
         } else {
             if !read_toplevel_tiling(wl).0 {
@@ -3707,7 +3799,7 @@ impl CompositorState {
     }
 
     /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).
-    pub fn try_spawn_wayland_client_sh(&self, shell_command: &str) -> Result<(), String> {
+    pub fn try_spawn_wayland_client_sh(&mut self, shell_command: &str) -> Result<(), String> {
         let trimmed = shell_command.trim();
         if trimmed.is_empty() {
             return Err("empty command".into());
@@ -3725,6 +3817,7 @@ impl CompositorState {
             .stdin(Stdio::null());
         let child = cmd.spawn().map_err(|e| e.to_string())?;
         tracing::debug!(pid = child.id(), "spawned Wayland client via shell IPC");
+        self.shell_spawn_focus_above_window_id = Some(self.window_registry.highest_allocated_window_id());
         Ok(())
     }
 }

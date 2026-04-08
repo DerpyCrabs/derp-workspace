@@ -442,7 +442,7 @@ impl CompositorState {
                                 if state.programs_menu_super_armed && !is_super {
                                     if let Some(action) = super_keybind_action(raw_sym, mods.shift) {
                                         state.programs_menu_super_chord = true;
-                                        state.shell_send_keybind(action);
+                                        state.handle_super_keybind(action);
                                         return FilterResult::Intercept(());
                                     }
                                     state.programs_menu_super_chord = true;

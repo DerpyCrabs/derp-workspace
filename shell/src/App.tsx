@@ -221,6 +221,7 @@ type DerpShellDetail =
   | { type: 'window_list'; windows: unknown[] }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle' }
+  | { type: 'keybind'; action: string; target_window_id?: number }
 
 type DesktopAppEntry = {
   name: string
@@ -763,6 +764,22 @@ function App() {
     )
   }
 
+  function screenTaskbarHiddenForFullscreen(s: LayoutScreen) {
+    const list = windowsByMonitor().get(s.name) ?? []
+    return list.some((w) => w.fullscreen && !w.minimized)
+  }
+
+  const fullscreenTaskbarExclusionSig = createMemo(() => {
+    const byMon = windowsByMonitor()
+    return taskbarScreens()
+      .map((scr) => {
+        const list = byMon.get(scr.name) ?? []
+        const hide = list.some((w) => w.fullscreen && !w.minimized)
+        return `${scr.name}:${hide ? 1 : 0}`
+      })
+      .join('|')
+  })
+
   const horizontalRulerTicks = createMemo(() => {
     const w = viewportCss().w
     if (w <= 0) return [] as number[]
@@ -890,8 +907,39 @@ function App() {
     })
   }
 
+  createEffect(() => {
+    fullscreenTaskbarExclusionSig()
+    queueMicrotask(() => scheduleExclusionZonesSync())
+  })
+
   function bumpSnapChrome() {
     setSnapChromeRev((n) => n + 1)
+  }
+
+  function toggleShellMaximizeForWindow(wid: number) {
+    const w = windows().get(wid)
+    if (!w) return
+    if (w.maximized) {
+      shellWireSend('set_maximized', wid, 0)
+      return
+    }
+    shellTiled.delete(wid)
+    tileRestore.delete(wid)
+    bumpSnapChrome()
+    scheduleExclusionZonesSync()
+    floatBeforeMaximize.set(wid, { x: w.x, y: w.y, w: w.width, h: w.height })
+    const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
+    const mon = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
+    if (!mon) return
+    const prim = workspacePartition().primary
+    const reserveTb =
+      !!prim &&
+      mon.x === prim.x &&
+      mon.y === prim.y &&
+      mon.width === prim.width &&
+      mon.height === prim.height
+    const r = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
+    shellWireSend('set_geometry', wid, r.x, r.y, r.w, r.h, SHELL_LAYOUT_MAXIMIZED)
   }
 
   /** Local-only draggable box. CEF OSR often delivers mouse events to `window` more reliably than `PointerEvent` + capture on a node. */
@@ -1556,6 +1604,38 @@ function App() {
         toggleProgramsMenuMeta()
         return
       }
+      if (d.type === 'keybind') {
+        const action = typeof d.action === 'string' ? d.action : ''
+        const fid = focusedWindowId()
+        const wmap = windows()
+        if (action === 'launch_terminal') {
+          void spawnInCompositor(spawnCommand())
+          return
+        }
+        if (action === 'close_focused') {
+          if (fid !== null) shellWireSend('close', fid)
+          return
+        }
+        if (action === 'toggle_programs_menu') {
+          toggleProgramsMenuMeta()
+          return
+        }
+        if (action === 'toggle_fullscreen') {
+          if (fid === null) return
+          const w = wmap.get(fid)
+          if (!w) return
+          shellWireSend('set_fullscreen', fid, w.fullscreen ? 0 : 1)
+          return
+        }
+        if (action === 'toggle_maximize') {
+          const fromEv = coerceShellWindowId(d.target_window_id)
+          const tid = fromEv ?? fid
+          if (tid === null) return
+          toggleShellMaximizeForWindow(tid)
+          return
+        }
+        return
+      }
       if (d.type === 'focus_changed') {
         const fw = coerceShellWindowId(d.window_id)
         setFocusedWindowId((prev) => (prev === fw ? prev : fw))
@@ -2013,36 +2093,7 @@ function App() {
                 shellWireSend('minimize', win().window_id)
               }}
               onMaximize={() => {
-                const w = win()
-                if (w.maximized) {
-                  shellWireSend('set_maximized', w.window_id, 0)
-                  return
-                }
-                shellTiled.delete(w.window_id)
-                tileRestore.delete(w.window_id)
-                bumpSnapChrome()
-                scheduleExclusionZonesSync()
-                floatBeforeMaximize.set(w.window_id, { x: w.x, y: w.y, w: w.width, h: w.height })
-                const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
-                const mon = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
-                if (!mon) return
-                const prim = workspacePartition().primary
-                const reserveTb =
-                  !!prim &&
-                  mon.x === prim.x &&
-                  mon.y === prim.y &&
-                  mon.width === prim.width &&
-                  mon.height === prim.height
-                const r = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
-                shellWireSend(
-                  'set_geometry',
-                  w.window_id,
-                  r.x,
-                  r.y,
-                  r.w,
-                  r.h,
-                  SHELL_LAYOUT_MAXIMIZED,
-                )
+                toggleShellMaximizeForWindow(win().window_id)
               }}
               onClose={() => {
                 shellWireSend('close', win().window_id)
@@ -2075,34 +2126,36 @@ function App() {
           const primary = workspacePartition().primary
           const isPrim = isPrimaryTaskbarScreen(s, primary)
           return (
-            <div
-              class="pointer-events-none absolute z-[400000]"
-              style={{
-                left: `${s.x}px`,
-                top: `${s.y + s.height - TASKBAR_HEIGHT}px`,
-                width: `${s.width}px`,
-                height: `${TASKBAR_HEIGHT}px`,
-              }}
-            >
-              <Taskbar
-                monitorName={s.name}
-                isPrimary={isPrim}
-                programsMenuOpen={programsMenuOpen()}
-                onProgramsMenuClick={onProgramsMenuClick}
-                powerMenuOpen={powerMenuOpen()}
-                onPowerMenuClick={onPowerMenuClick}
-                windows={taskbarRowsForScreen(s)}
-                focusedWindowId={focusedWindowId()}
-                debugPanelOpen={debugPanelOpen()}
-                onDebugPanelToggle={() => {
-                  setDebugPanelOpen((v) => !v)
-                  scheduleExclusionZonesSync()
+            <Show when={!screenTaskbarHiddenForFullscreen(s)}>
+              <div
+                class="pointer-events-none absolute z-[400000]"
+                style={{
+                  left: `${s.x}px`,
+                  top: `${s.y + s.height - TASKBAR_HEIGHT}px`,
+                  width: `${s.width}px`,
+                  height: `${TASKBAR_HEIGHT}px`,
                 }}
-                onTaskbarActivate={(id) => {
-                  shellWireSend('taskbar_activate', id)
-                }}
-              />
-            </div>
+              >
+                <Taskbar
+                  monitorName={s.name}
+                  isPrimary={isPrim}
+                  programsMenuOpen={programsMenuOpen()}
+                  onProgramsMenuClick={onProgramsMenuClick}
+                  powerMenuOpen={powerMenuOpen()}
+                  onPowerMenuClick={onPowerMenuClick}
+                  windows={taskbarRowsForScreen(s)}
+                  focusedWindowId={focusedWindowId()}
+                  debugPanelOpen={debugPanelOpen()}
+                  onDebugPanelToggle={() => {
+                    setDebugPanelOpen((v) => !v)
+                    scheduleExclusionZonesSync()
+                  }}
+                  onTaskbarActivate={(id) => {
+                    shellWireSend('taskbar_activate', id)
+                  }}
+                />
+              </div>
+            </Show>
           )
         }}
       </For>

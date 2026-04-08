@@ -56,8 +56,12 @@ pub fn chrome_event_to_shell_message(
                 minimized: *minimized,
             }
         }
-        ChromeEvent::Keybind { action } => shell_wire::DecodedCompositorToShellMessage::Keybind {
+        ChromeEvent::Keybind {
+            action,
+            target_window_id,
+        } => shell_wire::DecodedCompositorToShellMessage::Keybind {
             action: action.clone(),
+            target_window_id: target_window_id.unwrap_or(0),
         },
     })
 }
