@@ -23,12 +23,18 @@ import {
   canvasOriginXY,
   clientPointToCanvasLocal,
   clientPointToGlobalLogical,
+  findAdjacentMonitor,
   pickScreenContainingGlobalPoint,
   pickScreenForWindow,
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
 } from './shellCoords'
-import { keyboardTileHalfRectGlobal, snapRectGlobalForPointerOnMonitor } from './tileSnap'
+import {
+  inferHalfTileSide,
+  keyboardTileHalfRectGlobal,
+  monitorWorkAreaGlobal,
+  snapRectGlobalForPointerOnMonitor,
+} from './tileSnap'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
 import {
@@ -1632,6 +1638,66 @@ function App() {
           const tid = fromEv ?? fid
           if (tid === null) return
           toggleShellMaximizeForWindow(tid)
+          return
+        }
+        if (action === 'move_monitor_left' || action === 'move_monitor_right') {
+          if (fid === null) return
+          const w = wmap.get(fid)
+          if (!w || w.minimized || w.fullscreen) return
+          const co = layoutCanvasOrigin()
+          const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
+          const curMon = pickScreenForWindow(w, list, co) ?? list[0] ?? null
+          if (!curMon) return
+          const tgtMon = findAdjacentMonitor(
+            curMon,
+            list,
+            action === 'move_monitor_left' ? 'left' : 'right',
+          )
+          if (!tgtMon) return
+          const prim = workspacePartition().primary
+          const reserveCur = isPrimaryTaskbarScreen(curMon, prim)
+          const reserveTgt = isPrimaryTaskbarScreen(tgtMon, prim)
+          const glob = rectCanvasLocalToGlobal(w.x, w.y, w.width, w.height, co)
+          let gRect: { x: number; y: number; w: number; h: number }
+          let layoutFlag: typeof SHELL_LAYOUT_FLOATING | typeof SHELL_LAYOUT_MAXIMIZED
+          if (w.maximized) {
+            gRect = shellMaximizedWorkAreaGlobalRect(tgtMon, reserveTgt)
+            layoutFlag = SHELL_LAYOUT_MAXIMIZED
+          } else if (shellTiled.has(fid)) {
+            const side = inferHalfTileSide(glob, curMon, prim)
+            gRect = keyboardTileHalfRectGlobal(tgtMon, prim, side)
+            layoutFlag = SHELL_LAYOUT_FLOATING
+          } else {
+            const srcWork = monitorWorkAreaGlobal(curMon, reserveCur)
+            const tgtWork = monitorWorkAreaGlobal(tgtMon, reserveTgt)
+            const relY = glob.y - srcWork.y
+            let newGlobX = tgtWork.x + Math.floor((tgtWork.w - glob.w) / 2)
+            let newGlobY = tgtWork.y + relY
+            const maxX = tgtWork.x + tgtWork.w - glob.w
+            const maxY = tgtWork.y + tgtWork.h - glob.h
+            newGlobX = Math.max(tgtWork.x, Math.min(newGlobX, maxX))
+            newGlobY = Math.max(tgtWork.y, Math.min(newGlobY, maxY))
+            gRect = { x: newGlobX, y: newGlobY, w: glob.w, h: glob.h }
+            layoutFlag = SHELL_LAYOUT_FLOATING
+          }
+          const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
+          shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, layoutFlag)
+          setWindows((m) => {
+            const cur = m.get(fid)
+            if (!cur) return m
+            const next = new Map(m)
+            next.set(fid, {
+              ...cur,
+              x: loc.x,
+              y: loc.y,
+              width: loc.w,
+              height: loc.h,
+              maximized: layoutFlag === SHELL_LAYOUT_MAXIMIZED,
+            })
+            return next
+          })
+          scheduleExclusionZonesSync()
+          bumpSnapChrome()
           return
         }
         if (action === 'tile_left' || action === 'tile_right') {

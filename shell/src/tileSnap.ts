@@ -69,6 +69,17 @@ export function keyboardTileHalfRectGlobal(
   return halfRect(work, side)
 }
 
+export function inferHalfTileSide(
+  winGlob: { x: number; y: number; w: number; h: number },
+  mon: LayoutScreen,
+  primaryChromeMon: LayoutScreen | null,
+): 'left' | 'right' {
+  const work = monitorWorkAreaGlobal(mon, primaryMatchesMon(mon, primaryChromeMon))
+  const mid = work.x + work.w / 2
+  const winMid = winGlob.x + winGlob.w / 2
+  return winMid < mid ? 'left' : 'right'
+}
+
 export function hitTestSnapRectGlobal(
   px: number,
   py: number,

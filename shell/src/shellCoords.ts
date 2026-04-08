@@ -90,3 +90,21 @@ export function pickScreenForWindow<T extends { x: number; y: number; width: num
   const { cx, cy } = windowCenterGlobal(win, origin)
   return pickScreenContainingGlobalPoint(cx, cy, screens)
 }
+
+export function findAdjacentMonitor<
+  T extends { x: number; y: number; width: number; height: number; name: string },
+>(current: T, allScreens: ReadonlyArray<T>, direction: 'left' | 'right'): T | null {
+  if (allScreens.length === 0) return null
+  const sorted = [...allScreens].sort((a, b) => a.x - b.x || a.y - b.y)
+  const idx = sorted.findIndex(
+    (s) =>
+      s.name === current.name &&
+      s.x === current.x &&
+      s.y === current.y &&
+      s.width === current.width &&
+      s.height === current.height,
+  )
+  if (idx < 0) return null
+  if (direction === 'left') return idx > 0 ? sorted[idx - 1]! : null
+  return idx < sorted.length - 1 ? sorted[idx + 1]! : null
+}
