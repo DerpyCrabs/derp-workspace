@@ -1,6 +1,6 @@
 import { CHROME_BORDER_PX, CHROME_TITLEBAR_PX } from './chromeConstants'
 
-export const SHELL_CHROME_BG_FOCUSED_OPAQUE = 'hsl(210, 38%, 26%)'
+export const SHELL_CHROME_BG_FOCUSED_OPAQUE = 'hsl(210, 55%, 48%)'
 export const SHELL_CHROME_BG_UNFOCUSED_OPAQUE = 'hsl(210, 18%, 15%)'
 
 export const SHELL_EXCLUSION_ZONES_SENT_MAX = 128

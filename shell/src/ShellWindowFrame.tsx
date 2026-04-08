@@ -120,8 +120,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           <span
             class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
             classList={{
-              'opacity-[0.72]': !props.focused,
-              'opacity-[0.95]': props.focused,
+              'text-neutral-200 opacity-[0.62]': !props.focused,
+              'text-white opacity-100': props.focused,
             }}
           >
             {props.win.title || props.win.app_id || `window ${props.win.window_id}`}

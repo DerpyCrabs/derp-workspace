@@ -85,7 +85,7 @@ impl XdgShellHandler for CompositorState {
         let (map_x, map_y) = if map_at_output_origin {
             self.primary_output_logical_origin()
         } else {
-            self.new_toplevel_initial_location()
+            self.new_toplevel_initial_location(&window, parent.as_ref())
         };
         tracing::debug!(
             target: "derp_shell_sync",
@@ -163,6 +163,10 @@ impl XdgShellHandler for CompositorState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
+        let window_id_pre = self.window_registry.window_id_for_wl_surface(wl);
+        let keyboard_had_focus_here = window_id_pre.is_some_and(|id| {
+            self.keyboard_focused_window_id() == Some(id)
+        });
         let removed_pre = self.window_registry.snapshot_for_wl_surface(wl);
         let mut had_pending_deferred = false;
         if let Some(k) = crate::window_registry::wl_surface_key(wl) {
@@ -191,6 +195,7 @@ impl XdgShellHandler for CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
+            self.focus_history_remove_window(window_id);
             if self.shell_last_non_shell_focus_window_id == Some(window_id) {
                 self.shell_last_non_shell_focus_window_id = None;
             }
@@ -207,6 +212,9 @@ impl XdgShellHandler for CompositorState {
             }
             if !had_pending_deferred {
                 self.shell_emit_chrome_window_unmapped(window_id, removed);
+            }
+            if keyboard_had_focus_here {
+                self.try_refocus_after_closed_toplevel();
             }
         }
     }

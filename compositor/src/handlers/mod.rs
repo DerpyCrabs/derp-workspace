@@ -42,6 +42,7 @@ impl SeatHandler for CompositorState {
             if let Some(info) = self.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {
                     self.shell_last_non_shell_focus_window_id = Some(wid);
+                    self.push_non_shell_focus_history(wid);
                 }
             }
         }

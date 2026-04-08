@@ -91,7 +91,7 @@ pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
 /// Added per already-mapped toplevel so new windows are not stacked at the identical `(offset_x, offset_y)` (breaks shell chrome / input).
-pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 48;
+pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 30;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
@@ -301,6 +301,7 @@ pub struct CompositorState {
     /// Last Wayland client toplevel that had keyboard focus (non–solid-shell). Used for taskbar
     /// minimize when real keyboard focus is on the shell/CEF layer.
     pub(crate) shell_last_non_shell_focus_window_id: Option<u32>,
+    focus_history_non_shell: Vec<u32>,
     /// After [`Self::try_spawn_wayland_client_sh`]: focus the first new non-shell toplevel with a greater window id.
     shell_spawn_focus_above_window_id: Option<u32>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
@@ -500,6 +501,7 @@ impl CompositorState {
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
             shell_last_non_shell_focus_window_id: None,
+            focus_history_non_shell: Vec::new(),
             shell_spawn_focus_above_window_id: None,
             shell_minimized_windows: HashMap::new(),
             shell_move_window_id: None,
@@ -1068,112 +1070,102 @@ impl CompositorState {
         None
     }
 
-    fn new_toplevel_placement_output_geometry(&self) -> Option<Rectangle<i32, Logical>> {
-        if let Some(ptr) = self.seat.get_pointer() {
-            if let Some(out) = self.output_containing_global_point(ptr.current_location()) {
-                if let Some(g) = self.space.output_geometry(&out) {
-                    return Some(g);
+    fn new_toplevel_placement_output(&self, parent_wl: Option<&WlSurface>) -> Option<Output> {
+        if let Some(pw) = parent_wl {
+            if let Some(w) = self.space.elements().find_map(|e| {
+                if let DerpSpaceElem::Wayland(w) = e {
+                    w.toplevel()
+                        .filter(|t| t.wl_surface() == pw)
+                        .map(|_| w.clone())
+                } else {
+                    None
+                }
+            }) {
+                let elem = DerpSpaceElem::Wayland(w.clone());
+                if let Some(loc) = self.space.element_location(&elem) {
+                    let sz = w.geometry().size;
+                    let ww = sz.w.max(1);
+                    let hh = sz.h.max(1);
+                    if let Some(o) = self.output_for_global_xywh(loc.x, loc.y, ww, hh) {
+                        return Some(o);
+                    }
                 }
             }
         }
+        if let Some(ptr) = self.seat.get_pointer() {
+            if let Some(out) = self.output_containing_global_point(ptr.current_location()) {
+                return Some(out);
+            }
+        }
         if let Some(out) = self.shell_effective_primary_output() {
-            if let Some(g) = self.space.output_geometry(&out) {
-                return Some(g);
-            }
+            return Some(out);
         }
-        if let Some(out) = self.leftmost_output() {
-            if let Some(g) = self.space.output_geometry(&out) {
-                return Some(g);
-            }
-        }
-        self.workspace_logical_bounds()
+        self.leftmost_output()
     }
 
-    fn window_element_center_on_output(
-        geo: &Rectangle<i32, Logical>,
-        elem_loc: Point<i32, Logical>,
-        wdt: i32,
-        hgt: i32,
-    ) -> bool {
-        let cx = elem_loc.x.saturating_add(wdt.saturating_div(2));
-        let cy = elem_loc.y.saturating_add(hgt.saturating_div(2));
-        cx >= geo.loc.x
-            && cy >= geo.loc.y
-            && cx < geo.loc.x.saturating_add(geo.size.w)
-            && cy < geo.loc.y.saturating_add(geo.size.h)
+    fn element_top_left_occupied(&self, x: i32, y: i32) -> bool {
+        self.space.elements().any(|e| {
+            self.space
+                .element_location(e)
+                .is_some_and(|loc| loc.x == x && loc.y == y)
+        })
     }
 
-    /// Logical top-left for mapping a new xdg toplevel (client rectangle origin).
-    ///
-    /// Placement uses the output under the pointer (fallback: shell primary, then leftmost, then
-    /// workspace union). Each additional window on **that output** is placed to the right of the
-    /// rightmost window there, or below the stack if there is no horizontal room.
-    pub fn new_toplevel_initial_location(&self) -> (i32, i32) {
-        const GAP: i32 = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
-        const MIN_PLACEHOLDER_W: i32 = 240;
-
-        let Some(geo) = self.new_toplevel_placement_output_geometry() else {
+    pub fn new_toplevel_initial_location(
+        &self,
+        window: &Window,
+        parent_wl: Option<&WlSurface>,
+    ) -> (i32, i32) {
+        let Some(out) = self.new_toplevel_placement_output(parent_wl) else {
+            return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
+        };
+        let Some(work) = self.shell_maximize_work_area_global_for_output(&out) else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
 
-        let base_x = geo.loc.x.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_X);
-        let base_y = geo.loc.y.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
-
-        let mut max_right = i32::MIN;
-        let mut min_top = i32::MAX;
-        let mut max_bottom = i32::MIN;
-        let mut any_on_output = false;
-
-        for w in self.space.elements() {
-            let Some(loc) = self.space.element_location(w) else {
-                continue;
-            };
-            let sz = w.geometry().size;
-            let wdt = sz.w.max(1);
-            let hgt = sz.h.max(1);
-            if !Self::window_element_center_on_output(&geo, loc, wdt, hgt) {
-                continue;
-            }
-            any_on_output = true;
-            max_right = max_right.max(loc.x.saturating_add(wdt));
-            min_top = min_top.min(loc.y);
-            max_bottom = max_bottom.max(loc.y.saturating_add(hgt));
-        }
-
-        if !any_on_output || max_right == i32::MIN {
-            return (base_x, base_y);
-        }
-
-        let right_limit = geo
-            .loc
-            .x
-            .saturating_add(geo.size.w)
-            .saturating_sub(MIN_PLACEHOLDER_W);
-
-        let (mut x, mut y) = if max_right.saturating_add(GAP) > right_limit {
-            (base_x, max_bottom.saturating_add(GAP))
+        let geo = window.geometry().size;
+        let bbox = window.bbox().size;
+        let (ww, hh) = if geo.w > 0 && geo.h > 0 {
+            (geo.w, geo.h)
+        } else if bbox.w > 0 && bbox.h > 0 {
+            (bbox.w, bbox.h)
         } else {
-            (
-                max_right.saturating_add(GAP),
-                if min_top == i32::MAX { base_y } else { min_top },
-            )
+            (800, 600)
         };
 
-        let min_y_client = geo.loc.y.saturating_add(self.shell_chrome_titlebar_h);
-        let max_y_client = geo
-            .loc
-            .y
-            .saturating_add(geo.size.h)
-            .saturating_sub(32);
-        y = y.clamp(min_y_client, max_y_client.max(min_y_client));
-
-        let min_x_client = geo.loc.x;
-        let max_x_client = geo
+        let max_x = work
             .loc
             .x
-            .saturating_add(geo.size.w)
-            .saturating_sub(MIN_PLACEHOLDER_W);
-        x = x.clamp(min_x_client, max_x_client.max(min_x_client));
+            .saturating_add(work.size.w)
+            .saturating_sub(ww);
+        let max_y = work
+            .loc
+            .y
+            .saturating_add(work.size.h)
+            .saturating_sub(hh);
+
+        let mut x = work
+            .loc
+            .x
+            .saturating_add(work.size.w.saturating_sub(ww) / 2);
+        let mut y = work
+            .loc
+            .y
+            .saturating_add(work.size.h.saturating_sub(hh) / 2);
+
+        x = x.clamp(work.loc.x, max_x.max(work.loc.x));
+        y = y.clamp(work.loc.y, max_y.max(work.loc.y));
+
+        let step = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
+        for _ in 0..64 {
+            if !self.element_top_left_occupied(x, y) {
+                break;
+            }
+            x = x.saturating_add(step);
+            y = y.saturating_add(step);
+            x = x.clamp(work.loc.x, max_x.max(work.loc.x));
+            y = y.clamp(work.loc.y, max_y.max(work.loc.y));
+        }
 
         (x, y)
     }
@@ -1589,7 +1581,7 @@ impl CompositorState {
         if self.restore_toplevel_floating_layout(window_id, window) {
             return true;
         }
-        let (x, y) = self.new_toplevel_initial_location();
+        let (x, y) = self.new_toplevel_initial_location(window, tl.parent().as_ref());
         self.cancel_shell_move_resize_for_window(window_id);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Maximized);
@@ -1619,7 +1611,7 @@ impl CompositorState {
         } else if self.restore_toplevel_floating_layout(window_id, window) {
             true
         } else {
-            let (x, y) = self.new_toplevel_initial_location();
+            let (x, y) = self.new_toplevel_initial_location(window, tl.parent().as_ref());
             self.cancel_shell_move_resize_for_window(window_id);
             tl.with_pending_state(|st| {
                 st.states.unset(xdg_toplevel::State::Fullscreen);
@@ -3238,9 +3230,70 @@ impl CompositorState {
         self.shell_presentation_fullscreen = enabled;
     }
 
-    fn keyboard_focused_window_id(&self) -> Option<u32> {
+    pub(crate) fn keyboard_focused_window_id(&self) -> Option<u32> {
         let surf = self.seat.get_keyboard()?.current_focus()?;
         self.window_registry.window_id_for_wl_surface(&surf)
+    }
+
+    pub(crate) fn push_non_shell_focus_history(&mut self, wid: u32) {
+        self.focus_history_non_shell.retain(|&x| x != wid);
+        self.focus_history_non_shell.push(wid);
+        const MAX: usize = 64;
+        while self.focus_history_non_shell.len() > MAX {
+            self.focus_history_non_shell.remove(0);
+        }
+    }
+
+    pub(crate) fn focus_history_remove_window(&mut self, wid: u32) {
+        self.focus_history_non_shell.retain(|&x| x != wid);
+    }
+
+    fn is_valid_user_focus_target(&self, window_id: u32) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if info.minimized || self.window_info_is_solid_shell_host(&info) {
+            return false;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return false;
+        };
+        self.find_window_by_surface_id(sid).is_some()
+    }
+
+    fn pick_next_focus_target(&self) -> Option<u32> {
+        for &wid in self.focus_history_non_shell.iter().rev() {
+            if self.is_valid_user_focus_target(wid) {
+                return Some(wid);
+            }
+        }
+        for e in self.space.elements().rev() {
+            if let DerpSpaceElem::Wayland(w) = e {
+                let Some(tl) = w.toplevel() else {
+                    continue;
+                };
+                let wl = tl.wl_surface();
+                let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) else {
+                    continue;
+                };
+                if self.is_valid_user_focus_target(wid) {
+                    return Some(wid);
+                }
+            }
+        }
+        None
+    }
+
+    pub(crate) fn try_refocus_after_closed_toplevel(&mut self) {
+        let Some(target) = self.pick_next_focus_target() else {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat
+                .get_keyboard()
+                .unwrap()
+                .set_focus(self, Option::<WlSurface>::None, serial);
+            return;
+        };
+        self.shell_raise_and_focus_window(target);
     }
 
     /// Raise a mapped Wayland toplevel to the top of the stack and give it keyboard focus.
