@@ -67,6 +67,16 @@ pub fn apply_message(
             screens,
             shell_chrome_primary,
         } => {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                canvas_logical_w,
+                canvas_logical_h,
+                canvas_physical_w,
+                canvas_physical_h,
+                n_screens = screens.len(),
+                primary = ?shell_chrome_primary,
+                "cef_ui OutputLayout task enter"
+            );
             if let Ok(mut g) = view_state.lock() {
                 g.logical_width = canvas_logical_w.max(1) as i32;
                 g.logical_height = canvas_logical_h.max(1) as i32;
@@ -75,15 +85,20 @@ pub fn apply_message(
                 g.set_physical_size(pw, ph);
             }
             let Ok(guard) = browser.lock() else {
+                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout browser lock poisoned");
                 return;
             };
             let Some(b) = guard.as_ref() else {
+                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout missing browser");
                 return;
             };
             if let Some(host) = b.host() {
+                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout was_resized notify_screen invalidate");
                 host.was_resized();
                 host.notify_screen_info_changed();
                 host.invalidate(cef::PaintElementType::VIEW);
+            } else {
+                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout no browser host");
             }
             let screens_j: Vec<serde_json::Value> = screens
                 .iter()
@@ -123,6 +138,7 @@ pub fn apply_message(
                     "shell_chrome_primary": shell_chrome_primary,
                 }),
             );
+            tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout dispatch_shell_detail done");
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMapped {
             window_id,

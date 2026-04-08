@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::{ImportDma, ImportEgl};
 use smithay::backend::session::libseat::LibSeatSessionNotifier;
@@ -33,8 +34,9 @@ use crate::derp_space::DerpSpaceElem;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::{
     calloop::{
+        generic::{Generic, NoIoDrop},
         timer::{TimeoutAction, Timer},
-        EventLoop, LoopHandle,
+        EventLoop, Interest, LoopHandle, Mode, PostAction,
     },
     drm::{
         control::{
@@ -346,11 +348,12 @@ pub struct DrmSession {
     pub drm: DrmDevice,
     pub renderer: Arc<Mutex<GlesRenderer>>,
     pub heads: Vec<DrmHead>,
-    cef_begin_frame_drm_serial: u64,
     libinput: Libinput,
     loop_handle: LoopHandle<'static, CalloopData>,
     _egl_display: EGLDisplay,
     _gbm_device: GbmDevice<DrmDeviceFd>,
+    output_formats: Vec<Format>,
+    hotplug_retry_after: HashMap<connector::Handle, Instant>,
 }
 
 impl DrmSession {
@@ -377,6 +380,226 @@ impl DrmSession {
         }
     }
 
+    fn prune_disconnected_heads(&mut self, state: &mut CompositorState) {
+        let mut any_removed = false;
+        let mut i = 0;
+        while i < self.heads.len() {
+            let conn = self.heads[i].connector;
+            let still_here = match self.drm.get_connector(conn, false) {
+                Ok(info) => info.state() == ConnectorState::Connected,
+                Err(_) => true,
+            };
+            if still_here {
+                i += 1;
+                continue;
+            }
+            let head = self.heads.remove(i);
+            any_removed = true;
+            info!(
+                target: "derp_drm",
+                connector = %head.connector_name,
+                "connector disconnected; migrating windows and unmapping output"
+            );
+            state.migrate_windows_before_output_unmapped(&head.output);
+            state.space.unmap_output(&head.output);
+            self.hotplug_retry_after.remove(&head.connector);
+            drop(head);
+        }
+        if any_removed && !self.heads.is_empty() {
+            state.normalize_workspace_to_origin_after_output_removed();
+            state.resync_wayland_window_registry_from_space();
+            state.shell_after_drm_topology_changed();
+        }
+        if self.heads.is_empty() {
+            warn!(
+                target: "derp_drm",
+                "all DRM heads disconnected; compositor has no physical outputs"
+            );
+        }
+    }
+
+    fn attach_new_heads(
+        &mut self,
+        state: &mut CompositorState,
+        display: &mut DisplayHandle,
+        force_connector_probe: bool,
+    ) {
+        if !self.drm.is_active() {
+            return;
+        }
+        let now = Instant::now();
+        let existing_conn: HashSet<_> = self.heads.iter().map(|h| h.connector).collect();
+        let existing_crtc: HashSet<_> = self.heads.iter().map(|h| h.crtc).collect();
+        let new_specs = match enumerate_new_crtc_plans(
+            &mut self.drm,
+            &existing_conn,
+            &existing_crtc,
+            now,
+            &self.hotplug_retry_after,
+            force_connector_probe,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(target: "derp_drm", err = %e, "enumerate_new_crtc_plans");
+                return;
+            }
+        };
+        if new_specs.is_empty() {
+            return;
+        }
+
+        let shell_sc = CompositorState::wayland_scale_for_shell_ui(state.shell_ui_scale);
+        let hotplug_backoff = Duration::from_secs(2);
+        let mut shift_total = 0i32;
+        let mut planned: Vec<(crtc::Handle, DrmCtlMode, Vec<connector::Handle>, i32)> =
+            Vec::with_capacity(new_specs.len());
+        for (crtc_h, drm_mode, conns) in new_specs {
+            let mode = OutputMode::from(drm_mode);
+            let lw = {
+                let sz = Transform::Normal
+                    .transform_size(mode.size)
+                    .to_f64()
+                    .to_logical(shell_sc.fractional_scale())
+                    .to_i32_ceil();
+                std::cmp::max(sz.w, 0)
+            };
+            shift_total = shift_total.saturating_add(lw);
+            planned.push((crtc_h, drm_mode, conns, lw));
+        }
+
+        state.translate_workspace_by(shift_total, 0);
+
+        let color_formats = [
+            Fourcc::Xrgb8888,
+            Fourcc::Argb8888,
+            Fourcc::Abgr8888,
+            Fourcc::Argb8888,
+        ];
+        let mut cursor_x = 0i32;
+        let cursor_y = 0i32;
+        let n_before = self.heads.len();
+
+        for (crtc_h, drm_mode, conns, lw) in planned {
+            let drm_surface = match self
+                .drm
+                .create_surface(crtc_h, drm_mode, conns.as_slice())
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(target: "derp_drm", ?e, "hotplug create_surface");
+                    self.hotplug_retry_after
+                        .insert(conns[0], Instant::now() + hotplug_backoff);
+                    continue;
+                }
+            };
+            let conn_info = match self.drm.get_connector(conns[0], false) {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!(target: "derp_drm", ?e, "hotplug get_connector");
+                    self.hotplug_retry_after
+                        .insert(conns[0], Instant::now() + hotplug_backoff);
+                    continue;
+                }
+            };
+            let (phys_w, phys_h) = conn_info
+                .size()
+                .map(|(w, h)| (w as i32, h as i32))
+                .unwrap_or_else(|| {
+                    let (pw, ph) = drm_mode.size();
+                    let w = ((pw as f64) * 25.4 / 96.0).round() as i32;
+                    let h = ((ph as f64) * 25.4 / 96.0).round() as i32;
+                    (w.max(1), h.max(1))
+                });
+            let output_name = conn_info.to_string();
+            info!(
+                target: "derp_drm",
+                connector = %output_name,
+                crtc = ?crtc_h,
+                pos_x = cursor_x,
+                pos_y = cursor_y,
+                "hotplug new head"
+            );
+
+            let allocator = GbmAllocator::new(
+                self._gbm_device.clone(),
+                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+            );
+            let gbm_surface = match GbmBufferedSurface::new(
+                drm_surface,
+                allocator,
+                &color_formats,
+                self.output_formats.clone(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(target: "derp_drm", ?e, "hotplug GbmBufferedSurface");
+                    self.hotplug_retry_after
+                        .insert(conns[0], Instant::now() + hotplug_backoff);
+                    continue;
+                }
+            };
+
+            let mode = OutputMode::from(drm_mode);
+            self.hotplug_retry_after.remove(&conns[0]);
+            let output = Output::new(
+                output_name.clone(),
+                PhysicalProperties {
+                    size: (phys_w.max(1), phys_h.max(1)).into(),
+                    subpixel: Subpixel::Unknown,
+                    make: "derp-workspace".into(),
+                    model: "DRM".into(),
+                },
+            );
+            let _global = output.create_global::<CompositorState>(display);
+            output.change_current_state(
+                Some(mode),
+                Some(Transform::Normal),
+                Some(shell_sc),
+                Some((cursor_x, cursor_y).into()),
+            );
+            output.set_preferred(mode);
+
+            state.space.map_output(&output, (cursor_x, cursor_y));
+
+            cursor_x = cursor_x.saturating_add(lw);
+
+            let damage_tracker = OutputDamageTracker::from_output(&output);
+
+            self.heads.push(DrmHead {
+                gbm_surface,
+                damage_tracker,
+                output,
+                connector_name: output_name,
+                connector: conns[0],
+                crtc: crtc_h,
+                pending_frame_complete: false,
+            });
+        }
+
+        if self.heads.len() == n_before {
+            state.translate_workspace_by(-shift_total, 0);
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                n_before,
+                shift_total,
+                "hotplug attach rolled back no new heads"
+            );
+            return;
+        }
+
+        tracing::warn!(
+            target: "derp_hotplug_shell",
+            heads = self.heads.len(),
+            n_before,
+            shift_total,
+            "hotplug attach calling apply_stored_from_heads+shell_after_drm_topology_changed"
+        );
+        let _ = crate::display_config::apply_stored_from_heads(state, &self.drm, &self.heads);
+        state.shell_after_drm_topology_changed();
+        let h = self.loop_handle.clone();
+        h.insert_idle(|d| drm_idle_render(d));
+    }
+
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
         shell_ipc::drain_shell_stream(state);
         state.shell_check_ipc_watchdog();
@@ -390,15 +613,13 @@ impl DrmSession {
             return;
         }
 
+        state.space.refresh();
+
         crate::cef::begin_frame_diag::note_drm_render_tick();
 
-        self.cef_begin_frame_drm_serial = self.cef_begin_frame_drm_serial.wrapping_add(1);
-        let n = self.heads.len().max(1) as u64;
-        if self.cef_begin_frame_drm_serial % n == 0 {
-            if let Ok(g) = state.shell_to_cef.lock() {
-                if let Some(link) = g.as_ref() {
-                    link.schedule_external_begin_frame();
-                }
+        if let Ok(g) = state.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.schedule_external_begin_frame();
             }
         }
 
@@ -417,7 +638,6 @@ impl DrmSession {
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 
-        state.space.refresh();
         state.popups.cleanup();
         let _ = display.flush_clients();
     }
@@ -430,23 +650,47 @@ fn drm_idle_render(data: &mut CalloopData) {
     drms.render_tick(&mut data.state, &mut data.display_handle);
 }
 
+fn drm_connector_topology_sort_key(info: &connector::Info, h: connector::Handle) -> (u8, u32, u32) {
+    use connector::Interface as If;
+    let kind = match info.interface() {
+        If::EmbeddedDisplayPort | If::LVDS | If::DSI => 0u8,
+        If::DisplayPort => 1,
+        If::HDMIA | If::HDMIB => 2,
+        If::DVID | If::DVII | If::DVIA => 3,
+        If::VGA => 4,
+        _ => 5,
+    };
+    (kind, info.interface_id(), u32::from(h))
+}
+
+fn sort_connected_connector_handles(
+    drm: &mut DrmDevice,
+    candidates: &[connector::Handle],
+    force_probe: bool,
+    pred: impl Fn(connector::Handle) -> bool,
+) -> Vec<connector::Handle> {
+    let mut scored: Vec<(connector::Handle, (u8, u32, u32))> = candidates
+        .iter()
+        .copied()
+        .filter(|&c| pred(c))
+        .filter_map(|c| {
+            let info = drm.get_connector(c, force_probe).ok()?;
+            (info.state() == ConnectorState::Connected)
+                .then_some((c, drm_connector_topology_sort_key(&info, c)))
+        })
+        .collect();
+    // Interface id orders DP-1, DP-2, … and HDMI-A-1, … to match kernel naming / scanout expectations.
+    scored.sort_by(|a, b| a.1.cmp(&b.1));
+    scored.into_iter().map(|(h, _)| h).collect()
+}
+
 fn pick_all_crtc_surfaces(
     drm: &mut DrmDevice,
 ) -> Result<Vec<(DrmSurface, crtc::Handle, DrmCtlMode, Vec<connector::Handle>)>, String> {
     let handles = drm
         .resource_handles()
         .map_err(|e| format!("resource_handles: {e}"))?;
-    let mut connected: Vec<connector::Handle> = handles
-        .connectors()
-        .iter()
-        .copied()
-        .filter(|&c| {
-            drm.get_connector(c, false)
-                .map(|i| i.state() == ConnectorState::Connected)
-                .unwrap_or(false)
-        })
-        .collect();
-    connected.sort_by_key(|c| u32::from(*c));
+    let connected = sort_connected_connector_handles(drm, handles.connectors(), false, |_| true);
 
     let mut used_crtcs: HashSet<crtc::Handle> = HashSet::new();
     let mut out = Vec::new();
@@ -488,6 +732,93 @@ fn pick_all_crtc_surfaces(
         return Err("no connected connector with mode".into());
     }
     Ok(out)
+}
+
+fn enumerate_new_crtc_plans(
+    drm: &mut DrmDevice,
+    existing_connectors: &HashSet<connector::Handle>,
+    existing_crtcs: &HashSet<crtc::Handle>,
+    now: Instant,
+    hotplug_retry_after: &HashMap<connector::Handle, Instant>,
+    force_probe: bool,
+) -> Result<Vec<(crtc::Handle, DrmCtlMode, Vec<connector::Handle>)>, String> {
+    let handles = drm
+        .resource_handles()
+        .map_err(|e| format!("resource_handles: {e}"))?;
+    let connected = sort_connected_connector_handles(
+        drm,
+        handles.connectors(),
+        force_probe,
+        |c| {
+            !existing_connectors.contains(&c)
+                && hotplug_retry_after
+                    .get(&c)
+                    .map_or(true, |until| now >= *until)
+        },
+    );
+    let mut used_crtcs: HashSet<crtc::Handle> = existing_crtcs.iter().copied().collect();
+    let mut out = Vec::new();
+    for conn in connected {
+        let info = drm
+            .get_connector(conn, force_probe)
+            .map_err(|e| format!("get_connector: {e}"))?;
+        let Some(mode) = info.modes().first().copied() else {
+            continue;
+        };
+        let mut picked: Option<crtc::Handle> = None;
+        for &enc in info.encoders() {
+            let Ok(enc_info) = drm.get_encoder(enc) else {
+                continue;
+            };
+            for crtc_h in handles.filter_crtcs(enc_info.possible_crtcs()) {
+                if used_crtcs.contains(&crtc_h) {
+                    continue;
+                }
+                picked = Some(crtc_h);
+                break;
+            }
+            if picked.is_some() {
+                break;
+            }
+        }
+        let Some(crtc_h) = picked else {
+            continue;
+        };
+        used_crtcs.insert(crtc_h);
+        out.push((crtc_h, mode, vec![conn]));
+    }
+    Ok(out)
+}
+
+fn drm_hotplug_on_udev_drm_change(data: &mut CalloopData) {
+    let Some(drms) = data.drm.as_mut() else {
+        return;
+    };
+    if !drms.drm.is_active() {
+        return;
+    }
+    let n_before = drms.heads.len();
+    drms.prune_disconnected_heads(&mut data.state);
+    let n_after_prune = drms.heads.len();
+    drms.attach_new_heads(&mut data.state, &mut data.display_handle, true);
+    let n_after_attach = drms.heads.len();
+    tracing::warn!(
+        target: "derp_hotplug_shell",
+        n_before,
+        n_after_prune,
+        n_after_attach,
+        "udev drm hotplug finished prune+attach"
+    );
+}
+
+fn drm_hotplug_timer_prune_only(data: &mut CalloopData) {
+    let Some(drms) = data.drm.as_mut() else {
+        return;
+    };
+    if !drms.drm.is_active() {
+        return;
+    }
+    drms.prune_disconnected_heads(&mut data.state);
 }
 
 pub fn init_drm(
@@ -536,6 +867,10 @@ pub fn init_drm(
     let path: PathBuf = primary_gpu(session.seat())
         .map_err(|e| format!("primary_gpu: {e}"))?
         .ok_or_else(|| "no DRM device for seat".to_string())?;
+
+    let drm_rdev = std::fs::metadata(path.as_path())
+        .map_err(|e| format!("drm metadata: {e}"))?
+        .rdev();
 
     info!(path = %path.display(), "Opening DRM device via session");
     let fd = session
@@ -693,8 +1028,7 @@ pub fn init_drm(
     }
 
     let _ = crate::display_config::apply_stored_from_heads(&mut data.state, &drm, &heads);
-    data.state.recompute_shell_canvas_from_outputs();
-    data.state.send_shell_output_layout();
+    data.state.shell_after_drm_topology_changed();
     data.state.shell_embedded_notify_output_ready();
 
     std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
@@ -729,12 +1063,58 @@ pub fn init_drm(
         drm,
         renderer,
         heads,
-        cef_begin_frame_drm_serial: 0,
         libinput: libinput_context,
         loop_handle: loop_handle_static,
         _egl_display: egl_display,
         _gbm_device: gbm,
+        output_formats: format_vec,
+        hotplug_retry_after: HashMap::new(),
     });
+
+    let drm_monitor = udev::MonitorBuilder::new()
+        .map_err(|e| format!("udev MonitorBuilder: {e}"))?
+        .match_subsystem("drm")
+        .map_err(|e| format!("udev match_subsystem: {e}"))?
+        .listen()
+        .map_err(|e| format!("udev listen: {e}"))?;
+    event_loop
+        .handle()
+        .insert_source(
+            Generic::new(drm_monitor, Interest::READ, Mode::Level),
+            move |_, monitor: &mut NoIoDrop<udev::MonitorSocket>, d| {
+                let sock = unsafe { monitor.get_mut() };
+                let mut ours = false;
+                for ev in sock.iter() {
+                    if !matches!(
+                        ev.event_type(),
+                        udev::EventType::Change | udev::EventType::Add
+                    ) {
+                        continue;
+                    }
+                    let Some(ev_rdev) = ev.devnum() else {
+                        continue;
+                    };
+                    if ev_rdev as u64 != drm_rdev {
+                        continue;
+                    }
+                    ours = true;
+                }
+                if ours {
+                    drm_hotplug_on_udev_drm_change(d);
+                }
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|e| format!("drm udev monitor: {e}"))?;
+
+    let hotplug_fallback = Duration::from_secs(5);
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(hotplug_fallback), move |_, _, d| {
+            drm_hotplug_timer_prune_only(d);
+            TimeoutAction::ToDuration(hotplug_fallback)
+        })
+        .map_err(|e| format!("drm hotplug fallback timer: {e}"))?;
 
     loop_handle.insert_idle(|d| {
         drm_idle_render(d);

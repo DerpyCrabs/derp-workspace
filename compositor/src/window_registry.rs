@@ -109,6 +109,14 @@ impl WindowRegistry {
         Some(changed)
     }
 
+    pub fn set_output_name_for_wl(&mut self, wl: &WlSurface, output_name: String) -> Option<bool> {
+        let wid = *self.by_surface.get(&key(wl)?)?;
+        let info = self.records.get_mut(&wid)?;
+        let changed = info.output_name != output_name;
+        info.output_name = output_name;
+        Some(changed)
+    }
+
     pub fn set_shell_layout(
         &mut self,
         wl: &WlSurface,

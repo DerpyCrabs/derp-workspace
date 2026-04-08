@@ -57,6 +57,12 @@ pub fn display_config_path() -> Option<PathBuf> {
     Some(p)
 }
 
+fn drm_connector_connected<D: ControlDevice>(drm: &D, conn: connector::Handle) -> bool {
+    drm.get_connector(conn, false)
+        .map(|info| info.state() == connector::State::Connected)
+        .unwrap_or(false)
+}
+
 fn read_connector_edid<D: ControlDevice>(drm: &D, conn: connector::Handle) -> Option<Vec<u8>> {
     let props = drm.get_properties(conn).ok()?;
     for (prop_id, raw_val) in props.iter() {
@@ -113,17 +119,20 @@ fn live_heads_from_drm(drm: &DrmDevice, heads: &[DrmHead]) -> Vec<LiveHead> {
 }
 
 fn resolve_entry(name: &str, monitor_id: Option<&String>, live: &[LiveHead]) -> Option<String> {
+    if let Some(h) = live.iter().find(|h| h.name == name) {
+        return Some(h.name.clone());
+    }
     if let Some(mid) = monitor_id {
-        if let Some(h) = live
-            .iter()
-            .find(|h| h.monitor_id.as_ref().map(|s| s.as_str()) == Some(mid.as_str()))
-        {
+        if let Some(h) = live.iter().find(|h| {
+            h.monitor_id
+                .as_ref()
+                .map(|s| s.as_str())
+                == Some(mid.as_str())
+        }) {
             return Some(h.name.clone());
         }
     }
-    live.iter()
-        .find(|h| h.name == name)
-        .map(|h| h.name.clone())
+    None
 }
 
 fn resolve_monitor_ref(pref: &MonitorRef, live: &[LiveHead]) -> Option<String> {
@@ -180,7 +189,17 @@ pub fn apply_stored_from_heads(
             by_name.insert(n, (s.x, s.y, s.transform));
         }
     }
-    if !by_name.is_empty() {
+    let live_name_set: HashSet<String> = live.iter().map(|h| h.name.clone()).collect();
+    let layout_name_set: HashSet<String> = by_name.keys().cloned().collect();
+    let apply_layout = !by_name.is_empty() && layout_name_set == live_name_set;
+    tracing::warn!(
+        target: "derp_hotplug_shell",
+        apply_layout,
+        live = ?live_name_set,
+        layout = ?layout_name_set,
+        "apply_stored_from_heads layout gate"
+    );
+    if apply_layout {
         let screens: Vec<serde_json::Value> = by_name
             .into_iter()
             .map(|(name, (x, y, transform))| {
@@ -202,11 +221,18 @@ pub fn apply_stored_from_heads(
         }
         Some(pref) => {
             let name = resolve_monitor_ref(pref, &live).unwrap_or_default();
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                pref_connector = %pref.connector,
+                resolved_primary = %name,
+                "apply_stored_from_heads primary"
+            );
             state.set_shell_primary_output_name(name);
         }
     }
 
     state.display_config_save_suppressed = false;
+    state.resync_embedded_shell_host_after_ipc_connect();
     true
 }
 
@@ -244,6 +270,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
     let screens: Vec<ScreenEntry> = session
         .heads
         .iter()
+        .filter(|h| drm_connector_connected(&session.drm, h.connector))
         .filter_map(|h| {
             let out = &h.output;
             let g = state.space.output_geometry(out)?;
@@ -259,16 +286,23 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         })
         .collect();
 
-    let shell_chrome_primary = state.shell_primary_output_name.as_ref().map(|name| {
-        let pref = session.heads.iter().find(|h| h.connector_name == *name);
-        let monitor_id = pref.and_then(|h| {
-            read_connector_edid(&session.drm, h.connector).and_then(|b| monitor_id_from_edid(&b))
-        });
-        MonitorRef {
-            connector: name.clone(),
-            monitor_id,
-        }
-    });
+    let shell_chrome_primary = match state.shell_primary_output_name.as_ref() {
+        None => None,
+        Some(name) => session
+            .heads
+            .iter()
+            .find(|h| h.connector_name == *name)
+            .filter(|h| drm_connector_connected(&session.drm, h.connector))
+            .map(|h| {
+                let monitor_id = read_connector_edid(&session.drm, h.connector)
+                    .as_deref()
+                    .and_then(monitor_id_from_edid);
+                MonitorRef {
+                    connector: h.connector_name.clone(),
+                    monitor_id,
+                }
+            }),
+    };
 
     let file = DisplayConfigFile {
         version: 1,

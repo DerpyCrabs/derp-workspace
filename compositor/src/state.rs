@@ -769,6 +769,20 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn shell_nudge_cef_repaint(&self) {
+        let Ok(g) = self.shell_to_cef.lock() else {
+            tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint shell_to_cef lock poisoned");
+            return;
+        };
+        if let Some(link) = g.as_ref() {
+            tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint post 2x external_begin_frame");
+            link.schedule_external_begin_frame();
+            link.schedule_external_begin_frame();
+        } else {
+            tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
+        }
+    }
+
     pub(crate) fn programs_menu_toggle_from_super(&mut self, serial: Serial) {
         tracing::debug!(target: "derp_shell_menu", "programs_menu_toggle_from_super");
         self.space.elements().for_each(|e| {
@@ -897,7 +911,7 @@ impl CompositorState {
                     planes.len(),
                 );
             }
-            Err(e) => tracing::warn!(?e, "shell: dma-buf frame rejected"),
+            Err(e) => tracing::warn!(target: "derp_hotplug_shell", ?e, "shell dma-buf frame rejected"),
         }
     }
 
@@ -1393,6 +1407,39 @@ impl CompositorState {
             if let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
             }
+        }
+    }
+
+    fn sync_registry_from_space_for_wayland(&mut self, window: &Window) {
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let wl = toplevel.wl_surface();
+        let Some((gx, gy, gw, gh, csd)) = self.wayland_window_shell_rect_and_deco(window) else {
+            return;
+        };
+        let output_name = self
+            .output_for_window_position(gx, gy, gw, gh)
+            .unwrap_or_default();
+        let _ = self.window_registry.set_shell_layout(wl, gx, gy, gw, gh, csd, output_name);
+        let (max, fs) = read_toplevel_tiling(wl);
+        let _ = self.window_registry.set_tiling_state(wl, max, fs);
+    }
+
+    pub(crate) fn resync_wayland_window_registry_from_space(&mut self) {
+        let wins: Vec<Window> = self
+            .space
+            .elements()
+            .filter_map(|e| {
+                if let DerpSpaceElem::Wayland(w) = e {
+                    Some(w.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for w in wins {
+            self.sync_registry_from_space_for_wayland(&w);
         }
     }
 
@@ -1989,6 +2036,12 @@ impl CompositorState {
         }
         self.shell_ui_scale = scale;
         self.apply_shell_ui_scale_to_outputs();
+        if self.display_config_save_suppressed {
+            if self.workspace_logical_bounds().is_some() {
+                self.recompute_shell_canvas_from_outputs();
+            }
+            return;
+        }
         self.send_shell_output_layout();
         self.display_config_request_save();
     }
@@ -1999,7 +2052,127 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn normalize_workspace_to_origin_after_output_removed(&mut self) {
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return;
+        };
+        let dx = -ws.loc.x;
+        let dy = -ws.loc.y;
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        let elem_targets: Vec<(DerpSpaceElem, i32, i32)> = self
+            .space
+            .elements()
+            .filter_map(|e| {
+                let loc = self.space.element_location(e)?;
+                Some((
+                    e.clone(),
+                    loc.x.saturating_add(dx),
+                    loc.y.saturating_add(dy),
+                ))
+            })
+            .collect();
+        let outs: Vec<Output> = self.space.outputs().cloned().collect();
+        let sc = Self::wayland_scale_for_shell_ui(self.shell_ui_scale);
+        for out in outs.iter() {
+            let Some(g) = self.space.output_geometry(out) else {
+                continue;
+            };
+            let Some(mode) = out.current_mode() else {
+                continue;
+            };
+            let tf = out.current_transform();
+            let nx = g.loc.x.saturating_add(dx);
+            let ny = g.loc.y.saturating_add(dy);
+            out.change_current_state(
+                Some(mode),
+                Some(tf),
+                Some(sc),
+                Some((nx, ny).into()),
+            );
+            self.space.map_output(out, (nx, ny));
+        }
+        for (elem, nx, ny) in elem_targets {
+            match elem {
+                DerpSpaceElem::Wayland(w) => {
+                    self.space
+                        .map_element(DerpSpaceElem::Wayland(w.clone()), (nx, ny), true);
+                    self.notify_geometry_for_window(&w, true);
+                }
+                DerpSpaceElem::X11(x) => {
+                    let mut geo = x.geometry();
+                    geo.loc.x = nx;
+                    geo.loc.y = ny;
+                    let _ = x.configure(Some(geo));
+                    self.space
+                        .map_element(DerpSpaceElem::X11(x.clone()), (nx, ny), false);
+                }
+            }
+        }
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn translate_workspace_by(&mut self, dx: i32, dy: i32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        let elem_targets: Vec<(DerpSpaceElem, i32, i32)> = self
+            .space
+            .elements()
+            .filter_map(|e| {
+                let loc = self.space.element_location(e)?;
+                Some((
+                    e.clone(),
+                    loc.x.saturating_add(dx),
+                    loc.y.saturating_add(dy),
+                ))
+            })
+            .collect();
+        let outs: Vec<Output> = self.space.outputs().cloned().collect();
+        let sc = Self::wayland_scale_for_shell_ui(self.shell_ui_scale);
+        for out in outs.iter() {
+            let Some(g) = self.space.output_geometry(out) else {
+                continue;
+            };
+            let Some(mode) = out.current_mode() else {
+                continue;
+            };
+            let tf = out.current_transform();
+            let nx = g.loc.x.saturating_add(dx);
+            let ny = g.loc.y.saturating_add(dy);
+            out.change_current_state(
+                Some(mode),
+                Some(tf),
+                Some(sc),
+                Some((nx, ny).into()),
+            );
+            self.space.map_output(out, (nx, ny));
+        }
+        for (elem, nx, ny) in elem_targets {
+            match elem {
+                DerpSpaceElem::Wayland(w) => {
+                    self.space
+                        .map_element(DerpSpaceElem::Wayland(w.clone()), (nx, ny), true);
+                    self.notify_geometry_for_window(&w, true);
+                }
+                DerpSpaceElem::X11(x) => {
+                    let mut geo = x.geometry();
+                    geo.loc.x = nx;
+                    geo.loc.y = ny;
+                    let _ = x.configure(Some(geo));
+                    self.space
+                        .map_element(DerpSpaceElem::X11(x.clone()), (nx, ny), false);
+                }
+            }
+        }
+        self.loop_signal.wakeup();
+    }
+
     pub(crate) fn recompute_shell_canvas_from_outputs(&mut self) {
+        let prev_origin = self.shell_canvas_logical_origin;
+        let prev_size = self.shell_canvas_logical_size;
+        let prev_phys = self.shell_window_physical_px;
         let Some(bounds) = self.workspace_logical_bounds() else {
             return;
         };
@@ -2019,6 +2192,23 @@ impl CompositorState {
         let ph_work = ((ch_work as f64) * max_scale).round().max(1.0);
         let ph = (ph_work + atlas_px as f64).round().max(1.0) as i32;
         self.shell_window_physical_px = (pw, ph);
+        if prev_origin != self.shell_canvas_logical_origin
+            || prev_size != self.shell_canvas_logical_size
+            || prev_phys != self.shell_window_physical_px
+        {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                prev_origin = ?prev_origin,
+                prev_size = ?prev_size,
+                prev_phys = ?prev_phys,
+                origin = ?self.shell_canvas_logical_origin,
+                size = ?self.shell_canvas_logical_size,
+                phys = ?self.shell_window_physical_px,
+                "recompute_shell_canvas_from_outputs canvas changed clear_shell_frame"
+            );
+            self.clear_shell_frame();
+            self.shell_nudge_cef_repaint();
+        }
     }
 
     pub(crate) fn leftmost_output(&self) -> Option<Output> {
@@ -2084,6 +2274,369 @@ impl CompositorState {
         first
     }
 
+    fn snapshot_output_geometry_by_name(&self) -> HashMap<String, Rectangle<i32, Logical>> {
+        let mut m = HashMap::new();
+        for o in self.space.outputs() {
+            if let Some(g) = self.space.output_geometry(o) {
+                m.insert(o.name().into(), g);
+            }
+        }
+        m
+    }
+
+    fn output_name_for_window_from_geometry_map(
+        geos: &HashMap<String, Rectangle<i32, Logical>>,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> Option<String> {
+        if geos.is_empty() {
+            return None;
+        }
+        let cx = x.saturating_add(w.saturating_div(2));
+        let cy = y.saturating_add(h.saturating_div(2));
+        for (name, g) in geos {
+            if cx >= g.loc.x
+                && cy >= g.loc.y
+                && cx < g.loc.x.saturating_add(g.size.w)
+                && cy < g.loc.y.saturating_add(g.size.h)
+            {
+                return Some(name.clone());
+            }
+        }
+        let mut pairs: Vec<(i32, String)> = geos
+            .iter()
+            .map(|(n, g)| (g.loc.x, n.clone()))
+            .collect();
+        pairs.sort_by_key(|(px, _)| *px);
+        pairs.into_iter().next().map(|(_, n)| n)
+    }
+
+    fn shift_mapped_toplevels_for_output_moves(
+        &mut self,
+        before_outputs: &HashMap<String, Rectangle<i32, Logical>>,
+    ) {
+        if before_outputs.is_empty() {
+            return;
+        }
+        let mut deltas: HashMap<String, (i32, i32)> = HashMap::new();
+        for o in self.space.outputs() {
+            let name: String = o.name().into();
+            let Some(bg) = before_outputs.get(&name) else {
+                continue;
+            };
+            let Some(ag) = self.space.output_geometry(o) else {
+                continue;
+            };
+            let dx = ag.loc.x.saturating_sub(bg.loc.x);
+            let dy = ag.loc.y.saturating_sub(bg.loc.y);
+            if dx != 0 || dy != 0 {
+                deltas.insert(name, (dx, dy));
+            }
+        }
+        if deltas.is_empty() {
+            return;
+        }
+        let elems: Vec<DerpSpaceElem> = self.space.elements().cloned().collect();
+        for e in elems {
+            match e {
+                DerpSpaceElem::Wayland(w) => {
+                    let Some(tl) = w.toplevel() else {
+                        continue;
+                    };
+                    let wl = tl.wl_surface();
+                    let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) else {
+                        continue;
+                    };
+                    if self.window_info_is_solid_shell_host(&info) {
+                        continue;
+                    }
+                    let elem = DerpSpaceElem::Wayland(w.clone());
+                    let Some(loc) = self.space.element_location(&elem) else {
+                        continue;
+                    };
+                    let g = w.geometry();
+                    let ww = g.size.w.max(1);
+                    let hh = g.size.h.max(1);
+                    let Some(oname) =
+                        Self::output_name_for_window_from_geometry_map(before_outputs, loc.x, loc.y, ww, hh)
+                    else {
+                        continue;
+                    };
+                    let Some(&(dx, dy)) = deltas.get(&oname) else {
+                        continue;
+                    };
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let nx = loc.x.saturating_add(dx);
+                    let ny = loc.y.saturating_add(dy);
+                    self.space
+                        .map_element(DerpSpaceElem::Wayland(w.clone()), (nx, ny), true);
+                    self.notify_geometry_for_window(&w, true);
+                }
+                DerpSpaceElem::X11(x) => {
+                    let elem = DerpSpaceElem::X11(x.clone());
+                    let Some(loc) = self.space.element_location(&elem) else {
+                        continue;
+                    };
+                    let geo = x.geometry();
+                    let ww = geo.size.w.max(1);
+                    let hh = geo.size.h.max(1);
+                    let Some(oname) =
+                        Self::output_name_for_window_from_geometry_map(before_outputs, loc.x, loc.y, ww, hh)
+                    else {
+                        continue;
+                    };
+                    let Some(&(dx, dy)) = deltas.get(&oname) else {
+                        continue;
+                    };
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let nx = loc.x.saturating_add(dx);
+                    let ny = loc.y.saturating_add(dy);
+                    let mut ngeo = geo;
+                    ngeo.loc.x = nx;
+                    ngeo.loc.y = ny;
+                    let _ = x.configure(Some(ngeo));
+                    self.space
+                        .map_element(DerpSpaceElem::X11(x.clone()), (nx, ny), false);
+                }
+            }
+        }
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn pick_nearest_surviving_output(&self, remove: &Output) -> Option<Output> {
+        let removed_name = remove.name();
+        let rg = self.space.output_geometry(remove)?;
+        let rcx = rg.loc.x.saturating_add(rg.size.w.saturating_div(2));
+        let rcy = rg.loc.y.saturating_add(rg.size.h.saturating_div(2));
+        let mut scored: Vec<(i32, i32, Output)> = self
+            .space
+            .outputs()
+            .filter(|o| o.name() != removed_name)
+            .filter_map(|o| {
+                let g = self.space.output_geometry(o)?;
+                let cx = g.loc.x.saturating_add(g.size.w.saturating_div(2));
+                let cy = g.loc.y.saturating_add(g.size.h.saturating_div(2));
+                Some(((cx - rcx).abs(), (cy - rcy).abs(), o.clone()))
+            })
+            .collect();
+        if scored.is_empty() {
+            return None;
+        }
+        scored.sort_by_key(|(dx, dy, _)| (*dx, *dy));
+        let (best_dx, best_dy, _) = scored[0];
+        let tier: Vec<Output> = scored
+            .into_iter()
+            .filter(|(dx, dy, _)| *dx == best_dx && *dy == best_dy)
+            .map(|(_, _, o)| o)
+            .collect();
+        if tier.len() == 1 {
+            return tier.into_iter().next();
+        }
+        if let Some(pref) = self.shell_effective_primary_output() {
+            let pn = pref.name();
+            if let Some(o) = tier.iter().find(|o| o.name() == pn) {
+                return Some(o.clone());
+            }
+        }
+        tier.into_iter().next()
+    }
+
+    fn migrate_wayland_window_to_target_work_area(
+        &mut self,
+        window: &Window,
+        target_work: &Rectangle<i32, Logical>,
+        target: &Output,
+    ) {
+        let Some(tl) = window.toplevel() else {
+            return;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return;
+        };
+        self.clear_toplevel_layout_maps(window_id);
+        self.cancel_shell_move_resize_for_window(window_id);
+        self.toplevel_fullscreen_return_maximized.remove(&window_id);
+        let csd = Self::wayland_window_has_client_side_decoration(window);
+        let geo = window.geometry();
+        let ww = geo
+            .size
+            .w
+            .max(1)
+            .min(target_work.size.w)
+            .max(1);
+        let hh = geo
+            .size
+            .h
+            .max(1)
+            .min(target_work.size.h)
+            .max(1);
+        let max_x = target_work
+            .loc
+            .x
+            .saturating_add(target_work.size.w)
+            .saturating_sub(ww);
+        let max_y = target_work
+            .loc
+            .y
+            .saturating_add(target_work.size.h)
+            .saturating_sub(hh);
+        let gx = target_work
+            .loc
+            .x
+            .saturating_add(target_work.size.w.saturating_sub(ww) / 2)
+            .clamp(target_work.loc.x, max_x);
+        let gy = target_work
+            .loc
+            .y
+            .saturating_add(target_work.size.h.saturating_sub(hh) / 2)
+            .clamp(target_work.loc.y, max_y);
+        let (map_x, map_y, content_w, content_h) =
+            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, ww, hh);
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Fullscreen);
+            st.states.unset(xdg_toplevel::State::Maximized);
+            st.fullscreen_output = None;
+            st.size = Some(Size::from((content_w, content_h)));
+        });
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
+        self.space
+            .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        tl.send_pending_configure();
+        self.notify_geometry_for_window(window, true);
+        let tn = target.name().to_string();
+        let _ = self.window_registry.set_output_name_for_wl(wl, tn);
+    }
+
+    fn migrate_x11_surface_to_work_area(
+        &mut self,
+        x: &X11Surface,
+        target_work: &Rectangle<i32, Logical>,
+    ) {
+        let elem = DerpSpaceElem::X11(x.clone());
+        let Some(_loc) = self.space.element_location(&elem) else {
+            return;
+        };
+        let mut geo = x.geometry();
+        let ww = geo
+            .size
+            .w
+            .max(1)
+            .min(target_work.size.w)
+            .max(1);
+        let hh = geo
+            .size
+            .h
+            .max(1)
+            .min(target_work.size.h)
+            .max(1);
+        let max_x = target_work
+            .loc
+            .x
+            .saturating_add(target_work.size.w)
+            .saturating_sub(ww);
+        let max_y = target_work
+            .loc
+            .y
+            .saturating_add(target_work.size.h)
+            .saturating_sub(hh);
+        let nx = target_work
+            .loc
+            .x
+            .saturating_add(target_work.size.w.saturating_sub(ww) / 2)
+            .clamp(target_work.loc.x, max_x);
+        let ny = target_work
+            .loc
+            .y
+            .saturating_add(target_work.size.h.saturating_sub(hh) / 2)
+            .clamp(target_work.loc.y, max_y);
+        geo.loc.x = nx;
+        geo.loc.y = ny;
+        geo.size.w = ww;
+        geo.size.h = hh;
+        if let Err(e) = x.configure(Some(geo)) {
+            tracing::warn!(target: "derp_output", ?e, "x11 migrate configure");
+        }
+        self.space
+            .map_element(DerpSpaceElem::X11(x.clone()), (nx, ny), false);
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn migrate_windows_before_output_unmapped(&mut self, remove: &Output) {
+        let Some(target) = self.pick_nearest_surviving_output(remove) else {
+            tracing::warn!(
+                target: "derp_output",
+                name = %remove.name(),
+                "output removal: no surviving output; skipping window migration"
+            );
+            return;
+        };
+        let removed_name = remove.name().to_string();
+        let Some(target_work) = self.shell_maximize_work_area_global_for_output(&target) else {
+            return;
+        };
+        let elems: Vec<DerpSpaceElem> = self.space.elements().cloned().collect();
+        for e in elems {
+            let DerpSpaceElem::Wayland(window) = e else {
+                continue;
+            };
+            let Some(tl) = window.toplevel() else {
+                continue;
+            };
+            let wl = tl.wl_surface();
+            let Some(info) = self.window_registry.snapshot_for_wl_surface(wl) else {
+                continue;
+            };
+            if self.window_info_is_solid_shell_host(&info) {
+                continue;
+            }
+            let elem = DerpSpaceElem::Wayland(window.clone());
+            let Some(loc) = self.space.element_location(&elem) else {
+                continue;
+            };
+            let g = window.geometry();
+            let ww = g.size.w.max(1);
+            let hh = g.size.h.max(1);
+            let spatial_on_removed = self
+                .output_for_window_position(loc.x, loc.y, ww, hh)
+                .as_deref()
+                == Some(removed_name.as_str());
+            if info.output_name != removed_name && !spatial_on_removed {
+                continue;
+            }
+            self.migrate_wayland_window_to_target_work_area(&window, &target_work, &target);
+        }
+        let x11_to_move: Vec<X11Surface> = self
+            .space
+            .elements()
+            .filter_map(|e| {
+                let DerpSpaceElem::X11(x) = e else {
+                    return None;
+                };
+                let elem = DerpSpaceElem::X11(x.clone());
+                let loc = self.space.element_location(&elem)?;
+                let g = x.geometry();
+                let w = g.size.w.max(1);
+                let h = g.size.h.max(1);
+                let on_removed = self
+                    .output_for_window_position(loc.x, loc.y, w, h)
+                    .as_deref()
+                    == Some(removed_name.as_str());
+                on_removed.then(|| x.clone())
+            })
+            .collect();
+        for x in x11_to_move {
+            self.migrate_x11_surface_to_work_area(&x, &target_work);
+        }
+    }
+
     pub fn send_shell_output_layout(&mut self) {
         let cleared_stale_primary = if let Some(ref n) = self.shell_primary_output_name {
             if !self
@@ -2100,6 +2653,14 @@ impl CompositorState {
             false
         };
         if self.workspace_logical_bounds().is_none() {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                cleared_stale_primary,
+                "send_shell_output_layout abort no workspace_logical_bounds"
+            );
+            if cleared_stale_primary {
+                self.resync_embedded_shell_host_after_ipc_connect();
+            }
             return;
         }
         self.recompute_shell_canvas_from_outputs();
@@ -2126,6 +2687,22 @@ impl CompositorState {
                 })
             })
             .collect();
+        let screen_names: Vec<&str> = screens.iter().map(|s| s.name.as_str()).collect();
+        tracing::warn!(
+            target: "derp_hotplug_shell",
+            lw,
+            lh,
+            physical_w,
+            physical_h,
+            n_screens = screens.len(),
+            ?screen_names,
+            primary = ?self.shell_primary_output_name,
+            suppressed = self.display_config_save_suppressed,
+            "send_shell_output_layout shell_send_to_cef OutputLayout"
+        );
+        if self.display_config_save_suppressed {
+            return;
+        }
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w: lw.max(1),
             canvas_logical_h: lh.max(1),
@@ -2138,6 +2715,30 @@ impl CompositorState {
         if cleared_stale_primary {
             self.resync_embedded_shell_host_after_ipc_connect();
         }
+    }
+
+    pub(crate) fn shell_after_drm_topology_changed(&mut self) {
+        self.shell_resize_end_active();
+        self.shell_move_end_active();
+        self.shell_exclusion_zones_need_full_damage = true;
+        self.shell_dmabuf_dirty_force_full = true;
+        let output_names: Vec<String> = self.space.outputs().map(|o| o.name().into()).collect();
+        tracing::warn!(
+            target: "derp_hotplug_shell",
+            ?output_names,
+            primary = ?self.shell_primary_output_name,
+            cef = self.shell_cef_active(),
+            has_frame = self.shell_has_frame,
+            "shell_after_drm_topology_changed enter"
+        );
+        self.send_shell_output_layout();
+        self.shell_reply_window_list();
+        self.shell_nudge_cef_repaint();
+        tracing::warn!(
+            target: "derp_hotplug_shell",
+            has_frame = self.shell_has_frame,
+            "shell_after_drm_topology_changed exit"
+        );
     }
 
     pub fn set_shell_primary_output_name(&mut self, name: String) {
@@ -2154,6 +2755,9 @@ impl CompositorState {
             Some(name)
         };
         self.shell_primary_output_name = pref;
+        if self.display_config_save_suppressed {
+            return;
+        }
         self.resync_embedded_shell_host_after_ipc_connect();
         self.send_shell_output_layout();
         self.display_config_request_save();
@@ -2175,6 +2779,7 @@ impl CompositorState {
         let Ok(root) = serde_json::from_str::<Root>(json) else {
             return;
         };
+        let before_outputs = self.snapshot_output_geometry_by_name();
         let mut resolved: Vec<(Scr, Output)> = Vec::new();
         for s in root.screens {
             let Some(out) = self
@@ -2248,6 +2853,8 @@ impl CompositorState {
                 self.shell_primary_output_name = None;
             }
         }
+        self.shift_mapped_toplevels_for_output_moves(&before_outputs);
+        self.resync_wayland_window_registry_from_space();
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();
         self.display_config_request_save();
@@ -3533,6 +4140,32 @@ impl CompositorState {
             fds.clear();
             return Err("dmabuf plane/fd mismatch");
         }
+        let (pw, ph) = self.shell_window_physical_px;
+        if pw > 0 && ph > 0 && self.workspace_logical_bounds().is_some() {
+            let exp_w = u32::try_from(pw).unwrap_or(width).max(1);
+            let exp_h = u32::try_from(ph).unwrap_or(height).max(1);
+            const LO: u64 = 97;
+            const HI: u64 = 103;
+            let ew = exp_w as u64;
+            let eh = exp_h as u64;
+            let ww = width as u64;
+            let hh = height as u64;
+            let w_ok = ww * 100 >= ew * LO && ww * 100 <= ew * HI;
+            let h_ok = hh * 100 >= eh * LO && hh * 100 <= eh * HI;
+            if !w_ok || !h_ok {
+                fds.clear();
+                self.shell_nudge_cef_repaint();
+                tracing::debug!(
+                    target: "derp_hotplug_shell",
+                    width,
+                    height,
+                    exp_w,
+                    exp_h,
+                    "apply_shell_frame_dmabuf reject mismatched size pending CEF resize paint"
+                );
+                return Err("dmabuf size mismatch shell_window_physical_px");
+            }
+        }
         let force_env = std::env::var_os("DERP_SHELL_OSR_FULL_DAMAGE").is_some_and(|v| {
             v.as_os_str() == std::ffi::OsStr::new("1")
                 || v.as_os_str().eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
@@ -3604,6 +4237,14 @@ impl CompositorState {
             }
         }
         self.shell_move_flush_pending_deltas();
+        if resized {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                width,
+                height,
+                "apply_shell_frame_dmabuf OSR size changed shell_has_frame true"
+            );
+        }
         tracing::debug!(
             target: "derp_shell_osr_damage",
             width,
@@ -3662,6 +4303,7 @@ impl CompositorState {
     }
 
     pub fn clear_shell_frame(&mut self) {
+        tracing::warn!(target: "derp_hotplug_shell", "clear_shell_frame");
         self.shell_has_frame = false;
         self.shell_view_px = None;
         self.shell_frame_is_dmabuf = false;

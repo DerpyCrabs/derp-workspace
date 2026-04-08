@@ -28,6 +28,7 @@ import {
   type CanvasOrigin,
   canvasRectToClientCss,
   clientPointToCanvasLocal,
+  clientPointerDeltaToCanvasLogical,
   clientPointToGlobalLogical,
   findAdjacentMonitor,
   pickScreenForPointerSnap,
@@ -169,6 +170,19 @@ function screensListForLayout(
     ]
   }
   return []
+}
+
+function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): LayoutScreen {
+  const loc = rectGlobalToCanvasLocal(s.x, s.y, s.width, s.height, origin)
+  return {
+    name: s.name,
+    x: loc.x,
+    y: loc.y,
+    width: loc.w,
+    height: loc.h,
+    transform: s.transform,
+    refresh_milli_hz: s.refresh_milli_hz,
+  }
 }
 
 function monitorRefreshLabel(milli: number): string {
@@ -1234,18 +1248,26 @@ function App() {
     if (!shellWindowDrag) return
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
-    const dx = cx - shellWindowDrag.lastX
-    const dy = cy - shellWindowDrag.lastY
+    const dClientX = cx - shellWindowDrag.lastX
+    const dClientY = cy - shellWindowDrag.lastY
     const wid = shellWindowDrag.windowId
-    if (dx !== 0 || dy !== 0) {
-      shellMoveDeltaLogSeq += 1
-      if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
-        shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
+    if (dClientX !== 0 || dClientY !== 0) {
+      const main = mainRef
+      const og = outputGeom()
+      const { dx, dy } =
+        main && og
+          ? clientPointerDeltaToCanvasLogical(dClientX, dClientY, main.getBoundingClientRect(), og.w, og.h)
+          : { dx: dClientX, dy: dClientY }
+      if (dx !== 0 || dy !== 0) {
+        shellMoveDeltaLogSeq += 1
+        if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
+          shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
+        }
+        batch(() => {
+          bumpShellWindowPosition(wid, dx, dy)
+          shellWireSend('move_delta', dx, dy)
+        })
       }
-      batch(() => {
-        bumpShellWindowPosition(wid, dx, dy)
-        shellWireSend('move_delta', dx, dy)
-      })
       shellWindowDrag.lastX = cx
       shellWindowDrag.lastY = cy
     }
@@ -1474,9 +1496,20 @@ function App() {
     if (!shellWindowResize) return
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
-    const dx = cx - shellWindowResize.lastX
-    const dy = cy - shellWindowResize.lastY
-    if (dx === 0 && dy === 0) return
+    const dClientX = cx - shellWindowResize.lastX
+    const dClientY = cy - shellWindowResize.lastY
+    if (dClientX === 0 && dClientY === 0) return
+    const main = mainRef
+    const og = outputGeom()
+    const { dx, dy } =
+      main && og
+        ? clientPointerDeltaToCanvasLogical(dClientX, dClientY, main.getBoundingClientRect(), og.w, og.h)
+        : { dx: dClientX, dy: dClientY }
+    if (dx === 0 && dy === 0) {
+      shellWindowResize.lastX = cx
+      shellWindowResize.lastY = cy
+      return
+    }
     if (shellWindowResize.kind === 'compositor') {
       shellResizeDeltaLogSeq += 1
       if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
@@ -2167,6 +2200,15 @@ function App() {
         return
       }
       if (d.type === 'output_layout') {
+        console.warn(
+          '[derp_hotplug_shell] output_layout',
+          JSON.stringify({
+            screens: d.screens?.length,
+            lw: d.canvas_logical_width,
+            lh: d.canvas_logical_height,
+            primary: d.shell_chrome_primary,
+          }),
+        )
         batch(() => {
           setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
           setOutputPhysical({
@@ -2220,14 +2262,23 @@ function App() {
           setShellChromePrimaryName(pr)
         })
         queueMicrotask(() => {
-          scheduleExclusionZonesSync()
-          relayoutAllAutoMonitors()
+          try {
+            scheduleExclusionZonesSync()
+            relayoutAllAutoMonitors()
+            window.scrollTo(0, 0)
+            document.documentElement.scrollTop = 0
+            document.documentElement.scrollLeft = 0
+            document.body.scrollTop = 0
+            document.body.scrollLeft = 0
+          } catch (e) {
+            console.error('[derp-shell] output_layout follow-up', e)
+          }
         })
         return
       }
       if (d.type === 'window_list') {
         setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
-        queueMicrotask(() => relayoutAllAutoMonitors())
+        queueMicrotask(() => scheduleExclusionZonesSync())
         return
       }
       if (d.type === 'window_state') {
@@ -2707,35 +2758,39 @@ function App() {
       </Show>
 
       <For each={workspacePartition().secondary}>
-        {(s) => (
-          <div
-            class="pointer-events-none absolute z-[1] box-border border border-dashed border-[rgba(40,55,90,0.45)] bg-white/[0.04]"
-            style={{
-              left: `${s.x}px`,
-              top: `${s.y}px`,
-              width: `${s.width}px`,
-              height: `${s.height}px`,
-            }}
-          >
-            <span class="absolute top-2 left-2 rounded border border-white/12 bg-black/35 px-2 py-1 text-[11px] font-semibold tracking-wider text-neutral-100 uppercase">
-              {s.name || 'Display'}
-            </span>
-          </div>
-        )}
+        {(s) => {
+          const loc = layoutScreenCssRect(s, layoutCanvasOrigin())
+          return (
+            <div
+              class="pointer-events-none absolute z-[1] box-border border border-dashed border-[rgba(40,55,90,0.45)] bg-white/[0.04]"
+              style={{
+                left: `${loc.x}px`,
+                top: `${loc.y}px`,
+                width: `${loc.width}px`,
+                height: `${loc.height}px`,
+              }}
+            >
+              <span class="absolute top-2 left-2 rounded border border-white/12 bg-black/35 px-2 py-1 text-[11px] font-semibold tracking-wider text-neutral-100 uppercase">
+                {s.name || 'Display'}
+              </span>
+            </div>
+          )
+        }}
       </For>
 
       <For each={taskbarScreens()}>
         {(s) => {
           const primary = workspacePartition().primary
           const isPrim = isPrimaryTaskbarScreen(s, primary)
+          const loc = layoutScreenCssRect(s, layoutCanvasOrigin())
           return (
             <Show when={!screenTaskbarHiddenForFullscreen(s)}>
               <div
                 class="pointer-events-none absolute z-[400000]"
                 style={{
-                  left: `${s.x}px`,
-                  top: `${s.y + s.height - TASKBAR_HEIGHT}px`,
-                  width: `${s.width}px`,
+                  left: `${loc.x}px`,
+                  top: `${loc.y + loc.height - TASKBAR_HEIGHT}px`,
+                  width: `${loc.width}px`,
                   height: `${TASKBAR_HEIGHT}px`,
                 }}
               >
@@ -2764,16 +2819,18 @@ function App() {
       </For>
 
       <Show when={workspacePartition().primary}>
-        {(prim) => (
-          <div
-            class="pointer-events-none absolute z-[400000] box-border flex flex-col items-stretch overflow-hidden"
-            style={{
-              left: `${prim().x}px`,
-              top: `${prim().y}px`,
-              width: `${prim().width}px`,
-              height: `${prim().height}px`,
-            }}
-          >
+        {(prim) => {
+          const loc = layoutScreenCssRect(prim(), layoutCanvasOrigin())
+          return (
+            <div
+              class="pointer-events-none absolute z-[400000] box-border flex flex-col items-stretch overflow-hidden"
+              style={{
+                left: `${loc.x}px`,
+                top: `${loc.y}px`,
+                width: `${loc.width}px`,
+                height: `${loc.height}px`,
+              }}
+            >
             <div class="pointer-events-none relative z-30 box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px]">
               <Show when={debugPanelOpen()}>
                 <div
@@ -3169,7 +3226,8 @@ function App() {
               Drag me (DOM only)
             </div>
           </div>
-        )}
+          );
+        }}
       </Show>
 
       <div

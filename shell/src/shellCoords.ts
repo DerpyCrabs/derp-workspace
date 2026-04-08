@@ -45,6 +45,25 @@ export function clientPointToCanvasLocal(
   }
 }
 
+export function clientPointerDeltaToCanvasLogical(
+  dClientX: number,
+  dClientY: number,
+  mainRect: DOMRect,
+  canvasW: number,
+  canvasH: number,
+): { dx: number; dy: number } {
+  const cw = Math.max(1, canvasW)
+  const ch = Math.max(1, canvasH)
+  const mw = Math.max(1, mainRect.width)
+  const mh = Math.max(1, mainRect.height)
+  const sx = cw / mw
+  const sy = ch / mh
+  return {
+    dx: Math.round(dClientX * sx),
+    dy: Math.round(dClientY * sy),
+  }
+}
+
 export function clientPointToGlobalLogical(
   clientX: number,
   clientY: number,

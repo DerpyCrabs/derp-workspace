@@ -312,6 +312,7 @@ dependencies = [
  "smithay",
  "tracing",
  "tracing-subscriber",
+ "udev",
  "xcursor",
 ]
 
