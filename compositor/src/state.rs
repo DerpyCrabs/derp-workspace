@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     os::fd::OwnedFd,
     path::PathBuf,
@@ -32,7 +32,7 @@ use smithay::{
         PopupManager, Window, WindowSurfaceType,
     },
     input::{
-        keyboard::{keysyms, KeysymHandle, ModifiersState},
+        keyboard::{keysyms, KeysymHandle, Layout, ModifiersState},
         Seat, SeatState,
     },
     reexports::{
@@ -292,6 +292,10 @@ pub struct CompositorState {
     /// Super key pressed; used with [`Self::programs_menu_super_chord`] for Programs menu tap detection.
     pub(crate) programs_menu_super_armed: bool,
     pub(crate) programs_menu_super_chord: bool,
+    keyboard_layout_by_window: HashMap<u32, u32>,
+    keyboard_layout_last_focus_window: Option<u32>,
+    keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
+    session_default_layout_index: u32,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
@@ -366,6 +370,12 @@ pub struct CompositorState {
 pub struct ShellContextMenuPlacement {
     pub buffer_rect: Rectangle<i32, Buffer>,
     pub global_rect: Rectangle<i32, Logical>,
+}
+
+struct KeyboardLayoutFocusOp {
+    save_from: Option<u32>,
+    restore_for: Option<u32>,
+    shell_host: bool,
 }
 
 impl CompositorState {
@@ -463,7 +473,7 @@ impl CompositorState {
             })
             .expect("cef from-shell channel");
 
-        let s = Self {
+        let mut s = Self {
             start_time,
             display_handle: dh,
             space,
@@ -509,6 +519,10 @@ impl CompositorState {
             shell_ipc_keyboard_to_cef: false,
             programs_menu_super_armed: false,
             programs_menu_super_chord: false,
+            keyboard_layout_by_window: HashMap::new(),
+            keyboard_layout_last_focus_window: None,
+            keyboard_layout_focus_queue: VecDeque::new(),
+            session_default_layout_index: 0,
             shell_pointer_norm: None,
             shell_last_pointer_ipc_px: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
@@ -556,8 +570,15 @@ impl CompositorState {
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
             shell_chrome_border_w: SHELL_BORDER_THICKNESS,
         };
-
+        crate::display_config::apply_keyboard_from_display_file(&mut s);
+        s.session_default_layout_index = s.keyboard_layout_index_current();
         s
+    }
+
+    pub(crate) fn keyboard_clear_per_window_layout_map(&mut self) {
+        self.keyboard_layout_by_window.clear();
+        self.keyboard_layout_last_focus_window = None;
+        self.keyboard_layout_focus_queue.clear();
     }
 
     pub fn apply_shell_tile_preview_canvas(
@@ -812,6 +833,7 @@ impl CompositorState {
         });
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+        self.keyboard_on_focus_surface_changed(None);
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle);
     }
@@ -890,6 +912,7 @@ impl CompositorState {
             | "tile_down"
             | "move_monitor_left"
             | "move_monitor_right" => self.shell_send_keybind(action),
+            "cycle_keyboard_layout" => self.keyboard_cycle_layout_for_shortcut(),
             _ => {}
         }
     }
@@ -1252,6 +1275,134 @@ impl CompositorState {
     pub(crate) fn window_info_is_solid_shell_host(&self, info: &WindowInfo) -> bool {
         window_is_solid_shell_host(&info.title, &info.app_id)
             || self.shell_ipc_peer_matches_wayland_pid(info.wayland_client_pid)
+    }
+
+    fn keyboard_layout_should_track_window(&self, wid: u32) -> bool {
+        self.window_registry
+            .window_info(wid)
+            .map(|i| !self.window_info_is_solid_shell_host(&i))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn keyboard_layout_index_current(&mut self) -> u32 {
+        let kbd = self.seat.get_keyboard().unwrap();
+        kbd.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            xkb.active_layout().0
+        })
+    }
+
+    fn keyboard_layout_set_index(&mut self, idx: u32) {
+        let Some(kbd) = self.seat.get_keyboard() else {
+            return;
+        };
+        kbd.with_xkb_state(self, |mut ctx| {
+            let nl = {
+                let xkb = ctx.xkb().lock().unwrap();
+                xkb.layouts().count()
+            };
+            if nl == 0 {
+                return;
+            }
+            let max_v = u32::try_from(nl.saturating_sub(1)).unwrap_or(u32::MAX);
+            let li = idx.min(max_v);
+            ctx.set_layout(Layout(li));
+        });
+    }
+
+    fn keyboard_layout_active_name_raw(&mut self) -> String {
+        let kbd = self.seat.get_keyboard().unwrap();
+        kbd.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            let layout = xkb.active_layout();
+            xkb.layout_name(layout).to_string()
+        })
+    }
+
+    fn keyboard_layout_label_short(name: &str) -> String {
+        let s = name.split_whitespace().next().unwrap_or(name);
+        let s = s
+            .find('(')
+            .map(|i| s[..i].trim_end())
+            .unwrap_or(s);
+        let mut out: String = s.chars().take(12).collect();
+        if out.is_empty() {
+            out.push('?');
+        }
+        out.make_ascii_uppercase();
+        let max = shell_wire::MAX_KEYBOARD_LAYOUT_LABEL_BYTES as usize;
+        while out.len() > max {
+            out.pop();
+        }
+        out
+    }
+
+    pub(crate) fn emit_keyboard_layout_to_shell(&mut self) {
+        let raw = self.keyboard_layout_active_name_raw();
+        let label = Self::keyboard_layout_label_short(&raw);
+        self.shell_emit_chrome_event(ChromeEvent::KeyboardLayout { label });
+    }
+
+    pub(crate) fn keyboard_on_focus_surface_changed(&mut self, focused: Option<&WlSurface>) {
+        let new_wid = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
+        let shell_host = new_wid
+            .and_then(|w| self.window_registry.window_info(w))
+            .map(|i| self.window_info_is_solid_shell_host(&i))
+            .unwrap_or(false);
+        let prev = self.keyboard_layout_last_focus_window.take();
+        let save_from = prev.filter(|&w| self.keyboard_layout_should_track_window(w));
+        let restore_for = new_wid.filter(|&w| self.keyboard_layout_should_track_window(w));
+        self.keyboard_layout_last_focus_window = if restore_for.is_some() {
+            new_wid
+        } else {
+            None
+        };
+        self.keyboard_layout_focus_queue.push_back(KeyboardLayoutFocusOp {
+            save_from,
+            restore_for,
+            shell_host,
+        });
+        let tx = self.cef_to_compositor_tx.clone();
+        let _ = tx.send(crate::cef::compositor_tx::CefToCompositor::Run(Box::new(|state| {
+            state.keyboard_drain_focus_layout_queue();
+        })));
+    }
+
+    fn keyboard_drain_focus_layout_queue(&mut self) {
+        while let Some(op) = self.keyboard_layout_focus_queue.pop_front() {
+            if let Some(w) = op.save_from {
+                let idx = self.keyboard_layout_index_current();
+                self.keyboard_layout_by_window.insert(w, idx);
+            }
+            if let Some(w) = op.restore_for {
+                let idx = self
+                    .keyboard_layout_by_window
+                    .get(&w)
+                    .copied()
+                    .unwrap_or(self.session_default_layout_index);
+                self.keyboard_layout_set_index(idx);
+            } else if op.shell_host || op.save_from.is_some() {
+                self.keyboard_layout_set_index(self.session_default_layout_index);
+            }
+            self.emit_keyboard_layout_to_shell();
+        }
+    }
+
+    pub(crate) fn keyboard_cycle_layout_for_shortcut(&mut self) {
+        let Some(kbd) = self.seat.get_keyboard() else {
+            return;
+        };
+        let idx = kbd.with_xkb_state(self, |mut ctx| {
+            ctx.cycle_next_layout();
+            let xkb = ctx.xkb().lock().unwrap();
+            xkb.active_layout().0
+        });
+        if let Some(wid) = self.keyboard_focused_window_id() {
+            if self.keyboard_layout_should_track_window(wid) {
+                self.keyboard_layout_by_window.insert(wid, idx);
+            }
+        }
+        self.emit_keyboard_layout_to_shell();
     }
 
     pub(crate) fn xdg_sync_pending_deferred_toplevel(&mut self, root: &WlSurface) {
@@ -1752,7 +1903,7 @@ impl CompositorState {
                 self.window_info_is_solid_shell_host(info)
                     || !shell_window_row_should_show(info)
             }
-            ChromeEvent::Keybind { .. } => false,
+            ChromeEvent::Keybind { .. } | ChromeEvent::KeyboardLayout { .. } => false,
         }
     }
 
@@ -1769,6 +1920,10 @@ impl CompositorState {
         window_id: u32,
         removed_info: Option<WindowInfo>,
     ) {
+        self.keyboard_layout_by_window.remove(&window_id);
+        if self.keyboard_layout_last_focus_window == Some(window_id) {
+            self.keyboard_layout_last_focus_window = None;
+        }
         let hint = removed_info.as_ref();
         self.shell_emit_chrome_event_inner(
             ChromeEvent::WindowUnmapped { window_id },
@@ -1778,6 +1933,10 @@ impl CompositorState {
 
     /// When title/app_id becomes that of the Solid host after an earlier map with empty metadata, retract the phantom HUD entry.
     pub(crate) fn shell_retract_phantom_shell_window(&mut self, window_id: u32) {
+        self.keyboard_layout_by_window.remove(&window_id);
+        if self.keyboard_layout_last_focus_window == Some(window_id) {
+            self.keyboard_layout_last_focus_window = None;
+        }
         tracing::debug!(
             target: "derp_shell_sync",
             window_id,
@@ -3946,6 +4105,7 @@ impl CompositorState {
                 .get_keyboard()
                 .unwrap()
                 .set_focus(self, Option::<WlSurface>::None, serial);
+            self.keyboard_on_focus_surface_changed(None);
             return;
         };
         self.shell_raise_and_focus_window(target);
@@ -4037,6 +4197,7 @@ impl CompositorState {
                 .get_keyboard()
                 .unwrap()
                 .set_focus(self, Option::<WlSurface>::None, serial);
+            self.keyboard_on_focus_surface_changed(None);
         }
 
         self.shell_emit_window_state(window_id, true);

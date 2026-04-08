@@ -504,6 +504,21 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "keyboard_layout",
+                    "label": label,
+                }),
+            );
+        }
 
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
             let Ok(guard) = browser.lock() else {

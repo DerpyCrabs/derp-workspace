@@ -277,6 +277,7 @@ type DerpShellDetail =
   | { type: 'programs_menu_toggle' }
   | { type: 'compositor_ping' }
   | { type: 'keybind'; action: string; target_window_id?: number }
+  | { type: 'keyboard_layout'; label: string }
 
 type DesktopAppEntry = {
   name: string
@@ -671,6 +672,7 @@ function App() {
   })
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
+  const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<string | null>(null)
   const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
   const [layoutCanvasOrigin, setLayoutCanvasOrigin] = createSignal<{ x: number; y: number } | null>(
     null,
@@ -1995,6 +1997,11 @@ function App() {
         shellWireSend('shell_ipc_pong')
         return
       }
+      if (d.type === 'keyboard_layout') {
+        const label = typeof d.label === 'string' ? d.label.trim() : ''
+        setKeyboardLayoutLabel(label.length > 0 ? label : null)
+        return
+      }
       if (d.type === 'keybind') {
         const action = typeof d.action === 'string' ? d.action : ''
         const fid = focusedWindowId()
@@ -2829,6 +2836,7 @@ function App() {
                   onPowerMenuClick={onPowerMenuClick}
                   windows={taskbarRowsForScreen(s)}
                   focusedWindowId={focusedWindowId()}
+                  keyboardLayoutLabel={isPrim ? keyboardLayoutLabel() : null}
                   debugPanelOpen={debugPanelOpen()}
                   onDebugPanelToggle={() => {
                     setDebugPanelOpen((v) => !v)

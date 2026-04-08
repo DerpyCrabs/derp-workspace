@@ -37,6 +37,8 @@ impl SeatHandler for CompositorState {
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
         set_data_device_focus(dh, seat, client);
 
+        self.keyboard_on_focus_surface_changed(focused);
+
         let window_id = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
         if let Some(wid) = window_id {
             if let Some(info) = self.window_registry.window_info(wid) {

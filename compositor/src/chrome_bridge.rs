@@ -85,6 +85,9 @@ pub enum ChromeEvent {
         action: String,
         target_window_id: Option<u32>,
     },
+    KeyboardLayout {
+        label: String,
+    },
 }
 
 pub type CommandResult<T = ()> = Result<T, String>;

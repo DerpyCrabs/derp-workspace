@@ -63,5 +63,10 @@ pub fn chrome_event_to_shell_message(
             action: action.clone(),
             target_window_id: target_window_id.unwrap_or(0),
         },
+        ChromeEvent::KeyboardLayout { label } => {
+            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout {
+                label: label.clone(),
+            }
+        }
     })
 }

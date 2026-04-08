@@ -8,6 +8,7 @@ use smithay::reexports::drm::control::{connector, Device as ControlDevice};
 
 use crate::drm::{DrmHead, DrmSession};
 use crate::state::{transform_to_wire, CompositorState};
+use smithay::input::keyboard::XkbConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonitorRef {
@@ -29,6 +30,21 @@ pub struct ScreenEntry {
     pub transform: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KeyboardXkbFile {
+    #[serde(default)]
+    pub rules: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub layout: String,
+    #[serde(default)]
+    pub variant: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfigFile {
     pub version: u32,
@@ -38,11 +54,79 @@ pub struct DisplayConfigFile {
     pub shell_chrome_primary: Option<MonitorRef>,
     #[serde(default)]
     pub screens: Vec<ScreenEntry>,
+    #[serde(default)]
+    pub keyboard: KeyboardXkbFile,
 }
 
 struct LiveHead {
     name: String,
     monitor_id: Option<String>,
+}
+
+pub fn apply_keyboard_from_display_file(state: &mut CompositorState) {
+    let Some(path) = display_config_path() else {
+        return;
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            tracing::warn!(
+                target: "derp_display_config",
+                ?e,
+                path = %path.display(),
+                "read display config for keyboard"
+            );
+            return;
+        }
+    };
+    let cfg: DisplayConfigFile = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                target: "derp_display_config",
+                ?e,
+                "parse display config for keyboard"
+            );
+            return;
+        }
+    };
+    if cfg.version != 1 {
+        return;
+    }
+    apply_keyboard_from_section(state, &cfg.keyboard);
+}
+
+pub(crate) fn apply_keyboard_from_section(state: &mut CompositorState, kb: &KeyboardXkbFile) {
+    if kb.layout.trim().is_empty() {
+        return;
+    }
+    let xkb_cfg = XkbConfig {
+        rules: kb.rules.as_str(),
+        model: kb.model.as_str(),
+        layout: kb.layout.as_str(),
+        variant: kb.variant.as_str(),
+        options: kb.options.clone(),
+    };
+    let Some(handle) = state.seat.get_keyboard() else {
+        return;
+    };
+    match handle.set_xkb_config(state, xkb_cfg) {
+        Ok(()) => {
+            state.keyboard_clear_per_window_layout_map();
+            tracing::warn!(
+                target: "derp_display_config",
+                layout = %kb.layout,
+                "applied keyboard layouts from display.json"
+            );
+        }
+        Err(e) => tracing::warn!(
+            target: "derp_display_config",
+            ?e,
+            layout = %kb.layout,
+            "set_xkb_config from display.json keyboard"
+        ),
+    }
 }
 
 pub fn display_config_path() -> Option<PathBuf> {
@@ -304,11 +388,18 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
             }),
     };
 
+    let keyboard = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<DisplayConfigFile>(&raw).ok())
+        .map(|c| c.keyboard)
+        .unwrap_or_default();
+
     let file = DisplayConfigFile {
         version: 1,
         ui_scale: state.shell_ui_scale,
         shell_chrome_primary,
         screens,
+        keyboard,
     };
 
     if let Err(e) = write_atomic(&path, &file) {

@@ -17,6 +17,7 @@ export type TaskbarProps = {
   onPowerMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
+  keyboardLayoutLabel: string | null
   debugPanelOpen: boolean
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
@@ -75,6 +76,14 @@ export function Taskbar(props: TaskbarProps) {
 
       <Show when={props.isPrimary}>
         <div class="ml-auto flex shrink-0 items-center gap-2.5">
+          <Show when={props.keyboardLayoutLabel}>
+            <span
+              class="min-w-[2rem] shrink-0 rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.5rem] py-[0.35rem] text-center text-[0.75rem] font-semibold tabular-nums tracking-wide text-neutral-200"
+              title="Keyboard layout"
+            >
+              {props.keyboardLayoutLabel!}
+            </span>
+          </Show>
           <button
             type="button"
             class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"

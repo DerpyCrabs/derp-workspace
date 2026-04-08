@@ -34,6 +34,7 @@ fn super_keybind_action(raw_sym: u32, shift: bool) -> Option<&'static str> {
         };
     }
     match raw_sym {
+        KEY_space => Some("cycle_keyboard_layout"),
         KEY_Return | KEY_KP_Enter => Some("launch_terminal"),
         KEY_q | KEY_Q => Some("close_focused"),
         KEY_d | KEY_D => Some("toggle_programs_menu"),
@@ -271,6 +272,7 @@ impl CompositorState {
                     }
                 });
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                self.keyboard_on_focus_surface_changed(None);
                 self.shell_ipc_keyboard_to_cef = true;
             }
             pointer.button(
@@ -371,6 +373,7 @@ impl CompositorState {
                     }
                 });
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                self.keyboard_on_focus_surface_changed(None);
             }
         }
 

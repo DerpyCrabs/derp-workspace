@@ -21,7 +21,7 @@
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
 //!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`
+//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] when layout changes
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -93,6 +93,8 @@ pub const MSG_SHELL_CHROME_METRICS: u32 = 49;
 /// Compositor → shell: toggle Programs menu (Win/Super tap when keyboard was on a native client).
 pub const MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE: u32 = 50;
 pub const MSG_COMPOSITOR_KEYBIND: u32 = 51;
+/// Compositor → shell: active keyboard layout short label (UTF-8).
+pub const MSG_COMPOSITOR_KEYBOARD_LAYOUT: u32 = 52;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -117,6 +119,8 @@ pub const MAX_OUTPUT_LAYOUT_NAME_BYTES: u32 = 128;
 /// Max UTF-8 bytes in [`MSG_SHELL_SET_OUTPUT_LAYOUT`] JSON payload.
 pub const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES: u32 = 4096;
 pub const MAX_KEYBIND_ACTION_BYTES: u32 = 256;
+/// Max UTF-8 bytes for [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] `label`.
+pub const MAX_KEYBOARD_LAYOUT_LABEL_BYTES: u32 = 32;
 /// Max planes in [`MSG_FRAME_DMABUF_COMMIT`] (matches Linux dma-buf multi-plane caps).
 pub const MAX_DMABUF_PLANES: u32 = 4;
 
@@ -1044,6 +1048,9 @@ pub enum DecodedCompositorToShellMessage {
         action: String,
         target_window_id: u32,
     },
+    KeyboardLayout {
+        label: String,
+    },
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -1100,6 +1107,27 @@ pub fn encode_compositor_programs_menu_toggle() -> Vec<u8> {
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE.to_le_bytes());
     v
+}
+
+pub fn encode_compositor_keyboard_layout(label: &str) -> Option<Vec<u8>> {
+    let b = label.as_bytes();
+    if b.contains(&0) {
+        return None;
+    }
+    let ll = u32::try_from(b.len()).ok()?;
+    if ll > MAX_KEYBOARD_LAYOUT_LABEL_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(ll)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_KEYBOARD_LAYOUT.to_le_bytes());
+    v.extend_from_slice(&ll.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
 }
 
 pub fn encode_compositor_keybind(action: &str, target_window_id: u32) -> Option<Vec<u8>> {
@@ -1577,6 +1605,25 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 action,
                 target_window_id,
             })
+        }
+        MSG_COMPOSITOR_KEYBOARD_LAYOUT => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let ll = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            if ll > MAX_KEYBOARD_LAYOUT_LABEL_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 8usize
+                .checked_add(ll)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let label = std::str::from_utf8(&body[8..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedCompositorToShellMessage::KeyboardLayout { label })
         }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
