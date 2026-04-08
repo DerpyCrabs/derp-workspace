@@ -50,6 +50,25 @@ function halfRect(work: { x: number; y: number; w: number; h: number }, side: 'l
   return { x: work.x + halfW, y: work.y, w: Math.max(1, restW), h: Math.max(1, work.h) }
 }
 
+function primaryMatchesMon(mon: LayoutScreen, primaryChromeMon: LayoutScreen | null): boolean {
+  return (
+    !!primaryChromeMon &&
+    mon.x === primaryChromeMon.x &&
+    mon.y === primaryChromeMon.y &&
+    mon.width === primaryChromeMon.width &&
+    mon.height === primaryChromeMon.height
+  )
+}
+
+export function keyboardTileHalfRectGlobal(
+  mon: LayoutScreen,
+  primaryChromeMon: LayoutScreen | null,
+  side: 'left' | 'right',
+): { x: number; y: number; w: number; h: number } {
+  const work = monitorWorkAreaGlobal(mon, primaryMatchesMon(mon, primaryChromeMon))
+  return halfRect(work, side)
+}
+
 export function hitTestSnapRectGlobal(
   px: number,
   py: number,

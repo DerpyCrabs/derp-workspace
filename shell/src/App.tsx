@@ -28,7 +28,7 @@ import {
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
 } from './shellCoords'
-import { snapRectGlobalForPointerOnMonitor } from './tileSnap'
+import { keyboardTileHalfRectGlobal, snapRectGlobalForPointerOnMonitor } from './tileSnap'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
 import {
@@ -1632,6 +1632,111 @@ function App() {
           const tid = fromEv ?? fid
           if (tid === null) return
           toggleShellMaximizeForWindow(tid)
+          return
+        }
+        if (action === 'tile_left' || action === 'tile_right') {
+          if (fid === null) return
+          const w = wmap.get(fid)
+          if (!w || w.minimized) return
+          const co = layoutCanvasOrigin()
+          const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
+          const mon = pickScreenForWindow(w, list, co) ?? list[0] ?? null
+          if (!mon) return
+          const side = action === 'tile_left' ? 'left' : 'right'
+          const prim = workspacePartition().primary
+          const gRect = keyboardTileHalfRectGlobal(mon, prim, side)
+          const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
+          const preTile = w.maximized
+            ? (floatBeforeMaximize.get(fid) ?? {
+                x: w.x,
+                y: w.y,
+                w: w.width,
+                h: w.height,
+              })
+            : { x: w.x, y: w.y, w: w.width, h: w.height }
+          tileRestore.set(fid, preTile)
+          shellTiled.add(fid)
+          if (w.maximized) floatBeforeMaximize.delete(fid)
+          shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
+          setWindows((m) => {
+            const cur = m.get(fid)
+            if (!cur) return m
+            const next = new Map(m)
+            next.set(fid, {
+              ...cur,
+              x: loc.x,
+              y: loc.y,
+              width: loc.w,
+              height: loc.h,
+              maximized: false,
+            })
+            return next
+          })
+          scheduleExclusionZonesSync()
+          bumpSnapChrome()
+          return
+        }
+        if (action === 'tile_up') {
+          if (fid === null) return
+          toggleShellMaximizeForWindow(fid)
+          return
+        }
+        if (action === 'tile_down') {
+          if (fid === null) return
+          const w = wmap.get(fid)
+          if (!w || w.minimized) return
+          if (w.maximized) {
+            const rest = floatBeforeMaximize.get(fid) ?? {
+              x: w.x,
+              y: w.y,
+              w: w.width,
+              h: w.height,
+            }
+            floatBeforeMaximize.delete(fid)
+            shellWireSend('set_geometry', fid, rest.x, rest.y, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
+            setWindows((m) => {
+              const cur = m.get(fid)
+              if (!cur) return m
+              const next = new Map(m)
+              next.set(fid, {
+                ...cur,
+                x: rest.x,
+                y: rest.y,
+                width: rest.w,
+                height: rest.h,
+                maximized: false,
+              })
+              return next
+            })
+            scheduleExclusionZonesSync()
+            bumpSnapChrome()
+            return
+          }
+          if (shellTiled.has(fid)) {
+            const tr = tileRestore.get(fid)
+            if (tr) {
+              shellWireSend('set_geometry', fid, tr.x, tr.y, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
+              setWindows((m) => {
+                const cur = m.get(fid)
+                if (!cur) return m
+                const next = new Map(m)
+                next.set(fid, {
+                  ...cur,
+                  x: tr.x,
+                  y: tr.y,
+                  width: tr.w,
+                  height: tr.h,
+                  maximized: false,
+                })
+                return next
+              })
+            }
+            shellTiled.delete(fid)
+            tileRestore.delete(fid)
+            scheduleExclusionZonesSync()
+            bumpSnapChrome()
+            return
+          }
           return
         }
         return
