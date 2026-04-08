@@ -427,6 +427,26 @@ impl CompositorState {
                                 return FilterResult::Intercept(());
                             }
                         }
+                        match crate::volume::try_volume_key(&keysym, key_state) {
+                            None => {}
+                            Some(crate::volume::VolumeKeyIntercept::ReleaseOnly) => {
+                                return FilterResult::Intercept(());
+                            }
+                            Some(crate::volume::VolumeKeyIntercept::PressHud {
+                                volume_linear_percent_x100,
+                                muted,
+                                state_known,
+                            }) => {
+                                state.shell_send_to_cef(
+                                    shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
+                                        volume_linear_percent_x100,
+                                        muted,
+                                        state_known,
+                                    },
+                                );
+                                return FilterResult::Intercept(());
+                            }
+                        }
                         if state.shell_cef_active() && state.shell_has_frame {
                             let is_super = matches!(
                                 raw_sym,

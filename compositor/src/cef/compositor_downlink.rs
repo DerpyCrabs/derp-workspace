@@ -519,6 +519,27 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
+            volume_linear_percent_x100,
+            muted,
+            state_known,
+        } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "volume_overlay",
+                    "volume_linear_percent_x100": volume_linear_percent_x100,
+                    "muted": muted,
+                    "state_known": state_known,
+                }),
+            );
+        }
 
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
             let Ok(guard) = browser.lock() else {

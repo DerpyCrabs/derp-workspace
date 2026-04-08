@@ -278,6 +278,12 @@ type DerpShellDetail =
   | { type: 'compositor_ping' }
   | { type: 'keybind'; action: string; target_window_id?: number }
   | { type: 'keyboard_layout'; label: string }
+  | {
+      type: 'volume_overlay'
+      volume_linear_percent_x100: number
+      muted: boolean
+      state_known: boolean
+    }
 
 type DesktopAppEntry = {
   name: string
@@ -673,6 +679,64 @@ function App() {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<string | null>(null)
+  const [volumeOverlay, setVolumeOverlay] = createSignal<{
+    linear: number
+    muted: boolean
+    stateKnown: boolean
+  } | null>(null)
+  const volumeOverlayHud = createMemo(() => {
+    const v = volumeOverlay()
+    if (!v) return null
+    const pct = Math.min(200, Math.round(v.linear / 100))
+    const barPct = Math.min(100, pct)
+    const main = mainRef
+    const og = outputGeom()
+    const co = layoutCanvasOrigin()
+    const primary = workspacePartition().primary
+    let pos: Record<string, string> = {
+      left: '50%',
+      bottom: 'max(5.5rem, 12vh)',
+      transform: 'translateX(-50%)',
+    }
+    if (main && og && primary) {
+      const loc = layoutScreenCssRect(primary, co)
+      const gap = 12
+      const cx = loc.x + loc.width / 2
+      const cy = loc.y + loc.height - TASKBAR_HEIGHT - gap
+      const pt = canvasRectToClientCss(cx, cy, 0, 0, main.getBoundingClientRect(), og.w, og.h)
+      pos = {
+        left: `${pt.left}px`,
+        top: `${pt.top}px`,
+        transform: 'translate(-50%, -100%)',
+      }
+    }
+    const label = !v.stateKnown ? '—' : v.muted ? 'Muted' : `${pct}%`
+    const fillPct = !v.stateKnown || v.muted ? 0 : barPct
+    return (
+      <div
+        class="pointer-events-none fixed z-[470000] box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl border border-white/20 bg-[rgba(18,20,28,0.88)] px-5 py-3.5 shadow-[0_8px_32px_rgba(0,0,0,0.45)]"
+        style={pos}
+        role="status"
+        aria-live="polite"
+      >
+        <div class="flex flex-col gap-2">
+          <p class="m-0 flex h-[1.75rem] items-center justify-center text-center text-[1.05rem] font-semibold tabular-nums text-neutral-100">
+            {!v.stateKnown ? (
+              <span class="text-[0.95rem] font-medium text-neutral-200">Volume unavailable</span>
+            ) : (
+              label
+            )}
+          </p>
+          <div class="h-2 w-full shrink-0 overflow-hidden rounded-full bg-white/15">
+            <div
+              class="h-full rounded-full bg-[rgba(120,200,255,0.9)] transition-[width] duration-100 ease-out"
+              style={{ width: `${fillPct}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  })
   const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
   const [layoutCanvasOrigin, setLayoutCanvasOrigin] = createSignal<{ x: number; y: number } | null>(
     null,
@@ -1943,6 +2007,7 @@ function App() {
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
+    let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
     const refreshSpawnUrl = () => {
       const u = window.__DERP_SPAWN_URL
       setSpawnUrlLine(
@@ -2000,6 +2065,21 @@ function App() {
       if (d.type === 'keyboard_layout') {
         const label = typeof d.label === 'string' ? d.label.trim() : ''
         setKeyboardLayoutLabel(label.length > 0 ? label : null)
+        return
+      }
+      if (d.type === 'volume_overlay') {
+        if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
+        const linRaw = d.volume_linear_percent_x100
+        const lin = typeof linRaw === 'number' && Number.isFinite(linRaw) ? Math.max(0, linRaw) : 0
+        setVolumeOverlay({
+          linear: lin,
+          muted: !!d.muted,
+          stateKnown: d.state_known !== false,
+        })
+        volumeOverlayHideTimer = setTimeout(() => {
+          setVolumeOverlay(null)
+          volumeOverlayHideTimer = undefined
+        }, 2200)
         return
       }
       if (d.type === 'keybind') {
@@ -2625,6 +2705,7 @@ function App() {
     document.addEventListener('pointerdown', onCtxPointerDown, true)
 
     onCleanup(() => {
+      if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
       document.removeEventListener('keydown', onCtxKeyDown, true)
       document.removeEventListener('pointerdown', onCtxPointerDown, true)
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
@@ -2761,6 +2842,8 @@ function App() {
           </Show>
         )}
       </Index>
+
+      {volumeOverlayHud()}
 
       <Show when={assistOverlay} keyed>
         {(st) => {

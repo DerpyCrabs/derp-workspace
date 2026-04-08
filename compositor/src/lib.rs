@@ -27,6 +27,7 @@ mod shell_render;
 mod tile_preview_render;
 pub mod sidecar;
 pub mod state;
+mod volume;
 pub mod xwayland;
 
 pub use derp_space::DerpSpaceElem;

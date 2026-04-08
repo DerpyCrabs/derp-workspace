@@ -21,7 +21,7 @@
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
 //!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] when layout changes
+//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] when layout changes; [`MSG_COMPOSITOR_VOLUME_OVERLAY`] after hardware volume / mute keys
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -95,6 +95,7 @@ pub const MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE: u32 = 50;
 pub const MSG_COMPOSITOR_KEYBIND: u32 = 51;
 /// Compositor → shell: active keyboard layout short label (UTF-8).
 pub const MSG_COMPOSITOR_KEYBOARD_LAYOUT: u32 = 52;
+pub const MSG_COMPOSITOR_VOLUME_OVERLAY: u32 = 53;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -1051,6 +1052,11 @@ pub enum DecodedCompositorToShellMessage {
     KeyboardLayout {
         label: String,
     },
+    VolumeOverlay {
+        volume_linear_percent_x100: u16,
+        muted: bool,
+        state_known: bool,
+    },
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -1106,6 +1112,27 @@ pub fn encode_compositor_programs_menu_toggle() -> Vec<u8> {
     let mut v = Vec::with_capacity(12);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_volume_overlay(
+    volume_linear_percent_x100: u16,
+    muted: bool,
+    state_known: bool,
+) -> Vec<u8> {
+    let body_len = 8u32;
+    let mut flags = 0u16;
+    if muted {
+        flags |= 1;
+    }
+    if state_known {
+        flags |= 2;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_VOLUME_OVERLAY.to_le_bytes());
+    v.extend_from_slice(&volume_linear_percent_x100.to_le_bytes());
+    v.extend_from_slice(&flags.to_le_bytes());
     v
 }
 
@@ -1624,6 +1651,19 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
             Ok(DecodedCompositorToShellMessage::KeyboardLayout { label })
+        }
+        MSG_COMPOSITOR_VOLUME_OVERLAY => {
+            if body.len() != 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let volume_linear_percent_x100 =
+                u16::from_le_bytes(body[4..6].try_into().unwrap());
+            let flags = u16::from_le_bytes(body[6..8].try_into().unwrap());
+            Ok(DecodedCompositorToShellMessage::VolumeOverlay {
+                volume_linear_percent_x100,
+                muted: flags & 1 != 0,
+                state_known: flags & 2 != 0,
+            })
         }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN
