@@ -1,4 +1,5 @@
 import { CHROME_TASKBAR_RESERVE_PX, CHROME_TITLEBAR_PX } from './chromeConstants'
+import type { SnapZone } from './tileZones'
 
 export type LayoutScreen = {
   x: number
@@ -24,100 +25,28 @@ export function monitorWorkAreaGlobal(
   }
 }
 
-function quarterRect(work: { x: number; y: number; w: number; h: number }, q: 'tl' | 'tr' | 'bl' | 'br') {
-  const halfW = Math.floor(work.w / 2)
-  const halfH = Math.floor(work.h / 2)
-  const restW = work.w - halfW
-  const restH = work.h - halfH
-  switch (q) {
-    case 'tl':
-      return { x: work.x, y: work.y, w: Math.max(1, halfW), h: Math.max(1, halfH) }
-    case 'tr':
-      return { x: work.x + halfW, y: work.y, w: Math.max(1, restW), h: Math.max(1, halfH) }
-    case 'bl':
-      return { x: work.x, y: work.y + halfH, w: Math.max(1, halfW), h: Math.max(1, restH) }
-    case 'br':
-      return { x: work.x + halfW, y: work.y + halfH, w: Math.max(1, restW), h: Math.max(1, restH) }
-  }
-}
-
-function halfRect(work: { x: number; y: number; w: number; h: number }, side: 'left' | 'right') {
-  const halfW = Math.floor(work.w / 2)
-  const restW = work.w - halfW
-  if (side === 'left') {
-    return { x: work.x, y: work.y, w: Math.max(1, halfW), h: Math.max(1, work.h) }
-  }
-  return { x: work.x + halfW, y: work.y, w: Math.max(1, restW), h: Math.max(1, work.h) }
-}
-
-function primaryMatchesMon(mon: LayoutScreen, primaryChromeMon: LayoutScreen | null): boolean {
-  return (
-    !!primaryChromeMon &&
-    mon.x === primaryChromeMon.x &&
-    mon.y === primaryChromeMon.y &&
-    mon.width === primaryChromeMon.width &&
-    mon.height === primaryChromeMon.height
-  )
-}
-
-export function keyboardTileHalfRectGlobal(
-  mon: LayoutScreen,
-  primaryChromeMon: LayoutScreen | null,
-  side: 'left' | 'right',
-): { x: number; y: number; w: number; h: number } {
-  const work = monitorWorkAreaGlobal(mon, primaryMatchesMon(mon, primaryChromeMon))
-  return halfRect(work, side)
-}
-
-export function inferHalfTileSide(
-  winGlob: { x: number; y: number; w: number; h: number },
-  mon: LayoutScreen,
-  primaryChromeMon: LayoutScreen | null,
-): 'left' | 'right' {
-  const work = monitorWorkAreaGlobal(mon, primaryMatchesMon(mon, primaryChromeMon))
-  const mid = work.x + work.w / 2
-  const winMid = winGlob.x + winGlob.w / 2
-  return winMid < mid ? 'left' : 'right'
-}
-
-export function hitTestSnapRectGlobal(
+export function hitTestSnapZoneGlobal(
   px: number,
   py: number,
   work: { x: number; y: number; w: number; h: number },
   edgePx: number = TILE_SNAP_EDGE_PX,
-): { x: number; y: number; w: number; h: number } | null {
+  titlebarProbePx: number = CHROME_TITLEBAR_PX,
+): SnapZone | null {
   const { x, y, w, h } = work
-  if (px < x || py < y || px > x + w || py > y + h) return null
+  const yTop = y - titlebarProbePx
+  if (px < x || py < yTop || px > x + w || py > y + h) return null
   const dl = px - x
   const dr = x + w - px
-  const dt = py - y
+  const nearT = py >= y ? py - y <= edgePx : y - py <= titlebarProbePx
   const db = y + h - py
   const nearL = dl <= edgePx
   const nearR = dr <= edgePx
-  const nearT = dt <= edgePx
   const nearB = db <= edgePx
-  if (nearL && nearT) return quarterRect(work, 'tl')
-  if (nearR && nearT) return quarterRect(work, 'tr')
-  if (nearL && nearB) return quarterRect(work, 'bl')
-  if (nearR && nearB) return quarterRect(work, 'br')
-  if (nearL) return halfRect(work, 'left')
-  if (nearR) return halfRect(work, 'right')
+  if (nearL && nearT) return 'top-left'
+  if (nearR && nearT) return 'top-right'
+  if (nearL && nearB) return 'bottom-left'
+  if (nearR && nearB) return 'bottom-right'
+  if (nearL) return 'left-half'
+  if (nearR) return 'right-half'
   return null
-}
-
-export function snapRectGlobalForPointerOnMonitor(
-  px: number,
-  py: number,
-  mon: LayoutScreen,
-  primaryChromeMon: LayoutScreen | null,
-  edgePx: number = TILE_SNAP_EDGE_PX,
-): { x: number; y: number; w: number; h: number } | null {
-  const reserveTb =
-    !!primaryChromeMon &&
-    mon.x === primaryChromeMon.x &&
-    mon.y === primaryChromeMon.y &&
-    mon.width === primaryChromeMon.width &&
-    mon.height === primaryChromeMon.height
-  const work = monitorWorkAreaGlobal(mon, reserveTb)
-  return hitTestSnapRectGlobal(px, py, work, edgePx)
 }

@@ -21,6 +21,7 @@ import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './e
 import { ShellWindowFrame } from './ShellWindowFrame'
 import {
   canvasOriginXY,
+  type CanvasOrigin,
   clientPointToCanvasLocal,
   clientPointToGlobalLogical,
   findAdjacentMonitor,
@@ -29,12 +30,12 @@ import {
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
 } from './shellCoords'
+import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal } from './tileSnap'
 import {
-  inferHalfTileSide,
-  keyboardTileHalfRectGlobal,
-  monitorWorkAreaGlobal,
-  snapRectGlobalForPointerOnMonitor,
-} from './tileSnap'
+  type SnapZone,
+  snapZoneToBoundsWithOccupied,
+  type Rect as TileRect,
+} from './tileZones'
 import { Taskbar } from './Taskbar'
 import { TransformPicker } from './TransformPicker'
 import {
@@ -252,6 +253,12 @@ type DerpWindow = {
   client_side_decoration?: boolean
 }
 
+function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
+  if (w.output_name && w.output_name === mon.name) return true
+  const p = pickScreenForWindow(w, list, co)
+  return p !== null && p.name === mon.name
+}
+
 /** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
 function coerceShellWindowId(raw: unknown): number | null {
   if (raw == null || raw === '') return null
@@ -395,10 +402,11 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
 
 const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
 const tileRestore = new Map<number, { x: number; y: number; w: number; h: number }>()
-const shellTiled = new Set<number>()
+const shellTiled = new Map<number, SnapZone>()
 const dragPreTileSnapshot = new Map<number, { x: number; y: number; w: number; h: number }>()
 let activeSnapDropCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapPreviewCanvas: { x: number; y: number; w: number; h: number } | null = null
+let activeSnapZone: SnapZone | null = null
 let tilePreviewRaf = 0
 let lastTilePreviewKey = ''
 
@@ -770,9 +778,31 @@ function App() {
     )
   }
 
+  function occupiedSnapZonesOnMonitor(
+    mon: LayoutScreen,
+    excludeWindowId: number,
+  ): { zone: SnapZone; bounds: TileRect }[] {
+    const co = layoutCanvasOrigin()
+    const list = taskbarScreens()
+    const out: { zone: SnapZone; bounds: TileRect }[] = []
+    for (const [wid, zone] of shellTiled) {
+      if (wid === excludeWindowId) continue
+      const win = windows().get(wid)
+      if (!win || win.minimized) continue
+      if (!windowOnMonitor(win, mon, list, co)) continue
+      const g = rectCanvasLocalToGlobal(win.x, win.y, win.width, win.height, co)
+      out.push({ zone, bounds: { x: g.x, y: g.y, width: g.w, height: g.h } })
+    }
+    return out
+  }
+
   function screenTaskbarHiddenForFullscreen(s: LayoutScreen) {
     const list = windowsByMonitor().get(s.name) ?? []
     return list.some((w) => w.fullscreen && !w.minimized)
+  }
+
+  function reserveTaskbarForMon(mon: LayoutScreen) {
+    return !screenTaskbarHiddenForFullscreen(mon)
   }
 
   const fullscreenTaskbarExclusionSig = createMemo(() => {
@@ -937,13 +967,7 @@ function App() {
     const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
     const mon = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
     if (!mon) return
-    const prim = workspacePartition().primary
-    const reserveTb =
-      !!prim &&
-      mon.x === prim.x &&
-      mon.y === prim.y &&
-      mon.width === prim.width &&
-      mon.height === prim.height
+    const reserveTb = reserveTaskbarForMon(mon)
     const r = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
     shellWireSend('set_geometry', wid, r.x, r.y, r.w, r.h, SHELL_LAYOUT_MAXIMIZED)
   }
@@ -988,6 +1012,7 @@ function App() {
     shellMoveDeltaLogSeq = 0
     activeSnapDropCanvas = null
     activeSnapPreviewCanvas = null
+    activeSnapZone = null
     lastTilePreviewKey = ''
     if (tilePreviewRaf) {
       cancelAnimationFrame(tilePreviewRaf)
@@ -1015,13 +1040,7 @@ function App() {
         let maxCanvasX = w.x
         let maxCanvasY = w.y
         if (mon) {
-          const prim = workspacePartition().primary
-          const reserveTb =
-            !!prim &&
-            mon.x === prim.x &&
-            mon.y === prim.y &&
-            mon.width === prim.width &&
-            mon.height === prim.height
+          const reserveTb = reserveTaskbarForMon(mon)
           const mg = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
           const loc = rectGlobalToCanvasLocal(mg.x, mg.y, mg.w, mg.h, co)
           maxCanvasX = loc.x
@@ -1129,6 +1148,7 @@ function App() {
     if (list.length === 0) {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
+      activeSnapZone = null
       scheduleTilePreviewSync()
       return
     }
@@ -1136,18 +1156,31 @@ function App() {
     if (!mon) {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
+      activeSnapZone = null
       scheduleTilePreviewSync()
       return
     }
-    const prim = workspacePartition().primary
-    const snapG = snapRectGlobalForPointerOnMonitor(glob.x, glob.y, mon, prim)
-    if (!snapG) {
+    const reserveTb = reserveTaskbarForMon(mon)
+    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const zone = hitTestSnapZoneGlobal(glob.x, glob.y, work)
+    if (!zone) {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
+      activeSnapZone = null
       scheduleTilePreviewSync()
       return
     }
+    const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
+    const occupied = occupiedSnapZonesOnMonitor(mon, wid)
+    const snapBounds = snapZoneToBoundsWithOccupied(zone, workRect, occupied)
+    const snapG = {
+      x: snapBounds.x,
+      y: snapBounds.y,
+      w: snapBounds.width,
+      h: snapBounds.height,
+    }
     activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
+    activeSnapZone = zone
     const th = CHROME_TITLEBAR_PX
     const previewG = { x: snapG.x, y: snapG.y - th, w: snapG.w, h: snapG.h + th }
     activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
@@ -1160,18 +1193,20 @@ function App() {
     shellMoveLog('titlebar_end', { windowId: id, reason })
     shellWindowDrag = null
     const snap = activeSnapDropCanvas
+    const droppedZone = activeSnapZone
     activeSnapDropCanvas = null
     activeSnapPreviewCanvas = null
+    activeSnapZone = null
     if (tilePreviewRaf) {
       cancelAnimationFrame(tilePreviewRaf)
       tilePreviewRaf = 0
     }
     lastTilePreviewKey = ''
     shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
-    if (snap) {
+    if (snap && droppedZone !== null) {
       const pre = dragPreTileSnapshot.get(id)
       if (pre) tileRestore.set(id, pre)
-      shellTiled.add(id)
+      shellTiled.set(id, droppedZone)
       shellWireSend('set_geometry', id, snap.x, snap.y, snap.w, snap.h, SHELL_LAYOUT_FLOATING)
       setWindows((m) => {
         const cur = m.get(id)
@@ -1654,9 +1689,8 @@ function App() {
             action === 'move_monitor_left' ? 'left' : 'right',
           )
           if (!tgtMon) return
-          const prim = workspacePartition().primary
-          const reserveCur = isPrimaryTaskbarScreen(curMon, prim)
-          const reserveTgt = isPrimaryTaskbarScreen(tgtMon, prim)
+          const reserveCur = reserveTaskbarForMon(curMon)
+          const reserveTgt = reserveTaskbarForMon(tgtMon)
           const glob = rectCanvasLocalToGlobal(w.x, w.y, w.width, w.height, co)
           let gRect: { x: number; y: number; w: number; h: number }
           let layoutFlag: typeof SHELL_LAYOUT_FLOATING | typeof SHELL_LAYOUT_MAXIMIZED
@@ -1664,8 +1698,12 @@ function App() {
             gRect = shellMaximizedWorkAreaGlobalRect(tgtMon, reserveTgt)
             layoutFlag = SHELL_LAYOUT_MAXIMIZED
           } else if (shellTiled.has(fid)) {
-            const side = inferHalfTileSide(glob, curMon, prim)
-            gRect = keyboardTileHalfRectGlobal(tgtMon, prim, side)
+            const zone = shellTiled.get(fid)!
+            const tw = monitorWorkAreaGlobal(tgtMon, reserveTgt)
+            const workRect: TileRect = { x: tw.x, y: tw.y, width: tw.w, height: tw.h }
+            const occ = occupiedSnapZonesOnMonitor(tgtMon, fid)
+            const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
+            gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
             layoutFlag = SHELL_LAYOUT_FLOATING
           } else {
             const srcWork = monitorWorkAreaGlobal(curMon, reserveCur)
@@ -1708,9 +1746,13 @@ function App() {
           const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
           const mon = pickScreenForWindow(w, list, co) ?? list[0] ?? null
           if (!mon) return
-          const side = action === 'tile_left' ? 'left' : 'right'
-          const prim = workspacePartition().primary
-          const gRect = keyboardTileHalfRectGlobal(mon, prim, side)
+          const zone: SnapZone = action === 'tile_left' ? 'left-half' : 'right-half'
+          const reserveTb = reserveTaskbarForMon(mon)
+          const wr = monitorWorkAreaGlobal(mon, reserveTb)
+          const workRect: TileRect = { x: wr.x, y: wr.y, width: wr.w, height: wr.h }
+          const occ = occupiedSnapZonesOnMonitor(mon, fid)
+          const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
+          const gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
           const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
           const preTile = w.maximized
             ? (floatBeforeMaximize.get(fid) ?? {
@@ -1721,7 +1763,7 @@ function App() {
               })
             : { x: w.x, y: w.y, w: w.width, h: w.height }
           tileRestore.set(fid, preTile)
-          shellTiled.add(fid)
+          shellTiled.set(fid, zone)
           if (w.maximized) floatBeforeMaximize.delete(fid)
           shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
           setWindows((m) => {
