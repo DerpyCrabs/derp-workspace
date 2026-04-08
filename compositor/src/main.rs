@@ -74,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let shell_to_cef = Arc::new(Mutex::new(None));
     let cef_handshake = Arc::new(AtomicBool::new(false));
+    let cef_shutdown = Arc::new(AtomicBool::new(false));
 
     let init = CompositorInitOptions {
         socket: SocketConfig::Fixed(socket_name),
@@ -99,11 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drm::init_drm(&mut event_loop, &mut data, session, notifier)?;
     data.state.set_vt_session(Some(vt_session));
 
-    cef::spawn_cef_ui_thread(
+    let cef_join = cef::spawn_cef_ui_thread(
         cef_url,
         data.state.cef_to_compositor_tx.clone(),
         shell_to_cef.clone(),
         cef_handshake,
+        cef_shutdown.clone(),
     );
 
     data.pending_sidecar_cmd = cli.command.clone();
@@ -142,6 +144,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     event_loop.run(None, &mut data, |_| {})?;
     compositor::sidecar::terminate_sidecar(&mut data.command_child);
+
+    cef_shutdown.store(true, Ordering::SeqCst);
+    if cef_join.join().is_err() {
+        tracing::warn!("cef UI thread panicked during shutdown");
+    }
 
     if request_restart.load(Ordering::SeqCst) {
         std::process::exit(42);

@@ -2241,6 +2241,9 @@ impl CompositorState {
         if self.shell_output_logical_size().is_none() {
             return;
         }
+        if !self.shell_cef_active() {
+            return;
+        }
         self.shell_embedded_initial_handshake_done = true;
         self.shell_on_shell_client_connected();
     }

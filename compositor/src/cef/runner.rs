@@ -481,10 +481,17 @@ pub fn spawn_cef_ui_thread(
     cef_tx: Sender<CefToCompositor>,
     shell_slot: Arc<Mutex<Option<Arc<ShellToCefLink>>>>,
     handshake: Arc<AtomicBool>,
-) {
+    shutdown_from_main: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        run_cef(url, cef_tx, shell_slot, handshake);
-      });
+        run_cef(
+            url,
+            cef_tx,
+            shell_slot,
+            handshake,
+            shutdown_from_main,
+        );
+    })
 }
 
 fn run_cef(
@@ -492,6 +499,7 @@ fn run_cef(
     cef_tx: Sender<CefToCompositor>,
     shell_slot: Arc<Mutex<Option<Arc<ShellToCefLink>>>>,
     handshake: Arc<AtomicBool>,
+    shutdown_from_main: Arc<AtomicBool>,
 ) {
     tracing::debug!(target: "derp_shell_osr", "cef: dma-buf OSR (in-process)");
     #[cfg(target_os = "linux")]
@@ -629,7 +637,9 @@ fn run_cef(
         tracing::warn!("cef: could not register SIGINT/SIGTERM handlers");
     }
 
-    while !shutdown_requested.load(Ordering::Relaxed) {
+    while !shutdown_requested.load(Ordering::Relaxed)
+        && !shutdown_from_main.load(Ordering::SeqCst)
+    {
         do_message_loop_work();
         thread::sleep(Duration::from_millis(4));
     }
@@ -644,6 +654,9 @@ fn run_cef(
     for _ in 0..750 {
         do_message_loop_work();
         thread::sleep(Duration::from_millis(4));
+    }
+    if let Ok(mut g) = shell_slot.lock() {
+        *g = None;
     }
     shutdown();
 }
