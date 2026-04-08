@@ -243,6 +243,17 @@ export class MonitorTileState {
     this.tiledWindows.delete(windowId)
   }
 
+  clearAllTiled(): void {
+    this.tiledWindows.clear()
+  }
+
+  replaceFromAutoLayoutRects(rects: Map<number, Rect>): void {
+    this.tiledWindows.clear()
+    for (const [wid, b] of rects) {
+      this.tiledWindows.set(wid, { zone: 'auto-fill', bounds: { ...b } })
+    }
+  }
+
   has(windowId: number): boolean {
     return this.tiledWindows.has(windowId)
   }

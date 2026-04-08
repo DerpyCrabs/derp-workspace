@@ -1068,30 +1068,61 @@ impl CompositorState {
         None
     }
 
+    fn new_toplevel_placement_output_geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        if let Some(ptr) = self.seat.get_pointer() {
+            if let Some(out) = self.output_containing_global_point(ptr.current_location()) {
+                if let Some(g) = self.space.output_geometry(&out) {
+                    return Some(g);
+                }
+            }
+        }
+        if let Some(out) = self.shell_effective_primary_output() {
+            if let Some(g) = self.space.output_geometry(&out) {
+                return Some(g);
+            }
+        }
+        if let Some(out) = self.leftmost_output() {
+            if let Some(g) = self.space.output_geometry(&out) {
+                return Some(g);
+            }
+        }
+        self.workspace_logical_bounds()
+    }
+
+    fn window_element_center_on_output(
+        geo: &Rectangle<i32, Logical>,
+        elem_loc: Point<i32, Logical>,
+        wdt: i32,
+        hgt: i32,
+    ) -> bool {
+        let cx = elem_loc.x.saturating_add(wdt.saturating_div(2));
+        let cy = elem_loc.y.saturating_add(hgt.saturating_div(2));
+        cx >= geo.loc.x
+            && cy >= geo.loc.y
+            && cx < geo.loc.x.saturating_add(geo.size.w)
+            && cy < geo.loc.y.saturating_add(geo.size.h)
+    }
+
     /// Logical top-left for mapping a new xdg toplevel (client rectangle origin).
     ///
-    /// The first window uses the default output-relative corner. Each additional window is placed
-    /// **to the right of the rightmost** existing window (same `GAP` as [`DEFAULT_XDG_TOPLEVEL_CASCADE_STEP`]),
-    /// or **below** all windows if there is no horizontal room. That avoids overlap even when the first
-    /// window was dragged away from the default position (a fixed diagonal grid still collides).
+    /// Placement uses the output under the pointer (fallback: shell primary, then leftmost, then
+    /// workspace union). Each additional window on **that output** is placed to the right of the
+    /// rightmost window there, or below the stack if there is no horizontal room.
     pub fn new_toplevel_initial_location(&self) -> (i32, i32) {
         const GAP: i32 = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
         const MIN_PLACEHOLDER_W: i32 = 240;
 
-        let Some(geo) = self.workspace_logical_bounds() else {
+        let Some(geo) = self.new_toplevel_placement_output_geometry() else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
 
         let base_x = geo.loc.x.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_X);
         let base_y = geo.loc.y.saturating_add(DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
 
-        if self.space.elements().count() == 0 {
-            return (base_x, base_y);
-        }
-
         let mut max_right = i32::MIN;
         let mut min_top = i32::MAX;
         let mut max_bottom = i32::MIN;
+        let mut any_on_output = false;
 
         for w in self.space.elements() {
             let Some(loc) = self.space.element_location(w) else {
@@ -1100,12 +1131,16 @@ impl CompositorState {
             let sz = w.geometry().size;
             let wdt = sz.w.max(1);
             let hgt = sz.h.max(1);
+            if !Self::window_element_center_on_output(&geo, loc, wdt, hgt) {
+                continue;
+            }
+            any_on_output = true;
             max_right = max_right.max(loc.x.saturating_add(wdt));
             min_top = min_top.min(loc.y);
             max_bottom = max_bottom.max(loc.y.saturating_add(hgt));
         }
 
-        if max_right == i32::MIN {
+        if !any_on_output || max_right == i32::MIN {
             return (base_x, base_y);
         }
 

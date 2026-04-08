@@ -1,4 +1,5 @@
 export type SnapZone =
+  | 'auto-fill'
   | 'left-half'
   | 'right-half'
   | 'top-left'
@@ -59,6 +60,8 @@ function defaultSnapZoneBoundsLocal(zone: SnapZone, ww: number, wh: number): Rec
   const ox = 0
   const oy = 0
   switch (zone) {
+    case 'auto-fill':
+      return { x: ox, y: oy, width: ww, height: wh }
     case 'left-half':
       return { x: ox, y: oy, width: halfW, height: wh }
     case 'right-half':

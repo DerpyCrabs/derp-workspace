@@ -67,6 +67,7 @@ import {
 } from './contextMenu'
 import fuzzysort from 'fuzzysort'
 import { LayoutTypePicker } from './LayoutTypePicker'
+import { getMonitorLayout } from './tilingConfig'
 
 declare global {
   interface Window {
@@ -843,6 +844,62 @@ function App() {
     return !screenTaskbarHiddenForFullscreen(mon)
   }
 
+  function fallbackMonitorKey(): string {
+    const part = workspacePartition()
+    return part.primary.name || screenDraft.rows.find((r) => r.name)?.name || ''
+  }
+
+  function applyAutoLayout(monitorName: string) {
+    const { layout, params } = getMonitorLayout(monitorName)
+    if (layout.type === 'manual-snap') {
+      return
+    }
+    const mon = taskbarScreens().find((s) => s.name === monitorName) ?? null
+    if (!mon) return
+    const fb = fallbackMonitorKey()
+    const co = layoutCanvasOrigin()
+    const reserveTb = reserveTaskbarForMon(mon)
+    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
+    const candidates = windowsList().filter((w) => {
+      if (w.minimized) return false
+      if ((w.output_name || fb) !== monitorName) return false
+      if (w.fullscreen || w.maximized) return false
+      return true
+    })
+    const windowIds = candidates.map((w) => w.window_id).sort((a, b) => a - b)
+    const rectMap = layout.computeLayout(windowIds, workRect, params)
+    perMonitorTiles.stateFor(monitorName).replaceFromAutoLayoutRects(rectMap)
+    const snap = windows()
+    for (const [wid, gr] of rectMap) {
+      const pt = snap.get(wid)
+      if (pt) perMonitorTiles.preTileGeometry.set(wid, { x: pt.x, y: pt.y, w: pt.width, h: pt.height })
+      const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
+      shellWireSend('set_geometry', wid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
+    }
+    setWindows((m) => {
+      let next: Map<number, DerpWindow> | null = null
+      for (const [wid, gr] of rectMap) {
+        const cur = m.get(wid)
+        if (!cur) continue
+        const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
+        if (!next) next = new Map(m)
+        next.set(wid, { ...cur, x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false })
+      }
+      return next ?? m
+    })
+    scheduleExclusionZonesSync()
+    bumpSnapChrome()
+  }
+
+  function relayoutAllAutoMonitors() {
+    for (const s of screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())) {
+      if (getMonitorLayout(s.name).layout.type !== 'manual-snap') {
+        applyAutoLayout(s.name)
+      }
+    }
+  }
+
   const fullscreenTaskbarExclusionSig = createMemo(() => {
     const byMon = windowsByMonitor()
     return taskbarScreens()
@@ -1210,6 +1267,15 @@ function App() {
     }
     const mon = pickScreenForPointerSnap(glob.x, glob.y, list)
     if (!mon) {
+      activeSnapDropCanvas = null
+      activeSnapPreviewCanvas = null
+      activeSnapZone = null
+      activeSnapScreen = null
+      setAssistOverlay(null)
+      scheduleTilePreviewSync()
+      return
+    }
+    if (getMonitorLayout(mon.name).layout.type !== 'manual-snap') {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
@@ -1969,6 +2035,10 @@ function App() {
           })
           scheduleExclusionZonesSync()
           bumpSnapChrome()
+          queueMicrotask(() => {
+            applyAutoLayout(curMon.name)
+            applyAutoLayout(tgtMon.name)
+          })
           return
         }
         if (action === 'tile_left' || action === 'tile_right') {
@@ -2149,31 +2219,79 @@ function App() {
               : null
           setShellChromePrimaryName(pr)
         })
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        queueMicrotask(() => {
+          scheduleExclusionZonesSync()
+          relayoutAllAutoMonitors()
+        })
         return
       }
       if (d.type === 'window_list') {
         setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
+        queueMicrotask(() => relayoutAllAutoMonitors())
         return
       }
       if (d.type === 'window_state') {
+        const wid = coerceShellWindowId(d.window_id)
+        let relayoutMon: string | null = null
+        if (wid !== null) {
+          const w = windows().get(wid)
+          if (w) relayoutMon = w.output_name || fallbackMonitorKey()
+        }
         if (d.minimized) {
-          const wid = coerceShellWindowId(d.window_id)
           if (wid !== null) {
             setFocusedWindowId((prev) => (prev === wid ? null : prev))
           }
         }
         setWindows((m) => applyDetail(m, d))
+        if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
         return
       }
       if (d.type === 'window_unmapped') {
         const wid = coerceShellWindowId(d.window_id)
+        let relayoutMon: string | null = null
         if (wid !== null) {
+          const w = windows().get(wid)
+          if (w) relayoutMon = w.output_name || fallbackMonitorKey()
           perMonitorTiles.untileWindowEverywhere(wid)
           perMonitorTiles.preTileGeometry.delete(wid)
         }
+        setWindows((m) => applyDetail(m, d))
+        if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
+        return
       }
-      setWindows((m) => applyDetail(m, d))
+      if (d.type === 'window_geometry') {
+        const wid = coerceShellWindowId(d.window_id)
+        let prevMon: string | null = null
+        if (wid !== null) {
+          const w = windows().get(wid)
+          if (w) prevMon = w.output_name || fallbackMonitorKey()
+        }
+        setWindows((m) => applyDetail(m, d))
+        if (wid !== null) {
+          queueMicrotask(() => {
+            const w2 = windows().get(wid!)
+            const fb = fallbackMonitorKey()
+            const newMon = w2 ? w2.output_name || fb : null
+            if (prevMon !== null && newMon !== null && prevMon !== newMon) {
+              applyAutoLayout(prevMon)
+              applyAutoLayout(newMon)
+            }
+          })
+        }
+        return
+      }
+      if (d.type === 'window_mapped') {
+        setWindows((m) => applyDetail(m, d))
+        const fb = fallbackMonitorKey()
+        const mon =
+          typeof d.output_name === 'string' && d.output_name.length > 0 ? d.output_name : fb
+        queueMicrotask(() => applyAutoLayout(mon))
+        return
+      }
+      if (d.type === 'window_metadata') {
+        setWindows((m) => applyDetail(m, d))
+        return
+      }
     }
     window.addEventListener('derp-shell', onDerpShell as EventListener)
 
@@ -2941,7 +3059,19 @@ function App() {
                             <LayoutTypePicker
                               outputName={row.name}
                               revision={tilingCfgRev}
-                              onPersisted={() => setTilingCfgRev((n) => n + 1)}
+                              onPersisted={() => {
+                                setTilingCfgRev((n) => n + 1)
+                                const name = row.name
+                                queueMicrotask(() => {
+                                  if (getMonitorLayout(name).layout.type === 'manual-snap') {
+                                    perMonitorTiles.stateFor(name).clearAllTiled()
+                                    bumpSnapChrome()
+                                    scheduleExclusionZonesSync()
+                                  } else {
+                                    applyAutoLayout(name)
+                                  }
+                                })
+                              }}
                             />
                             <span class="text-[0.75rem] opacity-65">
                               {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
