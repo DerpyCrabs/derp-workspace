@@ -44,9 +44,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const th = csd ? 0 : CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
   const rh = CHROME_RESIZE_HANDLE_PX
-  const tiling = props.win.maximized || props.win.fullscreen || !!props.win.snap_tiled
-  const inset = tiling ? 0 : bd
+  const noTilingChrome = props.win.maximized || props.win.fullscreen
+  const snapTiled = !!props.win.snap_tiled && !noTilingChrome
+  const inset = noTilingChrome || snapTiled ? 0 : bd
   const outerW = props.win.width + inset * 2
+  const showBorderChrome = !noTilingChrome
 
   const startResize = (edges: number, clientX: number, clientY: number) => {
     props.onResizeEdgeDown(edges, clientX, clientY)
@@ -179,7 +181,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       </Show>
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         style={{
           position: 'absolute',
           left: '0',
@@ -190,7 +192,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         style={{
           position: 'absolute',
           right: '0',
@@ -201,7 +203,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         style={{
           position: 'absolute',
           left: '0',
@@ -212,7 +214,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         title="Resize"
         style={{
           position: 'absolute',
@@ -238,7 +240,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         title="Resize"
         style={{
           position: 'absolute',
@@ -264,7 +266,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         title="Resize height"
         style={{
           position: 'absolute',
@@ -290,7 +292,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         title="Resize width"
         style={{
           position: 'absolute',
@@ -316,7 +318,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: tiling }}
+        classList={{ hidden: !showBorderChrome }}
         title="Resize width"
         style={{
           position: 'absolute',

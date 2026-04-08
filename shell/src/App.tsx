@@ -16,6 +16,10 @@ import {
   CHROME_TITLEBAR_PX,
   SHELL_LAYOUT_FLOATING,
   SHELL_LAYOUT_MAXIMIZED,
+  SHELL_RESIZE_BOTTOM,
+  SHELL_RESIZE_LEFT,
+  SHELL_RESIZE_RIGHT,
+  SHELL_RESIZE_TOP,
 } from './chromeConstants'
 import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './exclusionRects'
 import { ShellWindowFrame } from './ShellWindowFrame'
@@ -41,7 +45,13 @@ import {
 } from './assistGrid'
 import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
-import { PerMonitorTileStates } from './tileState'
+import {
+  computeTiledResizeRects,
+  PerMonitorTileStates,
+  TILE_RESIZE_EDGE_ALIGN_PX,
+  TILED_RESIZE_MIN_H,
+  TILED_RESIZE_MIN_W,
+} from './tileState'
 import {
   type SnapZone,
   snapZoneToBoundsWithOccupied,
@@ -75,6 +85,8 @@ declare global {
         | 'resize_begin'
         | 'resize_delta'
         | 'resize_end'
+        | 'resize_shell_grab_begin'
+        | 'resize_shell_grab_end'
         | 'taskbar_activate'
         | 'minimize'
         | 'set_geometry'
@@ -499,6 +511,8 @@ function shellWireSend(
     | 'resize_begin'
     | 'resize_delta'
     | 'resize_end'
+    | 'resize_shell_grab_begin'
+    | 'resize_shell_grab_end'
     | 'taskbar_activate'
     | 'minimize'
     | 'set_geometry'
@@ -527,7 +541,9 @@ function shellWireSend(
       op === 'move_end' ||
       op === 'resize_begin' ||
       op === 'resize_delta' ||
-      op === 'resize_end'
+      op === 'resize_end' ||
+      op === 'resize_shell_grab_begin' ||
+      op === 'resize_shell_grab_end'
     ) {
       shellMoveLog('wire_missing', { op, arg, arg2 })
     }
@@ -553,7 +569,7 @@ function shellWireSend(
     arg2 !== undefined
   ) {
     fn(op, arg as number, arg2)
-  } else if (op === 'quit' || op === 'request_compositor_sync') {
+  } else if (op === 'quit' || op === 'request_compositor_sync' || op === 'resize_shell_grab_end') {
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
@@ -1001,7 +1017,21 @@ function App() {
   let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
   let shellMoveDeltaLogSeq = 0
 
-  let shellWindowResize: { windowId: number; lastX: number; lastY: number } | null = null
+  type ShellResizeSession =
+    | { kind: 'compositor'; windowId: number; lastX: number; lastY: number }
+    | {
+        kind: 'tiled'
+        windowId: number
+        lastX: number
+        lastY: number
+        edges: number
+        accumDx: number
+        accumDy: number
+        initialRects: Map<number, TileRect>
+        outputName: string
+      }
+
+  let shellWindowResize: ShellResizeSession | null = null
   let shellResizeDeltaLogSeq = 0
 
   function flushTilePreviewWire() {
@@ -1321,8 +1351,54 @@ function App() {
   function beginShellWindowResize(windowId: number, edges: number, clientX: number, clientY: number) {
     if (shellWindowResize !== null || shellWindowDrag !== null) return
     shellResizeDeltaLogSeq = 0
+    const mon = perMonitorTiles.findMonitorForTiledWindow(windowId)
+    const tol = TILE_RESIZE_EDGE_ALIGN_PX
+    let useTiledPropagate = false
+    const initialRects = new Map<number, TileRect>()
+    if (mon !== null) {
+      const st = perMonitorTiles.stateFor(mon)
+      const dirs: Array<'left' | 'right' | 'top' | 'bottom'> = []
+      if (edges & SHELL_RESIZE_LEFT) dirs.push('left')
+      if (edges & SHELL_RESIZE_RIGHT) dirs.push('right')
+      if (edges & SHELL_RESIZE_TOP) dirs.push('top')
+      if (edges & SHELL_RESIZE_BOTTOM) dirs.push('bottom')
+      const seen = new Set<number>([windowId])
+      for (const dir of dirs) {
+        for (const nid of st.findEdgeNeighbors(windowId, dir, tol)) {
+          seen.add(nid)
+        }
+      }
+      if (seen.size > 1) {
+        useTiledPropagate = true
+        for (const sid of seen) {
+          const e = st.tiledWindows.get(sid)
+          if (e) initialRects.set(sid, { ...e.bounds })
+        }
+      }
+    }
+    if (useTiledPropagate && mon !== null) {
+      if (!shellWireSend('resize_shell_grab_begin', windowId)) return
+      shellWindowResize = {
+        kind: 'tiled',
+        windowId,
+        lastX: Math.round(clientX),
+        lastY: Math.round(clientY),
+        edges,
+        accumDx: 0,
+        accumDy: 0,
+        initialRects,
+        outputName: mon,
+      }
+      shellMoveLog('resize_begin_tiled', { windowId, edges, clientX, clientY })
+      return
+    }
     if (!shellWireSend('resize_begin', windowId, edges)) return
-    shellWindowResize = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY) }
+    shellWindowResize = {
+      kind: 'compositor',
+      windowId,
+      lastX: Math.round(clientX),
+      lastY: Math.round(clientY),
+    }
     shellMoveLog('resize_begin', { windowId, edges, clientX, clientY })
   }
 
@@ -1333,21 +1409,80 @@ function App() {
     const dx = cx - shellWindowResize.lastX
     const dy = cy - shellWindowResize.lastY
     if (dx === 0 && dy === 0) return
-    shellResizeDeltaLogSeq += 1
-    if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
-      shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
+    if (shellWindowResize.kind === 'compositor') {
+      shellResizeDeltaLogSeq += 1
+      if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
+        shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
+      }
+      shellWireSend('resize_delta', dx, dy)
+      shellWindowResize.lastX = cx
+      shellWindowResize.lastY = cy
+      return
     }
-    shellWireSend('resize_delta', dx, dy)
+    shellWindowResize.accumDx += dx
+    shellWindowResize.accumDy += dy
     shellWindowResize.lastX = cx
     shellWindowResize.lastY = cy
+    const co = layoutCanvasOrigin()
+    const rects = computeTiledResizeRects(
+      shellWindowResize.windowId,
+      shellWindowResize.edges,
+      shellWindowResize.accumDx,
+      shellWindowResize.accumDy,
+      shellWindowResize.initialRects,
+      TILED_RESIZE_MIN_W,
+      TILED_RESIZE_MIN_H,
+    )
+    for (const [wid, gr] of rects) {
+      const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
+      shellWireSend('set_geometry', wid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
+    }
+    setWindows((m) => {
+      let next = m
+      let changed = false
+      for (const [wid, gr] of rects) {
+        const cur = next.get(wid)
+        if (!cur) continue
+        if (!changed) {
+          next = new Map(next)
+          changed = true
+        }
+        const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
+        next.set(wid, { ...cur, x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false })
+      }
+      return changed ? next : m
+    })
+    scheduleExclusionZonesSync()
+    bumpSnapChrome()
   }
 
   function endShellWindowResize(reason: string) {
     if (!shellWindowResize) return
     const id = shellWindowResize.windowId
-    shellMoveLog('resize_end', { windowId: id, reason })
+    if (shellWindowResize.kind === 'compositor') {
+      shellMoveLog('resize_end', { windowId: id, reason })
+      shellWindowResize = null
+      shellWireSend('resize_end', id)
+      return
+    }
+    const s = shellWindowResize
     shellWindowResize = null
-    shellWireSend('resize_end', id)
+    shellMoveLog('resize_end_tiled', { windowId: id, reason })
+    const rects = computeTiledResizeRects(
+      s.windowId,
+      s.edges,
+      s.accumDx,
+      s.accumDy,
+      s.initialRects,
+      TILED_RESIZE_MIN_W,
+      TILED_RESIZE_MIN_H,
+    )
+    const st = perMonitorTiles.stateFor(s.outputName)
+    for (const [wid, gr] of rects) {
+      st.setTiledBounds(wid, gr)
+    }
+    bumpSnapChrome()
+    shellWireSend('resize_shell_grab_end')
   }
 
   /** Readable in `~/.local/state/derp/compositor.log` when `cef_host` runs under `derp-session` (stderr tee). */

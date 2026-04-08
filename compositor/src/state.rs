@@ -315,6 +315,7 @@ pub struct CompositorState {
     shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
     shell_resize_initial_rect: Option<Rectangle<i32, Logical>>,
     shell_resize_accum: (f64, f64),
+    shell_resize_shell_grab: Option<u32>,
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
     shell_ipc_stall_timeout: Option<Duration>,
@@ -507,6 +508,7 @@ impl CompositorState {
             shell_resize_edges: None,
             shell_resize_initial_rect: None,
             shell_resize_accum: (0.0, 0.0),
+            shell_resize_shell_grab: None,
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
@@ -712,6 +714,13 @@ impl CompositorState {
                     if let Some(i) = r.intersection(ws) {
                         out.push(i);
                     }
+                }
+            }
+        }
+        if let Some(rs) = self.shell_exclusion_decor.get(&self_id) {
+            for r in rs {
+                if let Some(i) = r.intersection(ws) {
+                    out.push(i);
                 }
             }
         }
@@ -2508,9 +2517,7 @@ impl CompositorState {
     }
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
-        if let Some(rid) = self.shell_resize_window_id {
-            self.shell_resize_end(rid);
-        }
+        self.shell_resize_end_active();
         let Some(info) = self.window_registry.window_info(window_id) else {
             tracing::warn!(
                 target: "derp_shell_move",
@@ -2721,14 +2728,31 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_resize_is_active(&self) -> bool {
-        self.shell_resize_window_id.is_some()
+        self.shell_resize_window_id.is_some() || self.shell_resize_shell_grab.is_some()
     }
 
     pub(crate) fn shell_resize_end_active(&mut self) {
-        let Some(wid) = self.shell_resize_window_id else {
+        if let Some(wid) = self.shell_resize_window_id {
+            self.shell_resize_end(wid);
+        }
+        self.shell_resize_shell_grab = None;
+    }
+
+    pub fn shell_resize_shell_grab_begin(&mut self, window_id: u32) {
+        if window_id == 0 {
             return;
-        };
-        self.shell_resize_end(wid);
+        }
+        if let Some(mid) = self.shell_move_window_id {
+            self.shell_move_end(mid);
+        }
+        if let Some(prev) = self.shell_resize_window_id {
+            self.shell_resize_end(prev);
+        }
+        self.shell_resize_shell_grab = Some(window_id);
+    }
+
+    pub fn shell_resize_shell_grab_end(&mut self) {
+        self.shell_resize_shell_grab = None;
     }
 
     pub fn shell_resize_begin(&mut self, window_id: u32, edges_wire: u32) {
@@ -2738,6 +2762,7 @@ impl CompositorState {
         if let Some(mid) = self.shell_move_window_id {
             self.shell_move_end(mid);
         }
+        self.shell_resize_shell_grab = None;
         if self.shell_resize_window_id == Some(window_id) {
             tracing::warn!(
                 target: "derp_shell_resize",

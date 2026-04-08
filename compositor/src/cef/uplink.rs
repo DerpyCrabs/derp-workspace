@@ -97,6 +97,18 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_resize_shell_grab_begin(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_resize_shell_grab_begin(window_id);
+        });
+    }
+
+    pub fn shell_resize_shell_grab_end(&self) {
+        self.run(move |s| {
+            s.shell_resize_shell_grab_end();
+        });
+    }
+
     pub fn shell_taskbar_activate(&self, window_id: u32) {
         self.run(move |s| {
             s.shell_taskbar_activate(window_id);
