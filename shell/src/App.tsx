@@ -66,6 +66,7 @@ import {
   type ShellContextMenuItem,
 } from './contextMenu'
 import fuzzysort from 'fuzzysort'
+import { LayoutTypePicker } from './LayoutTypePicker'
 
 declare global {
   interface Window {
@@ -652,6 +653,7 @@ function App() {
     null,
   )
   const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
+  const [tilingCfgRev, setTilingCfgRev] = createSignal(0)
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
   const [debugPanelOpen, setDebugPanelOpen] = createSignal(false)
@@ -2140,6 +2142,7 @@ function App() {
               refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
             })),
           )
+          setTilingCfgRev((n) => n + 1)
           const pr =
             typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
               ? d.shell_chrome_primary
@@ -2653,7 +2656,7 @@ function App() {
               height: `${prim().height}px`,
             }}
           >
-            <div class="box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px] pointer-events-none">
+            <div class="pointer-events-none relative z-30 box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px]">
               <Show when={debugPanelOpen()}>
                 <div
                   class="relative z-[12] max-w-[min(28rem,100%)] rounded-2xl border border-white/12 bg-black/55 px-12 py-10 text-center shadow-[0_0.5rem_2rem_rgba(0,0,0,0.45)] pointer-events-auto"
@@ -2935,6 +2938,11 @@ function App() {
                                 onChange={(v) => setScreenDraft('rows', i(), 'transform', v)}
                               />
                             </label>
+                            <LayoutTypePicker
+                              outputName={row.name}
+                              revision={tilingCfgRev}
+                              onPersisted={() => setTilingCfgRev((n) => n + 1)}
+                            />
                             <span class="text-[0.75rem] opacity-65">
                               {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
                             </span>
@@ -2994,7 +3002,7 @@ function App() {
             </div>
 
             <div
-              class="pointer-events-auto fixed z-[15] min-w-[160px] cursor-grab touch-none rounded-lg border border-white/25 bg-[hsla(280,45%,35%,0.92)] px-3.5 py-2.5 text-[13px] font-semibold select-none text-neutral-100 shadow-[0_4px_16px_rgba(0,0,0,0.35)] active:cursor-grabbing"
+              class="pointer-events-auto fixed z-10 min-w-[160px] cursor-grab touch-none rounded-lg border border-white/25 bg-[hsla(280,45%,35%,0.92)] px-3.5 py-2.5 text-[13px] font-semibold select-none text-neutral-100 shadow-[0_4px_16px_rgba(0,0,0,0.35)] active:cursor-grabbing"
               style={{
                 left: `${dragDemoPos().x}px`,
                 top: `${dragDemoPos().y}px`,
