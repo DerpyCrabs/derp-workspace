@@ -58,6 +58,29 @@ export function clientPointToGlobalLogical(
   return { x: p.x + ox, y: p.y + oy }
 }
 
+export function canvasRectToClientCss(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  mainRect: DOMRect,
+  canvasW: number,
+  canvasH: number,
+): { left: number; top: number; width: number; height: number } {
+  const cw = Math.max(1, canvasW)
+  const ch = Math.max(1, canvasH)
+  const mw = Math.max(1, mainRect.width)
+  const mh = Math.max(1, mainRect.height)
+  const sx = mw / cw
+  const sy = mh / ch
+  return {
+    left: mainRect.left + x * sx,
+    top: mainRect.top + y * sy,
+    width: Math.max(0, w * sx),
+    height: Math.max(0, h * sy),
+  }
+}
+
 export type ShellRect = { x: number; y: number; width: number; height: number }
 
 export function windowCenterGlobal(win: ShellRect, origin: CanvasOrigin): { cx: number; cy: number } {
@@ -79,7 +102,29 @@ export function pickScreenContainingGlobalPoint<T extends { x: number; y: number
       return s
     }
   }
-  return screens[0] ?? null
+  return null
+}
+
+export function pickScreenForPointerSnap<T extends { x: number; y: number; width: number; height: number }>(
+  px: number,
+  py: number,
+  screens: ReadonlyArray<T>,
+): T | null {
+  if (screens.length === 0) return null
+  const hit = pickScreenContainingGlobalPoint(px, py, screens)
+  if (hit) return hit
+  let best = screens[0]!
+  let bestD = Infinity
+  for (const s of screens) {
+    const nx = Math.min(Math.max(px, s.x), s.x + s.width)
+    const ny = Math.min(Math.max(py, s.y), s.y + s.height)
+    const d = (px - nx) ** 2 + (py - ny) ** 2
+    if (d < bestD) {
+      bestD = d
+      best = s
+    }
+  }
+  return best
 }
 
 export function pickScreenForWindow<T extends { x: number; y: number; width: number; height: number }>(
@@ -88,7 +133,7 @@ export function pickScreenForWindow<T extends { x: number; y: number; width: num
   origin: CanvasOrigin,
 ): T | null {
   const { cx, cy } = windowCenterGlobal(win, origin)
-  return pickScreenContainingGlobalPoint(cx, cy, screens)
+  return pickScreenForPointerSnap(cx, cy, screens)
 }
 
 export function findAdjacentMonitor<

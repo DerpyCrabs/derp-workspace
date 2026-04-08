@@ -15,7 +15,7 @@ use smithay::backend::renderer::element::AsRenderElements;
 
 type WinEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
 
-const PREVIEW_COLOR: Color32F = Color32F::new(0.15, 0.38, 0.72, 0.42);
+const PREVIEW_COLOR: Color32F = Color32F::new(0.2, 0.55, 0.95, 0.58);
 
 pub(crate) fn append_tile_preview_for_output<'a>(
     state: &mut CompositorState,

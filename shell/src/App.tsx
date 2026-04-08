@@ -22,15 +22,25 @@ import { ShellWindowFrame } from './ShellWindowFrame'
 import {
   canvasOriginXY,
   type CanvasOrigin,
+  canvasRectToClientCss,
   clientPointToCanvasLocal,
   clientPointToGlobalLogical,
   findAdjacentMonitor,
-  pickScreenContainingGlobalPoint,
+  pickScreenForPointerSnap,
   pickScreenForWindow,
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
 } from './shellCoords'
-import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal } from './tileSnap'
+import {
+  assistGridGutterPx,
+  assistSpanFromWorkAreaPoint,
+  DEFAULT_ASSIST_GRID_SHAPE,
+  snapZoneAndPreviewFromAssistSpan,
+  type AssistGridShape,
+  type AssistGridSpan,
+} from './assistGrid'
+import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
+import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
 import {
   type SnapZone,
   snapZoneToBoundsWithOccupied,
@@ -103,6 +113,13 @@ type ExclusionHudZone = {
   y: number
   w: number
   h: number
+}
+
+type AssistOverlayState = {
+  shape: AssistGridShape
+  gutterPx: number
+  hoverSpan: AssistGridSpan | null
+  workCanvas: { x: number; y: number; w: number; h: number }
 }
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
@@ -635,6 +652,7 @@ function App() {
     alignAboveY?: number
   }>({ x: 0, y: 0 })
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
+  const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
   const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
   const [programsCatalog, setProgramsCatalog] = createStore<{ items: DesktopAppEntry[] }>({
@@ -1019,6 +1037,7 @@ function App() {
       tilePreviewRaf = 0
     }
     shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+    setAssistOverlay(null)
     const main = mainRef
     const og = outputGeom()
     const w = windows().get(windowId)
@@ -1035,8 +1054,7 @@ function App() {
         }
         const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
         const globPtr = clientPointToGlobalLogical(clientX, clientY, mainRect, og.w, og.h, co)
-        const mon =
-          pickScreenContainingGlobalPoint(globPtr.x, globPtr.y, list) ?? list[0] ?? null
+        const mon = pickScreenForPointerSnap(globPtr.x, globPtr.y, list)
         let maxCanvasX = w.x
         let maxCanvasY = w.y
         if (mon) {
@@ -1126,42 +1144,91 @@ function App() {
     const cy = Math.round(clientY)
     const dx = cx - shellWindowDrag.lastX
     const dy = cy - shellWindowDrag.lastY
-    if (dx === 0 && dy === 0) return
-    shellMoveDeltaLogSeq += 1
-    if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
-      shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
-    }
     const wid = shellWindowDrag.windowId
-    batch(() => {
-      bumpShellWindowPosition(wid, dx, dy)
-      shellWireSend('move_delta', dx, dy)
-    })
-    shellWindowDrag.lastX = cx
-    shellWindowDrag.lastY = cy
+    if (dx !== 0 || dy !== 0) {
+      shellMoveDeltaLogSeq += 1
+      if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
+        shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
+      }
+      batch(() => {
+        bumpShellWindowPosition(wid, dx, dy)
+        shellWireSend('move_delta', dx, dy)
+      })
+      shellWindowDrag.lastX = cx
+      shellWindowDrag.lastY = cy
+    }
     const main = mainRef
     const og = outputGeom()
     const co = layoutCanvasOrigin()
     if (!main || !og) return
     const mainRect = main.getBoundingClientRect()
     const glob = clientPointToGlobalLogical(cx, cy, mainRect, og.w, og.h, co)
-    const list = screenDraft.rows
+    const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
     if (list.length === 0) {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
+      setAssistOverlay(null)
       scheduleTilePreviewSync()
       return
     }
-    const mon = pickScreenContainingGlobalPoint(glob.x, glob.y, list) ?? list[0] ?? null
+    const mon = pickScreenForPointerSnap(glob.x, glob.y, list)
     if (!mon) {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
+      setAssistOverlay(null)
       scheduleTilePreviewSync()
       return
     }
     const reserveTb = reserveTaskbarForMon(mon)
     const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const inAssistTopStrip =
+      glob.x >= work.x &&
+      glob.x <= work.x + work.w &&
+      ((glob.y >= work.y && glob.y <= work.y + TILE_SNAP_EDGE_PX) ||
+        (glob.y < work.y && work.y - glob.y <= TILE_SNAP_EDGE_PX))
+
+    const gridShape = DEFAULT_ASSIST_GRID_SHAPE
+
+    if (inAssistTopStrip) {
+      const wl = rectGlobalToCanvasLocal(work.x, work.y, work.w, work.h, co)
+      const gutterPx = assistGridGutterPx(work, gridShape)
+      const pxForAssist = Math.max(work.x, Math.min(glob.x, work.x + work.w))
+      const pyForAssist = Math.max(work.y, Math.min(glob.y, work.y + work.h))
+      const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, gridShape, work)
+      if (span) {
+        const { zone, previewRect: pr } = snapZoneAndPreviewFromAssistSpan(span, gridShape, work)
+        const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
+        const occupied = occupiedSnapZonesOnMonitor(mon, wid)
+        const snapBounds = snapZoneToBoundsWithOccupied(zone, workRect, occupied)
+        const snapG = {
+          x: snapBounds.x,
+          y: snapBounds.y,
+          w: snapBounds.width,
+          h: snapBounds.height,
+        }
+        activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
+        activeSnapZone = zone
+        const th = CHROME_TITLEBAR_PX
+        const previewG = { x: pr.x, y: pr.y - th, w: pr.width, h: pr.height + th }
+        activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
+      } else {
+        activeSnapDropCanvas = null
+        activeSnapPreviewCanvas = null
+        activeSnapZone = null
+      }
+      setAssistOverlay({
+        shape: gridShape,
+        gutterPx,
+        hoverSpan: span,
+        workCanvas: { x: wl.x, y: wl.y, w: wl.w, h: wl.h },
+      })
+      scheduleTilePreviewSync()
+      return
+    }
+
+    setAssistOverlay(null)
     const zone = hitTestSnapZoneGlobal(glob.x, glob.y, work)
     if (!zone) {
       activeSnapDropCanvas = null
@@ -1197,6 +1264,7 @@ function App() {
     activeSnapDropCanvas = null
     activeSnapPreviewCanvas = null
     activeSnapZone = null
+    setAssistOverlay(null)
     if (tilePreviewRaf) {
       cancelAnimationFrame(tilePreviewRaf)
       tilePreviewRaf = 0
@@ -2315,6 +2383,34 @@ function App() {
           </Show>
         )}
       </Index>
+
+      <Show when={assistOverlay} keyed>
+        {(st) => {
+          const s = st()
+          if (!s) return <></>
+          const main = mainRef
+          const og = outputGeom()
+          if (!main || !og) return <></>
+          const css = canvasRectToClientCss(s.workCanvas.x, s.workCanvas.y, s.workCanvas.w, s.workCanvas.h, main.getBoundingClientRect(), og.w, og.h)
+          return (
+            <div
+              class="pointer-events-none fixed z-[450000] box-border flex min-h-0 min-w-0 flex-col rounded-sm bg-black/25 p-1.5 outline outline-2 -outline-offset-1 outline-cyan-400/55 shadow-[0_0_24px_rgba(0,200,255,0.12)]"
+              style={{
+                left: `${css.left}px`,
+                top: `${css.top}px`,
+                width: `${css.width}px`,
+                height: `${css.height}px`,
+              }}
+            >
+              <SnapAssistMasterGrid
+                shape={s.shape}
+                gutterPx={s.gutterPx}
+                getHoverSpan={() => assistOverlay()?.hoverSpan ?? null}
+              />
+            </div>
+          )
+        }}
+      </Show>
 
       <For each={workspacePartition().secondary}>
         {(s) => (
