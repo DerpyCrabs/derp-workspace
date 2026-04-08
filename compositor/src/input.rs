@@ -420,8 +420,7 @@ impl CompositorState {
                                 && mods.shift
                                 && matches!(raw_sym, keysyms::KEY_q | keysyms::KEY_Q)
                             {
-                                state.loop_signal.stop();
-                                state.loop_signal.wakeup();
+                                state.stop_event_loop();
                                 return FilterResult::Intercept(());
                             }
                         }

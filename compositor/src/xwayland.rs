@@ -59,11 +59,15 @@ pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut Calloo
                                 }
                             }
                         }
-                        Err(e) => tracing::error!(?e, "X11Wm::start_wm failed"),
+                        Err(e) => {
+                            d.state.x11_wm_slot = None;
+                            tracing::error!(?e, "X11Wm::start_wm failed");
+                        }
                     }
                     spawn_pending_sidecar(d);
                 }
                 XWaylandEvent::Error => {
+                    d.state.x11_wm_slot = None;
                     tracing::error!("XWayland failed to start (is `xwayland` installed?)");
                     spawn_pending_sidecar(d);
                 }

@@ -5,10 +5,7 @@ use cef::{
     WrapTask,
 };
 
-use smithay::reexports::calloop::channel::Sender;
-
 use crate::cef::compositor_downlink;
-use crate::cef::compositor_tx::CefToCompositor;
 use crate::cef::osr_view_state::OsrViewState;
 
 wrap_task! {
@@ -53,19 +50,16 @@ wrap_task! {
 pub struct ShellToCefLink {
     browser_holder: Arc<Mutex<Option<Browser>>>,
     view_state: Arc<Mutex<OsrViewState>>,
-    cef_tx: Sender<CefToCompositor>,
 }
 
 impl ShellToCefLink {
     pub fn new(
         browser_holder: Arc<Mutex<Option<Browser>>>,
         view_state: Arc<Mutex<OsrViewState>>,
-        cef_tx: Sender<CefToCompositor>,
     ) -> Self {
         Self {
             browser_holder,
             view_state,
-            cef_tx,
         }
     }
 
@@ -78,10 +72,6 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
-        if matches!(msg, shell_wire::DecodedCompositorToShellMessage::Ping) {
-            let _ = self.cef_tx.send(CefToCompositor::ShellRxNote);
-            return;
-        }
         let mut task = ApplyCompositorToShellTask::new(
             self.browser_holder.clone(),
             self.view_state.clone(),

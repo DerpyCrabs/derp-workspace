@@ -16,7 +16,7 @@
 # uncommitted edits and multiple pushes between commits are detected from file contents.
 #
 # Usage:
-#   bash scripts/remote-update-and-restart.sh [--no-restart] [--dry-run] [--full] [--quick-shell] [-- INSTALL_RUN_ARGS...]
+#   bash scripts/remote-update-and-restart.sh [--no-restart] [--dry-run] [--full] [--quick-shell] [--restart-always] [-- INSTALL_RUN_ARGS...]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,12 +30,14 @@ REMOTE_REPO="${REMOTE_REPO:-/home/${REMOTE_USER}/derp-workspace}"
 
 NO_RESTART=0
 DRY_RUN=0
+RESTART_ALWAYS=0
 UPDATE_MODE=auto
 forward=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-restart) NO_RESTART=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --restart-always) RESTART_ALWAYS=1; shift ;;
     --full) UPDATE_MODE=full; shift ;;
     --quick-shell) UPDATE_MODE=quick_shell; shift ;;
     -h|--help)
@@ -246,7 +248,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "Would: ssh … cd $REMOTE_REPO && bash scripts/install-system-run.sh $remote_install_args"
   fi
   if [[ "$NO_RESTART" -eq 0 ]]; then
-    if [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
+    if [[ "$RESTART_ALWAYS" -eq 1 ]]; then
+      echo "Would: ssh … SIGUSR2 (--restart-always)"
+    elif [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
       echo "Would: ssh … SIGUSR2 to compositor"
     else
       echo "Would: skip SIGUSR2 (sync_only, or quick_shell with no remote install)"
@@ -280,7 +284,7 @@ else
 fi
 
 if [[ "$NO_RESTART" -eq 0 ]]; then
-  if [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
+  if [[ "$RESTART_ALWAYS" -eq 1 ]] || [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
     echo "=== SIGUSR2 compositor (in-place restart) ==="
     signal_compositor_restart
   fi

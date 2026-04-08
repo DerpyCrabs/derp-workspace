@@ -21,8 +21,13 @@ impl UplinkToCompositor {
 
     pub fn quit_compositor(&self) {
         self.run(move |s| {
-            s.loop_signal.stop();
-            s.loop_signal.wakeup();
+            s.stop_event_loop();
+        });
+    }
+
+    pub fn shell_ipc_pong(&self) {
+        self.run(move |s| {
+            s.shell_ipc_on_pong();
         });
     }
 

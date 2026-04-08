@@ -4,7 +4,10 @@ use std::{
     os::fd::OwnedFd,
     path::PathBuf,
     process::Stdio,
-    sync::{atomic::AtomicBool, Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, Weak,
+    },
     time::{Duration, Instant},
 };
 
@@ -234,6 +237,7 @@ pub struct CompositorState {
 
     pub space: Space<DerpSpaceElem>,
     pub loop_signal: LoopSignal,
+    pub event_loop_stop: Arc<AtomicBool>,
 
     pub compositor_state: WlCompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -324,6 +328,9 @@ pub struct CompositorState {
     shell_ipc_last_rx: Option<Instant>,
     /// Last compositor ping sent (throttle while shell may reply with [`shell_wire::MSG_SHELL_PONG`]).
     pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
+    pub(crate) shell_ipc_last_pong: Option<Instant>,
+    pub(crate) shell_ipc_unanswered_ping_since: Option<Instant>,
+    pub(crate) shell_ipc_ping_late_warned_for: Option<Instant>,
     pub shell_has_frame: bool,
     pub shell_view_px: Option<(u32, u32)>,
     pub shell_frame_is_dmabuf: bool,
@@ -370,6 +377,13 @@ impl CompositorState {
             .max(256)
             .min(16384)
     }
+
+    pub fn stop_event_loop(&self) {
+        self.event_loop_stop.store(true, Ordering::Release);
+        self.loop_signal.stop();
+        self.loop_signal.wakeup();
+    }
+
     pub fn new(
         event_loop: &mut EventLoop<CalloopData>,
         display: Display<Self>,
@@ -408,6 +422,7 @@ impl CompositorState {
         let socket_name = Self::init_wayland_listener(display, event_loop, &options.socket);
 
         let loop_signal = event_loop.get_signal();
+        let event_loop_stop = Arc::new(AtomicBool::new(false));
 
         let (cef_to_compositor_tx, cef_rx) = channel::channel();
         event_loop
@@ -453,6 +468,7 @@ impl CompositorState {
             display_handle: dh,
             space,
             loop_signal,
+            event_loop_stop,
             socket_name,
             compositor_state,
             xdg_shell_state,
@@ -514,6 +530,9 @@ impl CompositorState {
             shell_ipc_stall_timeout,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
+            shell_ipc_last_pong: None,
+            shell_ipc_unanswered_ping_since: None,
+            shell_ipc_ping_late_warned_for: None,
             shell_has_frame: false,
             shell_view_px: None,
             shell_frame_is_dmabuf: false,
@@ -2923,6 +2942,9 @@ impl CompositorState {
     pub fn shell_on_shell_client_connected(&mut self) {
         self.shell_note_shell_ipc_rx();
         self.shell_ipc_last_compositor_ping = None;
+        self.shell_ipc_last_pong = None;
+        self.shell_ipc_unanswered_ping_since = None;
+        self.shell_ipc_ping_late_warned_for = None;
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         for info in self.window_registry.all_infos() {
@@ -2978,12 +3000,21 @@ impl CompositorState {
         self.shell_ipc_last_rx = Some(Instant::now());
     }
 
+    pub(crate) fn shell_ipc_on_pong(&mut self) {
+        self.shell_ipc_last_pong = Some(Instant::now());
+        self.shell_ipc_ping_late_warned_for = None;
+        self.shell_ipc_unanswered_ping_since = None;
+    }
+
     pub(crate) fn shell_check_ipc_watchdog(&mut self) {
         let Some(limit) = self.shell_ipc_stall_timeout else {
             return;
         };
         if !self.shell_cef_active() {
             self.shell_ipc_last_compositor_ping = None;
+            self.shell_ipc_last_pong = None;
+            self.shell_ipc_unanswered_ping_since = None;
+            self.shell_ipc_ping_late_warned_for = None;
             return;
         }
         let Some(last_rx) = self.shell_ipc_last_rx else {
@@ -2999,8 +3030,26 @@ impl CompositorState {
                 .map(|t| t.elapsed() >= throttle)
                 .unwrap_or(true)
             {
+                let prev = self.shell_ipc_last_compositor_ping;
+                let now = Instant::now();
+                let prev_round_answered = prev.map_or(true, |pp| {
+                    self.shell_ipc_last_pong.map(|p| p >= pp).unwrap_or(false)
+                });
                 self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Ping);
-                self.shell_ipc_last_compositor_ping = Some(Instant::now());
+                self.shell_ipc_last_compositor_ping = Some(now);
+                if prev_round_answered {
+                    self.shell_ipc_unanswered_ping_since = Some(now);
+                }
+            }
+        }
+        if let Some(u) = self.shell_ipc_unanswered_ping_since {
+            if u.elapsed() >= Duration::from_secs(10) {
+                if self.shell_ipc_ping_late_warned_for != Some(u) {
+                    self.shell_ipc_ping_late_warned_for = Some(u);
+                    tracing::warn!(
+                        "shell ipc: no pong within 10s after compositor ping (CEF or shell handler may be stuck)"
+                    );
+                }
             }
         }
         if idle <= limit {
@@ -3010,8 +3059,7 @@ impl CompositorState {
             timeout_secs = limit.as_secs(),
             "shell watchdog: no CEF/compositor activity within timeout; stopping compositor (stuck shell / JS)"
         );
-        self.loop_signal.stop();
-        self.loop_signal.wakeup();
+        self.stop_event_loop();
     }
 
     /// True if the pointer is over the Solid shell layer (desktop), not the native Wayland client beneath.

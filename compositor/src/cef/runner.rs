@@ -576,7 +576,6 @@ fn run_cef(
     let link = Arc::new(ShellToCefLink::new(
         browser_holder.clone(),
         view_state.clone(),
-        cef_tx.clone(),
     ));
     {
         let mut g = shell_slot.lock().expect("shell_slot");

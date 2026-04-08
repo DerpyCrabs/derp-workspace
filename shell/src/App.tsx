@@ -81,6 +81,7 @@ declare global {
         | 'close'
         | 'quit'
         | 'request_compositor_sync'
+        | 'shell_ipc_pong'
         | 'spawn'
         | 'move_begin'
         | 'move_delta'
@@ -274,6 +275,7 @@ type DerpShellDetail =
   | { type: 'window_list'; windows: unknown[] }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle' }
+  | { type: 'compositor_ping' }
   | { type: 'keybind'; action: string; target_window_id?: number }
 
 type DesktopAppEntry = {
@@ -520,6 +522,7 @@ function shellWireSend(
     | 'close'
     | 'quit'
     | 'request_compositor_sync'
+    | 'shell_ipc_pong'
     | 'spawn'
     | 'move_begin'
     | 'move_delta'
@@ -585,7 +588,12 @@ function shellWireSend(
     arg2 !== undefined
   ) {
     fn(op, arg as number, arg2)
-  } else if (op === 'quit' || op === 'request_compositor_sync' || op === 'resize_shell_grab_end') {
+  } else if (
+    op === 'quit' ||
+    op === 'request_compositor_sync' ||
+    op === 'shell_ipc_pong' ||
+    op === 'resize_shell_grab_end'
+  ) {
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
@@ -976,6 +984,7 @@ function App() {
   })
 
   let spawnPoll: ReturnType<typeof setInterval> | undefined
+  let wireWatchPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
   let menuAtlasHostRef: HTMLElement | undefined
   let menuPanelRef: HTMLElement | undefined
@@ -1944,8 +1953,13 @@ function App() {
     spawnPoll = setInterval(refreshSpawnUrl, 400)
 
     let compositorSyncAttempts = 0
+    let nativeWireHadBeenReady = false
     const tryRequestCompositorSync = () => {
       if (shellWireSend('request_compositor_sync')) {
+        if (typeof window.__derpShellWireSend === 'function') {
+          nativeWireHadBeenReady = true
+          shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
+        }
         return
       }
       compositorSyncAttempts += 1
@@ -1958,6 +1972,13 @@ function App() {
       shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
     })
 
+    wireWatchPoll = setInterval(() => {
+      if (!nativeWireHadBeenReady) return
+      if (typeof window.__derpShellWireSend === 'function') return
+      compositorSyncAttempts = 0
+      tryRequestCompositorSync()
+    }, 750)
+
     const onDerpShell = (ev: Event) => {
       const ce = ev as CustomEvent<DerpShellDetail>
       const d = ce.detail
@@ -1968,6 +1989,10 @@ function App() {
       }
       if (d.type === 'programs_menu_toggle') {
         toggleProgramsMenuMeta()
+        return
+      }
+      if (d.type === 'compositor_ping') {
+        shellWireSend('shell_ipc_pong')
         return
       }
       if (d.type === 'keybind') {
@@ -2612,6 +2637,7 @@ function App() {
   })
   onCleanup(() => {
     if (spawnPoll !== undefined) clearInterval(spawnPoll)
+    if (wireWatchPoll !== undefined) clearInterval(wireWatchPoll)
   })
 
   createEffect(() => {

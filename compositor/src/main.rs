@@ -2,6 +2,7 @@
 
 use libc;
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -115,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let loop_stop = data.state.loop_signal.clone();
+    let event_loop_stop_flag = data.state.event_loop_stop.clone();
     let request_restart = Arc::new(AtomicBool::new(false));
     let request_restart_thread = Arc::clone(&request_restart);
     std::thread::Builder::new()
@@ -135,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "caught, stopping compositor and tearing down --command"
                         );
                     }
+                    event_loop_stop_flag.store(true, Ordering::Release);
                     loop_stop.stop();
                     loop_stop.wakeup();
                 }
@@ -142,7 +145,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .expect("signal-hook thread");
 
-    event_loop.run(None, &mut data, |_| {})?;
+    while !data.state.event_loop_stop.load(Ordering::Acquire) {
+        let dispatch_result = catch_unwind(AssertUnwindSafe(|| event_loop.dispatch(None, &mut data)));
+        match dispatch_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!(?e, "event_loop dispatch error");
+                break;
+            }
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("(non-string panic payload)");
+                tracing::error!(
+                    %msg,
+                    "event_loop: dispatch panicked; continuing session"
+                );
+            }
+        }
+    }
     compositor::sidecar::terminate_sidecar(&mut data.command_child);
 
     cef_shutdown.store(true, Ordering::SeqCst);

@@ -519,6 +519,19 @@ pub fn apply_message(
                 }),
             );
         }
-        shell_wire::DecodedCompositorToShellMessage::Ping => {}
+        shell_wire::DecodedCompositorToShellMessage::Ping => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "compositor_ping",
+                }),
+            );
+        }
     }
 }
