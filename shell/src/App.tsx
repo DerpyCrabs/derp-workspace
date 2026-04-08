@@ -41,6 +41,7 @@ import {
 } from './assistGrid'
 import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
+import { PerMonitorTileStates } from './tileState'
 import {
   type SnapZone,
   snapZoneToBoundsWithOccupied,
@@ -418,12 +419,12 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
 }
 
 const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
-const tileRestore = new Map<number, { x: number; y: number; w: number; h: number }>()
-const shellTiled = new Map<number, SnapZone>()
+const perMonitorTiles = new PerMonitorTileStates()
 const dragPreTileSnapshot = new Map<number, { x: number; y: number; w: number; h: number }>()
 let activeSnapDropCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapPreviewCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapZone: SnapZone | null = null
+let activeSnapScreen: LayoutScreen | null = null
 let tilePreviewRaf = 0
 let lastTilePreviewKey = ''
 
@@ -803,13 +804,14 @@ function App() {
     const co = layoutCanvasOrigin()
     const list = taskbarScreens()
     const out: { zone: SnapZone; bounds: TileRect }[] = []
-    for (const [wid, zone] of shellTiled) {
+    const st = perMonitorTiles.stateFor(mon.name)
+    for (const [wid, e] of st.tiledWindows) {
       if (wid === excludeWindowId) continue
       const win = windows().get(wid)
       if (!win || win.minimized) continue
       if (!windowOnMonitor(win, mon, list, co)) continue
       const g = rectCanvasLocalToGlobal(win.x, win.y, win.width, win.height, co)
-      out.push({ zone, bounds: { x: g.x, y: g.y, width: g.w, height: g.h } })
+      out.push({ zone: e.zone, bounds: { x: g.x, y: g.y, width: g.w, height: g.h } })
     }
     return out
   }
@@ -932,7 +934,7 @@ function App() {
       if (decoWin.minimized || decoWin.client_side_decoration) continue
       const deco = ssdDecorationExclusionRects({
         ...decoWin,
-        snap_tiled: shellTiled.has(decoWin.window_id),
+        snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
       })
       const room = Math.max(0, SHELL_EXCLUSION_ZONES_SENT_MAX - rects.length)
       const decoUsed = deco.slice(0, room)
@@ -977,8 +979,8 @@ function App() {
       shellWireSend('set_maximized', wid, 0)
       return
     }
-    shellTiled.delete(wid)
-    tileRestore.delete(wid)
+    perMonitorTiles.untileWindowEverywhere(wid)
+    perMonitorTiles.preTileGeometry.delete(wid)
     bumpSnapChrome()
     scheduleExclusionZonesSync()
     floatBeforeMaximize.set(wid, { x: w.x, y: w.y, w: w.width, h: w.height })
@@ -1031,6 +1033,7 @@ function App() {
     activeSnapDropCanvas = null
     activeSnapPreviewCanvas = null
     activeSnapZone = null
+    activeSnapScreen = null
     lastTilePreviewKey = ''
     if (tilePreviewRaf) {
       cancelAnimationFrame(tilePreviewRaf)
@@ -1087,8 +1090,8 @@ function App() {
         dragPreTileSnapshot.set(windowId, { x: nx, y: ny, w: rest.w, h: rest.h })
         scheduleExclusionZonesSync()
         bumpSnapChrome()
-      } else if (shellTiled.has(windowId)) {
-        const tr = tileRestore.get(windowId)
+      } else if (perMonitorTiles.isTiled(windowId)) {
+        const tr = perMonitorTiles.preTileGeometry.get(windowId)
         if (tr) {
           const grabDx = ptrCl.x - w.x
           const grabDy = ptrCl.y - w.y
@@ -1110,8 +1113,8 @@ function App() {
             return next
           })
         }
-        shellTiled.delete(windowId)
-        tileRestore.delete(windowId)
+        perMonitorTiles.untileWindowEverywhere(windowId)
+        perMonitorTiles.preTileGeometry.delete(windowId)
         dragPreTileSnapshot.set(windowId, tr ?? { x: w.x, y: w.y, w: w.width, h: w.height })
         scheduleExclusionZonesSync()
         bumpSnapChrome()
@@ -1168,6 +1171,7 @@ function App() {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
+      activeSnapScreen = null
       setAssistOverlay(null)
       scheduleTilePreviewSync()
       return
@@ -1177,6 +1181,7 @@ function App() {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
+      activeSnapScreen = null
       setAssistOverlay(null)
       scheduleTilePreviewSync()
       return
@@ -1210,6 +1215,7 @@ function App() {
         }
         activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
         activeSnapZone = zone
+        activeSnapScreen = mon
         const th = CHROME_TITLEBAR_PX
         const previewG = { x: pr.x, y: pr.y - th, w: pr.width, h: pr.height + th }
         activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
@@ -1217,6 +1223,7 @@ function App() {
         activeSnapDropCanvas = null
         activeSnapPreviewCanvas = null
         activeSnapZone = null
+        activeSnapScreen = null
       }
       setAssistOverlay({
         shape: gridShape,
@@ -1234,6 +1241,7 @@ function App() {
       activeSnapDropCanvas = null
       activeSnapPreviewCanvas = null
       activeSnapZone = null
+      activeSnapScreen = null
       scheduleTilePreviewSync()
       return
     }
@@ -1248,6 +1256,7 @@ function App() {
     }
     activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
     activeSnapZone = zone
+    activeSnapScreen = mon
     const th = CHROME_TITLEBAR_PX
     const previewG = { x: snapG.x, y: snapG.y - th, w: snapG.w, h: snapG.h + th }
     activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
@@ -1265,27 +1274,39 @@ function App() {
     activeSnapPreviewCanvas = null
     activeSnapZone = null
     setAssistOverlay(null)
+    const snapMon = activeSnapScreen
+    activeSnapScreen = null
     if (tilePreviewRaf) {
       cancelAnimationFrame(tilePreviewRaf)
       tilePreviewRaf = 0
     }
     lastTilePreviewKey = ''
     shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
-    if (snap && droppedZone !== null) {
+    if (snap && droppedZone !== null && snapMon) {
       const pre = dragPreTileSnapshot.get(id)
-      if (pre) tileRestore.set(id, pre)
-      shellTiled.set(id, droppedZone)
-      shellWireSend('set_geometry', id, snap.x, snap.y, snap.w, snap.h, SHELL_LAYOUT_FLOATING)
+      if (pre) perMonitorTiles.preTileGeometry.set(id, pre)
+      const co = layoutCanvasOrigin()
+      const reserveTb = reserveTaskbarForMon(snapMon)
+      const work = monitorWorkAreaGlobal(snapMon, reserveTb)
+      const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
+      const occ = occupiedSnapZonesOnMonitor(snapMon, id)
+      const prevMon = perMonitorTiles.findMonitorForTiledWindow(id)
+      if (prevMon !== null && prevMon !== snapMon.name) {
+        perMonitorTiles.stateFor(prevMon).untileWindow(id)
+      }
+      const gb = perMonitorTiles.stateFor(snapMon.name).tileWindow(id, droppedZone, workRect, occ)
+      const loc = rectGlobalToCanvasLocal(gb.x, gb.y, gb.width, gb.height, co)
+      shellWireSend('set_geometry', id, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
       setWindows((m) => {
         const cur = m.get(id)
         if (!cur) return m
         const next = new Map(m)
         next.set(id, {
           ...cur,
-          x: snap.x,
-          y: snap.y,
-          width: snap.w,
-          height: snap.h,
+          x: loc.x,
+          y: loc.y,
+          width: loc.w,
+          height: loc.h,
           maximized: false,
         })
         return next
@@ -1765,12 +1786,19 @@ function App() {
           if (w.maximized) {
             gRect = shellMaximizedWorkAreaGlobalRect(tgtMon, reserveTgt)
             layoutFlag = SHELL_LAYOUT_MAXIMIZED
-          } else if (shellTiled.has(fid)) {
-            const zone = shellTiled.get(fid)!
+          } else if (perMonitorTiles.isTiled(fid)) {
+            const zone = perMonitorTiles.getTiledZone(fid)!
             const tw = monitorWorkAreaGlobal(tgtMon, reserveTgt)
             const workRect: TileRect = { x: tw.x, y: tw.y, width: tw.w, height: tw.h }
             const occ = occupiedSnapZonesOnMonitor(tgtMon, fid)
-            const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
+            const gb = perMonitorTiles.moveTiledWindowToMonitor(
+              fid,
+              curMon.name,
+              tgtMon.name,
+              zone,
+              workRect,
+              occ,
+            )
             gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
             layoutFlag = SHELL_LAYOUT_FLOATING
           } else {
@@ -1819,7 +1847,11 @@ function App() {
           const wr = monitorWorkAreaGlobal(mon, reserveTb)
           const workRect: TileRect = { x: wr.x, y: wr.y, width: wr.w, height: wr.h }
           const occ = occupiedSnapZonesOnMonitor(mon, fid)
-          const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
+          const prevMonKb = perMonitorTiles.findMonitorForTiledWindow(fid)
+          if (prevMonKb !== null && prevMonKb !== mon.name) {
+            perMonitorTiles.stateFor(prevMonKb).untileWindow(fid)
+          }
+          const gb = perMonitorTiles.stateFor(mon.name).tileWindow(fid, zone, workRect, occ)
           const gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
           const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
           const preTile = w.maximized
@@ -1830,8 +1862,7 @@ function App() {
                 h: w.height,
               })
             : { x: w.x, y: w.y, w: w.width, h: w.height }
-          tileRestore.set(fid, preTile)
-          shellTiled.set(fid, zone)
+          perMonitorTiles.preTileGeometry.set(fid, preTile)
           if (w.maximized) floatBeforeMaximize.delete(fid)
           shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
           setWindows((m) => {
@@ -1888,8 +1919,8 @@ function App() {
             bumpSnapChrome()
             return
           }
-          if (shellTiled.has(fid)) {
-            const tr = tileRestore.get(fid)
+          if (perMonitorTiles.isTiled(fid)) {
+            const tr = perMonitorTiles.preTileGeometry.get(fid)
             if (tr) {
               shellWireSend('set_geometry', fid, tr.x, tr.y, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
               setWindows((m) => {
@@ -1907,8 +1938,8 @@ function App() {
                 return next
               })
             }
-            shellTiled.delete(fid)
-            tileRestore.delete(fid)
+            perMonitorTiles.untileWindowEverywhere(fid)
+            perMonitorTiles.preTileGeometry.delete(fid)
             scheduleExclusionZonesSync()
             bumpSnapChrome()
             return
@@ -1996,6 +2027,13 @@ function App() {
         }
         setWindows((m) => applyDetail(m, d))
         return
+      }
+      if (d.type === 'window_unmapped') {
+        const wid = coerceShellWindowId(d.window_id)
+        if (wid !== null) {
+          perMonitorTiles.untileWindowEverywhere(wid)
+          perMonitorTiles.preTileGeometry.delete(wid)
+        }
       }
       setWindows((m) => applyDetail(m, d))
     }
@@ -2358,7 +2396,7 @@ function App() {
         {(win) => (
           <Show when={!win().minimized}>
             <ShellWindowFrame
-              win={{ ...win(), snap_tiled: shellTiled.has(win().window_id) }}
+              win={{ ...win(), snap_tiled: perMonitorTiles.isTiled(win().window_id) }}
               repaintKey={snapChromeRev()}
               stackZ={
                 20 +
