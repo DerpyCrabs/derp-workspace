@@ -21,7 +21,7 @@ A **Wayland compositor** (Rust, Smithay) that embeds the desktop **shell inside 
 - Basic **snap tiling**, tile preview overlay, exclusion zones for decorations
 - **Remote deploy**: rsync + install + in-place compositor reload (`SIGUSR2`) from your dev machine
 
-Gaps and roadmap: [ROADMAP.md](./ROADMAP.md), step-by-step plan: [MVP_STEPS.md](./MVP_STEPS.md).
+Roadmap: [ROADMAP.md](./ROADMAP.md).
 
 ## Deploy
 
