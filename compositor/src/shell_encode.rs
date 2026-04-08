@@ -56,5 +56,8 @@ pub fn chrome_event_to_shell_message(
                 minimized: *minimized,
             }
         }
+        ChromeEvent::Keybind { action } => shell_wire::DecodedCompositorToShellMessage::Keybind {
+            action: action.clone(),
+        },
     })
 }

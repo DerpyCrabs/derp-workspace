@@ -469,7 +469,21 @@ pub fn apply_message(
                 }),
             );
         }
-        shell_wire::DecodedCompositorToShellMessage::Keybind { .. } => {}
+        shell_wire::DecodedCompositorToShellMessage::Keybind { action } => {
+            let Ok(guard) = browser.lock() else {
+                return;
+            };
+            let Some(b) = guard.as_ref() else {
+                return;
+            };
+            dispatch_shell_detail(
+                b,
+                json!({
+                    "type": "keybind",
+                    "action": action,
+                }),
+            );
+        }
 
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
             let Ok(guard) = browser.lock() else {

@@ -317,7 +317,7 @@ pub struct CompositorState {
     shell_ipc_stall_timeout: Option<Duration>,
     /// Last time a length-prefixed message was decoded from the shell peer.
     shell_ipc_last_rx: Option<Instant>,
-    /// Last [`shell_wire::encode_compositor_ping`] sent (throttle while waiting for [`shell_wire::MSG_SHELL_PONG`]).
+    /// Last compositor ping sent (throttle while shell may reply with [`shell_wire::MSG_SHELL_PONG`]).
     pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
     pub shell_has_frame: bool,
     pub shell_view_px: Option<(u32, u32)>,
@@ -769,7 +769,7 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_keybind(&mut self, action: &str) {
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Keybind {
+        self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
         });
     }
@@ -1557,6 +1557,7 @@ impl CompositorState {
                 self.window_info_is_solid_shell_host(info)
                     || !shell_window_row_should_show(info)
             }
+            ChromeEvent::Keybind { .. } => false,
         }
     }
 
@@ -2238,7 +2239,6 @@ impl CompositorState {
         self.shell_ipc_last_rx = Some(Instant::now());
     }
 
-    /// Stops the compositor if a shell IPC client is connected but has been silent longer than [`Self::shell_ipc_stall_timeout`].
     pub(crate) fn shell_check_ipc_watchdog(&mut self) {
         let Some(limit) = self.shell_ipc_stall_timeout else {
             return;
@@ -2251,7 +2251,6 @@ impl CompositorState {
             return;
         };
         let idle = last_rx.elapsed();
-        // Silence does not reset `shell_ipc_last_rx`; in-process shell handles Ping without a socket round-trip.
         let prod_after = std::cmp::max(limit / 2, Duration::from_millis(500))
             .min(Duration::from_secs(2));
         if idle >= prod_after {

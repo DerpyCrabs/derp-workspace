@@ -81,6 +81,9 @@ pub enum ChromeEvent {
         info: WindowInfo,
         minimized: bool,
     },
+    Keybind {
+        action: String,
+    },
 }
 
 pub type CommandResult<T = ()> = Result<T, String>;
