@@ -465,28 +465,7 @@ Reference: [ROADMAP.md](./ROADMAP.md) | [derp-media-server](https://github.com/D
 
 ---
 
-### Step 21 — Focus-follows-monitor: track last focused window per monitor
-
-**Goal:** When pointer moves to a different monitor, the most recently focused window on that monitor gets focus.
-
-**Files to modify:**
-- `compositor/src/state.rs`
-- `compositor/src/input.rs`
-
-**What to do:**
-1. In `CompositorState`, add `last_focused_per_output: HashMap<String, u32>` (output_name → window_id)
-2. When focus changes (keyboard focus set to a surface), update the map for the window's output
-3. In `pointer_motion_output_local` (or the pointer motion handler), detect when the pointer crosses an output boundary:
-   - Track `current_pointer_output: Option<String>`
-   - When it changes, look up `last_focused_per_output` for the new output
-   - If a window_id is found and the window is still mapped and not minimized, focus it
-4. Don't steal focus if the user is in the middle of a drag operation
-
-**Verify:** `cargo check`, deploy. Move pointer between monitors — the last focused window on each monitor re-activates.
-
----
-
-### Step 22 — Migrate windows when a monitor is disconnected
+### Step 21 — Migrate windows when a monitor is disconnected
 
 **Goal:** Windows on a removed monitor move to the nearest remaining monitor.
 
@@ -505,7 +484,7 @@ Reference: [ROADMAP.md](./ROADMAP.md) | [derp-media-server](https://github.com/D
 
 ---
 
-### Step 23 — Crash resilience: catch panics and handle wire disconnect
+### Step 22 — Crash resilience: catch panics and handle wire disconnect
 
 **Goal:** Non-critical panics don't crash the session. Shell recovers from compositor restart.
 
@@ -521,6 +500,62 @@ Reference: [ROADMAP.md](./ROADMAP.md) | [derp-media-server](https://github.com/D
 4. For XWayland: ensure the XWayland crash handler (if any) doesn't propagate the crash to the compositor. The compositor should log it and continue
 
 **Verify:** Build both. Intentionally kill and restart the compositor (SIGUSR2 path already exists). Shell should re-sync windows after restart.
+
+---
+
+### Step 23 — Keyboard layout switch and indicator
+
+**Goal:** User can cycle or pick keyboard layouts with a shortcut; the shell shows the active layout (e.g. in the taskbar or status area).
+
+**Files to modify:**
+- Compositor: seat / keyboard handling (xkb group or layout index), optional wire event for layout name
+- `shell_wire` / `shell_encode` / CEF downlink — if layout is pushed from compositor to shell
+- `shell/src/App.tsx` (or a small status component) — bind shortcut if handled in shell, render indicator
+
+**What to do:**
+1. Wire up layout cycling at the compositor: Super+Space or another agreed shortcut; use xkb state to switch group/layout and apply to the focused keyboard resource
+2. Track the human-readable layout label (locale short name or xkb layout id) after each change
+3. Send layout updates to the shell over the existing wire (new message or extend an existing status channel) so the indicator stays in sync when layout changes from any path
+4. In the shell, show a compact label (e.g. `US`, `RU`) next to clock or on primary taskbar; refresh on wire events
+
+**Verify:** Deploy, switch layouts with the shortcut — focused text field reflects the new layout; indicator updates immediately.
+
+---
+
+### Step 24 — Volume controls
+
+**Goal:** Raise, lower, and mute system volume from the keyboard (and optionally from the shell UI), without leaving the compositor session.
+
+**Files to modify:**
+- Compositor or a small helper: key bindings mapped to volume steps / mute (PipeWire `wpctl`, `wireplumber`, or session-specific audio API the project already uses)
+- `shell/src/...` — optional on-screen volume overlay or taskbar mic/speaker affordance if desired for MVP
+
+**What to do:**
+1. Define shortcuts (e.g. dedicated volume keys, or Super + audio key chords) and implement them where other global shortcuts live
+2. Integrate with the stack actually used on the test image (PipeWire suggested); keep behavior idempotent when audio daemon is absent (log once, no panic)
+3. Optionally mirror current volume/mute state to the shell for an indicator; otherwise rely on OS audio feedback if available
+4. If adding a shell HUD: brief non-blocking overlay on change; dismiss after timeout
+
+**Verify:** On remote machine, keys change volume and mute state reliably; no regressions to focus or other shortcuts.
+
+---
+
+### Step 25 — Keyboard layout per window
+
+**Goal:** Each window remembers its last-used keyboard layout; focusing a window restores that layout; new windows inherit a sensible default (e.g. primary layout or last global).
+
+**Files to modify:**
+- `compositor/src/state.rs` (or keyboard focus handler) — map `window_id` / toplevel to saved layout index or group
+- Focus enter: restore stored layout for that surface; focus leave: persist current layout for the window being left
+- Optional: shell notification only if compositor pushes layout changes (Step 23) — ensure per-window restore still updates the indicator
+
+**What to do:**
+1. On keyboard focus change, before updating xkb for the new client, save the current layout group for the previously focused toplevel (if any)
+2. When focus enters a toplevel, look up saved layout; if present, apply it to the seat keyboard state; if absent, use session default
+3. Clear or don't persist layout for surfaces that unmap (avoid stale map growth)
+4. Document interaction with global layout shortcut: shortcut updates layout for the focused window and overwrites that window's stored value
+
+**Verify:** Open two windows, set different layouts in each, alt-tab between them — each restores its layout; indicator matches focused window.
 
 ---
 
@@ -543,3 +578,6 @@ When all steps are complete, verify the full MVP workflow:
 - [ ] Windows open on the monitor where the pointer is
 - [ ] Moving pointer between monitors focuses last active window on target monitor
 - [ ] Compositor survives non-critical panics
+- [ ] Keyboard layout can be switched with a shortcut; shell shows active layout
+- [ ] Volume up/down/mute work from keyboard (or shell) in session
+- [ ] Focused window restores its saved keyboard layout; switching windows switches layout accordingly
