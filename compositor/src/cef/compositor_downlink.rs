@@ -469,6 +469,8 @@ pub fn apply_message(
                 }),
             );
         }
+        shell_wire::DecodedCompositorToShellMessage::Keybind { .. } => {}
+
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
             let Ok(guard) = browser.lock() else {
                 return;

@@ -768,6 +768,12 @@ impl CompositorState {
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle);
     }
 
+    pub(crate) fn shell_send_keybind(&mut self, action: &str) {
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Keybind {
+            action: action.to_string(),
+        });
+    }
+
     pub(crate) fn accept_shell_dmabuf_from_cef(
         &mut self,
         width: u32,

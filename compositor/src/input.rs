@@ -23,6 +23,30 @@ use crate::{derp_space::DerpSpaceElem, state::CompositorState};
 
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
+#[allow(non_upper_case_globals)]
+fn super_keybind_action(raw_sym: u32, shift: bool) -> Option<&'static str> {
+    use keysyms::*;
+    if shift {
+        return match raw_sym {
+            KEY_Left => Some("move_monitor_left"),
+            KEY_Right => Some("move_monitor_right"),
+            _ => None,
+        };
+    }
+    match raw_sym {
+        KEY_Return | KEY_KP_Enter => Some("launch_terminal"),
+        KEY_q | KEY_Q => Some("close_focused"),
+        KEY_d | KEY_D => Some("toggle_programs_menu"),
+        KEY_f | KEY_F => Some("toggle_fullscreen"),
+        KEY_m | KEY_M => Some("toggle_maximize"),
+        KEY_Left => Some("tile_left"),
+        KEY_Right => Some("tile_right"),
+        KEY_Up => Some("tile_up"),
+        KEY_Down => Some("tile_down"),
+        _ => None,
+    }
+}
+
 /// Map libinput / Smithay pointer-axis values to integers for CEF [`send_mouse_wheel_event`].
 fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
     if let Some(v) = discrete_v120 {
@@ -416,6 +440,11 @@ impl CompositorState {
                                     return FilterResult::Intercept(());
                                 }
                                 if state.programs_menu_super_armed && !is_super {
+                                    if let Some(action) = super_keybind_action(raw_sym, mods.shift) {
+                                        state.programs_menu_super_chord = true;
+                                        state.shell_send_keybind(action);
+                                        return FilterResult::Intercept(());
+                                    }
                                     state.programs_menu_super_chord = true;
                                 }
                             } else if key_state == KeyState::Released && is_super {
