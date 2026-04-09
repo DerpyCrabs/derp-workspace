@@ -1,10 +1,20 @@
 use crate::chrome_bridge::WindowInfo;
 use crate::grabs::resize_grab::ResizeEdge;
 use crate::state::{CompositorState, ShellUiWindowPlacement};
+use serde::Deserialize;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-pub(crate) const SHELL_BACKED_DEBUG_WINDOW_ID: u32 = 9001;
-pub(crate) const SHELL_BACKED_SETTINGS_WINDOW_ID: u32 = 9002;
+#[derive(Debug, Deserialize)]
+pub(crate) struct ShellBackedOpenParams {
+    pub(crate) window_id: u32,
+    pub(crate) title: String,
+    pub(crate) app_id: String,
+    pub(crate) output_name: String,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) w: i32,
+    pub(crate) h: i32,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShellBackedWindowEntry {
@@ -15,6 +25,19 @@ pub(crate) struct ShellBackedWindowEntry {
     pub(crate) title: String,
     pub(crate) app_id: String,
     pub(crate) output_name: String,
+}
+
+fn truncate_shell_ipc_string(mut s: String) -> String {
+    let max = shell_wire::MAX_WINDOW_STRING_BYTES as usize;
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s
 }
 
 impl CompositorState {
@@ -149,215 +172,94 @@ impl CompositorState {
         self.shell_backed_emit_geometry_messages(id, e);
     }
 
-    fn shell_backed_default_debug_client_rect(&self) -> Option<(Rectangle<i32, Logical>, String)> {
-        let out = self.shell_effective_primary_output()?;
-        let work = self.shell_maximize_work_area_global_for_output(&out)?;
-        let cw = ((work.size.w as f64 * 0.38).round() as i32).clamp(320, 480);
-        let ch = ((work.size.h as f64 * 0.45).round() as i32).clamp(260, 520);
-        let th = self.shell_chrome_titlebar_h.max(0);
-        let bd = self.shell_chrome_border_w.max(0);
-        let outer_w = cw + bd * 2;
-        let outer_h = ch + th + bd * 2;
-        let gx0 = work.loc.x + (work.size.w - outer_w) / 2;
-        let gy0 = work.loc.y + (work.size.h - outer_h) / 2;
-        let gx_outer = gx0
-            .max(work.loc.x)
-            .min(work.loc.x + work.size.w - outer_w.max(1));
-        let gy_outer = gy0
-            .max(work.loc.y)
-            .min(work.loc.y + work.size.h - outer_h.max(1));
-        let gx = gx_outer + bd;
-        let gy = gy_outer + th + bd;
-        let name = out.name().to_string();
-        Some((
-            Rectangle::new(
-                Point::from((gx, gy)),
-                Size::from((cw.max(1), ch.max(1))),
-            ),
-            name,
-        ))
-    }
+    pub(crate) fn shell_backed_try_open_json(&mut self, json: &str) {
+        let Ok(mut p) = serde_json::from_str::<ShellBackedOpenParams>(json) else {
+            return;
+        };
+        if p.window_id == 0 {
+            return;
+        }
+        p.title = truncate_shell_ipc_string(p.title);
+        p.app_id = truncate_shell_ipc_string(p.app_id);
+        p.output_name = truncate_shell_ipc_string(p.output_name);
+        let lw = p.w.max(1);
+        let lh = p.h.max(1);
+        let Some((gx, gy, gw, gh)) =
+            self.shell_output_local_rect_to_logical_global(p.x, p.y, lw, lh)
+        else {
+            return;
+        };
+        let client_global = Rectangle::new(
+            Point::<i32, Logical>::from((gx, gy)),
+            Size::<i32, Logical>::from((gw, gh)),
+        );
+        let id = p.window_id;
 
-    fn shell_backed_default_settings_client_rect(&self) -> Option<(Rectangle<i32, Logical>, String)> {
-        let out = self.shell_effective_primary_output()?;
-        let work = self.shell_maximize_work_area_global_for_output(&out)?;
-        let cw = ((work.size.w as f64 * 0.5).round() as i32).clamp(400, 620);
-        let ch = ((work.size.h as f64 * 0.56).round() as i32).clamp(340, 700);
-        let th = self.shell_chrome_titlebar_h.max(0);
-        let bd = self.shell_chrome_border_w.max(0);
-        let outer_w = cw + bd * 2;
-        let outer_h = ch + th + bd * 2;
-        let gx0 = work.loc.x + (work.size.w - outer_w) / 2;
-        let gy0 = work.loc.y + (work.size.h - outer_h) / 2;
-        let gx_outer = gx0
-            .max(work.loc.x)
-            .min(work.loc.x + work.size.w - outer_w.max(1));
-        let gy_outer = gy0
-            .max(work.loc.y)
-            .min(work.loc.y + work.size.h - outer_h.max(1));
-        let gx = gx_outer + bd;
-        let gy = gy_outer + th + bd;
-        let name = out.name().to_string();
-        Some((
-            Rectangle::new(
-                Point::from((gx, gy)),
-                Size::from((cw.max(1), ch.max(1))),
-            ),
-            name,
-        ))
-    }
-
-    pub(crate) fn shell_backed_debug_open(&mut self) {
         let unmin = self
             .shell_backed_windows
-            .get(&SHELL_BACKED_DEBUG_WINDOW_ID)
+            .get(&id)
             .is_some_and(|e| e.minimized);
         if unmin {
-            if let Some(e) = self.shell_backed_windows.get_mut(&SHELL_BACKED_DEBUG_WINDOW_ID) {
+            if let Some(e) = self.shell_backed_windows.get_mut(&id) {
                 e.minimized = false;
             }
             let snap = self
                 .shell_backed_windows
-                .get(&SHELL_BACKED_DEBUG_WINDOW_ID)
-                .expect("debug window")
+                .get(&id)
+                .expect("backed window")
                 .clone();
             self.shell_backed_refresh_placements();
             self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id: SHELL_BACKED_DEBUG_WINDOW_ID,
+                window_id: id,
                 minimized: false,
             });
-            self.shell_backed_emit_geometry_messages(SHELL_BACKED_DEBUG_WINDOW_ID, &snap);
+            self.shell_backed_emit_geometry_messages(id, &snap);
             self.shell_reply_window_list();
-            self.shell_focus_shell_ui_window(SHELL_BACKED_DEBUG_WINDOW_ID);
+            self.shell_focus_shell_ui_window(id);
             return;
         }
-        if self.shell_backed_windows.contains_key(&SHELL_BACKED_DEBUG_WINDOW_ID) {
+        if self.shell_backed_windows.contains_key(&id) {
             return;
         }
-        let Some((client_global, output_name)) = self.shell_backed_default_debug_client_rect() else {
-            return;
-        };
         self.shell_backed_windows.insert(
-            SHELL_BACKED_DEBUG_WINDOW_ID,
+            id,
             ShellBackedWindowEntry {
                 client_global,
                 minimized: false,
                 maximized: false,
                 float_restore: Some(client_global),
-                title: "Debug".to_string(),
-                app_id: "derp.debug".to_string(),
-                output_name,
+                title: p.title,
+                app_id: p.app_id,
+                output_name: p.output_name,
             },
         );
         let e = self
             .shell_backed_windows
-            .get(&SHELL_BACKED_DEBUG_WINDOW_ID)
+            .get(&id)
             .expect("inserted")
             .clone();
-        self.shell_backed_emit_mapped_metas(SHELL_BACKED_DEBUG_WINDOW_ID, &e);
+        self.shell_backed_emit_mapped_metas(id, &e);
         self.shell_backed_refresh_placements();
         self.shell_reply_window_list();
-        self.shell_focus_shell_ui_window(SHELL_BACKED_DEBUG_WINDOW_ID);
-    }
-
-    pub(crate) fn shell_backed_debug_close(&mut self) {
-        self.cancel_shell_move_resize_for_window(SHELL_BACKED_DEBUG_WINDOW_ID);
-        if self.shell_focused_ui_window_id == Some(SHELL_BACKED_DEBUG_WINDOW_ID) {
-            self.shell_blur_shell_ui_focus();
-        }
-        if self.shell_backed_windows.remove(&SHELL_BACKED_DEBUG_WINDOW_ID).is_some() {
-            self.shell_ui_pointer_grab = None;
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
-                window_id: SHELL_BACKED_DEBUG_WINDOW_ID,
-            });
-            self.shell_backed_refresh_placements();
-            self.shell_reply_window_list();
-        }
-    }
-
-    pub(crate) fn shell_backed_settings_open(&mut self) {
-        let unmin = self
-            .shell_backed_windows
-            .get(&SHELL_BACKED_SETTINGS_WINDOW_ID)
-            .is_some_and(|e| e.minimized);
-        if unmin {
-            if let Some(e) = self.shell_backed_windows.get_mut(&SHELL_BACKED_SETTINGS_WINDOW_ID) {
-                e.minimized = false;
-            }
-            let snap = self
-                .shell_backed_windows
-                .get(&SHELL_BACKED_SETTINGS_WINDOW_ID)
-                .expect("settings window")
-                .clone();
-            self.shell_backed_refresh_placements();
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id: SHELL_BACKED_SETTINGS_WINDOW_ID,
-                minimized: false,
-            });
-            self.shell_backed_emit_geometry_messages(SHELL_BACKED_SETTINGS_WINDOW_ID, &snap);
-            self.shell_reply_window_list();
-            self.shell_focus_shell_ui_window(SHELL_BACKED_SETTINGS_WINDOW_ID);
-            return;
-        }
-        if self.shell_backed_windows.contains_key(&SHELL_BACKED_SETTINGS_WINDOW_ID) {
-            return;
-        }
-        let Some((client_global, output_name)) = self.shell_backed_default_settings_client_rect() else {
-            return;
-        };
-        self.shell_backed_windows.insert(
-            SHELL_BACKED_SETTINGS_WINDOW_ID,
-            ShellBackedWindowEntry {
-                client_global,
-                minimized: false,
-                maximized: false,
-                float_restore: Some(client_global),
-                title: "Settings".to_string(),
-                app_id: "derp.settings".to_string(),
-                output_name,
-            },
-        );
-        let e = self
-            .shell_backed_windows
-            .get(&SHELL_BACKED_SETTINGS_WINDOW_ID)
-            .expect("inserted")
-            .clone();
-        self.shell_backed_emit_mapped_metas(SHELL_BACKED_SETTINGS_WINDOW_ID, &e);
-        self.shell_backed_refresh_placements();
-        self.shell_reply_window_list();
-        self.shell_focus_shell_ui_window(SHELL_BACKED_SETTINGS_WINDOW_ID);
-    }
-
-    pub(crate) fn shell_backed_settings_close(&mut self) {
-        self.cancel_shell_move_resize_for_window(SHELL_BACKED_SETTINGS_WINDOW_ID);
-        if self.shell_focused_ui_window_id == Some(SHELL_BACKED_SETTINGS_WINDOW_ID) {
-            self.shell_blur_shell_ui_focus();
-        }
-        if self.shell_backed_windows
-            .remove(&SHELL_BACKED_SETTINGS_WINDOW_ID)
-            .is_some()
-        {
-            self.shell_ui_pointer_grab = None;
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
-                window_id: SHELL_BACKED_SETTINGS_WINDOW_ID,
-            });
-            self.shell_backed_refresh_placements();
-            self.shell_reply_window_list();
-        }
+        self.shell_focus_shell_ui_window(id);
     }
 
     pub(crate) fn shell_backed_close_if_any(&mut self, window_id: u32) -> bool {
-        match window_id {
-            SHELL_BACKED_DEBUG_WINDOW_ID => {
-                self.shell_backed_debug_close();
-                true
-            }
-            SHELL_BACKED_SETTINGS_WINDOW_ID => {
-                self.shell_backed_settings_close();
-                true
-            }
-            _ => false,
+        if !self.shell_backed_windows.contains_key(&window_id) {
+            return false;
         }
+        self.cancel_shell_move_resize_for_window(window_id);
+        if self.shell_focused_ui_window_id == Some(window_id) {
+            self.shell_blur_shell_ui_focus();
+        }
+        self.shell_backed_windows.remove(&window_id);
+        self.shell_ui_pointer_grab = None;
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
+            window_id,
+        });
+        self.shell_backed_refresh_placements();
+        self.shell_reply_window_list();
+        true
     }
 
     pub(crate) fn shell_backed_minimize_if_any(&mut self, window_id: u32) -> bool {
@@ -393,7 +295,11 @@ impl CompositorState {
             }
             e.minimized = false;
         }
-        let snap = self.shell_backed_windows.get(&window_id).expect("restored window").clone();
+        let snap = self
+            .shell_backed_windows
+            .get(&window_id)
+            .expect("restored window")
+            .clone();
         self.shell_backed_refresh_placements();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,
@@ -672,7 +578,11 @@ impl CompositorState {
                 );
             }
         }
-        let snap = self.shell_backed_windows.get(&window_id).expect("backed window").clone();
+        let snap = self
+            .shell_backed_windows
+            .get(&window_id)
+            .expect("backed window")
+            .clone();
         self.shell_backed_emit_geometry_messages(window_id, &snap);
         self.shell_backed_refresh_placements();
         self.shell_reply_window_list();
@@ -710,4 +620,3 @@ impl CompositorState {
         }
     }
 }
-

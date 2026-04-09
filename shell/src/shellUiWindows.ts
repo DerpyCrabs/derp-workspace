@@ -1,7 +1,7 @@
 import { clientRectToGlobalLogical } from './shellCoords'
+import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from './backedShellWindows'
 
-export const SHELL_UI_DEBUG_WINDOW_ID = 9001
-export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
+export { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from './backedShellWindows'
 
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
 

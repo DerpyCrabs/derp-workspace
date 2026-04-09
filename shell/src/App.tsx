@@ -38,6 +38,7 @@ import {
   rectGlobalToCanvasLocal,
 } from './shellCoords'
 import { SettingsPanel } from './SettingsPanel'
+import { buildBackedWindowOpenPayload } from './backedShellWindows'
 import {
   isShellUiToolboxRow,
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -115,10 +116,7 @@ declare global {
         | 'set_tile_preview'
         | 'set_chrome_metrics'
         | 'context_menu'
-        | 'backed_debug_open'
-        | 'backed_debug_close'
-        | 'backed_settings_open'
-        | 'backed_settings_close',
+        | 'backed_window_open',
       arg?: number | string,
       arg2?: number,
       arg3?: number,
@@ -555,10 +553,7 @@ function shellWireSend(
     | 'set_ui_scale'
     | 'set_tile_preview'
     | 'set_chrome_metrics'
-    | 'backed_debug_open'
-    | 'backed_debug_close'
-    | 'backed_settings_open'
-    | 'backed_settings_close',
+    | 'backed_window_open',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -607,13 +602,11 @@ function shellWireSend(
     op === 'quit' ||
     op === 'request_compositor_sync' ||
     op === 'shell_ipc_pong' ||
-    op === 'resize_shell_grab_end' ||
-    op === 'backed_debug_open' ||
-    op === 'backed_debug_close' ||
-    op === 'backed_settings_open' ||
-    op === 'backed_settings_close'
+    op === 'resize_shell_grab_end'
   ) {
     fn(op)
+  } else if (op === 'backed_window_open' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_exclusion_zones' && typeof arg === 'string') {
@@ -1168,12 +1161,24 @@ function App() {
     shellWireSend('minimize', SHELL_UI_DEBUG_WINDOW_ID)
   }
 
+  function openBackedShellWindow(kind: 'debug' | 'settings') {
+    const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
+    const co = layoutCanvasOrigin()
+    const part = workspacePartition()
+    const mon = list.find((s) => s.name === part.primary.name) ?? list[0] ?? null
+    if (!mon) return
+    const reserveTb = reserveTaskbarForMon(mon)
+    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const payload = buildBackedWindowOpenPayload(mon.name, work, kind, co)
+    shellWireSend('backed_window_open', JSON.stringify(payload))
+  }
+
   function openDebugShellWindow() {
-    shellWireSend('backed_debug_open')
+    openBackedShellWindow('debug')
   }
 
   function openSettingsShellWindow() {
-    shellWireSend('backed_settings_open')
+    openBackedShellWindow('settings')
   }
 
   function toggleShellMaximizeForWindow(wid: number) {
