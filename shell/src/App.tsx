@@ -859,6 +859,11 @@ function App() {
     return !!w && !w.minimized
   })
 
+  const settingsHudFrameVisible = createMemo(() => {
+    const w = windows().get(SHELL_UI_SETTINGS_WINDOW_ID)
+    return !!w && !w.minimized
+  })
+
   /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
    * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
   const windowsList = createMemo(() =>
@@ -1147,6 +1152,16 @@ function App() {
 
   function minimizeDebugShellWindow() {
     shellWireSend('minimize', SHELL_UI_DEBUG_WINDOW_ID)
+  }
+
+  function minimizeSettingsShellWindow() {
+    shellWireSend('minimize', SHELL_UI_SETTINGS_WINDOW_ID)
+  }
+
+  function toggleSettingsShellWindow() {
+    const w = windows().get(SHELL_UI_SETTINGS_WINDOW_ID)
+    if (!w || w.minimized) openSettingsShellWindow()
+    else minimizeSettingsShellWindow()
   }
 
   function openBackedShellWindow(kind: 'debug' | 'settings') {
@@ -2075,6 +2090,10 @@ function App() {
           toggleProgramsMenuMeta()
           return
         }
+        if (action === 'open_settings') {
+          toggleSettingsShellWindow()
+          return
+        }
         if (action === 'toggle_fullscreen') {
           if (fid === null) return
           const w = wmap.get(fid)
@@ -2668,6 +2687,7 @@ function App() {
       if (!ctxMenuOpen()) return
       const t = e.target
       if (t instanceof Element && t.closest('[data-shell-programs-toggle]')) return
+      if (t instanceof Element && t.closest('[data-shell-settings-toggle]')) return
       if (t instanceof Element && t.closest('[data-shell-power-toggle]')) return
       const p = menuPanelRef
       if (p && t instanceof Node && p.contains(t)) return
@@ -2765,13 +2785,6 @@ function App() {
       <div class="px-4 py-3 text-left text-xs leading-snug [&_strong]:text-shell-hud-strong">
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <span class="text-[0.8rem] font-semibold tracking-wide text-neutral-100">Debug</span>
-          <button
-            type="button"
-            class="cursor-pointer rounded border border-white/25 bg-black/40 px-2 py-0.5 text-[0.7rem] hover:bg-black/55"
-            onClick={() => openSettingsShellWindow()}
-          >
-            Open settings
-          </button>
           <button
             type="button"
             class="cursor-pointer rounded border border-white/25 bg-black/40 px-2 py-0.5 text-[0.7rem] hover:bg-black/55"
@@ -3008,6 +3021,7 @@ function App() {
                   onRunNative={() => void runNativeInCompositor()}
                   onSpawnBtnPointerDown={() => setBtnPointerDowns((n) => n + 1)}
                   monitorRefreshLabel={monitorRefreshLabel}
+                  keyboardLayoutLabel={keyboardLayoutLabel}
                 />
               </Show>
             </ShellWindowFrame>
@@ -3094,6 +3108,10 @@ function App() {
                   windows={taskbarRowsForScreen(s)}
                   focusedWindowId={focusedWindowId()}
                   keyboardLayoutLabel={isPrim ? keyboardLayoutLabel() : null}
+                  settingsPanelOpen={settingsHudFrameVisible()}
+                  onSettingsPanelToggle={() => {
+                    toggleSettingsShellWindow()
+                  }}
                   debugPanelOpen={debugHudFrameVisible()}
                   onDebugPanelToggle={() => {
                     const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)

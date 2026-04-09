@@ -18,6 +18,8 @@ export type TaskbarProps = {
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
   keyboardLayoutLabel: string | null
+  settingsPanelOpen: boolean
+  onSettingsPanelToggle: () => void
   debugPanelOpen: boolean
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
@@ -84,6 +86,19 @@ export function Taskbar(props: TaskbarProps) {
               {props.keyboardLayoutLabel!}
             </span>
           </Show>
+          <button
+            type="button"
+            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            classList={{
+              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.settingsPanelOpen,
+            }}
+            data-shell-settings-toggle
+            aria-pressed={props.settingsPanelOpen}
+            title={props.settingsPanelOpen ? 'Hide settings' : 'Settings'}
+            onClick={() => props.onSettingsPanelToggle()}
+          >
+            Settings
+          </button>
           <button
             type="button"
             class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"

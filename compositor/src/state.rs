@@ -1235,6 +1235,7 @@ impl CompositorState {
             }
             "launch_terminal"
             | "toggle_programs_menu"
+            | "open_settings"
             | "tile_left"
             | "tile_right"
             | "tile_up"

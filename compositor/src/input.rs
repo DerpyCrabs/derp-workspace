@@ -35,6 +35,7 @@ fn super_keybind_action(raw_sym: u32, shift: bool) -> Option<&'static str> {
     }
     match raw_sym {
         KEY_space => Some("cycle_keyboard_layout"),
+        KEY_comma => Some("open_settings"),
         KEY_Return | KEY_KP_Enter => Some("launch_terminal"),
         KEY_q | KEY_Q => Some("close_focused"),
         KEY_d | KEY_D => Some("toggle_programs_menu"),

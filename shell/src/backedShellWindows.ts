@@ -32,8 +32,8 @@ export function defaultBackedClientAreaGlobal(
     cw = Math.round(Math.max(320, Math.min(480, work.w * 0.38)))
     ch = Math.round(Math.max(260, Math.min(520, work.h * 0.45)))
   } else {
-    cw = Math.round(Math.max(400, Math.min(620, work.w * 0.5)))
-    ch = Math.round(Math.max(340, Math.min(700, work.h * 0.56)))
+    cw = Math.round(Math.max(520, Math.min(900, work.w * 0.62)))
+    ch = Math.round(Math.max(400, Math.min(820, work.h * 0.68)))
   }
   const outerW = cw + bd * 2
   const outerH = ch + th + bd * 2
