@@ -463,12 +463,13 @@ impl CompositorState {
             .copied()
             .filter(|wid| self.window_registry.window_info(*wid).is_some())
             .collect();
+        let seen: HashSet<u32> = ordered.iter().copied().collect();
         let mut missing: Vec<u32> = self
             .window_registry
             .all_records()
             .into_iter()
             .map(|record| record.info.window_id)
-            .filter(|wid| !ordered.contains(wid))
+            .filter(|wid| !seen.contains(wid))
             .collect();
         missing.sort_unstable();
         ordered.extend(missing);
@@ -910,10 +911,26 @@ impl CompositorState {
 
     pub(crate) fn native_hit_blocked_by_shell_exclusion(
         &self,
-        _elem: &DerpSpaceElem,
+        elem: &DerpSpaceElem,
         pos: Point<f64, Logical>,
     ) -> bool {
-        self.point_in_shell_exclusion_zones(pos) || self.shell_ui_placement_topmost_at(pos).is_some()
+        if self.point_in_shell_exclusion_zones(pos) {
+            return true;
+        }
+        let Some(window_id) = self.derp_elem_window_id(elem) else {
+            return false;
+        };
+        self.shell_ui_placement_topmost_at(pos)
+            .is_some_and(|w| self.shell_placement_renders_above_window(&w, window_id))
+    }
+
+    fn shell_placement_renders_above_window(
+        &self,
+        placement: &ShellUiWindowPlacement,
+        window_id: u32,
+    ) -> bool {
+        let native_z = self.shell_window_stack_z(window_id);
+        placement.z > native_z || (placement.z == native_z && placement.id > window_id)
     }
 
     pub(crate) fn shell_ui_placement_topmost_at(
@@ -923,20 +940,65 @@ impl CompositorState {
         let px = pos.x;
         let py = pos.y;
         let mut best: Option<ShellUiWindowPlacement> = None;
-        let mut best_z = 0u32;
         let placements = self.shell_hosted_visible_placements();
         for w in &placements {
             let g = &w.global_rect;
             let x2 = g.loc.x.saturating_add(g.size.w) as f64;
             let y2 = g.loc.y.saturating_add(g.size.h) as f64;
             if px >= g.loc.x as f64 && px < x2 && py >= g.loc.y as f64 && py < y2 {
-                if best.is_none() || w.z >= best_z {
-                    best_z = w.z;
+                if best
+                    .as_ref()
+                    .is_none_or(|cur| w.z > cur.z || (w.z == cur.z && w.id > cur.id))
+                {
                     best = Some(w.clone());
                 }
             }
         }
         best
+    }
+
+    pub(crate) fn native_surface_under_no_shell_exclusion(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(Option<u32>, WlSurface, Point<f64, Logical>)> {
+        for elem in self.space.elements().rev() {
+            let Some(map_loc) = self.space.element_location(elem) else {
+                continue;
+            };
+            let render_loc = map_loc - elem.geometry().loc;
+            let local = pos - render_loc.to_f64();
+            let window_id = self.derp_elem_window_id(elem);
+            let hit = match elem {
+                DerpSpaceElem::Wayland(window) => window
+                    .surface_under(local, WindowSurfaceType::ALL)
+                    .map(|(s, p)| (s, (p + render_loc).to_f64())),
+                DerpSpaceElem::X11(x11) => {
+                    let surf = x11.wl_surface()?;
+                    under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL)
+                        .map(|(s, p)| (s, (p + render_loc).to_f64()))
+                }
+            };
+            let Some((surf, p_global)) = hit else {
+                continue;
+            };
+            return Some((window_id, surf, p_global));
+        }
+        None
+    }
+
+    pub(crate) fn shell_ui_placement_topmost_for_input_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<ShellUiWindowPlacement> {
+        let placement = self.shell_ui_placement_topmost_at(pos)?;
+        let Some((window_id, _, _)) = self.native_surface_under_no_shell_exclusion(pos) else {
+            return Some(placement);
+        };
+        let Some(window_id) = window_id else {
+            return None;
+        };
+        self.shell_placement_renders_above_window(&placement, window_id)
+            .then_some(placement)
     }
 
     fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
@@ -965,8 +1027,10 @@ impl CompositorState {
         let Some(native_window_id) = native_window_id else {
             return placements;
         };
-        let native_z = self.shell_window_stack_z(native_window_id);
-        placements.into_iter().filter(|w| w.z > native_z).collect()
+        placements
+            .into_iter()
+            .filter(|w| self.shell_placement_renders_above_window(w, native_window_id))
+            .collect()
     }
 
     pub(crate) fn shell_global_rect_to_buffer_rect(
@@ -1144,7 +1208,7 @@ impl CompositorState {
             self.shell_emit_shell_ui_focus_if_changed(None);
             return;
         }
-        let id = self.shell_ui_placement_topmost_at(pos).map(|w| w.id);
+        let id = self.shell_ui_placement_topmost_for_input_at(pos).map(|w| w.id);
         self.shell_emit_shell_ui_focus_if_changed(id);
     }
 
@@ -1278,15 +1342,18 @@ impl CompositorState {
     }
 
     fn window_ids_strictly_above_on_output(&self, output: &Output, self_id: u32) -> Vec<u32> {
-        let stack: Vec<u32> = self
+        let mut stack: Vec<(u32, u32)> = self
             .space
             .elements_for_output(output)
             .filter_map(|e| self.derp_elem_window_id(e))
+            .map(|id| (id, self.shell_window_stack_z(id)))
             .collect();
-        let Some(idx) = stack.iter().position(|&id| id == self_id) else {
+        stack.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        stack.dedup_by(|a, b| a.0 == b.0);
+        let Some(idx) = stack.iter().position(|(id, _)| *id == self_id) else {
             return Vec::new();
         };
-        stack[(idx + 1)..].to_vec()
+        stack[(idx + 1)..].iter().map(|(id, _)| *id).collect()
     }
 
     pub(crate) fn shell_exclusion_clip_rects_logical(
@@ -3711,12 +3778,12 @@ impl CompositorState {
             }
         }
 
-        let in_placement = self.shell_ui_placement_topmost_at(pos).is_some();
+        let in_placement = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
         if in_placement {
             return true;
         }
 
-        if self.surface_under(pos).is_some() {
+        if self.native_surface_under_no_shell_exclusion(pos).is_some() {
             return false;
         }
 
@@ -3792,7 +3859,7 @@ impl CompositorState {
                 return Some((vlx.clamp(0, xmax), vly.clamp(0, ymax)));
             }
         }
-        if let Some(w) = self.shell_ui_placement_topmost_at(pos) {
+        if let Some(w) = self.shell_ui_placement_topmost_for_input_at(pos) {
             let g = &w.global_rect;
             let gw = g.size.w.max(1) as f64;
             let gh = g.size.h.max(1) as f64;

@@ -238,8 +238,8 @@ impl CompositorState {
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_menu = self.shell_point_in_context_menu_global(pos);
-        let in_shell_ui = self.shell_ui_placement_topmost_at(pos).is_some();
-        let under_native = self.surface_under(pos).is_some();
+        let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
+        let under_native = self.native_surface_under_no_shell_exclusion(pos).is_some();
         let force_native_buttons = under_native
             && !in_excl
             && !in_menu

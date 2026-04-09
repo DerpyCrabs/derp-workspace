@@ -39,10 +39,10 @@ import {
 import { SettingsPanel } from './SettingsPanel'
 import { buildBackedWindowOpenPayload } from './backedShellWindows'
 import {
+  flushShellUiWindowsSyncNow,
   SHELL_WINDOW_FLAG_SHELL_HOSTED,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
-  scheduleShellUiWindowsSync,
   type ShellUiMeasureEnv,
 } from './shellUiWindows'
 import {
@@ -2355,13 +2355,16 @@ function App() {
         }
         queueMicrotask(() => {
           scheduleExclusionZonesSync()
-          scheduleShellUiWindowsSync()
+          flushShellUiWindowsSyncNow()
         })
         return
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        queueMicrotask(() => {
+          scheduleExclusionZonesSync()
+          flushShellUiWindowsSyncNow()
+        })
         return
       }
       if (d.type === 'output_layout') {
@@ -2429,6 +2432,7 @@ function App() {
         queueMicrotask(() => {
           try {
             scheduleExclusionZonesSync()
+            flushShellUiWindowsSyncNow()
             relayoutAllAutoMonitors()
             window.scrollTo(0, 0)
             document.documentElement.scrollTop = 0
@@ -2443,7 +2447,10 @@ function App() {
       }
       if (d.type === 'window_list') {
         setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        queueMicrotask(() => {
+          scheduleExclusionZonesSync()
+          flushShellUiWindowsSyncNow()
+        })
         return
       }
       if (d.type === 'window_state') {
@@ -2459,6 +2466,7 @@ function App() {
           }
         }
         setWindows((m) => applyDetail(m, d))
+        queueMicrotask(() => flushShellUiWindowsSyncNow())
         if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
         return
       }
@@ -2473,6 +2481,7 @@ function App() {
           perMonitorTiles.preTileGeometry.delete(wid)
         }
         setWindows((m) => applyDetail(m, d))
+        queueMicrotask(() => flushShellUiWindowsSyncNow())
         if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
         return
       }
