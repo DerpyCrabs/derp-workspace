@@ -14,7 +14,7 @@ use std::{
 use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
-    backend::input::{KeyState, TouchSlot},
+    backend::input::{KeyState, Keycode, TouchSlot},
     backend::renderer::{
         element::solid::SolidColorBuffer,
         gles::GlesRenderer,
@@ -39,11 +39,14 @@ use smithay::{
         calloop::{
             channel::{self, Event as CalloopChannelEvent},
             generic::Generic,
+            timer::{TimeoutAction, Timer},
             EventLoop,
             Interest,
+            LoopHandle,
             LoopSignal,
             Mode,
             PostAction,
+            RegistrationToken,
         },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
@@ -289,6 +292,9 @@ pub struct CompositorState {
     pub(crate) touch_routes_to_cef: bool,
     /// Typing and shortcuts go to `cef_host` after interacting with the Solid shell layer.
     pub(crate) shell_ipc_keyboard_to_cef: bool,
+    shell_cef_repeat_token: Option<RegistrationToken>,
+    pub(crate) shell_cef_repeat_keycode: Option<Keycode>,
+    shell_cef_repeat_sym_raw: Option<u32>,
     /// Super key pressed; used with [`Self::programs_menu_super_chord`] for Programs menu tap detection.
     pub(crate) programs_menu_super_armed: bool,
     pub(crate) programs_menu_super_chord: bool,
@@ -537,6 +543,9 @@ impl CompositorState {
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
             shell_ipc_keyboard_to_cef: false,
+            shell_cef_repeat_token: None,
+            shell_cef_repeat_keycode: None,
+            shell_cef_repeat_sym_raw: None,
             programs_menu_super_armed: false,
             programs_menu_super_chord: false,
             keyboard_layout_by_window: HashMap::new(),
@@ -5052,6 +5061,8 @@ impl CompositorState {
         Self::cef_flags_from_modifiers(&kb.modifier_state())
     }
 
+    const CEF_EVENTFLAG_IS_REPEAT: u32 = 1 << 13;
+
     fn cef_flags_from_modifiers(m: &ModifiersState) -> u32 {
         let mut f = 0u32;
         if m.caps_lock {
@@ -5073,6 +5084,89 @@ impl CompositorState {
             f |= 4096;
         }
         f
+    }
+
+    pub(crate) fn shell_cef_sym_should_autorepeat(raw: u32) -> bool {
+        !matches!(
+            raw,
+            keysyms::KEY_Shift_L
+                | keysyms::KEY_Shift_R
+                | keysyms::KEY_Control_L
+                | keysyms::KEY_Control_R
+                | keysyms::KEY_Alt_L
+                | keysyms::KEY_Alt_R
+                | keysyms::KEY_Caps_Lock
+        )
+    }
+
+    pub(crate) fn shell_cef_repeat_clear(&mut self, lh: &LoopHandle<CalloopData>) {
+        if let Some(t) = self.shell_cef_repeat_token.take() {
+            let _ = lh.remove(t);
+        }
+        self.shell_cef_repeat_keycode = None;
+        self.shell_cef_repeat_sym_raw = None;
+    }
+
+    pub(crate) fn shell_cef_repeat_arm(
+        &mut self,
+        lh: &LoopHandle<CalloopData>,
+        keycode: Keycode,
+        sym_raw: u32,
+    ) {
+        self.shell_cef_repeat_clear(lh);
+        self.shell_cef_repeat_keycode = Some(keycode);
+        self.shell_cef_repeat_sym_raw = Some(sym_raw);
+        let lh2 = lh.clone();
+        match lh.insert_source(
+            Timer::from_duration(Duration::from_millis(200)),
+            move |_, _, d: &mut CalloopData| d.state.shell_cef_repeat_on_tick(&lh2),
+        ) {
+            Ok(t) => self.shell_cef_repeat_token = Some(t),
+            Err(_) => {
+                self.shell_cef_repeat_keycode = None;
+                self.shell_cef_repeat_sym_raw = None;
+            }
+        }
+    }
+
+    fn shell_cef_repeat_on_tick(&mut self, lh: &LoopHandle<CalloopData>) -> TimeoutAction {
+        let Some(keycode) = self.shell_cef_repeat_keycode else {
+            self.shell_cef_repeat_token = None;
+            return TimeoutAction::Drop;
+        };
+        let Some(keyboard) = self.seat.get_keyboard().map(|k| k.clone()) else {
+            self.shell_cef_repeat_clear(lh);
+            return TimeoutAction::Drop;
+        };
+        if !keyboard.pressed_keys().contains(&keycode) {
+            self.shell_cef_repeat_clear(lh);
+            return TimeoutAction::Drop;
+        }
+        if !self.shell_ipc_keyboard_to_cef || !self.shell_cef_active() || !self.shell_has_frame {
+            self.shell_cef_repeat_clear(lh);
+            return TimeoutAction::Drop;
+        }
+        let Some(sym_raw) = self.shell_cef_repeat_sym_raw else {
+            self.shell_cef_repeat_clear(lh);
+            return TimeoutAction::Drop;
+        };
+        let mods = keyboard.modifier_state();
+        let mut ticked = false;
+        keyboard.with_pressed_keysyms(|handles| {
+            let Some(h) = handles
+                .iter()
+                .find(|h| h.modified_sym().raw() == sym_raw)
+            else {
+                return;
+            };
+            self.shell_ipc_forward_keyboard_to_cef(KeyState::Pressed, &mods, h, true);
+            ticked = true;
+        });
+        if !ticked {
+            self.shell_cef_repeat_clear(lh);
+            return TimeoutAction::Drop;
+        }
+        TimeoutAction::ToDuration(Duration::from_millis(40))
     }
 
     fn keysym_raw_to_windows_vkey(raw: u32) -> i32 {
@@ -5102,35 +5196,85 @@ impl CompositorState {
         key_state: KeyState,
         mods: &ModifiersState,
         keysym: &KeysymHandle<'_>,
+        is_autorepeat: bool,
     ) {
         if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
         let sym = keysym.modified_sym();
-        let mods_u = Self::cef_flags_from_modifiers(mods);
+        let mut mods_u = Self::cef_flags_from_modifiers(mods);
+        if key_state == KeyState::Pressed && is_autorepeat {
+            mods_u |= Self::CEF_EVENTFLAG_IS_REPEAT;
+        }
         let native = sym.raw() as i32;
         let win_vk = Self::keysym_raw_to_windows_vkey(sym.raw());
         match key_state {
             KeyState::Pressed => {
-                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
-                    cef_key_type: shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
-                    modifiers: mods_u,
-                    windows_key_code: win_vk,
-                    native_key_code: native,
-                    character: 0,
-                    unmodified_character: 0,
-                });
+                let raw = sym.raw();
+                let ctl_char: Option<u32> = match raw {
+                    keysyms::KEY_BackSpace => Some(0x08),
+                    keysyms::KEY_Delete | keysyms::KEY_KP_Delete => Some(0x7f),
+                    _ => None,
+                };
                 let printable = sym.key_char().filter(|c| !c.is_control());
-                if let Some(ch) = printable {
-                    let cu = ch as u32;
+                if is_autorepeat {
                     self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
-                        cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                        cef_key_type: shell_wire::CEF_KEYEVENT_KEYDOWN,
                         modifiers: mods_u,
                         windows_key_code: win_vk,
                         native_key_code: native,
-                        character: cu,
-                        unmodified_character: cu,
+                        character: 0,
+                        unmodified_character: 0,
                     });
+                    if let Some(cu) = ctl_char {
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                            modifiers: mods_u,
+                            windows_key_code: win_vk,
+                            native_key_code: native,
+                            character: cu,
+                            unmodified_character: cu,
+                        });
+                    } else if let Some(ch) = printable {
+                        let cu = ch as u32;
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                            modifiers: mods_u,
+                            windows_key_code: win_vk,
+                            native_key_code: native,
+                            character: cu,
+                            unmodified_character: cu,
+                        });
+                    }
+                } else {
+                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                        cef_key_type: shell_wire::CEF_KEYEVENT_RAWKEYDOWN,
+                        modifiers: mods_u,
+                        windows_key_code: win_vk,
+                        native_key_code: native,
+                        character: 0,
+                        unmodified_character: 0,
+                    });
+                    if let Some(cu) = ctl_char {
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                            modifiers: mods_u,
+                            windows_key_code: win_vk,
+                            native_key_code: native,
+                            character: cu,
+                            unmodified_character: cu,
+                        });
+                    } else if let Some(ch) = printable {
+                        let cu = ch as u32;
+                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Key {
+                            cef_key_type: shell_wire::CEF_KEYEVENT_CHAR,
+                            modifiers: mods_u,
+                            windows_key_code: win_vk,
+                            native_key_code: native,
+                            character: cu,
+                            unmodified_character: cu,
+                        });
+                    }
                 }
             }
             KeyState::Released => {

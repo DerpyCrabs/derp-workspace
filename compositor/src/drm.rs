@@ -1040,10 +1040,11 @@ pub fn init_drm(
         .map_err(|()| "udev_assign_seat failed".to_string())?;
     let libinput_backend = LibinputInputBackend::new(libinput_context.clone());
 
+    let lh_libinput = loop_handle.clone();
     event_loop
         .handle()
         .insert_source(libinput_backend, move |event, _, d| {
-            d.state.process_input_event(event);
+            d.state.process_input_event(event, &lh_libinput);
         })
         .map_err(|e| format!("libinput insert_source: {e}"))?;
 

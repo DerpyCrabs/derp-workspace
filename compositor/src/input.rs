@@ -15,11 +15,14 @@ use smithay::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::{
+        calloop::LoopHandle,
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
 };
 
-use crate::{derp_space::DerpSpaceElem, state::CompositorState};
+use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
 
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
@@ -432,16 +435,25 @@ impl CompositorState {
         }
     }
 
-    pub fn process_input_event(&mut self, event: InputEvent<LibinputInputBackend>) {
+    pub fn process_input_event(
+        &mut self,
+        event: InputEvent<LibinputInputBackend>,
+        loop_handle: &LoopHandle<CalloopData>,
+    ) {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
                 let key_state = event.state();
+                let keycode = event.key_code();
+                let keyboard = self.seat.get_keyboard().unwrap();
+                let is_autorepeat = key_state == KeyState::Pressed
+                    && keyboard.pressed_keys().contains(&keycode);
 
-                self.seat.get_keyboard().unwrap().input::<(), _>(
+                let lh_kbd = loop_handle.clone();
+                keyboard.input::<(), _>(
                     self,
-                    event.key_code(),
+                    keycode,
                     key_state,
                     serial,
                     time,
@@ -523,7 +535,31 @@ impl CompositorState {
                             && state.shell_cef_active()
                             && state.shell_has_frame
                         {
-                            state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym);
+                            if key_state == KeyState::Pressed && is_autorepeat {
+                                return FilterResult::Intercept(());
+                            }
+                            if key_state == KeyState::Released {
+                                if state.shell_cef_repeat_keycode == Some(keycode) {
+                                    state.shell_cef_repeat_clear(&lh_kbd);
+                                }
+                                state.shell_ipc_forward_keyboard_to_cef(
+                                    key_state,
+                                    mods,
+                                    &keysym,
+                                    false,
+                                );
+                                return FilterResult::Intercept(());
+                            }
+                            state.shell_ipc_forward_keyboard_to_cef(
+                                key_state,
+                                mods,
+                                &keysym,
+                                false,
+                            );
+                            if CompositorState::shell_cef_sym_should_autorepeat(raw_sym) {
+                                let sr = keysym.modified_sym().raw();
+                                state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);
+                            }
                             return FilterResult::Intercept(());
                         }
                         FilterResult::Forward

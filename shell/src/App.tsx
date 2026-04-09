@@ -761,6 +761,10 @@ function App() {
 
   function hideContextMenu() {
     setCtxMenuOpen(false)
+    setCtxMenuKind(null)
+    setProgramsMenuQuery('')
+    setProgramsMenuHighlightIdx(0)
+    setPowerMenuHighlightIdx(0)
     hideShellFloatingWire()
   }
   function closeAllAtlasSelects(): boolean {
@@ -3182,10 +3186,6 @@ function App() {
                       e.preventDefault()
                       e.stopPropagation()
                       activateProgramsMenuSelection()
-                      return
-                    }
-                    if (e.key === 'Backspace' || e.key === 'Delete') {
-                      e.stopPropagation()
                     }
                   }}
                 />

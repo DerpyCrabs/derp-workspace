@@ -426,6 +426,7 @@ pub fn apply_message(
             ev.native_key_code = native_key_code;
             ev.character = clamp_u16(character);
             ev.unmodified_character = clamp_u16(unmodified_character);
+            ev.focus_on_editable_field = 1;
             host.send_key_event(Some(&ev));
         }
         shell_wire::DecodedCompositorToShellMessage::Touch {
