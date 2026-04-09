@@ -130,7 +130,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       class="pointer-events-none box-border"
       style={{
         position: 'fixed',
-        'z-index': readAcc(props.stackZ),
+        'z-index': 1000 + readAcc(props.stackZ),
         left: `${(model()?.x ?? 0) - layout().inset}px`,
         top: `${(model()?.y ?? 0) - layout().th - layout().inset}px`,
         width: `${(model()?.width ?? 0) + layout().inset * 2}px`,
