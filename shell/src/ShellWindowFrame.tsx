@@ -151,7 +151,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <Show when={props.children}>
         <div
-          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-neutral-950/85 p-2"
+          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-neutral-950 p-2"
           style={{
             left: `${layout().inset}px`,
             top: `${layout().inset + layout().th}px`,
@@ -206,7 +206,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-slate-500"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -215,7 +215,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-sm leading-none text-neutral-200 hover:bg-slate-500"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMaximize()}
@@ -246,7 +246,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-lg leading-none text-neutral-200 hover:bg-red-600 hover:text-white"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}

@@ -28,7 +28,7 @@ export type TaskbarProps = {
 export function Taskbar(props: TaskbarProps) {
   return (
     <div
-      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-[50000] box-border flex h-11 items-center border-t border-white/18 bg-[hsla(210,28%,14%,0.94)] px-2.5 shadow-[0_-4px_20px_rgba(0,0,0,0.35)]"
+      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-[50000] box-border flex h-11 items-center border-t border-slate-600 bg-slate-900 px-2.5 shadow-[0_-4px_20px_rgba(0,0,0,0.35)]"
       data-shell-taskbar
       data-shell-taskbar-monitor={props.monitorName}
     >
@@ -56,7 +56,7 @@ export function Taskbar(props: TaskbarProps) {
             <button
               type="button"
               role="listitem"
-              class="max-w-[11rem] flex-[0_1_auto] cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+              class="max-w-[11rem] flex-[0_1_auto] cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
               classList={{
                 'border-white/35 bg-shell-taskbar-focused text-neutral-900':
                   props.focusedWindowId === w.window_id && !w.minimized,
@@ -80,7 +80,7 @@ export function Taskbar(props: TaskbarProps) {
         <div class="ml-auto flex shrink-0 items-center gap-2.5">
           <Show when={props.keyboardLayoutLabel}>
             <span
-              class="min-w-[2rem] shrink-0 rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.5rem] py-[0.35rem] text-center text-[0.75rem] font-semibold tabular-nums tracking-wide text-neutral-200"
+              class="min-w-[2rem] shrink-0 rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.5rem] py-[0.35rem] text-center text-[0.75rem] font-semibold tabular-nums tracking-wide text-neutral-200"
               title="Keyboard layout"
             >
               {props.keyboardLayoutLabel!}
@@ -88,7 +88,7 @@ export function Taskbar(props: TaskbarProps) {
           </Show>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
             classList={{
               'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.settingsPanelOpen,
             }}
@@ -101,7 +101,7 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
             classList={{
               'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.debugPanelOpen,
             }}
@@ -113,7 +113,7 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-white/12 bg-[hsla(210,18%,22%,0.95)] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
             classList={{
               'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.powerMenuOpen,
             }}
