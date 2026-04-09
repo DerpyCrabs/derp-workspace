@@ -46,6 +46,26 @@ pub struct KeyboardXkbFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopBackgroundConfig {
+    pub mode: String,
+    pub solid_rgba: [f32; 4],
+    pub image_path: String,
+    pub fit: String,
+}
+
+impl Default for DesktopBackgroundConfig {
+    fn default() -> Self {
+        Self {
+            mode: "solid".into(),
+            solid_rgba: [0.1, 0.1, 0.1, 1.0],
+            image_path: String::new(),
+            fit: "fill".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfigFile {
     pub version: u32,
     pub ui_scale: f64,
@@ -56,6 +76,10 @@ pub struct DisplayConfigFile {
     pub screens: Vec<ScreenEntry>,
     #[serde(default)]
     pub keyboard: KeyboardXkbFile,
+    #[serde(default)]
+    pub desktop_background: DesktopBackgroundConfig,
+    #[serde(default)]
+    pub desktop_background_outputs: HashMap<String, DesktopBackgroundConfig>,
 }
 
 struct LiveHead {
@@ -255,6 +279,8 @@ pub fn apply_stored_from_heads(
         return false;
     }
 
+    state.apply_desktop_background_from_display_file(&cfg);
+
     state.display_config_save_suppressed = true;
 
     let live = live_heads_from_drm(drm, heads);
@@ -388,18 +414,21 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
             }),
     };
 
-    let keyboard = std::fs::read_to_string(&path)
+    let prev_file = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|raw| serde_json::from_str::<DisplayConfigFile>(&raw).ok())
-        .map(|c| c.keyboard)
+        .and_then(|raw| serde_json::from_str::<DisplayConfigFile>(&raw).ok());
+    let keyboard = prev_file
+        .as_ref()
+        .map(|c| c.keyboard.clone())
         .unwrap_or_default();
-
     let file = DisplayConfigFile {
         version: 1,
         ui_scale: state.shell_ui_scale,
         shell_chrome_primary,
         screens,
         keyboard,
+        desktop_background: state.desktop_background_config.clone(),
+        desktop_background_outputs: state.desktop_background_by_output_name.clone(),
     };
 
     if let Err(e) = write_atomic(&path, &file) {

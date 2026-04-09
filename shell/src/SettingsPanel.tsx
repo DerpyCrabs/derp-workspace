@@ -37,15 +37,9 @@ export type SettingsPanelProps = {
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   applyCompositorLayoutFromDraft: () => void
-  spawnUrlLine: Accessor<string>
-  spawnCommand: Accessor<string>
-  setSpawnCommand: Setter<string>
-  spawnBusy: Accessor<boolean>
-  spawnStatus: Accessor<string | null>
-  onRunNative: () => void
-  onSpawnBtnPointerDown: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
+  setDesktopBackgroundJson: (json: string) => void
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -95,13 +89,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setUiScale={props.setUiScale}
             applyCompositorLayoutFromDraft={props.applyCompositorLayoutFromDraft}
             monitorRefreshLabel={props.monitorRefreshLabel}
-            spawnUrlLine={props.spawnUrlLine}
-            spawnCommand={props.spawnCommand}
-            setSpawnCommand={props.setSpawnCommand}
-            spawnBusy={props.spawnBusy}
-            spawnStatus={props.spawnStatus}
-            onRunNative={props.onRunNative}
-            onSpawnBtnPointerDown={props.onSpawnBtnPointerDown}
           />
         </Show>
         <Show when={activePage() === 'tiling'}>
@@ -119,7 +106,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} />
         </Show>
         <Show when={activePage() === 'appearance'}>
-          <SettingsAppearancePage />
+          <SettingsAppearancePage setDesktopBackgroundJson={props.setDesktopBackgroundJson} />
         </Show>
       </div>
     </div>

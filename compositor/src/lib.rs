@@ -7,8 +7,10 @@ pub mod cef;
 pub mod layout;
 pub mod window_registry;
 
+mod backdrop_render;
 mod calloop_xwm;
 mod cursor_fallback;
+mod desktop_background;
 mod display_config;
 pub mod derp_space;
 mod derp_space_render;

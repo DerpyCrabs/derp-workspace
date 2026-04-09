@@ -31,31 +31,7 @@ body {
     position: relative;
     overflow: hidden;
     font-family: ui-sans-serif, system-ui, sans-serif;
-    background-color: #aeb8cc;
-    background-image:
-      radial-gradient(ellipse 85% 65% at 50% 18%, rgba(255, 255, 255, 0.14), transparent 52%),
-      repeating-linear-gradient(
-        118deg,
-        rgba(255, 255, 255, 0.09) 0,
-        rgba(255, 255, 255, 0.09) 1px,
-        transparent 1px,
-        transparent max(48px, 3.75vw)
-      ),
-      repeating-linear-gradient(
-        -118deg,
-        rgba(25, 35, 62, 0.085) 0,
-        rgba(25, 35, 62, 0.085) 1px,
-        transparent 1px,
-        transparent max(48px, 3.75vw)
-      ),
-      linear-gradient(rgba(28, 38, 68, 0.2) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(28, 38, 68, 0.2) 1px, transparent 1px);
-    background-size:
-      auto,
-      auto,
-      auto,
-      max(96px, 7.5vw) max(96px, 7.5vw),
-      max(96px, 7.5vw) max(96px, 7.5vw);
+    background: transparent;
     color: hsl(0 0% 96%);
   }
 }

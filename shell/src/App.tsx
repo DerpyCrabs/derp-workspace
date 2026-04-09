@@ -74,6 +74,7 @@ import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { hideShellFloatingWire } from './shellFloatingWire'
 import fuzzysort from 'fuzzysort'
 import { getMonitorLayout } from './tilingConfig'
+import { shellHttpBase } from './shellHttp'
 
 declare global {
   interface Window {
@@ -113,6 +114,7 @@ declare global {
         | 'set_ui_scale'
         | 'set_tile_preview'
         | 'set_chrome_metrics'
+        | 'set_desktop_background'
         | 'context_menu'
         | 'backed_window_open',
       arg?: number | string,
@@ -493,12 +495,6 @@ let lastTilePreviewKey = ''
 
 const TASKBAR_HEIGHT = 44
 
-function shellHttpBase(): string | null {
-  const u = window.__DERP_SHELL_HTTP
-  if (u && u.startsWith('http://127.0.0.1:')) return u.replace(/\/$/, '')
-  return null
-}
-
 async function postShell(path: string, body: object): Promise<void> {
   const base = shellHttpBase()
   if (!base) return
@@ -551,6 +547,7 @@ function shellWireSend(
     | 'set_ui_scale'
     | 'set_tile_preview'
     | 'set_chrome_metrics'
+    | 'set_desktop_background'
     | 'backed_window_open',
   arg?: number | string,
   arg2?: number,
@@ -607,6 +604,8 @@ function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'set_desktop_background' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_exclusion_zones' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_shell_ui_windows' && typeof arg === 'string') {
@@ -639,13 +638,7 @@ function canSessionControl(): boolean {
 }
 
 function App() {
-  const [spawnStatus, setSpawnStatus] = createSignal<string | null>(null)
-  const [spawnBusy, setSpawnBusy] = createSignal(false)
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
-  const [btnPointerDowns, setBtnPointerDowns] = createSignal(0)
-  const [spawnClicks, setSpawnClicks] = createSignal(0)
-  const [spawnUrlLine, setSpawnUrlLine] = createSignal('')
-  const [spawnCommand, setSpawnCommand] = createSignal('foot')
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
@@ -1041,7 +1034,6 @@ function App() {
     )
   })
 
-  let spawnPoll: ReturnType<typeof setInterval> | undefined
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
   let menuAtlasHostRef: HTMLElement | undefined
@@ -1669,45 +1661,22 @@ function App() {
     shellWireSend('resize_shell_grab_end')
   }
 
-  async function spawnInCompositor(cmd: string, emptyMessage = 'Empty command.') {
+  async function spawnInCompositor(cmd: string) {
     const trimmed = cmd.trim()
-    if (!trimmed) {
-      setSpawnStatus(emptyMessage)
-      return
-    }
-    if (shellWireSend('spawn', trimmed)) {
-      setSpawnStatus(`Started: ${trimmed}`)
-      return
-    }
+    if (!trimmed) return
+    if (shellWireSend('spawn', trimmed)) return
     const url = window.__DERP_SPAWN_URL
-    if (!url) {
-      setSpawnStatus('Not running under cef_host (no spawn URL / wire).')
-      return
-    }
-    setSpawnBusy(true)
-    setSpawnStatus(null)
+    if (!url) return
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: trimmed }),
       })
-      const text = await res.text()
-      if (!res.ok) {
-        setSpawnStatus(`Spawn failed (${res.status}): ${text}`)
-        return
-      }
-      setSpawnStatus(`Started: ${trimmed}`)
-    } catch (e) {
-      setSpawnStatus(`Network error: ${e}`)
-    } finally {
-      setSpawnBusy(false)
+      await res.text()
+    } catch {
+      /* noop */
     }
-  }
-
-  async function runNativeInCompositor() {
-    setSpawnClicks((c) => c + 1)
-    await spawnInCompositor(spawnCommand(), 'Enter a command above (e.g. foot).')
   }
 
   async function refreshProgramsMenuItems() {
@@ -1988,17 +1957,6 @@ function App() {
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
     let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
-    const refreshSpawnUrl = () => {
-      const u = window.__DERP_SPAWN_URL
-      setSpawnUrlLine(
-        u
-          ? `Spawn endpoint: ${u}`
-          : 'Spawn endpoint: not set yet — waiting for cef_host inject, or not in CEF',
-      )
-    }
-    refreshSpawnUrl()
-    spawnPoll = setInterval(refreshSpawnUrl, 400)
-
     let compositorSyncAttempts = 0
     let nativeWireHadBeenReady = false
     const tryRequestCompositorSync = () => {
@@ -2083,7 +2041,7 @@ function App() {
         const fid = focusedWindowId()
         const wmap = allWindowsMap()
         if (action === 'launch_terminal') {
-          void spawnInCompositor(spawnCommand())
+          void spawnInCompositor('foot')
           return
         }
         if (action === 'close_focused') {
@@ -2723,7 +2681,6 @@ function App() {
     })
   })
   onCleanup(() => {
-    if (spawnPoll !== undefined) clearInterval(spawnPoll)
     if (wireWatchPoll !== undefined) clearInterval(wireWatchPoll)
   })
 
@@ -2884,10 +2841,7 @@ function App() {
               </div>
             </Show>
             <div>
-              Pointer downs: <strong>{rootPointerDowns()}</strong> / btn <strong>{btnPointerDowns()}</strong>
-            </div>
-            <div>
-              Spawn clicks: <strong>{spawnClicks()}</strong>
+              Pointer downs: <strong>{rootPointerDowns()}</strong>
             </div>
           </div>
         </details>
@@ -3017,15 +2971,11 @@ function App() {
                     }))
                     shellWireSend('set_output_layout', JSON.stringify({ screens }))
                   }}
-                  spawnUrlLine={spawnUrlLine}
-                  spawnCommand={spawnCommand}
-                  setSpawnCommand={setSpawnCommand}
-                  spawnBusy={spawnBusy}
-                  spawnStatus={spawnStatus}
-                  onRunNative={() => void runNativeInCompositor()}
-                  onSpawnBtnPointerDown={() => setBtnPointerDowns((n) => n + 1)}
                   monitorRefreshLabel={monitorRefreshLabel}
                   keyboardLayoutLabel={keyboardLayoutLabel}
+                  setDesktopBackgroundJson={(json) =>
+                    shellWireSend('set_desktop_background', json)
+                  }
                 />
               </Show>
             </ShellWindowFrame>

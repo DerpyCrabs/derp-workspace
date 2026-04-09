@@ -298,6 +298,27 @@ pub struct ShellDmaElement {
 }
 
 impl ShellDmaElement {
+    pub(crate) fn wallpaper_quad(
+        id: Id,
+        context_id: ContextId<GlesTexture>,
+        location: Point<f64, Physical>,
+        dst_logical_size: Size<i32, Logical>,
+        texture: GlesTexture,
+        buffer_src: Rectangle<f64, Buffer>,
+        commit: CommitCounter,
+    ) -> Self {
+        Self {
+            id,
+            context_id,
+            location,
+            dst_logical_size,
+            texture,
+            buffer_src,
+            commit,
+            damage_phys: None,
+        }
+    }
+
     fn physical_size(&self, scale: Scale<f64>) -> Size<i32, Physical> {
         let logical_size = self.dst_logical_size;
         ((logical_size.to_f64().to_physical(scale).to_point() + self.location).to_i32_round()
@@ -478,6 +499,8 @@ where
     Pointer(FractionalDamageElement<WaylandSurfaceRenderElement<GlesRenderer>>),
     CursorTex(FractionalDamageElement<ShellCursorElement>),
     TilePreview(SolidColorRenderElement),
+    BackdropSolid(SolidColorRenderElement),
+    BackdropTex(ShellDmaElement),
     #[doc(hidden)]
     _Catcher(Infallible),
 }
@@ -494,6 +517,8 @@ where
             DesktopStack::Pointer(x) => x.id(),
             DesktopStack::CursorTex(x) => x.id(),
             DesktopStack::TilePreview(x) => x.id(),
+            DesktopStack::BackdropSolid(x) => x.id(),
+            DesktopStack::BackdropTex(x) => x.id(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -506,6 +531,8 @@ where
             DesktopStack::Pointer(x) => x.current_commit(),
             DesktopStack::CursorTex(x) => x.current_commit(),
             DesktopStack::TilePreview(x) => x.current_commit(),
+            DesktopStack::BackdropSolid(x) => x.current_commit(),
+            DesktopStack::BackdropTex(x) => x.current_commit(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -518,6 +545,8 @@ where
             DesktopStack::Pointer(x) => x.location(scale),
             DesktopStack::CursorTex(x) => x.location(scale),
             DesktopStack::TilePreview(x) => x.location(scale),
+            DesktopStack::BackdropSolid(x) => x.location(scale),
+            DesktopStack::BackdropTex(x) => x.location(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -530,6 +559,8 @@ where
             DesktopStack::Pointer(x) => x.src(),
             DesktopStack::CursorTex(x) => x.src(),
             DesktopStack::TilePreview(x) => x.src(),
+            DesktopStack::BackdropSolid(x) => x.src(),
+            DesktopStack::BackdropTex(x) => x.src(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -542,6 +573,8 @@ where
             DesktopStack::Pointer(x) => x.transform(),
             DesktopStack::CursorTex(x) => x.transform(),
             DesktopStack::TilePreview(x) => x.transform(),
+            DesktopStack::BackdropSolid(x) => x.transform(),
+            DesktopStack::BackdropTex(x) => x.transform(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -554,6 +587,8 @@ where
             DesktopStack::Pointer(x) => x.geometry(scale),
             DesktopStack::CursorTex(x) => x.geometry(scale),
             DesktopStack::TilePreview(x) => x.geometry(scale),
+            DesktopStack::BackdropSolid(x) => x.geometry(scale),
+            DesktopStack::BackdropTex(x) => x.geometry(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -570,6 +605,8 @@ where
             DesktopStack::Pointer(x) => x.damage_since(scale, commit),
             DesktopStack::CursorTex(x) => x.damage_since(scale, commit),
             DesktopStack::TilePreview(x) => x.damage_since(scale, commit),
+            DesktopStack::BackdropSolid(x) => x.damage_since(scale, commit),
+            DesktopStack::BackdropTex(x) => x.damage_since(scale, commit),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -582,6 +619,8 @@ where
             DesktopStack::Pointer(x) => x.opaque_regions(scale),
             DesktopStack::CursorTex(x) => x.opaque_regions(scale),
             DesktopStack::TilePreview(x) => x.opaque_regions(scale),
+            DesktopStack::BackdropSolid(x) => x.opaque_regions(scale),
+            DesktopStack::BackdropTex(x) => x.opaque_regions(scale),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -594,6 +633,8 @@ where
             DesktopStack::Pointer(x) => x.alpha(),
             DesktopStack::CursorTex(x) => x.alpha(),
             DesktopStack::TilePreview(x) => x.alpha(),
+            DesktopStack::BackdropSolid(x) => x.alpha(),
+            DesktopStack::BackdropTex(x) => x.alpha(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -606,6 +647,8 @@ where
             DesktopStack::Pointer(x) => x.kind(),
             DesktopStack::CursorTex(x) => x.kind(),
             DesktopStack::TilePreview(x) => x.kind(),
+            DesktopStack::BackdropSolid(x) => x.kind(),
+            DesktopStack::BackdropTex(x) => x.kind(),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -634,6 +677,12 @@ where
             DesktopStack::TilePreview(x) => {
                 RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
             }
+            DesktopStack::BackdropSolid(x) => {
+                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+            }
+            DesktopStack::BackdropTex(x) => {
+                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+            }
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
@@ -649,6 +698,8 @@ where
             DesktopStack::Pointer(x) => x.underlying_storage(renderer),
             DesktopStack::CursorTex(x) => x.underlying_storage(renderer),
             DesktopStack::TilePreview(x) => x.underlying_storage(renderer),
+            DesktopStack::BackdropSolid(x) => x.underlying_storage(renderer),
+            DesktopStack::BackdropTex(x) => x.underlying_storage(renderer),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }

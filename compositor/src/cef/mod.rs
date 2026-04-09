@@ -4,6 +4,8 @@ pub mod compositor_tx;
 mod compositor_downlink;
 mod control_server;
 mod desktop_apps;
+mod gnome_background;
+mod gnome_wallpaper_list;
 mod frame_sink;
 mod osr_view_state;
 mod runner;

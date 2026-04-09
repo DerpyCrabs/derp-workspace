@@ -194,6 +194,8 @@ impl DrmHead {
                 }
             };
 
+            let cc = state.desktop_background_config.solid_rgba;
+
             let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
                 if state.shell_presentation_fullscreen {
                     match space_render_elements(renderer, [&state.space], output, 1.0) {
@@ -211,6 +213,15 @@ impl DrmHead {
                                     ),
                                 )
                             }));
+                            let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
+                                state, output, output_scale,
+                            );
+                            for s in backdrop.solids {
+                                render_elements.push(DesktopStack::BackdropSolid(s));
+                            }
+                            for t in backdrop.textures {
+                                render_elements.push(DesktopStack::BackdropTex(t));
+                            }
                             let age_for_render = if state.shell_exclusion_zones_need_full_damage {
                                 0usize
                             } else {
@@ -221,7 +232,7 @@ impl DrmHead {
                                 &mut fb_target,
                                 age_for_render,
                                 &render_elements,
-                                [0.1, 0.1, 0.1, 1.0],
+                                [cc[0], cc[1], cc[2], cc[3]],
                             );
                             if out.is_ok() {
                                 state.shell_exclusion_zones_need_full_damage = false;
@@ -257,6 +268,15 @@ impl DrmHead {
                     if let Some(ref el) = shell_dma {
                         render_elements.push(DesktopStack::ShellDma(el));
                     }
+                    let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
+                        state, output, output_scale,
+                    );
+                    for s in backdrop.solids {
+                        render_elements.push(DesktopStack::BackdropSolid(s));
+                    }
+                    for t in backdrop.textures {
+                        render_elements.push(DesktopStack::BackdropTex(t));
+                    }
                     let age_for_render = if state.shell_exclusion_zones_need_full_damage {
                         0usize
                     } else {
@@ -267,7 +287,7 @@ impl DrmHead {
                         &mut fb_target,
                         age_for_render,
                         &render_elements,
-                        [0.1, 0.1, 0.1, 1.0],
+                        [cc[0], cc[1], cc[2], cc[3]],
                     );
                     if out.is_ok() {
                         state.shell_exclusion_zones_need_full_damage = false;
@@ -620,6 +640,10 @@ impl DrmSession {
         let renderer = self.renderer.clone();
         let loop_handle = self.loop_handle.clone();
         let drm_ref = &self.drm;
+
+        if let Ok(mut rg) = renderer.lock() {
+            state.sync_desktop_wallpaper_upload(&mut *rg);
+        }
 
         let mut any_advanced = false;
         for head in &mut self.heads {

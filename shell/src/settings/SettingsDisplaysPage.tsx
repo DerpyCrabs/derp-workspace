@@ -1,5 +1,5 @@
 import { For, Show } from 'solid-js'
-import type { Accessor, Setter } from 'solid-js'
+import type { Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
 import { TransformPicker } from '../TransformPicker'
 import type { SettingsLayoutScreen } from './settingsTypes'
@@ -17,13 +17,6 @@ export type SettingsDisplaysPageProps = {
   setUiScale: (pct: 100 | 150 | 200) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
-  spawnUrlLine: Accessor<string>
-  spawnCommand: Accessor<string>
-  setSpawnCommand: Setter<string>
-  spawnBusy: Accessor<boolean>
-  spawnStatus: Accessor<string | null>
-  onRunNative: () => void
-  onSpawnBtnPointerDown: () => void
 }
 
 export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
@@ -201,41 +194,6 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           >
             Apply layout to compositor
           </button>
-        </Show>
-      </div>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
-          Run in compositor
-        </p>
-        <p class="mb-[0.85rem] max-w-[28rem] text-[0.72rem] leading-snug break-all opacity-[0.88]">
-          {props.spawnUrlLine()}
-        </p>
-        <label class="mb-[0.65rem] block max-w-[28rem]">
-          <span class="mb-[0.35rem] block text-[0.72rem] opacity-[0.88]">
-            Command (`sh -c`, Wayland display)
-          </span>
-          <input
-            class="box-border w-full rounded-[0.4rem] border border-white/25 bg-black/35 px-[0.55rem] py-[0.45rem] text-[0.9rem] text-inherit"
-            type="text"
-            value={props.spawnCommand()}
-            onInput={(e) => props.setSpawnCommand(e.currentTarget.value)}
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </label>
-        <button
-          type="button"
-          class="mt-1 cursor-pointer rounded-lg border-0 bg-shell-btn-primary px-[1.2rem] py-[0.6rem] text-[0.95rem] font-semibold tracking-wide text-neutral-900 shadow-[0_0.15rem_0.5rem_rgba(0,0,0,0.25)] hover:brightness-[1.06] disabled:cursor-wait disabled:opacity-65"
-          disabled={props.spawnBusy()}
-          onPointerDown={() => props.onSpawnBtnPointerDown()}
-          onClick={() => props.onRunNative()}
-        >
-          {props.spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
-        </button>
-        <Show when={props.spawnStatus()}>
-          <p class="mt-[0.85rem] max-w-[28rem] text-[0.875rem] leading-snug opacity-90">
-            {props.spawnStatus()!}
-          </p>
         </Show>
       </div>
     </div>
