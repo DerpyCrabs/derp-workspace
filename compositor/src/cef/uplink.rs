@@ -265,4 +265,16 @@ impl UplinkToCompositor {
             s.shell_backed_debug_close();
         });
     }
+
+    pub fn shell_backed_settings_open(&self) {
+        self.run(move |s| {
+            s.shell_backed_settings_open();
+        });
+    }
+
+    pub fn shell_backed_settings_close(&self) {
+        self.run(move |s| {
+            s.shell_backed_settings_close();
+        });
+    }
 }

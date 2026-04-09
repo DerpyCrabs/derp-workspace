@@ -226,6 +226,12 @@ fn handle_uplink_list(
         "backed_debug_close" => {
             uplink.shell_backed_debug_close();
         }
+        "backed_settings_open" => {
+            uplink.shell_backed_settings_open();
+        }
+        "backed_settings_close" => {
+            uplink.shell_backed_settings_close();
+        }
         "shell_ipc_pong" => {
             uplink.shell_ipc_pong();
         }
@@ -319,7 +325,10 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                 }
                 "quit" => {}
-                "backed_debug_open" | "backed_debug_close" => {}
+                "backed_debug_open"
+                | "backed_debug_close"
+                | "backed_settings_open"
+                | "backed_settings_close" => {}
                 "shell_blur_ui_window" => {}
                 "shell_ui_grab_end" => {}
                 "resize_shell_grab_end" => {}
@@ -701,7 +710,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_debug_open, backed_debug_close, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, context_menu)"
+                        "unknown op (use close, quit, backed_debug_open, backed_debug_close, backed_settings_open, backed_settings_close, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, context_menu)"
                     );
                 }
             }

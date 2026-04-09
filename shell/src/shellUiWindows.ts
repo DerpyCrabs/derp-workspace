@@ -1,11 +1,16 @@
 import { clientRectToGlobalLogical } from './shellCoords'
 
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
+export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
 
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
 
 export function isShellUiToolboxRow(shellFlags: number, windowId: number): boolean {
-  return (shellFlags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 || windowId === SHELL_UI_DEBUG_WINDOW_ID
+  return (
+    (shellFlags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
+    windowId === SHELL_UI_DEBUG_WINDOW_ID ||
+    windowId === SHELL_UI_SETTINGS_WINDOW_ID
+  )
 }
 
 export type ShellUiMeasureEnv = {

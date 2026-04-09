@@ -58,24 +58,4 @@ body {
       max(96px, 7.5vw) max(96px, 7.5vw);
     color: hsl(0 0% 96%);
   }
-
-  .shell-ruler-ticks-h {
-    background: repeating-linear-gradient(
-      to right,
-      transparent 0,
-      transparent 9px,
-      rgba(255, 255, 255, 0.22) 9px,
-      rgba(255, 255, 255, 0.22) 10px
-    );
-  }
-
-  .shell-ruler-ticks-v {
-    background: repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent 9px,
-      rgba(255, 255, 255, 0.22) 9px,
-      rgba(255, 255, 255, 0.22) 10px
-    );
-  }
 }
