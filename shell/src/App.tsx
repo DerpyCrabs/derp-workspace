@@ -68,12 +68,10 @@ import {
   type Rect as TileRect,
 } from './tileZones'
 import { Taskbar } from './Taskbar'
-import {
-  atlasTopFromLayout,
-  logicalWorkspaceBoundsFromScreens,
-  menuPlacementForCompositor,
-  type ShellContextMenuItem,
-} from './contextMenu'
+import { atlasTopFromLayout, type ShellContextMenuItem } from './contextMenu'
+import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
+import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
+import { hideShellFloatingWire } from './shellFloatingWire'
 import fuzzysort from 'fuzzysort'
 import { getMonitorLayout } from './tilingConfig'
 
@@ -636,36 +634,6 @@ function shellWireSend(
   return true
 }
 
-function shellContextMenuWire(
-  visible: boolean,
-  bx: number,
-  by: number,
-  bw: number,
-  bh: number,
-  gx: number,
-  gy: number,
-  gw: number,
-  gh: number,
-): boolean {
-  const fn = window.__derpShellWireSend as
-    | ((
-        op: 'context_menu',
-        vis: number,
-        bx: number,
-        by: number,
-        bw: number,
-        bh: number,
-        gx: number,
-        gy: number,
-        gw: number,
-        gh: number,
-      ) => void)
-    | undefined
-  if (typeof fn !== 'function') return false
-  fn('context_menu', visible ? 1 : 0, bx, by, bw, bh, gx, gy, gw, gh)
-  return true
-}
-
 function canSessionControl(): boolean {
   return typeof window.__derpShellWireSend === 'function' || shellHttpBase() !== null
 }
@@ -779,6 +747,8 @@ function App() {
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
   const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
+  const atlasSelectClosers = new Set<() => boolean>()
+  const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
@@ -788,6 +758,24 @@ function App() {
       setPowerMenuHighlightIdx(0)
     }
   })
+
+  function hideContextMenu() {
+    setCtxMenuOpen(false)
+    hideShellFloatingWire()
+  }
+  function closeAllAtlasSelects(): boolean {
+    let any = false
+    for (const f of atlasSelectClosers) {
+      if (f()) any = true
+    }
+    return any
+  }
+  function acquireAtlasOverlayPointer() {
+    setAtlasOverlayPointerUsers((n) => n + 1)
+  }
+  function releaseAtlasOverlayPointer() {
+    setAtlasOverlayPointerUsers((n) => Math.max(0, n - 1))
+  }
 
   const canvasCss = createMemo(() => {
     const g = outputGeom()
@@ -1759,6 +1747,7 @@ function App() {
   }
 
   function openProgramsMenu() {
+    closeAllAtlasSelects()
     anchorProgramsMenuFromToggle()
     setCtxMenuKind('programs')
     setProgramsMenuBusy(true)
@@ -1788,6 +1777,7 @@ function App() {
       setCtxMenuOpen(false)
       return
     }
+    closeAllAtlasSelects()
     const r = e.currentTarget.getBoundingClientRect()
     setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
     setCtxMenuKind('programs')
@@ -1807,6 +1797,7 @@ function App() {
       setCtxMenuOpen(false)
       return
     }
+    closeAllAtlasSelects()
     const r = e.currentTarget.getBoundingClientRect()
     setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
     setCtxMenuKind('power')
@@ -1889,7 +1880,7 @@ function App() {
     if (!item || n === 0) return
     item.action()
     setCtxMenuOpen(false)
-    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+    hideShellFloatingWire()
   }
 
   function movePowerMenuHighlight(delta: number) {
@@ -1913,7 +1904,7 @@ function App() {
     if (!item || item.disabled) return
     item.action()
     setCtxMenuOpen(false)
-    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+    hideShellFloatingWire()
   }
 
   createEffect(() => {
@@ -2036,7 +2027,8 @@ function App() {
       const d = ce.detail
       if (!d || typeof d !== 'object' || !('type' in d)) return
       if (d.type === 'context_menu_dismiss') {
-        setCtxMenuOpen(false)
+        closeAllAtlasSelects()
+        hideContextMenu()
         return
       }
       if (d.type === 'programs_menu_toggle') {
@@ -2578,12 +2570,12 @@ function App() {
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
 
-    const hideContextMenu = () => {
-      setCtxMenuOpen(false)
-      shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
-    }
     const onCtxKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (closeAllAtlasSelects()) {
+          e.preventDefault()
+          return
+        }
         hideContextMenu()
         return
       }
@@ -2720,15 +2712,12 @@ function App() {
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
-      shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
+      hideShellFloatingWire()
       return
     }
     void menuListItems().length
     void screenDraft.rows.length
     const anch = ctxMenuAnchor()
-    const ax = anch.x
-    const ay = anch.y
-    const alignAboveY = anch.alignAboveY ?? null
     const rid = requestAnimationFrame(() => {
       const main = mainRef
       const atlas = menuAtlasHostRef
@@ -2736,31 +2725,19 @@ function App() {
       const og = outputGeom()
       const ph = outputPhysical()
       if (!main || !atlas || !panel || !og || !ph) return
-      const mainRect = main.getBoundingClientRect()
-      const wsBounds = logicalWorkspaceBoundsFromScreens(
-        screenDraft.rows,
-        layoutCanvasOrigin(),
-        og.w,
-        og.h,
-        ph.h,
-        contextMenuAtlasBufferH(),
-      )
-      const args = menuPlacementForCompositor(
-        mainRect,
-        atlas.getBoundingClientRect(),
-        panel.getBoundingClientRect(),
-        og.w,
-        og.h,
-        ph.w,
-        ph.h,
-        contextMenuAtlasBufferH(),
-        ax,
-        ay,
-        alignAboveY,
-        layoutCanvasOrigin(),
-        wsBounds,
-      )
-      shellContextMenuWire(true, args.bx, args.by, args.bw, args.bh, args.gx, args.gy, args.gw, args.gh)
+      pushShellFloatingWireFromDom({
+        main,
+        atlasHost: atlas,
+        panel,
+        anchor: { x: anch.x, y: anch.y, alignAboveY: anch.alignAboveY },
+        canvasW: og.w,
+        canvasH: og.h,
+        physicalW: ph.w,
+        physicalH: ph.h,
+        contextMenuAtlasBufferH: contextMenuAtlasBufferH(),
+        screens: screenDraft.rows,
+        layoutOrigin: layoutCanvasOrigin(),
+      })
     })
     onCleanup(() => cancelAnimationFrame(rid))
   })
@@ -2925,7 +2902,29 @@ function App() {
     )
   }
 
+  const shellFloatingRegistry: ShellFloatingRegistry = {
+    registerAtlasSelectCloser(fn) {
+      atlasSelectClosers.add(fn)
+    },
+    unregisterAtlasSelectCloser(fn) {
+      atlasSelectClosers.delete(fn)
+    },
+    closeAllAtlasSelects,
+    dismissContextMenus: hideContextMenu,
+    acquireAtlasOverlayPointer,
+    releaseAtlasOverlayPointer,
+    mainEl: () => mainRef,
+    atlasHostEl: () => menuAtlasHostRef,
+    atlasBufferH: contextMenuAtlasBufferH,
+    menuAtlasTopPx: shellMenuAtlasTop,
+    outputGeom,
+    outputPhysical,
+    layoutCanvasOrigin,
+    screenDraftRows: () => screenDraft.rows,
+  }
+
   return (
+    <ShellFloatingProvider value={shellFloatingRegistry}>
     <main
       data-shell-main
       classList={{
@@ -3114,8 +3113,8 @@ function App() {
       <div
         class="relative z-[90000] contain-layout contain-paint overflow-hidden"
         classList={{
-          'pointer-events-auto': ctxMenuOpen(),
-          'pointer-events-none': !ctxMenuOpen(),
+          'pointer-events-auto': ctxMenuOpen() || atlasOverlayPointerUsers() > 0,
+          'pointer-events-none': !ctxMenuOpen() && atlasOverlayPointerUsers() === 0,
         }}
         ref={(el) => {
           menuAtlasHostRef = el
@@ -3228,6 +3227,7 @@ function App() {
         {crosshairDebugOverlay()}
       </div>
     </main>
+    </ShellFloatingProvider>
   )
 }
 
