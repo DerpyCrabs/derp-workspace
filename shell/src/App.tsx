@@ -30,12 +30,18 @@ import {
   clientPointToCanvasLocal,
   clientPointerDeltaToCanvasLogical,
   clientPointToGlobalLogical,
+  clientRectToGlobalLogical,
   findAdjacentMonitor,
   pickScreenForPointerSnap,
   pickScreenForWindow,
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
 } from './shellCoords'
+import {
+  isShellUiToolboxRow,
+  SHELL_UI_DEBUG_WINDOW_ID,
+  scheduleShellUiWindowsSync,
+} from './shellUiWindows'
 import {
   assistGridGutterPx,
   assistSpanFromWorkAreaPoint,
@@ -92,6 +98,10 @@ declare global {
         | 'resize_shell_grab_begin'
         | 'resize_shell_grab_end'
         | 'taskbar_activate'
+        | 'shell_focus_ui_window'
+        | 'shell_blur_ui_window'
+        | 'shell_ui_grab_begin'
+        | 'shell_ui_grab_end'
         | 'minimize'
         | 'set_geometry'
         | 'set_fullscreen'
@@ -99,11 +109,14 @@ declare global {
         | 'presentation_fullscreen'
         | 'set_output_layout'
         | 'set_exclusion_zones'
+        | 'set_shell_ui_windows'
         | 'set_shell_primary'
         | 'set_ui_scale'
         | 'set_tile_preview'
         | 'set_chrome_metrics'
-        | 'context_menu',
+        | 'context_menu'
+        | 'backed_debug_open'
+        | 'backed_debug_close',
       arg?: number | string,
       arg2?: number,
       arg3?: number,
@@ -284,7 +297,6 @@ type DerpShellDetail =
       muted: boolean
       state_known: boolean
     }
-
 type DesktopAppEntry = {
   name: string
   exec: string
@@ -306,6 +318,7 @@ type DerpWindow = {
   maximized: boolean
   fullscreen: boolean
   client_side_decoration?: boolean
+  shell_flags: number
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -355,6 +368,11 @@ function buildWindowsMapFromList(
         : (prev?.get(wid)?.client_side_decoration ?? false)
     const outputName =
       typeof r.output_name === 'string' ? r.output_name : ''
+    const sfRaw = r.shell_flags
+    const shell_flags =
+      typeof sfRaw === 'number' && Number.isFinite(sfRaw)
+        ? Math.trunc(sfRaw)
+        : (prev?.get(wid)?.shell_flags ?? 0)
     next.set(wid, {
       window_id: wid,
       surface_id: sid,
@@ -369,6 +387,7 @@ function buildWindowsMapFromList(
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
       client_side_decoration: csd,
+      shell_flags,
     })
   }
   return next
@@ -396,6 +415,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         maximized: false,
         fullscreen: false,
         client_side_decoration: !!detail.client_side_decoration,
+        shell_flags: next.get(wid)?.shell_flags ?? 0,
       })
       break
     }
@@ -497,33 +517,6 @@ function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   console.log(`[derp-shell-move] ${msg}${extra}`)
 }
 
-function clientRectToGlobalLogical(
-  mainRect: DOMRect,
-  elRect: DOMRect,
-  canvasW: number,
-  canvasH: number,
-  origin: { x: number; y: number } | null,
-) {
-  const ox = origin?.x ?? 0
-  const oy = origin?.y ?? 0
-  const cw = Math.max(1, canvasW)
-  const ch = Math.max(1, canvasH)
-  const mw = Math.max(1, mainRect.width)
-  const mh = Math.max(1, mainRect.height)
-  const sx = cw / mw
-  const sy = ch / mh
-  const lx = (elRect.left - mainRect.left) * sx
-  const ly = (elRect.top - mainRect.top) * sy
-  const lw = elRect.width * sx
-  const lh = elRect.height * sy
-  return {
-    x: Math.round(lx + ox),
-    y: Math.round(ly + oy),
-    w: Math.max(1, Math.round(lw)),
-    h: Math.max(1, Math.round(lh)),
-  }
-}
-
 function shellWireSend(
   op:
     | 'close'
@@ -540,6 +533,10 @@ function shellWireSend(
     | 'resize_shell_grab_begin'
     | 'resize_shell_grab_end'
     | 'taskbar_activate'
+    | 'shell_focus_ui_window'
+    | 'shell_blur_ui_window'
+    | 'shell_ui_grab_begin'
+    | 'shell_ui_grab_end'
     | 'minimize'
     | 'set_geometry'
     | 'set_fullscreen'
@@ -547,10 +544,13 @@ function shellWireSend(
     | 'presentation_fullscreen'
     | 'set_output_layout'
     | 'set_exclusion_zones'
+    | 'set_shell_ui_windows'
     | 'set_shell_primary'
     | 'set_ui_scale'
     | 'set_tile_preview'
-    | 'set_chrome_metrics',
+    | 'set_chrome_metrics'
+    | 'backed_debug_open'
+    | 'backed_debug_close',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -599,12 +599,16 @@ function shellWireSend(
     op === 'quit' ||
     op === 'request_compositor_sync' ||
     op === 'shell_ipc_pong' ||
-    op === 'resize_shell_grab_end'
+    op === 'resize_shell_grab_end' ||
+    op === 'backed_debug_open' ||
+    op === 'backed_debug_close'
   ) {
     fn(op)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_exclusion_zones' && typeof arg === 'string') {
+    fn(op, arg)
+  } else if (op === 'set_shell_ui_windows' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {
     fn(op, arg)
@@ -621,6 +625,8 @@ function shellWireSend(
     fn(op, arg, arg2, arg3, arg4, arg5)
   } else if (op === 'set_chrome_metrics' && typeof arg === 'number' && arg2 !== undefined) {
     fn(op, arg, arg2)
+  } else if (op === 'shell_blur_ui_window' || op === 'shell_ui_grab_end') {
+    fn(op)
   } else {
     fn(op, arg)
   }
@@ -745,7 +751,6 @@ function App() {
   const [tilingCfgRev, setTilingCfgRev] = createSignal(0)
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
-  const [debugPanelOpen, setDebugPanelOpen] = createSignal(false)
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
@@ -858,10 +863,17 @@ function App() {
     return workspacePartition().primary
   })
 
+  const allWindowsMap = createMemo(() => windows())
+
+  const debugHudFrameVisible = createMemo(() => {
+    const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
+    return !!w && !w.minimized
+  })
+
   /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
    * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
   const windowsList = createMemo(() =>
-    Array.from(windows().values()).sort((a, b) => a.window_id - b.window_id),
+    Array.from(allWindowsMap().values()).sort((a, b) => a.window_id - b.window_id),
   )
 
   const windowsByMonitor = createMemo(() => {
@@ -914,7 +926,7 @@ function App() {
     const st = perMonitorTiles.stateFor(mon.name)
     for (const [wid, e] of st.tiledWindows) {
       if (wid === excludeWindowId) continue
-      const win = windows().get(wid)
+      const win = allWindowsMap().get(wid)
       if (!win || win.minimized) continue
       if (!windowOnMonitor(win, mon, list, co)) continue
       const g = rectCanvasLocalToGlobal(win.x, win.y, win.width, win.height, co)
@@ -950,6 +962,7 @@ function App() {
     const work = monitorWorkAreaGlobal(mon, reserveTb)
     const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
     const candidates = windowsList().filter((w) => {
+      if (w.window_id === SHELL_UI_DEBUG_WINDOW_ID) return false
       if (w.minimized) return false
       if ((w.output_name || fb) !== monitorName) return false
       if (w.fullscreen || w.maximized) return false
@@ -1096,6 +1109,11 @@ function App() {
     for (const decoWin of windowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       if (decoWin.minimized || decoWin.client_side_decoration) continue
+      const fid = focusedWindowId()
+      const frow = fid != null ? windows().get(fid) : undefined
+      const nativeHudFocus =
+        frow != null && !isShellUiToolboxRow(frow.shell_flags, frow.window_id)
+      if (nativeHudFocus && isShellUiToolboxRow(decoWin.shell_flags, decoWin.window_id)) continue
       const deco = ssdDecorationExclusionRects({
         ...decoWin,
         snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
@@ -1136,8 +1154,37 @@ function App() {
     setSnapChromeRev((n) => n + 1)
   }
 
+  function applyGeometryToWindowMaps(
+    wid: number,
+    loc: { x: number; y: number; w: number; h: number },
+    patch: Partial<DerpWindow> = {},
+  ) {
+    setWindows((m) => {
+      const cur = m.get(wid)
+      if (!cur) return m
+      const n = new Map(m)
+      n.set(wid, {
+        ...cur,
+        ...patch,
+        x: loc.x,
+        y: loc.y,
+        width: loc.w,
+        height: loc.h,
+      })
+      return n
+    })
+  }
+
+  function minimizeDebugShellWindow() {
+    shellWireSend('minimize', SHELL_UI_DEBUG_WINDOW_ID)
+  }
+
+  function openDebugShellWindow() {
+    shellWireSend('backed_debug_open')
+  }
+
   function toggleShellMaximizeForWindow(wid: number) {
-    const w = windows().get(wid)
+    const w = allWindowsMap().get(wid)
     if (!w) return
     if (w.maximized) {
       shellWireSend('set_maximized', wid, 0)
@@ -1149,10 +1196,10 @@ function App() {
     scheduleExclusionZonesSync()
     floatBeforeMaximize.set(wid, { x: w.x, y: w.y, w: w.width, h: w.height })
     const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
-    const mon = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
-    if (!mon) return
-    const reserveTb = reserveTaskbarForMon(mon)
-    const r = shellMaximizedWorkAreaGlobalRect(mon, reserveTb)
+    const mon2 = pickScreenForWindow(w, list, layoutCanvasOrigin()) ?? list[0] ?? null
+    if (!mon2) return
+    const reserveTb = reserveTaskbarForMon(mon2)
+    const r = shellMaximizedWorkAreaGlobalRect(mon2, reserveTb)
     shellWireSend('set_geometry', wid, r.x, r.y, r.w, r.h, SHELL_LAYOUT_MAXIMIZED)
   }
 
@@ -1221,7 +1268,7 @@ function App() {
     setAssistOverlay(null)
     const main = mainRef
     const og = outputGeom()
-    const w = windows().get(windowId)
+    const w = allWindowsMap().get(windowId)
     if (main && og && w) {
       const mainRect = main.getBoundingClientRect()
       const ptrCl = clientPointToCanvasLocal(clientX, clientY, mainRect, og.w, og.h)
@@ -1251,20 +1298,7 @@ function App() {
         const ny = ptrCl.y - grabDy + CHROME_BORDER_PX
         shellWireSend('set_geometry', windowId, nx, ny, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
         floatBeforeMaximize.delete(windowId)
-        setWindows((m) => {
-          const cur = m.get(windowId)
-          if (!cur) return m
-          const next = new Map(m)
-          next.set(windowId, {
-            ...cur,
-            x: nx,
-            y: ny,
-            width: rest.w,
-            height: rest.h,
-            maximized: false,
-          })
-          return next
-        })
+        applyGeometryToWindowMaps(windowId, { x: nx, y: ny, w: rest.w, h: rest.h }, { maximized: false })
         dragPreTileSnapshot.set(windowId, { x: nx, y: ny, w: rest.w, h: rest.h })
         scheduleExclusionZonesSync()
         bumpSnapChrome()
@@ -1276,20 +1310,7 @@ function App() {
           const nx = ptrCl.x - grabDx + CHROME_BORDER_PX
           const ny = ptrCl.y - grabDy + CHROME_BORDER_PX
           shellWireSend('set_geometry', windowId, nx, ny, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
-          setWindows((m) => {
-            const cur = m.get(windowId)
-            if (!cur) return m
-            const next = new Map(m)
-            next.set(windowId, {
-              ...cur,
-              x: nx,
-              y: ny,
-              width: tr.w,
-              height: tr.h,
-              maximized: false,
-            })
-            return next
-          })
+          applyGeometryToWindowMaps(windowId, { x: nx, y: ny, w: tr.w, h: tr.h }, { maximized: false })
         }
         perMonitorTiles.untileWindowEverywhere(windowId)
         perMonitorTiles.preTileGeometry.delete(windowId)
@@ -1492,20 +1513,7 @@ function App() {
       const gb = perMonitorTiles.stateFor(snapMon.name).tileWindow(id, droppedZone, workRect, occ)
       const loc = rectGlobalToCanvasLocal(gb.x, gb.y, gb.width, gb.height, co)
       shellWireSend('set_geometry', id, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
-      setWindows((m) => {
-        const cur = m.get(id)
-        if (!cur) return m
-        const next = new Map(m)
-        next.set(id, {
-          ...cur,
-          x: loc.x,
-          y: loc.y,
-          width: loc.w,
-          height: loc.h,
-          maximized: false,
-        })
-        return next
-      })
+      applyGeometryToWindowMaps(id, loc, { maximized: false })
       scheduleExclusionZonesSync()
       bumpSnapChrome()
     }
@@ -2004,6 +2012,12 @@ function App() {
   })
 
   onMount(() => {
+    const gw = window as unknown as { __derpSuppressShellUiPlacementHoles?: () => boolean }
+    gw.__derpSuppressShellUiPlacementHoles = () => {
+      const fid = focusedWindowId()
+      const row = fid != null ? windows().get(fid) : undefined
+      return row != null && !isShellUiToolboxRow(row.shell_flags, row.window_id)
+    }
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
@@ -2085,7 +2099,7 @@ function App() {
       if (d.type === 'keybind') {
         const action = typeof d.action === 'string' ? d.action : ''
         const fid = focusedWindowId()
-        const wmap = windows()
+        const wmap = allWindowsMap()
         if (action === 'launch_terminal') {
           void spawnInCompositor(spawnCommand())
           return
@@ -2302,8 +2316,22 @@ function App() {
       }
       if (d.type === 'focus_changed') {
         const fw = coerceShellWindowId(d.window_id)
-        setFocusedWindowId((prev) => (prev === fw ? prev : fw))
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        if (fw != null) {
+          setFocusedWindowId((prev) => (prev === fw ? prev : fw))
+        } else {
+          setFocusedWindowId((prev) => {
+            if (prev == null) return null
+            const prow = windows().get(prev)
+            if (prow && isShellUiToolboxRow(prow.shell_flags, prow.window_id)) {
+              return prev
+            }
+            return null
+          })
+        }
+        queueMicrotask(() => {
+          scheduleExclusionZonesSync()
+          scheduleShellUiWindowsSync()
+        })
         return
       }
       if (d.type === 'output_geometry') {
@@ -2413,6 +2441,7 @@ function App() {
         const wid = coerceShellWindowId(d.window_id)
         let relayoutMon: string | null = null
         if (wid !== null) {
+          setFocusedWindowId((prev) => (prev === wid ? null : prev))
           const w = windows().get(wid)
           if (w) relayoutMon = w.output_name || fallbackMonitorKey()
           perMonitorTiles.untileWindowEverywhere(wid)
@@ -2705,6 +2734,8 @@ function App() {
     document.addEventListener('pointerdown', onCtxPointerDown, true)
 
     onCleanup(() => {
+      const gw = window as unknown as { __derpSuppressShellUiPlacementHoles?: () => boolean }
+      delete gw.__derpSuppressShellUiPlacementHoles
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
       document.removeEventListener('keydown', onCtxKeyDown, true)
       document.removeEventListener('pointerdown', onCtxPointerDown, true)
@@ -2783,8 +2814,357 @@ function App() {
     onCleanup(() => cancelAnimationFrame(rid))
   })
 
+  function DebugHudContent() {
+    return (
+      <div class="px-8 py-6 text-center [&_strong]:text-shell-hud-strong">
+        <h1 class="mb-2 text-[2rem] font-bold tracking-wider">derp shell</h1>
+        <p class="mb-4 text-base opacity-[0.85]">SolidJS → CEF OSR → compositor</p>
+        <label class="mb-4 inline-flex cursor-pointer items-center justify-center gap-2 text-sm select-none opacity-92">
+          <input
+            type="checkbox"
+            class="h-4 w-4 accent-shell-accent-ring"
+            checked={crosshairCursor()}
+            onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
+          />
+          <span>Crosshair cursor</span>
+        </label>
+        <Show when={outputGeom()}>
+          {(g) => (
+            <p class="mb-3 text-[0.8rem] opacity-90">
+              {`OSR / compositor canvas (logical): `}
+              <strong>
+                {g().w}×{g().h}
+              </strong>
+            </p>
+          )}
+        </Show>
+        <div
+          class="mb-3 rounded-[0.45rem] border border-white/15 bg-black/40 px-[0.85rem] py-[0.65rem] text-left text-[0.8rem] leading-snug tabular-nums"
+          aria-live="polite"
+        >
+          <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
+            input debug
+          </span>
+          <span class="block">
+            <span>
+              Union from <code>screens[]</code>
+              {': '}
+            </span>
+            <strong>
+              {layoutUnionBbox()
+                ? `@ ${layoutUnionBbox()!.x},${layoutUnionBbox()!.y} (${layoutUnionBbox()!.w}×${layoutUnionBbox()!.h})`
+                : '—'}
+            </strong>
+          </span>
+          <span class="block">
+            <span>Compositor union min corner: </span>
+            <strong>
+              {layoutCanvasOrigin()
+                ? `@ ${layoutCanvasOrigin()!.x},${layoutCanvasOrigin()!.y}`
+                : '—'}
+            </strong>
+          </span>
+          <span class="block">
+            <span>Panel + taskbar host: </span>
+            <strong>
+              {panelHostForHud()
+                ? `${shellChromePrimaryName() ? `${shellChromePrimaryName()} (explicit) · ` : ''}${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
+                : '—'}
+            </strong>
+          </span>
+          <span class="block">
+            {`Viewport (CSS): `}
+            <strong>
+              {viewportCss().w}×{viewportCss().h}
+            </strong>
+            {` · devicePixelRatio `}
+            <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
+          </span>
+          <span class="block">
+            Windows (HUD list): <strong>{windowsList().length}</strong>
+          </span>
+          <div class="mt-2 border-t border-white/12 pt-[0.45rem]">
+            <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
+              Exclusion zones (global logical)
+            </span>
+            <Show
+              when={exclusionZonesHud().length > 0}
+              fallback={<span class="block opacity-[0.65]">—</span>}
+            >
+              <ul class="mt-1 max-h-[11rem] list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
+                <For each={exclusionZonesHud()}>
+                  {(z) => (
+                    <li class="my-0.5 list-disc">
+                      <span class="mr-[0.35rem] inline-block min-w-[7.5rem] opacity-90">
+                        {z.label}
+                      </span>
+                      <code class="font-mono text-[0.7rem] text-shell-hud-mono">
+                        {z.x},{z.y} · {z.w}×{z.h}
+                      </code>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
+          <Show when={crosshairCursor()}>
+            <span class="block">
+              {`Pointer (clientX/Y): `}
+              <strong>
+                {pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}
+              </strong>
+            </span>
+            <span class="block">
+              {`Pointer (in <main>): `}
+              <strong>
+                {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
+              </strong>
+            </span>
+          </Show>
+          <span class="block">
+            Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
+          </span>
+          <span class="block">
+            Pointer downs (button): <strong>{btnPointerDowns()}</strong>
+          </span>
+          <span class="block">
+            Spawn clicks handled: <strong>{spawnClicks()}</strong>
+          </span>
+        </div>
+        <div class="mb-3 max-w-none rounded-lg bg-black/25 px-3 py-[0.65rem] text-left">
+          <h2 class="mb-2 text-[0.72rem] font-semibold">Monitors</h2>
+          <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
+            <span class="mr-1 opacity-90">Shell panel + taskbar</span>
+            <button
+              type="button"
+              class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+              classList={{
+                'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                  !shellChromePrimaryName(),
+              }}
+              disabled={!canSessionControl() || !shellChromePrimaryName()}
+              title={
+                !canSessionControl() ? 'Needs cef_host wire' : 'Use top-left output (min x, then y)'
+              }
+              onClick={() => shellWireSend('set_shell_primary', '')}
+            >
+              Auto
+            </button>
+          </div>
+          <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
+            <span class="mr-1 opacity-90">UI scale (all heads)</span>
+            <button
+              type="button"
+              class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+              classList={{
+                'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                  uiScalePercent() === 100,
+              }}
+              disabled={!canSessionControl() || uiScalePercent() === 100}
+              title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+              onClick={() => {
+                shellWireSend('set_ui_scale', 100)
+              }}
+            >
+              100%
+            </button>
+            <button
+              type="button"
+              class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+              classList={{
+                'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                  uiScalePercent() === 150,
+              }}
+              disabled={!canSessionControl() || uiScalePercent() === 150}
+              title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+              onClick={() => {
+                shellWireSend('set_ui_scale', 150)
+              }}
+            >
+              150%
+            </button>
+            <button
+              type="button"
+              class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+              classList={{
+                'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                  uiScalePercent() === 200,
+              }}
+              disabled={!canSessionControl() || uiScalePercent() === 200}
+              title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
+              onClick={() => {
+                shellWireSend('set_ui_scale', 200)
+              }}
+            >
+              200%
+            </button>
+          </div>
+          <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-neutral-200">
+            <For
+              each={screenDraft.rows}
+              fallback={
+                <li class="list-disc text-[hsl(45,85%,72%)]">
+                  No outputs listed — compositor should send <code>output_layout</code> with one entry per
+                  head.
+                </li>
+              }
+            >
+              {(row) => (
+                <li class="mb-1.5 list-disc">
+                  <div class="flex flex-wrap items-start justify-between gap-x-2.5 gap-y-1.5">
+                    <div class="min-w-0 flex-[1_1_12rem]">
+                      <span class="font-semibold text-neutral-100">{row.name || '—'}</span>
+                      <span class="opacity-92">
+                        @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
+                        {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
+                        {!shellChromePrimaryName() &&
+                        row.name &&
+                        row.name === autoShellChromeMonitorName() ? (
+                          <span class="font-semibold text-shell-accent-badge"> · auto</span>
+                        ) : null}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 cursor-pointer whitespace-nowrap rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.45rem] py-0.5 text-[0.72rem] font-semibold tracking-wide text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+                      classList={{
+                        'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
+                          !!shellChromePrimaryName() && shellChromePrimaryName() === row.name,
+                      }}
+                      disabled={!canSessionControl()}
+                      title={
+                        !canSessionControl() ? 'Needs cef_host wire' : 'Show panel and taskbar on this head'
+                      }
+                      onClick={() => shellWireSend('set_shell_primary', row.name)}
+                    >
+                      Shell chrome
+                    </button>
+                  </div>
+                </li>
+              )}
+            </For>
+          </ul>
+          <Show
+            when={screenDraft.rows.length > 0}
+            fallback={
+              <p class="mb-2 text-[0.78rem] opacity-[0.88]">
+                Position/orientation editor unlocks once screens are known.
+              </p>
+            }
+          >
+            <For each={screenDraft.rows}>
+              {(row, i) => (
+                <div class="mb-[0.45rem] flex flex-wrap items-center gap-x-[0.65rem] gap-y-[0.45rem] text-[0.82rem]">
+                  <span class="min-w-0 flex-[1_1_6rem] font-mono opacity-92">{row.name}</span>
+                  <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
+                    x
+                    <input
+                      type="number"
+                      class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
+                      value={row.x}
+                      onInput={(e) =>
+                        setScreenDraft('rows', i(), 'x', Number(e.currentTarget.value) || 0)
+                      }
+                    />
+                  </label>
+                  <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
+                    y
+                    <input
+                      type="number"
+                      class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
+                      value={row.y}
+                      onInput={(e) =>
+                        setScreenDraft('rows', i(), 'y', Number(e.currentTarget.value) || 0)
+                      }
+                    />
+                  </label>
+                  <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide opacity-80 [&_.relative]:mt-[0.15rem]">
+                    orientation
+                    <TransformPicker
+                      value={row.transform}
+                      rowIndex={i()}
+                      openIndex={orientationPickerOpen}
+                      setOpenIndex={setOrientationPickerOpen}
+                      onChange={(v) => setScreenDraft('rows', i(), 'transform', v)}
+                    />
+                  </label>
+                  <LayoutTypePicker
+                    outputName={row.name}
+                    revision={tilingCfgRev}
+                    onPersisted={() => {
+                      setTilingCfgRev((n) => n + 1)
+                      const name = row.name
+                      queueMicrotask(() => {
+                        if (getMonitorLayout(name).layout.type === 'manual-snap') {
+                          perMonitorTiles.stateFor(name).clearAllTiled()
+                          bumpSnapChrome()
+                          scheduleExclusionZonesSync()
+                        } else {
+                          applyAutoLayout(name)
+                        }
+                      })
+                    }}
+                  />
+                  <span class="text-[0.75rem] opacity-65">
+                    {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
+                  </span>
+                </div>
+              )}
+            </For>
+            <button
+              type="button"
+              class="mt-2 cursor-pointer rounded-[0.35rem] border border-white/28 bg-[rgba(30,80,140,0.55)] px-3 py-1.5 text-[0.85rem] hover:bg-[rgba(40,100,170,0.65)]"
+              onClick={() => {
+                const screens = screenDraft.rows.map((r) => ({
+                  name: r.name,
+                  x: r.x,
+                  y: r.y,
+                  transform: r.transform,
+                }))
+                shellWireSend('set_output_layout', JSON.stringify({ screens }))
+              }}
+            >
+              Apply layout to compositor
+            </button>
+          </Show>
+        </div>
+        <p class="mb-[0.85rem] max-w-[22rem] text-left text-[0.72rem] leading-snug break-all opacity-[0.88]">
+          {spawnUrlLine()}
+        </p>
+        <label class="mb-[0.65rem] block max-w-[22rem] text-left">
+          <span class="mb-[0.35rem] block text-[0.72rem] opacity-[0.88]">
+            Command (`sh -c`, nested Wayland display)
+          </span>
+          <input
+            class="box-border w-full rounded-[0.4rem] border border-white/25 bg-black/35 px-[0.55rem] py-[0.45rem] text-[0.9rem] text-inherit"
+            type="text"
+            value={spawnCommand()}
+            onInput={(e) => setSpawnCommand(e.currentTarget.value)}
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </label>
+        <button
+          type="button"
+          class="mt-1 cursor-pointer rounded-lg border-0 bg-shell-btn-primary px-[1.2rem] py-[0.6rem] text-[0.95rem] font-semibold tracking-wide text-neutral-900 shadow-[0_0.15rem_0.5rem_rgba(0,0,0,0.25)] hover:brightness-[1.06] disabled:cursor-wait disabled:opacity-65"
+          disabled={spawnBusy()}
+          onPointerDown={() => setBtnPointerDowns((n) => n + 1)}
+          onClick={() => void runNativeInCompositor()}
+        >
+          {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
+        </button>
+        {spawnStatus() ? (
+          <p class="mt-[0.85rem] max-w-[22rem] text-[0.875rem] leading-snug opacity-90">
+            {spawnStatus()}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+
   return (
     <main
+      data-shell-main
       classList={{
         'shell-desk m-0 block min-h-screen box-border pb-0 text-neutral-100': true,
         'cursor-crosshair': crosshairCursor(),
@@ -2838,7 +3218,11 @@ function App() {
               onClose={() => {
                 shellWireSend('close', win().window_id)
               }}
-            />
+            >
+              <Show when={win().window_id === SHELL_UI_DEBUG_WINDOW_ID}>
+                <DebugHudContent />
+              </Show>
+            </ShellWindowFrame>
           </Show>
         )}
       </Index>
@@ -2902,7 +3286,7 @@ function App() {
           return (
             <Show when={!screenTaskbarHiddenForFullscreen(s)}>
               <div
-                class="pointer-events-none absolute z-[400000]"
+                class="pointer-events-none absolute z-[401000]"
                 style={{
                   left: `${loc.x}px`,
                   top: `${loc.y + loc.height - TASKBAR_HEIGHT}px`,
@@ -2920,10 +3304,11 @@ function App() {
                   windows={taskbarRowsForScreen(s)}
                   focusedWindowId={focusedWindowId()}
                   keyboardLayoutLabel={isPrim ? keyboardLayoutLabel() : null}
-                  debugPanelOpen={debugPanelOpen()}
+                  debugPanelOpen={debugHudFrameVisible()}
                   onDebugPanelToggle={() => {
-                    setDebugPanelOpen((v) => !v)
-                    scheduleExclusionZonesSync()
+                    const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
+                    if (!w || w.minimized) openDebugShellWindow()
+                    else minimizeDebugShellWindow()
                   }}
                   onTaskbarActivate={(id) => {
                     shellWireSend('taskbar_activate', id)
@@ -2940,7 +3325,7 @@ function App() {
           const loc = layoutScreenCssRect(prim(), layoutCanvasOrigin())
           return (
             <div
-              class="pointer-events-none absolute z-[400000] box-border flex flex-col items-stretch overflow-hidden"
+              class="pointer-events-none absolute z-[399000] box-border flex flex-col items-stretch overflow-hidden"
               style={{
                 left: `${loc.x}px`,
                 top: `${loc.y}px`,
@@ -2948,363 +3333,6 @@ function App() {
                 height: `${loc.height}px`,
               }}
             >
-            <div class="pointer-events-none relative z-30 box-border flex min-h-0 flex-1 items-center justify-center pt-2 px-2.5 pb-[52px]">
-              <Show when={debugPanelOpen()}>
-                <div
-                  class="relative z-[12] max-w-[min(28rem,100%)] rounded-2xl border border-white/12 bg-black/55 px-12 py-10 text-center shadow-[0_0.5rem_2rem_rgba(0,0,0,0.45)] pointer-events-auto"
-                  data-shell-panel
-                >
-                <h1 class="mb-2 text-[2rem] font-bold tracking-wider">derp shell</h1>
-                <p class="mb-4 text-base opacity-[0.85]">SolidJS → CEF OSR → compositor</p>
-                <label class="mb-4 inline-flex cursor-pointer items-center justify-center gap-2 text-sm select-none opacity-92">
-                  <input
-                    type="checkbox"
-                    class="h-4 w-4 accent-shell-accent-ring"
-                    checked={crosshairCursor()}
-                    onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
-                  />
-                  <span>Crosshair cursor</span>
-                </label>
-                <Show when={outputGeom()}>
-                  {(g) => (
-                    <p class="mb-3 text-[0.8rem] opacity-90">
-                      {`OSR / compositor canvas (logical): `}
-                      <strong>
-                        {g().w}×{g().h}
-                      </strong>
-                    </p>
-                  )}
-                </Show>
-                <div
-                  class="mb-3 rounded-[0.45rem] border border-white/15 bg-black/40 px-[0.85rem] py-[0.65rem] text-left text-[0.8rem] leading-snug tabular-nums [&_strong]:text-shell-hud-strong"
-                  aria-live="polite"
-                >
-                  <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
-                    input debug
-                  </span>
-                  <span class="block">
-                    <span>
-                      Union from <code>screens[]</code>
-                      {': '}
-                    </span>
-                    <strong>
-                      {layoutUnionBbox()
-                        ? `@ ${layoutUnionBbox()!.x},${layoutUnionBbox()!.y} (${layoutUnionBbox()!.w}×${layoutUnionBbox()!.h})`
-                        : '—'}
-                    </strong>
-                  </span>
-                  <span class="block">
-                    <span>Compositor union min corner: </span>
-                    <strong>
-                      {layoutCanvasOrigin()
-                        ? `@ ${layoutCanvasOrigin()!.x},${layoutCanvasOrigin()!.y}`
-                        : '—'}
-                    </strong>
-                  </span>
-                  <span class="block">
-                    <span>Panel + taskbar host: </span>
-                    <strong>
-                      {panelHostForHud()
-                        ? `${shellChromePrimaryName() ? `${shellChromePrimaryName()} (explicit) · ` : ''}${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
-                        : '—'}
-                    </strong>
-                  </span>
-                  <span class="block">
-                    {`Viewport (CSS): `}
-                    <strong>
-                      {viewportCss().w}×{viewportCss().h}
-                    </strong>
-                    {` · devicePixelRatio `}
-                    <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
-                  </span>
-                  <span class="block">
-                    Windows (native): <strong>{windowsList().length}</strong>
-                  </span>
-                  <div class="mt-2 border-t border-white/12 pt-[0.45rem]">
-                    <span class="mb-[0.35rem] block text-[0.68rem] tracking-wider uppercase opacity-75">
-                      Exclusion zones (global logical)
-                    </span>
-                    <Show
-                      when={exclusionZonesHud().length > 0}
-                      fallback={<span class="block opacity-[0.65]">—</span>}
-                    >
-                      <ul class="mt-1 max-h-[11rem] list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
-                        <For each={exclusionZonesHud()}>
-                          {(z) => (
-                            <li class="my-0.5 list-disc">
-                              <span class="mr-[0.35rem] inline-block min-w-[7.5rem] opacity-90">
-                                {z.label}
-                              </span>
-                              <code class="font-mono text-[0.7rem] text-shell-hud-mono">
-                                {z.x},{z.y} · {z.w}×{z.h}
-                              </code>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
-                  </div>
-                  <Show when={crosshairCursor()}>
-                    <span class="block">
-                      {`Pointer (clientX/Y): `}
-                      <strong>
-                        {pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}
-                      </strong>
-                    </span>
-                    <span class="block">
-                      {`Pointer (in <main>): `}
-                      <strong>
-                        {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
-                      </strong>
-                    </span>
-                  </Show>
-                  <span class="block">
-                    Pointer downs (anywhere): <strong>{rootPointerDowns()}</strong>
-                  </span>
-                  <span class="block">
-                    Pointer downs (button): <strong>{btnPointerDowns()}</strong>
-                  </span>
-                  <span class="block">
-                    Spawn clicks handled: <strong>{spawnClicks()}</strong>
-                  </span>
-                  <div class="mt-2 max-w-none rounded-lg bg-black/25 px-3 py-[0.65rem]">
-                    <h2 class="mb-2 text-[0.72rem] font-semibold">Monitors</h2>
-                    <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
-                      <span class="mr-1 opacity-90">Shell panel + taskbar</span>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
-                        classList={{
-                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                            !shellChromePrimaryName(),
-                        }}
-                        disabled={!canSessionControl() || !shellChromePrimaryName()}
-                        title={!canSessionControl() ? 'Needs cef_host wire' : 'Use top-left output (min x, then y)'}
-                        onClick={() => shellWireSend('set_shell_primary', '')}
-                      >
-                        Auto
-                      </button>
-                    </div>
-                    <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
-                      <span class="mr-1 opacity-90">UI scale (all heads)</span>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
-                        classList={{
-                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                            uiScalePercent() === 100,
-                        }}
-                        disabled={!canSessionControl() || uiScalePercent() === 100}
-                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
-                        onClick={() => {
-                          shellWireSend('set_ui_scale', 100)
-                        }}
-                      >
-                        100%
-                      </button>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
-                        classList={{
-                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                            uiScalePercent() === 150,
-                        }}
-                        disabled={!canSessionControl() || uiScalePercent() === 150}
-                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
-                        onClick={() => {
-                          shellWireSend('set_ui_scale', 150)
-                        }}
-                      >
-                        150%
-                      </button>
-                      <button
-                        type="button"
-                        class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
-                        classList={{
-                          'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                            uiScalePercent() === 200,
-                        }}
-                        disabled={!canSessionControl() || uiScalePercent() === 200}
-                        title={!canSessionControl() ? 'Needs cef_host wire' : undefined}
-                        onClick={() => {
-                          shellWireSend('set_ui_scale', 200)
-                        }}
-                      >
-                        200%
-                      </button>
-                    </div>
-                    <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-neutral-200">
-                      <For
-                        each={screenDraft.rows}
-                        fallback={
-                          <li class="list-disc text-[hsl(45,85%,72%)]">
-                            No outputs listed — compositor should send <code>output_layout</code> with one entry per
-                            head.
-                          </li>
-                        }
-                      >
-                        {(row) => (
-                          <li class="mb-1.5 list-disc">
-                            <div class="flex flex-wrap items-start justify-between gap-x-2.5 gap-y-1.5">
-                              <div class="min-w-0 flex-[1_1_12rem]">
-                                <span class="font-semibold text-neutral-100">{row.name || '—'}</span>
-                                <span class="opacity-92">
-                                  @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
-                                  {monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
-                                  {!shellChromePrimaryName() &&
-                                  row.name &&
-                                  row.name === autoShellChromeMonitorName() ? (
-                                    <span class="font-semibold text-shell-accent-badge"> · auto</span>
-                                  ) : null}
-                                </span>
-                              </div>
-                              <button
-                                type="button"
-                                class="shrink-0 cursor-pointer whitespace-nowrap rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.45rem] py-0.5 text-[0.72rem] font-semibold tracking-wide text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
-                                classList={{
-                                  'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                                    !!shellChromePrimaryName() && shellChromePrimaryName() === row.name,
-                                }}
-                                disabled={!canSessionControl()}
-                                title={!canSessionControl() ? 'Needs cef_host wire' : 'Show panel and taskbar on this head'}
-                                onClick={() => shellWireSend('set_shell_primary', row.name)}
-                              >
-                                Shell chrome
-                              </button>
-                            </div>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                    <Show
-                      when={screenDraft.rows.length > 0}
-                      fallback={
-                        <p class="mb-2 text-[0.78rem] opacity-[0.88]">
-                          Position/orientation editor unlocks once screens are known.
-                        </p>
-                      }
-                    >
-                      <For each={screenDraft.rows}>
-                        {(row, i) => (
-                          <div class="mb-[0.45rem] flex flex-wrap items-center gap-x-[0.65rem] gap-y-[0.45rem] text-[0.82rem]">
-                            <span class="min-w-0 flex-[1_1_6rem] font-mono opacity-92">{row.name}</span>
-                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
-                              x
-                              <input
-                                type="number"
-                                class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
-                                value={row.x}
-                                onInput={(e) =>
-                                  setScreenDraft(
-                                    'rows',
-                                    i(),
-                                    'x',
-                                    Number(e.currentTarget.value) || 0,
-                                  )
-                                }
-                              />
-                            </label>
-                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide uppercase opacity-80">
-                              y
-                              <input
-                                type="number"
-                                class="w-[4.5rem] rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
-                                value={row.y}
-                                onInput={(e) =>
-                                  setScreenDraft(
-                                    'rows',
-                                    i(),
-                                    'y',
-                                    Number(e.currentTarget.value) || 0,
-                                  )
-                                }
-                              />
-                            </label>
-                            <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide opacity-80 [&_.relative]:mt-[0.15rem]">
-                              orientation
-                              <TransformPicker
-                                value={row.transform}
-                                rowIndex={i()}
-                                openIndex={orientationPickerOpen}
-                                setOpenIndex={setOrientationPickerOpen}
-                                onChange={(v) => setScreenDraft('rows', i(), 'transform', v)}
-                              />
-                            </label>
-                            <LayoutTypePicker
-                              outputName={row.name}
-                              revision={tilingCfgRev}
-                              onPersisted={() => {
-                                setTilingCfgRev((n) => n + 1)
-                                const name = row.name
-                                queueMicrotask(() => {
-                                  if (getMonitorLayout(name).layout.type === 'manual-snap') {
-                                    perMonitorTiles.stateFor(name).clearAllTiled()
-                                    bumpSnapChrome()
-                                    scheduleExclusionZonesSync()
-                                  } else {
-                                    applyAutoLayout(name)
-                                  }
-                                })
-                              }}
-                            />
-                            <span class="text-[0.75rem] opacity-65">
-                              {row.width}×{row.height} · {monitorRefreshLabel(row.refresh_milli_hz)}
-                            </span>
-                          </div>
-                        )}
-                      </For>
-                      <button
-                        type="button"
-                        class="mt-2 cursor-pointer rounded-[0.35rem] border border-white/28 bg-[rgba(30,80,140,0.55)] px-3 py-1.5 text-[0.85rem] hover:bg-[rgba(40,100,170,0.65)]"
-                        onClick={() => {
-                          const screens = screenDraft.rows.map((r) => ({
-                            name: r.name,
-                            x: r.x,
-                            y: r.y,
-                            transform: r.transform,
-                          }))
-                          shellWireSend('set_output_layout', JSON.stringify({ screens }))
-                        }}
-                      >
-                        Apply layout to compositor
-                      </button>
-                    </Show>
-                  </div>
-                </div>
-                <p class="mb-[0.85rem] max-w-[22rem] text-left text-[0.72rem] leading-snug break-all opacity-[0.88]">
-                  {spawnUrlLine()}
-                </p>
-                <label class="mb-[0.65rem] block max-w-[22rem] text-left">
-                  <span class="mb-[0.35rem] block text-[0.72rem] opacity-[0.88]">
-                    Command (`sh -c`, nested Wayland display)
-                  </span>
-                  <input
-                    class="box-border w-full rounded-[0.4rem] border border-white/25 bg-black/35 px-[0.55rem] py-[0.45rem] text-[0.9rem] text-inherit"
-                    type="text"
-                    value={spawnCommand()}
-                    onInput={(e) => setSpawnCommand(e.currentTarget.value)}
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </label>
-                <button
-                  type="button"
-                  class="mt-1 cursor-pointer rounded-lg border-0 bg-shell-btn-primary px-[1.2rem] py-[0.6rem] text-[0.95rem] font-semibold tracking-wide text-neutral-900 shadow-[0_0.15rem_0.5rem_rgba(0,0,0,0.25)] hover:brightness-[1.06] disabled:cursor-wait disabled:opacity-65"
-                  disabled={spawnBusy()}
-                  onPointerDown={() => setBtnPointerDowns((n) => n + 1)}
-                  onClick={() => void runNativeInCompositor()}
-                >
-                  {spawnBusy() ? 'Spawning…' : 'Run native app in compositor'}
-                </button>
-                {spawnStatus() ? (
-                  <p class="mt-[0.85rem] max-w-[22rem] text-[0.875rem] leading-snug opacity-90">
-                    {spawnStatus()}
-                  </p>
-                ) : null}
-                </div>
-              </Show>
-            </div>
-
             <div
               class="pointer-events-auto fixed z-10 min-w-[160px] cursor-grab touch-none rounded-lg border border-white/25 bg-[hsla(280,45%,35%,0.92)] px-3.5 py-2.5 text-[13px] font-semibold select-none text-neutral-100 shadow-[0_4px_16px_rgba(0,0,0,0.35)] active:cursor-grabbing"
               style={{

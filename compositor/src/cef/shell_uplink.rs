@@ -127,6 +127,20 @@ fn handle_uplink_list(
             let wid = args.int(1) as u32;
             uplink.shell_taskbar_activate(wid);
         }
+        "shell_focus_ui_window" => {
+            let wid = args.int(1) as u32;
+            uplink.shell_focus_shell_ui_window(wid);
+        }
+        "shell_blur_ui_window" => {
+            uplink.shell_blur_shell_ui_focus();
+        }
+        "shell_ui_grab_begin" => {
+            let wid = args.int(1) as u32;
+            uplink.shell_ui_pointer_grab_begin(wid);
+        }
+        "shell_ui_grab_end" => {
+            uplink.shell_ui_pointer_grab_end();
+        }
         "minimize" => {
             let wid = args.int(1) as u32;
             uplink.shell_minimize(wid);
@@ -161,6 +175,10 @@ fn handle_uplink_list(
         "set_exclusion_zones" => {
             let json = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_set_exclusion_zones_json(json);
+        }
+        "set_shell_ui_windows" => {
+            let json = cef_string_userfree_to_string(&args.string(1));
+            uplink.shell_set_ui_windows_json(json);
         }
         "set_shell_primary" => {
             let name = cef_string_userfree_to_string(&args.string(1));
@@ -201,6 +219,12 @@ fn handle_uplink_list(
         }
         "request_compositor_sync" => {
             uplink.shell_request_compositor_sync();
+        }
+        "backed_debug_open" => {
+            uplink.shell_backed_debug_open();
+        }
+        "backed_debug_close" => {
+            uplink.shell_backed_debug_close();
         }
         "shell_ipc_pong" => {
             uplink.shell_ipc_pong();
@@ -295,6 +319,9 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                 }
                 "quit" => {}
+                "backed_debug_open" | "backed_debug_close" => {}
+                "shell_blur_ui_window" => {}
+                "shell_ui_grab_end" => {}
                 "resize_shell_grab_end" => {}
                 "request_compositor_sync" => {}
                 "shell_ipc_pong" => {}
@@ -308,10 +335,10 @@ wrap_v8_handler! {
                     let cmd = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(cmd.as_str())));
                 }
-                "move_begin" | "move_end" | "taskbar_activate" | "minimize" | "resize_end"
-                | "resize_shell_grab_begin" => {
+                "move_begin" | "move_end" | "taskbar_activate" | "shell_focus_ui_window"
+                | "shell_ui_grab_begin" | "minimize" | "resize_end" | "resize_shell_grab_begin" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/minimize require window id");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/shell_focus_ui_window/shell_ui_grab_begin/minimize require window id");
                     };
                     let id = if a1.is_int() != 0 {
                         a1.int_value()
@@ -320,7 +347,7 @@ wrap_v8_handler! {
                     } else if a1.is_double() != 0 {
                         a1.double_value() as i32
                     } else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/minimize: second arg must be a number");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/shell_focus_ui_window/shell_ui_grab_begin/minimize: second arg must be a number");
                     };
                     if id < 0 {
                         return_exception!("window id must be non-negative");
@@ -536,6 +563,16 @@ wrap_v8_handler! {
                     let json = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
                 }
+                "set_shell_ui_windows" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_shell_ui_windows requires JSON string");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("set_shell_ui_windows: second arg must be a string");
+                    }
+                    let json = cef_string_userfree_to_string(&a1.string_value());
+                    let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
+                }
                 "set_shell_primary" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("set_shell_primary requires output name string (empty = auto)");
@@ -664,7 +701,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, context_menu)"
+                        "unknown op (use close, quit, backed_debug_open, backed_debug_close, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, context_menu)"
                     );
                 }
             }

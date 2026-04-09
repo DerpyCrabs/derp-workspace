@@ -266,6 +266,7 @@ pub fn apply_message(
                         "maximized": w.maximized != 0,
                         "fullscreen": w.fullscreen != 0,
                         "client_side_decoration": w.client_side_decoration != 0,
+                        "shell_flags": w.shell_flags,
                         "title": &w.title,
                         "app_id": &w.app_id,
                         "output_name": &w.output_name,

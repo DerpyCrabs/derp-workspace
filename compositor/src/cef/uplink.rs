@@ -120,6 +120,30 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_focus_shell_ui_window(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_focus_shell_ui_window(window_id);
+        });
+    }
+
+    pub fn shell_blur_shell_ui_focus(&self) {
+        self.run(move |s| {
+            s.shell_blur_shell_ui_focus();
+        });
+    }
+
+    pub fn shell_ui_pointer_grab_begin(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_ui_pointer_grab_begin(window_id);
+        });
+    }
+
+    pub fn shell_ui_pointer_grab_end(&self) {
+        self.run(move |s| {
+            s.shell_ui_pointer_grab_end();
+        });
+    }
+
     pub fn shell_minimize(&self, window_id: u32) {
         self.run(move |s| {
             s.shell_minimize_window(window_id);
@@ -182,6 +206,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_set_ui_windows_json(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_ui_windows_json(&json);
+        });
+    }
+
     pub fn shell_context_menu(
         &self,
         visible: bool,
@@ -221,6 +251,18 @@ impl UplinkToCompositor {
     pub fn shell_request_compositor_sync(&self) {
         self.run(move |s| {
             s.shell_on_shell_client_connected();
+        });
+    }
+
+    pub fn shell_backed_debug_open(&self) {
+        self.run(move |s| {
+            s.shell_backed_debug_open();
+        });
+    }
+
+    pub fn shell_backed_debug_close(&self) {
+        self.run(move |s| {
+            s.shell_backed_debug_close();
         });
     }
 }

@@ -20,8 +20,8 @@
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
-//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`], [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`] (watchdog keepalive); [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] when layout changes; [`MSG_COMPOSITOR_VOLUME_OVERLAY`] after hardware volume / mute keys
+//!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`], [`MSG_SHELL_WINDOWS_SYNC`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
+//! - compositor → shell: [`MSG_WINDOW_LIST`] rows include `shell_flags` ([`SHELL_WINDOW_FLAG_SHELL_HOSTED`] for compositor-backed OSR frames); [`MSG_FOCUS_CHANGED`] is the only compositor → shell focus event; [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`]; [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`]; [`MSG_COMPOSITOR_VOLUME_OVERLAY`]
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -96,6 +96,8 @@ pub const MSG_COMPOSITOR_KEYBIND: u32 = 51;
 /// Compositor → shell: active keyboard layout short label (UTF-8).
 pub const MSG_COMPOSITOR_KEYBOARD_LAYOUT: u32 = 52;
 pub const MSG_COMPOSITOR_VOLUME_OVERLAY: u32 = 53;
+/// Shell → compositor: replace registered **shell UI windows** (global layout + z); compositor derives buffer rects.
+pub const MSG_SHELL_WINDOWS_SYNC: u32 = 54;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -124,6 +126,8 @@ pub const MAX_KEYBIND_ACTION_BYTES: u32 = 256;
 pub const MAX_KEYBOARD_LAYOUT_LABEL_BYTES: u32 = 32;
 /// Max planes in [`MSG_FRAME_DMABUF_COMMIT`] (matches Linux dma-buf multi-plane caps).
 pub const MAX_DMABUF_PLANES: u32 = 4;
+/// Max rows in [`MSG_SHELL_WINDOWS_SYNC`].
+pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
 pub const DMABUF_FLAG_Y_INVERT: u32 = 1;
@@ -631,6 +635,8 @@ pub fn encode_shell_resize_end(window_id: u32) -> Vec<u8> {
     v
 }
 
+pub const SHELL_WINDOW_FLAG_SHELL_HOSTED: u32 = 1;
+
 /// One row in [`MSG_WINDOW_LIST`] / [`DecodedCompositorToShellMessage::WindowList`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellWindowSnapshot {
@@ -645,6 +651,7 @@ pub struct ShellWindowSnapshot {
     pub maximized: u32,
     pub fullscreen: u32,
     pub client_side_decoration: u32,
+    pub shell_flags: u32,
     pub title: String,
     pub app_id: String,
     pub output_name: String,
@@ -681,6 +688,7 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(&w.maximized.to_le_bytes());
         body.extend_from_slice(&w.fullscreen.to_le_bytes());
         body.extend_from_slice(&w.client_side_decoration.to_le_bytes());
+        body.extend_from_slice(&w.shell_flags.to_le_bytes());
         body.extend_from_slice(&tl.to_le_bytes());
         body.extend_from_slice(&al.to_le_bytes());
         body.extend_from_slice(tb);
@@ -923,6 +931,21 @@ pub enum DecodedMessage {
         titlebar_h: i32,
         border_w: i32,
     },
+    ShellWindowsSync {
+        generation: u32,
+        windows: Vec<ShellUiWindowWireRow>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellUiWindowWireRow {
+    pub id: u32,
+    pub gx: i32,
+    pub gy: i32,
+    pub gw: u32,
+    pub gh: u32,
+    pub z: u32,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -937,6 +960,7 @@ pub enum DecodeError {
     BadWindowListPayload,
     BadDmabufCommitPayload,
     BadOutputLayoutPayload,
+    BadShellWindowsPayload,
 }
 
 /// Messages the **compositor** writes on the shell Unix socket for `cef_host` to read.
@@ -1134,6 +1158,39 @@ pub fn encode_compositor_volume_overlay(
     v.extend_from_slice(&volume_linear_percent_x100.to_le_bytes());
     v.extend_from_slice(&flags.to_le_bytes());
     v
+}
+
+pub fn encode_shell_windows_sync(
+    generation: u32,
+    windows: &[ShellUiWindowWireRow],
+) -> Option<Vec<u8>> {
+    let n = u32::try_from(windows.len()).ok()?;
+    if n > MAX_SHELL_UI_WINDOWS {
+        return None;
+    }
+    let row_sz: u32 = 28;
+    let body_len = 12u32.checked_add(n.checked_mul(row_sz)?)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_WINDOWS_SYNC.to_le_bytes());
+    v.extend_from_slice(&generation.to_le_bytes());
+    v.extend_from_slice(&n.to_le_bytes());
+    for w in windows {
+        if w.id == 0 || w.gw == 0 || w.gh == 0 {
+            return None;
+        }
+        v.extend_from_slice(&w.id.to_le_bytes());
+        v.extend_from_slice(&w.gx.to_le_bytes());
+        v.extend_from_slice(&w.gy.to_le_bytes());
+        v.extend_from_slice(&w.gw.to_le_bytes());
+        v.extend_from_slice(&w.gh.to_le_bytes());
+        v.extend_from_slice(&w.z.to_le_bytes());
+        v.extend_from_slice(&w.flags.to_le_bytes());
+    }
+    Some(v)
 }
 
 pub fn encode_compositor_keyboard_layout(label: &str) -> Option<Vec<u8>> {
@@ -1684,7 +1741,8 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
         | MSG_SHELL_QUIT_COMPOSITOR
         | MSG_SHELL_PONG
         | MSG_SHELL_TILE_PREVIEW
-        | MSG_SHELL_CHROME_METRICS => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_CHROME_METRICS
+        | MSG_SHELL_WINDOWS_SYNC => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -1704,7 +1762,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
     let mut off = 8usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 48 > body.len() {
+        if off + 52 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -1717,15 +1775,16 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         let maximized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
         let fullscreen = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
         let client_side_decoration = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
+        let shell_flags = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
         if minimized > 1 || maximized > 1 || fullscreen > 1 || client_side_decoration > 1 {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()) as usize;
+        let title_len = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 48;
+        off += 52;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -1768,6 +1827,7 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
             maximized,
             fullscreen,
             client_side_decoration,
+            shell_flags,
             title,
             app_id,
             output_name,
@@ -1970,6 +2030,50 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             })
         }
         MSG_FRAME_DMABUF_COMMIT => decode_frame_dmabuf_commit_body(body),
+        MSG_SHELL_WINDOWS_SYNC => {
+            if body.len() < 12 {
+                return Err(DecodeError::BadShellWindowsPayload);
+            }
+            let generation = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let count = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            if count > MAX_SHELL_UI_WINDOWS {
+                return Err(DecodeError::BadShellWindowsPayload);
+            }
+            let need = 12usize
+                .checked_add((count as usize).checked_mul(28).ok_or(DecodeError::BadShellWindowsPayload)?)
+                .ok_or(DecodeError::BadShellWindowsPayload)?;
+            if body.len() != need {
+                return Err(DecodeError::BadShellWindowsPayload);
+            }
+            let mut windows = Vec::with_capacity(count as usize);
+            let mut off = 12usize;
+            for _ in 0..count {
+                let id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+                let gx = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
+                let gy = i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
+                let gw = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+                let gh = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
+                let z = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
+                let flags = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+                off += 28;
+                if id == 0 || gw == 0 || gh == 0 {
+                    return Err(DecodeError::BadShellWindowsPayload);
+                }
+                windows.push(ShellUiWindowWireRow {
+                    id,
+                    gx,
+                    gy,
+                    gw,
+                    gh,
+                    z,
+                    flags,
+                });
+            }
+            Ok(DecodedMessage::ShellWindowsSync {
+                generation,
+                windows,
+            })
+        }
         MSG_SHELL_CONTEXT_MENU => {
             if body.len() != 40 {
                 return Err(DecodeError::BadWindowPayload);

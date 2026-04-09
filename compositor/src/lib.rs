@@ -20,6 +20,7 @@ mod grabs;
 mod handlers;
 mod input;
 mod shell_encode;
+mod shell_backed;
 mod shell_ipc;
 mod shell_letterbox;
 mod shell_overlay;

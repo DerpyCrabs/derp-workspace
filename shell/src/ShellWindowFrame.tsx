@@ -1,4 +1,10 @@
-import { Show } from 'solid-js'
+import { type JSX, Show, createEffect, onCleanup, onMount } from 'solid-js'
+import {
+  registerShellUiWindow,
+  scheduleShellUiWindowsSync,
+  shellUiWindowMeasureFromEnv,
+  type ShellUiMeasureEnv,
+} from './shellUiWindows'
 import {
   CHROME_BORDER_PX,
   CHROME_RESIZE_HANDLE_PX,
@@ -37,9 +43,12 @@ type ShellWindowFrameProps = {
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
+  shellUiRegister?: { id: number; z: number; getEnv: () => ShellUiMeasureEnv | null }
+  children?: JSX.Element
 }
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
+  let root: HTMLDivElement | undefined
   const csd = !!props.win.client_side_decoration
   const th = csd ? 0 : CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
@@ -58,8 +67,31 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     ? SHELL_CHROME_BG_FOCUSED_OPAQUE
     : SHELL_CHROME_BG_UNFOCUSED_OPAQUE
 
+  onMount(() => {
+    const cfg = props.shellUiRegister
+    if (!cfg) return
+    const unreg = registerShellUiWindow(cfg.id, () =>
+      shellUiWindowMeasureFromEnv(cfg.id, cfg.z, root, cfg.getEnv),
+    )
+    onCleanup(unreg)
+  })
+
+  createEffect(() => {
+    if (!props.shellUiRegister) return
+    props.win.x
+    props.win.y
+    props.win.width
+    props.win.height
+    props.stackZ
+    props.shellUiRegister.z
+    scheduleShellUiWindowsSync()
+  })
+
   return (
     <div
+      ref={(el) => {
+        root = el
+      }}
       data-shell-repaint={props.repaintKey ?? 0}
       class="pointer-events-none box-border"
       style={{
@@ -84,6 +116,19 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           background: 'var(--shell-chrome-bg)',
         }}
       />
+      <Show when={props.children}>
+        <div
+          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-neutral-950/85 p-2"
+          style={{
+            left: `${inset}px`,
+            top: `${inset + th}px`,
+            width: `${props.win.width}px`,
+            height: `${props.win.height}px`,
+          }}
+        >
+          {props.children}
+        </div>
+      </Show>
       <Show when={!csd}>
         <div
           class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"

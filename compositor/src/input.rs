@@ -94,7 +94,11 @@ impl CompositorState {
 
         let grabbed = pointer.is_grabbed();
 
-        let under = if grabbed || self.shell_move_is_active() || self.shell_resize_is_active() {
+        let under = if grabbed
+            || self.shell_move_is_active()
+            || self.shell_resize_is_active()
+            || self.shell_ui_pointer_grab_active()
+        {
             None
         } else {
             self.surface_under(pos)
@@ -227,7 +231,11 @@ impl CompositorState {
         const BTN_LEFT: u32 = 0x110;
 
         let cef_ipc = self.shell_pointer_coords_for_cef(pos);
-        let shell_px = if route_cef || self.shell_move_is_active() || self.shell_resize_is_active() {
+        let shell_px = if route_cef
+            || self.shell_move_is_active()
+            || self.shell_resize_is_active()
+            || self.shell_ui_pointer_grab_active()
+        {
             norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
                 self.shell_pointer_norm_from_global(pos)
                     .and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
@@ -237,12 +245,19 @@ impl CompositorState {
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_menu = self.shell_point_in_context_menu_global(pos);
+        let in_shell_ui = self.shell_ui_placement_topmost_at(pos).is_some()
+            && (!self.shell_ui_suppress_osr_exclusion || self.surface_under(pos).is_none());
         let under_native = self.surface_under(pos).is_some();
-        let force_native_buttons = under_native && !in_excl && !in_menu;
+        let force_native_buttons = under_native
+            && !in_excl
+            && !in_menu
+            && !in_shell_ui
+            && !self.shell_ui_pointer_grab_active();
         let take_shell_base = shell_px.is_some()
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()
-            || self.shell_resize_is_active();
+            || self.shell_resize_is_active()
+            || (self.shell_cef_active() && self.shell_ui_pointer_grab_active() && cef_ipc.is_some());
         let take_shell = if force_native_buttons
             && !self.shell_move_is_active()
             && !self.shell_resize_is_active()
@@ -274,6 +289,7 @@ impl CompositorState {
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
                 self.keyboard_on_focus_surface_changed(None);
                 self.shell_ipc_keyboard_to_cef = true;
+                self.shell_emit_shell_ui_focus_from_point(pos);
             }
             pointer.button(
                 self,
@@ -285,7 +301,7 @@ impl CompositorState {
                 },
             );
             pointer.frame(self);
-            if route_cef && self.shell_cef_active() {
+            if (route_cef || self.shell_ui_pointer_grab_active()) && self.shell_cef_active() {
                 if let Some((bx, by)) = cef_ipc {
                     if button_state == ButtonState::Pressed {
                         self.shell_ipc_keyboard_to_cef = true;
@@ -318,6 +334,7 @@ impl CompositorState {
             if button == BTN_LEFT && button_state == ButtonState::Released {
                 self.shell_resize_end_active();
                 self.shell_move_end_active();
+                self.shell_ui_pointer_grab_end();
             }
             return;
         }
@@ -339,11 +356,19 @@ impl CompositorState {
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
             self.shell_ipc_keyboard_to_cef = false;
+            self.shell_emit_shell_ui_focus_if_changed(None);
             if let Some((elem, _loc)) =
                 self.element_under_respecting_shell_exclusions(pointer.current_location())
             {
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
+                        self.space.elements().for_each(|e| {
+                            e.set_activate(false);
+                            if let DerpSpaceElem::Wayland(w) = e {
+                                w.toplevel().unwrap().send_pending_configure();
+                            }
+                        });
+                        let _ = window.set_activated(true);
                         self.space
                             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
                         keyboard.set_focus(
@@ -359,9 +384,21 @@ impl CompositorState {
                     }
                     DerpSpaceElem::X11(x11) => {
                         if let Some(surf) = x11.wl_surface() {
+                            self.space.elements().for_each(|e| {
+                                e.set_activate(false);
+                                if let DerpSpaceElem::Wayland(w) = e {
+                                    w.toplevel().unwrap().send_pending_configure();
+                                }
+                            });
                             self.space
                                 .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
+                            x11.set_activate(true);
                             keyboard.set_focus(self, Some(surf), serial);
+                            self.space.elements().for_each(|e| {
+                                if let DerpSpaceElem::Wayland(w) = e {
+                                    w.toplevel().unwrap().send_pending_configure();
+                                }
+                            });
                         }
                     }
                 }
@@ -390,6 +427,7 @@ impl CompositorState {
         if button == BTN_LEFT && button_state == ButtonState::Released {
             self.shell_resize_end_active();
             self.shell_move_end_active();
+            self.shell_ui_pointer_grab_end();
         }
     }
 
@@ -620,6 +658,7 @@ impl CompositorState {
                         });
                     }
                     self.shell_ipc_keyboard_to_cef = true;
+                    self.shell_emit_shell_ui_focus_from_point(pos);
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Pressed, time);
                 }
