@@ -617,12 +617,6 @@ impl DrmSession {
 
         crate::cef::begin_frame_diag::note_drm_render_tick();
 
-        if let Ok(g) = state.shell_to_cef.lock() {
-            if let Some(link) = g.as_ref() {
-                link.schedule_external_begin_frame();
-            }
-        }
-
         let renderer = self.renderer.clone();
         let loop_handle = self.loop_handle.clone();
         let drm_ref = &self.drm;
@@ -635,6 +629,12 @@ impl DrmSession {
         }
 
         let _ = any_advanced;
+
+        if let Ok(g) = state.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.schedule_external_begin_frame();
+            }
+        }
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 

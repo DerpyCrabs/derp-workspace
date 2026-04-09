@@ -97,6 +97,8 @@ wrap_app! {
                 cmd.append_switch(Some(&CefString::from(
                     "disable-gpu-memory-buffer-video-frames",
                 )));
+                cmd.append_switch(Some(&CefString::from("disable-gpu-vsync")));
+                cmd.append_switch(Some(&CefString::from("disable-frame-rate-limit")));
                 #[cfg(target_os = "linux")]
                 {
                     cmd.append_switch_with_value(
@@ -640,7 +642,7 @@ fn run_cef(
         && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(4));
+        thread::sleep(Duration::from_millis(1));
     }
 
     if let Ok(g) = browser_holder.lock() {

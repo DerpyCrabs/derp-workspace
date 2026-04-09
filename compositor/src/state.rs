@@ -1144,7 +1144,6 @@ impl CompositorState {
             return;
         };
         if let Some(link) = g.as_ref() {
-            tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint post 2x external_begin_frame");
             link.schedule_external_begin_frame();
             link.schedule_external_begin_frame();
         } else {
