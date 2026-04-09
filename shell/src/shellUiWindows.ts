@@ -43,15 +43,7 @@ function flush() {
   generation += 1
   const fn = window.__derpShellWireSend
   if (typeof fn === 'function') {
-    const sup = (
-      window as unknown as {
-        __derpSuppressShellUiPlacementHoles?: () => boolean
-      }
-    ).__derpSuppressShellUiPlacementHoles
-    const suppressed = typeof sup === 'function' && sup()
-    const payload = suppressed
-      ? { generation, windows: [], suppress_osr_exclusion: true }
-      : { generation, windows, suppress_osr_exclusion: false }
+    const payload = { generation, windows }
     fn('set_shell_ui_windows', JSON.stringify(payload))
   }
 }

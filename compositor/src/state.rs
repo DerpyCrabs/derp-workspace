@@ -376,7 +376,6 @@ pub struct CompositorState {
     pub(crate) shell_context_menu: Option<ShellContextMenuPlacement>,
     pub(crate) shell_ui_windows: Vec<ShellUiWindowPlacement>,
     pub(crate) shell_ui_windows_generation: u32,
-    pub(crate) shell_ui_suppress_osr_exclusion: bool,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
@@ -458,19 +457,26 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
-        self.shell_window_stack_order
+        let mut ordered: Vec<u32> = self
+            .shell_window_stack_order
+            .iter()
+            .copied()
+            .filter(|wid| self.window_registry.window_info(*wid).is_some())
+            .collect();
+        let mut missing: Vec<u32> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .map(|record| record.info.window_id)
+            .filter(|wid| !ordered.contains(wid))
+            .collect();
+        missing.sort_unstable();
+        ordered.extend(missing);
+        ordered
             .iter()
             .position(|wid| *wid == window_id)
             .map(|idx| idx as u32 + 1)
-            .unwrap_or_else(|| {
-                20u32.saturating_add(window_id).saturating_add(
-                    if self.shell_focused_ui_window_id == Some(window_id) {
-                        10_000
-                    } else {
-                        0
-                    },
-                )
-            })
+            .unwrap_or(0)
     }
 
     pub fn shell_context_menu_atlas_px() -> u32 {
@@ -667,7 +673,6 @@ impl CompositorState {
             shell_context_menu: None,
             shell_ui_windows: Vec::new(),
             shell_ui_windows_generation: 0,
-            shell_ui_suppress_osr_exclusion: false,
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
             shell_last_sent_ui_focus_id: None,
@@ -908,46 +913,7 @@ impl CompositorState {
         _elem: &DerpSpaceElem,
         pos: Point<f64, Logical>,
     ) -> bool {
-        self.point_in_shell_exclusion_zones(pos) || self.shell_ui_topmost_at(pos).is_some()
-    }
-
-    pub(crate) fn native_hit_blocked_exclusion_only(
-        &self,
-        _elem: &DerpSpaceElem,
-        pos: Point<f64, Logical>,
-    ) -> bool {
-        self.point_in_shell_exclusion_zones(pos)
-    }
-
-    pub(crate) fn surface_under_bypassing_shell_ui_overlay(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        for elem in self.space.elements().rev() {
-            let Some(map_loc) = self.space.element_location(elem) else {
-                continue;
-            };
-            let render_loc = map_loc - elem.geometry().loc;
-            let local = pos - render_loc.to_f64();
-            let hit = match elem {
-                DerpSpaceElem::Wayland(window) => window
-                    .surface_under(local, WindowSurfaceType::ALL)
-                    .map(|(s, p)| (s, (p + render_loc).to_f64())),
-                DerpSpaceElem::X11(x11) => {
-                    let surf = x11.wl_surface()?;
-                    under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL)
-                        .map(|(s, p)| (s, (p + render_loc).to_f64()))
-                }
-            };
-            let Some((surf, p_global)) = hit else {
-                continue;
-            };
-            if self.native_hit_blocked_exclusion_only(elem, pos) {
-                continue;
-            }
-            return Some((surf, p_global));
-        }
-        None
+        self.point_in_shell_exclusion_zones(pos) || self.shell_ui_placement_topmost_at(pos).is_some()
     }
 
     pub(crate) fn shell_ui_placement_topmost_at(
@@ -971,16 +937,6 @@ impl CompositorState {
             }
         }
         best
-    }
-
-    pub(crate) fn shell_ui_topmost_at(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<ShellUiWindowPlacement> {
-        if self.shell_ui_suppress_osr_exclusion {
-            return None;
-        }
-        self.shell_ui_placement_topmost_at(pos)
     }
 
     fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
@@ -1083,8 +1039,6 @@ impl CompositorState {
         struct Root {
             generation: u32,
             windows: Vec<Row>,
-            #[serde(default)]
-            suppress_osr_exclusion: bool,
         }
         let Ok(root) = serde_json::from_str::<Root>(json) else {
             return;
@@ -1119,8 +1073,7 @@ impl CompositorState {
             });
         }
         let js_changed = out != self.shell_ui_windows;
-        let suppress_changed = root.suppress_osr_exclusion != self.shell_ui_suppress_osr_exclusion;
-        if js_changed || suppress_changed {
+        if js_changed {
             let placements: Vec<_> = out
                 .iter()
                 .map(|w| {
@@ -1137,7 +1090,6 @@ impl CompositorState {
             tracing::warn!(
                 target: "derp_shell_clip",
                 generation = root.generation,
-                suppress = root.suppress_osr_exclusion,
                 focused = ?self.shell_focused_ui_window_id,
                 placements = ?placements,
                 "shell_ui_windows updated"
@@ -1145,7 +1097,6 @@ impl CompositorState {
         }
         self.shell_ui_windows = out;
         self.shell_ui_windows_generation = root.generation;
-        self.shell_ui_suppress_osr_exclusion = root.suppress_osr_exclusion;
         if let Some(fid) = self.shell_focused_ui_window_id {
             if !self.shell_ui_windows.iter().any(|w| w.id == fid)
                 && !self.window_registry.is_shell_hosted(fid)
@@ -1160,7 +1111,7 @@ impl CompositorState {
                 self.shell_ui_pointer_grab = None;
             }
         }
-        if js_changed || suppress_changed {
+        if js_changed {
             self.shell_exclusion_zones_need_full_damage = true;
         }
     }
@@ -1387,22 +1338,9 @@ impl CompositorState {
                 }
             }
         }
-        if !self.shell_ui_suppress_osr_exclusion {
-            match elem_window {
-                None => {
-                    for w in &placements {
-                        if let Some(i) = w.global_rect.intersection(visible) {
-                            out.push(i);
-                        }
-                    }
-                }
-                Some(_) => {
-                    for w in &placements {
-                        if let Some(i) = w.global_rect.intersection(visible) {
-                            out.push(i);
-                        }
-                    }
-                }
+        for w in &placements {
+            if let Some(i) = w.global_rect.intersection(visible) {
+                out.push(i);
             }
         }
         out
@@ -2271,11 +2209,6 @@ impl CompositorState {
     pub(crate) fn clear_toplevel_layout_maps(&mut self, window_id: u32) {
         self.toplevel_floating_restore.remove(&window_id);
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
-    }
-
-    fn primary_output_geometry_rect(&self) -> Option<Rectangle<i32, Logical>> {
-        let o = self.shell_effective_primary_output()?;
-        self.space.output_geometry(&o)
     }
 
     fn resolve_smithay_output(&self, wl_output: Option<&WlOutput>) -> Option<Output> {
@@ -3780,13 +3713,7 @@ impl CompositorState {
 
         let in_placement = self.shell_ui_placement_topmost_at(pos).is_some();
         if in_placement {
-            if !self.shell_ui_suppress_osr_exclusion {
-                return true;
-            }
-            if self.surface_under(pos).is_none() {
-                return true;
-            }
-            return false;
+            return true;
         }
 
         if self.surface_under(pos).is_some() {
@@ -4931,15 +4858,6 @@ impl CompositorState {
         } else {
             self.shell_raise_and_focus_window(window_id);
         }
-    }
-
-    /// Letterboxed shell in **output-local logical** pixels `(ox, oy, cw, ch)`.
-    pub(crate) fn shell_letterbox_logical(
-        &self,
-        output_logical_size: Size<i32, Logical>,
-    ) -> Option<(i32, i32, i32, i32)> {
-        let (buf_w, buf_h) = self.shell_view_px?;
-        crate::shell_letterbox::letterbox_logical(output_logical_size, buf_w, buf_h)
     }
 
     pub(crate) fn shell_pointer_ipc_for_cef(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {

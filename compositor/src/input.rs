@@ -238,8 +238,7 @@ impl CompositorState {
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_menu = self.shell_point_in_context_menu_global(pos);
-        let in_shell_ui = self.shell_ui_placement_topmost_at(pos).is_some()
-            && (!self.shell_ui_suppress_osr_exclusion || self.surface_under(pos).is_none());
+        let in_shell_ui = self.shell_ui_placement_topmost_at(pos).is_some();
         let under_native = self.surface_under(pos).is_some();
         let force_native_buttons = under_native
             && !in_excl
@@ -365,6 +364,9 @@ impl CompositorState {
                 }
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
+                        let window_id = self
+                            .window_registry
+                            .window_id_for_wl_surface(window.toplevel().unwrap().wl_surface());
                         self.space.elements().for_each(|e| {
                             e.set_activate(false);
                             if let DerpSpaceElem::Wayland(w) = e {
@@ -379,6 +381,10 @@ impl CompositorState {
                             Some(window.toplevel().unwrap().wl_surface().clone()),
                             serial,
                         );
+                        if let Some(window_id) = window_id {
+                            self.shell_window_stack_touch(window_id);
+                            self.shell_reply_window_list();
+                        }
                         self.space.elements().for_each(|e| {
                             if let DerpSpaceElem::Wayland(w) = e {
                                 w.toplevel().unwrap().send_pending_configure();
@@ -387,6 +393,7 @@ impl CompositorState {
                     }
                     DerpSpaceElem::X11(x11) => {
                         if let Some(surf) = x11.wl_surface() {
+                            let window_id = self.window_registry.window_id_for_wl_surface(&surf);
                             self.space.elements().for_each(|e| {
                                 e.set_activate(false);
                                 if let DerpSpaceElem::Wayland(w) = e {
@@ -397,6 +404,10 @@ impl CompositorState {
                                 .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
                             x11.set_activate(true);
                             keyboard.set_focus(self, Some(surf), serial);
+                            if let Some(window_id) = window_id {
+                                self.shell_window_stack_touch(window_id);
+                                self.shell_reply_window_list();
+                            }
                             self.space.elements().for_each(|e| {
                                 if let DerpSpaceElem::Wayland(w) = e {
                                     w.toplevel().unwrap().send_pending_configure();

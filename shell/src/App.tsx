@@ -1187,11 +1187,6 @@ function App() {
     for (const decoWin of stackedWindowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       if (decoWin.minimized) continue
-      const fid = focusedWindowId()
-      const frow = fid != null ? windows().get(fid) : undefined
-      const nativeHudFocus =
-        frow != null && (frow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0
-      if (nativeHudFocus && (decoWin.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) continue
       const deco = ssdDecorationExclusionRects({
         ...decoWin,
         snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
@@ -2054,12 +2049,6 @@ function App() {
   })
 
   onMount(() => {
-    const gw = window as unknown as { __derpSuppressShellUiPlacementHoles?: () => boolean }
-    gw.__derpSuppressShellUiPlacementHoles = () => {
-      const fid = focusedWindowId()
-      const row = fid != null ? windows().get(fid) : undefined
-      return row != null && (row.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0
-    }
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
@@ -2751,8 +2740,6 @@ function App() {
     document.addEventListener('pointerdown', onCtxPointerDown, true)
 
     onCleanup(() => {
-      const gw = window as unknown as { __derpSuppressShellUiPlacementHoles?: () => boolean }
-      delete gw.__derpSuppressShellUiPlacementHoles
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
       document.removeEventListener('keydown', onCtxKeyDown, true)
       document.removeEventListener('pointerdown', onCtxPointerDown, true)
