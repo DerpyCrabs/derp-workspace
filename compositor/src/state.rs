@@ -1242,6 +1242,18 @@ impl CompositorState {
         stack[(idx + 1)..].to_vec()
     }
 
+    fn window_ids_strictly_below_on_output(&self, output: &Output, self_id: u32) -> Vec<u32> {
+        let stack: Vec<u32> = self
+            .space
+            .elements_for_output(output)
+            .filter_map(|e| self.derp_elem_window_id(e))
+            .collect();
+        let Some(idx) = stack.iter().position(|&id| id == self_id) else {
+            return Vec::new();
+        };
+        stack[..idx].to_vec()
+    }
+
     pub(crate) fn shell_exclusion_clip_rects_logical(
         &self,
         output: &Output,
@@ -1285,13 +1297,35 @@ impl CompositorState {
             }
         }
         if !self.shell_ui_suppress_osr_exclusion {
-            for w in self
-                .shell_ui_backed_placements
-                .iter()
-                .chain(self.shell_ui_windows.iter())
-            {
-                if let Some(i) = w.global_rect.intersection(ws) {
-                    out.push(i);
+            match elem_window {
+                None => {
+                    for w in self
+                        .shell_ui_backed_placements
+                        .iter()
+                        .chain(self.shell_ui_windows.iter())
+                    {
+                        if let Some(i) = w.global_rect.intersection(ws) {
+                            out.push(i);
+                        }
+                    }
+                }
+                Some(sid) => {
+                    let below: HashSet<u32> = self
+                        .window_ids_strictly_below_on_output(output, sid)
+                        .into_iter()
+                        .collect();
+                    for w in self.shell_ui_backed_placements.iter() {
+                        if w.id == sid || below.contains(&w.id) {
+                            if let Some(i) = w.global_rect.intersection(ws) {
+                                out.push(i);
+                            }
+                        }
+                    }
+                    for w in self.shell_ui_windows.iter() {
+                        if let Some(i) = w.global_rect.intersection(ws) {
+                            out.push(i);
+                        }
+                    }
                 }
             }
         }
@@ -2075,12 +2109,11 @@ impl CompositorState {
     pub(crate) fn wayland_window_shell_rect_and_deco(
         &self,
         window: &Window,
-    ) -> Option<(i32, i32, i32, i32, bool)> {
+    ) -> Option<(i32, i32, i32, i32)> {
         let elem = DerpSpaceElem::Wayland(window.clone());
         let map_loc = self.space.element_location(&elem)?;
         let geo = window.geometry();
-        let csd = Self::wayland_window_has_client_side_decoration(window);
-        Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h, csd))
+        Some((map_loc.x, map_loc.y, geo.size.w, geo.size.h))
     }
 
     pub(crate) fn notify_geometry_for_window(&mut self, window: &Window, force_shell_emit: bool) {
@@ -2088,7 +2121,7 @@ impl CompositorState {
             return;
         };
         let wl = toplevel.wl_surface();
-        let Some((gx, gy, gw, gh, csd)) = self.wayland_window_shell_rect_and_deco(window) else {
+        let Some((gx, gy, gw, gh)) = self.wayland_window_shell_rect_and_deco(window) else {
             return;
         };
         let output_name = self
@@ -2096,7 +2129,7 @@ impl CompositorState {
             .unwrap_or_default();
         let changed = self
             .window_registry
-            .set_shell_layout(wl, gx, gy, gw, gh, csd, output_name);
+            .set_shell_layout(wl, gx, gy, gw, gh, output_name);
         let (max, fs) = read_toplevel_tiling(wl);
         let tiling_changed = self
             .window_registry
@@ -2115,13 +2148,13 @@ impl CompositorState {
             return;
         };
         let wl = toplevel.wl_surface();
-        let Some((gx, gy, gw, gh, csd)) = self.wayland_window_shell_rect_and_deco(window) else {
+        let Some((gx, gy, gw, gh)) = self.wayland_window_shell_rect_and_deco(window) else {
             return;
         };
         let output_name = self
             .output_for_window_position(gx, gy, gw, gh)
             .unwrap_or_default();
-        let _ = self.window_registry.set_shell_layout(wl, gx, gy, gw, gh, csd, output_name);
+        let _ = self.window_registry.set_shell_layout(wl, gx, gy, gw, gh, output_name);
         let (max, fs) = read_toplevel_tiling(wl);
         let _ = self.window_registry.set_tiling_state(wl, max, fs);
     }
@@ -2226,13 +2259,12 @@ impl CompositorState {
             return false;
         };
         self.cancel_shell_move_resize_for_window(window_id);
-        let csd = Self::wayland_window_has_client_side_decoration(window);
         let gx = geo.loc.x;
         let gy = geo.loc.y;
         let gw = geo.size.w;
         let gh = geo.size.h;
         let (map_x, map_y, content_w, content_h) =
-            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, gw, gh);
+            Self::wayland_toplevel_map_and_content_for_shell_frame(gx, gy, gw, gh);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Fullscreen);
             st.fullscreen_output = None;
@@ -2271,13 +2303,12 @@ impl CompositorState {
         };
         self.cancel_shell_move_resize_for_window(window_id);
         let wl_out = wl_output_hint.or_else(|| self.client_wl_output_for(wl, &sm_out));
-        let csd = Self::wayland_window_has_client_side_decoration(window);
         let gx = geo.loc.x;
         let gy = geo.loc.y;
         let gw = geo.size.w;
         let gh = geo.size.h;
         let (map_x, map_y, content_w, content_h) =
-            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, gw, gh);
+            Self::wayland_toplevel_map_and_content_for_shell_frame(gx, gy, gw, gh);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Maximized);
             st.states.set(xdg_toplevel::State::Fullscreen);
@@ -2680,45 +2711,13 @@ impl CompositorState {
         Scale::Fractional(shell_ui_scale)
     }
 
-    pub(crate) fn wayland_window_has_client_side_decoration(window: &Window) -> bool {
-        let geo = window.geometry();
-        let bbox = window.bbox();
-        if bbox.size.w == 0 || bbox.size.h == 0 {
-            return false;
-        }
-        bbox.size.w != geo.size.w
-            || bbox.size.h != geo.size.h
-            || geo.loc.x != 0
-            || geo.loc.y != 0
-            || bbox.loc.x != 0
-            || bbox.loc.y != 0
-    }
-
     pub(crate) fn wayland_toplevel_map_and_content_for_shell_frame(
-        window: &Window,
-        client_side_decoration: bool,
         x: i32,
         y: i32,
         w: i32,
         h: i32,
     ) -> (i32, i32, i32, i32) {
-        if !client_side_decoration {
-            return (x, y, w, h);
-        }
-        let geo = window.geometry();
-        let bbox = window.bbox();
-        if bbox.size.w == 0 || bbox.size.h == 0 {
-            return (x, y, w, h);
-        }
-        let deco_extra_w = bbox.size.w.saturating_sub(geo.size.w);
-        let deco_extra_h = bbox.size.h.saturating_sub(geo.size.h);
-        let content_w = w.saturating_sub(deco_extra_w).max(geo.size.w.max(1));
-        let content_h = h.saturating_sub(deco_extra_h).max(geo.size.h.max(1));
-        let render_x = x.saturating_sub(bbox.loc.x);
-        let render_y = y.saturating_sub(bbox.loc.y);
-        let map_x = render_x.saturating_add(geo.loc.x);
-        let map_y = render_y.saturating_add(geo.loc.y);
-        (map_x, map_y, content_w, content_h)
+        (x, y, w, h)
     }
 
     pub(crate) fn apply_shell_ui_scale_to_outputs(&mut self) {
@@ -3179,7 +3178,6 @@ impl CompositorState {
         self.clear_toplevel_layout_maps(window_id);
         self.cancel_shell_move_resize_for_window(window_id);
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
-        let csd = Self::wayland_window_has_client_side_decoration(window);
         let geo = window.geometry();
         let ww = geo
             .size
@@ -3214,7 +3212,7 @@ impl CompositorState {
             .saturating_add(target_work.size.h.saturating_sub(hh) / 2)
             .clamp(target_work.loc.y, max_y);
         let (map_x, map_y, content_w, content_h) =
-            Self::wayland_toplevel_map_and_content_for_shell_frame(window, csd, gx, gy, ww, hh);
+            Self::wayland_toplevel_map_and_content_for_shell_frame(gx, gy, ww, hh);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Fullscreen);
             st.states.unset(xdg_toplevel::State::Maximized);

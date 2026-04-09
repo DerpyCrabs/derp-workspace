@@ -10,7 +10,6 @@ export type WindowChromeExclusionSource = {
   y: number
   width: number
   height: number
-  client_side_decoration?: boolean
   maximized: boolean
   fullscreen: boolean
   minimized: boolean
@@ -21,7 +20,6 @@ export function ssdDecorationExclusionRects(
   w: WindowChromeExclusionSource,
 ): Array<{ x: number; y: number; w: number; h: number }> {
   if (w.minimized) return []
-  if (w.client_side_decoration) return []
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
   const suppressSideStrips = w.maximized || w.fullscreen

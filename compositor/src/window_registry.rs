@@ -124,7 +124,6 @@ impl WindowRegistry {
         y: i32,
         width: i32,
         height: i32,
-        client_side_decoration: bool,
         output_name: String,
     ) -> Option<bool> {
         let wid = *self.by_surface.get(&key(wl)?)?;
@@ -133,13 +132,11 @@ impl WindowRegistry {
             || info.y != y
             || info.width != width
             || info.height != height
-            || info.client_side_decoration != client_side_decoration
             || info.output_name != output_name;
         info.x = x;
         info.y = y;
         info.width = width;
         info.height = height;
-        info.client_side_decoration = client_side_decoration;
         info.output_name = output_name;
         Some(changed)
     }

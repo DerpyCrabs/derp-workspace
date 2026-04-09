@@ -6,7 +6,6 @@ import {
   onCleanup,
   onMount,
   For,
-  Index,
   Show,
 } from 'solid-js'
 import { createStore } from 'solid-js/store'
@@ -22,7 +21,7 @@ import {
   SHELL_RESIZE_TOP,
 } from './chromeConstants'
 import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './exclusionRects'
-import { ShellWindowFrame } from './ShellWindowFrame'
+import { ShellWindowFrame, type ShellWindowModel } from './ShellWindowFrame'
 import {
   canvasOriginXY,
   type CanvasOrigin,
@@ -44,6 +43,7 @@ import {
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   scheduleShellUiWindowsSync,
+  type ShellUiMeasureEnv,
 } from './shellUiWindows'
 import {
   assistGridGutterPx,
@@ -268,7 +268,6 @@ type DerpShellDetail =
       title: string
       app_id: string
       output_name?: string
-      client_side_decoration?: boolean
     }
   | { type: 'window_unmapped'; window_id: number }
   | {
@@ -282,7 +281,6 @@ type DerpShellDetail =
       output_name?: string
       maximized?: boolean
       fullscreen?: boolean
-      client_side_decoration?: boolean
     }
   | {
       type: 'window_metadata'
@@ -325,7 +323,6 @@ type DerpWindow = {
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
-  client_side_decoration?: boolean
   shell_flags: number
 }
 
@@ -345,18 +342,6 @@ function coerceShellWindowId(raw: unknown): number | null {
   return t > 0 ? t : null
 }
 
-function coerceOptionalClientSideDecoration(raw: unknown): boolean | undefined {
-  if (raw === undefined || raw === null) return undefined
-  if (raw === true || raw === 1) return true
-  if (raw === false || raw === 0) return false
-  if (typeof raw === 'string') {
-    if (raw === '1' || raw === 'true') return true
-    if (raw === '0' || raw === 'false') return false
-  }
-  if (typeof raw === 'number') return raw !== 0
-  return !!raw
-}
-
 function buildWindowsMapFromList(
   raw: unknown,
   prev?: Map<number, DerpWindow>,
@@ -369,11 +354,6 @@ function buildWindowsMapFromList(
     const wid = coerceShellWindowId(r.window_id)
     const sid = coerceShellWindowId(r.surface_id)
     if (wid === null || sid === null) continue
-    const csdExplicit = coerceOptionalClientSideDecoration(r.client_side_decoration)
-    const csd =
-      csdExplicit !== undefined
-        ? csdExplicit
-        : (prev?.get(wid)?.client_side_decoration ?? false)
     const outputName =
       typeof r.output_name === 'string' ? r.output_name : ''
     const sfRaw = r.shell_flags
@@ -394,7 +374,6 @@ function buildWindowsMapFromList(
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
-      client_side_decoration: csd,
       shell_flags,
     })
   }
@@ -422,7 +401,6 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         minimized: false,
         maximized: false,
         fullscreen: false,
-        client_side_decoration: !!detail.client_side_decoration,
         shell_flags: next.get(wid)?.shell_flags ?? 0,
       })
       break
@@ -451,10 +429,6 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
               : w.output_name,
           maximized: detail.maximized ?? w.maximized,
           fullscreen: detail.fullscreen ?? w.fullscreen,
-          client_side_decoration:
-            detail.client_side_decoration !== undefined
-              ? !!detail.client_side_decoration
-              : w.client_side_decoration,
         })
       }
       break
@@ -883,11 +857,107 @@ function App() {
     onCleanup(() => cancelAnimationFrame(hudFpsRaf))
   })
 
-  /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
-   * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
-  const windowsList = createMemo(() =>
-    Array.from(allWindowsMap().values()).sort((a, b) => a.window_id - b.window_id),
-  )
+  const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
+
+  const windowsList = createMemo(() => {
+    const out: DerpWindow[] = []
+    for (const id of windowsListIds()) {
+      const w = allWindowsMap().get(id)
+      if (w) out.push(w)
+    }
+    return out
+  })
+
+  function ShellDeskWindowRow(props: { windowId: number }) {
+    const winModel = createMemo((): ShellWindowModel | undefined => {
+      const r = allWindowsMap().get(props.windowId)
+      if (!r || r.minimized) return undefined
+      return { ...r, snap_tiled: perMonitorTiles.isTiled(props.windowId) }
+    })
+    const stackZ = createMemo(
+      () => 20 + props.windowId + (focusedWindowId() === props.windowId ? 10_000 : 0),
+    )
+    const rowFocused = createMemo(() => focusedWindowId() === props.windowId)
+    const windowId = props.windowId
+    const deskShellUiReg = createMemo(() => {
+      focusedWindowId()
+      outputGeom()
+      layoutCanvasOrigin()
+      return {
+        id: props.windowId,
+        z: 20 + props.windowId + (focusedWindowId() === props.windowId ? 10_000 : 0),
+        getEnv: (): ShellUiMeasureEnv | null => {
+          const main = mainRef
+          const og = outputGeom()
+          const co = layoutCanvasOrigin()
+          if (!main || !og || !co) return null
+          return {
+            main,
+            outputGeom: { w: og.w, h: og.h },
+            origin: co,
+          }
+        },
+      }
+    })
+    return (
+      <Show when={winModel} fallback={null}>
+        <ShellWindowFrame
+          win={winModel}
+          repaintKey={snapChromeRev}
+          stackZ={stackZ}
+          focused={rowFocused}
+          shellUiRegister={deskShellUiReg()}
+          onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(windowId, cx, cy)}
+          onResizeEdgeDown={(edges, cx, cy) => beginShellWindowResize(windowId, edges, cx, cy)}
+          onMinimize={() => {
+            shellWireSend('minimize', windowId)
+          }}
+          onMaximize={() => {
+            toggleShellMaximizeForWindow(windowId)
+          }}
+          onClose={() => {
+            shellWireSend('close', windowId)
+          }}
+        >
+          <Show when={windowId === SHELL_UI_DEBUG_WINDOW_ID}>
+            <DebugHudContent />
+          </Show>
+          <Show when={windowId === SHELL_UI_SETTINGS_WINDOW_ID}>
+            <SettingsPanel
+              screenDraft={screenDraft}
+              setScreenDraft={setScreenDraft}
+              shellChromePrimaryName={shellChromePrimaryName}
+              autoShellChromeMonitorName={autoShellChromeMonitorName}
+              canSessionControl={canSessionControl}
+              uiScalePercent={uiScalePercent}
+              orientationPickerOpen={orientationPickerOpen}
+              setOrientationPickerOpen={setOrientationPickerOpen}
+              tilingCfgRev={tilingCfgRev}
+              setTilingCfgRev={setTilingCfgRev}
+              perMonitorTiles={perMonitorTiles}
+              bumpSnapChrome={() => bumpSnapChrome()}
+              scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
+              applyAutoLayout={(name) => applyAutoLayout(name)}
+              setShellPrimary={(name) => shellWireSend('set_shell_primary', name)}
+              setUiScale={(pct) => shellWireSend('set_ui_scale', pct)}
+              applyCompositorLayoutFromDraft={() => {
+                const screens = screenDraft.rows.map((r) => ({
+                  name: r.name,
+                  x: r.x,
+                  y: r.y,
+                  transform: r.transform,
+                }))
+                shellWireSend('set_output_layout', JSON.stringify({ screens }))
+              }}
+              monitorRefreshLabel={monitorRefreshLabel}
+              keyboardLayoutLabel={keyboardLayoutLabel}
+              setDesktopBackgroundJson={(json) => shellWireSend('set_desktop_background', json)}
+            />
+          </Show>
+        </ShellWindowFrame>
+      </Show>
+    )
+  }
 
   const windowsByMonitor = createMemo(() => {
     const list = windowsList()
@@ -1101,7 +1171,7 @@ function App() {
     const stripLabels = ['t', 'l', 'r', 'b'] as const
     for (const decoWin of windowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
-      if (decoWin.minimized || decoWin.client_side_decoration) continue
+      if (decoWin.minimized) continue
       const fid = focusedWindowId()
       const frow = fid != null ? windows().get(fid) : undefined
       const nativeHudFocus =
@@ -2921,73 +2991,7 @@ function App() {
         e.preventDefault()
       }}
     >
-      <Index each={windowsList()}>
-        {(win) => (
-          <Show when={!win().minimized}>
-            <ShellWindowFrame
-              win={{ ...win(), snap_tiled: perMonitorTiles.isTiled(win().window_id) }}
-              repaintKey={snapChromeRev()}
-              stackZ={
-                20 +
-                win().window_id +
-                (focusedWindowId() === win().window_id ? 10_000 : 0)
-              }
-              focused={focusedWindowId() === win().window_id}
-              onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(win().window_id, cx, cy)}
-              onResizeEdgeDown={(edges, cx, cy) =>
-                beginShellWindowResize(win().window_id, edges, cx, cy)
-              }
-              onMinimize={() => {
-                shellWireSend('minimize', win().window_id)
-              }}
-              onMaximize={() => {
-                toggleShellMaximizeForWindow(win().window_id)
-              }}
-              onClose={() => {
-                shellWireSend('close', win().window_id)
-              }}
-            >
-              <Show when={win().window_id === SHELL_UI_DEBUG_WINDOW_ID}>
-                <DebugHudContent />
-              </Show>
-              <Show when={win().window_id === SHELL_UI_SETTINGS_WINDOW_ID}>
-                <SettingsPanel
-                  screenDraft={screenDraft}
-                  setScreenDraft={setScreenDraft}
-                  shellChromePrimaryName={shellChromePrimaryName}
-                  autoShellChromeMonitorName={autoShellChromeMonitorName}
-                  canSessionControl={canSessionControl}
-                  uiScalePercent={uiScalePercent}
-                  orientationPickerOpen={orientationPickerOpen}
-                  setOrientationPickerOpen={setOrientationPickerOpen}
-                  tilingCfgRev={tilingCfgRev}
-                  setTilingCfgRev={setTilingCfgRev}
-                  perMonitorTiles={perMonitorTiles}
-                  bumpSnapChrome={() => bumpSnapChrome()}
-                  scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
-                  applyAutoLayout={(name) => applyAutoLayout(name)}
-                  setShellPrimary={(name) => shellWireSend('set_shell_primary', name)}
-                  setUiScale={(pct) => shellWireSend('set_ui_scale', pct)}
-                  applyCompositorLayoutFromDraft={() => {
-                    const screens = screenDraft.rows.map((r) => ({
-                      name: r.name,
-                      x: r.x,
-                      y: r.y,
-                      transform: r.transform,
-                    }))
-                    shellWireSend('set_output_layout', JSON.stringify({ screens }))
-                  }}
-                  monitorRefreshLabel={monitorRefreshLabel}
-                  keyboardLayoutLabel={keyboardLayoutLabel}
-                  setDesktopBackgroundJson={(json) =>
-                    shellWireSend('set_desktop_background', json)
-                  }
-                />
-              </Show>
-            </ShellWindowFrame>
-          </Show>
-        )}
-      </Index>
+      <For each={windowsListIds()}>{(wid) => <ShellDeskWindowRow windowId={wid as number} />}</For>
 
       {volumeOverlayHud()}
 

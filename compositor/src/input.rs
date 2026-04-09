@@ -15,10 +15,7 @@ use smithay::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::{
-        calloop::LoopHandle,
-        wayland_server::protocol::wl_surface::WlSurface,
-    },
+    reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
 };
 
@@ -145,11 +142,7 @@ impl CompositorState {
         if let Ok(override_name) = std::env::var("DERP_TOUCH_OUTPUT") {
             let override_name = override_name.trim();
             if !override_name.is_empty() {
-                if let Some(out) = self
-                    .space
-                    .outputs()
-                    .find(|o| o.name() == override_name)
-                {
+                if let Some(out) = self.space.outputs().find(|o| o.name() == override_name) {
                     return self.space.output_geometry(out);
                 }
                 tracing::warn!(
@@ -208,12 +201,7 @@ impl CompositorState {
         workspace.loc.to_f64() + event.position_transformed(workspace.size)
     }
 
-    fn process_pointer_button(
-        &mut self,
-        button: u32,
-        button_state: ButtonState,
-        time_msec: u32,
-    ) {
+    fn process_pointer_button(&mut self, button: u32, button_state: ButtonState, time_msec: u32) {
         let pointer = self.seat.get_pointer().unwrap();
         let keyboard = self.seat.get_keyboard().unwrap();
 
@@ -240,10 +228,11 @@ impl CompositorState {
             || self.shell_resize_is_active()
             || self.shell_ui_pointer_grab_active()
         {
-            norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny)).or_else(|| {
-                self.shell_pointer_norm_from_global(pos)
-                    .and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
-            })
+            norm.and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
+                .or_else(|| {
+                    self.shell_pointer_norm_from_global(pos)
+                        .and_then(|(nx, ny)| self.shell_pointer_buffer_pixels(nx, ny))
+                })
         } else {
             None
         };
@@ -261,7 +250,9 @@ impl CompositorState {
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()
             || self.shell_resize_is_active()
-            || (self.shell_cef_active() && self.shell_ui_pointer_grab_active() && cef_ipc.is_some());
+            || (self.shell_cef_active()
+                && self.shell_ui_pointer_grab_active()
+                && cef_ipc.is_some());
         let take_shell = if force_native_buttons
             && !self.shell_move_is_active()
             && !self.shell_resize_is_active()
@@ -320,19 +311,23 @@ impl CompositorState {
                     let mouse_up = button_state == ButtonState::Released;
                     let mod_flags = self.shell_cef_event_flags();
                     self.shell_last_pointer_ipc_px = Some((bx, by));
-                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
-                        x: bx,
-                        y: by,
-                        modifiers: mod_flags,
-                    });
-                    self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerButton {
-                        x: bx,
-                        y: by,
-                        button: shell_btn,
-                        mouse_up,
-                        titlebar_drag_window_id: 0,
-                        modifiers: mod_flags,
-                    });
+                    self.shell_send_to_cef(
+                        shell_wire::DecodedCompositorToShellMessage::PointerMove {
+                            x: bx,
+                            y: by,
+                            modifiers: mod_flags,
+                        },
+                    );
+                    self.shell_send_to_cef(
+                        shell_wire::DecodedCompositorToShellMessage::PointerButton {
+                            x: bx,
+                            y: by,
+                            button: shell_btn,
+                            mouse_up,
+                            titlebar_drag_window_id: 0,
+                            modifiers: mod_flags,
+                        },
+                    );
                 }
             }
             if button == BTN_LEFT && button_state == ButtonState::Released {
@@ -360,10 +355,12 @@ impl CompositorState {
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
             self.shell_ipc_keyboard_to_cef = false;
-            self.shell_emit_shell_ui_focus_if_changed(None);
-            if let Some((elem, _loc)) =
-                self.element_under_respecting_shell_exclusions(pointer.current_location())
-            {
+            let pos = pointer.current_location();
+            if let Some((elem, _loc)) = self.element_under_respecting_shell_exclusions(pos) {
+                let shell_ui_focus = self
+                    .derp_elem_window_id(&elem)
+                    .filter(|wid| self.shell_backed_windows.contains_key(wid));
+                self.shell_emit_shell_ui_focus_if_changed(shell_ui_focus);
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
                         self.space.elements().for_each(|e| {
@@ -407,6 +404,7 @@ impl CompositorState {
                     }
                 }
             } else {
+                self.shell_emit_shell_ui_focus_if_changed(None);
                 self.space.elements().for_each(|e| {
                     e.set_activate(false);
                     if let DerpSpaceElem::Wayland(w) = e {
@@ -447,8 +445,8 @@ impl CompositorState {
                 let key_state = event.state();
                 let keycode = event.key_code();
                 let keyboard = self.seat.get_keyboard().unwrap();
-                let is_autorepeat = key_state == KeyState::Pressed
-                    && keyboard.pressed_keys().contains(&keycode);
+                let is_autorepeat =
+                    key_state == KeyState::Pressed && keyboard.pressed_keys().contains(&keycode);
 
                 let lh_kbd = loop_handle.clone();
                 keyboard.input::<(), _>(
@@ -513,7 +511,8 @@ impl CompositorState {
                                     return FilterResult::Intercept(());
                                 }
                                 if state.programs_menu_super_armed && !is_super {
-                                    if let Some(action) = super_keybind_action(raw_sym, mods.shift) {
+                                    if let Some(action) = super_keybind_action(raw_sym, mods.shift)
+                                    {
                                         state.programs_menu_super_chord = true;
                                         state.handle_super_keybind(action);
                                         return FilterResult::Intercept(());
@@ -543,19 +542,12 @@ impl CompositorState {
                                     state.shell_cef_repeat_clear(&lh_kbd);
                                 }
                                 state.shell_ipc_forward_keyboard_to_cef(
-                                    key_state,
-                                    mods,
-                                    &keysym,
-                                    false,
+                                    key_state, mods, &keysym, false,
                                 );
                                 return FilterResult::Intercept(());
                             }
-                            state.shell_ipc_forward_keyboard_to_cef(
-                                key_state,
-                                mods,
-                                &keysym,
-                                false,
-                            );
+                            state
+                                .shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
                             if CompositorState::shell_cef_sym_should_autorepeat(raw_sym) {
                                 let sr = keysym.modified_sym().raw();
                                 state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);
@@ -632,11 +624,7 @@ impl CompositorState {
                 self.pointer_motion_output_local(output_geo, local, event.time_msec());
             }
             InputEvent::PointerButton { event, .. } => {
-                self.process_pointer_button(
-                    event.button_code(),
-                    event.state(),
-                    event.time_msec(),
-                );
+                self.process_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::TouchDown { event, .. } => {
                 if self.touch_emulation_slot.is_some() {
@@ -687,12 +675,14 @@ impl CompositorState {
                 if cef_touch {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
-                            touch_id: tid,
-                            phase: shell_wire::TOUCH_PHASE_PRESSED,
-                            x: bx,
-                            y: by,
-                        });
+                        self.shell_send_to_cef(
+                            shell_wire::DecodedCompositorToShellMessage::Touch {
+                                touch_id: tid,
+                                phase: shell_wire::TOUCH_PHASE_PRESSED,
+                                x: bx,
+                                y: by,
+                            },
+                        );
                     }
                     self.shell_ipc_keyboard_to_cef = true;
                     self.shell_emit_shell_ui_focus_from_point(pos);
@@ -732,12 +722,14 @@ impl CompositorState {
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
-                            touch_id: tid,
-                            phase: shell_wire::TOUCH_PHASE_MOVED,
-                            x: bx,
-                            y: by,
-                        });
+                        self.shell_send_to_cef(
+                            shell_wire::DecodedCompositorToShellMessage::Touch {
+                                touch_id: tid,
+                                phase: shell_wire::TOUCH_PHASE_MOVED,
+                                x: bx,
+                                y: by,
+                            },
+                        );
                     }
                 }
             }
@@ -757,12 +749,14 @@ impl CompositorState {
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
-                            touch_id: tid,
-                            phase: shell_wire::TOUCH_PHASE_RELEASED,
-                            x: bx,
-                            y: by,
-                        });
+                        self.shell_send_to_cef(
+                            shell_wire::DecodedCompositorToShellMessage::Touch {
+                                touch_id: tid,
+                                phase: shell_wire::TOUCH_PHASE_RELEASED,
+                                x: bx,
+                                y: by,
+                            },
+                        );
                     }
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Released, time);
@@ -786,12 +780,14 @@ impl CompositorState {
                 if self.touch_routes_to_cef {
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
-                        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Touch {
-                            touch_id: tid,
-                            phase: shell_wire::TOUCH_PHASE_CANCELLED,
-                            x: bx,
-                            y: by,
-                        });
+                        self.shell_send_to_cef(
+                            shell_wire::DecodedCompositorToShellMessage::Touch {
+                                touch_id: tid,
+                                phase: shell_wire::TOUCH_PHASE_CANCELLED,
+                                x: bx,
+                                y: by,
+                            },
+                        );
                     }
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Released, time);
@@ -843,7 +839,8 @@ impl CompositorState {
                     }
                 }
 
-                let delta_x = pointer_axis_to_cef_delta(horizontal_amount, horizontal_amount_discrete);
+                let delta_x =
+                    pointer_axis_to_cef_delta(horizontal_amount, horizontal_amount_discrete);
                 let delta_y = pointer_axis_to_cef_delta(vertical_amount, vertical_amount_discrete);
                 self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
 

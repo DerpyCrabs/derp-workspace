@@ -1,4 +1,12 @@
-import { type JSX, Show, createEffect, onCleanup, onMount } from 'solid-js'
+import {
+  type JSX,
+  type Accessor,
+  Show,
+  createEffect,
+  createMemo,
+  onCleanup,
+  onMount,
+} from 'solid-js'
 import {
   registerShellUiWindow,
   scheduleShellUiWindowsSync,
@@ -29,15 +37,20 @@ export type ShellWindowModel = {
   app_id: string
   maximized: boolean
   fullscreen: boolean
-  client_side_decoration?: boolean
   snap_tiled?: boolean
 }
 
+type MaybeAcc<T> = T | Accessor<T>
+
+function readAcc<T>(v: MaybeAcc<T>): T {
+  return typeof v === 'function' ? (v as Accessor<T>)() : v
+}
+
 type ShellWindowFrameProps = {
-  win: ShellWindowModel
-  repaintKey?: number
-  focused: boolean
-  stackZ: number
+  win: ShellWindowModel | Accessor<ShellWindowModel | undefined>
+  repaintKey?: MaybeAcc<number>
+  focused: MaybeAcc<boolean>
+  stackZ: MaybeAcc<number>
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
   onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
   onMinimize: () => void
@@ -49,23 +62,38 @@ type ShellWindowFrameProps = {
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
   let root: HTMLDivElement | undefined
-  const csd = !!props.win.client_side_decoration
-  const th = csd ? 0 : CHROME_TITLEBAR_PX
-  const bd = CHROME_BORDER_PX
-  const rh = CHROME_RESIZE_HANDLE_PX
-  const noTilingChrome = props.win.maximized || props.win.fullscreen
-  const snapTiled = !!props.win.snap_tiled && !noTilingChrome
-  const inset = noTilingChrome || snapTiled ? 0 : bd
-  const outerW = props.win.width + inset * 2
-  const showBorderChrome = !noTilingChrome
-
+  const model = createMemo((): ShellWindowModel | undefined => {
+    const v = props.win
+    return typeof v === 'function' ? (v as Accessor<ShellWindowModel | undefined>)() : v
+  })
+  const layout = createMemo(() => {
+    const w = model()
+    if (!w) {
+      return {
+        th: 0,
+        bd: CHROME_BORDER_PX,
+        rh: CHROME_RESIZE_HANDLE_PX,
+        inset: 0,
+        outerW: 1,
+        showBorderChrome: false,
+      }
+    }
+    const th = CHROME_TITLEBAR_PX
+    const bd = CHROME_BORDER_PX
+    const rh = CHROME_RESIZE_HANDLE_PX
+    const noTilingChrome = w.maximized || w.fullscreen
+    const snapTiled = !!w.snap_tiled && !noTilingChrome
+    const inset = noTilingChrome || snapTiled ? 0 : bd
+    const outerW = w.width + inset * 2
+    const showBorderChrome = !noTilingChrome
+    return { th, bd, rh, inset, outerW, showBorderChrome }
+  })
+  const chromeBg = createMemo(() =>
+    readAcc(props.focused) ? SHELL_CHROME_BG_FOCUSED_OPAQUE : SHELL_CHROME_BG_UNFOCUSED_OPAQUE,
+  )
   const startResize = (edges: number, clientX: number, clientY: number) => {
     props.onResizeEdgeDown(edges, clientX, clientY)
   }
-
-  const chromeBg = props.focused
-    ? SHELL_CHROME_BG_FOCUSED_OPAQUE
-    : SHELL_CHROME_BG_UNFOCUSED_OPAQUE
 
   onMount(() => {
     const cfg = props.shellUiRegister
@@ -78,11 +106,15 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
 
   createEffect(() => {
     if (!props.shellUiRegister) return
-    props.win.x
-    props.win.y
-    props.win.width
-    props.win.height
-    props.stackZ
+    const w = model()
+    if (w) {
+      w.x
+      w.y
+      w.width
+      w.height
+      w.snap_tiled
+    }
+    readAcc(props.stackZ)
     props.shellUiRegister.z
     scheduleShellUiWindowsSync()
   })
@@ -92,27 +124,27 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       ref={(el) => {
         root = el
       }}
-      data-shell-repaint={props.repaintKey ?? 0}
+      data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
         position: 'fixed',
-        'z-index': props.stackZ,
-        left: `${props.win.x - inset}px`,
-        top: `${props.win.y - th - inset}px`,
-        width: `${props.win.width + inset * 2}px`,
-        height: `${props.win.height + th + inset * 2}px`,
+        'z-index': readAcc(props.stackZ),
+        left: `${(model()?.x ?? 0) - layout().inset}px`,
+        top: `${(model()?.y ?? 0) - layout().th - layout().inset}px`,
+        width: `${(model()?.width ?? 0) + layout().inset * 2}px`,
+        height: `${(model()?.height ?? 0) + layout().th + layout().inset * 2}px`,
         'box-sizing': 'border-box',
         'pointer-events': 'none',
-        '--shell-chrome-bg': chromeBg,
+        '--shell-chrome-bg': chromeBg(),
       }}
     >
       <div
         class="pointer-events-none absolute z-[4] box-border border-0"
         style={{
-          left: `${inset}px`,
-          top: `${inset + th}px`,
-          width: `${props.win.width}px`,
-          height: `${props.win.height}px`,
+          left: `${layout().inset}px`,
+          top: `${layout().inset + layout().th}px`,
+          width: `${model()?.width ?? 0}px`,
+          height: `${model()?.height ?? 0}px`,
           background: 'var(--shell-chrome-bg)',
         }}
       />
@@ -120,153 +152,151 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div
           class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-neutral-950/85 p-2"
           style={{
-            left: `${inset}px`,
-            top: `${inset + th}px`,
-            width: `${props.win.width}px`,
-            height: `${props.win.height}px`,
+            left: `${layout().inset}px`,
+            top: `${layout().inset + layout().th}px`,
+            width: `${model()?.width ?? 0}px`,
+            height: `${model()?.height ?? 0}px`,
           }}
         >
           {props.children}
         </div>
       </Show>
-      <Show when={!csd}>
-        <div
-          class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
-          style={{
-            top: `${inset}px`,
-            height: `${th}px`,
-            'z-index': 6,
-            background: 'var(--shell-chrome-bg)',
-            'pointer-events': 'auto',
-          }}
-          onPointerDown={(e) => {
-            if (!e.isPrimary) return
-            if (e.button !== 0) return
-            if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
-            e.preventDefault()
-            e.stopPropagation()
-            console.log(
-              `[derp-shell-move] titlebar pointerdown win=${props.win.window_id} ${e.clientX},${e.clientY}`,
-            )
-            props.onTitlebarPointerDown(e.clientX, e.clientY)
-          }}
-          onTouchStart={(e) => {
-            if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
-            const t = e.changedTouches[0]
-            if (!t) return
-            e.preventDefault()
-            e.stopPropagation()
-            console.log(
-              `[derp-shell-move] titlebar touchstart win=${props.win.window_id} ${t.clientX},${t.clientY}`,
-            )
-            props.onTitlebarPointerDown(t.clientX, t.clientY)
+      <div
+        class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
+        style={{
+          top: `${layout().inset}px`,
+          height: `${layout().th}px`,
+          'z-index': 6,
+          background: 'var(--shell-chrome-bg)',
+          'pointer-events': 'auto',
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary) return
+          if (e.button !== 0) return
+          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
+          e.preventDefault()
+          e.stopPropagation()
+          console.log(
+            `[derp-shell-move] titlebar pointerdown win=${model()?.window_id ?? 0} ${e.clientX},${e.clientY}`,
+          )
+          props.onTitlebarPointerDown(e.clientX, e.clientY)
+        }}
+        onTouchStart={(e) => {
+          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
+          const t = e.changedTouches[0]
+          if (!t) return
+          e.preventDefault()
+          e.stopPropagation()
+          console.log(
+            `[derp-shell-move] titlebar touchstart win=${model()?.window_id ?? 0} ${t.clientX},${t.clientY}`,
+          )
+          props.onTitlebarPointerDown(t.clientX, t.clientY)
+        }}
+      >
+        <span
+          class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
+          classList={{
+            'text-neutral-200 opacity-[0.62]': !readAcc(props.focused),
+            'text-white opacity-100': readAcc(props.focused),
           }}
         >
-          <span
-            class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
-            classList={{
-              'text-neutral-200 opacity-[0.62]': !props.focused,
-              'text-white opacity-100': props.focused,
-            }}
+          {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}
+        </span>
+        <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
+          <button
+            type="button"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
+            title="Minimize window"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onMinimize()}
           >
-            {props.win.title || props.win.app_id || `window ${props.win.window_id}`}
-          </span>
-          <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
-            <button
-              type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-white/[0.22]"
-              title="Minimize window"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => props.onMinimize()}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
-              title={props.win.maximized ? 'Restore' : 'Maximize'}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => props.onMaximize()}
-            >
-              {props.win.maximized ? (
-                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.35"
-                    stroke-linejoin="miter"
-                    d="M1.5 3.5h7v7h-7z M3.5 1.5h7v7h-7z"
-                  />
-                </svg>
-              ) : (
-                <svg class="block shrink-0" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                  <rect
-                    x="2"
-                    y="2"
-                    width="8"
-                    height="8"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.35"
-                  />
-                </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
-              title="Close window"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => props.onClose()}
-            >
-              ×
-            </button>
-          </div>
+            −
+          </button>
+          <button
+            type="button"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-sm leading-none text-neutral-200 hover:bg-white/[0.22]"
+            title={model()?.maximized ? 'Restore' : 'Maximize'}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onMaximize()}
+          >
+            {model()?.maximized ? (
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.35"
+                  stroke-linejoin="miter"
+                  d="M1.5 3.5h7v7h-7z M3.5 1.5h7v7h-7z"
+                />
+              </svg>
+            ) : (
+              <svg class="block shrink-0" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <rect
+                  x="2"
+                  y="2"
+                  width="8"
+                  height="8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.35"
+                />
+              </svg>
+            )}
+          </button>
+          <button
+            type="button"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-white/12 p-0 text-lg leading-none text-neutral-200 hover:bg-[rgba(220,60,60,0.85)] hover:text-white"
+            title="Close window"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onClose()}
+          >
+            ×
+          </button>
         </div>
-      </Show>
+      </div>
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
           left: '0',
-          top: `${inset + th}px`,
-          width: `${bd}px`,
-          height: `${props.win.height}px`,
+          top: `${layout().inset + layout().th}px`,
+          width: `${layout().bd}px`,
+          height: `${model()?.height ?? 0}px`,
         }}
       />
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
           right: '0',
-          top: `${inset + th}px`,
-          width: `${bd}px`,
-          height: `${props.win.height}px`,
+          top: `${layout().inset + layout().th}px`,
+          width: `${layout().bd}px`,
+          height: `${model()?.height ?? 0}px`,
         }}
       />
       <div
         class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
           left: '0',
           right: '0',
-          top: `${inset + th + props.win.height}px`,
-          height: `${bd}px`,
+          top: `${layout().inset + layout().th + (model()?.height ?? 0)}px`,
+          height: `${layout().bd}px`,
         }}
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
         style={{
           position: 'absolute',
           left: '0',
           bottom: '0',
-          width: `${rh}px`,
-          height: `${rh}px`,
+          width: `${layout().rh}px`,
+          height: `${layout().rh}px`,
           cursor: 'nesw-resize',
         }}
         onPointerDown={(e) => {
@@ -285,14 +315,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
         style={{
           position: 'absolute',
           right: '0',
           bottom: '0',
-          width: `${rh}px`,
-          height: `${rh}px`,
+          width: `${layout().rh}px`,
+          height: `${layout().rh}px`,
           cursor: 'nwse-resize',
         }}
         onPointerDown={(e) => {
@@ -311,14 +341,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         title="Resize height"
         style={{
           position: 'absolute',
-          left: `${rh}px`,
+          left: `${layout().rh}px`,
           bottom: '0',
-          width: `${Math.max(0, outerW - 2 * rh)}px`,
-          height: `${rh}px`,
+          width: `${Math.max(0, layout().outerW - 2 * layout().rh)}px`,
+          height: `${layout().rh}px`,
           cursor: 'ns-resize',
         }}
         onPointerDown={(e) => {
@@ -337,14 +367,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"
         style={{
           position: 'absolute',
           left: '0',
-          top: `${inset + th}px`,
-          width: `${rh}px`,
-          bottom: `${rh}px`,
+          top: `${layout().inset + layout().th}px`,
+          width: `${layout().rh}px`,
+          bottom: `${layout().rh}px`,
           cursor: 'ew-resize',
         }}
         onPointerDown={(e) => {
@@ -363,14 +393,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <div
         class="pointer-events-auto touch-none z-[3] box-border"
-        classList={{ hidden: !showBorderChrome }}
+        classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"
         style={{
           position: 'absolute',
           right: '0',
-          top: `${inset + th}px`,
-          width: `${rh}px`,
-          bottom: `${rh}px`,
+          top: `${layout().inset + layout().th}px`,
+          width: `${layout().rh}px`,
+          bottom: `${layout().rh}px`,
           cursor: 'ew-resize',
         }}
         onPointerDown={(e) => {
