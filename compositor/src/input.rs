@@ -118,6 +118,27 @@ impl CompositorState {
         self.shell_ipc_maybe_forward_pointer_move(pos);
     }
 
+    pub(crate) fn shell_seed_initial_pointer_position(&mut self) {
+        if self.shell_initial_pointer_centered {
+            return;
+        }
+        let Some(output) = self.shell_effective_primary_output() else {
+            return;
+        };
+        let Some(output_geo) = self.space.output_geometry(&output) else {
+            return;
+        };
+        if output_geo.size.w <= 0 || output_geo.size.h <= 0 {
+            return;
+        }
+        self.shell_initial_pointer_centered = true;
+        self.pointer_motion_output_local(
+            output_geo,
+            Point::from((output_geo.size.w as f64 / 2.0, output_geo.size.h as f64 / 2.0)),
+            0,
+        );
+    }
+
     fn touch_workspace_local(
         &self,
         event: &impl AbsolutePositionEvent<LibinputInputBackend>,

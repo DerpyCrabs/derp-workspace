@@ -312,6 +312,7 @@ pub struct CompositorState {
     session_default_layout_index: u32,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
+    pub(crate) shell_initial_pointer_centered: bool,
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
     pub(crate) shell_last_pointer_ipc_px: Option<(i32, i32)>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
@@ -630,6 +631,7 @@ impl CompositorState {
             keyboard_layout_focus_queue: VecDeque::new(),
             session_default_layout_index: 0,
             shell_pointer_norm: None,
+            shell_initial_pointer_centered: false,
             shell_last_pointer_ipc_px: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
@@ -3476,6 +3478,7 @@ impl CompositorState {
             "shell_after_drm_topology_changed enter"
         );
         self.send_shell_output_layout();
+        self.shell_seed_initial_pointer_position();
         self.shell_reply_window_list();
         self.shell_nudge_cef_repaint();
         tracing::warn!(
