@@ -619,7 +619,7 @@ fn run_cef(
     );
 
     let mut browser_settings = BrowserSettings::default();
-    browser_settings.windowless_frame_rate = 120;
+    browser_settings.windowless_frame_rate = 60;
     browser_settings.background_color = 0x0000_0000;
 
     browser_host_create_browser(
@@ -642,7 +642,7 @@ fn run_cef(
         && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(8));
     }
 
     if let Ok(g) = browser_holder.lock() {

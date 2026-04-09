@@ -95,14 +95,11 @@ pub struct DrmHead {
 }
 
 impl DrmHead {
-    fn on_vblank_inner(&mut self, loop_handle: &LoopHandle<'static, CalloopData>) {
+    fn on_vblank_inner(&mut self) {
         if let Err(e) = self.gbm_surface.frame_submitted() {
             warn!(?e, "drm frame_submitted");
         }
         self.pending_frame_complete = false;
-        loop_handle.insert_idle(|data| {
-            drm_idle_render(data);
-        });
     }
 
     fn render_one(
@@ -374,6 +371,7 @@ pub struct DrmSession {
     _gbm_device: GbmDevice<DrmDeviceFd>,
     output_formats: Vec<Format>,
     hotplug_retry_after: HashMap<connector::Handle, Instant>,
+    drm_idle_render_armed: bool,
 }
 
 impl DrmSession {
@@ -394,10 +392,20 @@ impl DrmSession {
     fn on_vblank(&mut self, crtc_h: crtc::Handle) {
         for head in &mut self.heads {
             if head.crtc == crtc_h {
-                head.on_vblank_inner(&self.loop_handle);
+                head.on_vblank_inner();
                 break;
             }
         }
+        self.schedule_drm_idle_render_coalesced();
+    }
+
+    fn schedule_drm_idle_render_coalesced(&mut self) {
+        if self.drm_idle_render_armed {
+            return;
+        }
+        self.drm_idle_render_armed = true;
+        let h = self.loop_handle.clone();
+        h.insert_idle(|d| drm_idle_render(d));
     }
 
     fn prune_disconnected_heads(&mut self, state: &mut CompositorState) {
@@ -616,8 +624,7 @@ impl DrmSession {
         );
         let _ = crate::display_config::apply_stored_from_heads(state, &self.drm, &self.heads);
         state.shell_after_drm_topology_changed();
-        let h = self.loop_handle.clone();
-        h.insert_idle(|d| drm_idle_render(d));
+        self.schedule_drm_idle_render_coalesced();
     }
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
@@ -652,12 +659,23 @@ impl DrmSession {
             any_advanced |= advanced;
         }
 
-        let _ = any_advanced;
-
-        if let Ok(g) = state.shell_to_cef.lock() {
-            if let Some(link) = g.as_ref() {
-                link.schedule_external_begin_frame();
+        const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(16);
+        let now = Instant::now();
+        let shell_send = if any_advanced {
+            true
+        } else {
+            match state.shell_begin_frame_last {
+                None => true,
+                Some(t) => now.duration_since(t) >= SHELL_BEGIN_MIN_WHEN_IDLE,
             }
+        };
+        if shell_send {
+            if let Ok(g) = state.shell_to_cef.lock() {
+                if let Some(link) = g.as_ref() {
+                    link.schedule_external_begin_frame();
+                }
+            }
+            state.shell_begin_frame_last = Some(now);
         }
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
@@ -671,6 +689,7 @@ fn drm_idle_render(data: &mut CalloopData) {
     let Some(drms) = data.drm.as_mut() else {
         return;
     };
+    drms.drm_idle_render_armed = false;
     drms.render_tick(&mut data.state, &mut data.display_handle);
 }
 
@@ -1094,6 +1113,7 @@ pub fn init_drm(
         _gbm_device: gbm,
         output_formats: format_vec,
         hotplug_retry_after: HashMap::new(),
+        drm_idle_render_armed: false,
     });
 
     let drm_monitor = udev::MonitorBuilder::new()

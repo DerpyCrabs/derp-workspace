@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use smithay::{
     backend::renderer::{
-        element::{solid::SolidColorRenderElement, Kind},
+        element::{solid::SolidColorRenderElement, Id, Kind},
         Color32F,
     },
     output::Output,
@@ -11,8 +11,7 @@ use smithay::{
 
 use crate::desktop_stack::ShellDmaElement;
 use crate::display_config::DesktopBackgroundConfig;
-use crate::state::CompositorState;
-use smithay::backend::renderer::element::Id;
+use crate::state::{BackdropWallpaperIdCache, CompositorState};
 
 pub(crate) struct BackdropLayers {
     pub solids: Vec<SolidColorRenderElement>,
@@ -44,6 +43,29 @@ fn wallpaper_path_for_cfg(cfg: &DesktopBackgroundConfig) -> Option<PathBuf> {
     }
 }
 
+fn backdrop_wallpaper_element_id(
+    state: &mut CompositorState,
+    output_name: &str,
+    layout_key: &str,
+    idx: usize,
+) -> Id {
+    let e = state
+        .backdrop_wallpaper_id_cache
+        .entry(output_name.to_string())
+        .or_insert_with(|| BackdropWallpaperIdCache {
+            key: String::new(),
+            ids: Vec::new(),
+        });
+    if e.key != layout_key {
+        e.key = layout_key.to_string();
+        e.ids.clear();
+    }
+    while e.ids.len() <= idx {
+        e.ids.push(Id::new());
+    }
+    e.ids[idx].clone()
+}
+
 fn push_fill_cover(
     textures: &mut Vec<ShellDmaElement>,
     output_geo: Rectangle<i32, Logical>,
@@ -54,6 +76,7 @@ fn push_fill_cover(
     commit: smithay::backend::renderer::utils::CommitCounter,
     out_w: i32,
     out_h: i32,
+    elem_id: Id,
 ) {
     let ow = out_w as f64;
     let oh = out_h as f64;
@@ -63,7 +86,7 @@ fn push_fill_cover(
     let sx0 = ((tw - src_w) * 0.5).max(0.0);
     let sy0 = ((th - src_h) * 0.5).max(0.0);
     textures.push(ShellDmaElement::wallpaper_quad(
-        Id::new(),
+        elem_id,
         ctx_id,
         Point::<f64, Physical>::from((0.0, 0.0)),
         output_geo.size,
@@ -87,6 +110,7 @@ pub(crate) fn build_desktop_backdrop_layers(
     let Some(output_geo) = state.space.output_geometry(output) else {
         return BackdropLayers { solids, textures };
     };
+    let output_name = output.name();
     let out_w = output_geo.size.w.max(1);
     let out_h = output_geo.size.h.max(1);
     let ow = out_w as f64;
@@ -123,6 +147,23 @@ pub(crate) fn build_desktop_backdrop_layers(
     let tw = g.tex_w.max(1) as f64;
     let th = g.tex_h.max(1) as f64;
     let fit = fit_norm(&cfg.fit);
+    let ws_s = state
+        .workspace_logical_bounds()
+        .map(|r| format!("{}x{}+{}+{}", r.size.w, r.size.h, r.loc.x, r.loc.y))
+        .unwrap_or_else(|| "-".into());
+    let layout_root = format!(
+        "v1|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        path.to_string_lossy(),
+        fit,
+        scale_f.to_bits(),
+        out_w,
+        out_h,
+        output_geo.loc.x,
+        output_geo.loc.y,
+        tw as i64,
+        th as i64,
+        ws_s,
+    );
 
     match fit {
         "fit" => {
@@ -143,8 +184,9 @@ pub(crate) fn build_desktop_backdrop_layers(
             let oy = (out_h - dh) / 2;
             let ox_p = (ox as f64 * scale_f).round();
             let oy_p = (oy as f64 * scale_f).round();
+            let lk = format!("{layout_root}|fit");
             textures.push(ShellDmaElement::wallpaper_quad(
-                Id::new(),
+                backdrop_wallpaper_element_id(state, &output_name, &lk, 0),
                 ctx_id.clone(),
                 Point::<f64, Physical>::from((ox_p, oy_p)),
                 Size::from((dw, dh)),
@@ -165,6 +207,8 @@ pub(crate) fn build_desktop_backdrop_layers(
                 Point::<f64, Buffer>::from((0.0, 0.0)),
                 Size::<f64, Buffer>::from((tw, th)),
             );
+            let lk_tile = format!("{layout_root}|tile|{nx}|{ny}");
+            let mut tidx = 0usize;
             for j in 0..ny {
                 for i in 0..nx {
                     let ox = i * tile_w;
@@ -172,7 +216,7 @@ pub(crate) fn build_desktop_backdrop_layers(
                     let ox_p = (ox as f64 * scale_f).round();
                     let oy_p = (oy as f64 * scale_f).round();
                     textures.push(ShellDmaElement::wallpaper_quad(
-                        Id::new(),
+                        backdrop_wallpaper_element_id(state, &output_name, &lk_tile, tidx),
                         ctx_id.clone(),
                         Point::<f64, Physical>::from((ox_p, oy_p)),
                         Size::from((tile_w, tile_h)),
@@ -180,6 +224,7 @@ pub(crate) fn build_desktop_backdrop_layers(
                         src,
                         commit,
                     ));
+                    tidx += 1;
                 }
             }
         }
@@ -201,8 +246,9 @@ pub(crate) fn build_desktop_backdrop_layers(
             let oy = (out_h - dh) / 2;
             let ox_p = (ox as f64 * scale_f).round();
             let oy_p = (oy as f64 * scale_f).round();
+            let lk = format!("{layout_root}|center");
             textures.push(ShellDmaElement::wallpaper_quad(
-                Id::new(),
+                backdrop_wallpaper_element_id(state, &output_name, &lk, 0),
                 ctx_id.clone(),
                 Point::<f64, Physical>::from((ox_p, oy_p)),
                 Size::from((dw, dh)),
@@ -215,8 +261,9 @@ pub(crate) fn build_desktop_backdrop_layers(
             ));
         }
         "stretch" => {
+            let lk = format!("{layout_root}|stretch");
             textures.push(ShellDmaElement::wallpaper_quad(
-                Id::new(),
+                backdrop_wallpaper_element_id(state, &output_name, &lk, 0),
                 ctx_id.clone(),
                 Point::<f64, Physical>::from((0.0, 0.0)),
                 output_geo.size,
@@ -245,8 +292,9 @@ pub(crate) fn build_desktop_backdrop_layers(
                 let src_y0 = (oy - g0y) / s;
                 let src_w = ow / s;
                 let src_h = oh / s;
+                let lk = format!("{layout_root}|spanned");
                 textures.push(ShellDmaElement::wallpaper_quad(
-                    Id::new(),
+                    backdrop_wallpaper_element_id(state, &output_name, &lk, 0),
                     ctx_id.clone(),
                     Point::<f64, Physical>::from((0.0, 0.0)),
                     output_geo.size,
@@ -258,6 +306,8 @@ pub(crate) fn build_desktop_backdrop_layers(
                     commit,
                 ));
             } else {
+                let lk = format!("{layout_root}|spanned_fb");
+                let eid = backdrop_wallpaper_element_id(state, &output_name, &lk, 0);
                 push_fill_cover(
                     &mut textures,
                     output_geo,
@@ -268,10 +318,13 @@ pub(crate) fn build_desktop_backdrop_layers(
                     commit,
                     out_w,
                     out_h,
+                    eid,
                 );
             }
         }
         _ => {
+            let lk = format!("{layout_root}|fill");
+            let eid = backdrop_wallpaper_element_id(state, &output_name, &lk, 0);
             push_fill_cover(
                 &mut textures,
                 output_geo,
@@ -282,6 +335,7 @@ pub(crate) fn build_desktop_backdrop_layers(
                 commit,
                 out_w,
                 out_h,
+                eid,
             );
         }
     }

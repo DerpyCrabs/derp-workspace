@@ -153,6 +153,11 @@ pub(crate) struct DesktopWallpaperGpuEntry {
     pub commit: CommitCounter,
 }
 
+pub(crate) struct BackdropWallpaperIdCache {
+    pub key: String,
+    pub ids: Vec<Id>,
+}
+
 pub(crate) fn toplevel_should_defer_initial_map(
     parent: Option<&WlSurface>,
     _title: &str,
@@ -408,6 +413,8 @@ pub struct CompositorState {
     pub(crate) desktop_wallpaper_gpu_by_path: HashMap<PathBuf, DesktopWallpaperGpuEntry>,
     wallpaper_decode_inflight: HashSet<PathBuf>,
     pub(crate) desktop_backdrop_solid: SolidColorBuffer,
+    pub(crate) backdrop_wallpaper_id_cache: HashMap<String, BackdropWallpaperIdCache>,
+    pub(crate) shell_begin_frame_last: Option<Instant>,
 }
 
 
@@ -648,6 +655,8 @@ impl CompositorState {
                 (1, 1),
                 Color32F::new(0.1, 0.1, 0.1, 1.0),
             ),
+            backdrop_wallpaper_id_cache: HashMap::new(),
+            shell_begin_frame_last: None,
         };
         crate::display_config::apply_keyboard_from_display_file(&mut s);
         crate::desktop_background::load_from_display_file_into(&mut s);

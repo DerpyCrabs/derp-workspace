@@ -861,6 +861,28 @@ function App() {
     return !!w && !w.minimized
   })
 
+  createEffect(() => {
+    if (!debugHudFrameVisible()) {
+      setHudFps(0)
+      return
+    }
+    let hudFpsFrames = 0
+    let hudFpsLast = performance.now()
+    let hudFpsRaf = 0
+    const hudFpsStep = (now: number) => {
+      hudFpsFrames += 1
+      const dt = now - hudFpsLast
+      if (dt >= 500) {
+        setHudFps(Math.round((hudFpsFrames * 1000) / dt))
+        hudFpsFrames = 0
+        hudFpsLast = now
+      }
+      hudFpsRaf = requestAnimationFrame(hudFpsStep)
+    }
+    hudFpsRaf = requestAnimationFrame(hudFpsStep)
+    onCleanup(() => cancelAnimationFrame(hudFpsRaf))
+  })
+
   /** Stable by `window_id` only — never sort by focus here. Focus-based sort reordered `<Index>` rows on every
    * `focus_changed`, churning titlebars and scrambling which row owned which window (visible flicker / wrong drag target). */
   const windowsList = createMemo(() =>
@@ -1984,21 +2006,6 @@ function App() {
       tryRequestCompositorSync()
     }, 750)
 
-    let hudFpsFrames = 0
-    let hudFpsLast = performance.now()
-    let hudFpsRaf = 0
-    const hudFpsStep = (now: number) => {
-      hudFpsFrames += 1
-      const dt = now - hudFpsLast
-      if (dt >= 500) {
-        setHudFps(Math.round((hudFpsFrames * 1000) / dt))
-        hudFpsFrames = 0
-        hudFpsLast = now
-      }
-      hudFpsRaf = requestAnimationFrame(hudFpsStep)
-    }
-    hudFpsRaf = requestAnimationFrame(hudFpsStep)
-
     const onDerpShell = (ev: Event) => {
       const ce = ev as CustomEvent<DerpShellDetail>
       const d = ce.detail
@@ -2661,7 +2668,6 @@ function App() {
     onCleanup(() => {
       const gw = window as unknown as { __derpSuppressShellUiPlacementHoles?: () => boolean }
       delete gw.__derpSuppressShellUiPlacementHoles
-      cancelAnimationFrame(hudFpsRaf)
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
       document.removeEventListener('keydown', onCtxKeyDown, true)
       document.removeEventListener('pointerdown', onCtxPointerDown, true)
