@@ -33,10 +33,7 @@ impl UplinkToCompositor {
 
     pub fn session_power_systemctl(&self, verb: String) {
         std::thread::spawn(move || {
-            match std::process::Command::new("systemctl")
-                .arg(&verb)
-                .output()
-            {
+            match std::process::Command::new("systemctl").arg(&verb).output() {
                 Ok(out) if out.status.success() => {}
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -235,14 +232,7 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn shell_tile_preview_canvas(
-        &self,
-        visible: bool,
-        lx: i32,
-        ly: i32,
-        lw: i32,
-        lh: i32,
-    ) {
+    pub fn shell_tile_preview_canvas(&self, visible: bool, lx: i32, ly: i32, lw: i32, lh: i32) {
         self.run(move |s| {
             s.apply_shell_tile_preview_canvas(visible, lx, ly, lw, lh);
         });

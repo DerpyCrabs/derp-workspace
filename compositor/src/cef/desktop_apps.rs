@@ -111,9 +111,8 @@ fn application_dirs() -> Vec<PathBuf> {
         dirs.push(p);
     }
 
-    let data_dirs = std::env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| {
-        std::ffi::OsString::from("/usr/local/share:/usr/share")
-    });
+    let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+        .unwrap_or_else(|| std::ffi::OsString::from("/usr/local/share:/usr/share"));
     for part in std::env::split_paths(&data_dirs) {
         if part.as_os_str().is_empty() {
             continue;
@@ -183,8 +182,7 @@ fn parse_desktop_contents(raw: &str) -> Option<DesktopEntryRaw> {
         } else if key == "Name" {
             e.name = Some(val.to_string());
         } else if let Some(loc) = key.strip_prefix("Name[").and_then(|s| s.strip_suffix(']')) {
-            e.name_locale
-                .insert(loc.to_string(), val.to_string());
+            e.name_locale.insert(loc.to_string(), val.to_string());
         } else if key == "GenericName" {
             e.generic_name = Some(val.to_string());
         } else if key == "Exec" {
@@ -200,10 +198,7 @@ fn parse_desktop_contents(raw: &str) -> Option<DesktopEntryRaw> {
 }
 
 fn parse_bool(s: &str) -> bool {
-    matches!(
-        s.to_ascii_lowercase().as_str(),
-        "true" | "1" | "yes" | "on"
-    )
+    matches!(s.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on")
 }
 
 fn include_entry(e: &DesktopEntryRaw) -> bool {
@@ -242,9 +237,7 @@ fn pick_display_name(e: &DesktopEntryRaw) -> Option<String> {
     if let Some((_k, v)) = e.name_locale.iter().find(|(_, v)| !v.is_empty()) {
         return Some(v.clone());
     }
-    e.generic_name
-        .clone()
-        .filter(|s| !s.is_empty())
+    e.generic_name.clone().filter(|s| !s.is_empty())
 }
 
 fn strip_exec_field_codes(exec: &str) -> String {

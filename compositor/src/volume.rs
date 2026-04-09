@@ -20,11 +20,7 @@ fn sym_for_media_key(keysym: &KeysymHandle<'_>) -> u32 {
     if m != keysyms::KEY_NoSymbol {
         return m;
     }
-    keysym
-        .raw_syms()
-        .first()
-        .map(|k| k.raw())
-        .unwrap_or(m)
+    keysym.raw_syms().first().map(|k| k.raw()).unwrap_or(m)
 }
 
 #[allow(non_upper_case_globals)]

@@ -8,8 +8,8 @@ use smithay::{
     utils::Scale,
 };
 
-use crate::desktop_stack::DesktopStack;
 use crate::derp_space::DerpSpaceElem;
+use crate::desktop_stack::DesktopStack;
 use crate::CompositorState;
 use smithay::backend::renderer::element::AsRenderElements;
 

@@ -71,9 +71,13 @@ fn parse_wallpaper_xml_into(xml: &str, items: &mut Vec<(String, String)>) {
         for path_raw in all_filename_values(block) {
             let path = path_raw.trim();
             if path.starts_with('/') {
-                let label = name
-                    .map(str::to_string)
-                    .unwrap_or_else(|| Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string());
+                let label = name.map(str::to_string).unwrap_or_else(|| {
+                    Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path)
+                        .to_string()
+                });
                 items.push((path.to_string(), label));
             }
         }
@@ -87,7 +91,11 @@ fn read_xml_wallpapers(items: &mut Vec<(String, String)>) {
     };
     for ent in rd.flatten() {
         let p = ent.path();
-        if p.extension().and_then(|x| x.to_str()).map(|e| e.eq_ignore_ascii_case("xml")) != Some(true) {
+        if p.extension()
+            .and_then(|x| x.to_str())
+            .map(|e| e.eq_ignore_ascii_case("xml"))
+            != Some(true)
+        {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&p) else {
@@ -145,7 +153,11 @@ fn dedup_sort(items: Vec<(String, String)>) -> Vec<GnomeWallpaperItem> {
             })
         })
         .collect();
-    v.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.file_uri.cmp(&b.file_uri)));
+    v.sort_by(|a, b| {
+        a.label
+            .cmp(&b.label)
+            .then_with(|| a.file_uri.cmp(&b.file_uri))
+    });
     v
 }
 

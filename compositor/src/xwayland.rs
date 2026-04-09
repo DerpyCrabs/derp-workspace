@@ -1,9 +1,9 @@
 use std::io;
 use std::process::Stdio;
 
+use crate::{sidecar, CalloopData};
 use smithay::reexports::calloop::{EventLoop, LoopHandle};
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
-use crate::{sidecar, CalloopData};
 
 pub fn spawn_pending_sidecar(data: &mut CalloopData) {
     if let Some(cmd) = data.pending_sidecar_cmd.take() {
@@ -17,7 +17,10 @@ pub fn spawn_pending_sidecar(data: &mut CalloopData) {
     }
 }
 
-pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut CalloopData) -> io::Result<()> {
+pub fn start_xwayland(
+    event_loop: &mut EventLoop<CalloopData>,
+    data: &mut CalloopData,
+) -> io::Result<()> {
     let dh = data.display_handle.clone();
     let (xwayland, client) = XWayland::spawn(
         &dh,
@@ -36,41 +39,39 @@ pub fn start_xwayland(event_loop: &mut EventLoop<CalloopData>, data: &mut Calloo
 
     event_loop
         .handle()
-        .insert_source(xwayland, move |event, _, d: &mut CalloopData| {
-            match event {
-                XWaylandEvent::Ready {
-                    x11_socket,
-                    display_number,
-                } => {
-                    std::env::set_var("DISPLAY", format!(":{}", display_number));
-                    tracing::debug!(
-                        display = display_number,
-                        "XWayland ready; DISPLAY set for OSR / child processes"
-                    );
-                    match X11Wm::start_wm(loop_handle.clone(), x11_socket, client.clone()) {
-                        Ok(wm) => {
-                            let id = wm.id();
-                            d.state.x11_wm_slot = Some((id, wm));
-                            if let Some(out) = d.state.leftmost_output() {
-                                if let Some((_, ref mut wm)) = d.state.x11_wm_slot {
-                                    if let Err(e) = wm.set_randr_primary_output(Some(&out)) {
-                                        tracing::debug!(?e, "xwm set_randr_primary_output");
-                                    }
+        .insert_source(xwayland, move |event, _, d: &mut CalloopData| match event {
+            XWaylandEvent::Ready {
+                x11_socket,
+                display_number,
+            } => {
+                std::env::set_var("DISPLAY", format!(":{}", display_number));
+                tracing::debug!(
+                    display = display_number,
+                    "XWayland ready; DISPLAY set for OSR / child processes"
+                );
+                match X11Wm::start_wm(loop_handle.clone(), x11_socket, client.clone()) {
+                    Ok(wm) => {
+                        let id = wm.id();
+                        d.state.x11_wm_slot = Some((id, wm));
+                        if let Some(out) = d.state.leftmost_output() {
+                            if let Some((_, ref mut wm)) = d.state.x11_wm_slot {
+                                if let Err(e) = wm.set_randr_primary_output(Some(&out)) {
+                                    tracing::debug!(?e, "xwm set_randr_primary_output");
                                 }
                             }
                         }
-                        Err(e) => {
-                            d.state.x11_wm_slot = None;
-                            tracing::error!(?e, "X11Wm::start_wm failed");
-                        }
                     }
-                    spawn_pending_sidecar(d);
+                    Err(e) => {
+                        d.state.x11_wm_slot = None;
+                        tracing::error!(?e, "X11Wm::start_wm failed");
+                    }
                 }
-                XWaylandEvent::Error => {
-                    d.state.x11_wm_slot = None;
-                    tracing::error!("XWayland failed to start (is `xwayland` installed?)");
-                    spawn_pending_sidecar(d);
-                }
+                spawn_pending_sidecar(d);
+            }
+            XWaylandEvent::Error => {
+                d.state.x11_wm_slot = None;
+                tracing::error!("XWayland failed to start (is `xwayland` installed?)");
+                spawn_pending_sidecar(d);
             }
         })
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;

@@ -39,7 +39,7 @@ import {
 import { SettingsPanel } from './SettingsPanel'
 import { buildBackedWindowOpenPayload } from './backedShellWindows'
 import {
-  isShellUiToolboxRow,
+  SHELL_WINDOW_FLAG_SHELL_HOSTED,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   scheduleShellUiWindowsSync,
@@ -324,6 +324,10 @@ type DerpWindow = {
   maximized: boolean
   fullscreen: boolean
   shell_flags: number
+}
+
+function shellWindowStackZ(windowId: number, focusedId: number | null): number {
+  return 20 + windowId + (focusedId === windowId ? 10_000 : 0)
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -868,6 +872,15 @@ function App() {
     return out
   })
 
+  const stackedWindowsList = createMemo(() => {
+    const focusedId = focusedWindowId()
+    return [...windowsList()].sort((a, b) => {
+      const az = shellWindowStackZ(a.window_id, focusedId)
+      const bz = shellWindowStackZ(b.window_id, focusedId)
+      return bz - az || b.window_id - a.window_id
+    })
+  })
+
   function ShellDeskWindowRow(props: { windowId: number }) {
     const winModel = createMemo((): ShellWindowModel | undefined => {
       const r = allWindowsMap().get(props.windowId)
@@ -875,7 +888,7 @@ function App() {
       return { ...r, snap_tiled: perMonitorTiles.isTiled(props.windowId) }
     })
     const stackZ = createMemo(
-      () => 20 + props.windowId + (focusedWindowId() === props.windowId ? 10_000 : 0),
+      () => shellWindowStackZ(props.windowId, focusedWindowId()),
     )
     const rowFocused = createMemo(() => focusedWindowId() === props.windowId)
     const windowId = props.windowId
@@ -885,7 +898,7 @@ function App() {
       layoutCanvasOrigin()
       return {
         id: props.windowId,
-        z: 20 + props.windowId + (focusedWindowId() === props.windowId ? 10_000 : 0),
+        z: shellWindowStackZ(props.windowId, focusedWindowId()),
         getEnv: (): ShellUiMeasureEnv | null => {
           const main = mainRef
           const og = outputGeom()
@@ -1169,14 +1182,14 @@ function App() {
       addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
     }
     const stripLabels = ['t', 'l', 'r', 'b'] as const
-    for (const decoWin of windowsList()) {
+    for (const decoWin of stackedWindowsList()) {
       if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       if (decoWin.minimized) continue
       const fid = focusedWindowId()
       const frow = fid != null ? windows().get(fid) : undefined
       const nativeHudFocus =
-        frow != null && !isShellUiToolboxRow(frow.shell_flags, frow.window_id)
-      if (nativeHudFocus && isShellUiToolboxRow(decoWin.shell_flags, decoWin.window_id)) continue
+        frow != null && (frow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0
+      if (nativeHudFocus && (decoWin.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) continue
       const deco = ssdDecorationExclusionRects({
         ...decoWin,
         snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
@@ -2043,7 +2056,7 @@ function App() {
     gw.__derpSuppressShellUiPlacementHoles = () => {
       const fid = focusedWindowId()
       const row = fid != null ? windows().get(fid) : undefined
-      return row != null && !isShellUiToolboxRow(row.shell_flags, row.window_id)
+      return row != null && (row.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0
     }
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
@@ -2343,7 +2356,7 @@ function App() {
           setFocusedWindowId((prev) => {
             if (prev == null) return null
             const prow = windows().get(prev)
-            if (prow && isShellUiToolboxRow(prow.shell_flags, prow.window_id)) {
+            if (prow && (prow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
               return prev
             }
             return null

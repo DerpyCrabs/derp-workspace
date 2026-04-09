@@ -257,7 +257,10 @@ pub fn encode_output_layout(
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES {
             return None;
         }
-        body_sz = body_sz.checked_add(4)?.checked_add(nl as usize)?.checked_add(28)?;
+        body_sz = body_sz
+            .checked_add(4)?
+            .checked_add(nl as usize)?
+            .checked_add(28)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
     body_sz = body_sz.checked_add(4)?;
@@ -464,7 +467,8 @@ pub fn encode_window_mapped(
     let tl = u32::try_from(tb.len()).ok()?;
     let al = u32::try_from(ab.len()).ok()?;
     let ol = u32::try_from(ob.len()).ok()?;
-    if tl > MAX_WINDOW_STRING_BYTES || al > MAX_WINDOW_STRING_BYTES || ol > MAX_WINDOW_STRING_BYTES {
+    if tl > MAX_WINDOW_STRING_BYTES || al > MAX_WINDOW_STRING_BYTES || ol > MAX_WINDOW_STRING_BYTES
+    {
         return None;
     }
     let header = 4u32 * 9;
@@ -813,7 +817,13 @@ pub fn encode_shell_quit_compositor() -> Vec<u8> {
     v
 }
 
-pub fn encode_shell_tile_preview(visible: bool, x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
+pub fn encode_shell_tile_preview(
+    visible: bool,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Vec<u8> {
     let body_len = 24u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
@@ -1414,7 +1424,9 @@ pub fn pop_compositor_to_shell_message(
     return Ok(Some(decoded));
 }
 
-fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
+fn decode_compositor_to_shell_body(
+    body: &[u8],
+) -> Result<DecodedCompositorToShellMessage, DecodeError> {
     if body.len() < 4 {
         return Err(DecodeError::BadCompositorToShellPayload);
     }
@@ -1542,9 +1554,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
                 return Err(DecodeError::BadWindowPayload);
             }
             let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
-            Ok(DecodedCompositorToShellMessage::WindowUnmapped {
-                window_id,
-            })
+            Ok(DecodedCompositorToShellMessage::WindowUnmapped { window_id })
         }
         MSG_WINDOW_GEOMETRY => {
             if body.len() < 28 {
@@ -1713,8 +1723,7 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
             if body.len() != 8 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let volume_linear_percent_x100 =
-                u16::from_le_bytes(body[4..6].try_into().unwrap());
+            let volume_linear_percent_x100 = u16::from_le_bytes(body[4..6].try_into().unwrap());
             let flags = u16::from_le_bytes(body[6..8].try_into().unwrap());
             Ok(DecodedCompositorToShellMessage::VolumeOverlay {
                 volume_linear_percent_x100,
@@ -1747,7 +1756,9 @@ fn decode_compositor_to_shell_body(body: &[u8]) -> Result<DecodedCompositorToShe
     }
 }
 
-fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
+fn decode_window_list_compositor_body(
+    body: &[u8],
+) -> Result<DecodedCompositorToShellMessage, DecodeError> {
     if body.len() < 8 {
         return Err(DecodeError::BadWindowListPayload);
     }
@@ -1774,14 +1785,17 @@ fn decode_window_list_compositor_body(body: &[u8]) -> Result<DecodedCompositorTo
         let minimized = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
         let maximized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
         let fullscreen = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
-        let client_side_decoration = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
+        let client_side_decoration =
+            u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
         let shell_flags = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
         if minimized > 1 || maximized > 1 || fullscreen > 1 || client_side_decoration > 1 {
             return Err(DecodeError::BadWindowListPayload);
         }
         let title_len = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()) as usize;
         let app_len = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()) as usize;
-        if title_len > MAX_WINDOW_STRING_BYTES as usize || app_len > MAX_WINDOW_STRING_BYTES as usize {
+        if title_len > MAX_WINDOW_STRING_BYTES as usize
+            || app_len > MAX_WINDOW_STRING_BYTES as usize
+        {
             return Err(DecodeError::BadWindowListPayload);
         }
         off += 52;
@@ -1982,9 +1996,7 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             if en > 1 {
                 return Err(DecodeError::BadWindowPayload);
             }
-            Ok(DecodedMessage::ShellSetPresentationFullscreen {
-                enabled: en != 0,
-            })
+            Ok(DecodedMessage::ShellSetPresentationFullscreen { enabled: en != 0 })
         }
         MSG_SHELL_TASKBAR_ACTIVATE => {
             if body.len() != 8 {
@@ -2040,7 +2052,11 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 return Err(DecodeError::BadShellWindowsPayload);
             }
             let need = 12usize
-                .checked_add((count as usize).checked_mul(28).ok_or(DecodeError::BadShellWindowsPayload)?)
+                .checked_add(
+                    (count as usize)
+                        .checked_mul(28)
+                        .ok_or(DecodeError::BadShellWindowsPayload)?,
+                )
                 .ok_or(DecodeError::BadShellWindowsPayload)?;
             if body.len() != need {
                 return Err(DecodeError::BadShellWindowsPayload);
@@ -2155,7 +2171,11 @@ fn decode_frame_dmabuf_commit_body(body: &[u8]) -> Result<DecodedMessage, Decode
         return Err(DecodeError::BadDmabufCommitPayload);
     }
     let need = 36usize
-        .checked_add((plane_count as usize).checked_mul(16).ok_or(DecodeError::BadDmabufCommitPayload)?)
+        .checked_add(
+            (plane_count as usize)
+                .checked_mul(16)
+                .ok_or(DecodeError::BadDmabufCommitPayload)?,
+        )
         .ok_or(DecodeError::BadDmabufCommitPayload)?;
     if body.len() != need {
         return Err(DecodeError::BadDmabufCommitPayload);

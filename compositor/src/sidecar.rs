@@ -135,21 +135,21 @@ pub fn terminate_sidecar(child: &mut Option<Child>) {
     let Some(mut c) = child.take() else {
         return;
     };
-        let pid = c.id() as libc::pid_t;
-        let order = linux_subtree_postorder_kill_list(pid);
-        unsafe {
-            linux_signal_pids(&order, libc::SIGTERM);
+    let pid = c.id() as libc::pid_t;
+    let order = linux_subtree_postorder_kill_list(pid);
+    unsafe {
+        linux_signal_pids(&order, libc::SIGTERM);
+    }
+    for _ in 0..80 {
+        match c.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => break,
         }
-        for _ in 0..80 {
-            match c.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
-        }
-        let order = linux_subtree_postorder_kill_list(pid);
-        unsafe {
-            linux_signal_pids(&order, libc::SIGKILL);
-        }
-        let _ = c.wait();
+    }
+    let order = linux_subtree_postorder_kill_list(pid);
+    unsafe {
+        linux_signal_pids(&order, libc::SIGKILL);
+    }
+    let _ = c.wait();
 }

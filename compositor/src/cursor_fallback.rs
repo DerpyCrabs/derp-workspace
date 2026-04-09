@@ -30,7 +30,11 @@ fn pick_image(images: &[xcursor::parser::Image]) -> Option<&xcursor::parser::Ima
     images
         .iter()
         .min_by_key(|img| (img.size as i32 - 32).abs())
-        .or_else(|| images.iter().max_by_key(|img| img.width.saturating_mul(img.height)))
+        .or_else(|| {
+            images
+                .iter()
+                .max_by_key(|img| img.width.saturating_mul(img.height))
+        })
 }
 
 fn load_system_cursor() -> Option<(MemoryRenderBuffer, (i32, i32))> {
@@ -46,7 +50,8 @@ fn load_system_cursor() -> Option<(MemoryRenderBuffer, (i32, i32))> {
             continue;
         }
         let bgra = rgba_strip_to_shell_bgra(img.width, img.height, &img.pixels_rgba)?;
-        let mut buf = MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (w, h), 1, Transform::Normal, None);
+        let mut buf =
+            MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (w, h), 1, Transform::Normal, None);
         {
             let mut ctx = buf.render();
             ctx.draw(|mem| {
@@ -65,7 +70,8 @@ fn load_system_cursor() -> Option<(MemoryRenderBuffer, (i32, i32))> {
 fn build_vector_fallback() -> (MemoryRenderBuffer, (i32, i32)) {
     const W: i32 = 24;
     const H: i32 = 24;
-    let mut buf = MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (W, H), 1, Transform::Normal, None);
+    let mut buf =
+        MemoryRenderBuffer::new(SHELL_OSR_MEMORY_FOURCC, (W, H), 1, Transform::Normal, None);
     {
         let mut ctx = buf.render();
         ctx.draw(|mem| {

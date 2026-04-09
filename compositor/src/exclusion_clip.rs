@@ -25,7 +25,7 @@ impl ShellExclusionClipCtx {
                 (r.loc.y + r.size.h) as f64,
             ))
             .to_logical(scale)
-                .to_i32_round();
+            .to_i32_round();
         let w = (gbr.x - gtl.x).max(1);
         let h = (gbr.y - gtl.y).max(1);
         Rectangle::new(gtl, Size::from((w, h)))

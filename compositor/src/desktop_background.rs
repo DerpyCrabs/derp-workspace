@@ -42,9 +42,7 @@ pub fn normalize_filesystem_path(raw: &str) -> PathBuf {
 }
 
 pub(crate) fn rgba_to_argb8888_bytes(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
-    let n = (w as usize)
-        .checked_mul(h as usize)?
-        .checked_mul(4)?;
+    let n = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
     if rgba.len() < n {
         return None;
     }
@@ -63,9 +61,8 @@ fn decode_bytes_to_dynamic(bytes: &[u8], path_for_err: &Path) -> Result<DynamicI
     match image::load_from_memory(bytes) {
         Ok(img) => Ok(img),
         Err(e0) => {
-            let dec = JxlDecoder::new(Cursor::new(bytes)).map_err(|e| {
-                format!("decode {}: {e0}; jxl init: {e}", path_for_err.display())
-            })?;
+            let dec = JxlDecoder::new(Cursor::new(bytes))
+                .map_err(|e| format!("decode {}: {e0}; jxl init: {e}", path_for_err.display()))?;
             DynamicImage::from_decoder(dec)
                 .map_err(|e| format!("decode {}: {e0}; jxl: {e}", path_for_err.display()))
         }

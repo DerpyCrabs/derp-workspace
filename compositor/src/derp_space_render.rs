@@ -10,8 +10,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 use crate::derp_space::DerpSpaceElem;
 use crate::state::CompositorState;
 
-pub(crate) type DerpWinRenderEl =
-    <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
+pub(crate) type DerpWinRenderEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
 
 pub(crate) fn derp_space_render_elements_with_window_ids(
     space: &Space<DerpSpaceElem>,
@@ -19,9 +18,14 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
     renderer: &mut GlesRenderer,
     output: &Output,
     alpha: f32,
-) -> Vec<(SpaceRenderElements<GlesRenderer, DerpWinRenderEl>, Option<u32>)> {
-    let mut out: Vec<(SpaceRenderElements<GlesRenderer, DerpWinRenderEl>, Option<u32>)> =
-        Vec::new();
+) -> Vec<(
+    SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
+    Option<u32>,
+)> {
+    let mut out: Vec<(
+        SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
+        Option<u32>,
+    )> = Vec::new();
     let output_scale = output.current_scale().fractional_scale();
 
     let layer_map = layer_map_for_output(output);
@@ -72,10 +76,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 Scale::from(output_scale),
                 alpha,
             ) {
-                out.push((
-                    SpaceRenderElements::Element(Wrap::from(el)),
-                    wid,
-                ));
+                out.push((SpaceRenderElements::Element(Wrap::from(el)), wid));
             }
         }
     }

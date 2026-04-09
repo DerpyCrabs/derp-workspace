@@ -10,10 +10,8 @@
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{
     element::{
-        memory::MemoryRenderBufferRenderElement,
-        solid::SolidColorRenderElement,
-        surface::WaylandSurfaceRenderElement,
-        Element, Id, Kind, RenderElement, UnderlyingStorage,
+        memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
+        surface::WaylandSurfaceRenderElement, Element, Id, Kind, RenderElement, UnderlyingStorage,
     },
     gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
     utils::{CommitCounter, DamageSet, OpaqueRegions},
@@ -55,7 +53,10 @@ where
     E: Element + RenderElement<GlesRenderer>,
 {
     pub fn new(inner: SpaceRenderElements<GlesRenderer, E>, output_scale: f64) -> Self {
-        Self { inner, output_scale }
+        Self {
+            inner,
+            output_scale,
+        }
     }
 }
 
@@ -125,8 +126,7 @@ where
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        self.inner
-            .draw(frame, src, dst, damage, opaque_regions)
+        self.inner.draw(frame, src, dst, damage, opaque_regions)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -140,6 +140,7 @@ where
 {
     inner: FractionalDamageSpaceElements<E>,
     exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+    debug_window_id: Option<u32>,
 }
 
 impl<E> SpaceExclusionClip<E>
@@ -150,10 +151,12 @@ where
         inner: SpaceRenderElements<GlesRenderer, E>,
         output_scale: f64,
         exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
+        debug_window_id: Option<u32>,
     ) -> Self {
         Self {
             inner: FractionalDamageSpaceElements::new(inner, output_scale),
             exclusion,
+            debug_window_id,
         }
     }
 }
@@ -273,15 +276,20 @@ where
             }
         }
         if clipped.is_empty() {
+            warn!(
+                target: "derp_shell_clip",
+                window_id = ?self.debug_window_id,
+                damage = ?damage,
+                dst = ?dst,
+                zone_count = self.exclusion.zones.len(),
+                "space exclusion clip removed all native damage"
+            );
             return Ok(());
         }
         self.inner.draw(frame, src, dst, &clipped, opaque_regions)
     }
 
-    fn underlying_storage(
-        &self,
-        renderer: &mut GlesRenderer,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         self.inner.underlying_storage(renderer)
     }
 }
@@ -344,7 +352,11 @@ impl Element for ShellDmaElement {
         Rectangle::new(self.location.to_i32_round(), self.physical_size(scale))
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         let full_rect = Rectangle::new(
             Point::<i32, Physical>::from((0, 0)),
             self.physical_size(scale),
@@ -415,7 +427,10 @@ pub struct FractionalDamageElement<E> {
 
 impl<E> FractionalDamageElement<E> {
     pub fn new(inner: E, output_scale: f64) -> Self {
-        Self { inner, output_scale }
+        Self {
+            inner,
+            output_scale,
+        }
     }
 }
 
@@ -479,8 +494,7 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for FractionalD
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        self.inner
-            .draw(frame, src, dst, damage, opaque_regions)
+        self.inner.draw(frame, src, dst, damage, opaque_regions)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -687,10 +701,7 @@ where
         }
     }
 
-    fn underlying_storage(
-        &self,
-        renderer: &mut GlesRenderer,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         match self {
             DesktopStack::Space(x) => x.underlying_storage(renderer),
             DesktopStack::SpaceClip(x) => x.underlying_storage(renderer),

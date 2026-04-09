@@ -1,9 +1,4 @@
-use crate::{
-    derp_space::DerpSpaceElem,
-    grabs::resize_grab,
-    state::ClientState,
-    CompositorState,
-};
+use crate::{derp_space::DerpSpaceElem, grabs::resize_grab, state::ClientState, CompositorState};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,

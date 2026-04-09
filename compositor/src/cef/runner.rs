@@ -486,13 +486,7 @@ pub fn spawn_cef_ui_thread(
     shutdown_from_main: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        run_cef(
-            url,
-            cef_tx,
-            shell_slot,
-            handshake,
-            shutdown_from_main,
-        );
+        run_cef(url, cef_tx, shell_slot, handshake, shutdown_from_main);
     })
 }
 
@@ -638,8 +632,7 @@ fn run_cef(
         tracing::warn!("cef: could not register SIGINT/SIGTERM handlers");
     }
 
-    while !shutdown_requested.load(Ordering::Relaxed)
-        && !shutdown_from_main.load(Ordering::SeqCst)
+    while !shutdown_requested.load(Ordering::Relaxed) && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
         thread::sleep(Duration::from_millis(8));

@@ -231,12 +231,10 @@ fn resolve_entry(name: &str, monitor_id: Option<&String>, live: &[LiveHead]) -> 
         return Some(h.name.clone());
     }
     if let Some(mid) = monitor_id {
-        if let Some(h) = live.iter().find(|h| {
-            h.monitor_id
-                .as_ref()
-                .map(|s| s.as_str())
-                == Some(mid.as_str())
-        }) {
+        if let Some(h) = live
+            .iter()
+            .find(|h| h.monitor_id.as_ref().map(|s| s.as_str()) == Some(mid.as_str()))
+        {
             return Some(h.name.clone());
         }
     }
@@ -361,9 +359,8 @@ fn write_atomic(path: &Path, src: &DisplayConfigFile) -> std::io::Result<()> {
         s.push(".tmp");
         s
     });
-    let data = serde_json::to_vec_pretty(src).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-    })?;
+    let data = serde_json::to_vec_pretty(src)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(&data)?;

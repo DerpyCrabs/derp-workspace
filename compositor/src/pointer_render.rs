@@ -3,15 +3,14 @@
 use smithay::{
     backend::renderer::{
         element::{
-            memory::MemoryRenderBufferRenderElement,
-            surface::render_elements_from_surface_tree,
+            memory::MemoryRenderBufferRenderElement, surface::render_elements_from_surface_tree,
             AsRenderElements, Kind,
         },
         gles::GlesRenderer,
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
-    utils::{IsAlive, Logical, Point, Physical, Scale},
+    utils::{IsAlive, Logical, Physical, Point, Scale},
     wayland::compositor,
 };
 
@@ -47,7 +46,9 @@ fn push_named_cursor_fallback(
         None,
         Kind::Cursor,
     ) {
-        Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(el, scale_f))),
+        Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
+            el, scale_f,
+        ))),
         Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
     }
 }
@@ -98,10 +99,7 @@ pub fn append_pointer_desktop_elements(
                     .map(|m| m.lock().unwrap().hotspot)
                     .unwrap_or_default()
             });
-            let top_left = Point::from((
-                pos.x - hotspot.x as f64,
-                pos.y - hotspot.y as f64,
-            ));
+            let top_left = Point::from((pos.x - hotspot.x as f64, pos.y - hotspot.y as f64));
             let phys = top_left.to_physical_precise_round(Scale::from(scale_f));
             for el in render_elements_from_surface_tree(
                 renderer,
@@ -111,7 +109,9 @@ pub fn append_pointer_desktop_elements(
                 1.0,
                 Kind::Cursor,
             ) {
-                out.push(DesktopStack::Pointer(FractionalDamageElement::new(el, scale_f)));
+                out.push(DesktopStack::Pointer(FractionalDamageElement::new(
+                    el, scale_f,
+                )));
             }
         }
         CursorImageStatus::Hidden => unreachable!(),

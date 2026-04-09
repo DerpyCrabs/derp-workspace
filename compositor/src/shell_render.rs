@@ -122,10 +122,16 @@ pub(crate) fn shell_dmabuf_dirty_buffer_to_physical(
     out
 }
 
-fn log_shell_dmabuf_import_context(dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf, renderer: &GlesRenderer) {
+fn log_shell_dmabuf_import_context(
+    dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf,
+    renderer: &GlesRenderer,
+) {
     let fmt = dmabuf.format();
     let sz = dmabuf.size();
-    let in_render = renderer.egl_context().dmabuf_render_formats().contains(&fmt);
+    let in_render = renderer
+        .egl_context()
+        .dmabuf_render_formats()
+        .contains(&fmt);
     let in_texture = renderer.dmabuf_formats().contains(&fmt);
     let strides: Vec<u32> = dmabuf.strides().collect();
     let offsets: Vec<u32> = dmabuf.offsets().collect();
@@ -167,9 +173,7 @@ pub fn compositor_shell_dmabuf_element(
         Some(p) => p,
         None => return Ok(None),
     };
-    let Some(buffer_src) =
-        shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h)
-    else {
+    let Some(buffer_src) = shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h) else {
         return Ok(None);
     };
 
@@ -211,9 +215,16 @@ pub fn compositor_shell_dmabuf_element(
         Err(e) => {
             let fmt = dmabuf.format();
             let sz = dmabuf.size();
-            let in_render = renderer.egl_context().dmabuf_render_formats().contains(&fmt);
+            let in_render = renderer
+                .egl_context()
+                .dmabuf_render_formats()
+                .contains(&fmt);
             let in_texture = renderer.dmabuf_formats().contains(&fmt);
-            let render_n = renderer.egl_context().dmabuf_render_formats().iter().count();
+            let render_n = renderer
+                .egl_context()
+                .dmabuf_render_formats()
+                .iter()
+                .count();
             let texture_n = renderer.dmabuf_formats().iter().count();
             let (sample_render, sample_texture) = sample_egl_dmabuf_pairs(renderer);
             tracing::warn!(
@@ -311,10 +322,7 @@ pub fn compositor_shell_context_menu_element(
     let output_scale = Scale::from(output.current_scale().fractional_scale());
     let scale_f = output.current_scale().fractional_scale();
     let d = inter.loc - output_geo.loc;
-    let shell_loc_phys = Point::<f64, Physical>::from((
-        d.x as f64 * scale_f,
-        d.y as f64 * scale_f,
-    ));
+    let shell_loc_phys = Point::<f64, Physical>::from((d.x as f64 * scale_f, d.y as f64 * scale_f));
     let shell_size_logical = inter.size;
 
     let damage_phys = if state.shell_dmabuf_dirty_force_full {

@@ -121,8 +121,10 @@ pub(crate) fn build_desktop_backdrop_layers(
     let mode = cfg.mode.as_str();
     let want_image = mode == "image" && !cfg.image_path.trim().is_empty();
     let path_ok = wallpaper_path_for_cfg(cfg);
-    let gpu_ready =
-        want_image && path_ok.as_ref().is_some_and(|p| state.desktop_wallpaper_gpu_by_path.contains_key(p));
+    let gpu_ready = want_image
+        && path_ok
+            .as_ref()
+            .is_some_and(|p| state.desktop_wallpaper_gpu_by_path.contains_key(p));
 
     if !gpu_ready {
         state

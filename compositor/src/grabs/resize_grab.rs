@@ -50,7 +50,8 @@ pub fn compute_clamped_resize_size(
     let mut delta_x = accum_dx;
     let mut delta_y = accum_dy;
 
-    if edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) && edges.intersects(ResizeEdge::LEFT) {
+    if edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) && edges.intersects(ResizeEdge::LEFT)
+    {
         delta_x = -delta_x;
     }
 
@@ -114,7 +115,10 @@ pub fn resize_tracking_set_waiting_last_commit(
     initial_rect: Rectangle<i32, Logical>,
 ) {
     ResizeSurfaceState::with(surface, |state| {
-        *state = ResizeSurfaceState::WaitingForLastCommit { edges, initial_rect };
+        *state = ResizeSurfaceState::WaitingForLastCommit {
+            edges,
+            initial_rect,
+        };
     });
 }
 

@@ -11,17 +11,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use smithay::output::{Output, Scale};
+use smithay::reexports::wayland_server::Resource;
 use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
     backend::input::{KeyState, Keycode, TouchSlot},
     backend::renderer::{
-        element::solid::SolidColorBuffer,
-        gles::GlesRenderer,
-        utils::CommitCounter,
-        Color32F,
-        ImportDma,
-        Renderer,
+        element::solid::SolidColorBuffer, gles::GlesRenderer, utils::CommitCounter, Color32F,
+        ImportDma, Renderer,
     },
     backend::{
         renderer::element::{memory::MemoryRenderBuffer, Id},
@@ -41,25 +39,20 @@ use smithay::{
             channel::{self, Event as CalloopChannelEvent},
             generic::Generic,
             timer::{TimeoutAction, Timer},
-            EventLoop,
-            Interest,
-            LoopHandle,
-            LoopSignal,
-            Mode,
-            PostAction,
-            RegistrationToken,
+            EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
         },
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
             Display, DisplayHandle,
         },
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
     utils::{Buffer, Logical, Point, Rectangle, Serial, Size, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
+        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
@@ -67,26 +60,22 @@ use smithay::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
-        viewporter::ViewporterState,
         shm::ShmState,
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
-        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
     },
     xwayland::{
         xwm::{Reorder, ResizeEdge, X11Window, XwmId},
         X11Surface, X11Wm, XwmHandler,
     },
 };
-use smithay::output::{Output, Scale};
-use smithay::reexports::wayland_server::Resource;
 
 use crate::{
     chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge, WindowInfo},
     derp_space::DerpSpaceElem,
-    exclusion_clip,
-    shell_ipc,
-    window_registry::WindowRegistry,
+    exclusion_clip, shell_ipc,
+    window_registry::{WindowKind, WindowRegistry},
     CalloopData,
 };
 use smithay::input::pointer::CursorImageStatus;
@@ -141,9 +130,8 @@ pub(crate) fn transform_to_wire(t: Transform) -> u32 {
 
 pub(crate) struct DesktopWallpaperGpu {
     pub texture: smithay::backend::renderer::gles::GlesTexture,
-    pub context_id: smithay::backend::renderer::ContextId<
-        smithay::backend::renderer::gles::GlesTexture,
-    >,
+    pub context_id:
+        smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
     pub tex_w: i32,
     pub tex_h: i32,
 }
@@ -345,14 +333,12 @@ pub struct CompositorState {
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
     /// (immediate flush) and from [`Self::shell_move_end`].
     pub(crate) shell_move_pending_delta: (i32, i32),
-    pub(crate) shell_move_is_backed: bool,
     /// Shell-initiated interactive resize ([`shell_wire::MSG_SHELL_RESIZE_*`]).
     pub(crate) shell_resize_window_id: Option<u32>,
     pub(crate) shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
     pub(crate) shell_resize_initial_rect: Option<Rectangle<i32, Logical>>,
     pub(crate) shell_resize_accum: (f64, f64),
     pub(crate) shell_resize_shell_grab: Option<u32>,
-    pub(crate) shell_resize_is_backed: bool,
     pub(crate) shell_ui_pointer_grab: Option<u32>,
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
@@ -393,9 +379,6 @@ pub struct CompositorState {
     pub(crate) shell_ui_suppress_osr_exclusion: bool,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
-    pub(crate) shell_backed_windows:
-        std::collections::HashMap<u32, crate::shell_backed::ShellBackedWindowEntry>,
-    pub(crate) shell_ui_backed_placements: Vec<ShellUiWindowPlacement>,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
     pub(crate) shell_chrome_titlebar_h: i32,
@@ -417,15 +400,13 @@ pub struct CompositorState {
     pub(crate) shell_begin_frame_last: Option<Instant>,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ShellContextMenuPlacement {
     pub buffer_rect: Rectangle<i32, Buffer>,
     pub global_rect: Rectangle<i32, Logical>,
 }
 
-#[derive(Debug, Clone)]
-#[derive(PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShellUiWindowPlacement {
     pub id: u32,
     pub z: u32,
@@ -483,7 +464,8 @@ impl CompositorState {
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
         let wallpaper_loader = crate::desktop_background::spawn_wallpaper_loader_thread();
-        let (cursor_fallback_buffer, cursor_fallback_hotspot) = crate::cursor_fallback::load_cursor_fallback();
+        let (cursor_fallback_buffer, cursor_fallback_hotspot) =
+            crate::cursor_fallback::load_cursor_fallback();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, &options.seat_name);
         seat.add_keyboard(Default::default(), 200, 25).unwrap();
@@ -499,39 +481,39 @@ impl CompositorState {
         let (cef_to_compositor_tx, cef_rx) = channel::channel();
         event_loop
             .handle()
-            .insert_source(cef_rx, |ev, _, d: &mut CalloopData| {
-                match ev {
-                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::ShellRxNote) => {
-                        d.state.shell_note_shell_ipc_rx();
-                    }
-                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Dmabuf {
+            .insert_source(cef_rx, |ev, _, d: &mut CalloopData| match ev {
+                CalloopChannelEvent::Msg(
+                    crate::cef::compositor_tx::CefToCompositor::ShellRxNote,
+                ) => {
+                    d.state.shell_note_shell_ipc_rx();
+                }
+                CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Dmabuf {
+                    width,
+                    height,
+                    drm_format,
+                    modifier,
+                    flags,
+                    generation,
+                    planes,
+                    fds,
+                    dirty_buffer,
+                }) => {
+                    d.state.accept_shell_dmabuf_from_cef(
                         width,
                         height,
                         drm_format,
                         modifier,
                         flags,
                         generation,
-                        planes,
+                        &planes,
                         fds,
                         dirty_buffer,
-                    }) => {
-                        d.state.accept_shell_dmabuf_from_cef(
-                            width,
-                            height,
-                            drm_format,
-                            modifier,
-                            flags,
-                            generation,
-                            &planes,
-                            fds,
-                            dirty_buffer,
-                        );
-                    }
-                    CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
-                        f(&mut d.state);
-                    }
-                    CalloopChannelEvent::Closed => {}
+                    );
                 }
+                CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
+                    f(&mut d.state);
+                }
+                CalloopChannelEvent::Closed => {}
             })
             .expect("cef from-shell channel");
 
@@ -636,10 +618,6 @@ impl CompositorState {
             shell_ui_suppress_osr_exclusion: false,
             shell_focused_ui_window_id: None,
             shell_last_sent_ui_focus_id: None,
-            shell_backed_windows: std::collections::HashMap::new(),
-            shell_ui_backed_placements: Vec::new(),
-            shell_move_is_backed: false,
-            shell_resize_is_backed: false,
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
@@ -707,9 +685,12 @@ impl CompositorState {
     }
 
     fn prune_desktop_wallpaper_paths(&mut self, needed: &HashSet<PathBuf>) {
-        self.desktop_wallpaper_cpu_by_path.retain(|k, _| needed.contains(k));
-        self.desktop_wallpaper_gpu_by_path.retain(|k, _| needed.contains(k));
-        self.wallpaper_decode_inflight.retain(|k| needed.contains(k));
+        self.desktop_wallpaper_cpu_by_path
+            .retain(|k, _| needed.contains(k));
+        self.desktop_wallpaper_gpu_by_path
+            .retain(|k, _| needed.contains(k));
+        self.wallpaper_decode_inflight
+            .retain(|k| needed.contains(k));
     }
 
     pub fn apply_shell_desktop_background_json(&mut self, json: &str) {
@@ -718,19 +699,20 @@ impl CompositorState {
             #[serde(flatten)]
             default: crate::display_config::DesktopBackgroundConfig,
             #[serde(default)]
-            desktop_background_outputs: HashMap<String, crate::display_config::DesktopBackgroundConfig>,
+            desktop_background_outputs:
+                HashMap<String, crate::display_config::DesktopBackgroundConfig>,
         }
         let (default, outs) = match serde_json::from_str::<ShellDesktopBg>(json) {
             Ok(w) => (w.default, w.desktop_background_outputs),
             Err(_) => {
-                let cfg: crate::display_config::DesktopBackgroundConfig = match serde_json::from_str(json)
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(target: "derp_wallpaper", ?e, "desktop background json");
-                        return;
-                    }
-                };
+                let cfg: crate::display_config::DesktopBackgroundConfig =
+                    match serde_json::from_str(json) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::warn!(target: "derp_wallpaper", ?e, "desktop background json");
+                            return;
+                        }
+                    };
                 (cfg, HashMap::new())
             }
         };
@@ -769,7 +751,8 @@ impl CompositorState {
             match r {
                 Ok((path, cpu)) => {
                     self.wallpaper_decode_inflight.remove(&path);
-                    self.desktop_wallpaper_cpu_by_path.insert(path, Arc::new(cpu));
+                    self.desktop_wallpaper_cpu_by_path
+                        .insert(path, Arc::new(cpu));
                 }
                 Err(e) => tracing::warn!(target: "derp_wallpaper", "{e}"),
             }
@@ -914,34 +897,59 @@ impl CompositorState {
         None
     }
 
-    pub(crate) fn shell_ui_placement_topmost_at(&self, pos: Point<f64, Logical>) -> Option<&ShellUiWindowPlacement> {
+    pub(crate) fn shell_ui_placement_topmost_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<ShellUiWindowPlacement> {
         let px = pos.x;
         let py = pos.y;
-        let mut best: Option<&ShellUiWindowPlacement> = None;
+        let mut best: Option<ShellUiWindowPlacement> = None;
         let mut best_z = 0u32;
-        for w in self
-            .shell_ui_backed_placements
-            .iter()
-            .chain(self.shell_ui_windows.iter())
-        {
+        let placements = self.shell_hosted_visible_placements();
+        for w in &placements {
             let g = &w.global_rect;
             let x2 = g.loc.x.saturating_add(g.size.w) as f64;
             let y2 = g.loc.y.saturating_add(g.size.h) as f64;
             if px >= g.loc.x as f64 && px < x2 && py >= g.loc.y as f64 && py < y2 {
                 if best.is_none() || w.z >= best_z {
                     best_z = w.z;
-                    best = Some(w);
+                    best = Some(w.clone());
                 }
             }
         }
         best
     }
 
-    pub(crate) fn shell_ui_topmost_at(&self, pos: Point<f64, Logical>) -> Option<&ShellUiWindowPlacement> {
+    pub(crate) fn shell_ui_topmost_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<ShellUiWindowPlacement> {
         if self.shell_ui_suppress_osr_exclusion {
             return None;
         }
         self.shell_ui_placement_topmost_at(pos)
+    }
+
+    fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        let mut placements = self.shell_ui_windows.clone();
+        let shell_ids: HashSet<u32> = placements.iter().map(|w| w.id).collect();
+        placements.extend(
+            self.shell_backed_placements()
+                .into_iter()
+                .filter(|w| !shell_ids.contains(&w.id)),
+        );
+        placements
+    }
+
+    fn shell_hosted_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        self.shell_visible_placements()
+            .into_iter()
+            .filter(|w| self.window_registry.is_shell_hosted(w.id))
+            .collect()
+    }
+
+    fn shell_hosted_clip_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        self.shell_hosted_visible_placements()
     }
 
     pub(crate) fn shell_global_rect_to_buffer_rect(
@@ -949,15 +957,14 @@ impl CompositorState {
         global: &Rectangle<i32, Logical>,
     ) -> Option<Rectangle<i32, Buffer>> {
         let (buf_w, buf_h) = self.shell_view_px?;
-        let content_h = buf_h.saturating_sub(self.shell_context_menu_atlas_buffer_h).max(1);
+        let content_h = buf_h
+            .saturating_sub(self.shell_context_menu_atlas_buffer_h)
+            .max(1);
         let (lw_u, lh_u) = self.shell_output_logical_size()?;
         let lw = lw_u as i32;
         let lh = lh_u as i32;
-        let (ox, oy, cw_l, ch_l) = crate::shell_letterbox::letterbox_logical(
-            Size::from((lw, lh)),
-            buf_w,
-            content_h,
-        )?;
+        let (ox, oy, cw_l, ch_l) =
+            crate::shell_letterbox::letterbox_logical(Size::from((lw, lh)), buf_w, content_h)?;
         let ws = self.workspace_logical_bounds()?;
         let g = global.intersection(ws)?;
         if g.size.w < 1 || g.size.h < 1 {
@@ -994,10 +1001,7 @@ impl CompositorState {
         }
         Some(Rectangle::from_loc_and_size(
             Point::new(min_x, min_y),
-            Size::new(
-                (max_x - min_x + 1).max(1),
-                (max_y - min_y + 1).max(1),
-            ),
+            Size::new((max_x - min_x + 1).max(1), (max_y - min_y + 1).max(1)),
         ))
     }
 
@@ -1055,24 +1059,46 @@ impl CompositorState {
         }
         let js_changed = out != self.shell_ui_windows;
         let suppress_changed = root.suppress_osr_exclusion != self.shell_ui_suppress_osr_exclusion;
+        if js_changed || suppress_changed {
+            let placements: Vec<_> = out
+                .iter()
+                .map(|w| {
+                    (
+                        w.id,
+                        w.z,
+                        w.global_rect.loc.x,
+                        w.global_rect.loc.y,
+                        w.global_rect.size.w,
+                        w.global_rect.size.h,
+                    )
+                })
+                .collect();
+            tracing::warn!(
+                target: "derp_shell_clip",
+                generation = root.generation,
+                suppress = root.suppress_osr_exclusion,
+                focused = ?self.shell_focused_ui_window_id,
+                placements = ?placements,
+                "shell_ui_windows updated"
+            );
+        }
         self.shell_ui_windows = out;
         self.shell_ui_windows_generation = root.generation;
         self.shell_ui_suppress_osr_exclusion = root.suppress_osr_exclusion;
         if let Some(fid) = self.shell_focused_ui_window_id {
             if !self.shell_ui_windows.iter().any(|w| w.id == fid)
-                && !self.shell_backed_windows.contains_key(&fid)
+                && !self.window_registry.is_shell_hosted(fid)
             {
                 self.shell_emit_shell_ui_focus_if_changed(None);
             }
         }
         if let Some(gid) = self.shell_ui_pointer_grab {
             if !self.shell_ui_windows.iter().any(|w| w.id == gid)
-                && !self.shell_backed_windows.contains_key(&gid)
+                && !self.window_registry.is_shell_hosted(gid)
             {
                 self.shell_ui_pointer_grab = None;
             }
         }
-        self.shell_backed_refresh_placements();
         if js_changed || suppress_changed {
             self.shell_exclusion_zones_need_full_damage = true;
         }
@@ -1083,6 +1109,12 @@ impl CompositorState {
         if id == self.shell_last_sent_ui_focus_id {
             return;
         }
+        tracing::warn!(
+            target: "derp_shell_clip",
+            focused = ?id,
+            last_non_shell = ?self.shell_last_non_shell_focus_window_id,
+            "shell ui focus changed"
+        );
         self.shell_last_sent_ui_focus_id = id;
         let (surface_id, window_id) = match id {
             None => (None, None),
@@ -1092,7 +1124,7 @@ impl CompositorState {
             surface_id,
             window_id,
         });
-        self.shell_backed_refresh_placements();
+        self.shell_exclusion_zones_need_full_damage = true;
     }
 
     pub(crate) fn shell_emit_shell_ui_focus_from_point(&mut self, pos: Point<f64, Logical>) {
@@ -1124,7 +1156,7 @@ impl CompositorState {
             return;
         }
         if !self.shell_ui_windows.iter().any(|w| w.id == window_id)
-            && !self.shell_backed_windows.contains_key(&window_id)
+            && !self.window_registry.is_shell_hosted(window_id)
         {
             return;
         }
@@ -1220,9 +1252,10 @@ impl CompositorState {
 
     pub(crate) fn derp_elem_window_id(&self, elem: &DerpSpaceElem) -> Option<u32> {
         match elem {
-            DerpSpaceElem::Wayland(w) => w
-                .toplevel()
-                .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface())),
+            DerpSpaceElem::Wayland(w) => w.toplevel().and_then(|t| {
+                self.window_registry
+                    .window_id_for_wl_surface(t.wl_surface())
+            }),
             DerpSpaceElem::X11(x) => x
                 .wl_surface()
                 .as_ref()
@@ -1242,18 +1275,6 @@ impl CompositorState {
         stack[(idx + 1)..].to_vec()
     }
 
-    fn window_ids_strictly_below_on_output(&self, output: &Output, self_id: u32) -> Vec<u32> {
-        let stack: Vec<u32> = self
-            .space
-            .elements_for_output(output)
-            .filter_map(|e| self.derp_elem_window_id(e))
-            .collect();
-        let Some(idx) = stack.iter().position(|&id| id == self_id) else {
-            return Vec::new();
-        };
-        stack[..idx].to_vec()
-    }
-
     pub(crate) fn shell_exclusion_clip_rects_logical(
         &self,
         output: &Output,
@@ -1262,16 +1283,23 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
         };
+        let Some(out_geo) = self.space.output_geometry(output) else {
+            return Vec::new();
+        };
+        let Some(visible) = ws.intersection(out_geo) else {
+            return Vec::new();
+        };
         let mut out: Vec<Rectangle<i32, Logical>> = self
             .shell_exclusion_global
             .iter()
-            .filter_map(|z| z.intersection(ws))
+            .filter_map(|z| z.intersection(visible))
             .collect();
+        let placements = self.shell_hosted_clip_placements();
         match elem_window {
             None => {
                 for rs in self.shell_exclusion_decor.values() {
                     for r in rs {
-                        if let Some(i) = r.intersection(ws) {
+                        if let Some(i) = r.intersection(visible) {
                             out.push(i);
                         }
                     }
@@ -1281,7 +1309,7 @@ impl CompositorState {
                 for ow in self.window_ids_strictly_above_on_output(output, self_id) {
                     if let Some(rs) = self.shell_exclusion_decor.get(&ow) {
                         for r in rs {
-                            if let Some(i) = r.intersection(ws) {
+                            if let Some(i) = r.intersection(visible) {
                                 out.push(i);
                             }
                         }
@@ -1289,7 +1317,7 @@ impl CompositorState {
                 }
                 if let Some(rs) = self.shell_exclusion_decor.get(&self_id) {
                     for r in rs {
-                        if let Some(i) = r.intersection(ws) {
+                        if let Some(i) = r.intersection(visible) {
                             out.push(i);
                         }
                     }
@@ -1299,30 +1327,15 @@ impl CompositorState {
         if !self.shell_ui_suppress_osr_exclusion {
             match elem_window {
                 None => {
-                    for w in self
-                        .shell_ui_backed_placements
-                        .iter()
-                        .chain(self.shell_ui_windows.iter())
-                    {
-                        if let Some(i) = w.global_rect.intersection(ws) {
+                    for w in &placements {
+                        if let Some(i) = w.global_rect.intersection(visible) {
                             out.push(i);
                         }
                     }
                 }
-                Some(sid) => {
-                    let below: HashSet<u32> = self
-                        .window_ids_strictly_below_on_output(output, sid)
-                        .into_iter()
-                        .collect();
-                    for w in self.shell_ui_backed_placements.iter() {
-                        if w.id == sid || below.contains(&w.id) {
-                            if let Some(i) = w.global_rect.intersection(ws) {
-                                out.push(i);
-                            }
-                        }
-                    }
-                    for w in self.shell_ui_windows.iter() {
-                        if let Some(i) = w.global_rect.intersection(ws) {
+                Some(_) => {
+                    for w in &placements {
+                        if let Some(i) = w.global_rect.intersection(visible) {
                             out.push(i);
                         }
                     }
@@ -1347,8 +1360,11 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return None;
         };
+        let Some(visible) = ws.intersection(out_geo) else {
+            return None;
+        };
         let filtered: Vec<Rectangle<i32, Logical>> =
-            zones.iter().filter_map(|z| z.intersection(ws)).collect();
+            zones.iter().filter_map(|z| z.intersection(visible)).collect();
         if filtered.is_empty() {
             return None;
         }
@@ -1360,7 +1376,10 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_cef_active(&self) -> bool {
-        self.shell_to_cef.lock().map(|g| g.is_some()).unwrap_or(false)
+        self.shell_to_cef
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     }
 
     pub(crate) fn shell_send_to_cef(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
@@ -1517,7 +1536,9 @@ impl CompositorState {
                     planes.len(),
                 );
             }
-            Err(e) => tracing::warn!(target: "derp_hotplug_shell", ?e, "shell dma-buf frame rejected"),
+            Err(e) => {
+                tracing::warn!(target: "derp_hotplug_shell", ?e, "shell dma-buf frame rejected")
+            }
         }
     }
 
@@ -1611,7 +1632,11 @@ impl CompositorState {
                 best = best.max(o.current_scale().fractional_scale());
             }
         }
-        if hit { best } else { fallback() }
+        if hit {
+            best
+        } else {
+            fallback()
+        }
     }
 
     pub(crate) fn wayland_window_containing_surface(&self, surface: &WlSurface) -> Option<Window> {
@@ -1675,9 +1700,9 @@ impl CompositorState {
             let render_loc = map_loc - elem.geometry().loc;
             let local = pos - render_loc.to_f64();
             let hit = match elem {
-                DerpSpaceElem::Wayland(window) => {
-                    window.surface_under(local, WindowSurfaceType::ALL).is_some()
-                }
+                DerpSpaceElem::Wayland(window) => window
+                    .surface_under(local, WindowSurfaceType::ALL)
+                    .is_some(),
                 DerpSpaceElem::X11(x11) => x11.wl_surface().is_some_and(|surf| {
                     under_from_surface_tree(&surf, local, (0, 0), WindowSurfaceType::ALL).is_some()
                 }),
@@ -1753,16 +1778,8 @@ impl CompositorState {
             (800, 600)
         };
 
-        let max_x = work
-            .loc
-            .x
-            .saturating_add(work.size.w)
-            .saturating_sub(ww);
-        let max_y = work
-            .loc
-            .y
-            .saturating_add(work.size.h)
-            .saturating_sub(hh);
+        let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(ww);
+        let max_y = work.loc.y.saturating_add(work.size.h).saturating_sub(hh);
 
         let mut x = work
             .loc
@@ -1815,7 +1832,10 @@ impl CompositorState {
     }
 
     #[inline]
-    pub(crate) fn shell_ipc_peer_matches_wayland_pid(&self, wayland_client_pid: Option<i32>) -> bool {
+    pub(crate) fn shell_ipc_peer_matches_wayland_pid(
+        &self,
+        wayland_client_pid: Option<i32>,
+    ) -> bool {
         let Some(shell_pid) = self.shell_ipc_peer_pid else {
             return false;
         };
@@ -1885,10 +1905,7 @@ impl CompositorState {
 
     fn keyboard_layout_label_short(name: &str) -> String {
         let s = name.split_whitespace().next().unwrap_or(name);
-        let s = s
-            .find('(')
-            .map(|i| s[..i].trim_end())
-            .unwrap_or(s);
+        let s = s.find('(').map(|i| s[..i].trim_end()).unwrap_or(s);
         let mut out: String = s.chars().take(12).collect();
         if out.is_empty() {
             out.push('?');
@@ -1916,20 +1933,19 @@ impl CompositorState {
         let prev = self.keyboard_layout_last_focus_window.take();
         let save_from = prev.filter(|&w| self.keyboard_layout_should_track_window(w));
         let restore_for = new_wid.filter(|&w| self.keyboard_layout_should_track_window(w));
-        self.keyboard_layout_last_focus_window = if restore_for.is_some() {
-            new_wid
-        } else {
-            None
-        };
-        self.keyboard_layout_focus_queue.push_back(KeyboardLayoutFocusOp {
-            save_from,
-            restore_for,
-            shell_host,
-        });
+        self.keyboard_layout_last_focus_window = if restore_for.is_some() { new_wid } else { None };
+        self.keyboard_layout_focus_queue
+            .push_back(KeyboardLayoutFocusOp {
+                save_from,
+                restore_for,
+                shell_host,
+            });
         let tx = self.cef_to_compositor_tx.clone();
-        let _ = tx.send(crate::cef::compositor_tx::CefToCompositor::Run(Box::new(|state| {
-            state.keyboard_drain_focus_layout_queue();
-        })));
+        let _ = tx.send(crate::cef::compositor_tx::CefToCompositor::Run(Box::new(
+            |state| {
+                state.keyboard_drain_focus_layout_queue();
+            },
+        )));
     }
 
     fn keyboard_drain_focus_layout_queue(&mut self) {
@@ -2000,19 +2016,13 @@ impl CompositorState {
                 .initial_configure_sent
         });
         if !initial_configure_sent {
-            let pending = self
-                .pending_deferred_toplevels
-                .get(&key)
-                .expect("checked");
+            let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
             if let Some(tl) = pending.window.toplevel() {
                 tl.send_configure();
             }
         }
         let (has_identity, title, app_id) = {
-            let pending = self
-                .pending_deferred_toplevels
-                .get(&key)
-                .expect("checked");
+            let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
             let bbox = pending.window.bbox();
             let has_buffer_extent = bbox.size.w >= 1 && bbox.size.h >= 1;
             let (title, app_id) = smithay::wayland::compositor::with_states(root, |states| {
@@ -2090,10 +2100,10 @@ impl CompositorState {
 
     pub(crate) fn wayland_window_id_is_pending_deferred_toplevel(&self, window_id: u32) -> bool {
         self.pending_deferred_toplevels.values().any(|p| {
-            p.window
-                .toplevel()
-                .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface()))
-                == Some(window_id)
+            p.window.toplevel().and_then(|t| {
+                self.window_registry
+                    .window_id_for_wl_surface(t.wl_surface())
+            }) == Some(window_id)
         })
     }
 
@@ -2154,7 +2164,9 @@ impl CompositorState {
         let output_name = self
             .output_for_window_position(gx, gy, gw, gh)
             .unwrap_or_default();
-        let _ = self.window_registry.set_shell_layout(wl, gx, gy, gw, gh, output_name);
+        let _ = self
+            .window_registry
+            .set_shell_layout(wl, gx, gy, gw, gh, output_name);
         let (max, fs) = read_toplevel_tiling(wl);
         let _ = self.window_registry.set_tiling_state(wl, max, fs);
     }
@@ -2178,14 +2190,14 @@ impl CompositorState {
 
     pub(crate) fn cancel_shell_move_resize_for_window(&mut self, window_id: u32) {
         if self.shell_move_window_id == Some(window_id) {
-            if self.shell_move_is_backed {
+            if self.window_registry.is_shell_hosted(window_id) {
                 self.shell_move_end_backed_only(window_id);
             } else {
                 self.shell_move_end(window_id);
             }
         }
         if self.shell_resize_window_id == Some(window_id) {
-            if self.shell_resize_is_backed {
+            if self.window_registry.is_shell_hosted(window_id) {
                 self.shell_resize_end_backed_only(window_id);
             } else {
                 self.shell_resize_end(window_id);
@@ -2271,11 +2283,8 @@ impl CompositorState {
             st.states.set(xdg_toplevel::State::Maximized);
             st.size = Some(Size::from((content_w, content_h)));
         });
-        self.space.map_element(
-            DerpSpaceElem::Wayland(window.clone()),
-            (map_x, map_y),
-            true,
-        );
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
@@ -2315,11 +2324,8 @@ impl CompositorState {
             st.fullscreen_output = wl_out;
             st.size = Some(Size::from((content_w, content_h)));
         });
-        self.space.map_element(
-            DerpSpaceElem::Wayland(window.clone()),
-            (map_x, map_y),
-            true,
-        );
+        self.space
+            .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
@@ -2327,7 +2333,11 @@ impl CompositorState {
         true
     }
 
-    pub(crate) fn restore_toplevel_floating_layout(&mut self, window_id: u32, window: &Window) -> bool {
+    pub(crate) fn restore_toplevel_floating_layout(
+        &mut self,
+        window_id: u32,
+        window: &Window,
+    ) -> bool {
         let Some((x, y, w, h)) = self.toplevel_floating_restore.remove(&window_id) else {
             return false;
         };
@@ -2448,8 +2458,7 @@ impl CompositorState {
             ChromeEvent::WindowMapped { info }
             | ChromeEvent::WindowGeometryChanged { info }
             | ChromeEvent::WindowMetadataChanged { info } => {
-                self.window_info_is_solid_shell_host(info)
-                    || !shell_window_row_should_show(info)
+                self.window_info_is_solid_shell_host(info) || !shell_window_row_should_show(info)
             }
             ChromeEvent::WindowUnmapped { window_id } => {
                 if let Some(i) = unmap_removed_info {
@@ -2469,8 +2478,7 @@ impl CompositorState {
                 .map(|i| self.window_info_is_solid_shell_host(&i))
                 .unwrap_or(false),
             ChromeEvent::WindowStateChanged { info, .. } => {
-                self.window_info_is_solid_shell_host(info)
-                    || !shell_window_row_should_show(info)
+                self.window_info_is_solid_shell_host(info) || !shell_window_row_should_show(info)
             }
             ChromeEvent::Keybind { .. } | ChromeEvent::KeyboardLayout { .. } => false,
         }
@@ -2494,10 +2502,7 @@ impl CompositorState {
             self.keyboard_layout_last_focus_window = None;
         }
         let hint = removed_info.as_ref();
-        self.shell_emit_chrome_event_inner(
-            ChromeEvent::WindowUnmapped { window_id },
-            hint,
-        );
+        self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
     }
 
     /// When title/app_id becomes that of the Solid host after an earlier map with empty metadata, retract the phantom HUD entry.
@@ -2511,9 +2516,9 @@ impl CompositorState {
             window_id,
             "shell ipc WindowUnmapped (retract phantom shell host)"
         );
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
-            window_id,
-        });
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },
+        );
         self.chrome_bridge
             .notify(ChromeEvent::WindowUnmapped { window_id });
     }
@@ -2541,12 +2546,13 @@ impl CompositorState {
                         .unwrap_or_else(|| info.clone()),
                     minimized: *minimized,
                 }
-            },
+            }
             _ => event.clone(),
         };
 
         let suppress = self.chrome_event_suppress_shell_ipc(&ipc_event, unmap_removed_info);
-        let focus_cleared_for_shell = matches!(ipc_event, ChromeEvent::FocusChanged { .. }) && suppress;
+        let focus_cleared_for_shell =
+            matches!(ipc_event, ChromeEvent::FocusChanged { .. }) && suppress;
         let shell_packet_source: ChromeEvent = if focus_cleared_for_shell {
             ChromeEvent::FocusChanged {
                 surface_id: None,
@@ -2646,10 +2652,7 @@ impl CompositorState {
                     );
                 }
             }
-            ChromeEvent::WindowStateChanged {
-                info,
-                minimized,
-            } if !suppress => {
+            ChromeEvent::WindowStateChanged { info, minimized } if !suppress => {
                 tracing::debug!(
                     target: "derp_shell_sync",
                     window_id = info.window_id,
@@ -2694,10 +2697,7 @@ impl CompositorState {
         }
         Some(Rectangle::new(
             Point::<i32, Logical>::from((min_x, min_y)),
-            Size::<i32, Logical>::from((
-                (max_x - min_x).max(1),
-                (max_y - min_y).max(1),
-            )),
+            Size::<i32, Logical>::from(((max_x - min_x).max(1), (max_y - min_y).max(1))),
         ))
     }
 
@@ -2732,12 +2732,7 @@ impl CompositorState {
                 continue;
             };
             let loc = g.loc;
-            out.change_current_state(
-                Some(mode),
-                Some(tf),
-                Some(sc),
-                Some(loc.into()),
-            );
+            out.change_current_state(Some(mode), Some(tf), Some(sc), Some(loc.into()));
             self.space.map_output(&out, (loc.x, loc.y));
         }
     }
@@ -2800,12 +2795,7 @@ impl CompositorState {
             let tf = out.current_transform();
             let nx = g.loc.x.saturating_add(dx);
             let ny = g.loc.y.saturating_add(dy);
-            out.change_current_state(
-                Some(mode),
-                Some(tf),
-                Some(sc),
-                Some((nx, ny).into()),
-            );
+            out.change_current_state(Some(mode), Some(tf), Some(sc), Some((nx, ny).into()));
             self.space.map_output(out, (nx, ny));
         }
         for (elem, nx, ny) in elem_targets {
@@ -2856,12 +2846,7 @@ impl CompositorState {
             let tf = out.current_transform();
             let nx = g.loc.x.saturating_add(dx);
             let ny = g.loc.y.saturating_add(dy);
-            out.change_current_state(
-                Some(mode),
-                Some(tf),
-                Some(sc),
-                Some((nx, ny).into()),
-            );
+            out.change_current_state(Some(mode), Some(tf), Some(sc), Some((nx, ny).into()));
             self.space.map_output(out, (nx, ny));
         }
         for (elem, nx, ny) in elem_targets {
@@ -3020,10 +3005,8 @@ impl CompositorState {
                 return Some(name.clone());
             }
         }
-        let mut pairs: Vec<(i32, String)> = geos
-            .iter()
-            .map(|(n, g)| (g.loc.x, n.clone()))
-            .collect();
+        let mut pairs: Vec<(i32, String)> =
+            geos.iter().map(|(n, g)| (g.loc.x, n.clone())).collect();
         pairs.sort_by_key(|(px, _)| *px);
         pairs.into_iter().next().map(|(_, n)| n)
     }
@@ -3074,9 +3057,13 @@ impl CompositorState {
                     let g = w.geometry();
                     let ww = g.size.w.max(1);
                     let hh = g.size.h.max(1);
-                    let Some(oname) =
-                        Self::output_name_for_window_from_geometry_map(before_outputs, loc.x, loc.y, ww, hh)
-                    else {
+                    let Some(oname) = Self::output_name_for_window_from_geometry_map(
+                        before_outputs,
+                        loc.x,
+                        loc.y,
+                        ww,
+                        hh,
+                    ) else {
                         continue;
                     };
                     let Some(&(dx, dy)) = deltas.get(&oname) else {
@@ -3099,9 +3086,13 @@ impl CompositorState {
                     let geo = x.geometry();
                     let ww = geo.size.w.max(1);
                     let hh = geo.size.h.max(1);
-                    let Some(oname) =
-                        Self::output_name_for_window_from_geometry_map(before_outputs, loc.x, loc.y, ww, hh)
-                    else {
+                    let Some(oname) = Self::output_name_for_window_from_geometry_map(
+                        before_outputs,
+                        loc.x,
+                        loc.y,
+                        ww,
+                        hh,
+                    ) else {
                         continue;
                     };
                     let Some(&(dx, dy)) = deltas.get(&oname) else {
@@ -3179,18 +3170,8 @@ impl CompositorState {
         self.cancel_shell_move_resize_for_window(window_id);
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
         let geo = window.geometry();
-        let ww = geo
-            .size
-            .w
-            .max(1)
-            .min(target_work.size.w)
-            .max(1);
-        let hh = geo
-            .size
-            .h
-            .max(1)
-            .min(target_work.size.h)
-            .max(1);
+        let ww = geo.size.w.max(1).min(target_work.size.w).max(1);
+        let hh = geo.size.h.max(1).min(target_work.size.h).max(1);
         let max_x = target_work
             .loc
             .x
@@ -3239,18 +3220,8 @@ impl CompositorState {
             return;
         };
         let mut geo = x.geometry();
-        let ww = geo
-            .size
-            .w
-            .max(1)
-            .min(target_work.size.w)
-            .max(1);
-        let hh = geo
-            .size
-            .h
-            .max(1)
-            .min(target_work.size.h)
-            .max(1);
+        let ww = geo.size.w.max(1).min(target_work.size.w).max(1);
+        let hh = geo.size.h.max(1).min(target_work.size.h).max(1);
         let max_x = target_work
             .loc
             .x
@@ -3353,11 +3324,7 @@ impl CompositorState {
 
     pub fn send_shell_output_layout(&mut self) {
         let cleared_stale_primary = if let Some(ref n) = self.shell_primary_output_name {
-            if !self
-                .space
-                .outputs()
-                .any(|o| o.name() == n.as_str())
-            {
+            if !self.space.outputs().any(|o| o.name() == n.as_str()) {
                 self.shell_primary_output_name = None;
                 true
             } else {
@@ -3459,11 +3426,7 @@ impl CompositorState {
         let pref = if name.is_empty() {
             None
         } else {
-            if !self
-                .space
-                .outputs()
-                .any(|o| o.name() == name.as_str())
-            {
+            if !self.space.outputs().any(|o| o.name() == name.as_str()) {
                 return;
             }
             Some(name)
@@ -3496,12 +3459,7 @@ impl CompositorState {
         let before_outputs = self.snapshot_output_geometry_by_name();
         let mut resolved: Vec<(Scr, Output)> = Vec::new();
         for s in root.screens {
-            let Some(out) = self
-                .space
-                .outputs()
-                .find(|o| o.name() == s.name)
-                .cloned()
-            else {
+            let Some(out) = self.space.outputs().find(|o| o.name() == s.name).cloned() else {
                 continue;
             };
             if out.current_mode().is_none() {
@@ -3513,22 +3471,14 @@ impl CompositorState {
         for (s, out) in &resolved {
             let mode = out.current_mode().unwrap();
             let tf = transform_from_wire(s.transform);
-            out.change_current_state(
-                Some(mode),
-                Some(tf),
-                Some(sc),
-                Some((s.x, s.y).into()),
-            );
+            out.change_current_state(Some(mode), Some(tf), Some(sc), Some((s.x, s.y).into()));
             self.space.map_output(out, (s.x, s.y));
         }
         let mut row_buckets: HashMap<i32, Vec<usize>> = HashMap::new();
         for (i, (s, _)) in resolved.iter().enumerate() {
             row_buckets.entry(s.y).or_default().push(i);
         }
-        let mut new_xy: Vec<(i32, i32)> = resolved
-            .iter()
-            .map(|(s, _)| (s.x, s.y))
-            .collect();
+        let mut new_xy: Vec<(i32, i32)> = resolved.iter().map(|(s, _)| (s.x, s.y)).collect();
         for mut indices in row_buckets.into_values() {
             indices.sort_by_key(|&i| resolved[i].0.x);
             let mut cx = resolved[indices[0]].0.x;
@@ -3550,20 +3500,11 @@ impl CompositorState {
                 continue;
             };
             let tf = transform_from_wire(s.transform);
-            out.change_current_state(
-                Some(mode),
-                Some(tf),
-                Some(sc),
-                Some((nx, ny).into()),
-            );
+            out.change_current_state(Some(mode), Some(tf), Some(sc), Some((nx, ny).into()));
             self.space.map_output(out, (nx, ny));
         }
         if let Some(ref n) = self.shell_primary_output_name {
-            if !self
-                .space
-                .outputs()
-                .any(|o| o.name() == n.as_str())
-            {
+            if !self.space.outputs().any(|o| o.name() == n.as_str()) {
                 self.shell_primary_output_name = None;
             }
         }
@@ -3668,7 +3609,8 @@ impl CompositorState {
                 output_name: ipc_info.output_name.clone(),
             });
         }
-        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus()) {
+        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus())
+        {
             Some(surf) => {
                 let wid = self.window_registry.window_id_for_wl_surface(&surf);
                 let sid = wid.and_then(|w| self.window_registry.surface_id_for_window(w));
@@ -3716,8 +3658,8 @@ impl CompositorState {
             return;
         };
         let idle = last_rx.elapsed();
-        let prod_after = std::cmp::max(limit / 2, Duration::from_millis(500))
-            .min(Duration::from_secs(2));
+        let prod_after =
+            std::cmp::max(limit / 2, Duration::from_millis(500)).min(Duration::from_secs(2));
         if idle >= prod_after {
             let throttle = Duration::from_secs(1);
             if self
@@ -3801,10 +3743,7 @@ impl CompositorState {
         let x2 = g.loc.x.saturating_add(g.size.w) as f64;
         let y2 = g.loc.y.saturating_add(g.size.h) as f64;
         const EPS: f64 = 1.0e-6;
-        px >= g.loc.x as f64 - EPS
-            && px < x2 + EPS
-            && py >= g.loc.y as f64 - EPS
-            && py < y2 + EPS
+        px >= g.loc.x as f64 - EPS && px < x2 + EPS && py >= g.loc.y as f64 - EPS && py < y2 + EPS
     }
 
     pub(crate) fn shell_dismiss_context_menu_from_compositor(&mut self) {
@@ -3819,7 +3758,9 @@ impl CompositorState {
     /// Map normalized pointer (`nx`, `ny` over the canvas) to **shell OSR buffer** pixels (letterbox-aware).
     pub fn shell_pointer_buffer_pixels(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
         let (buf_w, buf_h) = self.shell_view_px?;
-        let content_h = buf_h.saturating_sub(self.shell_context_menu_atlas_buffer_h).max(1);
+        let content_h = buf_h
+            .saturating_sub(self.shell_context_menu_atlas_buffer_h)
+            .max(1);
         let (lw, lh) = self.shell_output_logical_size()?;
         let (ox, oy, cw, ch) = crate::shell_letterbox::letterbox_logical(
             Size::from((lw as i32, lh as i32)),
@@ -3889,11 +3830,16 @@ impl CompositorState {
     }
 
     pub fn find_window_by_surface_id(&self, surface_id: u32) -> Option<Window> {
-        let window_id = self.window_registry.window_id_for_shell_surface(surface_id)?;
+        let window_id = self
+            .window_registry
+            .window_id_for_shell_surface(surface_id)?;
         self.space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 w.toplevel()
-                    .and_then(|t| self.window_registry.window_id_for_wl_surface(t.wl_surface()))
+                    .and_then(|t| {
+                        self.window_registry
+                            .window_id_for_wl_surface(t.wl_surface())
+                    })
                     .filter(|&id| id == window_id)
                     .map(|_| w.clone())
             } else {
@@ -3982,7 +3928,6 @@ impl CompositorState {
             }
         });
 
-        self.shell_move_is_backed = false;
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = (0, 0);
         let loc = self
@@ -3998,7 +3943,10 @@ impl CompositorState {
 
     /// Applies [`Self::shell_move_pending_delta`] to the active shell-move window in [`Self::space`].
     fn shell_move_flush_pending_deltas(&mut self) {
-        if self.shell_move_is_backed {
+        if self
+            .shell_move_window_id
+            .is_some_and(|wid| self.window_registry.is_shell_hosted(wid))
+        {
             self.shell_move_flush_pending_deltas_backed();
             return;
         }
@@ -4021,7 +3969,10 @@ impl CompositorState {
             self.shell_move_pending_delta = (0, 0);
             return;
         };
-        let Some(loc) = self.space.element_location(&DerpSpaceElem::Wayland(window.clone())) else {
+        let Some(loc) = self
+            .space
+            .element_location(&DerpSpaceElem::Wayland(window.clone()))
+        else {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: no element_location");
             return;
         };
@@ -4052,7 +4003,7 @@ impl CompositorState {
             );
             return;
         };
-        if self.shell_move_is_backed {
+        if self.window_registry.is_shell_hosted(wid) {
             self.shell_move_pending_delta.0 += dx;
             self.shell_move_pending_delta.1 += dy;
             self.shell_move_flush_pending_deltas_backed();
@@ -4109,7 +4060,7 @@ impl CompositorState {
             );
             return;
         }
-        if self.shell_move_is_backed {
+        if self.window_registry.is_shell_hosted(window_id) {
             self.shell_move_end_backed_only(window_id);
             return;
         }
@@ -4159,14 +4110,14 @@ impl CompositorState {
             return;
         }
         if let Some(mid) = self.shell_move_window_id {
-            if self.shell_move_is_backed {
+            if self.window_registry.is_shell_hosted(mid) {
                 self.shell_move_end_backed_only(mid);
             } else {
                 self.shell_move_end(mid);
             }
         }
         if let Some(prev) = self.shell_resize_window_id {
-            if self.shell_resize_is_backed {
+            if self.window_registry.is_shell_hosted(prev) {
                 self.shell_resize_end_backed_only(prev);
             } else {
                 self.shell_resize_end(prev);
@@ -4180,11 +4131,13 @@ impl CompositorState {
     }
 
     pub fn shell_resize_begin(&mut self, window_id: u32, edges_wire: u32) {
-        use crate::grabs::resize_grab::{resize_tracking_set_resizing, ResizeEdge as GrabResizeEdge};
+        use crate::grabs::resize_grab::{
+            resize_tracking_set_resizing, ResizeEdge as GrabResizeEdge,
+        };
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 
         if let Some(mid) = self.shell_move_window_id {
-            if self.shell_move_is_backed {
+            if self.window_registry.is_shell_hosted(mid) {
                 self.shell_move_end_backed_only(mid);
             } else {
                 self.shell_move_end(mid);
@@ -4200,7 +4153,7 @@ impl CompositorState {
             return;
         }
         if let Some(prev) = self.shell_resize_window_id {
-            if self.shell_resize_is_backed {
+            if self.window_registry.is_shell_hosted(prev) {
                 self.shell_resize_end_backed_only(prev);
             } else {
                 self.shell_resize_end(prev);
@@ -4261,7 +4214,6 @@ impl CompositorState {
         });
         tl.send_pending_configure();
 
-        self.shell_resize_is_backed = false;
         self.shell_resize_window_id = Some(window_id);
         self.shell_resize_edges = Some(edges);
         self.shell_resize_initial_rect = Some(initial_rect);
@@ -4289,7 +4241,7 @@ impl CompositorState {
         let Some(initial_rect) = self.shell_resize_initial_rect else {
             return;
         };
-        if self.shell_resize_is_backed {
+        if self.window_registry.is_shell_hosted(wid) {
             self.shell_resize_delta_backed(dx, dy);
             return;
         }
@@ -4344,7 +4296,7 @@ impl CompositorState {
             return;
         }
 
-        if self.shell_resize_is_backed {
+        if self.window_registry.is_shell_hosted(window_id) {
             self.shell_resize_end_backed_only(window_id);
             return;
         }
@@ -4409,15 +4361,19 @@ impl CompositorState {
     pub fn shell_reply_window_list(&mut self) {
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
             .window_registry
-            .all_infos()
+            .all_records()
             .into_iter()
-            .filter(|i| !self.window_info_is_solid_shell_host(i))
-            .filter(|i| shell_window_row_should_show(i))
-            .filter(|i| !self.wayland_window_id_is_pending_deferred_toplevel(i.window_id))
-            .map(|i| {
+            .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
+            .filter(|record| shell_window_row_should_show(&record.info))
+            .filter(|record| {
+                record.kind == WindowKind::ShellHosted
+                    || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+            })
+            .map(|record| {
+                let info = record.info;
                 let i = self
-                    .shell_window_info_to_output_local_layout(&i)
-                    .unwrap_or_else(|| i.clone());
+                    .shell_window_info_to_output_local_layout(&info)
+                    .unwrap_or_else(|| info.clone());
                 shell_wire::ShellWindowSnapshot {
                     window_id: i.window_id,
                     surface_id: i.surface_id,
@@ -4429,14 +4385,17 @@ impl CompositorState {
                     maximized: if i.maximized { 1 } else { 0 },
                     fullscreen: if i.fullscreen { 1 } else { 0 },
                     client_side_decoration: if i.client_side_decoration { 1 } else { 0 },
-                    shell_flags: 0,
+                    shell_flags: if record.kind == WindowKind::ShellHosted {
+                        shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
+                    } else {
+                        0
+                    },
                     title: i.title,
                     app_id: i.app_id,
                     output_name: i.output_name,
                 }
             })
             .collect();
-        self.shell_backed_extend_window_list_snapshots(&mut windows);
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowList { windows });
     }
@@ -4486,7 +4445,8 @@ impl CompositorState {
         let Some(window) = self.find_window_by_surface_id(sid) else {
             return;
         };
-        let Some((x, y, w, h)) = self.shell_output_local_rect_to_logical_global(lx, ly, lw, lh) else {
+        let Some((x, y, w, h)) = self.shell_output_local_rect_to_logical_global(lx, ly, lw, lh)
+        else {
             return;
         };
 
@@ -4608,8 +4568,7 @@ impl CompositorState {
             if maximized {
                 self.toplevel_fullscreen_return_maximized.insert(window_id);
             } else {
-                self.toplevel_fullscreen_return_maximized
-                    .remove(&window_id);
+                self.toplevel_fullscreen_return_maximized.remove(&window_id);
                 if !self.toplevel_floating_restore.contains_key(&window_id) {
                     if let Some(s) = self.toplevel_rect_snapshot(&window) {
                         self.toplevel_floating_restore.insert(window_id, s);
@@ -4824,9 +4783,10 @@ impl CompositorState {
     /// Map a compositor-minimized toplevel back into the space and focus it.
     pub fn shell_restore_minimized_window(&mut self, window_id: u32) {
         if self
-            .shell_backed_windows
-            .get(&window_id)
-            .is_some_and(|e| e.minimized)
+            .window_registry
+            .window_info(window_id)
+            .filter(|_| self.window_registry.is_shell_hosted(window_id))
+            .is_some_and(|info| info.minimized)
         {
             self.shell_backed_restore_minimized_if_any(window_id);
             self.shell_focus_shell_ui_window(window_id);
@@ -4915,10 +4875,7 @@ impl CompositorState {
         crate::shell_letterbox::letterbox_logical(output_logical_size, buf_w, buf_h)
     }
 
-    pub(crate) fn shell_pointer_ipc_for_cef(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<(i32, i32)> {
+    pub(crate) fn shell_pointer_ipc_for_cef(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {
         let (cox, coy) = self.shell_canvas_logical_origin;
         let (clw, clh) = self.shell_canvas_logical_size;
         let clwf = clw.max(1) as f64;
@@ -4935,7 +4892,11 @@ impl CompositorState {
         Some((x, y))
     }
 
-    fn shell_osr_dirty_bbox_covers_buffer(dirty: &[(i32, i32, i32, i32)], buf_w: u32, buf_h: u32) -> bool {
+    fn shell_osr_dirty_bbox_covers_buffer(
+        dirty: &[(i32, i32, i32, i32)],
+        buf_w: u32,
+        buf_h: u32,
+    ) -> bool {
         const FRAC_NUM: i64 = 97;
         const FRAC_DEN: i64 = 100;
         let mut min_x = i32::MAX;
@@ -5005,7 +4966,8 @@ impl CompositorState {
         }
         let force_env = std::env::var_os("DERP_SHELL_OSR_FULL_DAMAGE").is_some_and(|v| {
             v.as_os_str() == std::ffi::OsStr::new("1")
-                || v.as_os_str().eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
+                || v.as_os_str()
+                    .eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
         });
         let resized = self.shell_view_px.is_some_and(|p| p != (width, height));
         let dirty_supplied_len = dirty_buffer.as_ref().map(|v| v.len());
@@ -5214,8 +5176,10 @@ impl CompositorState {
         let (clw_u, clh_u) = self.shell_canvas_logical_size;
         let ch_work = ws.size.h.max(1) as u32;
         let strip_log = clh_u.saturating_sub(ch_work).max(1);
-        let gw_adj = (((bw as u64) * (clw_u as u64)) / (buf_w.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
-        let gh_adj = (((bh as u64) * (strip_log as u64)) / (atlas.max(1) as u64)).clamp(1, MAX_MENU as u64) as u32;
+        let gw_adj = (((bw as u64) * (clw_u as u64)) / (buf_w.max(1) as u64))
+            .clamp(1, MAX_MENU as u64) as u32;
+        let gh_adj = (((bh as u64) * (strip_log as u64)) / (atlas.max(1) as u64))
+            .clamp(1, MAX_MENU as u64) as u32;
         let ws_w = ws.size.w.max(1) as u32;
         let ws_h = ws.size.h.max(1) as u32;
         if gw_adj > ws_w || gh_adj > ws_h {
@@ -5342,10 +5306,7 @@ impl CompositorState {
         let mods = keyboard.modifier_state();
         let mut ticked = false;
         keyboard.with_pressed_keysyms(|handles| {
-            let Some(h) = handles
-                .iter()
-                .find(|h| h.modified_sym().raw() == sym_raw)
-            else {
+            let Some(h) = handles.iter().find(|h| h.modified_sym().raw() == sym_raw) else {
                 return;
             };
             self.shell_ipc_forward_keyboard_to_cef(KeyState::Pressed, &mods, h, true);
@@ -5485,7 +5446,10 @@ impl CompositorState {
             return;
         }
         let route = self.shell_pointer_route_to_cef(pos);
-        if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() && self.shell_ui_pointer_grab.is_none()
+        if !route
+            && !self.shell_move_is_active()
+            && !self.shell_resize_is_active()
+            && self.shell_ui_pointer_grab.is_none()
         {
             return;
         }
@@ -5514,7 +5478,10 @@ impl CompositorState {
         let pointer = self.seat.get_pointer().unwrap();
         let pos = pointer.current_location();
         let route = self.shell_pointer_route_to_cef(pos);
-        if !route && !self.shell_move_is_active() && !self.shell_resize_is_active() && self.shell_ui_pointer_grab.is_none()
+        if !route
+            && !self.shell_move_is_active()
+            && !self.shell_resize_is_active()
+            && self.shell_ui_pointer_grab.is_none()
         {
             return;
         }
@@ -5549,7 +5516,8 @@ impl CompositorState {
             .stdin(Stdio::null());
         let child = cmd.spawn().map_err(|e| e.to_string())?;
         tracing::debug!(pid = child.id(), "spawned Wayland client via shell IPC");
-        self.shell_spawn_focus_above_window_id = Some(self.window_registry.highest_allocated_window_id());
+        self.shell_spawn_focus_above_window_id =
+            Some(self.window_registry.highest_allocated_window_id());
         Ok(())
     }
 }
@@ -5681,8 +5649,11 @@ impl XdgDecorationHandler for CompositorState {
         toplevel.send_configure();
     }
 
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode)
-    {
+    fn request_mode(
+        &mut self,
+        toplevel: ToplevelSurface,
+        _mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode;
         // Shell draws decorations (CEF); force SSD so clients like foot omit CSD.
         toplevel.with_pending_state(|state| {

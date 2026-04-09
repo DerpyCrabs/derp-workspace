@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use cef::{
-    post_task, wrap_task, rc::Rc, Browser, ImplBrowser, ImplBrowserHost, ImplTask, Task, ThreadId,
+    post_task, rc::Rc, wrap_task, Browser, ImplBrowser, ImplBrowserHost, ImplTask, Task, ThreadId,
     WrapTask,
 };
 

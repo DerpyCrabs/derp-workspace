@@ -24,13 +24,13 @@ use smithay::{
     },
 };
 
+use crate::state::read_toplevel_tiling;
 use crate::{
     chrome_bridge::ChromeEvent,
     derp_space::DerpSpaceElem,
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
     CompositorState,
 };
-use crate::state::read_toplevel_tiling;
 
 fn toplevel_title_app_id(surface: &ToplevelSurface) -> (String, String) {
     with_states(surface.wl_surface(), |states| {
@@ -70,12 +70,8 @@ impl XdgShellHandler for CompositorState {
         );
         let window = Window::new_wayland_window(surface);
         let parent_protocol_id = parent.as_ref().map(|p| p.id().protocol_id());
-        self.window_registry.register_toplevel(
-            &wl0,
-            title,
-            app_id,
-            wayland_client_pid,
-        );
+        self.window_registry
+            .register_toplevel(&wl0, title, app_id, wayland_client_pid);
         let reg = self
             .window_registry
             .snapshot_for_wl_surface(&wl0)
@@ -124,7 +120,8 @@ impl XdgShellHandler for CompositorState {
             "xdg new_toplevel staging check"
         );
         if defer_map {
-            let key = crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
+            let key =
+                crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
             self.pending_deferred_toplevels.insert(
                 key,
                 crate::state::PendingDeferredToplevel {
@@ -140,8 +137,11 @@ impl XdgShellHandler for CompositorState {
                 "xdg new_toplevel deferred until app_id"
             );
         } else {
-            self.space
-                .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), false);
+            self.space.map_element(
+                DerpSpaceElem::Wayland(window.clone()),
+                (map_x, map_y),
+                false,
+            );
 
             self.notify_geometry_if_changed(&window);
             let info = self
@@ -164,9 +164,8 @@ impl XdgShellHandler for CompositorState {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl = surface.wl_surface();
         let window_id_pre = self.window_registry.window_id_for_wl_surface(wl);
-        let keyboard_had_focus_here = window_id_pre.is_some_and(|id| {
-            self.keyboard_focused_window_id() == Some(id)
-        });
+        let keyboard_had_focus_here =
+            window_id_pre.is_some_and(|id| self.keyboard_focused_window_id() == Some(id));
         let removed_pre = self.window_registry.snapshot_for_wl_surface(wl);
         let mut had_pending_deferred = false;
         if let Some(k) = crate::window_registry::wl_surface_key(wl) {
@@ -453,8 +452,7 @@ impl XdgShellHandler for CompositorState {
         if read_toplevel_tiling(wl).0 {
             self.toplevel_fullscreen_return_maximized.insert(window_id);
         } else {
-            self.toplevel_fullscreen_return_maximized
-                .remove(&window_id);
+            self.toplevel_fullscreen_return_maximized.remove(&window_id);
             if !self.toplevel_floating_restore.contains_key(&window_id) {
                 if let Some(s) = self.toplevel_rect_snapshot(&window) {
                     self.toplevel_floating_restore.insert(window_id, s);

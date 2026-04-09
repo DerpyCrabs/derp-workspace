@@ -14,16 +14,17 @@ use compositor::{
     chrome_bridge::NoOpChromeBridge,
     drm,
     state::{CompositorInitOptions, SocketConfig},
-    xwayland,
-    CalloopData,
-    CompositorState,
+    xwayland, CalloopData, CompositorState,
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::Session;
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
 
 #[derive(Parser, Debug)]
-#[command(name = "compositor", about = "Minimal Smithay Wayland compositor with CEF shell")]
+#[command(
+    name = "compositor",
+    about = "Minimal Smithay Wayland compositor with CEF shell"
+)]
 struct Cli {
     #[arg(long, value_name = "NAME")]
     socket: Option<String>,
@@ -44,12 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("warn")
-    });
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     tracing::debug!(
         target: "derp_shell_sync",
@@ -57,14 +55,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let cli = Cli::parse();
-    let socket_name = cli
-        .socket
-        .unwrap_or_else(default_wayland_socket_name);
+    let socket_name = cli.socket.unwrap_or_else(default_wayland_socket_name);
 
     let Some(cef_url) = cli.cef_shell_url else {
-        return Err(
-            "CEF_SHELL_URL or --cef-shell-url is required (Solid shell page URL)".into(),
-        );
+        return Err("CEF_SHELL_URL or --cef-shell-url is required (Solid shell page URL)".into());
     };
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
@@ -146,7 +140,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("signal-hook thread");
 
     while !data.state.event_loop_stop.load(Ordering::Acquire) {
-        let dispatch_result = catch_unwind(AssertUnwindSafe(|| event_loop.dispatch(None, &mut data)));
+        let dispatch_result =
+            catch_unwind(AssertUnwindSafe(|| event_loop.dispatch(None, &mut data)));
         match dispatch_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {

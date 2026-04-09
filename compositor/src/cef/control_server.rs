@@ -162,10 +162,7 @@ fn wallpaper_preview_allowed(canon: &Path) -> bool {
     ext_ok && canon.is_file()
 }
 
-fn handle_one(
-    stream: &mut std::net::TcpStream,
-    uplink: &UplinkToCompositor,
-) -> Result<(), String> {
+fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut first = String::new();
     reader.read_line(&mut first).map_err(|e| e.to_string())?;
@@ -217,12 +214,16 @@ fn handle_one(
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/wallpaper_preview" {
         let q = query_str.ok_or_else(|| "wallpaper_preview: missing query".to_string())?;
-        let p_enc = query_param_raw(q, "p").ok_or_else(|| "wallpaper_preview: missing p".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "wallpaper_preview: missing p".to_string())?;
         let p_dec = percent_decode_component(p_enc)?;
         let pb = PathBuf::from(p_dec);
-        let canon = pb.canonicalize().map_err(|e| format!("wallpaper_preview: {e}"))?;
+        let canon = pb
+            .canonicalize()
+            .map_err(|e| format!("wallpaper_preview: {e}"))?;
         if !wallpaper_preview_allowed(&canon) {
-            write_http_json_error(stream, 403, r#"{"error":"forbidden"}"#).map_err(|e| e.to_string())?;
+            write_http_json_error(stream, 403, r#"{"error":"forbidden"}"#)
+                .map_err(|e| e.to_string())?;
             return Ok(());
         }
         let jpeg = crate::desktop_background::encode_wallpaper_preview_jpeg(&canon)?;

@@ -20,10 +20,7 @@ use smithay::backend::{
         gles::{GlesError, GlesRenderer},
         Bind, Renderer,
     },
-    session::{
-        libseat::LibSeatSession,
-        Event as SessionEvent, Session,
-    },
+    session::{libseat::LibSeatSession, Event as SessionEvent, Session},
     udev::primary_gpu,
 };
 use smithay::desktop::space::space_render_elements;
@@ -32,6 +29,7 @@ use crate::derp_space_render;
 
 use crate::derp_space::DerpSpaceElem;
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::{
     calloop::{
         generic::{Generic, NoIoDrop},
@@ -41,16 +39,13 @@ use smithay::reexports::{
     drm::{
         control::{
             connector::{self, State as ConnectorState},
-            crtc,
-            Device as ControlDevice,
-            Mode as DrmCtlMode,
+            crtc, Device as ControlDevice, Mode as DrmCtlMode,
         },
         Device as DrmFdDevice,
     },
     input::Libinput,
     rustix::fs::OFlags,
 };
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
 use tracing::{debug, error, info, warn};
 
@@ -125,10 +120,11 @@ impl DrmHead {
             Err(e) => {
                 warn!(?e, "drm next_buffer (busy or inactive); retry later");
                 let h = loop_handle.clone();
-                let _ = h.insert_source(Timer::from_duration(Duration::from_millis(4)), |_, _, d| {
-                    drm_idle_render(d);
-                    TimeoutAction::Drop
-                });
+                let _ =
+                    h.insert_source(Timer::from_duration(Duration::from_millis(4)), |_, _, d| {
+                        drm_idle_render(d);
+                        TimeoutAction::Drop
+                    });
                 return (false, false);
             }
         };
@@ -155,15 +151,22 @@ impl DrmHead {
                 }
             };
 
-            type Desk<'a> = DesktopStack<
-                'a,
-                <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement,
-            >;
+            type Desk<'a> =
+                DesktopStack<'a, <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement>;
             let output_scale = output.current_scale().fractional_scale();
 
             let mut render_elements: Vec<Desk<'_>> = Vec::new();
-            pointer_render::append_pointer_desktop_elements(state, renderer, output, &mut render_elements);
-            crate::tile_preview_render::append_tile_preview_for_output(state, output, &mut render_elements);
+            pointer_render::append_pointer_desktop_elements(
+                state,
+                renderer,
+                output,
+                &mut render_elements,
+            );
+            crate::tile_preview_render::append_tile_preview_for_output(
+                state,
+                output,
+                &mut render_elements,
+            );
             let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
                 state, renderer, output,
             ) {
@@ -206,12 +209,15 @@ impl DrmHead {
                             render_elements.extend(space_els.into_iter().map(|el| {
                                 DesktopStack::Space(
                                     crate::desktop_stack::FractionalDamageSpaceElements::new(
-                                        el, output_scale,
+                                        el,
+                                        output_scale,
                                     ),
                                 )
                             }));
                             let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
-                                state, output, output_scale,
+                                state,
+                                output,
+                                output_scale,
                             );
                             for s in backdrop.solids {
                                 render_elements.push(DesktopStack::BackdropSolid(s));
@@ -254,11 +260,12 @@ impl DrmHead {
                         match excl_ctx {
                             None => render_elements.push(DesktopStack::Space(
                                 crate::desktop_stack::FractionalDamageSpaceElements::new(
-                                    el, output_scale,
+                                    el,
+                                    output_scale,
                                 ),
                             )),
                             Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
-                                SpaceExclusionClip::new(el, output_scale, ctx),
+                                SpaceExclusionClip::new(el, output_scale, ctx, wid),
                             )),
                         }
                     }
@@ -266,7 +273,9 @@ impl DrmHead {
                         render_elements.push(DesktopStack::ShellDma(el));
                     }
                     let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
-                        state, output, output_scale,
+                        state,
+                        output,
+                        output_scale,
                     );
                     for s in backdrop.solids {
                         render_elements.push(DesktopStack::BackdropSolid(s));
@@ -508,10 +517,7 @@ impl DrmSession {
         let n_before = self.heads.len();
 
         for (crtc_h, drm_mode, conns, lw) in planned {
-            let drm_surface = match self
-                .drm
-                .create_surface(crtc_h, drm_mode, conns.as_slice())
-            {
+            let drm_surface = match self.drm.create_surface(crtc_h, drm_mode, conns.as_slice()) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(target: "derp_drm", ?e, "hotplug create_surface");
@@ -788,17 +794,12 @@ fn enumerate_new_crtc_plans(
     let handles = drm
         .resource_handles()
         .map_err(|e| format!("resource_handles: {e}"))?;
-    let connected = sort_connected_connector_handles(
-        drm,
-        handles.connectors(),
-        force_probe,
-        |c| {
-            !existing_connectors.contains(&c)
-                && hotplug_retry_after
-                    .get(&c)
-                    .map_or(true, |until| now >= *until)
-        },
-    );
+    let connected = sort_connected_connector_handles(drm, handles.connectors(), force_probe, |c| {
+        !existing_connectors.contains(&c)
+            && hotplug_retry_after
+                .get(&c)
+                .map_or(true, |until| now >= *until)
+    });
     let mut used_crtcs: HashSet<crtc::Handle> = existing_crtcs.iter().copied().collect();
     let mut out = Vec::new();
     for conn in connected {
@@ -943,8 +944,7 @@ pub fn init_drm(
 
     let head_specs = pick_all_crtc_surfaces(&mut drm)?;
 
-    let gbm = GbmDevice::new(gbm_drm_fd)
-        .map_err(|e| format!("GbmDevice: {e}"))?;
+    let gbm = GbmDevice::new(gbm_drm_fd).map_err(|e| format!("GbmDevice: {e}"))?;
     let egl_display =
         unsafe { EGLDisplay::new(gbm.clone()).map_err(|e| format!("EGLDisplay: {e}"))? };
     let egl_ctx = EGLContext::new_with_priority(&egl_display, ContextPriority::High)
@@ -1015,13 +1015,9 @@ pub fn init_drm(
             gbm.clone(),
             GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
         );
-        let gbm_surface = GbmBufferedSurface::new(
-            drm_surface,
-            allocator,
-            &color_formats,
-            format_vec.clone(),
-        )
-        .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
+        let gbm_surface =
+            GbmBufferedSurface::new(drm_surface, allocator, &color_formats, format_vec.clone())
+                .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
 
         let mode = OutputMode::from(drm_mode);
         let shell_sc = CompositorState::wayland_scale_for_shell_ui(data.state.shell_ui_scale);
@@ -1051,9 +1047,7 @@ pub fn init_drm(
         );
         output.set_preferred(mode);
 
-        data.state
-            .space
-            .map_output(&output, (cursor_x, cursor_y));
+        data.state.space.map_output(&output, (cursor_x, cursor_y));
 
         cursor_x = cursor_x.saturating_add(logical_stride_w);
 

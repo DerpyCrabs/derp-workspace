@@ -359,7 +359,7 @@ impl CompositorState {
             if let Some((elem, _loc)) = self.element_under_respecting_shell_exclusions(pos) {
                 let shell_ui_focus = self
                     .derp_elem_window_id(&elem)
-                    .filter(|wid| self.shell_backed_windows.contains_key(wid));
+                    .filter(|wid| self.window_registry.is_shell_hosted(*wid));
                 self.shell_emit_shell_ui_focus_if_changed(shell_ui_focus);
                 match elem {
                     DerpSpaceElem::Wayland(window) => {

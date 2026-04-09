@@ -1,6 +1,7 @@
 //! [`crate::CalloopData`] implements Smithay’s X11 / xwayland-shell handler traits so X11 events on
 //! the calloop loop forward into [`crate::CompositorState`] (the Wayland display still dispatches `CompositorState`).
 
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::{
     utils::{Logical, Rectangle},
     wayland::xwayland_shell::XWaylandShellHandler,
@@ -9,12 +10,13 @@ use smithay::{
         X11Surface, X11Wm, XwmHandler,
     },
 };
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::CalloopData;
 
 impl XWaylandShellHandler for CalloopData {
-    fn xwayland_shell_state(&mut self) -> &mut smithay::wayland::xwayland_shell::XWaylandShellState {
+    fn xwayland_shell_state(
+        &mut self,
+    ) -> &mut smithay::wayland::xwayland_shell::XWaylandShellState {
         XWaylandShellHandler::xwayland_shell_state(&mut self.state)
     }
 

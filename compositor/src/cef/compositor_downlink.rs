@@ -330,11 +330,7 @@ pub fn apply_message(
                 return;
             };
 
-            let ev = MouseEvent {
-                x,
-                y,
-                modifiers,
-            };
+            let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
         }
         shell_wire::DecodedCompositorToShellMessage::PointerButton {
@@ -355,11 +351,7 @@ pub fn apply_message(
                 return;
             };
 
-            let ev = MouseEvent {
-                x,
-                y,
-                modifiers,
-            };
+            let ev = MouseEvent { x, y, modifiers };
             let ty = match button {
                 1 => MouseButtonType::MIDDLE,
                 2 => MouseButtonType::RIGHT,
@@ -385,11 +377,7 @@ pub fn apply_message(
                 return;
             };
 
-            let ev = MouseEvent {
-                x,
-                y,
-                modifiers,
-            };
+            let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
         }

@@ -1,17 +1,7 @@
 import { clientRectToGlobalLogical } from './shellCoords'
-import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from './backedShellWindows'
-
 export { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from './backedShellWindows'
 
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
-
-export function isShellUiToolboxRow(shellFlags: number, windowId: number): boolean {
-  return (
-    (shellFlags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
-    windowId === SHELL_UI_DEBUG_WINDOW_ID ||
-    windowId === SHELL_UI_SETTINGS_WINDOW_ID
-  )
-}
 
 export type ShellUiMeasureEnv = {
   main: HTMLElement

@@ -96,11 +96,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   }
 
   onMount(() => {
-    const cfg = props.shellUiRegister
-    if (!cfg) return
-    const unreg = registerShellUiWindow(cfg.id, () =>
-      shellUiWindowMeasureFromEnv(cfg.id, cfg.z, root, cfg.getEnv),
-    )
+    if (!props.shellUiRegister) return
+    const unreg = registerShellUiWindow(props.shellUiRegister.id, () => {
+      const cfg = props.shellUiRegister
+      if (!cfg) return null
+      return shellUiWindowMeasureFromEnv(cfg.id, cfg.z, root, cfg.getEnv)
+    })
     onCleanup(unreg)
   })
 

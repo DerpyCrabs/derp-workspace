@@ -1,12 +1,12 @@
 pub(crate) mod begin_frame_diag;
 mod bridge;
-pub mod compositor_tx;
 mod compositor_downlink;
+pub mod compositor_tx;
 mod control_server;
 mod desktop_apps;
+mod frame_sink;
 mod gnome_background;
 mod gnome_wallpaper_list;
-mod frame_sink;
 mod osr_view_state;
 mod runner;
 mod shell_uplink;
