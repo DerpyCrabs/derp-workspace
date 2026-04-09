@@ -646,6 +646,7 @@ pub const SHELL_WINDOW_FLAG_SHELL_HOSTED: u32 = 1;
 pub struct ShellWindowSnapshot {
     pub window_id: u32,
     pub surface_id: u32,
+    pub stack_z: u32,
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -684,6 +685,7 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         let olen = u32::try_from(ob.len()).ok()?;
         body.extend_from_slice(&w.window_id.to_le_bytes());
         body.extend_from_slice(&w.surface_id.to_le_bytes());
+        body.extend_from_slice(&w.stack_z.to_le_bytes());
         body.extend_from_slice(&w.x.to_le_bytes());
         body.extend_from_slice(&w.y.to_le_bytes());
         body.extend_from_slice(&w.w.to_le_bytes());
@@ -1778,27 +1780,28 @@ fn decode_window_list_compositor_body(
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
         let surface_id = u32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
-        let x = i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
-        let y = i32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
-        let w = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
-        let h = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-        let minimized = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-        let maximized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
-        let fullscreen = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
+        let stack_z = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
+        let x = i32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+        let y = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
+        let w = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
+        let h = i32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+        let minimized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+        let maximized = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
+        let fullscreen = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
         let client_side_decoration =
-            u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
-        let shell_flags = u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
+            u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
+        let shell_flags = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap());
         if minimized > 1 || maximized > 1 || fullscreen > 1 || client_side_decoration > 1 {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()) as usize;
+        let title_len = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize
             || app_len > MAX_WINDOW_STRING_BYTES as usize
         {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 52;
+        off += 56;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -1833,6 +1836,7 @@ fn decode_window_list_compositor_body(
         windows.push(ShellWindowSnapshot {
             window_id,
             surface_id,
+            stack_z,
             x,
             y,
             w,

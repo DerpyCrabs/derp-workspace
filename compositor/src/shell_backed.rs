@@ -56,7 +56,6 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
         };
-        let fz = self.shell_focused_ui_window_id;
         let mut placements = Vec::new();
         for info in self.window_registry.shell_hosted_infos() {
             if info.minimized {
@@ -70,12 +69,9 @@ impl CompositorState {
             let Some(br) = self.shell_global_rect_to_buffer_rect(&clamped) else {
                 continue;
             };
-            let z = 30_000u32
-                .saturating_add(id)
-                .saturating_add(if fz == Some(id) { 500_000 } else { 0 });
             placements.push(ShellUiWindowPlacement {
                 id,
-                z,
+                z: self.shell_window_stack_z(id),
                 global_rect: clamped,
                 buffer_rect: br,
             });
@@ -204,6 +200,7 @@ impl CompositorState {
             self.shell_blur_shell_ui_focus();
         }
         self.window_registry.remove_shell_hosted(window_id);
+        self.shell_window_stack_forget(window_id);
         self.shell_ui_pointer_grab = None;
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },

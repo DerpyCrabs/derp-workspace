@@ -378,6 +378,7 @@ pub struct CompositorState {
     pub(crate) shell_ui_windows_generation: u32,
     pub(crate) shell_ui_suppress_osr_exclusion: bool,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
+    pub(crate) shell_window_stack_order: Vec<u32>,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
@@ -421,6 +422,57 @@ struct KeyboardLayoutFocusOp {
 }
 
 impl CompositorState {
+    fn shell_window_stack_seed_known_windows(&mut self) {
+        self.shell_window_stack_order
+            .retain(|wid| self.window_registry.window_info(*wid).is_some());
+        let mut ids: Vec<u32> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .map(|record| record.info.window_id)
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            if !self.shell_window_stack_order.contains(&id) {
+                self.shell_window_stack_order.push(id);
+            }
+        }
+    }
+
+    pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) {
+        if window_id == 0 || self.window_registry.window_info(window_id).is_none() {
+            return;
+        }
+        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+        self.shell_window_stack_order.push(window_id);
+    }
+
+    pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {
+        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+    }
+
+    pub(crate) fn shell_note_non_shell_focus(&mut self) {
+        self.shell_focused_ui_window_id = None;
+        self.shell_last_sent_ui_focus_id = None;
+        self.shell_exclusion_zones_need_full_damage = true;
+    }
+
+    pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
+        self.shell_window_stack_order
+            .iter()
+            .position(|wid| *wid == window_id)
+            .map(|idx| idx as u32 + 1)
+            .unwrap_or_else(|| {
+                20u32.saturating_add(window_id).saturating_add(
+                    if self.shell_focused_ui_window_id == Some(window_id) {
+                        10_000
+                    } else {
+                        0
+                    },
+                )
+            })
+    }
+
     pub fn shell_context_menu_atlas_px() -> u32 {
         std::env::var("DERP_SHELL_CONTEXT_MENU_ATLAS_PX")
             .ok()
@@ -617,6 +669,7 @@ impl CompositorState {
             shell_ui_windows_generation: 0,
             shell_ui_suppress_osr_exclusion: false,
             shell_focused_ui_window_id: None,
+            shell_window_stack_order: Vec::new(),
             shell_last_sent_ui_focus_id: None,
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
@@ -948,8 +1001,16 @@ impl CompositorState {
             .collect()
     }
 
-    fn shell_hosted_clip_placements(&self) -> Vec<ShellUiWindowPlacement> {
-        self.shell_hosted_visible_placements()
+    fn shell_hosted_clip_placements(
+        &self,
+        native_window_id: Option<u32>,
+    ) -> Vec<ShellUiWindowPlacement> {
+        let placements = self.shell_hosted_visible_placements();
+        let Some(native_window_id) = native_window_id else {
+            return placements;
+        };
+        let native_z = self.shell_window_stack_z(native_window_id);
+        placements.into_iter().filter(|w| w.z > native_z).collect()
     }
 
     pub(crate) fn shell_global_rect_to_buffer_rect(
@@ -1173,7 +1234,9 @@ impl CompositorState {
             .set_focus(self, Option::<WlSurface>::None, k_serial);
         self.keyboard_on_focus_surface_changed(None);
         self.shell_ipc_keyboard_to_cef = true;
+        self.shell_window_stack_touch(window_id);
         self.shell_emit_shell_ui_focus_if_changed(Some(window_id));
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_blur_shell_ui_focus(&mut self) {
@@ -1294,7 +1357,7 @@ impl CompositorState {
             .iter()
             .filter_map(|z| z.intersection(visible))
             .collect();
-        let placements = self.shell_hosted_clip_placements();
+        let placements = self.shell_hosted_clip_placements(elem_window);
         match elem_window {
             None => {
                 for rs in self.shell_exclusion_decor.values() {
@@ -4359,6 +4422,7 @@ impl CompositorState {
 
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
+        self.shell_window_stack_seed_known_windows();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
             .window_registry
             .all_records()
@@ -4377,6 +4441,7 @@ impl CompositorState {
                 shell_wire::ShellWindowSnapshot {
                     window_id: i.window_id,
                     surface_id: i.surface_id,
+                    stack_z: self.shell_window_stack_z(i.window_id),
                     x: i.x,
                     y: i.y,
                     w: i.width,
@@ -4699,7 +4764,7 @@ impl CompositorState {
             return;
         };
         self.shell_ipc_keyboard_to_cef = false;
-        self.shell_emit_shell_ui_focus_if_changed(None);
+        self.shell_note_non_shell_focus();
         self.space.elements().for_each(|e| {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
@@ -4709,6 +4774,7 @@ impl CompositorState {
         let _ = window.set_activated(true);
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
+        self.shell_window_stack_touch(window_id);
         let wl_surface = window.toplevel().unwrap().wl_surface().clone();
         let k_serial = SERIAL_COUNTER.next_serial();
         self.seat
@@ -4720,6 +4786,7 @@ impl CompositorState {
                 w.toplevel().unwrap().send_pending_configure();
             }
         });
+        self.shell_reply_window_list();
     }
 
     fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {

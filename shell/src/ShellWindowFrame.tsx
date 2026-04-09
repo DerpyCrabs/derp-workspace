@@ -51,6 +51,7 @@ type ShellWindowFrameProps = {
   repaintKey?: MaybeAcc<number>
   focused: MaybeAcc<boolean>
   stackZ: MaybeAcc<number>
+  onFocusRequest?: () => void
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
   onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
   onMinimize: () => void
@@ -158,6 +159,13 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             width: `${model()?.width ?? 0}px`,
             height: `${model()?.height ?? 0}px`,
           }}
+          onPointerDown={(e) => {
+            if (!e.isPrimary || e.button !== 0) return
+            props.onFocusRequest?.()
+          }}
+          onTouchStart={() => {
+            props.onFocusRequest?.()
+          }}
         >
           {props.children}
         </div>
@@ -174,6 +182,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
+          props.onFocusRequest?.()
           if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           e.preventDefault()
           e.stopPropagation()
@@ -183,6 +192,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
+          props.onFocusRequest?.()
           if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           const t = e.changedTouches[0]
           if (!t) return

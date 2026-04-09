@@ -258,6 +258,7 @@ pub fn apply_message(
                     json!({
                         "window_id": w.window_id,
                         "surface_id": w.surface_id,
+                        "stack_z": w.stack_z,
                         "x": w.x,
                         "y": w.y,
                         "width": w.w,

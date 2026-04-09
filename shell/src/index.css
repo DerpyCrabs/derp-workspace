@@ -21,7 +21,7 @@ body {
   --color-shell-hud-strong: hsl(210 85% 82%);
   --color-shell-hud-mono: hsl(210 75% 78%);
   --color-shell-btn-primary: hsl(210 70% 78%);
-  --color-shell-taskbar-focused: hsl(210 65% 72%);
+  --color-shell-taskbar-focused: hsl(210 80% 82%);
 }
 
 @layer components {

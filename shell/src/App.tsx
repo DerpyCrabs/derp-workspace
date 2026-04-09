@@ -313,6 +313,7 @@ type DesktopAppEntry = {
 type DerpWindow = {
   window_id: number
   surface_id: number
+  stack_z: number
   x: number
   y: number
   width: number
@@ -324,10 +325,6 @@ type DerpWindow = {
   maximized: boolean
   fullscreen: boolean
   shell_flags: number
-}
-
-function shellWindowStackZ(windowId: number, focusedId: number | null): number {
-  return 20 + windowId + (focusedId === windowId ? 10_000 : 0)
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -365,9 +362,15 @@ function buildWindowsMapFromList(
       typeof sfRaw === 'number' && Number.isFinite(sfRaw)
         ? Math.trunc(sfRaw)
         : (prev?.get(wid)?.shell_flags ?? 0)
+    const szRaw = r.stack_z
+    const stack_z =
+      typeof szRaw === 'number' && Number.isFinite(szRaw)
+        ? Math.trunc(szRaw)
+        : (prev?.get(wid)?.stack_z ?? wid)
     next.set(wid, {
       window_id: wid,
       surface_id: sid,
+      stack_z,
       x: Number(r.x) || 0,
       y: Number(r.y) || 0,
       width: Number(r.width) || 0,
@@ -394,6 +397,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
       next.set(wid, {
         window_id: wid,
         surface_id: sid,
+        stack_z: next.get(wid)?.stack_z ?? wid,
         x: detail.x,
         y: detail.y,
         width: detail.width,
@@ -873,11 +877,8 @@ function App() {
   })
 
   const stackedWindowsList = createMemo(() => {
-    const focusedId = focusedWindowId()
     return [...windowsList()].sort((a, b) => {
-      const az = shellWindowStackZ(a.window_id, focusedId)
-      const bz = shellWindowStackZ(b.window_id, focusedId)
-      return bz - az || b.window_id - a.window_id
+      return b.stack_z - a.stack_z || b.window_id - a.window_id
     })
   })
 
@@ -887,18 +888,16 @@ function App() {
       if (!r || r.minimized) return undefined
       return { ...r, snap_tiled: perMonitorTiles.isTiled(props.windowId) }
     })
-    const stackZ = createMemo(
-      () => shellWindowStackZ(props.windowId, focusedWindowId()),
-    )
+    const stackZ = createMemo(() => allWindowsMap().get(props.windowId)?.stack_z ?? 0)
     const rowFocused = createMemo(() => focusedWindowId() === props.windowId)
     const windowId = props.windowId
     const deskShellUiReg = createMemo(() => {
-      focusedWindowId()
+      stackZ()
       outputGeom()
       layoutCanvasOrigin()
       return {
         id: props.windowId,
-        z: shellWindowStackZ(props.windowId, focusedWindowId()),
+        z: stackZ(),
         getEnv: (): ShellUiMeasureEnv | null => {
           const main = mainRef
           const og = outputGeom()
@@ -920,6 +919,9 @@ function App() {
           stackZ={stackZ}
           focused={rowFocused}
           shellUiRegister={deskShellUiReg()}
+          onFocusRequest={() => {
+            shellWireSend('shell_focus_ui_window', windowId)
+          }}
           onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(windowId, cx, cy)}
           onResizeEdgeDown={(edges, cx, cy) => beginShellWindowResize(windowId, edges, cx, cy)}
           onMinimize={() => {

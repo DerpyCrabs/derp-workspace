@@ -41,8 +41,10 @@ impl SeatHandler for CompositorState {
 
         let window_id = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
         if let Some(wid) = window_id {
+            self.shell_window_stack_touch(wid);
             if let Some(info) = self.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {
+                    self.shell_note_non_shell_focus();
                     self.shell_last_non_shell_focus_window_id = Some(wid);
                     self.push_non_shell_focus_history(wid);
                 }
@@ -53,6 +55,7 @@ impl SeatHandler for CompositorState {
             surface_id,
             window_id,
         });
+        self.shell_reply_window_list();
     }
 }
 

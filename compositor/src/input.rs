@@ -360,7 +360,9 @@ impl CompositorState {
                 let shell_ui_focus = self
                     .derp_elem_window_id(&elem)
                     .filter(|wid| self.window_registry.is_shell_hosted(*wid));
-                self.shell_emit_shell_ui_focus_if_changed(shell_ui_focus);
+                if shell_ui_focus.is_some() {
+                    self.shell_emit_shell_ui_focus_if_changed(shell_ui_focus);
+                }
                 match elem {
                     DerpSpaceElem::Wayland(window) => {
                         self.space.elements().for_each(|e| {

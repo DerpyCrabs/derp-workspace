@@ -56,10 +56,12 @@ export function Taskbar(props: TaskbarProps) {
             <button
               type="button"
               role="listitem"
-              class="max-w-[11rem] flex-[0_1_auto] cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+              class="max-w-[11rem] flex-[0_1_auto] cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
               classList={{
-                'border-white/35 bg-shell-taskbar-focused text-neutral-900':
+                'border border-white/35 bg-shell-btn-primary text-neutral-900':
                   props.focusedWindowId === w.window_id && !w.minimized,
+                'border border-slate-600 bg-slate-800 text-neutral-200':
+                  !(props.focusedWindowId === w.window_id && !w.minimized),
                 'opacity-55':
                   w.minimized && !(props.focusedWindowId === w.window_id && !w.minimized),
               }}
@@ -88,9 +90,11 @@ export function Taskbar(props: TaskbarProps) {
           </Show>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.settingsPanelOpen,
+              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+                props.settingsPanelOpen,
+              'border border-slate-600 bg-slate-800 text-neutral-200': !props.settingsPanelOpen,
             }}
             data-shell-settings-toggle
             aria-pressed={props.settingsPanelOpen}
@@ -101,9 +105,11 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.debugPanelOpen,
+              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+                props.debugPanelOpen,
+              'border border-slate-600 bg-slate-800 text-neutral-200': !props.debugPanelOpen,
             }}
             aria-pressed={props.debugPanelOpen}
             title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
@@ -113,9 +119,11 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium text-neutral-200 hover:brightness-[1.12]"
+            class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border-white/35 bg-shell-taskbar-focused text-neutral-900': props.powerMenuOpen,
+              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+                props.powerMenuOpen,
+              'border border-slate-600 bg-slate-800 text-neutral-200': !props.powerMenuOpen,
             }}
             data-shell-power-toggle
             aria-expanded={props.powerMenuOpen}
