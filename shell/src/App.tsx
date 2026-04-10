@@ -56,10 +56,7 @@ import {
   assistSpanFromWorkAreaPoint,
   DEFAULT_ASSIST_GRID_SHAPE,
   snapZoneAndPreviewFromAssistSpan,
-  type AssistGridShape,
-  type AssistGridSpan,
 } from './assistGrid'
-import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
 import {
   computeTiledResizeRects,
@@ -73,22 +70,18 @@ import {
   snapZoneToBoundsWithOccupied,
   type Rect as TileRect,
 } from './tileZones'
-import { Taskbar } from './Taskbar'
-import { atlasTopFromLayout, type ShellContextMenuItem } from './contextMenu'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
-import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { hideShellFloatingWire } from './shellFloatingWire'
-import { searchDesktopApplications } from './desktopAppSearch'
 import { getMonitorLayout } from './tilingConfig'
-import {
-  parseDesktopApplicationsResponse,
-  postShellJson,
-  spawnViaShellHttp,
-  type DesktopAppEntry,
-} from './shellBridge'
+import { postShellJson, spawnViaShellHttp } from './shellBridge'
 import { shellHttpBase } from './shellHttp'
 import { startThemeDomSync } from './themeDom'
 import { refreshThemeSettingsFromRemote } from './themeStore'
+import { createShellContextMenus } from './app/createShellContextMenus'
+import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
+import { ShellDebugHudContent } from './app/ShellDebugHudContent'
+import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
+import type { AssistOverlayState, ExclusionHudZone, LayoutScreen } from './app/types'
 
 declare global {
   interface Window {
@@ -139,31 +132,6 @@ declare global {
       arg6?: number,
     ) => void
   }
-}
-
-type LayoutScreen = {
-  name: string
-  x: number
-  y: number
-  width: number
-  height: number
-  transform: number
-  refresh_milli_hz: number
-}
-
-type ExclusionHudZone = {
-  label: string
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-type AssistOverlayState = {
-  shape: AssistGridShape
-  gutterPx: number
-  hoverSpan: AssistGridSpan | null
-  workCanvas: { x: number; y: number; w: number; h: number }
 }
 
 type ScreenshotSelectionState = {
@@ -631,6 +599,7 @@ function canSessionControl(): boolean {
 }
 
 function App() {
+  const shellBuildLabel = shellBuildLabelText()
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -720,63 +689,17 @@ function App() {
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
   const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
   const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
-  const [ctxMenuOpen, setCtxMenuOpen] = createSignal(false)
-  const [ctxMenuKind, setCtxMenuKind] = createSignal<'programs' | 'power' | null>(null)
-  const [ctxMenuAnchor, setCtxMenuAnchor] = createSignal<{
-    x: number
-    y: number
-    alignAboveY?: number
-  }>({ x: 0, y: 0 })
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
-  const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
-  const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
-  const [programsCatalog, setProgramsCatalog] = createStore<{
-    items: DesktopAppEntry[]
-    loaded: boolean
-  }>({
-    items: [],
-    loaded: false,
-  })
-  const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
-  const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
-  const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
-  const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
-  const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
-  const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
-  let programsMenuRefreshPromise: Promise<void> | null = null
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
-  let menuAtlasHostRef: HTMLElement | undefined
-  let menuPanelRef: HTMLElement | undefined
-  let programsMenuSearchRef: HTMLInputElement | undefined
   let exclusionZonesRaf = 0
   let lastExclusionZonesJson: string | null = null
-
-  createEffect(() => {
-    if (!ctxMenuOpen()) {
-      setCtxMenuKind(null)
-      setProgramsMenuQuery('')
-      setProgramsMenuHighlightIdx(0)
-      setProgramsMenuOutputName(null)
-      setPowerMenuHighlightIdx(0)
-    }
-  })
-
-  function hideContextMenu() {
-    setCtxMenuOpen(false)
-    setCtxMenuKind(null)
-    setProgramsMenuQuery('')
-    setProgramsMenuHighlightIdx(0)
-    setProgramsMenuOutputName(null)
-    setPowerMenuHighlightIdx(0)
-    hideShellFloatingWire()
-  }
   function closeAllAtlasSelects(): boolean {
     let any = false
     for (const f of atlasSelectClosers) {
@@ -880,7 +803,7 @@ function App() {
   }
 
   function beginScreenshotMode() {
-    hideContextMenu()
+    shellContextMenus.hideContextMenu()
     closeAllAtlasSelects()
     clearShellActionIssue()
     setScreenshotSelection(null)
@@ -914,57 +837,35 @@ function App() {
     return { w, h }
   })
 
-  const shellMenuAtlasTop = createMemo(() => {
-    const g = outputGeom()
-    const p = outputPhysical()
-    const ah = contextMenuAtlasBufferH()
-    const v = canvasCss()
-    const clh = Math.max(1, g?.h ?? v.h)
-    const cph = Math.max(1, p?.h ?? Math.round(clh * 1.5))
-    return atlasTopFromLayout(clh, cph, ah)
-  })
-
-  function programsMenuMetrics(outputName?: string | null) {
-    const og = outputGeom()
-    const co = layoutCanvasOrigin()
-    const screens = screensListForLayout(screenDraft.rows, og, co)
-    const requestedOutput =
-      outputName !== null && outputName !== undefined
-        ? screens.find((screen) => screen.name === outputName)
-        : undefined
-    const explicitPrimaryName = shellChromePrimaryName()
-    const explicitPrimary =
-      explicitPrimaryName !== null ? screens.find((screen) => screen.name === explicitPrimaryName) : undefined
-    let primary = requestedOutput ?? explicitPrimary ?? screens[0] ?? null
-    if (requestedOutput === undefined && explicitPrimary === undefined && screens.length > 1) {
-      for (const screen of screens) {
-        if (
-          primary === null ||
-          screen.x < primary.x ||
-          (screen.x === primary.x && screen.y < primary.y)
-        ) {
-          primary = screen
-        }
+  const shellContextMenus = createShellContextMenus({
+    mainEl: () => mainRef,
+    outputGeom,
+    outputPhysical,
+    layoutCanvasOrigin,
+    screenDraftRows: () => screenDraft.rows,
+    shellChromePrimaryName,
+    viewportCss,
+    canvasCss,
+    contextMenuAtlasBufferH,
+    screenshotMode,
+    stopScreenshotMode,
+    closeAllAtlasSelects,
+    spawnInCompositor,
+    postSessionPower,
+    canSessionControl,
+    exitSession: () => {
+      if (shellWireSend('quit')) {
+        clearShellActionIssue()
+        return
       }
-    }
-    if (!og || !primary) return null
-    const targetCss = layoutScreenCssRect(primary, co)
-    const width = Math.max(320, Math.min(704, targetCss.width - 24))
-    const height = Math.max(240, Math.min(608, targetCss.height - 24))
-    return { targetCss, width, height }
-  }
-
-  const programsMenuPlacement = createMemo(() => {
-    const metrics = programsMenuMetrics(programsMenuOutputName())
-    if (!metrics) return null
-    const stripHeight = Math.max(1, canvasCss().h - shellMenuAtlasTop())
-    return {
-      left: '50%',
-      top: `${Math.max(8, Math.round((stripHeight - metrics.height) / 2))}px`,
-      width: `${Math.round(metrics.width)}px`,
-      'max-height': `${Math.round(metrics.height)}px`,
-      transform: 'translateX(-50%)',
-    } as const
+      void postShell('/session_quit', {}).then(clearShellActionIssue).catch((error) => {
+        reportShellActionIssue(`Exit session failed: ${describeError(error)}`)
+      })
+    },
+    clearShellActionIssue,
+    reportShellActionIssue,
+    describeError,
+    dismissFloatingWire: hideShellFloatingWire,
   })
 
   const workspacePartition = createMemo(() => {
@@ -1128,7 +1029,25 @@ function App() {
           }}
         >
           <Show when={windowId === SHELL_UI_DEBUG_WINDOW_ID}>
-            <DebugHudContent />
+            <ShellDebugHudContent
+              onReload={() => location.reload()}
+              onCopySnapshot={copyDebugHudSnapshot}
+              shellBuildLabel={shellBuildLabel}
+              hudFps={hudFps}
+              crosshairCursor={crosshairCursor}
+              setCrosshairCursor={setCrosshairCursor}
+              outputGeom={outputGeom}
+              layoutUnionBbox={layoutUnionBbox}
+              layoutCanvasOrigin={layoutCanvasOrigin}
+              panelHostForHud={panelHostForHud}
+              shellChromePrimaryName={shellChromePrimaryName}
+              viewportCss={viewportCss}
+              windowsCount={() => windowsList().length}
+              pointerClient={pointerClient}
+              pointerInMain={pointerInMain}
+              rootPointerDowns={rootPointerDowns}
+              exclusionZonesHud={exclusionZonesHud}
+            />
           </Show>
           <Show when={windowId === SHELL_UI_SETTINGS_WINDOW_ID}>
             <SettingsPanel
@@ -2074,294 +1993,11 @@ function App() {
     }
   }
 
-  async function refreshProgramsMenuItems() {
-    if (programsMenuRefreshPromise) return programsMenuRefreshPromise
-    const run = (async () => {
-      setProgramsMenuBusy(true)
-      const base = shellHttpBase()
-      if (!base) {
-        if (!programsCatalog.loaded) {
-          setProgramsMenuErr('Programs list needs cef_host (no shell HTTP).')
-        }
-        return
-      }
-      setProgramsMenuErr(null)
-      try {
-        const res = await fetch(`${base}/desktop_applications`)
-        const text = await res.text()
-        if (!res.ok) {
-          if (!programsCatalog.loaded) {
-            setProgramsMenuErr(
-              `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
-            )
-          }
-          return
-        }
-        const list = parseDesktopApplicationsResponse(text)
-        setProgramsCatalog('items', list)
-        setProgramsCatalog('loaded', true)
-        setProgramsMenuErr(null)
-      } catch (e) {
-        if (!programsCatalog.loaded) {
-          setProgramsMenuErr(`Network error: ${e}`)
-        }
-      } finally {
-        setProgramsMenuBusy(false)
-        programsMenuRefreshPromise = null
-      }
-    })()
-    programsMenuRefreshPromise = run
-    return run
-  }
-
-  async function warmProgramsMenuItems() {
-    const startedAt = Date.now()
-    let base = shellHttpBase()
-    while (!base && Date.now() - startedAt < 4000) {
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-      base = shellHttpBase()
-    }
-    if (!base) return
-    await refreshProgramsMenuItems()
-  }
-
-  function anchorProgramsMenuToCenter(outputName?: string | null) {
-    const main = mainRef
-    const og = outputGeom()
-    const metrics = programsMenuMetrics(outputName)
-    if (main && og && metrics) {
-      const center = canvasRectToClientCss(
-        metrics.targetCss.x + metrics.targetCss.width / 2,
-        metrics.targetCss.y + metrics.targetCss.height / 2,
-        0,
-        0,
-        main.getBoundingClientRect(),
-        og.w,
-        og.h,
-      )
-      const left = Math.round(center.left - metrics.width / 2)
-      const top = Math.round(center.top - metrics.height / 2)
-      setCtxMenuAnchor({ x: left, y: top, alignAboveY: top })
-      return
-    }
-    const v = viewportCss()
-    setCtxMenuAnchor({ x: Math.round(v.w / 2 - 352), y: Math.round(v.h / 2 - 240), alignAboveY: Math.round(v.h / 2 - 240) })
-  }
-
-  function openProgramsMenu(outputName?: string | null) {
-    closeAllAtlasSelects()
-    anchorProgramsMenuToCenter(outputName)
-    setCtxMenuKind('programs')
-    setProgramsMenuBusy(!programsCatalog.loaded)
-    setProgramsMenuErr(null)
-    setCtxMenuOpen(true)
-    setProgramsMenuQuery('')
-    setProgramsMenuHighlightIdx(0)
-    setProgramsMenuOutputName(outputName ?? null)
-    queueMicrotask(() => programsMenuSearchRef?.focus())
-    void refreshProgramsMenuItems()
-  }
-
-  function toggleProgramsMenuMeta(outputName?: string | null) {
-    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
-      setCtxMenuOpen(false)
-      return
-    }
-    if (ctxMenuOpen() && ctxMenuKind() === 'power') {
-      setCtxMenuOpen(false)
-    }
-    openProgramsMenu(outputName)
-  }
-
-  function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
-    e.preventDefault()
-    if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
-      setCtxMenuOpen(false)
-      return
-    }
-    const monitorName =
-      e.currentTarget.closest('[data-shell-taskbar-monitor]')?.getAttribute('data-shell-taskbar-monitor') ?? null
-    openProgramsMenu(monitorName)
-  }
-
-  function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
-    e.preventDefault()
-    if (ctxMenuOpen() && ctxMenuKind() === 'power') {
-      setCtxMenuOpen(false)
-      return
-    }
-    closeAllAtlasSelects()
-    const r = e.currentTarget.getBoundingClientRect()
-    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
-    setCtxMenuKind('power')
-    setPowerMenuHighlightIdx(0)
-    setCtxMenuOpen(true)
-  }
-
-  const powerMenuListItems = createMemo((): ShellContextMenuItem[] => {
-    if (!powerMenuOpen()) return []
-    const http = shellHttpBase() !== null
-    const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
-    return [
-      {
-        label: 'Suspend',
-        disabled: !http,
-        title: sysTitle,
-        action: () => void postSessionPower('suspend'),
-      },
-      {
-        label: 'Restart',
-        disabled: !http,
-        title: sysTitle,
-        action: () => void postSessionPower('reboot'),
-      },
-      {
-        label: 'Shut down',
-        disabled: !http,
-        title: sysTitle,
-        action: () => void postSessionPower('poweroff'),
-      },
-      {
-        label: 'Exit session',
-        disabled: !canSessionControl(),
-        title: canSessionControl()
-          ? 'Tell compositor to exit (ends session)'
-          : 'Needs cef_host control server or wire',
-        action: () => {
-          if (shellWireSend('quit')) {
-            clearShellActionIssue()
-            return
-          }
-          void postShell('/session_quit', {}).then(clearShellActionIssue).catch((error) => {
-            reportShellActionIssue(`Exit session failed: ${describeError(error)}`)
-          })
-        },
-      },
-    ]
-  })
-
-  const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
-    if (!programsMenuOpen()) return []
-    if (programsMenuBusy() && !programsCatalog.loaded) return [{ label: 'Loading…', action: () => {} }]
-    const err = programsMenuErr()
-    if (err && !programsCatalog.loaded) return [{ label: err, action: () => {} }]
-    const q = programsMenuQuery().trim()
-    const raw = programsCatalog.items
-    if (programsCatalog.loaded && raw.length === 0) {
-      return [{ label: 'No applications found.', action: () => {} }]
-    }
-    if (raw.length === 0) return [{ label: 'Loading…', action: () => {} }]
-    const rows = searchDesktopApplications(raw, q)
-    return rows.map((app) => ({
-      label: app.name,
-      badge: app.terminal ? 'tty' : undefined,
-      action: () => {
-        void spawnInCompositor(app.exec)
-      },
-    }))
-  })
-
-  const menuListItems = createMemo((): ShellContextMenuItem[] => {
-    if (ctxMenuKind() === 'programs') return programsMenuListItems()
-    if (ctxMenuKind() === 'power') return powerMenuListItems()
-    return []
-  })
-
-  function programsMenuEnterShortcut(e: KeyboardEvent) {
-    return !e.repeat && !e.isComposing && e.key === 'Enter'
-  }
-
-  function activateProgramsMenuSelection() {
-    if (!programsMenuOpen()) return
-    const items = programsMenuListItems()
-    const n = items.length
-    const item = items[programsMenuHighlightIdx()]
-    if (!item || n === 0) return
-    item.action()
-    setCtxMenuOpen(false)
-    hideShellFloatingWire()
-  }
-
-  function movePowerMenuHighlight(delta: number) {
-    const items = powerMenuListItems()
-    const n = items.length
-    if (n === 0) return
-    let idx = powerMenuHighlightIdx()
-    for (let step = 0; step < n; step++) {
-      idx = (idx + delta + n) % n
-      if (!items[idx]?.disabled) {
-        setPowerMenuHighlightIdx(idx)
-        return
-      }
-    }
-  }
-
-  function activatePowerMenuSelection() {
-    if (!powerMenuOpen()) return
-    const items = powerMenuListItems()
-    const item = items[powerMenuHighlightIdx()]
-    if (!item || item.disabled) return
-    item.action()
-    setCtxMenuOpen(false)
-    hideShellFloatingWire()
-  }
-
-  createEffect(() => {
-    if (!programsMenuOpen()) return
-    const list = programsMenuListItems()
-    const n = list.length
-    const h = programsMenuHighlightIdx()
-    if (n === 0) {
-      if (h !== 0) setProgramsMenuHighlightIdx(0)
-      return
-    }
-    if (h >= n) setProgramsMenuHighlightIdx(n - 1)
-    if (h < 0) setProgramsMenuHighlightIdx(0)
-  })
-
-  createEffect(() => {
-    if (!programsMenuOpen()) return
-    const idx = programsMenuHighlightIdx()
-    void programsMenuListItems().length
-    queueMicrotask(() => {
-      const panel = menuPanelRef
-      if (!panel) return
-      const el = panel.querySelector(`[data-programs-menu-idx="${idx}"]`)
-      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
-    })
-  })
-
-  createEffect(() => {
-    if (!powerMenuOpen()) return
-    const list = powerMenuListItems()
-    const n = list.length
-    const h = powerMenuHighlightIdx()
-    if (n === 0) {
-      if (h !== 0) setPowerMenuHighlightIdx(0)
-      return
-    }
-    if (h >= n) setPowerMenuHighlightIdx(n - 1)
-    if (h < 0) setPowerMenuHighlightIdx(0)
-    if (list[h]?.disabled) movePowerMenuHighlight(1)
-  })
-
-  createEffect(() => {
-    if (!powerMenuOpen()) return
-    const idx = powerMenuHighlightIdx()
-    void powerMenuListItems().length
-    queueMicrotask(() => {
-      const panel = menuPanelRef
-      if (!panel) return
-      const el = panel.querySelector(`[data-power-menu-idx="${idx}"]`)
-      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
-    })
-  })
-
   onMount(() => {
     const stopThemeDomSync = startThemeDomSync()
     onCleanup(stopThemeDomSync)
     void refreshThemeSettingsFromRemote()
-    void warmProgramsMenuItems()
+    void shellContextMenus.warmProgramsMenuItems()
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
@@ -2406,11 +2042,11 @@ function App() {
       if (!d || typeof d !== 'object' || !('type' in d)) return
       if (d.type === 'context_menu_dismiss') {
         closeAllAtlasSelects()
-        hideContextMenu()
+        shellContextMenus.hideContextMenu()
         return
       }
       if (d.type === 'programs_menu_toggle') {
-        toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
+        shellContextMenus.toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
         return
       }
       if (d.type === 'compositor_ping') {
@@ -2450,7 +2086,9 @@ function App() {
           return
         }
         if (action === 'toggle_programs_menu') {
-          toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
+          shellContextMenus.toggleProgramsMenuMeta(
+            typeof d.output_name === 'string' ? d.output_name : null,
+          )
           return
         }
         if (action === 'open_settings') {
@@ -2966,122 +2604,8 @@ function App() {
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
 
-    const onCtxKeyDown = (e: KeyboardEvent) => {
-      if (screenshotMode() && e.key === 'Escape') {
-        e.preventDefault()
-        stopScreenshotMode()
-        return
-      }
-      if (e.key === 'Escape') {
-        if (closeAllAtlasSelects()) {
-          e.preventDefault()
-          return
-        }
-        hideContextMenu()
-        return
-      }
-      if (
-        !e.repeat &&
-        (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight')
-      ) {
-        e.preventDefault()
-        toggleProgramsMenuMeta()
-        return
-      }
-      if (programsMenuOpen()) {
-        const items = programsMenuListItems()
-        const n = items.length
-        if (e.key === 'ArrowDown') {
-          if (n > 0) {
-            e.preventDefault()
-            setProgramsMenuHighlightIdx((i) => (i + 1) % n)
-          }
-          return
-        }
-        if (e.key === 'ArrowUp') {
-          if (n > 0) {
-            e.preventDefault()
-            setProgramsMenuHighlightIdx((i) => (i - 1 + n) % n)
-          }
-          return
-        }
-        if (programsMenuEnterShortcut(e)) {
-          e.preventDefault()
-          e.stopPropagation()
-          activateProgramsMenuSelection()
-          return
-        }
-        if (e.key === 'Home' && n > 0) {
-          e.preventDefault()
-          setProgramsMenuHighlightIdx(0)
-          return
-        }
-        if (e.key === 'End' && n > 0) {
-          e.preventDefault()
-          setProgramsMenuHighlightIdx(n - 1)
-          return
-        }
-      }
-      if (powerMenuOpen()) {
-        const items = powerMenuListItems()
-        const n = items.filter((x) => !x.disabled).length
-        if (e.key === 'ArrowDown') {
-          if (n > 0) {
-            e.preventDefault()
-            movePowerMenuHighlight(1)
-          }
-          return
-        }
-        if (e.key === 'ArrowUp') {
-          if (n > 0) {
-            e.preventDefault()
-            movePowerMenuHighlight(-1)
-          }
-          return
-        }
-        if (!e.repeat && !e.isComposing && e.key === 'Enter') {
-          e.preventDefault()
-          e.stopPropagation()
-          activatePowerMenuSelection()
-          return
-        }
-        if (e.key === 'Home' && n > 0) {
-          e.preventDefault()
-          const first = items.findIndex((x) => !x.disabled)
-          if (first >= 0) setPowerMenuHighlightIdx(first)
-          return
-        }
-        if (e.key === 'End' && n > 0) {
-          e.preventDefault()
-          let last = -1
-          for (let i = items.length - 1; i >= 0; i--) {
-            if (!items[i]?.disabled) {
-              last = i
-              break
-            }
-          }
-          if (last >= 0) setPowerMenuHighlightIdx(last)
-          return
-        }
-      }
-    }
-    const onCtxPointerDown = (e: PointerEvent) => {
-      if (!ctxMenuOpen()) return
-      const t = e.target
-      if (t instanceof Element && t.closest('[data-shell-programs-toggle]')) return
-      if (t instanceof Element && t.closest('[data-shell-settings-toggle]')) return
-      if (t instanceof Element && t.closest('[data-shell-power-toggle]')) return
-      const p = menuPanelRef
-      if (p && t instanceof Node && p.contains(t)) return
-      hideContextMenu()
-    }
-    document.addEventListener('keydown', onCtxKeyDown, true)
-    document.addEventListener('pointerdown', onCtxPointerDown, true)
-
     onCleanup(() => {
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
-      document.removeEventListener('keydown', onCtxKeyDown, true)
-      document.removeEventListener('pointerdown', onCtxPointerDown, true)
       window.removeEventListener('derp-shell', onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('mousemove', onMouseMove)
@@ -3108,43 +2632,11 @@ function App() {
     scheduleExclusionZonesSync()
   })
 
-  createEffect(() => {
-    if (!ctxMenuOpen()) {
-      hideShellFloatingWire()
-      return
-    }
-    void menuListItems().length
-    void screenDraft.rows.length
-    const anch = ctxMenuAnchor()
-    const rid = requestAnimationFrame(() => {
-      const main = mainRef
-      const atlas = menuAtlasHostRef
-      const panel = menuPanelRef
-      const og = outputGeom()
-      const ph = outputPhysical()
-      if (!main || !atlas || !panel || !og || !ph) return
-      pushShellFloatingWireFromDom({
-        main,
-        atlasHost: atlas,
-        panel,
-        anchor: { x: anch.x, y: anch.y, alignAboveY: anch.alignAboveY },
-        canvasW: og.w,
-        canvasH: og.h,
-        physicalW: ph.w,
-        physicalH: ph.h,
-        contextMenuAtlasBufferH: contextMenuAtlasBufferH(),
-        screens: screenDraft.rows,
-        layoutOrigin: layoutCanvasOrigin(),
-      })
-    })
-    onCleanup(() => cancelAnimationFrame(rid))
-  })
-
   function copyDebugHudSnapshot() {
     const g = outputGeom()
     const payload = {
       t: Date.now(),
-      shellBuild: shellBuildLabelText(),
+      shellBuild: shellBuildLabel,
       uiFps: hudFps(),
       screens: screenDraft.rows.map((r) => ({ ...r })),
       outputGeom: g ? { w: g.w, h: g.h } : null,
@@ -3158,138 +2650,6 @@ function App() {
     }
   }
 
-  function DebugHudContent() {
-    return (
-      <div class="px-4 py-3 text-left text-xs leading-snug [&_strong]:text-shell-hud-strong">
-        <div class="mb-2 flex flex-wrap items-center gap-2">
-          <span class="text-[0.8rem] font-semibold tracking-wide text-(--shell-text)">Debug</span>
-          <button
-            type="button"
-            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
-            onClick={() => location.reload()}
-          >
-            Reload shell
-          </button>
-          <button
-            type="button"
-            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
-            onClick={() => copyDebugHudSnapshot()}
-          >
-            Copy snapshot
-          </button>
-        </div>
-        <p class="mb-2 tabular-nums text-(--shell-text-muted)">
-          Build <strong>{shellBuildLabelText()}</strong>
-          {' · '}
-          UI FPS ~<strong>{hudFps()}</strong>
-        </p>
-        <label class="mb-2 flex cursor-pointer items-center gap-2 select-none text-(--shell-text-muted)">
-          <input
-            type="checkbox"
-            class="h-3.5 w-3.5 accent-shell-accent-ring"
-            checked={crosshairCursor()}
-            onChange={(e) => setCrosshairCursor(e.currentTarget.checked)}
-          />
-          <span>Crosshair</span>
-        </label>
-        <Show when={outputGeom()} keyed>
-          {(og) => (
-            <p class="mb-2 text-(--shell-text-muted)">
-              Canvas{' '}
-              <strong>
-                {og.w}×{og.h}
-              </strong>
-            </p>
-          )}
-        </Show>
-        <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) mb-2 rounded px-2 py-1.5" open>
-          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide text-(--shell-text-dim)">
-            Layout / input
-          </summary>
-          <div class="mt-1.5 space-y-1 tabular-nums text-(--shell-text-muted)">
-            <div>
-              Union from <code>screens[]</code>
-              {': '}
-              <strong>
-                {layoutUnionBbox()
-                  ? `@ ${layoutUnionBbox()!.x},${layoutUnionBbox()!.y} (${layoutUnionBbox()!.w}×${layoutUnionBbox()!.h})`
-                  : '—'}
-              </strong>
-            </div>
-            <div>
-              Compositor union min:{' '}
-              <strong>
-                {layoutCanvasOrigin()
-                  ? `@ ${layoutCanvasOrigin()!.x},${layoutCanvasOrigin()!.y}`
-                  : '—'}
-              </strong>
-            </div>
-            <div>
-              Panel host:{' '}
-              <strong>
-                {panelHostForHud()
-                  ? `${shellChromePrimaryName() ? `${shellChromePrimaryName()} (explicit) · ` : ''}${panelHostForHud()!.name || '—'} @ ${panelHostForHud()!.x},${panelHostForHud()!.y} (${panelHostForHud()!.width}×${panelHostForHud()!.height})`
-                  : '—'}
-              </strong>
-            </div>
-            <div>
-              Viewport (CSS){' '}
-              <strong>
-                {viewportCss().w}×{viewportCss().h}
-              </strong>
-              {' · dpr '}
-              <strong>{typeof window !== 'undefined' ? window.devicePixelRatio : 1}</strong>
-            </div>
-            <div>
-              Windows: <strong>{windowsList().length}</strong>
-            </div>
-            <Show when={crosshairCursor()}>
-              <div>
-                Pointer (client){' '}
-                <strong>
-                  {pointerClient() ? `${pointerClient()!.x}, ${pointerClient()!.y}` : '—'}
-                </strong>
-              </div>
-              <div>
-                Pointer (main){' '}
-                <strong>
-                  {pointerInMain() ? `${pointerInMain()!.x}, ${pointerInMain()!.y}` : '—'}
-                </strong>
-              </div>
-            </Show>
-            <div>
-              Pointer downs: <strong>{rootPointerDowns()}</strong>
-            </div>
-          </div>
-        </details>
-        <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded px-2 py-1.5">
-          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide text-(--shell-text-dim)">
-            Exclusion zones
-          </summary>
-          <div class="mt-1.5">
-            <Show
-              when={exclusionZonesHud().length > 0}
-              fallback={<span class="block text-(--shell-text-dim)">—</span>}
-            >
-              <ul class="max-h-40 list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
-                <For each={exclusionZonesHud()}>
-                  {(z) => (
-                    <li class="my-0.5 list-disc">
-                      <span class="mr-[0.35rem] inline-block min-w-28 text-(--shell-text-muted)">{z.label}</span>
-                      <code class="font-mono text-[0.65rem] text-shell-hud-mono">
-                        {z.x},{z.y} · {z.w}×{z.h}
-                      </code>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-          </div>
-        </details>
-      </div>
-    )
-  }
-
   const shellFloatingRegistry: ShellFloatingRegistry = {
     registerAtlasSelectCloser(fn) {
       atlasSelectClosers.add(fn)
@@ -3298,13 +2658,13 @@ function App() {
       atlasSelectClosers.delete(fn)
     },
     closeAllAtlasSelects,
-    dismissContextMenus: hideContextMenu,
+    dismissContextMenus: shellContextMenus.hideContextMenu,
     acquireAtlasOverlayPointer,
     releaseAtlasOverlayPointer,
     mainEl: () => mainRef,
-    atlasHostEl: () => menuAtlasHostRef,
+    atlasHostEl: shellContextMenus.atlasHostEl,
     atlasBufferH: contextMenuAtlasBufferH,
-    menuAtlasTopPx: shellMenuAtlasTop,
+    menuAtlasTopPx: shellContextMenus.shellMenuAtlasTop,
     outputGeom,
     outputPhysical,
     layoutCanvasOrigin,
@@ -3349,219 +2709,49 @@ function App() {
         <ScreenshotOverlay />
       </Show>
 
-      <Show when={assistOverlay} keyed>
-        {(st) => {
-          const s = st()
-          if (!s) return <></>
-          const main = mainRef
-          const og = outputGeom()
-          if (!main || !og) return <></>
-          const css = canvasRectToClientCss(s.workCanvas.x, s.workCanvas.y, s.workCanvas.w, s.workCanvas.h, main.getBoundingClientRect(), og.w, og.h)
-          return (
-            <div
-              class="bg-(--shell-overlay-muted) outline-(--shell-preview-outline) shadow-[0_0_24px_var(--shell-preview-shadow)] pointer-events-none fixed z-450000 box-border flex min-h-0 min-w-0 flex-col rounded-sm p-1.5 outline-2 -outline-offset-1"
-              style={{
-                left: `${css.left}px`,
-                top: `${css.top}px`,
-                width: `${css.width}px`,
-                height: `${css.height}px`,
-              }}
-            >
-              <SnapAssistMasterGrid
-                shape={s.shape}
-                gutterPx={s.gutterPx}
-                getHoverSpan={() => assistOverlay()?.hoverSpan ?? null}
-              />
-            </div>
-          )
+      <ShellSurfaceLayers
+        assistOverlay={assistOverlay}
+        mainEl={() => mainRef}
+        outputGeom={outputGeom}
+        workspaceSecondary={() => workspacePartition().secondary}
+        screenCssRect={(screen) => layoutScreenCssRect(screen, layoutCanvasOrigin())}
+        debugHudFrameVisible={debugHudFrameVisible}
+        taskbarScreens={taskbarScreens}
+        taskbarHeight={TASKBAR_HEIGHT}
+        screenTaskbarHiddenForFullscreen={screenTaskbarHiddenForFullscreen}
+        isPrimaryTaskbarScreen={(screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary)}
+        programsMenuOpen={shellContextMenus.programsMenuOpen}
+        onProgramsMenuClick={shellContextMenus.onProgramsMenuClick}
+        powerMenuOpen={shellContextMenus.powerMenuOpen}
+        onPowerMenuClick={shellContextMenus.onPowerMenuClick}
+        taskbarRowsForScreen={taskbarRowsForScreen}
+        focusedWindowId={focusedWindowId}
+        keyboardLayoutLabel={keyboardLayoutLabel}
+        settingsHudFrameVisible={settingsHudFrameVisible}
+        onSettingsPanelToggle={toggleSettingsShellWindow}
+        onDebugPanelToggle={() => {
+          const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
+          if (!w || w.minimized) openDebugShellWindow()
+          else minimizeDebugShellWindow()
         }}
-      </Show>
+        onTaskbarActivate={(id) => {
+          shellWireSend('taskbar_activate', id)
+        }}
+        onTaskbarClose={(id) => {
+          shellWireSend('close', id)
+        }}
+      />
 
-      <For each={workspacePartition().secondary}>
-        {(s) => {
-          const loc = layoutScreenCssRect(s, layoutCanvasOrigin())
-          return (
-            <div
-              class="pointer-events-none absolute z-1 box-border border border-dashed border-(--shell-border) bg-(--shell-overlay-muted)"
-              style={{
-                left: `${loc.x}px`,
-                top: `${loc.y}px`,
-                width: `${loc.width}px`,
-                height: `${loc.height}px`,
-              }}
-            >
-              <Show when={debugHudFrameVisible()}>
-                <span class="border border-(--shell-border) bg-(--shell-surface-elevated) text-(--shell-text-muted) absolute top-2 left-2 rounded px-2 py-1 text-[11px] font-semibold tracking-wider uppercase">
-                  {s.name || 'Display'}
-                </span>
-              </Show>
-            </div>
-          )
-        }}
-      </For>
-
-      <For each={taskbarScreens()}>
-        {(s) => {
-          const primary = workspacePartition().primary
-          const isPrim = isPrimaryTaskbarScreen(s, primary)
-          const loc = layoutScreenCssRect(s, layoutCanvasOrigin())
-          return (
-            <Show when={!screenTaskbarHiddenForFullscreen(s)}>
-              <div
-                class="pointer-events-none absolute z-401000"
-                style={{
-                  left: `${loc.x}px`,
-                  top: `${loc.y + loc.height - TASKBAR_HEIGHT}px`,
-                  width: `${loc.width}px`,
-                  height: `${TASKBAR_HEIGHT}px`,
-                }}
-              >
-                <Taskbar
-                  monitorName={s.name}
-                  isPrimary={isPrim}
-                  programsMenuOpen={programsMenuOpen()}
-                  onProgramsMenuClick={onProgramsMenuClick}
-                  powerMenuOpen={powerMenuOpen()}
-                  onPowerMenuClick={onPowerMenuClick}
-                  windows={taskbarRowsForScreen(s)}
-                  focusedWindowId={focusedWindowId()}
-                  keyboardLayoutLabel={isPrim ? keyboardLayoutLabel() : null}
-                  settingsPanelOpen={settingsHudFrameVisible()}
-                  onSettingsPanelToggle={() => {
-                    toggleSettingsShellWindow()
-                  }}
-                  debugPanelOpen={debugHudFrameVisible()}
-                  onDebugPanelToggle={() => {
-                    const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
-                    if (!w || w.minimized) openDebugShellWindow()
-                    else minimizeDebugShellWindow()
-                  }}
-                  onTaskbarActivate={(id) => {
-                    shellWireSend('taskbar_activate', id)
-                  }}
-                  onTaskbarClose={(id) => {
-                    shellWireSend('close', id)
-                  }}
-                />
-              </div>
-            </Show>
-          )
-        }}
-      </For>
-
-      <div
-        class="relative z-90000 contain-layout contain-paint overflow-hidden"
-        classList={{
-          'pointer-events-auto': ctxMenuOpen() || atlasOverlayPointerUsers() > 0,
-          'pointer-events-none': !ctxMenuOpen() && atlasOverlayPointerUsers() === 0,
-        }}
-        ref={(el) => {
-          menuAtlasHostRef = el
-        }}
-        style={{
-          position: 'absolute',
-          left: '0',
-          right: '0',
-          top: `${shellMenuAtlasTop()}px`,
-          bottom: '0',
-        }}
-      >
-        <Show when={ctxMenuOpen()}>
-          <div
-            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 flex flex-col overflow-hidden absolute"
-            classList={{
-              'top-2 left-2 min-w-48 rounded-[0.35rem]': ctxMenuKind() !== 'programs',
-            }}
-            role={ctxMenuKind() === 'programs' ? 'group' : 'menu'}
-            aria-label={ctxMenuKind() === 'programs' ? 'Application search' : ctxMenuKind() === 'power' ? 'Power' : 'Menu'}
-            ref={(el) => {
-              menuPanelRef = el
-            }}
-            style={ctxMenuKind() === 'programs' ? programsMenuPlacement() ?? undefined : undefined}
-          >
-            <Show when={ctxMenuKind() === 'programs'}>
-              <div class="shrink-0 border-b border-(--shell-border)">
-                <input
-                  type="text"
-                  inputMode="search"
-                  autocomplete="off"
-                  class="bg-(--shell-input-bg) placeholder:text-(--shell-text-dim) focus:outline-none focus-visible:outline-none box-border w-full border-0 px-4 py-4 text-[1.15rem] font-inherit text-inherit"
-                  placeholder="Search apps, keywords, and commands"
-                  aria-label="Search applications"
-                  value={programsMenuQuery()}
-                  ref={(el) => {
-                    programsMenuSearchRef = el
-                  }}
-                  onInput={(ev) => {
-                    setProgramsMenuQuery(ev.currentTarget.value)
-                    setProgramsMenuHighlightIdx(0)
-                  }}
-                  onKeyDown={(e) => {
-                    if (programsMenuEnterShortcut(e)) {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      activateProgramsMenuSelection()
-                    }
-                  }}
-                />
-              </div>
-            </Show>
-            <div
-              classList={{
-                'min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2': ctxMenuKind() === 'programs',
-                'min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1': ctxMenuKind() !== 'programs',
-              }}
-            >
-              <For each={menuListItems()}>
-                {(item, idx) => (
-                  <button
-                    type="button"
-                    class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 text-left font-inherit text-inherit"
-                    classList={{
-                      'px-4 py-3 text-[1rem]': ctxMenuKind() === 'programs',
-                      'px-3 py-[0.45rem]': ctxMenuKind() !== 'programs',
-                      'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                        (ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx()) ||
-                        (ctxMenuKind() === 'power' && powerMenuHighlightIdx() === idx()),
-                      'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
-                    }}
-                    role={ctxMenuKind() === 'programs' ? undefined : 'menuitem'}
-                    tabIndex={ctxMenuKind() === 'programs' ? -1 : undefined}
-                    title={item.title}
-                    data-programs-menu-idx={ctxMenuKind() === 'programs' ? idx() : undefined}
-                    data-power-menu-idx={ctxMenuKind() === 'power' ? idx() : undefined}
-                    onMouseDown={(e) => {
-                      if (ctxMenuKind() === 'programs') e.preventDefault()
-                    }}
-                    onFocus={(e) => {
-                      if (ctxMenuKind() !== 'programs') return
-                      if (e.target !== programsMenuSearchRef) {
-                        queueMicrotask(() => programsMenuSearchRef?.focus())
-                      }
-                    }}
-                    onClick={() => {
-                      if (item.disabled) return
-                      item.action()
-                      setCtxMenuOpen(false)
-                    }}
-                  >
-                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                      {item.label}
-                    </span>
-                    <Show when={item.badge} keyed>
-                      {(b) => (
-                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
-                          {b}
-                        </span>
-                      )}
-                    </Show>
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-        </Show>
-      </div>
+      <ShellContextMenuLayer
+        ctxMenuOpen={shellContextMenus.ctxMenuOpen}
+        atlasOverlayPointerUsers={atlasOverlayPointerUsers}
+        setMenuAtlasHostRef={shellContextMenus.setMenuAtlasHostRef}
+        shellMenuAtlasTop={shellContextMenus.shellMenuAtlasTop}
+        programsMenuOpen={shellContextMenus.programsMenuOpen}
+        powerMenuOpen={shellContextMenus.powerMenuOpen}
+        programsMenuProps={shellContextMenus.programsMenuProps}
+        powerMenuProps={shellContextMenus.powerMenuProps}
+      />
 
       <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">
         {crosshairDebugOverlay()}
