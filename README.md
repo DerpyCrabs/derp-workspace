@@ -21,8 +21,6 @@ A **Wayland compositor** (Rust, Smithay) that embeds the desktop **shell inside 
 - Basic **snap tiling**, tile preview overlay, exclusion zones for decorations
 - **Remote deploy**: rsync + install + in-place compositor reload (`SIGUSR2`) from your dev machine
 
-Roadmap: [ROADMAP.md](./ROADMAP.md).
-
 ## Deploy
 
 **Target:** Linux with DRM/KMS, typical dev headers for Smithay/CEF builds, and Node for the shell build. Session integration uses **GDM** and `scripts/derp-session.sh` (installed as `derp-session`).
