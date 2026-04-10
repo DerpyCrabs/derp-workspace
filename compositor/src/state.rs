@@ -1286,7 +1286,6 @@ impl CompositorState {
     }
 
     pub fn apply_shell_exclusion_zones_json(&mut self, json: &str) {
-        pub const MAX_SHELL_EXCLUSION_ZONES: usize = 128;
         #[derive(serde::Deserialize)]
         struct EzRect {
             x: i32,
@@ -1313,11 +1312,7 @@ impl CompositorState {
         };
         let mut next_global: Vec<Rectangle<i32, Logical>> = Vec::new();
         let mut next_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>> = HashMap::new();
-        let mut used = 0usize;
         for e in root.rects {
-            if used >= MAX_SHELL_EXCLUSION_ZONES {
-                break;
-            }
             let w = e.w.max(1);
             let h = e.h.max(1);
             let r = Rectangle::new(
@@ -1327,7 +1322,6 @@ impl CompositorState {
             let Some(clamped) = r.intersection(ws) else {
                 continue;
             };
-            used += 1;
             match e.window_id.filter(|&id| id > 0) {
                 None => next_global.push(clamped),
                 Some(id) => next_decor.entry(id).or_default().push(clamped),

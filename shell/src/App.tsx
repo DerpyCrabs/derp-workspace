@@ -20,7 +20,10 @@ import {
   SHELL_RESIZE_RIGHT,
   SHELL_RESIZE_TOP,
 } from './chromeConstants'
-import { ssdDecorationExclusionRects, SHELL_EXCLUSION_ZONES_SENT_MAX } from './exclusionRects'
+import {
+  mergeExclusionRects,
+  ssdDecorationExclusionRects,
+} from './exclusionRects'
 import { ShellWindowFrame, type ShellWindowModel } from './ShellWindowFrame'
 import {
   canvasOriginXY,
@@ -1425,22 +1428,18 @@ function App() {
     }
     addEl(main.querySelector('[data-shell-panel]'), 'panel')
     for (const el of main.querySelectorAll('[data-shell-taskbar]')) {
-      if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       const mon = el.getAttribute('data-shell-taskbar-monitor') ?? ''
       addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
     }
     const stripLabels = ['t', 'l', 'r', 'b'] as const
     for (const decoWin of stackedWindowsList()) {
-      if (rects.length >= SHELL_EXCLUSION_ZONES_SENT_MAX) break
       if (decoWin.minimized) continue
       const deco = ssdDecorationExclusionRects({
         ...decoWin,
         snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
       })
-      const room = Math.max(0, SHELL_EXCLUSION_ZONES_SENT_MAX - rects.length)
-      const decoUsed = deco.slice(0, room)
-      for (let i = 0; i < decoUsed.length; i++) {
-        const r = decoUsed[i]
+      for (let i = 0; i < deco.length; i++) {
+        const r = deco[i]
         const tag = stripLabels[i] ?? `${i}`
         const z = rectCanvasLocalToGlobal(r.x, r.y, r.w, r.h, co)
         hud.push({ label: `w${decoWin.window_id}-deco-${tag}`, x: z.x, y: z.y, w: z.w, h: z.h })
@@ -1448,11 +1447,9 @@ function App() {
       }
     }
     setExclusionZonesHud(hud)
+    const sentRects = mergeExclusionRects(rects)
     if (typeof window.__derpShellWireSend === 'function') {
-      window.__derpShellWireSend(
-        'set_exclusion_zones',
-        JSON.stringify({ rects: rects.slice(0, SHELL_EXCLUSION_ZONES_SENT_MAX) }),
-      )
+      window.__derpShellWireSend('set_exclusion_zones', JSON.stringify({ rects: sentRects }))
     }
   }
 
