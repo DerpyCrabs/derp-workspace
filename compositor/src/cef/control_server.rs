@@ -25,6 +25,7 @@ fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<Result<u16, 
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     let _ = port_tx.send(Ok(port));
+    std::thread::spawn(crate::cef::desktop_apps::warm_applications_cache);
 
     for conn in listener.incoming() {
         let mut stream = match conn {

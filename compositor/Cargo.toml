@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 udev = "0.9"
 signal-hook = "0.3"
 xcursor = "0.3.10"
+notify = "8.2.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

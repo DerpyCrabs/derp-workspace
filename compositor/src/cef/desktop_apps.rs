@@ -1,9 +1,11 @@
 //! Scan XDG `applications` directories and parse `.desktop` entries for the shell Programs menu.
 
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DesktopApp {
@@ -15,6 +17,19 @@ pub struct DesktopApp {
     /// `file://` URL of the `.desktop` path (for disambiguation / debugging).
     pub desktop_id: String,
 }
+
+struct DesktopAppsCache {
+    state: Arc<Mutex<DesktopAppsCacheState>>,
+    _watcher: Option<RecommendedWatcher>,
+}
+
+#[derive(Default)]
+struct DesktopAppsCacheState {
+    json: Option<String>,
+    dirty: bool,
+}
+
+static DESKTOP_APPS_CACHE: OnceLock<DesktopAppsCache> = OnceLock::new();
 
 /// Key-value pairs from the `[Desktop Entry]` group.
 #[derive(Default)]
@@ -32,8 +47,13 @@ struct DesktopEntryRaw {
 }
 
 pub fn list_applications_json() -> Result<String, String> {
-    let apps = scan_applications()?;
-    serde_json::to_string(&serde_json::json!({ "apps": apps })).map_err(|e| e.to_string())
+    applications_cache().list_json()
+}
+
+pub fn warm_applications_cache() {
+    if let Err(e) = applications_cache().list_json() {
+        tracing::warn!("desktop apps cache warm failed: {e}");
+    }
 }
 
 pub fn scan_applications() -> Result<Vec<DesktopApp>, String> {
@@ -92,6 +112,67 @@ pub fn scan_applications() -> Result<Vec<DesktopApp>, String> {
     });
 
     Ok(out)
+}
+
+fn applications_cache() -> &'static DesktopAppsCache {
+    DESKTOP_APPS_CACHE.get_or_init(DesktopAppsCache::new)
+}
+
+fn lock_cache_state(state: &Mutex<DesktopAppsCacheState>) -> std::sync::MutexGuard<'_, DesktopAppsCacheState> {
+    state.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+impl DesktopAppsCache {
+    fn new() -> Self {
+        let state = Arc::new(Mutex::new(DesktopAppsCacheState {
+            json: None,
+            dirty: true,
+        }));
+        let mut watcher = match notify::recommended_watcher({
+            let state = state.clone();
+            move |event: notify::Result<notify::Event>| {
+                if let Err(e) = event {
+                    tracing::warn!("desktop apps watch failed: {e}");
+                }
+                lock_cache_state(&state).dirty = true;
+            }
+        }) {
+            Ok(watcher) => Some(watcher),
+            Err(e) => {
+                tracing::warn!("desktop apps watcher init failed: {e}");
+                None
+            }
+        };
+        if let Some(watcher) = watcher.as_mut() {
+            for dir in application_dirs() {
+                if !dir.is_dir() {
+                    continue;
+                }
+                if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                    tracing::warn!("desktop apps watch failed for {}: {e}", dir.display());
+                }
+            }
+        }
+        Self {
+            state,
+            _watcher: watcher,
+        }
+    }
+
+    fn list_json(&self) -> Result<String, String> {
+        let mut state = lock_cache_state(&self.state);
+        if !state.dirty {
+            if let Some(json) = state.json.as_ref() {
+                return Ok(json.clone());
+            }
+        }
+        let apps = scan_applications()?;
+        let json =
+            serde_json::to_string(&serde_json::json!({ "apps": apps })).map_err(|e| e.to_string())?;
+        state.json = Some(json.clone());
+        state.dirty = false;
+        Ok(json)
+    }
 }
 
 fn application_dirs() -> Vec<PathBuf> {

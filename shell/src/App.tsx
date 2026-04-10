@@ -731,8 +731,12 @@ function App() {
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
   const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
-  const [programsCatalog, setProgramsCatalog] = createStore<{ items: DesktopAppEntry[] }>({
+  const [programsCatalog, setProgramsCatalog] = createStore<{
+    items: DesktopAppEntry[]
+    loaded: boolean
+  }>({
     items: [],
+    loaded: false,
   })
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
@@ -741,6 +745,7 @@ function App() {
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
   const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
+  let programsMenuRefreshPromise: Promise<void> | null = null
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
@@ -2025,40 +2030,54 @@ function App() {
   }
 
   async function refreshProgramsMenuItems() {
-    const base = shellHttpBase()
-    if (!base) {
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      setProgramsCatalog('items', [])
-      setProgramsMenuErr('Programs list needs cef_host (no shell HTTP).')
-      setProgramsMenuBusy(false)
-      return
-    }
-    setProgramsMenuBusy(true)
-    setProgramsMenuErr(null)
-    try {
-      const res = await fetch(`${base}/desktop_applications`)
-      const text = await res.text()
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      if (!res.ok) {
-        setProgramsCatalog('items', [])
-        setProgramsMenuErr(
-          `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
-        )
+    if (programsMenuRefreshPromise) return programsMenuRefreshPromise
+    const run = (async () => {
+      setProgramsMenuBusy(true)
+      const base = shellHttpBase()
+      if (!base) {
+        if (!programsCatalog.loaded) {
+          setProgramsMenuErr('Programs list needs cef_host (no shell HTTP).')
+        }
         return
       }
-      const list = parseDesktopApplicationsResponse(text)
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      setProgramsCatalog('items', list)
-      if (list.length === 0) {
+      setProgramsMenuErr(null)
+      try {
+        const res = await fetch(`${base}/desktop_applications`)
+        const text = await res.text()
+        if (!res.ok) {
+          if (!programsCatalog.loaded) {
+            setProgramsMenuErr(
+              `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+            )
+          }
+          return
+        }
+        const list = parseDesktopApplicationsResponse(text)
+        setProgramsCatalog('items', list)
+        setProgramsCatalog('loaded', true)
         setProgramsMenuErr(null)
+      } catch (e) {
+        if (!programsCatalog.loaded) {
+          setProgramsMenuErr(`Network error: ${e}`)
+        }
+      } finally {
+        setProgramsMenuBusy(false)
+        programsMenuRefreshPromise = null
       }
-    } catch (e) {
-      if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
-      setProgramsCatalog('items', [])
-      setProgramsMenuErr(`Network error: ${e}`)
-    } finally {
-      setProgramsMenuBusy(false)
+    })()
+    programsMenuRefreshPromise = run
+    return run
+  }
+
+  async function warmProgramsMenuItems() {
+    const startedAt = Date.now()
+    let base = shellHttpBase()
+    while (!base && Date.now() - startedAt < 4000) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
+      base = shellHttpBase()
     }
+    if (!base) return
+    await refreshProgramsMenuItems()
   }
 
   function anchorProgramsMenuFromToggle() {
@@ -2080,9 +2099,8 @@ function App() {
     closeAllAtlasSelects()
     anchorProgramsMenuFromToggle()
     setCtxMenuKind('programs')
-    setProgramsMenuBusy(true)
+    setProgramsMenuBusy(!programsCatalog.loaded)
     setProgramsMenuErr(null)
-    setProgramsCatalog('items', [])
     setCtxMenuOpen(true)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
@@ -2111,9 +2129,8 @@ function App() {
     const r = e.currentTarget.getBoundingClientRect()
     setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
     setCtxMenuKind('programs')
-    setProgramsMenuBusy(true)
+    setProgramsMenuBusy(!programsCatalog.loaded)
     setProgramsMenuErr(null)
-    setProgramsCatalog('items', [])
     setCtxMenuOpen(true)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
@@ -2179,12 +2196,15 @@ function App() {
 
   const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!programsMenuOpen()) return []
-    if (programsMenuBusy()) return [{ label: 'Loading…', action: () => {} }]
+    if (programsMenuBusy() && !programsCatalog.loaded) return [{ label: 'Loading…', action: () => {} }]
     const err = programsMenuErr()
-    if (err) return [{ label: err, action: () => {} }]
+    if (err && !programsCatalog.loaded) return [{ label: err, action: () => {} }]
     const q = programsMenuQuery().trim()
     const raw = programsCatalog.items
-    if (raw.length === 0) return [{ label: 'No applications found.', action: () => {} }]
+    if (programsCatalog.loaded && raw.length === 0) {
+      return [{ label: 'No applications found.', action: () => {} }]
+    }
+    if (raw.length === 0) return [{ label: 'Loading…', action: () => {} }]
     const rows =
       q === ''
         ? raw
@@ -2298,6 +2318,7 @@ function App() {
     const stopThemeDomSync = startThemeDomSync()
     onCleanup(stopThemeDomSync)
     void refreshThemeSettingsFromRemote()
+    void warmProgramsMenuItems()
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
