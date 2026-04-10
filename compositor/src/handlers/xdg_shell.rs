@@ -119,6 +119,9 @@ impl XdgShellHandler for CompositorState {
             will_emit_WindowMapped_immediately = !defer_map,
             "xdg new_toplevel staging check"
         );
+        if !map_at_output_origin {
+            self.pending_gnome_initial_toplevels.insert(reg.window_id);
+        }
         if defer_map {
             let key =
                 crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
@@ -191,6 +194,7 @@ impl XdgShellHandler for CompositorState {
         }
         if let Some(wid) = self.window_registry.window_id_for_wl_surface(wl) {
             self.clear_toplevel_layout_maps(wid);
+            self.pending_gnome_initial_toplevels.remove(&wid);
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {

@@ -71,6 +71,7 @@ impl CompositorHandler for CompositorState {
                 }
             });
             if let Some(window) = window {
+                self.finalize_gnome_initial_toplevel_layout(&window);
                 self.notify_geometry_if_changed(&window);
             }
         }

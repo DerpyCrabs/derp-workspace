@@ -11,7 +11,9 @@ pub struct DesktopAppUsageFile {
 
 pub fn sanitize_desktop_app_usage(mut usage: DesktopAppUsageFile) -> DesktopAppUsageFile {
     usage.version = 1;
-    usage.counts.retain(|key, count| !key.trim().is_empty() && *count > 0);
+    usage
+        .counts
+        .retain(|key, count| !key.trim().is_empty() && *count > 0);
     usage
 }
 
@@ -23,7 +25,10 @@ pub fn read_desktop_app_usage() -> DesktopAppUsageFile {
     let Some(path) = desktop_app_usage_path() else {
         return sanitize_desktop_app_usage(DesktopAppUsageFile::default());
     };
-    sanitize_desktop_app_usage(crate::json_state::read_json_file(&path, "read desktop app usage"))
+    sanitize_desktop_app_usage(crate::json_state::read_json_file(
+        &path,
+        "read desktop app usage",
+    ))
 }
 
 pub fn read_desktop_app_usage_json() -> Result<String, String> {
@@ -47,8 +52,8 @@ pub fn increment_desktop_app_usage(key: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DesktopAppUsageFile, desktop_app_usage_path, increment_desktop_app_usage,
-        read_desktop_app_usage, sanitize_desktop_app_usage,
+        desktop_app_usage_path, increment_desktop_app_usage, read_desktop_app_usage,
+        sanitize_desktop_app_usage, DesktopAppUsageFile,
     };
     use std::collections::BTreeMap;
 

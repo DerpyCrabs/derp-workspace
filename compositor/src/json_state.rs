@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 
 pub fn state_dir() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("DERP_STATE_DIR") {
@@ -77,18 +77,14 @@ mod tests {
         let path = state_file_path("sample.json").unwrap();
         write_json_file(
             &path,
-            &TestValue {
-                value: "ok".into(),
-            },
+            &TestValue { value: "ok".into() },
             "write test json state",
         )
         .unwrap();
 
         assert_eq!(
             read_json_file::<TestValue>(&path, "read test json state"),
-            TestValue {
-                value: "ok".into(),
-            }
+            TestValue { value: "ok".into() }
         );
 
         let _ = std::fs::remove_dir_all(&dir);

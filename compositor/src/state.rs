@@ -86,8 +86,9 @@ pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
 /// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
-/// Added per already-mapped toplevel so new windows are not stacked at the identical `(offset_x, offset_y)` (breaks shell chrome / input).
-pub const DEFAULT_XDG_TOPLEVEL_CASCADE_STEP: i32 = 30;
+pub const DEFAULT_XDG_TOPLEVEL_WIDTH: i32 = 800;
+pub const DEFAULT_XDG_TOPLEVEL_HEIGHT: i32 = 600;
+pub const GNOME_AUTO_MAXIMIZE_THRESHOLD_PERCENT: i32 = 90;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
@@ -280,6 +281,7 @@ pub struct CompositorState {
     pub chrome_bridge: SharedChromeBridge,
     pub window_registry: WindowRegistry,
     pub(crate) pending_deferred_toplevels: HashMap<(ClientId, u32), PendingDeferredToplevel>,
+    pub(crate) pending_gnome_initial_toplevels: HashSet<u32>,
 
     pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
     pub cef_to_compositor_tx: channel::Sender<crate::cef::compositor_tx::CefToCompositor>,
@@ -617,6 +619,7 @@ impl CompositorState {
             chrome_bridge,
             window_registry,
             pending_deferred_toplevels: HashMap::new(),
+            pending_gnome_initial_toplevels: HashSet::new(),
             shell_to_cef,
             cef_to_compositor_tx,
             shell_cef_handshake,
@@ -2004,12 +2007,100 @@ impl CompositorState {
         self.leftmost_output()
     }
 
-    fn element_top_left_occupied(&self, x: i32, y: i32) -> bool {
-        self.space.elements().any(|e| {
-            self.space
-                .element_location(e)
-                .is_some_and(|loc| loc.x == x && loc.y == y)
-        })
+    fn preferred_new_toplevel_size(&self, window: &Window) -> Option<(i32, i32)> {
+        let geo = window.geometry().size;
+        if geo.w > 0 && geo.h > 0 {
+            return Some((geo.w, geo.h));
+        }
+        let bbox = window.bbox().size;
+        if bbox.w > 0 && bbox.h > 0 {
+            return Some((bbox.w, bbox.h));
+        }
+        None
+    }
+
+    fn centered_toplevel_origin_for_work_area(
+        work: &Rectangle<i32, Logical>,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
+        let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(width);
+        let max_y = work
+            .loc
+            .y
+            .saturating_add(work.size.h)
+            .saturating_sub(height);
+        let x = work
+            .loc
+            .x
+            .saturating_add(work.size.w.saturating_sub(width) / 2)
+            .clamp(work.loc.x, max_x.max(work.loc.x));
+        let y = work
+            .loc
+            .y
+            .saturating_add(work.size.h.saturating_sub(height) / 2)
+            .clamp(work.loc.y, max_y.max(work.loc.y));
+        (x, y)
+    }
+
+    fn should_auto_maximize_new_toplevel(
+        work: &Rectangle<i32, Logical>,
+        width: i32,
+        height: i32,
+    ) -> bool {
+        let ww = i64::from(width.max(1));
+        let hh = i64::from(height.max(1));
+        let work_w = i64::from(work.size.w.max(1));
+        let work_h = i64::from(work.size.h.max(1));
+        let threshold = i64::from(GNOME_AUTO_MAXIMIZE_THRESHOLD_PERCENT);
+        ww.saturating_mul(100) >= work_w.saturating_mul(threshold)
+            && hh.saturating_mul(100) >= work_h.saturating_mul(threshold)
+    }
+
+    pub(crate) fn finalize_gnome_initial_toplevel_layout(&mut self, window: &Window) -> bool {
+        let Some(tl) = window.toplevel() else {
+            return false;
+        };
+        let wl = tl.wl_surface();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return false;
+        };
+        if !self.pending_gnome_initial_toplevels.contains(&window_id) {
+            return false;
+        }
+        let (maximized, fullscreen) = read_toplevel_tiling(wl);
+        if maximized || fullscreen {
+            self.pending_gnome_initial_toplevels.remove(&window_id);
+            return false;
+        }
+        let Some((width, height)) = self.preferred_new_toplevel_size(window) else {
+            return false;
+        };
+        let Some(out) = self.new_toplevel_placement_output(tl.parent().as_ref()) else {
+            self.pending_gnome_initial_toplevels.remove(&window_id);
+            return false;
+        };
+        let Some(work) = self.shell_maximize_work_area_global_for_output(&out) else {
+            self.pending_gnome_initial_toplevels.remove(&window_id);
+            return false;
+        };
+        self.pending_gnome_initial_toplevels.remove(&window_id);
+        if Self::should_auto_maximize_new_toplevel(&work, width, height) {
+            return self.apply_toplevel_maximize_layout(window);
+        }
+        let (x, y) = Self::centered_toplevel_origin_for_work_area(&work, width, height);
+        let elem = DerpSpaceElem::Wayland(window.clone());
+        let needs_reposition = self
+            .space
+            .element_location(&elem)
+            .map(|loc| loc.x != x || loc.y != y)
+            .unwrap_or(true);
+        if !needs_reposition {
+            return false;
+        }
+        self.space.map_element(elem.clone(), (x, y), true);
+        self.space.raise_element(&elem, true);
+        true
     }
 
     pub fn new_toplevel_initial_location(
@@ -2023,44 +2114,10 @@ impl CompositorState {
         let Some(work) = self.shell_maximize_work_area_global_for_output(&out) else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
-
-        let geo = window.geometry().size;
-        let bbox = window.bbox().size;
-        let (ww, hh) = if geo.w > 0 && geo.h > 0 {
-            (geo.w, geo.h)
-        } else if bbox.w > 0 && bbox.h > 0 {
-            (bbox.w, bbox.h)
-        } else {
-            (800, 600)
-        };
-
-        let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(ww);
-        let max_y = work.loc.y.saturating_add(work.size.h).saturating_sub(hh);
-
-        let mut x = work
-            .loc
-            .x
-            .saturating_add(work.size.w.saturating_sub(ww) / 2);
-        let mut y = work
-            .loc
-            .y
-            .saturating_add(work.size.h.saturating_sub(hh) / 2);
-
-        x = x.clamp(work.loc.x, max_x.max(work.loc.x));
-        y = y.clamp(work.loc.y, max_y.max(work.loc.y));
-
-        let step = DEFAULT_XDG_TOPLEVEL_CASCADE_STEP;
-        for _ in 0..64 {
-            if !self.element_top_left_occupied(x, y) {
-                break;
-            }
-            x = x.saturating_add(step);
-            y = y.saturating_add(step);
-            x = x.clamp(work.loc.x, max_x.max(work.loc.x));
-            y = y.clamp(work.loc.y, max_y.max(work.loc.y));
-        }
-
-        (x, y)
+        let (width, height) = self
+            .preferred_new_toplevel_size(window)
+            .unwrap_or((DEFAULT_XDG_TOPLEVEL_WIDTH, DEFAULT_XDG_TOPLEVEL_HEIGHT));
+        Self::centered_toplevel_origin_for_work_area(&work, width, height)
     }
 
     pub(crate) fn shell_effective_primary_output(&self) -> Option<Output> {
@@ -2521,6 +2578,7 @@ impl CompositorState {
         let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
             return false;
         };
+        self.pending_gnome_initial_toplevels.remove(&window_id);
         self.cancel_shell_move_resize_for_window(window_id);
         let gx = geo.loc.x;
         let gy = geo.loc.y;
@@ -2561,6 +2619,7 @@ impl CompositorState {
         let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
             return false;
         };
+        self.pending_gnome_initial_toplevels.remove(&window_id);
         self.cancel_shell_move_resize_for_window(window_id);
         let wl_out = wl_output_hint.or_else(|| self.client_wl_output_for(wl, &sm_out));
         let gx = geo.loc.x;
@@ -2595,6 +2654,7 @@ impl CompositorState {
         let Some(tl) = window.toplevel() else {
             return false;
         };
+        self.pending_gnome_initial_toplevels.remove(&window_id);
         self.cancel_shell_move_resize_for_window(window_id);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Maximized);
@@ -2632,7 +2692,10 @@ impl CompositorState {
         self.cancel_shell_move_resize_for_window(window_id);
         tl.with_pending_state(|st| {
             st.states.unset(xdg_toplevel::State::Maximized);
-            st.size = Some(Size::from((800, 600)));
+            st.size = Some(Size::from((
+                DEFAULT_XDG_TOPLEVEL_WIDTH,
+                DEFAULT_XDG_TOPLEVEL_HEIGHT,
+            )));
         });
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
@@ -2663,7 +2726,10 @@ impl CompositorState {
             tl.with_pending_state(|st| {
                 st.states.unset(xdg_toplevel::State::Fullscreen);
                 st.fullscreen_output = None;
-                st.size = Some(Size::from((800, 600)));
+                st.size = Some(Size::from((
+                    DEFAULT_XDG_TOPLEVEL_WIDTH,
+                    DEFAULT_XDG_TOPLEVEL_HEIGHT,
+                )));
             });
             self.space
                 .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);

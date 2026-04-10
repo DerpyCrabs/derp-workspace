@@ -302,7 +302,8 @@ fn parse_desktop_contents(raw: &str) -> Option<DesktopEntryRaw> {
             .strip_prefix("GenericName[")
             .and_then(|s| s.strip_suffix(']'))
         {
-            e.generic_name_locale.insert(loc.to_string(), val.to_string());
+            e.generic_name_locale
+                .insert(loc.to_string(), val.to_string());
         } else if key == "X-GNOME-FullName" {
             e.full_name = Some(val.to_string());
         } else if let Some(loc) = key
@@ -312,8 +313,12 @@ fn parse_desktop_contents(raw: &str) -> Option<DesktopEntryRaw> {
             e.full_name_locale.insert(loc.to_string(), val.to_string());
         } else if key == "Keywords" {
             e.keywords = split_keywords(val);
-        } else if let Some(loc) = key.strip_prefix("Keywords[").and_then(|s| s.strip_suffix(']')) {
-            e.keywords_locale.insert(loc.to_string(), split_keywords(val));
+        } else if let Some(loc) = key
+            .strip_prefix("Keywords[")
+            .and_then(|s| s.strip_suffix(']'))
+        {
+            e.keywords_locale
+                .insert(loc.to_string(), split_keywords(val));
         } else if key == "Exec" {
             e.exec = Some(val.to_string());
         } else if key == "Icon" {
@@ -395,7 +400,10 @@ fn pick_localized_string(
         .map(|v| v.clone())
 }
 
-fn pick_localized_list(primary: &[String], localized: &HashMap<String, Vec<String>>) -> Vec<String> {
+fn pick_localized_list(
+    primary: &[String],
+    localized: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
     if !primary.is_empty() {
         return primary.to_vec();
     }
