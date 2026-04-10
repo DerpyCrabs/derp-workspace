@@ -28,14 +28,14 @@ export type TaskbarProps = {
 export function Taskbar(props: TaskbarProps) {
   return (
     <div
-      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-[50000] box-border flex h-11 items-center border-t border-slate-600 bg-slate-900 px-2.5 shadow-[0_-4px_20px_rgba(0,0,0,0.35)]"
+      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-[50000] box-border flex h-11 items-center border-t border-[var(--shell-border)] bg-[var(--shell-taskbar-bg)] px-2.5 text-[var(--shell-text)] shadow-[0_-4px_20px_rgba(0,0,0,0.35)]"
       data-shell-taskbar
       data-shell-taskbar-monitor={props.monitorName}
     >
       <Show when={props.isPrimary}>
         <button
           type="button"
-          class="cursor-pointer rounded-md border border-white/35 bg-shell-btn-primary py-1.5 px-[0.9rem] text-sm font-semibold tracking-wide text-neutral-900 hover:brightness-[1.06]"
+          class="shell-btn-accent cursor-pointer rounded-md py-1.5 px-[0.9rem] text-sm font-semibold tracking-wide"
           data-shell-programs-toggle
           aria-expanded={props.programsMenuOpen}
           aria-haspopup="menu"
@@ -58,9 +58,9 @@ export function Taskbar(props: TaskbarProps) {
               role="listitem"
               class="max-w-[11rem] flex-[0_1_auto] cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
               classList={{
-                'border border-white/35 bg-shell-btn-primary text-neutral-900':
+                'shell-btn-accent':
                   props.focusedWindowId === w.window_id && !w.minimized,
-                'border border-slate-600 bg-slate-800 text-neutral-200':
+                'shell-btn-muted':
                   !(props.focusedWindowId === w.window_id && !w.minimized),
                 'opacity-55':
                   w.minimized && !(props.focusedWindowId === w.window_id && !w.minimized),
@@ -82,7 +82,7 @@ export function Taskbar(props: TaskbarProps) {
         <div class="ml-auto flex shrink-0 items-center gap-2.5">
           <Show when={props.keyboardLayoutLabel}>
             <span
-              class="min-w-[2rem] shrink-0 rounded-[0.35rem] border border-slate-600 bg-slate-800 px-[0.5rem] py-[0.35rem] text-center text-[0.75rem] font-semibold tabular-nums tracking-wide text-neutral-200"
+              class="shell-pill min-w-[2rem] shrink-0 rounded-[0.35rem] px-[0.5rem] py-[0.35rem] text-center text-[0.75rem] font-semibold tabular-nums tracking-wide"
               title="Keyboard layout"
             >
               {props.keyboardLayoutLabel!}
@@ -92,9 +92,9 @@ export function Taskbar(props: TaskbarProps) {
             type="button"
             class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+              'shell-btn-accent':
                 props.settingsPanelOpen,
-              'border border-slate-600 bg-slate-800 text-neutral-200': !props.settingsPanelOpen,
+              'shell-btn-muted': !props.settingsPanelOpen,
             }}
             data-shell-settings-toggle
             aria-pressed={props.settingsPanelOpen}
@@ -107,9 +107,9 @@ export function Taskbar(props: TaskbarProps) {
             type="button"
             class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+              'shell-btn-accent':
                 props.debugPanelOpen,
-              'border border-slate-600 bg-slate-800 text-neutral-200': !props.debugPanelOpen,
+              'shell-btn-muted': !props.debugPanelOpen,
             }}
             aria-pressed={props.debugPanelOpen}
             title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
@@ -121,9 +121,9 @@ export function Taskbar(props: TaskbarProps) {
             type="button"
             class="cursor-pointer rounded-[0.35rem] px-[0.65rem] py-[0.35rem] text-[0.82rem] font-medium hover:brightness-[1.12]"
             classList={{
-              'border border-white/35 bg-shell-btn-primary text-neutral-900':
+              'shell-btn-accent':
                 props.powerMenuOpen,
-              'border border-slate-600 bg-slate-800 text-neutral-200': !props.powerMenuOpen,
+              'shell-btn-muted': !props.powerMenuOpen,
             }}
             data-shell-power-toggle
             aria-expanded={props.powerMenuOpen}

@@ -213,6 +213,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_theme" {
+        let json = crate::settings_config::read_theme_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/wallpaper_preview" {
         let q = query_str.ok_or_else(|| "wallpaper_preview: missing query".to_string())?;
         let p_enc =
@@ -272,6 +278,11 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
                 .ok_or_else(|| "missing command".to_string())?
                 .to_string();
             uplink.spawn_wayland_client(command);
+        }
+        "/settings_theme" => {
+            let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)
+                .map_err(|e| format!("invalid theme settings: {e}"))?;
+            crate::settings_config::write_theme_settings(theme)?;
         }
         _ => {
             write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)

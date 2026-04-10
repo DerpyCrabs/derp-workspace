@@ -19,9 +19,9 @@ const SHORTCUT_ROWS: { keys: string; action: string }[] = [
 export function SettingsKeyboardPage(props: { keyboardLayoutLabel: Accessor<string | null> }) {
   return (
     <div class="space-y-4">
-      <h2 class="text-base font-semibold tracking-wide text-neutral-100">Keyboard</h2>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+      <h2 class="text-base font-semibold tracking-wide text-[var(--shell-text)]">Keyboard</h2>
+      <div class="shell-subpanel rounded-lg px-3 py-3">
+        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
           Active layout
         </p>
         <Show
@@ -30,18 +30,18 @@ export function SettingsKeyboardPage(props: { keyboardLayoutLabel: Accessor<stri
             <p class="text-[0.82rem] opacity-80">Waiting for layout from compositor…</p>
           }
         >
-          <p class="text-[0.95rem] font-semibold tabular-nums text-neutral-100">
+          <p class="text-[0.95rem] font-semibold tabular-nums text-[var(--shell-text)]">
             {props.keyboardLayoutLabel()!}
           </p>
         </Show>
       </div>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+      <div class="shell-subpanel rounded-lg px-3 py-3">
+        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
           Default shortcuts
         </p>
-        <table class="w-full border-collapse text-left text-[0.78rem] text-neutral-200">
+        <table class="w-full border-collapse text-left text-[0.78rem] text-[var(--shell-text-muted)]">
           <thead>
-            <tr class="border-b border-white/10 text-[0.65rem] uppercase tracking-wide text-neutral-500">
+            <tr class="border-b border-[var(--shell-border)] text-[0.65rem] uppercase tracking-wide text-[var(--shell-text-dim)]">
               <th class="py-1.5 pr-3 font-semibold">Shortcut</th>
               <th class="py-1.5 font-semibold">Action</th>
             </tr>
@@ -49,8 +49,10 @@ export function SettingsKeyboardPage(props: { keyboardLayoutLabel: Accessor<stri
           <tbody>
             <For each={SHORTCUT_ROWS}>
               {(row) => (
-                <tr class="border-b border-white/6 last:border-0">
-                  <td class="py-1.5 pr-3 font-mono text-[0.72rem] text-neutral-300">{row.keys}</td>
+                <tr class="border-b border-[var(--shell-border)] last:border-0">
+                  <td class="py-1.5 pr-3 font-mono text-[0.72rem] text-[var(--shell-text-dim)]">
+                    {row.keys}
+                  </td>
                   <td class="py-1.5 opacity-92">{row.action}</td>
                 </tr>
               )}

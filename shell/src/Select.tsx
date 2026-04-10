@@ -30,10 +30,10 @@ export type SelectProps<T> = {
 }
 
 const DEFAULT_TRIGGER_CLASS =
-  'min-w-[7.5rem] max-w-[12rem] cursor-pointer rounded border border-white/35 bg-[rgb(28,32,44)] py-0.5 px-[0.45rem] text-left font-inherit text-[0.78rem] text-neutral-100 hover:bg-[rgb(38,44,58)]'
+  'shell-btn-muted min-w-[7.5rem] max-w-[12rem] cursor-pointer rounded py-0.5 px-[0.45rem] text-left font-inherit text-[0.78rem]'
 
 const DEFAULT_LIST_CLASS =
-  'absolute top-2 left-2 z-[90000] flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem] border border-black/35 bg-[rgba(28,32,42,0.96)] py-0.5 shadow-[0_6px_24px_rgba(0,0,0,0.35)]'
+  'shell-menu absolute top-2 left-2 z-[90000] flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem] py-0.5'
 
 export const Select: Component<SelectProps<unknown>> = (props) => {
   const shellFloat = useShellFloating()
@@ -204,8 +204,8 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
                   {(opt) => (
                     <button
                       type="button"
-                      class="block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem] text-neutral-100 hover:bg-white/12"
-                      classList={{ 'bg-white/18': eq()(opt, props.value) }}
+                      class="shell-menu-item block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
+                      classList={{ 'shell-menu-item-active': eq()(opt, props.value) }}
                       role="option"
                       aria-selected={eq()(opt, props.value)}
                       onPointerDown={(e) => {

@@ -16,7 +16,7 @@ export const LayoutTypePicker: Component<{
   })
 
   return (
-    <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-neutral-200">
+    <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-[var(--shell-text-muted)]">
       <span>tiling layout</span>
       <Select
         options={OPTIONS}

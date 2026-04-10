@@ -1,11 +1,64 @@
 @import "tailwindcss";
 
+:root {
+  --shell-text: hsl(210 30% 96%);
+  --shell-text-muted: hsl(214 18% 80%);
+  --shell-text-dim: hsl(216 14% 58%);
+  --shell-text-strong: hsl(208 90% 84%);
+  --shell-text-mono: hsl(209 78% 80%);
+  --shell-border: hsl(218 20% 28% / 0.75);
+  --shell-border-strong: hsl(216 22% 42% / 0.9);
+  --shell-surface: hsl(221 24% 15% / 0.88);
+  --shell-surface-panel: hsl(222 26% 13% / 0.94);
+  --shell-surface-elevated: hsl(223 25% 18% / 0.96);
+  --shell-surface-inset: hsl(224 22% 10% / 0.9);
+  --shell-surface-hover: hsl(220 20% 24% / 0.96);
+  --shell-taskbar-bg: hsl(222 27% 12% / 0.96);
+  --shell-accent: hsl(210 70% 78%);
+  --shell-accent-hover: hsl(210 78% 72%);
+  --shell-accent-foreground: hsl(220 40% 12%);
+  --shell-accent-border: hsl(210 65% 60% / 0.78);
+  --shell-accent-soft: hsl(212 56% 34% / 0.42);
+  --shell-accent-soft-border: hsl(210 70% 62% / 0.58);
+  --shell-accent-soft-text: hsl(210 90% 88%);
+  --shell-control-muted-bg: hsl(221 22% 21% / 0.95);
+  --shell-control-muted-hover: hsl(221 22% 28% / 0.95);
+  --shell-control-muted-text: hsl(214 18% 90%);
+  --shell-input-bg: hsl(222 24% 12% / 0.95);
+  --shell-input-border: hsl(218 18% 34% / 0.9);
+  --shell-input-focus: hsl(210 68% 62%);
+  --shell-overlay: hsl(223 24% 14% / 0.97);
+  --shell-overlay-border: hsl(222 20% 10% / 0.75);
+  --shell-overlay-hover: hsl(220 20% 24% / 0.92);
+  --shell-overlay-active: hsl(213 40% 28% / 0.92);
+  --shell-overlay-muted: hsl(217 42% 16% / 0.28);
+  --shell-warning-bg: hsl(33 70% 18% / 0.94);
+  --shell-warning-border: hsl(38 80% 40% / 0.35);
+  --shell-warning-text: hsl(45 90% 84%);
+  --shell-preview-outline: hsl(196 90% 62% / 0.72);
+  --shell-preview-shadow: rgba(0, 173, 255, 0.16);
+  --shell-display-preview-bg: hsl(221 28% 11% / 0.96);
+  --shell-display-preview-glow: radial-gradient(circle at top, rgba(111, 146, 214, 0.2), transparent 58%);
+  --shell-display-card-bg: linear-gradient(180deg, rgba(73, 86, 117, 0.94), rgba(36, 43, 63, 0.98));
+  --shell-display-card-border: hsl(216 18% 42% / 0.72);
+  --shell-display-card-primary-bg: linear-gradient(180deg, rgba(72, 112, 184, 0.97), rgba(35, 63, 118, 0.98));
+  --shell-display-card-primary-border: hsl(210 82% 76% / 0.72);
+  --shell-window-chrome-focused: hsl(210 55% 48%);
+  --shell-window-chrome-unfocused: hsl(214 18% 15%);
+  --shell-cursor-readout: hsl(210 85% 78%);
+  --shell-crosshair: hsl(210 90% 65% / 0.75);
+  --shell-scrollbar-track: hsl(220 18% 11% / 0.96);
+  --shell-scrollbar-thumb: hsl(216 12% 30% / 0.95);
+  --shell-scrollbar-thumb-hover: hsl(214 16% 40% / 0.98);
+}
+
 html,
 body {
   margin: 0;
   overflow: hidden;
   width: 100%;
   height: 100%;
+  scrollbar-color: var(--shell-scrollbar-thumb) var(--shell-scrollbar-track);
 }
 
 #root {
@@ -13,15 +66,43 @@ body {
   height: 100%;
 }
 
+* {
+  scrollbar-color: var(--shell-scrollbar-thumb) var(--shell-scrollbar-track);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--shell-scrollbar-track);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--shell-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid var(--shell-scrollbar-track);
+  border-radius: 999px;
+  background: var(--shell-scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--shell-scrollbar-thumb-hover);
+}
+
 @theme {
-  --color-shell-accent-badge: hsl(210 55% 72%);
-  --color-shell-crosshair: hsl(210 90% 65% / 0.75);
-  --color-shell-cursor-readout: hsl(210 85% 78%);
-  --color-shell-accent-ring: hsl(210 65% 55%);
-  --color-shell-hud-strong: hsl(210 85% 82%);
-  --color-shell-hud-mono: hsl(210 75% 78%);
-  --color-shell-btn-primary: hsl(210 70% 78%);
-  --color-shell-taskbar-focused: hsl(210 80% 82%);
+  --color-shell-accent-badge: var(--shell-accent-soft);
+  --color-shell-crosshair: var(--shell-crosshair);
+  --color-shell-cursor-readout: var(--shell-cursor-readout);
+  --color-shell-accent-ring: var(--shell-input-focus);
+  --color-shell-hud-strong: var(--shell-text-strong);
+  --color-shell-hud-mono: var(--shell-text-mono);
+  --color-shell-btn-primary: var(--shell-accent);
+  --color-shell-taskbar-focused: var(--shell-accent);
 }
 
 @layer components {
@@ -32,6 +113,139 @@ body {
     overflow: hidden;
     font-family: ui-sans-serif, system-ui, sans-serif;
     background: transparent;
-    color: hsl(0 0% 96%);
+    color: var(--shell-text);
+  }
+
+  .shell-panel {
+    border: 1px solid var(--shell-border);
+    background: var(--shell-surface-panel);
+    color: var(--shell-text);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .shell-subpanel {
+    border: 1px solid var(--shell-border);
+    background: var(--shell-surface);
+    color: var(--shell-text);
+  }
+
+  .shell-scroll-panel {
+    border: 1px solid color-mix(in srgb, var(--shell-border) 80%, transparent);
+    background: color-mix(in srgb, var(--shell-surface) 92%, transparent);
+  }
+
+  .shell-menu {
+    border: 1px solid var(--shell-overlay-border);
+    background: var(--shell-overlay);
+    color: var(--shell-text);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .shell-menu-item:hover {
+    background: var(--shell-overlay-hover);
+  }
+
+  .shell-menu-item-active {
+    background: var(--shell-overlay-active);
+  }
+
+  .shell-input {
+    border: 1px solid var(--shell-input-border);
+    background: var(--shell-input-bg);
+    color: var(--shell-text);
+  }
+
+  .shell-input::placeholder {
+    color: var(--shell-text-dim);
+  }
+
+  .shell-input:focus,
+  .shell-input:focus-visible {
+    outline: none;
+    border-color: var(--shell-input-focus);
+  }
+
+  .shell-btn-muted {
+    border: 1px solid var(--shell-border-strong);
+    background: var(--shell-control-muted-bg);
+    color: var(--shell-control-muted-text);
+  }
+
+  .shell-btn-muted:hover {
+    background: var(--shell-control-muted-hover);
+  }
+
+  .shell-btn-accent {
+    border: 1px solid var(--shell-accent-border);
+    background: var(--shell-accent);
+    color: var(--shell-accent-foreground);
+  }
+
+  .shell-btn-accent:hover {
+    background: var(--shell-accent-hover);
+  }
+
+  .shell-badge-accent {
+    border: 1px solid var(--shell-accent-soft-border);
+    background: var(--shell-accent-soft);
+    color: var(--shell-accent-soft-text);
+  }
+
+  .shell-pill {
+    border: 1px solid var(--shell-border);
+    background: var(--shell-surface-elevated);
+    color: var(--shell-text-muted);
+  }
+
+  .shell-warning-banner {
+    border: 1px solid var(--shell-warning-border);
+    background: var(--shell-warning-bg);
+    color: var(--shell-warning-text);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .shell-warning-text {
+    color: var(--shell-warning-text);
+  }
+
+  .shell-display-preview {
+    background: var(--shell-display-preview-bg);
+  }
+
+  .shell-display-glow {
+    background: var(--shell-display-preview-glow);
+  }
+
+  .shell-display-card {
+    border: 1px solid var(--shell-display-card-border);
+    background: var(--shell-display-card-bg);
+    color: var(--shell-text);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .shell-display-card-primary {
+    border-color: var(--shell-display-card-primary-border);
+    background: var(--shell-display-card-primary-bg);
+  }
+
+  .shell-preview-frame {
+    background: var(--shell-overlay-muted);
+    outline-color: var(--shell-preview-outline);
+    box-shadow: 0 0 24px var(--shell-preview-shadow);
+  }
+
+  .shell-window-control {
+    border: 0;
+    background: var(--shell-control-muted-bg);
+    color: var(--shell-control-muted-text);
+  }
+
+  .shell-window-control:hover {
+    background: var(--shell-control-muted-hover);
+  }
+
+  .shell-window-control-close:hover {
+    background: color-mix(in srgb, var(--shell-warning-bg) 70%, var(--shell-accent) 30%);
+    color: var(--shell-text);
   }
 }

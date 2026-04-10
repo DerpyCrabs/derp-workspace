@@ -1,5 +1,15 @@
-import { For, Show, createMemo, createSignal, onMount } from 'solid-js'
+import { For, Show, createMemo, createSignal, onMount, onCleanup } from 'solid-js'
 import { shellHttpBase } from '../shellHttp'
+import {
+  getThemeSettings,
+  prefersDarkTheme,
+  resolveThemeMode,
+  setTheme,
+  subscribeThemeStore,
+  type ThemeMode,
+  type ThemePalette,
+  type ThemeSettings,
+} from '../themeStore'
 
 export type GnomeDesktopBackgroundPayload = {
   schema: string
@@ -22,6 +32,22 @@ export type GnomeWallpaperChoice = {
   file_uri: string
   label: string
 }
+
+const THEME_MODES: { value: ThemeMode; label: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+]
+
+const THEME_PALETTES: {
+  value: ThemePalette
+  label: string
+  swatches: [string, string, string]
+}[] = [
+  { value: 'default', label: 'Default', swatches: ['#7f99b9', '#242932', '#c9d2de'] },
+  { value: 'caffeine', label: 'Caffeine', swatches: ['#9b7656', '#372922', '#d8c1ad'] },
+  { value: 'cosmic-night', label: 'Cosmic Night', swatches: ['#916ee2', '#2e2746', '#d6c9f8'] },
+]
 
 function fileUriToDisplay(uri: string): string {
   if (!uri.startsWith('file://')) return uri
@@ -66,8 +92,8 @@ function hexToSolidRgba(hex: string): [number, number, number, number] {
 function row(label: string, value: string) {
   return (
     <div class="grid grid-cols-[7.2rem_1fr] gap-x-2 gap-y-1 text-[0.8rem] leading-snug">
-      <span class="text-neutral-500">{label}</span>
-      <span class="min-w-0 break-all text-neutral-200">{value}</span>
+      <span class="text-[var(--shell-text-dim)]">{label}</span>
+      <span class="min-w-0 break-all text-[var(--shell-text-muted)]">{value}</span>
     </div>
   )
 }
@@ -75,6 +101,7 @@ function row(label: string, value: string) {
 export function SettingsAppearancePage(props: {
   setDesktopBackgroundJson: (json: string) => void
 }) {
+  const [themeSettings, setThemeSettings] = createSignal<ThemeSettings>(getThemeSettings())
   const [busy, setBusy] = createSignal(false)
   const [err, setErr] = createSignal<string | null>(null)
   const [applyErr, setApplyErr] = createSignal<string | null>(null)
@@ -90,6 +117,8 @@ export function SettingsAppearancePage(props: {
     if (!q) return list
     return list.filter((w) => w.label.toLowerCase().includes(q) || w.file_uri.toLowerCase().includes(q))
   })
+
+  const resolvedMode = createMemo(() => resolveThemeMode(themeSettings().mode, prefersDarkTheme()))
 
   async function loadWallpaperChoices() {
     const base = shellHttpBase()
@@ -186,6 +215,8 @@ export function SettingsAppearancePage(props: {
   }
 
   onMount(() => {
+    const unsubscribe = subscribeThemeStore((next) => setThemeSettings(next))
+    onCleanup(unsubscribe)
     void load()
     void loadWallpaperChoices()
   })
@@ -193,30 +224,99 @@ export function SettingsAppearancePage(props: {
   return (
     <div class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h2 class="text-base font-semibold tracking-wide text-neutral-100">Appearance</h2>
+        <h2 class="text-base font-semibold tracking-wide text-[var(--shell-text)]">Appearance</h2>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-white/22 bg-black/35 px-2.5 py-1.5 text-[0.78rem] font-medium text-neutral-200 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
+          class="shell-btn-muted cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
           disabled={busy() || !shellHttpBase()}
           onClick={() => void load()}
         >
           {busy() ? 'Reading…' : 'Refresh'}
         </button>
       </div>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+      <div class="shell-subpanel rounded-lg px-3 py-3">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
+            Theme
+          </p>
+          <span class="text-[0.78rem] text-[var(--shell-text-muted)]">
+            {themeSettings().mode === 'system'
+              ? `Following system (${resolvedMode()})`
+              : `${themeSettings().mode} mode`}
+          </span>
+        </div>
+        <div class="mb-3 flex flex-wrap gap-2">
+          <For each={THEME_MODES}>
+            {(mode) => (
+              <button
+                type="button"
+                class="cursor-pointer rounded-md px-3 py-1.5 text-[0.8rem] font-medium"
+                classList={{
+                  'shell-btn-accent': themeSettings().mode === mode.value,
+                  'shell-btn-muted': themeSettings().mode !== mode.value,
+                }}
+                onClick={() => setTheme(themeSettings().palette, mode.value)}
+              >
+                {mode.label}
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="grid gap-2 md:grid-cols-3">
+          <For each={THEME_PALETTES}>
+            {(palette) => (
+              <button
+                type="button"
+                class="cursor-pointer rounded-lg border p-2 text-left transition-colors"
+                classList={{
+                  'border-[var(--shell-accent-border)] bg-[var(--shell-accent-soft)]':
+                    themeSettings().palette === palette.value,
+                  'border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] hover:bg-[var(--shell-surface-hover)]':
+                    themeSettings().palette !== palette.value,
+                }}
+                onClick={() => setTheme(palette.value, themeSettings().mode)}
+              >
+                <div class="mb-2 flex gap-1.5">
+                  <For each={palette.swatches}>
+                    {(swatch) => (
+                      <span
+                        class="h-3.5 w-3.5 rounded-full border border-[var(--shell-border)]"
+                        style={{ background: swatch }}
+                      />
+                    )}
+                  </For>
+                </div>
+                <div class="text-[0.84rem] font-semibold text-[var(--shell-text)]">{palette.label}</div>
+                <div class="text-[0.74rem] text-[var(--shell-text-dim)]">
+                  {palette.value === 'default'
+                    ? 'Balanced shell palette'
+                    : palette.value === 'caffeine'
+                      ? 'Warm browns and amber accents'
+                      : 'Purple-forward night palette'}
+                </div>
+              </button>
+            )}
+          </For>
+        </div>
+        <p class="mt-3 text-[0.75rem] text-[var(--shell-text-dim)]">
+          Theme choice is saved in <span class="text-[var(--shell-text-muted)]">settings.json</span>.
+        </p>
+      </div>
+      <div class="shell-subpanel rounded-lg px-3 py-3">
+        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
           Desktop background (compositor)
         </p>
-        <p class="mb-3 text-[0.78rem] leading-relaxed text-neutral-400">
+        <p class="mb-3 text-[0.78rem] leading-relaxed text-[var(--shell-text-dim)]">
           Wallpaper is drawn under the shell and clients. The shell desktop area is transparent so this layer
           shows through. Values below are read from GNOME (
-          <span class="text-neutral-300">org.gnome.desktop.background</span>); use Apply to mirror them into
-          derp and <span class="text-neutral-300">display.json</span> (persisted on the next DRM save).
+          <span class="text-[var(--shell-text-muted)]">org.gnome.desktop.background</span>); use Apply to
+          mirror them into derp and{' '}
+          <span class="text-[var(--shell-text-muted)]">display.json</span> (persisted on the next DRM save).
         </p>
         <div class="mb-3 flex flex-wrap gap-2">
           <button
             type="button"
-            class="cursor-pointer rounded-lg border border-emerald-500/40 bg-emerald-950/35 px-2.5 py-1.5 text-[0.78rem] font-medium text-emerald-100/95 hover:bg-emerald-900/40 disabled:cursor-default disabled:opacity-45"
+            class="shell-btn-accent cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
             disabled={!payload() || typeof window.__derpShellWireSend !== 'function'}
             onClick={() => applyGnomeToCompositor()}
           >
@@ -224,10 +324,10 @@ export function SettingsAppearancePage(props: {
           </button>
         </div>
         <Show when={applyErr()}>
-          <p class="mb-2 text-[0.8rem] text-amber-200/95">{applyErr()}</p>
+          <p class="shell-warning-text mb-2 text-[0.8rem]">{applyErr()}</p>
         </Show>
         <Show when={err()}>
-          <p class="text-[0.8rem] text-amber-200/95">{err()}</p>
+          <p class="shell-warning-text text-[0.8rem]">{err()}</p>
         </Show>
         <Show when={payload()}>
           {(p) => (
@@ -244,49 +344,50 @@ export function SettingsAppearancePage(props: {
           )}
         </Show>
       </div>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
+      <div class="shell-subpanel rounded-lg px-3 py-3">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
             GNOME wallpapers
           </p>
           <button
             type="button"
-            class="cursor-pointer rounded-lg border border-white/22 bg-black/35 px-2.5 py-1.5 text-[0.78rem] font-medium text-neutral-200 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
+            class="shell-btn-muted cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
             disabled={wallBusy() || !shellHttpBase()}
             onClick={() => void loadWallpaperChoices()}
           >
             {wallBusy() ? 'Scanning…' : 'Rescan'}
           </button>
         </div>
-        <p class="mb-2 text-[0.78rem] leading-relaxed text-neutral-400">
-          Images from <span class="text-neutral-300">/usr/share/gnome-background-properties</span> and{' '}
-          <span class="text-neutral-300">/usr/share/backgrounds</span>. Click a tile to set the compositor
-          backdrop (fit follows GNOME settings above when loaded).
+        <p class="mb-2 text-[0.78rem] leading-relaxed text-[var(--shell-text-dim)]">
+          Images from{' '}
+          <span class="text-[var(--shell-text-muted)]">/usr/share/gnome-background-properties</span> and{' '}
+          <span class="text-[var(--shell-text-muted)]">/usr/share/backgrounds</span>. Click a tile to set the
+          compositor backdrop (fit follows GNOME settings above when loaded).
         </p>
         <input
           type="search"
           placeholder="Filter by name or path…"
-          class="mb-3 w-full max-w-md rounded-md border border-white/15 bg-black/40 px-2.5 py-1.5 text-[0.82rem] text-neutral-100 placeholder:text-neutral-500 focus:border-white/30 focus:outline-none"
+          class="shell-input mb-3 w-full max-w-md rounded-md px-2.5 py-1.5 text-[0.82rem]"
           value={wallQuery()}
           onInput={(e) => setWallQuery(e.currentTarget.value)}
         />
         <Show when={wallErr()}>
-          <p class="mb-2 text-[0.8rem] text-amber-200/95">{wallErr()}</p>
+          <p class="shell-warning-text mb-2 text-[0.8rem]">{wallErr()}</p>
         </Show>
         <Show when={!wallBusy() && wallpapers().length === 0 && !wallErr()}>
-          <p class="text-[0.78rem] text-neutral-500">No wallpapers found on this system.</p>
+          <p class="text-[0.78rem] text-[var(--shell-text-dim)]">No wallpapers found on this system.</p>
         </Show>
-        <div class="max-h-[min(28rem,55vh)] overflow-auto rounded-md border border-white/8 bg-black/25 p-2">
+        <div class="shell-scroll-panel max-h-[min(28rem,55vh)] overflow-auto rounded-md p-2">
           <div class="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-2">
             <For each={filteredWallpapers()}>
               {(w) => (
                 <button
                   type="button"
                   disabled={typeof window.__derpShellWireSend !== 'function'}
-                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-white/12 bg-black/35 text-left transition-colors hover:border-emerald-500/45 hover:bg-emerald-950/25 disabled:cursor-default disabled:opacity-45"
+                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] text-left transition-colors hover:border-[var(--shell-accent-border)] hover:bg-[var(--shell-surface-hover)] disabled:cursor-default disabled:opacity-45"
                   onClick={() => applyWallpaperToCompositor(w)}
                 >
-                  <div class="aspect-[4/3] w-full overflow-hidden bg-neutral-900/80">
+                  <div class="aspect-[4/3] w-full overflow-hidden bg-[var(--shell-surface-inset)]">
                     <img
                       src={wallpaperThumbUrl(w.file_uri)}
                       alt=""
@@ -295,7 +396,7 @@ export function SettingsAppearancePage(props: {
                       decoding="async"
                     />
                   </div>
-                  <span class="line-clamp-2 px-1 py-1 text-[0.65rem] leading-tight text-neutral-300">
+                  <span class="line-clamp-2 px-1 py-1 text-[0.65rem] leading-tight text-[var(--shell-text-muted)]">
                     {w.label}
                   </span>
                 </button>

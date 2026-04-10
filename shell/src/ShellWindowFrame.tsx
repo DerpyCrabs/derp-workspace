@@ -21,10 +21,6 @@ import {
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
 } from './chromeConstants'
-import {
-  SHELL_CHROME_BG_FOCUSED_OPAQUE,
-  SHELL_CHROME_BG_UNFOCUSED_OPAQUE,
-} from './exclusionRects'
 
 export type ShellWindowModel = {
   window_id: number
@@ -90,7 +86,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     return { th, bd, rh, inset, outerW, showBorderChrome }
   })
   const chromeBg = createMemo(() =>
-    readAcc(props.focused) ? SHELL_CHROME_BG_FOCUSED_OPAQUE : SHELL_CHROME_BG_UNFOCUSED_OPAQUE,
+    readAcc(props.focused)
+      ? 'var(--shell-window-chrome-focused)'
+      : 'var(--shell-window-chrome-unfocused)',
   )
   const startResize = (edges: number, clientX: number, clientY: number) => {
     props.onResizeEdgeDown(edges, clientX, clientY)
@@ -152,7 +150,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <Show when={props.children}>
         <div
-          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-neutral-950 p-2"
+          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-[var(--shell-surface-inset)] p-2 text-[var(--shell-text)]"
           style={{
             left: `${layout().inset}px`,
             top: `${layout().inset + layout().th}px`,
@@ -207,8 +205,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <span
           class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
           classList={{
-            'text-neutral-200 opacity-[0.62]': !readAcc(props.focused),
-            'text-white opacity-100': readAcc(props.focused),
+            'text-[var(--shell-text-muted)] opacity-[0.72]': !readAcc(props.focused),
+            'text-[var(--shell-text)] opacity-100': readAcc(props.focused),
           }}
         >
           {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}
@@ -216,7 +214,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-base leading-none font-bold text-neutral-200 hover:bg-slate-500"
+            class="shell-window-control m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-base leading-none font-bold"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -225,7 +223,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-sm leading-none text-neutral-200 hover:bg-slate-500"
+            class="shell-window-control m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMaximize()}
@@ -256,7 +254,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none border-0 bg-slate-700 p-0 text-lg leading-none text-neutral-200 hover:bg-red-600 hover:text-white"
+            class="shell-window-control shell-window-control-close m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-lg leading-none"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}

@@ -118,12 +118,12 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
 
   return (
     <div class="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden" data-assist-mini-grid={props.shape}>
-      <div class="mb-0.5 shrink-0 text-center text-[10px] font-medium tracking-wider text-neutral-400">
+      <div class="mb-0.5 shrink-0 text-center text-[10px] font-medium tracking-wider text-[var(--shell-text-dim)]">
         {title()}
       </div>
       <div
         data-assist-master-grid
-        class="relative grid min-h-0 min-w-0 flex-1 rounded-md border border-white/20 bg-neutral-950/50 p-1 shadow-md"
+        class="relative grid min-h-0 min-w-0 flex-1 rounded-md border border-[var(--shell-border)] bg-[var(--shell-surface-inset)] p-1 shadow-md"
         style={{
           'grid-template-columns': gridTemplate().colT,
           'grid-template-rows': gridTemplate().rowT,
@@ -134,10 +134,10 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
             const active = createMemo(() => assistPickMatchesGridSpan(hover(), p().span))
             const tileClass = createMemo(() =>
               p().kind === 'cell'
-                ? 'rounded-sm border border-white/25 bg-neutral-800/80 shadow-sm'
+                ? 'rounded-sm border border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] shadow-sm'
                 : p().kind === 'junction'
-                  ? 'rounded-sm bg-neutral-950/80'
-                  : 'bg-neutral-950/70',
+                  ? 'rounded-sm bg-[var(--shell-surface-inset)]'
+                  : 'bg-[var(--shell-surface)]',
             )
             return (
               <div
@@ -164,7 +164,7 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
           if (!L) return null
           return (
             <div
-              class="pointer-events-none z-20 rounded-md border-2 border-sky-400 bg-sky-400/25 shadow-md ring-2 ring-sky-400/35"
+              class="pointer-events-none z-20 rounded-md border-2 border-[var(--shell-preview-outline)] bg-[var(--shell-accent-soft)] shadow-md ring-2 ring-[var(--shell-preview-outline)]"
               style={{
                 'grid-column': `${L.colStart} / ${L.colEnd}`,
                 'grid-row': `${L.rowStart} / ${L.rowEnd}`,

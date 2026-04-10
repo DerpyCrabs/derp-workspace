@@ -46,12 +46,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [activePage, setActivePage] = createSignal<SettingsPageId>('displays')
 
   return (
-    <div class="flex h-full min-h-0 min-w-0 text-left [&_strong]:text-shell-hud-strong">
+    <div class="flex h-full min-h-0 min-w-0 bg-[var(--shell-surface-panel)] text-left text-[var(--shell-text)] [&_strong]:text-shell-hud-strong">
       <nav
-        class="flex w-[13rem] shrink-0 flex-col gap-0.5 border-r border-white/12 bg-[hsla(220,22%,16%,0.97)] py-3 pr-2 pl-2"
+        class="flex w-[13rem] shrink-0 flex-col gap-0.5 border-r border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] py-3 pr-2 pl-2"
         aria-label="Settings sections"
       >
-        <p class="mb-2 px-2 text-[0.68rem] font-semibold uppercase tracking-wide text-neutral-500">
+        <p class="mb-2 px-2 text-[0.68rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
           Settings
         </p>
         <For each={NAV}>
@@ -60,9 +60,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
               type="button"
               role="tab"
               aria-selected={activePage() === item.id}
-              class="w-full cursor-pointer rounded-lg border-0 px-2.5 py-2 text-left text-[0.84rem] font-medium text-neutral-200 hover:bg-white/8"
+              class="w-full cursor-pointer rounded-lg border-0 px-2.5 py-2 text-left text-[0.84rem] font-medium text-[var(--shell-text-muted)] hover:bg-[var(--shell-surface-hover)]"
               classList={{
-                'bg-white/14 font-semibold text-white': activePage() === item.id,
+                'bg-[var(--shell-accent-soft)] font-semibold text-[var(--shell-accent-soft-text)]':
+                  activePage() === item.id,
               }}
               onClick={() => setActivePage(item.id)}
             >

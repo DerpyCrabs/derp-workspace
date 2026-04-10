@@ -221,9 +221,9 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
 
   return (
     <div class="space-y-4">
-      <h2 class="text-base font-semibold tracking-wide text-neutral-100">Displays</h2>
-      <div class="rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+      <h2 class="text-base font-semibold tracking-wide text-[var(--shell-text)]">Displays</h2>
+      <div class="shell-subpanel rounded-lg px-3 py-3">
+        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
           Primary monitor
         </p>
         <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.8rem]">
@@ -232,7 +232,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
             when={props.canSessionControl()}
             fallback={
               <div
-                class="min-w-48 rounded-[0.35rem] border border-white/18 bg-black/20 px-[0.55rem] py-1 text-[0.8rem] text-neutral-300 opacity-80"
+                class="shell-pill min-w-48 rounded-[0.35rem] px-[0.55rem] py-1 text-[0.8rem] opacity-80"
                 title="Needs cef_host wire"
               >
                 {props.shellChromePrimaryName() || 'Auto (top-left output)'}
@@ -245,7 +245,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
               onChange={(v) => props.setShellPrimary(String(v))}
               itemLabel={(v) => (v ? String(v) : 'Auto (top-left output)')}
               equals={(a, b) => a === b}
-              triggerClass="min-w-48 max-w-none cursor-pointer rounded border border-white/35 bg-[rgb(28,32,44)] py-1 px-[0.55rem] text-left font-inherit text-[0.8rem] text-neutral-100 hover:bg-[rgb(38,44,58)]"
+              triggerClass="shell-btn-muted min-w-48 max-w-none cursor-pointer rounded py-1 px-[0.55rem] text-left font-inherit text-[0.8rem]"
               minMenuWidthPx={192}
             />
           </Show>
@@ -259,10 +259,9 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           <span class="mr-1 opacity-90">UI scale (all heads)</span>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+            class="shell-btn-muted cursor-pointer rounded-[0.3rem] px-[0.55rem] py-1 font-inherit text-inherit disabled:cursor-default disabled:opacity-[0.55]"
             classList={{
-              'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                props.uiScalePercent() === 100,
+              'shell-btn-accent disabled:opacity-[0.85]': props.uiScalePercent() === 100,
             }}
             disabled={!props.canSessionControl() || props.uiScalePercent() === 100}
             title={!props.canSessionControl() ? 'Needs cef_host wire' : undefined}
@@ -272,10 +271,9 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+            class="shell-btn-muted cursor-pointer rounded-[0.3rem] px-[0.55rem] py-1 font-inherit text-inherit disabled:cursor-default disabled:opacity-[0.55]"
             classList={{
-              'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                props.uiScalePercent() === 150,
+              'shell-btn-accent disabled:opacity-[0.85]': props.uiScalePercent() === 150,
             }}
             disabled={!props.canSessionControl() || props.uiScalePercent() === 150}
             title={!props.canSessionControl() ? 'Needs cef_host wire' : undefined}
@@ -285,10 +283,9 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded-[0.3rem] border border-white/28 bg-black/35 px-[0.55rem] py-1 font-inherit text-inherit hover:bg-[rgba(40,100,170,0.45)] disabled:cursor-default disabled:opacity-[0.55]"
+            class="shell-btn-muted cursor-pointer rounded-[0.3rem] px-[0.55rem] py-1 font-inherit text-inherit disabled:cursor-default disabled:opacity-[0.55]"
             classList={{
-              'border-[rgba(160,200,255,0.45)] bg-[rgba(30,80,140,0.55)] disabled:opacity-[0.85]':
-                props.uiScalePercent() === 200,
+              'shell-btn-accent disabled:opacity-[0.85]': props.uiScalePercent() === 200,
             }}
             disabled={!props.canSessionControl() || props.uiScalePercent() === 200}
             title={!props.canSessionControl() ? 'Needs cef_host wire' : undefined}
@@ -297,11 +294,11 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
             200%
           </button>
         </div>
-        <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-neutral-200">
+        <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-[var(--shell-text-muted)]">
           <For
             each={props.screenDraft.rows}
             fallback={
-              <li class="list-disc text-[hsl(45,85%,72%)]">
+              <li class="shell-warning-text list-disc">
                 No outputs listed — compositor should send <code>output_layout</code> with one entry per
                 head.
               </li>
@@ -311,7 +308,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
               <li class="mb-1.5 list-disc">
                 <div class="flex flex-wrap items-start justify-between gap-x-2.5 gap-y-1.5">
                   <div class="min-w-0 flex-[1_1_12rem]">
-                    <span class="font-semibold text-neutral-100">{row.name || '—'}</span>
+                    <span class="font-semibold text-[var(--shell-text)]">{row.name || '—'}</span>
                     <Show
                       when={primaryBadgeLabel(
                         row.name,
@@ -319,7 +316,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                         props.autoShellChromeMonitorName(),
                       )}
                     >
-                      <span class="ml-2 rounded-full border border-[rgba(160,200,255,0.38)] bg-[rgba(30,80,140,0.32)] px-2 py-[0.1rem] text-[0.64rem] font-semibold uppercase tracking-wide text-[hsl(210,95%,88%)]">
+                      <span class="shell-badge-accent ml-2 rounded-full px-2 py-[0.1rem] text-[0.64rem] font-semibold uppercase tracking-wide">
                         {primaryBadgeLabel(
                           row.name,
                           props.shellChromePrimaryName(),
@@ -348,19 +345,19 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
             </p>
           }
         >
-          <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-neutral-400">
+          <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
             Arrangement
           </p>
-          <div class="mb-3 rounded-lg border border-white/10 bg-black/25 p-2.5">
+          <div class="shell-subpanel mb-3 rounded-lg p-2.5">
             <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-              <span class="text-[0.78rem] font-medium text-neutral-100">Layout preview</span>
+              <span class="text-[0.78rem] font-medium text-[var(--shell-text)]">Layout preview</span>
               <span class="text-[0.72rem] opacity-70">Drag displays to reposition them</span>
             </div>
             <div
               ref={(el) => (previewRef = el)}
-              class="relative aspect-2/1 w-full overflow-hidden rounded-md border border-white/10 bg-[rgba(15,18,24,0.92)]"
+              class="shell-display-preview relative aspect-2/1 w-full overflow-hidden rounded-md border border-[var(--shell-border)]"
             >
-              <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(90,120,170,0.18),transparent_58%)]" />
+              <div class="shell-display-glow pointer-events-none absolute inset-0" />
               <For each={previewMetrics()?.rects ?? []}>
                     {(rect) => {
                       const badge = () =>
@@ -372,10 +369,10 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       return (
                         <button
                           type="button"
-                          class="absolute flex flex-col items-start justify-between overflow-hidden rounded-md border border-white/18 bg-[linear-gradient(180deg,rgba(66,76,104,0.92),rgba(33,39,57,0.96))] px-2 py-1.5 text-left text-neutral-100 shadow-[0_10px_24px_rgba(0,0,0,0.28)] transition-shadow"
+                          class="shell-display-card absolute flex flex-col items-start justify-between overflow-hidden rounded-md px-2 py-1.5 text-left transition-shadow"
                           classList={{
                             'z-10 shadow-[0_14px_28px_rgba(0,0,0,0.42)]': draggingIndex() === rect.index,
-                            'border-[rgba(160,200,255,0.62)] bg-[linear-gradient(180deg,rgba(64,98,160,0.95),rgba(32,56,102,0.98))]':
+                            'shell-display-card-primary':
                               rect.row.name === resolvedPrimaryName(),
                           }}
                           style={{
@@ -394,7 +391,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                             </div>
                           </div>
                           <Show when={badge()}>
-                            <span class="rounded-full border border-white/18 bg-black/28 px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide">
+                            <span class="shell-pill rounded-full px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide">
                               {badge()}
                             </span>
                           </Show>
@@ -406,7 +403,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           </div>
           <For each={props.screenDraft.rows}>
             {(row, i) => (
-              <div class="mb-[0.55rem] rounded-md border border-white/10 bg-black/18 px-2.5 py-2">
+              <div class="shell-subpanel mb-[0.55rem] rounded-md px-2.5 py-2">
                 <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[0.82rem]">
                   <div class="flex min-w-0 items-center gap-2">
                     <span class="min-w-0 font-mono opacity-92">{row.name}</span>
@@ -417,7 +414,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                         props.autoShellChromeMonitorName(),
                       )}
                     >
-                      <span class="rounded-full border border-[rgba(160,200,255,0.38)] bg-[rgba(30,80,140,0.32)] px-2 py-[0.08rem] text-[0.6rem] font-semibold uppercase tracking-wide text-[hsl(210,95%,88%)]">
+                      <span class="shell-badge-accent rounded-full px-2 py-[0.08rem] text-[0.6rem] font-semibold uppercase tracking-wide">
                         {primaryBadgeLabel(
                           row.name,
                           props.shellChromePrimaryName(),
@@ -435,7 +432,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                     x
                     <input
                       type="number"
-                      class="w-18 rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
+                      class="shell-input w-18 rounded px-[0.35rem] py-0.5 text-inherit"
                       value={row.x}
                       onInput={(e) =>
                         props.setScreenDraft('rows', i(), 'x', Number(e.currentTarget.value) || 0)
@@ -446,7 +443,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                     y
                     <input
                       type="number"
-                      class="w-18 rounded border border-white/25 bg-black/35 px-[0.35rem] py-0.5 text-inherit"
+                      class="shell-input w-18 rounded px-[0.35rem] py-0.5 text-inherit"
                       value={row.y}
                       onInput={(e) =>
                         props.setScreenDraft('rows', i(), 'y', Number(e.currentTarget.value) || 0)
@@ -469,7 +466,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
           </For>
           <button
             type="button"
-            class="mt-3 cursor-pointer rounded-[0.35rem] border border-white/28 bg-[rgba(30,80,140,0.55)] px-3 py-1.5 text-[0.85rem] hover:bg-[rgba(40,100,170,0.65)]"
+            class="shell-btn-accent mt-3 cursor-pointer rounded-[0.35rem] px-3 py-1.5 text-[0.85rem]"
             onClick={() => props.applyCompositorLayoutFromDraft()}
           >
             Apply layout to compositor
