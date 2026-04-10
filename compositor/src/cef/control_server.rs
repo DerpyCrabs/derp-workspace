@@ -210,6 +210,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_app_usage" {
+        let json = crate::desktop_app_usage::read_desktop_app_usage_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/gnome_desktop_background" {
         let json = crate::cef::gnome_background::read_gnome_desktop_background_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -287,6 +293,14 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
                 .ok_or_else(|| "missing command".to_string())?
                 .to_string();
             uplink.spawn_wayland_client(command);
+        }
+        "/desktop_app_usage_launch" => {
+            let key = v
+                .get("key")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| "missing key".to_string())?
+                .to_string();
+            crate::desktop_app_usage::increment_desktop_app_usage(key)?;
         }
         "/settings_theme" => {
             let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)

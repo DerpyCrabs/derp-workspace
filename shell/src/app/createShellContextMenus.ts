@@ -1,4 +1,9 @@
 import {
+  getDesktopAppUsageCounts,
+  recordDesktopAppLaunch,
+  refreshDesktopAppUsageFromRemote,
+} from '../desktopAppUsage'
+import {
   createEffect,
   createMemo,
   createSignal,
@@ -93,6 +98,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
+  const [programsUsageCounts, setProgramsUsageCounts] = createSignal(getDesktopAppUsageCounts())
   const [programsCatalog, setProgramsCatalog] = createStore<{
     items: DesktopAppEntry[]
     loaded: boolean
@@ -229,6 +235,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     }
     if (!base) return
     await refreshProgramsMenuItems()
+    setProgramsUsageCounts(await refreshDesktopAppUsageFromRemote())
   }
 
   function anchorProgramsMenuToCenter(outputName?: string | null) {
@@ -270,6 +277,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setProgramsMenuOutputName(outputName ?? null)
     queueMicrotask(() => programsMenuSearchRef?.focus())
     void refreshProgramsMenuItems()
+    void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
   }
 
   function toggleProgramsMenuMeta(outputName?: string | null) {
@@ -352,10 +360,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       return [{ label: 'No applications found.', action: () => {} }]
     }
     if (raw.length === 0) return [{ label: 'Loading…', action: () => {} }]
-    return searchDesktopApplications(raw, q).map((app) => ({
+    return searchDesktopApplications(raw, q, programsUsageCounts()).map((app) => ({
       label: app.name,
       badge: app.terminal ? 'tty' : undefined,
       action: () => {
+        setProgramsUsageCounts(recordDesktopAppLaunch(app))
         void args.spawnInCompositor(app.exec)
       },
     }))

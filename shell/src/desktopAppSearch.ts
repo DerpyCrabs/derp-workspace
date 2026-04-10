@@ -1,3 +1,4 @@
+import { desktopAppLaunchCount, type DesktopAppUsageCounts } from './desktopAppUsage'
 import type { DesktopAppEntry } from './shellBridge'
 
 type SearchMatch = {
@@ -75,9 +76,25 @@ function bestFieldMatch(app: DesktopAppEntry, queryToken: string): SearchMatch |
   return matches[0]
 }
 
-export function searchDesktopApplications(apps: DesktopAppEntry[], query: string): DesktopAppEntry[] {
+export function searchDesktopApplications(
+  apps: DesktopAppEntry[],
+  query: string,
+  usageCounts: DesktopAppUsageCounts = {},
+): DesktopAppEntry[] {
   const queryTokens = tokenizeForSearch(query)
-  if (queryTokens.length === 0) return apps
+  if (queryTokens.length === 0) {
+    return apps
+      .map((app, index) => ({
+        app,
+        index,
+        launchCount: desktopAppLaunchCount(app, usageCounts),
+      }))
+      .sort((a, b) => {
+        if (a.launchCount !== b.launchCount) return b.launchCount - a.launchCount
+        return a.index - b.index
+      })
+      .map((entry) => entry.app)
+  }
   return apps
     .map((app, index) => {
       let category = 0
@@ -90,17 +107,32 @@ export function searchDesktopApplications(apps: DesktopAppEntry[], query: string
         matchType = Math.max(matchType, match.matchType)
         tokenPos = Math.max(tokenPos, match.tokenPos)
       }
-      return { app, index, category, matchType, tokenPos }
+      return {
+        app,
+        index,
+        category,
+        matchType,
+        tokenPos,
+        launchCount: desktopAppLaunchCount(app, usageCounts),
+      }
     })
     .filter(
       (
         value,
-      ): value is { app: DesktopAppEntry; index: number; category: number; matchType: number; tokenPos: number } =>
+      ): value is {
+        app: DesktopAppEntry
+        index: number
+        category: number
+        matchType: number
+        tokenPos: number
+        launchCount: number
+      } =>
         value !== null,
     )
     .sort((a, b) => {
       if (a.matchType !== b.matchType) return a.matchType - b.matchType
       if (a.category !== b.category) return a.category - b.category
+      if (a.launchCount !== b.launchCount) return b.launchCount - a.launchCount
       if (a.tokenPos !== b.tokenPos) return a.tokenPos - b.tokenPos
       return a.index - b.index
     })

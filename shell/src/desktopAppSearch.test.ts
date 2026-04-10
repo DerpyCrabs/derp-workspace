@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { searchDesktopApplications } from './desktopAppSearch'
+import { desktopAppUsageKey } from './desktopAppUsage'
 import type { DesktopAppEntry } from './shellBridge'
 
 const apps: DesktopAppEntry[] = [
@@ -20,6 +21,14 @@ const apps: DesktopAppEntry[] = [
     keywords: ['tty', 'shell'],
     terminal: true,
     desktop_id: 'org.gnome.Console.desktop',
+  },
+  {
+    name: 'Signal Web',
+    exec: 'signal-desktop',
+    executable: 'signal-desktop',
+    keywords: ['chat', 'web'],
+    terminal: false,
+    desktop_id: 'org.signal.Signal.desktop',
   },
   {
     name: 'Calculator',
@@ -60,5 +69,29 @@ describe('searchDesktopApplications', () => {
       'libreoffice-writer.desktop',
     ])
     expect(searchDesktopApplications(apps, 'writer tty')).toEqual([])
+  })
+
+  it('prioritizes apps opened more often when match quality ties', () => {
+    expect(
+      searchDesktopApplications(apps, 'web', {
+        [desktopAppUsageKey(apps[2])]: 4,
+        [desktopAppUsageKey(apps[0])]: 1,
+      }).map((app) => app.desktop_id),
+    ).toEqual(['org.signal.Signal.desktop', 'firefox.desktop'])
+  })
+
+  it('uses launch history when the query is empty', () => {
+    expect(
+      searchDesktopApplications(apps, '', {
+        [desktopAppUsageKey(apps[1])]: 5,
+        [desktopAppUsageKey(apps[3])]: 2,
+      }).map((app) => app.desktop_id),
+    ).toEqual([
+      'org.gnome.Console.desktop',
+      'org.gnome.Calculator.desktop',
+      'firefox.desktop',
+      'org.signal.Signal.desktop',
+      'libreoffice-writer.desktop',
+    ])
   })
 })
