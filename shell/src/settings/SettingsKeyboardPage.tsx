@@ -27,7 +27,7 @@ export function SettingsKeyboardPage(props: { keyboardLayoutLabel: Accessor<stri
         <Show
           when={props.keyboardLayoutLabel()}
           fallback={
-            <p class="text-[0.82rem] opacity-80">Waiting for layout from compositor…</p>
+            <p class="text-[0.82rem] text-(--shell-text-muted)">Waiting for layout from compositor…</p>
           }
         >
           <p class="text-[0.95rem] font-semibold tabular-nums text-(--shell-text)">
@@ -53,7 +53,7 @@ export function SettingsKeyboardPage(props: { keyboardLayoutLabel: Accessor<stri
                   <td class="py-1.5 pr-3 font-mono text-[0.72rem] text-(--shell-text-dim)">
                     {row.keys}
                   </td>
-                  <td class="py-1.5 opacity-92">{row.action}</td>
+                  <td class="py-1.5 text-(--shell-text)">{row.action}</td>
                 </tr>
               )}
             </For>

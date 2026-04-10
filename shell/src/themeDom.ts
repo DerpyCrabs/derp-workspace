@@ -368,13 +368,27 @@ export function resolveTheme(settings: ThemeSettings = getThemeSettings()): Reso
   }
 }
 
+function opaqueThemeValue(key: string, value: string): string {
+  if (key === 'shell-display-preview-glow') return 'none'
+  return value
+    .replace(
+      /rgba\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*[^)]+\)/g,
+      'rgb($1, $2, $3)',
+    )
+    .replace(
+      /hsla\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*[^)]+\)/g,
+      'hsl($1, $2, $3)',
+    )
+    .replace(/(hsl\([^)]*?)\s*\/\s*[\d.]+(\))/g, '$1$2')
+}
+
 export function applyTheme(theme: ResolvedTheme) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   root.dataset.shellThemePalette = theme.palette
   root.dataset.shellThemeMode = theme.mode
   for (const [key, value] of Object.entries(theme.tokens)) {
-    root.style.setProperty(`--${key}`, value)
+    root.style.setProperty(`--${key}`, opaqueThemeValue(key, value))
   }
 }
 

@@ -1496,7 +1496,7 @@ impl CompositorState {
         self.keyboard_on_focus_surface_changed(None);
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_emit_shell_ui_focus_if_changed(None);
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle);
+        self.shell_send_keybind_ex("toggle_programs_menu", None);
     }
 
     pub(crate) fn shell_send_keybind(&mut self, action: &str) {
@@ -1507,6 +1507,9 @@ impl CompositorState {
         self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
             target_window_id,
+            output_name: self
+                .new_toplevel_placement_output(None)
+                .map(|output| output.name().to_string()),
         });
     }
 

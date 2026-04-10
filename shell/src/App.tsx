@@ -78,7 +78,7 @@ import { atlasTopFromLayout, type ShellContextMenuItem } from './contextMenu'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
 import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { hideShellFloatingWire } from './shellFloatingWire'
-import fuzzysort from 'fuzzysort'
+import { searchDesktopApplications } from './desktopAppSearch'
 import { getMonitorLayout } from './tilingConfig'
 import {
   parseDesktopApplicationsResponse,
@@ -313,9 +313,9 @@ type DerpShellDetail =
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; windows: unknown[] }
   | { type: 'context_menu_dismiss' }
-  | { type: 'programs_menu_toggle' }
+  | { type: 'programs_menu_toggle'; output_name?: string }
   | { type: 'compositor_ping' }
-  | { type: 'keybind'; action: string; target_window_id?: number }
+  | { type: 'keybind'; action: string; target_window_id?: number; output_name?: string }
   | { type: 'keyboard_layout'; label: string }
   | {
       type: 'volume_overlay'
@@ -677,7 +677,7 @@ function App() {
     const fillPct = !v.stateKnown || v.muted ? 0 : barPct
     return (
       <div
-        class="border border-(--shell-border) bg-(--shell-surface-panel) text-(--shell-text) shadow-[0_8px_24px_rgba(0,0,0,0.28)] pointer-events-none fixed z-470000 box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl px-5 py-3.5"
+        class="border border-(--shell-border) bg-(--shell-surface-panel) text-(--shell-text) pointer-events-none fixed z-470000 box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl px-5 py-3.5"
         style={pos}
         role="status"
         aria-live="polite"
@@ -740,6 +740,7 @@ function App() {
   })
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
+  const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
@@ -749,12 +750,20 @@ function App() {
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
+  let wireWatchPoll: ReturnType<typeof setInterval> | undefined
+  let mainRef: HTMLElement | undefined
+  let menuAtlasHostRef: HTMLElement | undefined
+  let menuPanelRef: HTMLElement | undefined
+  let programsMenuSearchRef: HTMLInputElement | undefined
+  let exclusionZonesRaf = 0
+  let lastExclusionZonesJson: string | null = null
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
       setCtxMenuKind(null)
       setProgramsMenuQuery('')
       setProgramsMenuHighlightIdx(0)
+      setProgramsMenuOutputName(null)
       setPowerMenuHighlightIdx(0)
     }
   })
@@ -764,6 +773,7 @@ function App() {
     setCtxMenuKind(null)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
+    setProgramsMenuOutputName(null)
     setPowerMenuHighlightIdx(0)
     hideShellFloatingWire()
   }
@@ -912,6 +922,49 @@ function App() {
     const clh = Math.max(1, g?.h ?? v.h)
     const cph = Math.max(1, p?.h ?? Math.round(clh * 1.5))
     return atlasTopFromLayout(clh, cph, ah)
+  })
+
+  function programsMenuMetrics(outputName?: string | null) {
+    const og = outputGeom()
+    const co = layoutCanvasOrigin()
+    const screens = screensListForLayout(screenDraft.rows, og, co)
+    const requestedOutput =
+      outputName !== null && outputName !== undefined
+        ? screens.find((screen) => screen.name === outputName)
+        : undefined
+    const explicitPrimaryName = shellChromePrimaryName()
+    const explicitPrimary =
+      explicitPrimaryName !== null ? screens.find((screen) => screen.name === explicitPrimaryName) : undefined
+    let primary = requestedOutput ?? explicitPrimary ?? screens[0] ?? null
+    if (requestedOutput === undefined && explicitPrimary === undefined && screens.length > 1) {
+      for (const screen of screens) {
+        if (
+          primary === null ||
+          screen.x < primary.x ||
+          (screen.x === primary.x && screen.y < primary.y)
+        ) {
+          primary = screen
+        }
+      }
+    }
+    if (!og || !primary) return null
+    const targetCss = layoutScreenCssRect(primary, co)
+    const width = Math.max(320, Math.min(704, targetCss.width - 24))
+    const height = Math.max(240, Math.min(608, targetCss.height - 24))
+    return { targetCss, width, height }
+  }
+
+  const programsMenuPlacement = createMemo(() => {
+    const metrics = programsMenuMetrics(programsMenuOutputName())
+    if (!metrics) return null
+    const stripHeight = Math.max(1, canvasCss().h - shellMenuAtlasTop())
+    return {
+      left: '50%',
+      top: `${Math.max(8, Math.round((stripHeight - metrics.height) / 2))}px`,
+      width: `${Math.round(metrics.width)}px`,
+      'max-height': `${Math.round(metrics.height)}px`,
+      transform: 'translateX(-50%)',
+    } as const
   })
 
   const workspacePartition = createMemo(() => {
@@ -1157,7 +1210,7 @@ function App() {
         ref={(el) => {
           root = el
         }}
-        class="fixed inset-0 z-460500 touch-none bg-[rgba(0,0,0,0.35)]"
+        class="fixed inset-0 z-460500 touch-none bg-black"
         onContextMenu={(e) => {
           e.preventDefault()
         }}
@@ -1214,7 +1267,7 @@ function App() {
         <Show when={selectionCss()} keyed>
           {(css) => (
             <div
-              class="pointer-events-none fixed box-border border-2 border-white shadow-[0_0_0_99999px_rgba(0,0,0,0.45)]"
+              class="pointer-events-none fixed box-border border-2 border-white"
               style={{
                 left: `${css.left}px`,
                 top: `${css.top}px`,
@@ -1375,11 +1428,11 @@ function App() {
     return (
       <>
         <div
-          class="pointer-events-none fixed top-0 bottom-0 z-53 w-px -translate-x-[0.5px] bg-shell-crosshair shadow-[0_0_4px_rgba(0,0,0,0.4)]"
+          class="pointer-events-none fixed top-0 bottom-0 z-53 w-px -translate-x-[0.5px] bg-shell-crosshair"
           style={{ left: `${p.x}px` }}
         />
         <div
-          class="pointer-events-none fixed left-0 right-0 z-53 h-px -translate-y-[0.5px] bg-shell-crosshair shadow-[0_0_4px_rgba(0,0,0,0.4)]"
+          class="pointer-events-none fixed left-0 right-0 z-53 h-px -translate-y-[0.5px] bg-shell-crosshair"
           style={{ top: `${p.y}px` }}
         />
         <div
@@ -1394,14 +1447,6 @@ function App() {
       </>
     )
   })
-
-  let wireWatchPoll: ReturnType<typeof setInterval> | undefined
-  let mainRef: HTMLElement | undefined
-  let menuAtlasHostRef: HTMLElement | undefined
-  let menuPanelRef: HTMLElement | undefined
-  let programsMenuSearchRef: HTMLInputElement | undefined
-  let exclusionZonesRaf = 0
-  let lastExclusionZonesJson: string | null = null
 
   function syncExclusionZonesNow() {
     const main = mainRef
@@ -2080,35 +2125,44 @@ function App() {
     await refreshProgramsMenuItems()
   }
 
-  function anchorProgramsMenuFromToggle() {
-    const el = document.querySelector('[data-shell-programs-toggle]')
-    if (el instanceof HTMLElement) {
-      const r = el.getBoundingClientRect()
-      setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
-    } else {
-      const v = viewportCss()
-      setCtxMenuAnchor({
-        x: 8,
-        y: Math.max(0, v.h - 48),
-        alignAboveY: Math.max(0, v.h - 56),
-      })
+  function anchorProgramsMenuToCenter(outputName?: string | null) {
+    const main = mainRef
+    const og = outputGeom()
+    const metrics = programsMenuMetrics(outputName)
+    if (main && og && metrics) {
+      const center = canvasRectToClientCss(
+        metrics.targetCss.x + metrics.targetCss.width / 2,
+        metrics.targetCss.y + metrics.targetCss.height / 2,
+        0,
+        0,
+        main.getBoundingClientRect(),
+        og.w,
+        og.h,
+      )
+      const left = Math.round(center.left - metrics.width / 2)
+      const top = Math.round(center.top - metrics.height / 2)
+      setCtxMenuAnchor({ x: left, y: top, alignAboveY: top })
+      return
     }
+    const v = viewportCss()
+    setCtxMenuAnchor({ x: Math.round(v.w / 2 - 352), y: Math.round(v.h / 2 - 240), alignAboveY: Math.round(v.h / 2 - 240) })
   }
 
-  function openProgramsMenu() {
+  function openProgramsMenu(outputName?: string | null) {
     closeAllAtlasSelects()
-    anchorProgramsMenuFromToggle()
+    anchorProgramsMenuToCenter(outputName)
     setCtxMenuKind('programs')
     setProgramsMenuBusy(!programsCatalog.loaded)
     setProgramsMenuErr(null)
     setCtxMenuOpen(true)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
+    setProgramsMenuOutputName(outputName ?? null)
     queueMicrotask(() => programsMenuSearchRef?.focus())
     void refreshProgramsMenuItems()
   }
 
-  function toggleProgramsMenuMeta() {
+  function toggleProgramsMenuMeta(outputName?: string | null) {
     if (ctxMenuOpen() && ctxMenuKind() === 'programs') {
       setCtxMenuOpen(false)
       return
@@ -2116,7 +2170,7 @@ function App() {
     if (ctxMenuOpen() && ctxMenuKind() === 'power') {
       setCtxMenuOpen(false)
     }
-    openProgramsMenu()
+    openProgramsMenu(outputName)
   }
 
   function onProgramsMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
@@ -2125,17 +2179,9 @@ function App() {
       setCtxMenuOpen(false)
       return
     }
-    closeAllAtlasSelects()
-    const r = e.currentTarget.getBoundingClientRect()
-    setCtxMenuAnchor({ x: r.left, y: r.bottom, alignAboveY: r.top })
-    setCtxMenuKind('programs')
-    setProgramsMenuBusy(!programsCatalog.loaded)
-    setProgramsMenuErr(null)
-    setCtxMenuOpen(true)
-    setProgramsMenuQuery('')
-    setProgramsMenuHighlightIdx(0)
-    queueMicrotask(() => programsMenuSearchRef?.focus())
-    void refreshProgramsMenuItems()
+    const monitorName =
+      e.currentTarget.closest('[data-shell-taskbar-monitor]')?.getAttribute('data-shell-taskbar-monitor') ?? null
+    openProgramsMenu(monitorName)
   }
 
   function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
@@ -2205,10 +2251,7 @@ function App() {
       return [{ label: 'No applications found.', action: () => {} }]
     }
     if (raw.length === 0) return [{ label: 'Loading…', action: () => {} }]
-    const rows =
-      q === ''
-        ? raw
-        : fuzzysort.go(q, raw, { key: 'name', threshold: -10000 }).map((x) => x.obj)
+    const rows = searchDesktopApplications(raw, q)
     return rows.map((app) => ({
       label: app.name,
       badge: app.terminal ? 'tty' : undefined,
@@ -2367,7 +2410,7 @@ function App() {
         return
       }
       if (d.type === 'programs_menu_toggle') {
-        toggleProgramsMenuMeta()
+        toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
         return
       }
       if (d.type === 'compositor_ping') {
@@ -2407,7 +2450,7 @@ function App() {
           return
         }
         if (action === 'toggle_programs_menu') {
-          toggleProgramsMenuMeta()
+          toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
           return
         }
         if (action === 'open_settings') {
@@ -3135,12 +3178,12 @@ function App() {
             Copy snapshot
           </button>
         </div>
-        <p class="mb-2 tabular-nums opacity-90">
+        <p class="mb-2 tabular-nums text-(--shell-text-muted)">
           Build <strong>{shellBuildLabelText()}</strong>
           {' · '}
           UI FPS ~<strong>{hudFps()}</strong>
         </p>
-        <label class="mb-2 flex cursor-pointer items-center gap-2 select-none opacity-92">
+        <label class="mb-2 flex cursor-pointer items-center gap-2 select-none text-(--shell-text-muted)">
           <input
             type="checkbox"
             class="h-3.5 w-3.5 accent-shell-accent-ring"
@@ -3151,7 +3194,7 @@ function App() {
         </label>
         <Show when={outputGeom()} keyed>
           {(og) => (
-            <p class="mb-2 opacity-90">
+            <p class="mb-2 text-(--shell-text-muted)">
               Canvas{' '}
               <strong>
                 {og.w}×{og.h}
@@ -3160,10 +3203,10 @@ function App() {
           )}
         </Show>
         <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) mb-2 rounded px-2 py-1.5" open>
-          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide opacity-80">
+          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide text-(--shell-text-dim)">
             Layout / input
           </summary>
-          <div class="mt-1.5 space-y-1 tabular-nums opacity-90">
+          <div class="mt-1.5 space-y-1 tabular-nums text-(--shell-text-muted)">
             <div>
               Union from <code>screens[]</code>
               {': '}
@@ -3220,19 +3263,19 @@ function App() {
           </div>
         </details>
         <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded px-2 py-1.5">
-          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide opacity-80">
+          <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide text-(--shell-text-dim)">
             Exclusion zones
           </summary>
           <div class="mt-1.5">
             <Show
               when={exclusionZonesHud().length > 0}
-              fallback={<span class="block opacity-[0.65]">—</span>}
+              fallback={<span class="block text-(--shell-text-dim)">—</span>}
             >
               <ul class="max-h-40 list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
                 <For each={exclusionZonesHud()}>
                   {(z) => (
                     <li class="my-0.5 list-disc">
-                      <span class="mr-[0.35rem] inline-block min-w-28 opacity-90">{z.label}</span>
+                      <span class="mr-[0.35rem] inline-block min-w-28 text-(--shell-text-muted)">{z.label}</span>
                       <code class="font-mono text-[0.65rem] text-shell-hud-mono">
                         {z.x},{z.y} · {z.w}×{z.h}
                       </code>
@@ -3292,7 +3335,7 @@ function App() {
     >
       <Show when={shellBridgeIssue()} keyed>
         {(msg) => (
-          <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) shadow-[0_8px_24px_rgba(0,0,0,0.35)] pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
+          <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
             {msg}
           </div>
         )}
@@ -3425,27 +3468,25 @@ function App() {
       >
         <Show when={ctxMenuOpen()}>
           <div
-            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) shadow-[0_6px_24px_rgba(0,0,0,0.35)] absolute top-2 left-2 z-90000 flex max-h-[min(420px,55vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
+            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 flex flex-col overflow-hidden absolute"
+            classList={{
+              'top-2 left-2 min-w-48 rounded-[0.35rem]': ctxMenuKind() !== 'programs',
+            }}
             role={ctxMenuKind() === 'programs' ? 'group' : 'menu'}
-            aria-label={
-              ctxMenuKind() === 'programs'
-                ? 'Applications'
-                : ctxMenuKind() === 'power'
-                  ? 'Power'
-                  : 'Menu'
-            }
+            aria-label={ctxMenuKind() === 'programs' ? 'Application search' : ctxMenuKind() === 'power' ? 'Power' : 'Menu'}
             ref={(el) => {
               menuPanelRef = el
             }}
+            style={ctxMenuKind() === 'programs' ? programsMenuPlacement() ?? undefined : undefined}
           >
             <Show when={ctxMenuKind() === 'programs'}>
-              <div class="shrink-0 border-b border-(--shell-border) px-2 py-2">
+              <div class="shrink-0 border-b border-(--shell-border)">
                 <input
                   type="text"
                   inputMode="search"
                   autocomplete="off"
-                  class="border border-(--shell-input-border) bg-(--shell-input-bg) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none box-border w-full rounded-[0.3rem] px-2.5 py-1.5 text-[0.9rem] font-inherit text-inherit"
-                  placeholder="Search applications"
+                  class="bg-(--shell-input-bg) placeholder:text-(--shell-text-dim) focus:outline-none focus-visible:outline-none box-border w-full border-0 px-4 py-4 text-[1.15rem] font-inherit text-inherit"
+                  placeholder="Search apps, keywords, and commands"
                   aria-label="Search applications"
                   value={programsMenuQuery()}
                   ref={(el) => {
@@ -3465,17 +3506,24 @@ function App() {
                 />
               </div>
             </Show>
-            <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
+            <div
+              classList={{
+                'min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2': ctxMenuKind() === 'programs',
+                'min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1': ctxMenuKind() !== 'programs',
+              }}
+            >
               <For each={menuListItems()}>
                 {(item, idx) => (
                   <button
                     type="button"
-                    class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-3 py-[0.45rem] text-left font-inherit text-inherit"
+                    class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 text-left font-inherit text-inherit"
                     classList={{
+                      'px-4 py-3 text-[1rem]': ctxMenuKind() === 'programs',
+                      'px-3 py-[0.45rem]': ctxMenuKind() !== 'programs',
                       'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
                         (ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx()) ||
                         (ctxMenuKind() === 'power' && powerMenuHighlightIdx() === idx()),
-                      'cursor-not-allowed opacity-40': !!item.disabled,
+                      'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
                     }}
                     role={ctxMenuKind() === 'programs' ? undefined : 'menuitem'}
                     tabIndex={ctxMenuKind() === 'programs' ? -1 : undefined}
@@ -3502,7 +3550,7 @@ function App() {
                     </span>
                     <Show when={item.badge} keyed>
                       {(b) => (
-                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85">
+                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
                           {b}
                         </span>
                       )}

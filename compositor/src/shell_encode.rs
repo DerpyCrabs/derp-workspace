@@ -61,9 +61,11 @@ pub fn chrome_event_to_shell_message(
         ChromeEvent::Keybind {
             action,
             target_window_id,
+            output_name,
         } => shell_wire::DecodedCompositorToShellMessage::Keybind {
             action: action.clone(),
             target_window_id: target_window_id.unwrap_or(0),
+            output_name: output_name.clone(),
         },
         ChromeEvent::KeyboardLayout { label } => {
             shell_wire::DecodedCompositorToShellMessage::KeyboardLayout {

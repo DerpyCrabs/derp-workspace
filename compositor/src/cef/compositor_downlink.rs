@@ -479,6 +479,7 @@ pub fn apply_message(
         shell_wire::DecodedCompositorToShellMessage::Keybind {
             action,
             target_window_id,
+            output_name,
         } => {
             let Ok(guard) = browser.lock() else {
                 return;
@@ -492,6 +493,7 @@ pub fn apply_message(
                     "type": "keybind",
                     "action": action,
                     "target_window_id": target_window_id,
+                    "output_name": output_name,
                 }),
             );
         }

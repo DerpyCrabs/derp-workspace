@@ -121,8 +121,8 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-programs-toggle
           aria-expanded={props.programsMenuOpen}
           aria-haspopup="menu"
-          aria-label="Open programs"
-          title="Programs"
+          aria-label="Search apps"
+          title="Search apps"
           onClick={(e) => props.onProgramsMenuClick(e)}
         >
           <LayoutGrid class="h-4 w-4" stroke-width={2} />
@@ -145,7 +145,7 @@ export function Taskbar(props: TaskbarProps) {
                 classList={{
                   'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                     active(),
-                  'opacity-60': w.minimized && !active(),
+                  'text-(--shell-text-dim)': w.minimized && !active(),
                 }}
                 title={[windowLabel(w), w.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
               >

@@ -239,7 +239,7 @@ export function SettingsAppearancePage(props: {
         <h2 class="text-base font-semibold tracking-wide text-(--shell-text)">Appearance</h2>
         <button
           type="button"
-          class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
+          class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
           disabled={busy() || !shellHttpBase()}
           onClick={() => void load()}
         >
@@ -330,7 +330,7 @@ export function SettingsAppearancePage(props: {
         <div class="mb-3 flex flex-wrap gap-2">
           <button
             type="button"
-            class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
+            class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
             disabled={!payload() || typeof window.__derpShellWireSend !== 'function'}
             onClick={() => applyGnomeToCompositor()}
           >
@@ -378,7 +378,7 @@ export function SettingsAppearancePage(props: {
             />
             <button
               type="button"
-              class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
+              class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
               disabled={typeof window.__derpShellWireSend !== 'function'}
               onClick={() => applySolidColorToCompositor()}
             >
@@ -407,7 +407,7 @@ export function SettingsAppearancePage(props: {
           </p>
           <button
             type="button"
-            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
             disabled={wallBusy() || !shellHttpBase()}
             onClick={() => void loadWallpaperChoices()}
           >
@@ -433,14 +433,14 @@ export function SettingsAppearancePage(props: {
         <Show when={!wallBusy() && wallpapers().length === 0 && !wallErr()}>
           <p class="text-[0.78rem] text-(--shell-text-dim)">No wallpapers found on this system.</p>
         </Show>
-        <div class="border border-[color-mix(in_srgb,var(--shell-border)_80%,transparent)] bg-[color-mix(in_srgb,var(--shell-surface)_92%,transparent)] max-h-[min(28rem,55vh)] overflow-auto rounded-md p-2">
+        <div class="border border-(--shell-border) bg-(--shell-surface) max-h-[min(28rem,55vh)] overflow-auto rounded-md p-2">
           <div class="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-2">
             <For each={filteredWallpapers()}>
               {(w) => (
                 <button
                   type="button"
                   disabled={typeof window.__derpShellWireSend !== 'function'}
-                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-(--shell-border) bg-(--shell-surface-elevated) text-left transition-colors hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) disabled:cursor-default disabled:opacity-45"
+                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-(--shell-border) bg-(--shell-surface-elevated) text-left transition-colors hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) disabled:cursor-default"
                   onClick={() => applyWallpaperToCompositor(w)}
                 >
                   <div class="aspect-4/3 w-full overflow-hidden bg-(--shell-surface-inset)">

@@ -84,6 +84,7 @@ pub enum ChromeEvent {
     Keybind {
         action: String,
         target_window_id: Option<u32>,
+        output_name: Option<String>,
     },
     KeyboardLayout {
         label: String,

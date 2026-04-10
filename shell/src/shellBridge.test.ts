@@ -16,14 +16,32 @@ describe('parseDesktopApplicationsResponse', () => {
       parseDesktopApplicationsResponse(
         JSON.stringify({
           apps: [
-            { name: 'Foot', exec: 'foot', terminal: true, desktop_id: 'foot.desktop' },
+            {
+              name: 'Foot',
+              exec: 'foot',
+              executable: 'foot',
+              generic_name: 'Terminal',
+              full_name: 'GNOME Console',
+              keywords: ['tty', 'shell'],
+              terminal: true,
+              desktop_id: 'foot.desktop',
+            },
             { name: 'Files', exec: 'nautilus' },
           ],
         }),
       ),
     ).toEqual([
-      { name: 'Foot', exec: 'foot', terminal: true, desktop_id: 'foot.desktop' },
-      { name: 'Files', exec: 'nautilus', terminal: false, desktop_id: '' },
+      {
+        name: 'Foot',
+        exec: 'foot',
+        executable: 'foot',
+        generic_name: 'Terminal',
+        full_name: 'GNOME Console',
+        keywords: ['tty', 'shell'],
+        terminal: true,
+        desktop_id: 'foot.desktop',
+      },
+      { name: 'Files', exec: 'nautilus', keywords: [], terminal: false, desktop_id: '' },
     ])
   })
 

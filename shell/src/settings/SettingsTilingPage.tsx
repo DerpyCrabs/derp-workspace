@@ -23,7 +23,7 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
         <Show
           when={props.screenDraftRows.length > 0}
           fallback={
-            <p class="text-[0.78rem] opacity-[0.88]">Outputs from the compositor unlock this section.</p>
+            <p class="text-[0.78rem] text-(--shell-text-muted)">Outputs from the compositor unlock this section.</p>
           }
         >
           <p class="mb-3 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">

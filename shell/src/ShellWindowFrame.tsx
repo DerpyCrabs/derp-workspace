@@ -205,8 +205,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <span
           class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
           classList={{
-            'text-(--shell-text-muted) opacity-[0.72]': !readAcc(props.focused),
-            'text-(--shell-text) opacity-100': readAcc(props.focused),
+            'text-(--shell-text-muted)': !readAcc(props.focused),
+            'text-(--shell-text)': readAcc(props.focused),
           }}
         >
           {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}

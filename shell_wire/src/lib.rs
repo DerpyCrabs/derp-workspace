@@ -1084,6 +1084,7 @@ pub enum DecodedCompositorToShellMessage {
     Keybind {
         action: String,
         target_window_id: u32,
+        output_name: Option<String>,
     },
     KeyboardLayout {
         label: String,
@@ -1226,7 +1227,11 @@ pub fn encode_compositor_keyboard_layout(label: &str) -> Option<Vec<u8>> {
     Some(v)
 }
 
-pub fn encode_compositor_keybind(action: &str, target_window_id: u32) -> Option<Vec<u8>> {
+pub fn encode_compositor_keybind(
+    action: &str,
+    target_window_id: u32,
+    output_name: Option<&str>,
+) -> Option<Vec<u8>> {
     let b = action.as_bytes();
     if b.is_empty() || b.contains(&0) {
         return None;
@@ -1235,7 +1240,24 @@ pub fn encode_compositor_keybind(action: &str, target_window_id: u32) -> Option<
     if al > MAX_KEYBIND_ACTION_BYTES {
         return None;
     }
-    let body_len = 12u32.checked_add(al)?;
+    let output_bytes = output_name.map(str::as_bytes);
+    let output_len = match output_bytes {
+        Some(bytes) => {
+            let len = u32::try_from(bytes.len()).ok()?;
+            if len == 0 || len > MAX_OUTPUT_LAYOUT_NAME_BYTES {
+                return None;
+            }
+            len
+        }
+        None => 0,
+    };
+    let body_len = 12u32
+        .checked_add(al)?
+        .checked_add(if output_bytes.is_some() {
+            4u32.checked_add(output_len)?
+        } else {
+            0
+        })?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
@@ -1245,6 +1267,10 @@ pub fn encode_compositor_keybind(action: &str, target_window_id: u32) -> Option<
     v.extend_from_slice(&al.to_le_bytes());
     v.extend_from_slice(b);
     v.extend_from_slice(&target_window_id.to_le_bytes());
+    if let Some(bytes) = output_bytes {
+        v.extend_from_slice(&output_len.to_le_bytes());
+        v.extend_from_slice(bytes);
+    }
     Some(v)
 }
 
@@ -1697,9 +1723,29 @@ fn decode_compositor_to_shell_body(
             } else {
                 0
             };
+            let output_name = if body.len() == end + 4 {
+                None
+            } else {
+                if body.len() < end + 8 {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let ol = u32::from_le_bytes(body[end + 4..end + 8].try_into().unwrap()) as usize;
+                if ol == 0 || ol > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                if body.len() != end + 8 + ol {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                Some(
+                    std::str::from_utf8(&body[end + 8..end + 8 + ol])
+                        .map_err(|_| DecodeError::BadUtf8Command)?
+                        .to_string(),
+                )
+            };
             Ok(DecodedCompositorToShellMessage::Keybind {
                 action,
                 target_window_id,
+                output_name,
             })
         }
         MSG_COMPOSITOR_KEYBOARD_LAYOUT => {

@@ -1,6 +1,10 @@
 export type DesktopAppEntry = {
   name: string
   exec: string
+  executable?: string
+  generic_name?: string
+  full_name?: string
+  keywords?: string[]
   terminal: boolean
   desktop_id: string
 }
@@ -25,9 +29,20 @@ function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
   if (typeof row.name !== 'string' || typeof row.exec !== 'string') return null
+  const keywords =
+    row.keywords === undefined
+      ? []
+      : Array.isArray(row.keywords) && row.keywords.every((value) => typeof value === 'string')
+        ? row.keywords
+        : null
+  if (keywords === null) return null
   return {
     name: row.name,
     exec: row.exec,
+    executable: typeof row.executable === 'string' ? row.executable : undefined,
+    generic_name: typeof row.generic_name === 'string' ? row.generic_name : undefined,
+    full_name: typeof row.full_name === 'string' ? row.full_name : undefined,
+    keywords,
     terminal: row.terminal === true,
     desktop_id: typeof row.desktop_id === 'string' ? row.desktop_id : '',
   }
