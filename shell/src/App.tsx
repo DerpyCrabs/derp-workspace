@@ -3448,7 +3448,7 @@ function App() {
                 {(item, idx) => (
                   <button
                     type="button"
-                    class="shell-menu-item flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent px-3 py-[0.45rem] text-left font-inherit text-inherit"
+                    class="shell-menu-item flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-3 py-[0.45rem] text-left font-inherit text-inherit"
                     classList={{
                       'shell-menu-item-active':
                         (ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx()) ||
