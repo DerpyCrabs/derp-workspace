@@ -65,7 +65,9 @@ export function loadTilingConfig(): TilingConfig {
 
 export function saveTilingConfig(cfg: TilingConfig): void {
   if (typeof localStorage === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg))
+  const json = JSON.stringify(cfg)
+  if (localStorage.getItem(STORAGE_KEY) === json) return
+  localStorage.setItem(STORAGE_KEY, json)
 }
 
 export function getMonitorLayout(outputName: string): {

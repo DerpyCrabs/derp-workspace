@@ -27,6 +27,7 @@ type Entry = {
 const registry = new Map<number, Entry>()
 let generation = 0
 let raf = 0
+let lastWindowsJson: string | null = null
 
 function flush() {
   raf = 0
@@ -36,9 +37,12 @@ function flush() {
     if (m) windows.push(m)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
-  generation += 1
   const fn = window.__derpShellWireSend
   if (typeof fn === 'function') {
+    const windowsJson = JSON.stringify(windows)
+    if (windowsJson === lastWindowsJson) return
+    generation += 1
+    lastWindowsJson = windowsJson
     const payload = { generation, windows }
     fn('set_shell_ui_windows', JSON.stringify(payload))
   }

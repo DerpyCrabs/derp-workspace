@@ -1396,6 +1396,7 @@ function App() {
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
   let exclusionZonesRaf = 0
+  let lastExclusionZonesJson: string | null = null
 
   function syncExclusionZonesNow() {
     const main = mainRef
@@ -1448,8 +1449,10 @@ function App() {
     }
     setExclusionZonesHud(hud)
     const sentRects = mergeExclusionRects(rects)
-    if (typeof window.__derpShellWireSend === 'function') {
-      window.__derpShellWireSend('set_exclusion_zones', JSON.stringify({ rects: sentRects }))
+    const payload = JSON.stringify({ rects: sentRects })
+    if (typeof window.__derpShellWireSend === 'function' && payload !== lastExclusionZonesJson) {
+      lastExclusionZonesJson = payload
+      window.__derpShellWireSend('set_exclusion_zones', payload)
     }
   }
 

@@ -18,7 +18,7 @@ impl Default for ThemeSettingsFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SettingsFile {
     pub version: u32,
@@ -127,8 +127,12 @@ pub fn write_theme_settings(theme: ThemeSettingsFile) -> Result<(), String> {
     };
     ensure_parent_dir(&path)?;
     let mut cfg = read_settings_file_from_path(&path);
+    let theme = sanitize_theme_settings(theme);
+    if cfg.version == 1 && cfg.theme == theme {
+        return Ok(());
+    }
     cfg.version = 1;
-    cfg.theme = sanitize_theme_settings(theme);
+    cfg.theme = theme;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(

@@ -10,7 +10,7 @@ use crate::drm::{DrmHead, DrmSession};
 use crate::state::{transform_to_wire, CompositorState};
 use smithay::input::keyboard::XkbConfig;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MonitorRef {
     pub connector: String,
     #[serde(default)]
@@ -18,7 +18,7 @@ pub struct MonitorRef {
     pub monitor_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreenEntry {
     pub connector: String,
     #[serde(default)]
@@ -30,7 +30,7 @@ pub struct ScreenEntry {
     pub transform: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct KeyboardXkbFile {
     #[serde(default)]
     pub rules: String,
@@ -45,7 +45,7 @@ pub struct KeyboardXkbFile {
     pub options: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DesktopBackgroundConfig {
     pub mode: String,
@@ -65,7 +65,7 @@ impl Default for DesktopBackgroundConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DisplayConfigFile {
     pub version: u32,
     pub ui_scale: f64,
@@ -427,6 +427,10 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         desktop_background: state.desktop_background_config.clone(),
         desktop_background_outputs: state.desktop_background_by_output_name.clone(),
     };
+
+    if prev_file.as_ref().is_some_and(|prev| prev == &file) {
+        return;
+    }
 
     if let Err(e) = write_atomic(&path, &file) {
         tracing::warn!(target: "derp_display_config", ?e, path = %path.display(), "write display config");
