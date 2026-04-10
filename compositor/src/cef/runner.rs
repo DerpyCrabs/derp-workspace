@@ -101,6 +101,8 @@ wrap_app! {
                 cmd.append_switch(Some(&CefString::from("disable-frame-rate-limit")));
                 #[cfg(target_os = "linux")]
                 {
+                    cmd.append_switch(Some(&CefString::from("enable-media-stream")));
+                    cmd.append_switch(Some(&CefString::from("enable-webrtc-pipewire-capturer")));
                     cmd.append_switch_with_value(
                         Some(&CefString::from("use-angle")),
                         Some(&CefString::from("gl-egl")),

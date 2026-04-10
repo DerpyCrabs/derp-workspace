@@ -314,6 +314,8 @@ impl DrmHead {
 
             if render_res.is_ok() {
                 state.screenshot_capture_output_if_needed(output, renderer, &fb_target);
+                state.process_screencopy_output_if_needed(output, renderer, &fb_target);
+                state.process_ext_image_copy_capture_output_if_needed(output, renderer, &fb_target);
             }
 
             match render_res {
@@ -987,11 +989,11 @@ pub fn init_drm(
     let format_vec: Vec<Format> = formats.into_iter().collect();
 
     let linux_dmabuf_formats = crate::state::formats_for_linux_dmabuf_global(&renderer);
+    data.state
+        .init_linux_dmabuf_global(&renderer, linux_dmabuf_formats.iter().copied());
 
     let renderer = Arc::new(Mutex::new(renderer));
     data.state.dmabuf_import_renderer = Some(Arc::downgrade(&renderer));
-    data.state
-        .init_linux_dmabuf_global(linux_dmabuf_formats.iter().copied());
 
     let color_formats = [
         Fourcc::Xrgb8888,

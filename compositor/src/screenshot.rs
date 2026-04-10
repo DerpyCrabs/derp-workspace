@@ -109,7 +109,7 @@ pub(crate) fn capture_output_image(
         .map_texture(&mapping)
         .map_err(|e| format!("screenshot map_texture: {e}"))?
         .to_vec();
-    let mut image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(
+    let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(
         buffer_size.w as u32,
         buffer_size.h as u32,
         bytes,

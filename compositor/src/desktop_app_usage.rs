@@ -73,6 +73,7 @@ mod tests {
 
     #[test]
     fn increments_usage_in_its_own_state_file() {
+        let _guard = crate::json_state::test_state_dir_lock().lock().unwrap();
         let mut dir = std::env::temp_dir();
         dir.push(format!(
             "derp-desktop-app-usage-test-{}-{}",

@@ -359,6 +359,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "udev",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "xcursor",
 ]
 

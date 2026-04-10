@@ -54,11 +54,11 @@ DERP_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-remote-update-snapshot"
 derp_remote_list_full_paths() {
   (
     cd "$REPO_ROOT" || exit 1
-    for d in compositor shell_wire resources; do
+    for d in compositor shell_wire resources scripts; do
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done
-    for f in Cargo.toml Cargo.lock scripts/derp-session.sh scripts/install-system-run.sh scripts/remote-update-and-restart.sh; do
+    for f in Cargo.toml Cargo.lock; do
       [[ -f "$f" ]] && printf '%s\n' "$f"
     done
   ) | LC_ALL=C sort -u

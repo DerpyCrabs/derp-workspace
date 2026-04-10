@@ -55,8 +55,14 @@ pub fn write_json_file<T: Serialize>(path: &Path, value: &T, action: &str) -> Re
 }
 
 #[cfg(test)]
+pub(crate) fn test_state_dir_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{read_json_file, state_file_path, write_json_file};
+    use super::{read_json_file, state_file_path, test_state_dir_lock, write_json_file};
 
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
     struct TestValue {
@@ -65,6 +71,7 @@ mod tests {
 
     #[test]
     fn reads_and_writes_json_state_files() {
+        let _guard = test_state_dir_lock().lock().unwrap();
         let mut dir = std::env::temp_dir();
         dir.push(format!(
             "derp-json-state-test-{}-{}",

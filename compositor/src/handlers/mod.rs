@@ -1,4 +1,5 @@
 mod compositor;
+mod layer_shell;
 mod xdg_shell;
 
 use std::io::Write;
@@ -14,6 +15,7 @@ use smithay::wayland::selection::data_device::{
     ServerDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
+use smithay::delegate_layer_shell;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
 
@@ -102,3 +104,4 @@ delegate_data_device!(CompositorState);
 
 impl OutputHandler for CompositorState {}
 delegate_output!(CompositorState);
+delegate_layer_shell!(CompositorState);

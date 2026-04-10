@@ -16,6 +16,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
+    backend::egl::EGLDevice,
     backend::input::{KeyState, Keycode, TouchSlot},
     backend::renderer::{
         element::solid::SolidColorBuffer,
@@ -28,9 +29,10 @@ use smithay::{
         session::libseat::LibSeatSession,
     },
     desktop::{
+        layer_map_for_output,
         space::{Space, SpaceElement},
         utils::under_from_surface_tree,
-        PopupManager, Window, WindowSurfaceType,
+        LayerSurface as DesktopLayerSurface, PopupManager, Window, WindowSurfaceType,
     },
     input::{
         keyboard::{keysyms, KeysymHandle, Layout, ModifiersState},
@@ -53,14 +55,20 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
-        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        dmabuf::{
+            DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
+        },
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
+        foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
+        idle_inhibit::IdleInhibitManagerState,
+        keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
         selection::data_device::{set_data_device_selection, DataDeviceState},
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
+        shell::wlr_layer::{Layer, WlrLayerShellState},
         shm::ShmState,
         viewporter::ViewporterState,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
@@ -221,25 +229,65 @@ impl Default for CompositorInitOptions {
 /// include external-only combos that [`GlesRenderer::import_dmabuf`] / `eglCreateImageFromDmaBufs`
 /// reject with `EGL_BAD_MATCH` on KMS.
 pub fn formats_for_linux_dmabuf_global(renderer: &GlesRenderer) -> Vec<Format> {
+    let modifierless = Modifier::from(72057594037927935u64);
     let mut out: Vec<Format> = renderer
         .egl_context()
         .dmabuf_render_formats()
         .iter()
         .copied()
         .filter(|f| {
-            matches!(
-                f.code,
-                Fourcc::Argb8888 | Fourcc::Xrgb8888 | Fourcc::Abgr8888 | Fourcc::Xbgr8888
-            )
+            matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) && f.modifier == modifierless
         })
         .collect();
     if out.is_empty() {
-        out = renderer.dmabuf_formats().iter().copied().collect();
+        out = renderer
+            .dmabuf_formats()
+            .iter()
+            .copied()
+            .filter(|f| matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) && f.modifier == modifierless)
+            .collect();
         tracing::warn!(
-            "linux-dmabuf global: no RGB buffer formats in EGL render set; falling back to texture/import formats"
+            "linux-dmabuf global: no modifierless XRGB/ARGB formats in EGL render set; falling back to texture/import formats"
         );
     }
+    if out.is_empty() {
+        out = renderer
+            .egl_context()
+            .dmabuf_render_formats()
+            .iter()
+            .copied()
+            .filter(|f| matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888))
+            .collect();
+        if out.is_empty() {
+            out = renderer
+                .dmabuf_formats()
+                .iter()
+                .copied()
+                .filter(|f| matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888))
+                .collect();
+        }
+        tracing::warn!(
+            "linux-dmabuf global: no modifierless XRGB/ARGB formats available; falling back to explicit modifiers"
+        );
+    }
+    let advertised_formats: Vec<(u32, u64)> = out
+        .iter()
+        .map(|f| (f.code as u32, u64::from(f.modifier)))
+        .collect();
+    tracing::warn!(?advertised_formats, "linux-dmabuf advertised format/modifier pairs");
     out
+}
+
+pub(crate) fn normalize_capture_dmabuf_format(format: Format) -> Format {
+    let modifier = if format.modifier == Modifier::Invalid {
+        Modifier::Linear
+    } else {
+        format.modifier
+    };
+    Format {
+        code: format.code,
+        modifier,
+    }
 }
 
 pub struct CompositorState {
@@ -263,7 +311,19 @@ pub struct CompositorState {
     dmabuf_global: Option<DmabufGlobal>,
     /// DRM: validate client dma-bufs with the scanout GLES stack. Nested winit leaves this unset.
     pub(crate) dmabuf_import_renderer: Option<Weak<Mutex<GlesRenderer>>>,
+    pub(crate) capture_dmabuf_formats: Vec<Format>,
+    pub(crate) capture_dmabuf_device: Option<libc::dev_t>,
     pub output_manager_state: OutputManagerState,
+    pub layer_shell_state: WlrLayerShellState,
+    pub(crate) foreign_toplevel_list_state: ForeignToplevelListState,
+    pub(crate) capture_toplevel_handles: HashMap<u32, ForeignToplevelHandle>,
+    pub(crate) _idle_inhibit_manager_state: IdleInhibitManagerState,
+    pub(crate) idle_inhibit_surfaces: HashSet<(ClientId, u32)>,
+    pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
+    pub(crate) _screencopy_manager_state: crate::capture::ScreencopyManagerState,
+    pub(crate) pending_screencopy_copies: Vec<crate::capture::PendingScreencopyCopy>,
+    pub(crate) _ext_image_capture_manager_state: crate::capture_ext::ExtImageCaptureManagerState,
+    pub(crate) pending_image_copy_captures: Vec<crate::capture_ext::PendingImageCopyCapture>,
     pub seat_state: SeatState<CompositorState>,
     pub data_device_state: DataDeviceState,
     pub(crate) screenshot_request: Option<crate::screenshot::PendingScreenshotRequest>,
@@ -523,6 +583,13 @@ impl CompositorState {
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&dh);
+        let idle_inhibit_manager_state = IdleInhibitManagerState::new::<Self>(&dh);
+        let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        let screencopy_manager_state = crate::capture::ScreencopyManagerState::new::<Self>(&dh);
+        let ext_image_capture_manager_state =
+            crate::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
@@ -604,7 +671,19 @@ impl CompositorState {
             dmabuf_state,
             dmabuf_global: None,
             dmabuf_import_renderer: None,
+            capture_dmabuf_formats: Vec::new(),
+            capture_dmabuf_device: None,
             output_manager_state,
+            layer_shell_state,
+            foreign_toplevel_list_state,
+            capture_toplevel_handles: HashMap::new(),
+            _idle_inhibit_manager_state: idle_inhibit_manager_state,
+            idle_inhibit_surfaces: HashSet::new(),
+            keyboard_shortcuts_inhibit_state,
+            _screencopy_manager_state: screencopy_manager_state,
+            pending_screencopy_copies: Vec::new(),
+            _ext_image_capture_manager_state: ext_image_capture_manager_state,
+            pending_image_copy_captures: Vec::new(),
             seat_state,
             data_device_state,
             screenshot_request: None,
@@ -979,6 +1058,9 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(Option<u32>, WlSurface, Point<f64, Logical>)> {
+        if let Some((surface, point)) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
+            return Some((None, surface, point));
+        }
         for elem in self.space.elements().rev() {
             let Some(map_loc) = self.space.element_location(elem) else {
                 continue;
@@ -1001,7 +1083,8 @@ impl CompositorState {
             };
             return Some((window_id, surf, p_global));
         }
-        None
+        self.layer_surface_under(pos, &[Layer::Bottom, Layer::Background])
+            .map(|(surface, point)| (None, surface, point))
     }
 
     pub(crate) fn shell_ui_placement_topmost_for_input_at(
@@ -1843,7 +1926,11 @@ impl CompositorState {
     }
 
     /// Advertise `zwp_linux_dmabuf_v1` using formats from the live GLES stack (call after `bind_wl_display`).
-    pub fn init_linux_dmabuf_global(&mut self, formats: impl IntoIterator<Item = Format>) {
+    pub fn init_linux_dmabuf_global(
+        &mut self,
+        _renderer: &GlesRenderer,
+        formats: impl IntoIterator<Item = Format>,
+    ) {
         if self.dmabuf_global.is_some() {
             return;
         }
@@ -1852,10 +1939,34 @@ impl CompositorState {
             tracing::warn!("linux-dmabuf global skipped (no dma-buf formats from renderer)");
             return;
         }
-        let global = self
-            .dmabuf_state
-            .create_global::<Self>(&self.display_handle, formats);
+        let render_node = EGLDevice::device_for_display(_renderer.egl_context().display())
+            .ok()
+            .and_then(|device| device.try_get_render_node().ok().flatten());
+        let render_node_dev_id = render_node.as_ref().map(|node| node.dev_id());
+        let global = render_node
+            .and_then(|node| {
+                DmabufFeedbackBuilder::new(node.dev_id(), formats.iter().copied())
+                    .build()
+                    .ok()
+            })
+            .map(|feedback| {
+                self.dmabuf_state
+                    .create_global_with_default_feedback::<Self>(&self.display_handle, &feedback)
+            })
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "linux-dmabuf global falling back to v3 without default feedback"
+                );
+                self.dmabuf_state
+                    .create_global::<Self>(&self.display_handle, formats.iter().copied())
+            });
         self.dmabuf_global = Some(global);
+        self.capture_dmabuf_formats = formats
+            .iter()
+            .copied()
+            .map(normalize_capture_dmabuf_format)
+            .collect();
+        self.capture_dmabuf_device = render_node_dev_id;
         tracing::debug!("linux-dmabuf global created (native client buffers)");
     }
 
@@ -1918,6 +2029,9 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if let Some(hit) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
+            return Some(hit);
+        }
         for elem in self.space.elements().rev() {
             let Some(map_loc) = self.space.element_location(elem) else {
                 continue;
@@ -1941,6 +2055,53 @@ impl CompositorState {
                 continue;
             }
             return Some((surf, p_global));
+        }
+        self.layer_surface_under(pos, &[Layer::Bottom, Layer::Background])
+    }
+
+    fn layer_surface_under(
+        &self,
+        pos: Point<f64, Logical>,
+        layers: &[Layer],
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        for output in self.space.outputs() {
+            let Some(output_geo) = self.space.output_geometry(output) else {
+                continue;
+            };
+            let local = pos - output_geo.loc.to_f64();
+            let layer_map = layer_map_for_output(output);
+            for layer in layers {
+                let Some(surface) = layer_map.layer_under(*layer, local) else {
+                    continue;
+                };
+                let Some(geometry) = layer_map.layer_geometry(surface) else {
+                    continue;
+                };
+                let hit_local = local - geometry.loc.to_f64();
+                let Some((wl_surface, surface_loc)) =
+                    surface.surface_under(hit_local, WindowSurfaceType::ALL)
+                else {
+                    continue;
+                };
+                return Some((
+                    wl_surface,
+                    (surface_loc + geometry.loc + output_geo.loc).to_f64(),
+                ));
+            }
+        }
+        None
+    }
+
+    pub(crate) fn layer_surface_for_root(
+        &self,
+        root: &WlSurface,
+    ) -> Option<(Output, DesktopLayerSurface)> {
+        for output in self.space.outputs() {
+            let layer_map = layer_map_for_output(output);
+            let Some(layer) = layer_map.layer_for_surface(root, WindowSurfaceType::ALL) else {
+                continue;
+            };
+            return Some((output.clone(), layer.clone()));
         }
         None
     }
@@ -4672,6 +4833,7 @@ impl CompositorState {
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
         self.shell_window_stack_seed_known_windows();
+        self.capture_sync_toplevel_handles();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
             .window_registry
             .all_records()
@@ -5815,14 +5977,71 @@ impl CompositorState {
         }
         let display = self.socket_name.to_string_lossy().into_owned();
         let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR unset")?;
-        let mut cmd = std::process::Command::new("/bin/sh");
-        cmd.arg("-c")
+        let mut envs = vec![
+            ("WAYLAND_DISPLAY".to_string(), display),
+            ("XDG_RUNTIME_DIR".to_string(), runtime),
+        ];
+        for key in [
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+            "DESKTOP_SESSION",
+            "DISPLAY",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                envs.push((key.to_string(), value));
+            }
+        }
+
+        let mut unit_name = format!(
+            "derp-spawn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        unit_name.retain(|c| c.is_ascii_alphanumeric() || c == '-');
+
+        let mut launched_via_systemd = false;
+        let mut systemd_run = std::process::Command::new("systemd-run");
+        systemd_run
+            .arg("--user")
+            .arg("--collect")
+            .arg("--quiet")
+            .arg("--service-type=exec")
+            .arg(format!("--unit={unit_name}"));
+        for (key, value) in &envs {
+            systemd_run.arg(format!("--setenv={key}={value}"));
+        }
+        systemd_run
+            .arg("/bin/sh")
+            .arg("-c")
             .arg(trimmed)
-            .env("WAYLAND_DISPLAY", display)
-            .env("XDG_RUNTIME_DIR", runtime)
             .stdin(Stdio::null());
-        let child = cmd.spawn().map_err(|e| e.to_string())?;
-        tracing::debug!(pid = child.id(), "spawned Wayland client via shell IPC");
+        match systemd_run.status() {
+            Ok(status) if status.success() => {
+                launched_via_systemd = true;
+                tracing::debug!(unit = %unit_name, "spawned Wayland client via systemd-run");
+            }
+            Ok(status) => {
+                tracing::warn!(unit = %unit_name, code = status.code(), "systemd-run app spawn failed; falling back to direct spawn");
+            }
+            Err(error) => {
+                tracing::warn!(%error, unit = %unit_name, "systemd-run unavailable for app spawn; falling back to direct spawn");
+            }
+        }
+
+        if !launched_via_systemd {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.arg("-c").arg(trimmed).stdin(Stdio::null());
+            for (key, value) in &envs {
+                cmd.env(key, value);
+            }
+            let child = cmd.spawn().map_err(|e| e.to_string())?;
+            tracing::debug!(pid = child.id(), "spawned Wayland client via direct fallback");
+        }
         self.shell_spawn_focus_above_window_id =
             Some(self.window_registry.highest_allocated_window_id());
         Ok(())

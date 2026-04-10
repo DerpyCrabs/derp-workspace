@@ -22,6 +22,8 @@ if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
 fi
 
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Derp:wlroots}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-derp}"
 export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-logind}"
 
 # GDM runs `/usr/local/bin/derp-session` — a symlink to `…/scripts/derp-session.sh`. Without
@@ -35,6 +37,7 @@ ROOT="$(cd "$(dirname "$_session")/.." && pwd)"
 COMPOSITOR_BIN="${COMPOSITOR_BIN:-/usr/local/bin/compositor}"
 INDEX="${ROOT}/shell/dist/index.html"
 SOCKET="${DERP_WAYLAND_SOCKET:-wayland-d$UID}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-$SOCKET}"
 
 URL=""
 
@@ -218,6 +221,26 @@ derp_session_build_args() {
   fi
 }
 
+derp_session_import_activation_env() {
+  local vars=(
+    XDG_RUNTIME_DIR
+    XDG_SESSION_TYPE
+    XDG_CURRENT_DESKTOP
+    XDG_SESSION_DESKTOP
+    WAYLAND_DISPLAY
+    DBUS_SESSION_BUS_ADDRESS
+  )
+  if [[ -n "${DISPLAY:-}" ]]; then
+    vars+=(DISPLAY)
+  fi
+  if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd "${vars[@]}" >/dev/null 2>&1 || true
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment "${vars[@]}" >/dev/null 2>&1 || true
+  fi
+}
+
 STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
 DERP_COMPOSITOR_LOG="${DERP_COMPOSITOR_LOG:-$STATE_BASE/derp/compositor.log}"
 mkdir -p "$(dirname "$DERP_COMPOSITOR_LOG")"
@@ -234,6 +257,7 @@ derp_session_log_fresh_start() {
 }
 
 derp_session_build_args
+derp_session_import_activation_env
 derp_session_log_fresh_start
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1

@@ -8,6 +8,8 @@ pub mod window_registry;
 
 mod backdrop_render;
 mod calloop_xwm;
+mod capture;
+mod capture_ext;
 mod cursor_fallback;
 pub mod derp_space;
 mod derp_space_render;

@@ -71,9 +71,16 @@ BIN_DIR="$INSTALL_PREFIX/bin"
 SESSION_DIR="$INSTALL_PREFIX/share/wayland-sessions"
 DESKTOP_SRC="$REPO_ROOT/resources/derp-wayland.desktop"
 DESKTOP_DST="$SESSION_DIR/derp-wayland.desktop"
+PORTAL_CONFIG_SRC="$REPO_ROOT/resources/derp-portals.conf"
+PORTAL_CONFIG_DIR="$INSTALL_PREFIX/share/xdg-desktop-portal"
+PORTAL_CONFIG_DST="$PORTAL_CONFIG_DIR/derp-portals.conf"
 
 if [[ ! -f "$DESKTOP_SRC" ]]; then
   echo "Missing $DESKTOP_SRC" >&2
+  exit 1
+fi
+if [[ ! -f "$PORTAL_CONFIG_SRC" ]]; then
+  echo "Missing $PORTAL_CONFIG_SRC" >&2
   exit 1
 fi
 
@@ -84,9 +91,10 @@ if ! grep -q '^Exec=/usr/local/bin/derp-session$' "$DESKTOP_SRC" 2>/dev/null && 
 fi
 
 echo "=== install to $INSTALL_PREFIX (sudo) ==="
-sudo install -d "$BIN_DIR" "$SESSION_DIR"
+sudo install -d "$BIN_DIR" "$SESSION_DIR" "$PORTAL_CONFIG_DIR"
 sudo install -Dm755 "$REPO_ROOT/target/release/compositor" "$BIN_DIR/compositor"
 sudo install -Dm644 "$DESKTOP_SRC" "$DESKTOP_DST"
+sudo install -Dm644 "$PORTAL_CONFIG_SRC" "$PORTAL_CONFIG_DST"
 chmod +x "$REPO_ROOT/scripts/derp-session.sh" 2>/dev/null || true
 sudo ln -sf "$REPO_ROOT/scripts/derp-session.sh" "$BIN_DIR/derp-session"
 
@@ -98,6 +106,7 @@ if [[ -f "$SHELL_INDEX" ]]; then
 else
   echo "CEF shell: not built — add shell/ and re-run this script, or run nested without Solid."
 fi
+echo "Portal config: $PORTAL_CONFIG_DST"
 echo "Session log (default): ~/.local/state/derp/compositor.log — truncated each compositor start (and SIGUSR2 respawn) unless DERP_COMPOSITOR_LOG_APPEND=1."
 echo "dma-buf / Chromium verbose logs: off by default; set DERP_SESSION_DMABUF_LOGS=1 in scripts/derp-session.local.env when debugging import/EGL."
 echo "Compositor logs xdg/shell window diagnostics at WARN (derp_toplevel); default RUST_LOG=warn is enough."

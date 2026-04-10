@@ -17,6 +17,7 @@ use smithay::{
     },
     reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
+    wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat,
 };
 
 use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
@@ -562,6 +563,7 @@ impl CompositorState {
                             if mods.ctrl
                                 && mods.shift
                                 && matches!(raw_sym, keysyms::KEY_q | keysyms::KEY_Q)
+                                && !state.seat.keyboard_shortcuts_inhibited()
                             {
                                 state.stop_event_loop();
                                 return FilterResult::Intercept(());
@@ -589,12 +591,15 @@ impl CompositorState {
                         }
                         if state.shell_cef_active() && state.shell_has_frame {
                             if key_state == KeyState::Pressed {
-                                if is_super {
+                                if is_super && !state.seat.keyboard_shortcuts_inhibited() {
                                     state.programs_menu_super_armed = true;
                                     state.programs_menu_super_chord = false;
                                     return FilterResult::Intercept(());
                                 }
-                                if state.programs_menu_super_armed && !is_super {
+                                if state.programs_menu_super_armed
+                                    && !is_super
+                                    && !state.seat.keyboard_shortcuts_inhibited()
+                                {
                                     if let Some(action) =
                                         super_keybind_action(raw_sym, mods.ctrl, mods.shift)
                                     {
@@ -605,7 +610,10 @@ impl CompositorState {
                                     state.programs_menu_super_chord = true;
                                     return FilterResult::Intercept(());
                                 }
-                            } else if key_state == KeyState::Released && is_super {
+                            } else if key_state == KeyState::Released
+                                && is_super
+                                && !state.seat.keyboard_shortcuts_inhibited()
+                            {
                                 let armed = state.programs_menu_super_armed;
                                 let chord = state.programs_menu_super_chord;
                                 state.programs_menu_super_armed = false;

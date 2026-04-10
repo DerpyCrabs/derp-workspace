@@ -17,7 +17,7 @@ use smithay::{
     xwayland::XWaylandClientData,
 };
 
-use super::xdg_shell;
+use super::{layer_shell, xdg_shell};
 
 impl CompositorHandler for CompositorState {
     fn compositor_state(&mut self) -> &mut WlCompositorState {
@@ -53,6 +53,7 @@ impl CompositorHandler for CompositorState {
                 window.on_commit();
             }
             self.xdg_sync_pending_deferred_toplevel(&root);
+            layer_shell::handle_commit(self, &root);
         }
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);

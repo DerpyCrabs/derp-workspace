@@ -36,6 +36,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 udev = "0.9"
 signal-hook = "0.3"
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+wayland-protocols = { version = "0.32.11", features = ["server", "staging"] }
 xcursor = "0.3.10"
 notify = "8.2.0"
 
