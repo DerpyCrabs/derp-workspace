@@ -84,8 +84,8 @@ function gnomePictureOptionsToFit(opts: string): string {
 function row(label: string, value: string) {
   return (
     <div class="grid grid-cols-[7.2rem_1fr] gap-x-2 gap-y-1 text-[0.8rem] leading-snug">
-      <span class="text-[var(--shell-text-dim)]">{label}</span>
-      <span class="min-w-0 break-all text-[var(--shell-text-muted)]">{value}</span>
+      <span class="text-(--shell-text-dim)">{label}</span>
+      <span class="min-w-0 break-all text-(--shell-text-muted)">{value}</span>
     </div>
   )
 }
@@ -236,22 +236,22 @@ export function SettingsAppearancePage(props: {
   return (
     <div class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h2 class="text-base font-semibold tracking-wide text-[var(--shell-text)]">Appearance</h2>
+        <h2 class="text-base font-semibold tracking-wide text-(--shell-text)">Appearance</h2>
         <button
           type="button"
-          class="shell-btn-muted cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
+          class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
           disabled={busy() || !shellHttpBase()}
           onClick={() => void load()}
         >
           {busy() ? 'Reading…' : 'Refresh'}
         </button>
       </div>
-      <div class="shell-subpanel rounded-lg px-3 py-3">
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
+          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
             Theme
           </p>
-          <span class="text-[0.78rem] text-[var(--shell-text-muted)]">
+          <span class="text-[0.78rem] text-(--shell-text-muted)">
             {themeSettings().mode === 'system'
               ? `Following system (${resolvedMode()})`
               : `${themeSettings().mode} mode`}
@@ -264,8 +264,10 @@ export function SettingsAppearancePage(props: {
                 type="button"
                 class="cursor-pointer rounded-md px-3 py-1.5 text-[0.8rem] font-medium"
                 classList={{
-                  'shell-btn-accent': themeSettings().mode === mode.value,
-                  'shell-btn-muted': themeSettings().mode !== mode.value,
+                  'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
+                    themeSettings().mode === mode.value,
+                  'border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover)':
+                    themeSettings().mode !== mode.value,
                 }}
                 onClick={() => setTheme(themeSettings().palette, mode.value)}
               >
@@ -281,9 +283,9 @@ export function SettingsAppearancePage(props: {
                 type="button"
                 class="cursor-pointer rounded-lg border p-2 text-left transition-colors"
                 classList={{
-                  'border-[var(--shell-accent-border)] bg-[var(--shell-accent-soft)]':
+                  'border-(--shell-accent-border) bg-(--shell-accent-soft)':
                     themeSettings().palette === palette.value,
-                  'border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] hover:bg-[var(--shell-surface-hover)]':
+                  'border-(--shell-border) bg-(--shell-surface-elevated) hover:bg-(--shell-surface-hover)':
                     themeSettings().palette !== palette.value,
                 }}
                 onClick={() => setTheme(palette.value, themeSettings().mode)}
@@ -292,14 +294,14 @@ export function SettingsAppearancePage(props: {
                   <For each={palette.swatches}>
                     {(swatch) => (
                       <span
-                        class="h-3.5 w-3.5 rounded-full border border-[var(--shell-border)]"
+                        class="h-3.5 w-3.5 rounded-full border border-(--shell-border)"
                         style={{ background: swatch }}
                       />
                     )}
                   </For>
                 </div>
-                <div class="text-[0.84rem] font-semibold text-[var(--shell-text)]">{palette.label}</div>
-                <div class="text-[0.74rem] text-[var(--shell-text-dim)]">
+                <div class="text-[0.84rem] font-semibold text-(--shell-text)">{palette.label}</div>
+                <div class="text-[0.74rem] text-(--shell-text-dim)">
                   {palette.value === 'default'
                     ? 'Balanced shell palette'
                     : palette.value === 'caffeine'
@@ -310,25 +312,25 @@ export function SettingsAppearancePage(props: {
             )}
           </For>
         </div>
-        <p class="mt-3 text-[0.75rem] text-[var(--shell-text-dim)]">
-          Theme choice is saved in <span class="text-[var(--shell-text-muted)]">settings.json</span>.
+        <p class="mt-3 text-[0.75rem] text-(--shell-text-dim)">
+          Theme choice is saved in <span class="text-(--shell-text-muted)">settings.json</span>.
         </p>
       </div>
-      <div class="shell-subpanel rounded-lg px-3 py-3">
-        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
+        <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
           Desktop background (compositor)
         </p>
-        <p class="mb-3 text-[0.78rem] leading-relaxed text-[var(--shell-text-dim)]">
+        <p class="mb-3 text-[0.78rem] leading-relaxed text-(--shell-text-dim)">
           Wallpaper is drawn under the shell and clients. The shell desktop area is transparent so this layer
           shows through. Values below are read from GNOME (
-          <span class="text-[var(--shell-text-muted)]">org.gnome.desktop.background</span>); use Apply to
+          <span class="text-(--shell-text-muted)">org.gnome.desktop.background</span>); use Apply to
           mirror them into derp and{' '}
-          <span class="text-[var(--shell-text-muted)]">display.json</span> (persisted on the next DRM save).
+          <span class="text-(--shell-text-muted)">display.json</span> (persisted on the next DRM save).
         </p>
         <div class="mb-3 flex flex-wrap gap-2">
           <button
             type="button"
-            class="shell-btn-accent cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
+            class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
             disabled={!payload() || typeof window.__derpShellWireSend !== 'function'}
             onClick={() => applyGnomeToCompositor()}
           >
@@ -336,22 +338,20 @@ export function SettingsAppearancePage(props: {
           </button>
         </div>
         <Show when={applyErr()}>
-          <p class="shell-warning-text mb-2 text-[0.8rem]">{applyErr()}</p>
+          <p class="text-(--shell-warning-text) mb-2 text-[0.8rem]">{applyErr()}</p>
         </Show>
         <Show when={err()}>
-          <p class="shell-warning-text text-[0.8rem]">{err()}</p>
+          <p class="text-(--shell-warning-text) text-[0.8rem]">{err()}</p>
         </Show>
-        <Show when={payload()}>
+        <Show when={payload()} keyed>
           {(p) => (
             <div class="space-y-2">
-              {row('Picture', fileUriToDisplay(p().picture_uri || '(empty)'))}
-              <Show when={p().picture_uri_dark}>
-                {(u) => row('Picture (dark)', fileUriToDisplay(u()))}
-              </Show>
-              {row('Fit (GNOME)', p().picture_options)}
-              {row('Primary color', p().primary_color)}
-              {row('Secondary color', p().secondary_color)}
-              {row('Shading', p().color_shading_type)}
+              {row('Picture', fileUriToDisplay(p.picture_uri || '(empty)'))}
+              {p.picture_uri_dark ? row('Picture (dark)', fileUriToDisplay(p.picture_uri_dark)) : null}
+              {row('Fit (GNOME)', p.picture_options)}
+              {row('Primary color', p.primary_color)}
+              {row('Secondary color', p.secondary_color)}
+              {row('Shading', p.color_shading_type)}
             </div>
           )}
         </Show>
@@ -372,13 +372,13 @@ export function SettingsAppearancePage(props: {
               inputMode="text"
               spellcheck={false}
               placeholder="#1a1a1a"
-              class="shell-input w-full max-w-44 rounded-md px-2.5 py-1.5 text-[0.82rem]"
+              class="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none w-full max-w-44 rounded-md px-2.5 py-1.5 text-[0.82rem]"
               value={solidColorHex()}
               onInput={(e) => setSolidColorHex(e.currentTarget.value)}
             />
             <button
               type="button"
-              class="shell-btn-accent cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
+              class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
               disabled={typeof window.__derpShellWireSend !== 'function'}
               onClick={() => applySolidColorToCompositor()}
             >
@@ -400,50 +400,50 @@ export function SettingsAppearancePage(props: {
           </div>
         </div>
       </div>
-      <div class="shell-subpanel rounded-lg px-3 py-3">
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--shell-text-dim)]">
+          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
             GNOME wallpapers
           </p>
           <button
             type="button"
-            class="shell-btn-muted cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-50"
             disabled={wallBusy() || !shellHttpBase()}
             onClick={() => void loadWallpaperChoices()}
           >
             {wallBusy() ? 'Scanning…' : 'Rescan'}
           </button>
         </div>
-        <p class="mb-2 text-[0.78rem] leading-relaxed text-[var(--shell-text-dim)]">
+        <p class="mb-2 text-[0.78rem] leading-relaxed text-(--shell-text-dim)">
           Images from{' '}
-          <span class="text-[var(--shell-text-muted)]">/usr/share/gnome-background-properties</span> and{' '}
-          <span class="text-[var(--shell-text-muted)]">/usr/share/backgrounds</span>. Click a tile to set the
+          <span class="text-(--shell-text-muted)">/usr/share/gnome-background-properties</span> and{' '}
+          <span class="text-(--shell-text-muted)">/usr/share/backgrounds</span>. Click a tile to set the
           compositor backdrop (fit follows GNOME settings above when loaded).
         </p>
         <input
           type="search"
           placeholder="Filter by name or path…"
-          class="shell-input mb-3 w-full max-w-md rounded-md px-2.5 py-1.5 text-[0.82rem]"
+          class="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none mb-3 w-full max-w-md rounded-md px-2.5 py-1.5 text-[0.82rem]"
           value={wallQuery()}
           onInput={(e) => setWallQuery(e.currentTarget.value)}
         />
         <Show when={wallErr()}>
-          <p class="shell-warning-text mb-2 text-[0.8rem]">{wallErr()}</p>
+          <p class="text-(--shell-warning-text) mb-2 text-[0.8rem]">{wallErr()}</p>
         </Show>
         <Show when={!wallBusy() && wallpapers().length === 0 && !wallErr()}>
-          <p class="text-[0.78rem] text-[var(--shell-text-dim)]">No wallpapers found on this system.</p>
+          <p class="text-[0.78rem] text-(--shell-text-dim)">No wallpapers found on this system.</p>
         </Show>
-        <div class="shell-scroll-panel max-h-[min(28rem,55vh)] overflow-auto rounded-md p-2">
+        <div class="border border-[color-mix(in_srgb,var(--shell-border)_80%,transparent)] bg-[color-mix(in_srgb,var(--shell-surface)_92%,transparent)] max-h-[min(28rem,55vh)] overflow-auto rounded-md p-2">
           <div class="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-2">
             <For each={filteredWallpapers()}>
               {(w) => (
                 <button
                   type="button"
                   disabled={typeof window.__derpShellWireSend !== 'function'}
-                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-[var(--shell-border)] bg-[var(--shell-surface-elevated)] text-left transition-colors hover:border-[var(--shell-accent-border)] hover:bg-[var(--shell-surface-hover)] disabled:cursor-default disabled:opacity-45"
+                  class="group flex cursor-pointer flex-col overflow-hidden rounded-md border border-(--shell-border) bg-(--shell-surface-elevated) text-left transition-colors hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) disabled:cursor-default disabled:opacity-45"
                   onClick={() => applyWallpaperToCompositor(w)}
                 >
-                  <div class="aspect-[4/3] w-full overflow-hidden bg-[var(--shell-surface-inset)]">
+                  <div class="aspect-4/3 w-full overflow-hidden bg-(--shell-surface-inset)">
                     <img
                       src={wallpaperThumbUrl(w.file_uri)}
                       alt=""
@@ -452,7 +452,7 @@ export function SettingsAppearancePage(props: {
                       decoding="async"
                     />
                   </div>
-                  <span class="line-clamp-2 px-1 py-1 text-[0.65rem] leading-tight text-[var(--shell-text-muted)]">
+                  <span class="line-clamp-2 px-1 py-1 text-[0.65rem] leading-tight text-(--shell-text-muted)">
                     {w.label}
                   </span>
                 </button>

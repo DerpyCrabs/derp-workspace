@@ -16,7 +16,7 @@ export const LayoutTypePicker: Component<{
   })
 
   return (
-    <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-[var(--shell-text-muted)]">
+    <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-(--shell-text-muted)">
       <span>tiling layout</span>
       <Select
         options={OPTIONS}
@@ -27,6 +27,7 @@ export const LayoutTypePicker: Component<{
         }}
         itemLabel={(v) => String(v)}
         equals={(a, b) => a === b}
+        triggerClass="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) min-w-[7.5rem] max-w-[12rem] cursor-pointer rounded px-[0.45rem] py-0.5 text-left font-inherit text-[0.78rem]"
       />
     </div>
   )

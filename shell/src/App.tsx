@@ -677,24 +677,24 @@ function App() {
     const fillPct = !v.stateKnown || v.muted ? 0 : barPct
     return (
       <div
-        class="shell-panel pointer-events-none fixed z-[470000] box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl px-5 py-3.5"
+        class="border border-(--shell-border) bg-(--shell-surface-panel) text-(--shell-text) shadow-[0_8px_24px_rgba(0,0,0,0.28)] pointer-events-none fixed z-470000 box-border w-[min(360px,90vw)] min-w-[240px] rounded-xl px-5 py-3.5"
         style={pos}
         role="status"
         aria-live="polite"
       >
         <div class="flex flex-col gap-2">
-          <p class="m-0 flex h-[1.75rem] items-center justify-center text-center text-[1.05rem] font-semibold tabular-nums text-[var(--shell-text)]">
+          <p class="m-0 flex h-7 items-center justify-center text-center text-[1.05rem] font-semibold tabular-nums text-(--shell-text)">
             {!v.stateKnown ? (
-              <span class="text-[0.95rem] font-medium text-[var(--shell-text-muted)]">
+              <span class="text-[0.95rem] font-medium text-(--shell-text-muted)">
                 Volume unavailable
               </span>
             ) : (
               label
             )}
           </p>
-          <div class="h-2 w-full shrink-0 overflow-hidden rounded-full bg-[var(--shell-overlay-muted)]">
+          <div class="h-2 w-full shrink-0 overflow-hidden rounded-full bg-(--shell-overlay-muted)">
             <div
-              class="h-full rounded-full bg-[var(--shell-accent)] transition-[width] duration-100 ease-out"
+              class="h-full rounded-full bg-(--shell-accent) transition-[width] duration-100 ease-out"
               style={{ width: `${fillPct}%` }}
             />
           </div>
@@ -1157,7 +1157,7 @@ function App() {
         ref={(el) => {
           root = el
         }}
-        class="fixed inset-0 z-[460500] touch-none bg-[rgba(0,0,0,0.35)]"
+        class="fixed inset-0 z-460500 touch-none bg-[rgba(0,0,0,0.35)]"
         onContextMenu={(e) => {
           e.preventDefault()
         }}
@@ -1383,7 +1383,7 @@ function App() {
           style={{ top: `${p.y}px` }}
         />
         <div
-          class="pointer-events-none fixed z-54 rounded border border-[var(--shell-border)] bg-shell-cursor-readout px-1.5 py-0.5 text-[11px] whitespace-nowrap text-[var(--shell-accent-foreground)] tabular-nums"
+          class="pointer-events-none fixed z-54 rounded border border-(--shell-border) bg-shell-cursor-readout px-1.5 py-0.5 text-[11px] whitespace-nowrap text-(--shell-accent-foreground) tabular-nums"
           style={{
             left: `${Math.min(p.x + 14, Math.max(0, vpw - 128))}px`,
             top: `${Math.min(p.y + 14, Math.max(0, vph - 40))}px`,
@@ -3119,17 +3119,17 @@ function App() {
     return (
       <div class="px-4 py-3 text-left text-xs leading-snug [&_strong]:text-shell-hud-strong">
         <div class="mb-2 flex flex-wrap items-center gap-2">
-          <span class="text-[0.8rem] font-semibold tracking-wide text-[var(--shell-text)]">Debug</span>
+          <span class="text-[0.8rem] font-semibold tracking-wide text-(--shell-text)">Debug</span>
           <button
             type="button"
-            class="shell-btn-muted cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
             onClick={() => location.reload()}
           >
             Reload shell
           </button>
           <button
             type="button"
-            class="shell-btn-muted cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
             onClick={() => copyDebugHudSnapshot()}
           >
             Copy snapshot
@@ -3159,7 +3159,7 @@ function App() {
             </p>
           )}
         </Show>
-        <details class="shell-subpanel mb-2 rounded px-2 py-1.5" open>
+        <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) mb-2 rounded px-2 py-1.5" open>
           <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide opacity-80">
             Layout / input
           </summary>
@@ -3219,7 +3219,7 @@ function App() {
             </div>
           </div>
         </details>
-        <details class="shell-subpanel rounded px-2 py-1.5">
+        <details class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded px-2 py-1.5">
           <summary class="cursor-pointer select-none text-[0.68rem] font-medium uppercase tracking-wide opacity-80">
             Exclusion zones
           </summary>
@@ -3228,11 +3228,11 @@ function App() {
               when={exclusionZonesHud().length > 0}
               fallback={<span class="block opacity-[0.65]">—</span>}
             >
-              <ul class="max-h-[10rem] list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
+              <ul class="max-h-40 list-disc space-y-0.5 overflow-auto pl-4 text-[0.72rem]">
                 <For each={exclusionZonesHud()}>
                   {(z) => (
                     <li class="my-0.5 list-disc">
-                      <span class="mr-[0.35rem] inline-block min-w-[7rem] opacity-90">{z.label}</span>
+                      <span class="mr-[0.35rem] inline-block min-w-28 opacity-90">{z.label}</span>
                       <code class="font-mono text-[0.65rem] text-shell-hud-mono">
                         {z.x},{z.y} · {z.w}×{z.h}
                       </code>
@@ -3273,7 +3273,8 @@ function App() {
     <main
       data-shell-main
       classList={{
-        'shell-desk m-0 block min-h-screen box-border pb-0 text-[var(--shell-text)]': true,
+        'relative block box-border overflow-hidden bg-transparent font-sans text-(--shell-text) m-0 min-h-screen pb-0':
+          true,
         'cursor-crosshair': crosshairCursor(),
       }}
       style={{
@@ -3291,7 +3292,7 @@ function App() {
     >
       <Show when={shellBridgeIssue()} keyed>
         {(msg) => (
-          <div class="shell-warning-banner pointer-events-none fixed top-3 left-1/2 z-[470100] -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
+          <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) shadow-[0_8px_24px_rgba(0,0,0,0.35)] pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">
             {msg}
           </div>
         )}
@@ -3315,7 +3316,7 @@ function App() {
           const css = canvasRectToClientCss(s.workCanvas.x, s.workCanvas.y, s.workCanvas.w, s.workCanvas.h, main.getBoundingClientRect(), og.w, og.h)
           return (
             <div
-              class="shell-preview-frame pointer-events-none fixed z-[450000] box-border flex min-h-0 min-w-0 flex-col rounded-sm p-1.5 outline outline-2 -outline-offset-1"
+              class="bg-(--shell-overlay-muted) outline-(--shell-preview-outline) shadow-[0_0_24px_var(--shell-preview-shadow)] pointer-events-none fixed z-450000 box-border flex min-h-0 min-w-0 flex-col rounded-sm p-1.5 outline-2 -outline-offset-1"
               style={{
                 left: `${css.left}px`,
                 top: `${css.top}px`,
@@ -3338,7 +3339,7 @@ function App() {
           const loc = layoutScreenCssRect(s, layoutCanvasOrigin())
           return (
             <div
-              class="pointer-events-none absolute z-[1] box-border border border-dashed border-[var(--shell-border)] bg-[var(--shell-overlay-muted)]"
+              class="pointer-events-none absolute z-1 box-border border border-dashed border-(--shell-border) bg-(--shell-overlay-muted)"
               style={{
                 left: `${loc.x}px`,
                 top: `${loc.y}px`,
@@ -3347,7 +3348,7 @@ function App() {
               }}
             >
               <Show when={debugHudFrameVisible()}>
-                <span class="shell-pill absolute top-2 left-2 rounded px-2 py-1 text-[11px] font-semibold tracking-wider uppercase">
+                <span class="border border-(--shell-border) bg-(--shell-surface-elevated) text-(--shell-text-muted) absolute top-2 left-2 rounded px-2 py-1 text-[11px] font-semibold tracking-wider uppercase">
                   {s.name || 'Display'}
                 </span>
               </Show>
@@ -3364,7 +3365,7 @@ function App() {
           return (
             <Show when={!screenTaskbarHiddenForFullscreen(s)}>
               <div
-                class="pointer-events-none absolute z-[401000]"
+                class="pointer-events-none absolute z-401000"
                 style={{
                   left: `${loc.x}px`,
                   top: `${loc.y + loc.height - TASKBAR_HEIGHT}px`,
@@ -3406,7 +3407,7 @@ function App() {
       </For>
 
       <div
-        class="relative z-[90000] contain-layout contain-paint overflow-hidden"
+        class="relative z-90000 contain-layout contain-paint overflow-hidden"
         classList={{
           'pointer-events-auto': ctxMenuOpen() || atlasOverlayPointerUsers() > 0,
           'pointer-events-none': !ctxMenuOpen() && atlasOverlayPointerUsers() === 0,
@@ -3424,7 +3425,7 @@ function App() {
       >
         <Show when={ctxMenuOpen()}>
           <div
-            class="shell-menu absolute top-2 left-2 z-[90000] flex max-h-[min(420px,55vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem]"
+            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) shadow-[0_6px_24px_rgba(0,0,0,0.35)] absolute top-2 left-2 z-90000 flex max-h-[min(420px,55vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
             role={ctxMenuKind() === 'programs' ? 'group' : 'menu'}
             aria-label={
               ctxMenuKind() === 'programs'
@@ -3438,12 +3439,12 @@ function App() {
             }}
           >
             <Show when={ctxMenuKind() === 'programs'}>
-              <div class="shrink-0 border-b border-[var(--shell-border)] px-2 py-2">
+              <div class="shrink-0 border-b border-(--shell-border) px-2 py-2">
                 <input
                   type="text"
                   inputMode="search"
                   autocomplete="off"
-                  class="shell-input box-border w-full rounded-[0.3rem] px-2.5 py-1.5 text-[0.9rem] font-inherit text-inherit"
+                  class="border border-(--shell-input-border) bg-(--shell-input-bg) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none box-border w-full rounded-[0.3rem] px-2.5 py-1.5 text-[0.9rem] font-inherit text-inherit"
                   placeholder="Search applications"
                   aria-label="Search applications"
                   value={programsMenuQuery()}
@@ -3469,9 +3470,9 @@ function App() {
                 {(item, idx) => (
                   <button
                     type="button"
-                    class="shell-menu-item flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-3 py-[0.45rem] text-left font-inherit text-inherit"
+                    class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-3 py-[0.45rem] text-left font-inherit text-inherit"
                     classList={{
-                      'shell-menu-item-active':
+                      'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
                         (ctxMenuKind() === 'programs' && programsMenuHighlightIdx() === idx()) ||
                         (ctxMenuKind() === 'power' && powerMenuHighlightIdx() === idx()),
                       'cursor-not-allowed opacity-40': !!item.disabled,
@@ -3501,7 +3502,7 @@ function App() {
                     </span>
                     <Show when={item.badge} keyed>
                       {(b) => (
-                        <span class="shell-badge-accent shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85">
+                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase opacity-85">
                           {b}
                         </span>
                       )}

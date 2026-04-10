@@ -30,10 +30,10 @@ export type SelectProps<T> = {
 }
 
 const DEFAULT_TRIGGER_CLASS =
-  'shell-btn-muted min-w-[7.5rem] max-w-[12rem] cursor-pointer rounded py-0.5 px-[0.45rem] text-left font-inherit text-[0.78rem]'
+  'border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) min-w-[7.5rem] max-w-[12rem] cursor-pointer rounded px-[0.45rem] py-0.5 text-left font-inherit text-[0.78rem]'
 
 const DEFAULT_LIST_CLASS =
-  'shell-menu absolute top-2 left-2 z-[90000] flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-[12rem] flex-col overflow-hidden rounded-[0.35rem] py-0.5'
+  'border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) shadow-[0_6px_24px_rgba(0,0,0,0.35)] absolute top-2 left-2 z-90000 flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-0.5'
 
 export const Select: Component<SelectProps<unknown>> = (props) => {
   const shellFloat = useShellFloating()
@@ -204,8 +204,11 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
                   {(opt) => (
                     <button
                       type="button"
-                      class="shell-menu-item block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
-                      classList={{ 'shell-menu-item-active': eq()(opt, props.value) }}
+                      class="bg-transparent hover:bg-(--shell-overlay-hover) block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
+                      classList={{
+                        'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-(--shell-text) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
+                          eq()(opt, props.value),
+                      }}
                       role="option"
                       aria-selected={eq()(opt, props.value)}
                       onPointerDown={(e) => {

@@ -118,7 +118,9 @@ fn applications_cache() -> &'static DesktopAppsCache {
     DESKTOP_APPS_CACHE.get_or_init(DesktopAppsCache::new)
 }
 
-fn lock_cache_state(state: &Mutex<DesktopAppsCacheState>) -> std::sync::MutexGuard<'_, DesktopAppsCacheState> {
+fn lock_cache_state(
+    state: &Mutex<DesktopAppsCacheState>,
+) -> std::sync::MutexGuard<'_, DesktopAppsCacheState> {
     state.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
@@ -167,8 +169,8 @@ impl DesktopAppsCache {
             }
         }
         let apps = scan_applications()?;
-        let json =
-            serde_json::to_string(&serde_json::json!({ "apps": apps })).map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&serde_json::json!({ "apps": apps }))
+            .map_err(|e| e.to_string())?;
         state.json = Some(json.clone());
         state.dirty = false;
         Ok(json)

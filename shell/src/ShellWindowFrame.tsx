@@ -139,7 +139,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       }}
     >
       <div
-        class="pointer-events-none absolute z-[4] box-border border-0"
+        class="pointer-events-none absolute z-4 box-border border-0"
         style={{
           left: `${layout().inset}px`,
           top: `${layout().inset + layout().th}px`,
@@ -150,7 +150,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <Show when={props.children}>
         <div
-          class="pointer-events-auto absolute z-[5] box-border min-h-0 min-w-0 overflow-auto bg-[var(--shell-surface-inset)] p-2 text-[var(--shell-text)]"
+          class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) p-2 text-(--shell-text)"
           style={{
             left: `${layout().inset}px`,
             top: `${layout().inset + layout().th}px`,
@@ -205,8 +205,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <span
           class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
           classList={{
-            'text-[var(--shell-text-muted)] opacity-[0.72]': !readAcc(props.focused),
-            'text-[var(--shell-text)] opacity-100': readAcc(props.focused),
+            'text-(--shell-text-muted) opacity-[0.72]': !readAcc(props.focused),
+            'text-(--shell-text) opacity-100': readAcc(props.focused),
           }}
         >
           {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}
@@ -214,7 +214,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
-            class="shell-window-control m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-base leading-none font-bold"
+            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-base leading-none font-bold"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -223,7 +223,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="shell-window-control m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
+            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMaximize()}
@@ -254,7 +254,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="shell-window-control shell-window-control-close m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-lg leading-none"
+            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-lg leading-none"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}
@@ -264,7 +264,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         </div>
       </div>
       <div
-        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
         classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
@@ -275,7 +275,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
         classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
@@ -286,7 +286,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-none z-[5] box-border border-0 bg-[var(--shell-chrome-bg)]"
+        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
         classList={{ hidden: !layout().showBorderChrome }}
         style={{
           position: 'absolute',
@@ -297,7 +297,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-auto touch-none z-[3] box-border"
+        class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
         style={{
@@ -323,7 +323,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-auto touch-none z-[3] box-border"
+        class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
         style={{
@@ -349,7 +349,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-auto touch-none z-[3] box-border"
+        class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize height"
         style={{
@@ -375,7 +375,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-auto touch-none z-[3] box-border"
+        class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"
         style={{
@@ -401,7 +401,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
-        class="pointer-events-auto touch-none z-[3] box-border"
+        class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"
         style={{

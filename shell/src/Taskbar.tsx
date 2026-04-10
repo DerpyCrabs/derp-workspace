@@ -117,7 +117,7 @@ export function Taskbar(props: TaskbarProps) {
       <Show when={props.isPrimary}>
         <button
           type="button"
-          class="shell-taskbar-action mr-1 shrink-0 cursor-pointer"
+          class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) mr-1 shrink-0 cursor-pointer"
           data-shell-programs-toggle
           aria-expanded={props.programsMenuOpen}
           aria-haspopup="menu"
@@ -141,9 +141,10 @@ export function Taskbar(props: TaskbarProps) {
             return (
               <div
                 role="listitem"
-                class="shell-taskbar-row flex h-full min-w-[132px] flex-[0_1_220px] items-center gap-1 px-2"
+                class="relative border-r border-(--shell-border) bg-(--shell-control-muted-bg) text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) flex h-full min-w-[132px] flex-[0_1_220px] items-center gap-1 px-2"
                 classList={{
-                  'shell-taskbar-row-active': active(),
+                  'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
+                    active(),
                   'opacity-60': w.minimized && !active(),
                 }}
                 title={[windowLabel(w), w.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
@@ -164,7 +165,7 @@ export function Taskbar(props: TaskbarProps) {
                 </button>
                 <button
                   type="button"
-                  class="shell-taskbar-row-close flex h-full w-8 shrink-0 cursor-pointer items-center justify-center"
+                  class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
                   aria-label={`Close ${windowLabel(w)}`}
                   title={`Close ${windowLabel(w)}`}
                   onPointerDown={(e) => e.stopPropagation()}
@@ -185,7 +186,7 @@ export function Taskbar(props: TaskbarProps) {
         <div class="ml-auto flex shrink-0 items-stretch">
           <Show when={props.keyboardLayoutLabel}>
             <span
-              class="shell-taskbar-kbd flex min-w-11 shrink-0 items-center justify-center px-2 text-center text-[0.72rem] font-normal tabular-nums uppercase tracking-[0.08em]"
+              class="flex h-full min-w-11 shrink-0 items-center justify-center border-l border-(--shell-border) bg-transparent px-2 text-center text-[0.72rem] font-normal tabular-nums uppercase tracking-[0.08em] text-(--shell-text-muted)"
               title="Keyboard layout"
             >
               {keyboardIndicator(props.keyboardLayoutLabel!)}
@@ -193,9 +194,9 @@ export function Taskbar(props: TaskbarProps) {
           </Show>
           <button
             type="button"
-            class="shell-taskbar-action cursor-pointer"
+            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
             classList={{
-              'shell-taskbar-action-active': props.settingsPanelOpen,
+              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.settingsPanelOpen,
             }}
             data-shell-settings-toggle
             aria-pressed={props.settingsPanelOpen}
@@ -206,9 +207,9 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="shell-taskbar-action cursor-pointer"
+            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
             classList={{
-              'shell-taskbar-action-active': props.debugPanelOpen,
+              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.debugPanelOpen,
             }}
             aria-pressed={props.debugPanelOpen}
             title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
@@ -218,9 +219,9 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="shell-taskbar-action cursor-pointer"
+            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
             classList={{
-              'shell-taskbar-action-active': props.powerMenuOpen,
+              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.powerMenuOpen,
             }}
             data-shell-power-toggle
             aria-expanded={props.powerMenuOpen}
@@ -230,7 +231,7 @@ export function Taskbar(props: TaskbarProps) {
           >
             <Power class="h-4 w-4" stroke-width={2} />
           </button>
-          <div class="shell-taskbar-meta flex min-w-18 shrink-0 flex-col items-end justify-center px-2 text-[10px] leading-tight text-(--shell-text-dim)">
+          <div class="flex min-w-18 shrink-0 flex-col items-end justify-center border-l border-(--shell-border) px-2 text-[10px] leading-tight text-(--shell-text-dim)">
             <span class="text-[0.76rem] font-semibold text-(--shell-text)">
               {clockTimeFormatter.format(now())}
             </span>

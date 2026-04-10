@@ -15,7 +15,7 @@ const OPTIONS = [
 const VALUES = OPTIONS.map((o) => o.v)
 
 const TRIGGER_CLASS =
-  'shell-btn-muted min-w-[6.5rem] cursor-pointer rounded py-0.5 px-[0.45rem] text-left font-inherit text-[0.78rem]'
+  'border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) min-w-[6.5rem] cursor-pointer rounded px-[0.45rem] py-0.5 text-left font-inherit text-[0.78rem]'
 
 export const TransformPicker: Component<{
   value: number
