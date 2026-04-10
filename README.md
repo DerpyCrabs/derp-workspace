@@ -19,7 +19,7 @@ A **Wayland compositor** (Rust, Smithay) that embeds the desktop **shell inside 
 - SolidJS shell: window chrome (SSD), taskbar, programs/power menus, context menus
 - Window actions via wire: move, resize, minimize, maximize, close, fullscreen
 - Basic **snap tiling**, tile preview overlay, exclusion zones for decorations
-- **Remote deploy**: rsync + install + in-place compositor reload (`SIGUSR2`) from your dev machine
+- **Remote deploy**: tar sync + install + in-place compositor reload (`SIGUSR2`) from your dev machine
 
 ## Deploy
 
@@ -46,6 +46,12 @@ bash scripts/remote-update-and-restart.sh
 ```
 
 Logs and SSH details: [scripts/remote-install.sample.md](./scripts/remote-install.sample.md).
+
+Quick verification before a remote update:
+
+```bash
+bash scripts/verify.sh
+```
 
 ## Repo layout
 

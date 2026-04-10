@@ -432,3 +432,65 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         tracing::warn!(target: "derp_display_config", ?e, path = %path.display(), "write display config");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_id_from_edid_uses_vendor_product_and_serial() {
+        let mut edid = [0u8; 16];
+        edid[8] = 0x34;
+        edid[9] = 0x12;
+        edid[10] = 0xcd;
+        edid[11] = 0xab;
+        edid[12] = 0x78;
+        edid[13] = 0x56;
+        edid[14] = 0x34;
+        edid[15] = 0x12;
+
+        assert_eq!(
+            monitor_id_from_edid(&edid),
+            Some("m3412-abcd-12345678".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_entry_matches_connector_before_monitor_id() {
+        let live = vec![
+            LiveHead {
+                name: "DP-1".into(),
+                monitor_id: Some("primary".into()),
+            },
+            LiveHead {
+                name: "HDMI-A-1".into(),
+                monitor_id: Some("backup".into()),
+            },
+        ];
+
+        assert_eq!(
+            resolve_entry("HDMI-A-1", Some(&"primary".to_string()), &live),
+            Some("HDMI-A-1".to_string())
+        );
+        assert_eq!(
+            resolve_entry("missing", Some(&"primary".to_string()), &live),
+            Some("DP-1".to_string())
+        );
+    }
+
+    #[test]
+    fn display_config_deserialization_fills_nested_defaults() {
+        let cfg: DisplayConfigFile = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "ui_scale": 1.5,
+            "screens": []
+        }))
+        .unwrap();
+
+        assert_eq!(cfg.keyboard.layout, "");
+        assert_eq!(cfg.desktop_background.mode, "solid");
+        assert_eq!(cfg.desktop_background.fit, "fill");
+        assert!(cfg.desktop_background_outputs.is_empty());
+        assert!(cfg.shell_chrome_primary.is_none());
+    }
+}

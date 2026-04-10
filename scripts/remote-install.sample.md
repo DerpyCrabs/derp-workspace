@@ -42,7 +42,7 @@ REMOTE_HOST=192.0.2.1 REMOTE_USER=alice REMOTE_REPO=/home/alice/derp-workspace \
 
 ## Push working tree + install + reload compositor (`remote-update-and-restart.sh`)
 
-Use this when you want **uncommitted local changes** on the remote **without** relying on `git push` / `git pull`. It **rsyncs** the repo (excludes `target/`, `shell/node_modules/`, `.git/`), runs **`install-system-run.sh`** on the remote (same build + `sudo install` as install), then sends **`SIGUSR2`** to your user’s `compositor` process for an **in-place** reload.
+Use this when you want **uncommitted local changes** on the remote **without** relying on `git push` / `git pull`. It **archives the repo with `tar czf - | ssh ... tar xzf -`** (excluding `target/`, `shell/node_modules/`, `.git/`), runs **`install-system-run.sh`** on the remote (same build + `sudo install` as install), then sends **`SIGUSR2`** to your user’s `compositor` process for an **in-place** reload.
 
 ```bash
 bash scripts/remote-update-and-restart.sh
@@ -66,6 +66,8 @@ bash scripts/remote-update-and-restart.sh
 
 - The **running** compositor must understand **`SIGUSR2`** (exit 42 after teardown). The first time you deploy that binary, if the **old** process is still running, **`SIGUSR2`** may terminate it without exit 42; log in once so the new binary runs, then remote updates should reload cleanly.
 
+- Run **`bash scripts/verify.sh`** before a remote update when you want a quick local check of Rust tests plus shell typecheck/tests.
+
 **Fully non-interactive SSH** (no sudo password prompt): configure **`sudoers`** on the remote so `install-system-run.sh` can run its **`sudo`** steps without a TTY. That script uses **`install`** and **`ln`** (see `scripts/install-system-run.sh`). Example (adjust user and binary paths to match the host, e.g. `command -v install` / `command -v ln`):
 
 ```
@@ -75,6 +77,6 @@ alice ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/ln
 ## See also
 
 - `scripts/install-system.sh` — what actually builds and installs on the remote.
-- `scripts/remote-update-and-restart.sh` — rsync + remote `install-system-run.sh` + compositor `SIGUSR2` reload.
-- `scripts/list-derp-logs.sh` — same `remote-install.env`; SSH to the host and tail `~/.local/state/derp/compositor.log` (DERP session log).
+- `scripts/remote-update-and-restart.sh` — tar sync + remote `install-system-run.sh` + compositor `SIGUSR2` reload.
+- `scripts/fetch-logs.sh` — same `remote-install.env`; SSH to the host and tail `~/.local/state/derp/compositor.log` (DERP session log).
 - `README.md` — GDM session and DRM notes.

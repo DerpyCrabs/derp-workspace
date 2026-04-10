@@ -80,7 +80,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shell_ipc_stall_timeout: Some(std::time::Duration::from_secs(5)),
     };
 
-    let state = CompositorState::new(&mut event_loop, display, init);
+    let state =
+        CompositorState::new(&mut event_loop, display, init).map_err(std::io::Error::other)?;
     tracing::debug!(socket = ?state.socket_name, "Compositor listening");
 
     let mut data = CalloopData {

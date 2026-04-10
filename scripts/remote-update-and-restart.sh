@@ -20,13 +20,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=/dev/null
-[[ -f "$SCRIPT_DIR/remote-install.env" ]] && source "$SCRIPT_DIR/remote-install.env"
-
-REMOTE_USER="${REMOTE_USER:-$USER}"
-REMOTE_HOST="${REMOTE_HOST:?remote-update-and-restart: set REMOTE_HOST (see scripts/remote-install.sample.md)}"
-REMOTE_REPO="${REMOTE_REPO:-/home/${REMOTE_USER}/derp-workspace}"
+source "$SCRIPT_DIR/remote-common.sh"
+remote_common_init "remote-update-and-restart"
 
 NO_RESTART=0
 DRY_RUN=0
@@ -175,24 +171,6 @@ for a in "${remote_install_parts[@]}"; do
   remote_install_args+=$(printf '%q' "$a")" "
 done
 
-SSH_TTY=()
-if [[ -t 0 ]] && [[ -t 1 ]]; then
-  SSH_TTY=(-t)
-fi
-
-ssh_base() {
-  ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "$@"
-}
-
-run_tar_sync() {
-  local remote_sh
-  remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && tar xzf -' "$REMOTE_REPO" "$REMOTE_REPO")
-  (
-    cd "$REPO_ROOT"
-    tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git .
-  ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh"
-}
-
 run_install() {
   ssh_base bash -s <<EOF
 set -euo pipefail
@@ -259,12 +237,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-for cmd in ssh tar; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "remote-update-and-restart: $cmd not found" >&2
-    exit 1
-  fi
-done
+require_remote_sync_tools
 
 echo "=== remote mkdir ==="
 ssh_base mkdir -p "$REMOTE_REPO"

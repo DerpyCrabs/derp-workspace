@@ -134,7 +134,10 @@ impl CompositorState {
         self.shell_initial_pointer_centered = true;
         self.pointer_motion_output_local(
             output_geo,
-            Point::from((output_geo.size.w as f64 / 2.0, output_geo.size.h as f64 / 2.0)),
+            Point::from((
+                output_geo.size.w as f64 / 2.0,
+                output_geo.size.h as f64 / 2.0,
+            )),
             0,
         );
     }

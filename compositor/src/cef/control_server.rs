@@ -8,22 +8,23 @@ fn cors_headers() -> &'static str {
     "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
 }
 
-pub fn start(uplink: UplinkToCompositor) -> std::sync::mpsc::Receiver<u16> {
-    let (tx, rx) = std::sync::mpsc::channel::<u16>();
+pub fn start(uplink: UplinkToCompositor) -> std::sync::mpsc::Receiver<Result<u16, String>> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<u16, String>>();
     std::thread::spawn(move || run(uplink, tx));
     rx
 }
 
-fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<u16>) {
+fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<Result<u16, String>>) {
     let listener = match TcpListener::bind("127.0.0.1:0") {
         Ok(l) => l,
         Err(e) => {
             tracing::error!("compositor cef: control server bind: {e}");
+            let _ = port_tx.send(Err(e.to_string()));
             return;
         }
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-    let _ = port_tx.send(port);
+    let _ = port_tx.send(Ok(port));
 
     for conn in listener.incoming() {
         let mut stream = match conn {

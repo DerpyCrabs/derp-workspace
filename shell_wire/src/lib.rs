@@ -260,7 +260,7 @@ pub fn encode_output_layout(
         body_sz = body_sz
             .checked_add(4)?
             .checked_add(nl as usize)?
-            .checked_add(28)?;
+            .checked_add(24)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
     body_sz = body_sz.checked_add(4)?;
@@ -1872,6 +1872,76 @@ pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeEr
     let decoded = decode_shell_to_compositor_body(&buf[4..total])?;
     buf.drain(..total);
     Ok(Some(decoded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pop_message_decodes_spawn_packets() {
+        let mut buf = encode_spawn_wayland_client("foot").unwrap();
+
+        assert_eq!(
+            pop_message(&mut buf).unwrap(),
+            Some(DecodedMessage::SpawnWaylandClient {
+                command: "foot".to_string(),
+            })
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn output_layout_round_trip_preserves_primary_output() {
+        let packet = encode_output_layout(
+            3840,
+            2160,
+            3840,
+            2160,
+            1536,
+            &[OutputLayoutScreen {
+                name: "DP-1".into(),
+                x: 0,
+                y: 0,
+                w: 3840,
+                h: 2160,
+                transform: 0,
+                refresh_milli_hz: 60000,
+            }],
+            Some("DP-1"),
+        )
+        .unwrap();
+        let mut buf = packet;
+
+        assert_eq!(
+            pop_compositor_to_shell_message(&mut buf).unwrap(),
+            Some(DecodedCompositorToShellMessage::OutputLayout {
+                canvas_logical_w: 3840,
+                canvas_logical_h: 2160,
+                canvas_physical_w: 3840,
+                canvas_physical_h: 2160,
+                context_menu_atlas_buffer_h: 1536,
+                screens: vec![OutputLayoutScreen {
+                    name: "DP-1".into(),
+                    x: 0,
+                    y: 0,
+                    w: 3840,
+                    h: 2160,
+                    transform: 0,
+                    refresh_milli_hz: 60000,
+                }],
+                shell_chrome_primary: Some("DP-1".to_string()),
+            })
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn pop_message_rejects_oversized_packets() {
+        let mut buf = (MAX_BODY_BYTES + 1).to_le_bytes().to_vec();
+
+        assert_eq!(pop_message(&mut buf), Err(DecodeError::BodyTooLarge));
+    }
 }
 
 fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {

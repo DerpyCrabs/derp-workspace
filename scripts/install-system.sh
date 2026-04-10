@@ -19,7 +19,7 @@
 #   DERP_PERF_SESSION=1) so scripts/derp-session.sh appends derp_shell_sync=trace to RUST_LOG and sets
 #   CEF_HOST_PERF=1 for cef_host. Logs: DERP_COMPOSITOR_LOG (default ~/.local/state/derp/compositor.log).
 #   Deploy to a test host: bash scripts/remote-update-and-restart.sh
-#   Fetch logs: bash scripts/list-derp-logs.sh -n 2000  (uses scripts/remote-install.env)
+#   Fetch logs: bash scripts/fetch-logs.sh -n 2000  (uses scripts/remote-install.env)
 #
 # GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
 # `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
@@ -29,7 +29,7 @@
 #
 # Session logging: each compositor start truncates DERP_COMPOSITOR_LOG (incl. reload after exit 42)
 # unless DERP_COMPOSITOR_LOG_APPEND=1; then compositor + cef_host stdout/stderr append. Default file:
-# ~/.local/state/derp/compositor.log — inspect via `scripts/list-derp-logs.sh`. `derp-session` sets
+# ~/.local/state/derp/compositor.log — inspect via `scripts/fetch-logs.sh`. `derp-session` sets
 # Optional: DERP_SESSION_DMABUF_LOGS=1 in derp-session.local.env for derp_shell_dmabuf=debug,
 # CEF_HOST_DMABUF_TRACE, CEF_HOST_CHROMIUM_VERBOSE (see scripts/derp-session.sh).
 #

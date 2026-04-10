@@ -555,14 +555,20 @@ fn run_cef(
 
     let uplink = UplinkToCompositor::new(cef_tx.clone());
     let control_rx = crate::cef::control_server::start(uplink.clone());
-    let port = control_rx.recv().unwrap_or_else(|_| {
-        tracing::error!("cef: control server thread exited before binding");
-        0
-    });
-    let inject_js = format!(
-        r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";window.__DERP_SHELL_HTTP="http://127.0.0.1:{port}";"#,
-        port = port
-    );
+    let inject_js = match control_rx.recv() {
+        Ok(Ok(port)) => Some(format!(
+            r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";window.__DERP_SHELL_HTTP="http://127.0.0.1:{port}";"#,
+            port = port
+        )),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "cef: control server failed before binding");
+            None
+        }
+        Err(_) => {
+            tracing::error!("cef: control server thread exited before binding");
+            None
+        }
+    };
 
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone());
@@ -594,7 +600,7 @@ fn run_cef(
     }
 
     let rh = OsrToCompositor::new(view_state.clone(), frame_sink);
-    let lh = ShellLoadHandler::new(Some(inject_js), cef_tx.clone());
+    let lh = ShellLoadHandler::new(inject_js, cef_tx.clone());
     let mut client = ShellClient::new(rh, lh, capture, uplink.clone(), view_state.clone());
 
     let mut window_info = WindowInfo::default();

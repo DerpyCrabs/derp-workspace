@@ -37,9 +37,8 @@ use smithay::{
     reexports::{
         calloop::{
             channel::{self, Event as CalloopChannelEvent},
-            generic::Generic,
             timer::{TimeoutAction, Timer},
-            EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
+            EventLoop, LoopHandle, LoopSignal, RegistrationToken,
         },
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -61,7 +60,6 @@ use smithay::{
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
         shm::ShmState,
-        socket::ListeningSocketSource,
         viewporter::ViewporterState,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
@@ -443,12 +441,14 @@ impl CompositorState {
         if window_id == 0 || self.window_registry.window_info(window_id).is_none() {
             return;
         }
-        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+        self.shell_window_stack_order
+            .retain(|wid| *wid != window_id);
         self.shell_window_stack_order.push(window_id);
     }
 
     pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {
-        self.shell_window_stack_order.retain(|wid| *wid != window_id);
+        self.shell_window_stack_order
+            .retain(|wid| *wid != window_id);
     }
 
     pub(crate) fn shell_note_non_shell_focus(&mut self) {
@@ -500,7 +500,7 @@ impl CompositorState {
         event_loop: &mut EventLoop<CalloopData>,
         display: Display<Self>,
         options: CompositorInitOptions,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let start_time = std::time::Instant::now();
 
         let dh = display.handle();
@@ -533,7 +533,8 @@ impl CompositorState {
 
         let space = Space::default();
 
-        let socket_name = Self::init_wayland_listener(display, event_loop, &options.socket);
+        let socket_name =
+            crate::wayland_listener::init_wayland_listener(display, event_loop, &options.socket)?;
 
         let loop_signal = event_loop.get_signal();
         let event_loop_stop = Arc::new(AtomicBool::new(false));
@@ -575,7 +576,7 @@ impl CompositorState {
                 }
                 CalloopChannelEvent::Closed => {}
             })
-            .expect("cef from-shell channel");
+            .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
         let mut s = Self {
             start_time,
@@ -700,7 +701,7 @@ impl CompositorState {
         crate::display_config::apply_keyboard_from_display_file(&mut s);
         crate::desktop_background::load_from_display_file_into(&mut s);
         s.session_default_layout_index = s.keyboard_layout_index_current();
-        s
+        Ok(s)
     }
 
     pub(crate) fn keyboard_clear_per_window_layout_map(&mut self) {
@@ -1210,7 +1211,9 @@ impl CompositorState {
             self.shell_emit_shell_ui_focus_if_changed(None);
             return;
         }
-        let id = self.shell_ui_placement_topmost_for_input_at(pos).map(|w| w.id);
+        let id = self
+            .shell_ui_placement_topmost_for_input_at(pos)
+            .map(|w| w.id);
         self.shell_emit_shell_ui_focus_if_changed(id);
     }
 
@@ -1433,8 +1436,10 @@ impl CompositorState {
         let Some(visible) = ws.intersection(out_geo) else {
             return None;
         };
-        let filtered: Vec<Rectangle<i32, Logical>> =
-            zones.iter().filter_map(|z| z.intersection(visible)).collect();
+        let filtered: Vec<Rectangle<i32, Logical>> = zones
+            .iter()
+            .filter_map(|z| z.intersection(visible))
+            .collect();
         if filtered.is_empty() {
             return None;
         }
@@ -1632,47 +1637,6 @@ impl CompositorState {
     /// DRM session handle for **Ctrl+Alt+F1–F12** VT switching ([`crate::input`]).
     pub fn set_vt_session(&mut self, session: Option<LibSeatSession>) {
         self.vt_session = session;
-    }
-
-    fn init_wayland_listener(
-        display: Display<CompositorState>,
-        event_loop: &mut EventLoop<CalloopData>,
-        socket: &SocketConfig,
-    ) -> OsString {
-        let listening_socket = match socket {
-            SocketConfig::Auto => ListeningSocketSource::new_auto().unwrap(),
-            SocketConfig::Fixed(name) => ListeningSocketSource::with_name(name).unwrap(),
-        };
-
-        let socket_name = listening_socket.socket_name().to_os_string();
-
-        let loop_handle = event_loop.handle();
-
-        loop_handle
-            .insert_source(listening_socket, move |client_stream, _, state| {
-                state
-                    .display_handle
-                    .insert_client(client_stream, Arc::new(ClientState::default()))
-                    .unwrap();
-            })
-            .expect("Failed to init the wayland event source.");
-
-        loop_handle
-            .insert_source(
-                Generic::new(display, Interest::READ, Mode::Level),
-                |_, display, state| {
-                    unsafe {
-                        display
-                            .get_mut()
-                            .dispatch_clients(&mut state.state)
-                            .unwrap();
-                    }
-                    Ok(PostAction::Continue)
-                },
-            )
-            .unwrap();
-
-        socket_name
     }
 
     pub(crate) fn fractional_scale_for_space_element(&self, elem: &DerpSpaceElem) -> f64 {
@@ -2628,7 +2592,7 @@ impl CompositorState {
         };
         let skip_shell_packet = suppress && !focus_cleared_for_shell;
 
-        // Filter compositor.log with: `derp_shell_sync` (see scripts/list-derp-logs.sh).
+        // Filter compositor.log with: `derp_shell_sync` (see scripts/fetch-logs.sh).
         match &ipc_event {
             ChromeEvent::WindowMapped { info } if !suppress => {
                 tracing::debug!(

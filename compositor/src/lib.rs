@@ -30,6 +30,7 @@ pub mod sidecar;
 pub mod state;
 mod tile_preview_render;
 mod volume;
+mod wayland_listener;
 pub mod xwayland;
 
 pub use derp_space::DerpSpaceElem;

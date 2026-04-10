@@ -39,6 +39,9 @@ export default defineConfig(({ command }) => {
       strictPort: !!process.env.VITE_DEV_STRICT_PORT,
       ...(!isBuild ? { hmr } : {}),
     },
+    test: {
+      environment: 'node',
+    },
     plugins: [
       solid(),
       tailwindcss(),

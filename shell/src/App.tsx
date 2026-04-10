@@ -74,6 +74,12 @@ import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { hideShellFloatingWire } from './shellFloatingWire'
 import fuzzysort from 'fuzzysort'
 import { getMonitorLayout } from './tilingConfig'
+import {
+  parseDesktopApplicationsResponse,
+  postShellJson,
+  spawnViaShellHttp,
+  type DesktopAppEntry,
+} from './shellBridge'
 import { shellHttpBase } from './shellHttp'
 
 declare global {
@@ -303,13 +309,6 @@ type DerpShellDetail =
       muted: boolean
       state_known: boolean
     }
-type DesktopAppEntry = {
-  name: string
-  exec: string
-  terminal: boolean
-  desktop_id: string
-}
-
 type DerpWindow = {
   window_id: number
   surface_id: number
@@ -476,19 +475,17 @@ let tilePreviewRaf = 0
 let lastTilePreviewKey = ''
 
 const TASKBAR_HEIGHT = 44
+const SHELL_WIRE_DEGRADED_WITH_HTTP =
+  'Shell wire is unavailable. Window controls stay limited until cef_host reconnects.'
+const SHELL_WIRE_DEGRADED_NO_HTTP =
+  'Shell bridge is unavailable. Window controls and session actions stay limited until cef_host reconnects.'
 
-async function postShell(path: string, body: object): Promise<void> {
-  const base = shellHttpBase()
-  if (!base) return
-  await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+function shellWireIssueMessage(): string {
+  return shellHttpBase() !== null ? SHELL_WIRE_DEGRADED_WITH_HTTP : SHELL_WIRE_DEGRADED_NO_HTTP
 }
 
-async function postSessionPower(action: string): Promise<void> {
-  await postShell('/session_power', { action })
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** Tee’d into `compositor.log` when `cef_host` stderr is captured (session). Filter: `derp-shell-move`. */
@@ -719,11 +716,14 @@ function App() {
   })
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
+  const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
+  const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
   const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
+  const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
@@ -754,6 +754,38 @@ function App() {
   }
   function releaseAtlasOverlayPointer() {
     setAtlasOverlayPointerUsers((n) => Math.max(0, n - 1))
+  }
+
+  function reportShellWireIssue(message: string) {
+    console.warn(`[derp-shell-bridge] ${message}`)
+    setShellWireIssue((current) => (current === message ? current : message))
+  }
+
+  function clearShellWireIssue() {
+    setShellWireIssue(null)
+  }
+
+  function reportShellActionIssue(message: string) {
+    console.warn(`[derp-shell-bridge] ${message}`)
+    setShellActionIssue((current) => (current === message ? current : message))
+  }
+
+  function clearShellActionIssue() {
+    setShellActionIssue(null)
+  }
+
+  async function postShell(path: string, body: object): Promise<void> {
+    await postShellJson(path, body, shellHttpBase())
+  }
+
+  async function postSessionPower(action: string): Promise<void> {
+    try {
+      await postShell('/session_power', { action })
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Power action failed: ${describeError(error)}`)
+      throw error
+    }
   }
 
   const canvasCss = createMemo(() => {
@@ -1766,18 +1798,15 @@ function App() {
   async function spawnInCompositor(cmd: string) {
     const trimmed = cmd.trim()
     if (!trimmed) return
-    if (shellWireSend('spawn', trimmed)) return
-    const url = window.__DERP_SPAWN_URL
-    if (!url) return
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: trimmed }),
-      })
-      await res.text()
-    } catch {
-      /* noop */
+      if (shellWireSend('spawn', trimmed)) {
+        clearShellActionIssue()
+        return
+      }
+      await spawnViaShellHttp(trimmed, window.__DERP_SPAWN_URL)
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Launch failed: ${describeError(error)}`)
     }
   }
 
@@ -1803,10 +1832,7 @@ function App() {
         )
         return
       }
-      const data = JSON.parse(text) as {
-        apps?: Array<{ name: string; exec: string; terminal: boolean; desktop_id: string }>
-      }
-      const list = Array.isArray(data.apps) ? data.apps : []
+      const list = parseDesktopApplicationsResponse(text)
       if (!ctxMenuOpen() || ctxMenuKind() !== 'programs') return
       setProgramsCatalog('items', list)
       if (list.length === 0) {
@@ -1925,7 +1951,13 @@ function App() {
           ? 'Tell compositor to exit (ends session)'
           : 'Needs cef_host control server or wire',
         action: () => {
-          if (!shellWireSend('quit')) void postShell('/session_quit', {})
+          if (shellWireSend('quit')) {
+            clearShellActionIssue()
+            return
+          }
+          void postShell('/session_quit', {}).then(clearShellActionIssue).catch((error) => {
+            reportShellActionIssue(`Exit session failed: ${describeError(error)}`)
+          })
         },
       },
     ]
@@ -2059,6 +2091,7 @@ function App() {
       if (shellWireSend('request_compositor_sync')) {
         if (typeof window.__derpShellWireSend === 'function') {
           nativeWireHadBeenReady = true
+          clearShellWireIssue()
           shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
         }
         return
@@ -2066,6 +2099,8 @@ function App() {
       compositorSyncAttempts += 1
       if (compositorSyncAttempts < 80) {
         setTimeout(tryRequestCompositorSync, 100)
+      } else {
+        reportShellWireIssue(shellWireIssueMessage())
       }
     }
     queueMicrotask(tryRequestCompositorSync)
@@ -2075,7 +2110,11 @@ function App() {
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
-      if (typeof window.__derpShellWireSend === 'function') return
+      if (typeof window.__derpShellWireSend === 'function') {
+        clearShellWireIssue()
+        return
+      }
+      reportShellWireIssue(shellWireIssueMessage())
       compositorSyncAttempts = 0
       tryRequestCompositorSync()
     }, 750)
@@ -3002,6 +3041,14 @@ function App() {
         e.preventDefault()
       }}
     >
+      <Show when={shellBridgeIssue()}>
+        {(msg) => (
+          <div class="pointer-events-none fixed top-3 left-1/2 z-[470100] -translate-x-1/2 rounded-lg border border-amber-300/30 bg-[rgba(50,32,8,0.92)] px-4 py-2 text-sm font-medium text-amber-100 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+            {msg()}
+          </div>
+        )}
+      </Show>
+
       <For each={windowsListIds()}>{(wid) => <ShellDeskWindowRow windowId={wid as number} />}</For>
 
       {volumeOverlayHud()}
