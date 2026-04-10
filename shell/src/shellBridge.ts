@@ -52,6 +52,14 @@ export async function postShellJson(path: string, body: object, base: string | n
   }
 }
 
+export async function beginScreenshotRegionMode(base: string | null): Promise<void> {
+  await postShellJson('/screenshot_begin_region_mode', {}, base)
+}
+
+export async function cancelScreenshot(base: string | null): Promise<void> {
+  await postShellJson('/screenshot_cancel', {}, base)
+}
+
 export async function spawnViaShellHttp(command: string, spawnUrl: string | undefined): Promise<void> {
   if (!spawnUrl) {
     throw new Error('Shell spawn bridge is unavailable.')

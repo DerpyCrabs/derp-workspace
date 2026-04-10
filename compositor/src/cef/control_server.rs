@@ -163,6 +163,14 @@ fn wallpaper_preview_allowed(canon: &Path) -> bool {
     ext_ok && canon.is_file()
 }
 
+fn json_i32_field(v: &serde_json::Value, key: &str) -> Result<i32, String> {
+    let raw = v
+        .get(key)
+        .and_then(|x| x.as_i64())
+        .ok_or_else(|| format!("missing {key}"))?;
+    i32::try_from(raw).map_err(|_| format!("{key} out of range"))
+}
+
 fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut first = String::new();
@@ -283,6 +291,22 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
             let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
             crate::settings_config::write_theme_settings(theme)?;
+        }
+        "/screenshot_region" => {
+            let x = json_i32_field(&v, "x")?;
+            let y = json_i32_field(&v, "y")?;
+            let width = json_i32_field(&v, "width")?;
+            let height = json_i32_field(&v, "height")?;
+            if width <= 0 || height <= 0 {
+                return Err("screenshot_region: width and height must be positive".into());
+            }
+            uplink.screenshot_region(x, y, width, height);
+        }
+        "/screenshot_begin_region_mode" => {
+            uplink.screenshot_begin_region_mode();
+        }
+        "/screenshot_cancel" => {
+            uplink.screenshot_cancel();
         }
         _ => {
             write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)

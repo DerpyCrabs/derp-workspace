@@ -162,6 +162,11 @@ impl DrmHead {
                 output,
                 &mut render_elements,
             );
+            crate::screenshot_overlay_render::append_screenshot_overlay_for_output(
+                state,
+                output,
+                &mut render_elements,
+            );
             crate::tile_preview_render::append_tile_preview_for_output(
                 state,
                 output,
@@ -225,7 +230,9 @@ impl DrmHead {
                             for t in backdrop.textures {
                                 render_elements.push(DesktopStack::BackdropTex(t));
                             }
-                            let age_for_render = if state.shell_exclusion_zones_need_full_damage {
+                            let age_for_render = if state.shell_exclusion_zones_need_full_damage
+                                || state.screenshot_overlay_needs_full_damage
+                            {
                                 0usize
                             } else {
                                 buffer_age as usize
@@ -239,6 +246,7 @@ impl DrmHead {
                             );
                             if out.is_ok() {
                                 state.shell_exclusion_zones_need_full_damage = false;
+                                state.screenshot_overlay_needs_full_damage = false;
                             }
                             out
                         }
@@ -283,7 +291,9 @@ impl DrmHead {
                     for t in backdrop.textures {
                         render_elements.push(DesktopStack::BackdropTex(t));
                     }
-                    let age_for_render = if state.shell_exclusion_zones_need_full_damage {
+                    let age_for_render = if state.shell_exclusion_zones_need_full_damage
+                        || state.screenshot_overlay_needs_full_damage
+                    {
                         0usize
                     } else {
                         buffer_age as usize
@@ -297,9 +307,14 @@ impl DrmHead {
                     );
                     if out.is_ok() {
                         state.shell_exclusion_zones_need_full_damage = false;
+                        state.screenshot_overlay_needs_full_damage = false;
                     }
                     out
                 };
+
+            if render_res.is_ok() {
+                state.screenshot_capture_output_if_needed(output, renderer, &fb_target);
+            }
 
             match render_res {
                 Ok(result) => {

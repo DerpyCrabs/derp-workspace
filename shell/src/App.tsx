@@ -40,10 +40,13 @@ import { SettingsPanel } from './SettingsPanel'
 import { buildBackedWindowOpenPayload } from './backedShellWindows'
 import {
   flushShellUiWindowsSyncNow,
+  registerShellUiWindow,
   SHELL_WINDOW_FLAG_SHELL_HOSTED,
   SHELL_UI_DEBUG_WINDOW_ID,
+  SHELL_UI_SCREENSHOT_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   type ShellUiMeasureEnv,
+  shellUiWindowMeasureFromEnv,
 } from './shellUiWindows'
 import {
   assistGridGutterPx,
@@ -158,6 +161,12 @@ type AssistOverlayState = {
   gutterPx: number
   hoverSpan: AssistGridSpan | null
   workCanvas: { x: number; y: number; w: number; h: number }
+}
+
+type ScreenshotSelectionState = {
+  start: { x: number; y: number }
+  current: { x: number; y: number }
+  pointerId: number | null
 }
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
@@ -699,6 +708,10 @@ function App() {
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
   const [hudFps, setHudFps] = createSignal(0)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
+  const [screenshotMode, setScreenshotMode] = createSignal(false)
+  const [screenshotSelection, setScreenshotSelection] = createSignal<ScreenshotSelectionState | null>(
+    null,
+  )
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
@@ -789,6 +802,89 @@ function App() {
     } catch (error) {
       reportShellActionIssue(`Power action failed: ${describeError(error)}`)
       throw error
+    }
+  }
+
+  const screenshotSelectionRect = createMemo(() => {
+    if (!screenshotMode()) return null
+    const sel = screenshotSelection()
+    if (!sel) return null
+    const x1 = Math.min(sel.start.x, sel.current.x)
+    const y1 = Math.min(sel.start.y, sel.current.y)
+    const x2 = Math.max(sel.start.x, sel.current.x)
+    const y2 = Math.max(sel.start.y, sel.current.y)
+    return {
+      x: x1,
+      y: y1,
+      width: x2 - x1,
+      height: y2 - y1,
+    }
+  })
+
+  function screenshotShellUiEnv(): ShellUiMeasureEnv | null {
+    const main = mainRef
+    const og = outputGeom()
+    const co = layoutCanvasOrigin()
+    if (!main || !og || !co) return null
+    return {
+      main,
+      outputGeom: { w: og.w, h: og.h },
+      origin: co,
+    }
+  }
+
+  function screenshotPointFromClient(clientX: number, clientY: number) {
+    const main = mainRef
+    const og = outputGeom()
+    if (!main || !og) return null
+    return clientPointToGlobalLogical(
+      clientX,
+      clientY,
+      main.getBoundingClientRect(),
+      og.w,
+      og.h,
+      layoutCanvasOrigin(),
+    )
+  }
+
+  function stopScreenshotMode() {
+    setScreenshotSelection(null)
+    setScreenshotMode(false)
+    setCrosshairCursor(false)
+    shellWireSend('shell_ui_grab_end')
+    shellWireSend('shell_blur_ui_window')
+  }
+
+  function waitForAnimationFrame() {
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+  }
+
+  function beginScreenshotMode() {
+    hideContextMenu()
+    closeAllAtlasSelects()
+    clearShellActionIssue()
+    setScreenshotSelection(null)
+    setScreenshotMode(true)
+    setCrosshairCursor(true)
+    queueMicrotask(() => {
+      flushShellUiWindowsSyncNow()
+      shellWireSend('shell_focus_ui_window', SHELL_UI_SCREENSHOT_WINDOW_ID)
+    })
+  }
+
+  async function submitScreenshotRegion(bounds: { x: number; y: number; width: number; height: number }) {
+    try {
+      stopScreenshotMode()
+      await waitForAnimationFrame()
+      flushShellUiWindowsSyncNow()
+      await waitForAnimationFrame()
+      await waitForAnimationFrame()
+      await postShell('/screenshot_region', bounds)
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Screenshot failed: ${describeError(error)}`)
     }
   }
 
@@ -1007,6 +1103,120 @@ function App() {
           </Show>
         </ShellWindowFrame>
       </Show>
+    )
+  }
+
+  function ScreenshotOverlay() {
+    let root: HTMLDivElement | undefined
+
+    onMount(() => {
+      const unreg = registerShellUiWindow(SHELL_UI_SCREENSHOT_WINDOW_ID, () =>
+        shellUiWindowMeasureFromEnv(
+          SHELL_UI_SCREENSHOT_WINDOW_ID,
+          460500,
+          root,
+          screenshotShellUiEnv,
+        ),
+      )
+      onCleanup(unreg)
+    })
+
+    const selectionCss = createMemo(() => {
+      const rect = screenshotSelectionRect()
+      const main = mainRef
+      const og = outputGeom()
+      if (!rect || !main || !og) return null
+      const local = rectGlobalToCanvasLocal(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        layoutCanvasOrigin(),
+      )
+      return canvasRectToClientCss(
+        local.x,
+        local.y,
+        local.w,
+        local.h,
+        main.getBoundingClientRect(),
+        og.w,
+        og.h,
+      )
+    })
+
+    return (
+      <div
+        ref={(el) => {
+          root = el
+        }}
+        class="fixed inset-0 z-[460500] touch-none bg-[rgba(0,0,0,0.35)]"
+        onContextMenu={(e) => {
+          e.preventDefault()
+        }}
+        onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
+          const point = screenshotPointFromClient(e.clientX, e.clientY)
+          if (!point) return
+          root?.setPointerCapture?.(e.pointerId)
+          shellWireSend('shell_focus_ui_window', SHELL_UI_SCREENSHOT_WINDOW_ID)
+          shellWireSend('shell_ui_grab_begin', SHELL_UI_SCREENSHOT_WINDOW_ID)
+          setScreenshotSelection({
+            start: point,
+            current: point,
+            pointerId: e.pointerId,
+          })
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+        onPointerMove={(e) => {
+          const sel = screenshotSelection()
+          if (!sel || sel.pointerId !== e.pointerId) return
+          const point = screenshotPointFromClient(e.clientX, e.clientY)
+          if (!point) return
+          setScreenshotSelection({
+            ...sel,
+            current: point,
+          })
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+        onPointerUp={(e) => {
+          const sel = screenshotSelection()
+          if (!sel || sel.pointerId !== e.pointerId) return
+          root?.releasePointerCapture?.(e.pointerId)
+          const point = screenshotPointFromClient(e.clientX, e.clientY)
+          const next = point ? { ...sel, current: point } : sel
+          setScreenshotSelection(next)
+          const rect = screenshotSelectionRect()
+          e.preventDefault()
+          e.stopPropagation()
+          if (!rect || rect.width < 2 || rect.height < 2) {
+            stopScreenshotMode()
+            return
+          }
+          void submitScreenshotRegion(rect)
+        }}
+        onPointerCancel={(e) => {
+          root?.releasePointerCapture?.(e.pointerId)
+          e.preventDefault()
+          e.stopPropagation()
+          stopScreenshotMode()
+        }}
+      >
+        <Show when={selectionCss()} keyed>
+          {(css) => (
+            <div
+              class="pointer-events-none fixed box-border border-2 border-white shadow-[0_0_0_99999px_rgba(0,0,0,0.45)]"
+              style={{
+                left: `${css.left}px`,
+                top: `${css.top}px`,
+                width: `${css.width}px`,
+                height: `${css.height}px`,
+              }}
+            />
+          )}
+        </Show>
+      </div>
     )
   }
 
@@ -2183,6 +2393,10 @@ function App() {
           toggleSettingsShellWindow()
           return
         }
+        if (action === 'screenshot_region') {
+          beginScreenshotMode()
+          return
+        }
         if (action === 'toggle_fullscreen') {
           if (fid === null) return
           const w = wmap.get(fid)
@@ -2638,6 +2852,7 @@ function App() {
           windowId: shellWindowResize.windowId,
         })
       }
+      if (screenshotMode()) stopScreenshotMode()
     }
 
     const onWindowTouchEnd = () => {
@@ -2688,6 +2903,11 @@ function App() {
     document.addEventListener('fullscreenchange', onFullscreenChange)
 
     const onCtxKeyDown = (e: KeyboardEvent) => {
+      if (screenshotMode() && e.key === 'Escape') {
+        e.preventDefault()
+        stopScreenshotMode()
+        return
+      }
       if (e.key === 'Escape') {
         if (closeAllAtlasSelects()) {
           e.preventDefault()
@@ -3059,6 +3279,10 @@ function App() {
       <For each={windowsListIds()}>{(wid) => <ShellDeskWindowRow windowId={wid as number} />}</For>
 
       {volumeOverlayHud()}
+
+      <Show when={screenshotMode()}>
+        <ScreenshotOverlay />
+      </Show>
 
       <Show when={assistOverlay} keyed>
         {(st) => {

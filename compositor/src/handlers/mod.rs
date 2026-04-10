@@ -1,6 +1,8 @@
 mod compositor;
 mod xdg_shell;
 
+use std::io::Write;
+
 use crate::{chrome_bridge::ChromeEvent, CompositorState};
 
 use smithay::input::{Seat, SeatHandler, SeatState};
@@ -64,7 +66,27 @@ delegate_seat!(CompositorState);
 impl TabletSeatHandler for CompositorState {}
 
 impl SelectionHandler for CompositorState {
-    type SelectionUserData = ();
+    type SelectionUserData = std::sync::Arc<Vec<u8>>;
+
+    fn send_selection(
+        &mut self,
+        ty: smithay::wayland::selection::SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        user_data: &Self::SelectionUserData,
+    ) {
+        if ty != smithay::wayland::selection::SelectionTarget::Clipboard {
+            return;
+        }
+        if mime_type != "image/png" {
+            return;
+        }
+        let mut file = std::fs::File::from(fd);
+        if let Err(error) = file.write_all(user_data.as_slice()) {
+            tracing::warn!(%error, "clipboard image write failed");
+        }
+    }
 }
 
 impl DataDeviceHandler for CompositorState {

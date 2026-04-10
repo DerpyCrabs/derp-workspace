@@ -18,8 +18,10 @@ use smithay::{
     backend::allocator::{Format, Fourcc, Modifier},
     backend::input::{KeyState, Keycode, TouchSlot},
     backend::renderer::{
-        element::solid::SolidColorBuffer, gles::GlesRenderer, utils::CommitCounter, Color32F,
-        ImportDma, Renderer,
+        element::solid::SolidColorBuffer,
+        gles::{GlesRenderer, GlesTarget},
+        utils::CommitCounter,
+        Color32F, ImportDma, Renderer,
     },
     backend::{
         renderer::element::{memory::MemoryRenderBuffer, Id},
@@ -54,7 +56,7 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         output::OutputManagerState,
-        selection::data_device::DataDeviceState,
+        selection::data_device::{set_data_device_selection, DataDeviceState},
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
@@ -263,6 +265,11 @@ pub struct CompositorState {
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<CompositorState>,
     pub data_device_state: DataDeviceState,
+    pub(crate) screenshot_request: Option<crate::screenshot::PendingScreenshotRequest>,
+    pub(crate) screenshot_selection_active: bool,
+    pub(crate) screenshot_selection_anchor: Option<Point<i32, Logical>>,
+    pub(crate) screenshot_selection_current: Option<Point<i32, Logical>>,
+    pub(crate) screenshot_overlay_needs_full_damage: bool,
     pub popups: PopupManager,
 
     pub xwayland_shell_state: XWaylandShellState,
@@ -598,6 +605,11 @@ impl CompositorState {
             output_manager_state,
             seat_state,
             data_device_state,
+            screenshot_request: None,
+            screenshot_selection_active: false,
+            screenshot_selection_anchor: None,
+            screenshot_selection_current: None,
+            screenshot_overlay_needs_full_damage: false,
             popups,
             xwayland_shell_state,
             x11_wm_slot: None,
@@ -1083,7 +1095,7 @@ impl CompositorState {
         if !any {
             return None;
         }
-        Some(Rectangle::from_loc_and_size(
+        Some(Rectangle::new(
             Point::new(min_x, min_y),
             Size::new((max_x - min_x + 1).max(1), (max_y - min_y + 1).max(1)),
         ))
@@ -1099,8 +1111,6 @@ impl CompositorState {
             gw: i32,
             gh: i32,
             z: u32,
-            #[serde(default)]
-            flags: u32,
         }
         #[derive(serde::Deserialize)]
         struct Root {
@@ -1506,6 +1516,213 @@ impl CompositorState {
         });
     }
 
+    pub(crate) fn screenshot_selection_active(&self) -> bool {
+        self.screenshot_selection_active
+    }
+
+    pub(crate) fn begin_screenshot_selection_mode(&mut self) {
+        self.screenshot_selection_active = true;
+        self.screenshot_selection_anchor = None;
+        self.screenshot_selection_current = self
+            .seat
+            .get_pointer()
+            .map(|pointer| pointer.current_location().to_i32_round());
+        self.screenshot_overlay_needs_full_damage = true;
+        self.programs_menu_super_armed = false;
+        self.programs_menu_super_chord = false;
+        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_emit_shell_ui_focus_if_changed(None);
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn cancel_screenshot_selection_mode(&mut self) {
+        if !self.screenshot_selection_active {
+            return;
+        }
+        self.screenshot_selection_active = false;
+        self.screenshot_selection_anchor = None;
+        self.screenshot_selection_current = None;
+        self.screenshot_overlay_needs_full_damage = true;
+        self.programs_menu_super_armed = false;
+        self.programs_menu_super_chord = false;
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn update_screenshot_selection_pointer(&mut self, pos: Point<f64, Logical>) {
+        if !self.screenshot_selection_active {
+            return;
+        }
+        self.screenshot_selection_current = Some(pos.to_i32_round());
+        self.screenshot_overlay_needs_full_damage = true;
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn screenshot_selection_rect(&self) -> Option<Rectangle<i32, Logical>> {
+        if !self.screenshot_selection_active {
+            return None;
+        }
+        let anchor = self.screenshot_selection_anchor?;
+        let current = self.screenshot_selection_current?;
+        let x0 = anchor.x.min(current.x);
+        let y0 = anchor.y.min(current.y);
+        let x1 = anchor.x.max(current.x);
+        let y1 = anchor.y.max(current.y);
+        let width = x1.saturating_sub(x0).saturating_add(1);
+        let height = y1.saturating_sub(y0).saturating_add(1);
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        Some(Rectangle::new((x0, y0).into(), (width, height).into()))
+    }
+
+    pub(crate) fn handle_screenshot_pointer_button(
+        &mut self,
+        button: u32,
+        button_state: smithay::backend::input::ButtonState,
+    ) -> bool {
+        if !self.screenshot_selection_active {
+            return false;
+        }
+        const BTN_LEFT: u32 = 0x110;
+        const BTN_RIGHT: u32 = 0x111;
+        let pos = self
+            .seat
+            .get_pointer()
+            .map(|pointer| pointer.current_location().to_i32_round())
+            .or(self.screenshot_selection_current);
+        match (button, button_state) {
+            (BTN_RIGHT, smithay::backend::input::ButtonState::Pressed) => {
+                self.cancel_screenshot_selection_mode();
+            }
+            (BTN_LEFT, smithay::backend::input::ButtonState::Pressed) => {
+                if let Some(pos) = pos {
+                    self.screenshot_selection_anchor = Some(pos);
+                    self.screenshot_selection_current = Some(pos);
+                    self.screenshot_overlay_needs_full_damage = true;
+                    self.loop_signal.wakeup();
+                }
+            }
+            (BTN_LEFT, smithay::backend::input::ButtonState::Released) => {
+                let rect = self.screenshot_selection_rect();
+                self.cancel_screenshot_selection_mode();
+                if let Some(rect) = rect {
+                    if let Err(error) = self.request_screenshot_region(rect) {
+                        tracing::warn!(%error, "screenshot region request failed");
+                    }
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub(crate) fn request_screenshot_current_output(&mut self) -> Result<(), String> {
+        let output = self
+            .new_toplevel_placement_output(None)
+            .ok_or_else(|| "no output available for screenshot".to_string())?;
+        self.screenshot_request = Some(crate::screenshot::PendingScreenshotRequest::for_output(
+            output.name(),
+        ));
+        self.loop_signal.wakeup();
+        Ok(())
+    }
+
+    pub(crate) fn request_screenshot_region(
+        &mut self,
+        logical_rect: Rectangle<i32, Logical>,
+    ) -> Result<(), String> {
+        if logical_rect.size.w <= 0 || logical_rect.size.h <= 0 {
+            return Err("screenshot region must be non-empty".into());
+        }
+        let outputs = self
+            .space
+            .outputs()
+            .filter_map(|output| {
+                let geo = self.space.output_geometry(output)?;
+                if geo.overlaps(logical_rect) {
+                    Some(output.name())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.screenshot_request = Some(crate::screenshot::PendingScreenshotRequest::for_region(
+            logical_rect,
+            outputs,
+        )?);
+        self.loop_signal.wakeup();
+        Ok(())
+    }
+
+    pub(crate) fn screenshot_capture_output_if_needed(
+        &mut self,
+        output: &Output,
+        renderer: &mut GlesRenderer,
+        framebuffer: &GlesTarget<'_>,
+    ) {
+        let Some(mut request) = self.screenshot_request.take() else {
+            return;
+        };
+        let output_name = output.name();
+        if !request.needs_output(&output_name) {
+            self.screenshot_request = Some(request);
+            return;
+        }
+        let capture = (|| -> Result<(), String> {
+            let geo = self
+                .space
+                .output_geometry(output)
+                .ok_or_else(|| format!("screenshot missing geometry for output {output_name}"))?;
+            let mode = output
+                .current_mode()
+                .ok_or_else(|| format!("screenshot missing mode for output {output_name}"))?;
+            let image = crate::screenshot::capture_output_image(
+                renderer,
+                framebuffer,
+                Size::from((mode.size.w as i32, mode.size.h as i32)),
+                output.current_transform(),
+            )?;
+            request.push_capture(crate::screenshot::CapturedOutputFrame {
+                output_name: output_name.clone(),
+                logical_rect: geo,
+                image,
+            });
+            Ok(())
+        })();
+        if let Err(error) = capture {
+            tracing::warn!(%error, output = %output_name, "screenshot capture failed");
+            return;
+        }
+        if request.is_complete() {
+            if let Err(error) = self.finish_screenshot_request(request) {
+                tracing::warn!(%error, "screenshot finalize failed");
+            }
+            return;
+        }
+        self.screenshot_request = Some(request);
+    }
+
+    fn finish_screenshot_request(
+        &mut self,
+        request: crate::screenshot::PendingScreenshotRequest,
+    ) -> Result<PathBuf, String> {
+        let image = request.finalize_image()?;
+        let png = crate::screenshot::encode_png(&image)?;
+        let path = crate::screenshot::save_png(&png)?;
+        self.publish_screenshot_clipboard(png);
+        tracing::warn!(path = %path.display(), "screenshot saved");
+        Ok(path)
+    }
+
+    fn publish_screenshot_clipboard(&mut self, png: Vec<u8>) {
+        set_data_device_selection::<Self>(
+            &self.display_handle,
+            &self.seat,
+            vec!["image/png".into()],
+            Arc::new(png),
+        );
+    }
+
     fn super_keybind_target_window_id(&self) -> Option<u32> {
         if let Some(wid) = self.keyboard_focused_window_id() {
             if let Some(info) = self.window_registry.window_info(wid) {
@@ -1560,6 +1777,14 @@ impl CompositorState {
                     "toggle_maximize",
                     self.super_keybind_target_window_id(),
                 );
+            }
+            "screenshot_region" => {
+                self.begin_screenshot_selection_mode();
+            }
+            "screenshot_current_output" => {
+                if let Err(error) = self.request_screenshot_current_output() {
+                    tracing::warn!(%error, "screenshot current output request failed");
+                }
             }
             "launch_terminal"
             | "toggle_programs_menu"

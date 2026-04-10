@@ -24,10 +24,17 @@ use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
 #[allow(non_upper_case_globals)]
-fn super_keybind_action(raw_sym: u32, shift: bool) -> Option<&'static str> {
+fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Option<&'static str> {
     use keysyms::*;
+    if ctrl {
+        return match raw_sym {
+            KEY_s | KEY_S => Some("screenshot_current_output"),
+            _ => None,
+        };
+    }
     if shift {
         return match raw_sym {
+            KEY_s | KEY_S => Some("screenshot_region"),
             KEY_Left => Some("move_monitor_left"),
             KEY_Right => Some("move_monitor_right"),
             _ => None,
@@ -88,10 +95,23 @@ impl CompositorState {
     ) {
         let pos = local + output_geo.loc.to_f64();
         self.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
-
+        let pointer = self.seat.get_pointer().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
 
-        let pointer = self.seat.get_pointer().unwrap();
+        if self.screenshot_selection_active() {
+            self.update_screenshot_selection_pointer(pos);
+            pointer.motion(
+                self,
+                None,
+                &MotionEvent {
+                    location: pos,
+                    serial,
+                    time: time_msec,
+                },
+            );
+            pointer.frame(self);
+            return;
+        }
 
         let grabbed = pointer.is_grabbed();
 
@@ -226,6 +246,21 @@ impl CompositorState {
     }
 
     fn process_pointer_button(&mut self, button: u32, button_state: ButtonState, time_msec: u32) {
+        if self.handle_screenshot_pointer_button(button, button_state) {
+            let pointer = self.seat.get_pointer().unwrap();
+            let serial = SERIAL_COUNTER.next_serial();
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: button_state,
+                    serial,
+                    time: time_msec,
+                },
+            );
+            pointer.frame(self);
+            return;
+        }
         let pointer = self.seat.get_pointer().unwrap();
         let keyboard = self.seat.get_keyboard().unwrap();
 
@@ -494,6 +529,25 @@ impl CompositorState {
                     time,
                     move |state, mods, keysym| {
                         let raw_sym = keysym.modified_sym().raw();
+                        let is_super = matches!(
+                            raw_sym,
+                            keysyms::KEY_Super_L
+                                | keysyms::KEY_Super_R
+                                | keysyms::KEY_Meta_L
+                                | keysyms::KEY_Meta_R
+                        );
+                        if state.screenshot_selection_active() {
+                            if key_state == KeyState::Released && is_super {
+                                state.programs_menu_super_armed = false;
+                                state.programs_menu_super_chord = false;
+                            }
+                            if matches!(raw_sym, keysyms::KEY_Escape)
+                                && key_state == KeyState::Pressed
+                            {
+                                state.cancel_screenshot_selection_mode();
+                            }
+                            return FilterResult::Intercept(());
+                        }
                         if key_state == KeyState::Pressed {
                             if mods.ctrl && mods.alt {
                                 if let (Some(vt), Some(ref mut sess)) =
@@ -534,13 +588,6 @@ impl CompositorState {
                             }
                         }
                         if state.shell_cef_active() && state.shell_has_frame {
-                            let is_super = matches!(
-                                raw_sym,
-                                keysyms::KEY_Super_L
-                                    | keysyms::KEY_Super_R
-                                    | keysyms::KEY_Meta_L
-                                    | keysyms::KEY_Meta_R
-                            );
                             if key_state == KeyState::Pressed {
                                 if is_super {
                                     state.programs_menu_super_armed = true;
@@ -548,13 +595,15 @@ impl CompositorState {
                                     return FilterResult::Intercept(());
                                 }
                                 if state.programs_menu_super_armed && !is_super {
-                                    if let Some(action) = super_keybind_action(raw_sym, mods.shift)
+                                    if let Some(action) =
+                                        super_keybind_action(raw_sym, mods.ctrl, mods.shift)
                                     {
                                         state.programs_menu_super_chord = true;
                                         state.handle_super_keybind(action);
                                         return FilterResult::Intercept(());
                                     }
                                     state.programs_menu_super_chord = true;
+                                    return FilterResult::Intercept(());
                                 }
                             } else if key_state == KeyState::Released && is_super {
                                 let armed = state.programs_menu_super_armed;

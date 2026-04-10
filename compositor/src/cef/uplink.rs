@@ -255,4 +255,27 @@ impl UplinkToCompositor {
             s.shell_backed_try_open_json(&json);
         });
     }
+
+    pub fn screenshot_region(&self, x: i32, y: i32, width: i32, height: i32) {
+        self.run(move |s| {
+            if let Err(error) = s.request_screenshot_region(smithay::utils::Rectangle::new(
+                (x, y).into(),
+                (width, height).into(),
+            )) {
+                tracing::warn!(%error, "shell uplink: screenshot_region");
+            }
+        });
+    }
+
+    pub fn screenshot_begin_region_mode(&self) {
+        self.run(move |s| {
+            s.begin_screenshot_selection_mode();
+        });
+    }
+
+    pub fn screenshot_cancel(&self) {
+        self.run(move |s| {
+            s.cancel_screenshot_selection_mode();
+        });
+    }
 }

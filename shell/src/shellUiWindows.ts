@@ -1,5 +1,9 @@
 import { clientRectToGlobalLogical } from './shellCoords'
-export { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from './backedShellWindows'
+export {
+  SHELL_UI_DEBUG_WINDOW_ID,
+  SHELL_UI_SCREENSHOT_WINDOW_ID,
+  SHELL_UI_SETTINGS_WINDOW_ID,
+} from './backedShellWindows'
 
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
 
@@ -26,18 +30,10 @@ let raf = 0
 
 function flush() {
   raf = 0
-  const windows: Array<{
-    id: number
-    z: number
-    gx: number
-    gy: number
-    gw: number
-    gh: number
-    flags: number
-  }> = []
+  const windows: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> = []
   for (const [, e] of registry) {
     const m = e.measure()
-    if (m) windows.push({ ...m, flags: 0 })
+    if (m) windows.push(m)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
   generation += 1
