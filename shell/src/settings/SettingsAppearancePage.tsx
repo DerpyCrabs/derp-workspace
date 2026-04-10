@@ -10,6 +10,11 @@ import {
   type ThemePalette,
   type ThemeSettings,
 } from '../themeStore'
+import {
+  SOLID_COLOR_PRESETS,
+  hexToSolidRgba,
+  normalizeHexColor,
+} from './appearanceBackground'
 
 export type GnomeDesktopBackgroundPayload = {
   schema: string
@@ -76,19 +81,6 @@ function gnomePictureOptionsToFit(opts: string): string {
   return 'fill'
 }
 
-function hexToSolidRgba(hex: string): [number, number, number, number] {
-  const s = hex.replace(/^#/, '').replace(/^['"]|['"]$/g, '').trim()
-  if (s.length === 6) {
-    const r = parseInt(s.slice(0, 2), 16)
-    const g = parseInt(s.slice(2, 4), 16)
-    const b = parseInt(s.slice(4, 6), 16)
-    if ([r, g, b].every((x) => !Number.isNaN(x))) {
-      return [r / 255, g / 255, b / 255, 1]
-    }
-  }
-  return [0.1, 0.1, 0.1, 1]
-}
-
 function row(label: string, value: string) {
   return (
     <div class="grid grid-cols-[7.2rem_1fr] gap-x-2 gap-y-1 text-[0.8rem] leading-snug">
@@ -110,6 +102,7 @@ export function SettingsAppearancePage(props: {
   const [wallErr, setWallErr] = createSignal<string | null>(null)
   const [wallpapers, setWallpapers] = createSignal<GnomeWallpaperChoice[]>([])
   const [wallQuery, setWallQuery] = createSignal('')
+  const [solidColorHex, setSolidColorHex] = createSignal('#1a1a1a')
 
   const filteredWallpapers = createMemo(() => {
     const q = wallQuery().trim().toLowerCase()
@@ -170,6 +163,8 @@ export function SettingsAppearancePage(props: {
       }
       const data = JSON.parse(text) as GnomeDesktopBackgroundPayload
       setPayload(data)
+      const nextSolid = normalizeHexColor(data.primary_color || '')
+      if (nextSolid) setSolidColorHex(nextSolid)
     } catch (e) {
       setPayload(null)
       setErr(e instanceof Error ? e.message : String(e))
@@ -210,6 +205,23 @@ export function SettingsAppearancePage(props: {
       solid_rgba: solid,
       image_path: choice.file_uri,
       fit,
+    }
+    props.setDesktopBackgroundJson(JSON.stringify(wire))
+  }
+
+  function applySolidColorToCompositor() {
+    const color = normalizeHexColor(solidColorHex())
+    if (!color) {
+      setApplyErr('Solid color must be a 6-digit hex value like #334455.')
+      return
+    }
+    setApplyErr(null)
+    setSolidColorHex(color)
+    const wire: DesktopBackgroundWire = {
+      mode: 'solid',
+      solid_rgba: hexToSolidRgba(color),
+      image_path: '',
+      fit: 'fill',
     }
     props.setDesktopBackgroundJson(JSON.stringify(wire))
   }
@@ -343,6 +355,50 @@ export function SettingsAppearancePage(props: {
             </div>
           )}
         </Show>
+        <div class="mt-4 rounded-md border border-(--shell-border) bg-(--shell-surface-elevated) p-3">
+          <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
+            Solid color
+          </p>
+          <p class="mb-3 text-[0.78rem] leading-relaxed text-(--shell-text-dim)">
+            Set the compositor backdrop to a flat color and persist it with the next display config save.
+          </p>
+          <div class="mb-3 flex flex-wrap items-center gap-3">
+            <div
+              class="h-10 w-14 rounded border border-(--shell-border)"
+              style={{ background: normalizeHexColor(solidColorHex()) ?? '#1a1a1a' }}
+            />
+            <input
+              type="text"
+              inputMode="text"
+              spellcheck={false}
+              placeholder="#1a1a1a"
+              class="shell-input w-full max-w-44 rounded-md px-2.5 py-1.5 text-[0.82rem]"
+              value={solidColorHex()}
+              onInput={(e) => setSolidColorHex(e.currentTarget.value)}
+            />
+            <button
+              type="button"
+              class="shell-btn-accent cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default disabled:opacity-45"
+              disabled={typeof window.__derpShellWireSend !== 'function'}
+              onClick={() => applySolidColorToCompositor()}
+            >
+              Apply solid color
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <For each={SOLID_COLOR_PRESETS}>
+              {(color) => (
+                <button
+                  type="button"
+                  class="h-8 w-8 cursor-pointer rounded-full border-2 border-(--shell-border) transition-transform hover:scale-105"
+                  style={{ background: color }}
+                  title={color}
+                  onClick={() => setSolidColorHex(color)}
+                />
+              )}
+            </For>
+          </div>
+        </div>
       </div>
       <div class="shell-subpanel rounded-lg px-3 py-3">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
