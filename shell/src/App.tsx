@@ -3150,6 +3150,9 @@ function App() {
                   onTaskbarActivate={(id) => {
                     shellWireSend('taskbar_activate', id)
                   }}
+                  onTaskbarClose={(id) => {
+                    shellWireSend('close', id)
+                  }}
                 />
               </div>
             </Show>

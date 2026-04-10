@@ -13,7 +13,9 @@
   --shell-surface-elevated: hsl(223 25% 18% / 0.96);
   --shell-surface-inset: hsl(224 22% 10% / 0.9);
   --shell-surface-hover: hsl(220 20% 24% / 0.96);
-  --shell-taskbar-bg: hsl(222 27% 12% / 0.96);
+  --shell-taskbar-bg: hsl(223 18% 11%);
+  --shell-taskbar-bg-solid: hsl(223 18% 11%);
+  --shell-taskbar-focus-indicator: hsl(214 18% 56%);
   --shell-accent: hsl(210 70% 78%);
   --shell-accent-hover: hsl(210 78% 72%);
   --shell-accent-foreground: hsl(220 40% 12%);
@@ -247,5 +249,81 @@ body {
   .shell-window-control-close:hover {
     background: color-mix(in srgb, var(--shell-warning-bg) 70%, var(--shell-accent) 30%);
     color: var(--shell-text);
+  }
+
+  .shell-taskbar-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--shell-text-muted);
+  }
+
+  .shell-taskbar-action:hover {
+    background: var(--shell-control-muted-hover);
+    color: var(--shell-text);
+  }
+
+  .shell-taskbar-action-active {
+    background: var(--shell-control-muted-hover);
+    color: var(--shell-text);
+  }
+
+  .shell-taskbar-row {
+    position: relative;
+    border-right: 1px solid var(--shell-border);
+    background: var(--shell-control-muted-bg);
+    color: var(--shell-text-muted);
+  }
+
+  .shell-taskbar-row::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    background: transparent;
+  }
+
+  .shell-taskbar-row:hover {
+    background: var(--shell-control-muted-hover);
+    color: var(--shell-text);
+  }
+
+  .shell-taskbar-row-active {
+    background: var(--shell-control-muted-hover);
+    color: var(--shell-text);
+  }
+
+  .shell-taskbar-row-active::after {
+    background: var(--shell-taskbar-focus-indicator);
+  }
+
+  .shell-taskbar-row-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--shell-text-dim);
+  }
+
+  .shell-taskbar-row-close:hover {
+    background: var(--shell-control-muted-hover);
+    color: var(--shell-text);
+  }
+
+  .shell-taskbar-meta {
+    border-left: 1px solid var(--shell-border);
+    color: var(--shell-text-dim);
+  }
+
+  .shell-taskbar-kbd {
+    height: 100%;
+    border-left: 1px solid var(--shell-border);
+    background: transparent;
+    color: var(--shell-text-muted);
   }
 }
