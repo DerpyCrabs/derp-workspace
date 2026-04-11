@@ -6,6 +6,7 @@ pub mod chrome_bridge;
 pub mod layout;
 pub mod window_registry;
 
+mod audio_control;
 mod backdrop_render;
 mod calloop_xwm;
 mod capture;

@@ -89,6 +89,7 @@ import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
 import type { AssistOverlayState, ExclusionHudZone, LayoutScreen } from './app/types'
 import { Portal } from 'solid-js/web'
+import { dispatchAudioStateChanged } from './audioEvents'
 
 declare global {
   interface Window {
@@ -2511,6 +2512,7 @@ function App() {
           setVolumeOverlay(null)
           volumeOverlayHideTimer = undefined
         }, 2200)
+        dispatchAudioStateChanged({ reason: 'volume_overlay' })
         return
       }
       if (d.type === 'keybind') {

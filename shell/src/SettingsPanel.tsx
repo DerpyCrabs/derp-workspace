@@ -5,17 +5,19 @@ import type { PerMonitorTileStates } from './tileState'
 import { SettingsAppearancePage } from './settings/SettingsAppearancePage'
 import { SettingsDisplaysPage } from './settings/SettingsDisplaysPage'
 import { SettingsKeyboardPage } from './settings/SettingsKeyboardPage'
+import { SettingsSoundPage } from './settings/SettingsSoundPage'
 import { SettingsTilingPage } from './settings/SettingsTilingPage'
 import type { SettingsLayoutScreen } from './settings/settingsTypes'
 
 export type { SettingsLayoutScreen }
 
-type SettingsPageId = 'displays' | 'tiling' | 'keyboard' | 'appearance'
+type SettingsPageId = 'displays' | 'tiling' | 'keyboard' | 'sound' | 'appearance'
 
 const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'displays', label: 'Displays' },
   { id: 'tiling', label: 'Tiling' },
   { id: 'keyboard', label: 'Keyboard' },
+  { id: 'sound', label: 'Sound' },
   { id: 'appearance', label: 'Appearance' },
 ]
 
@@ -105,6 +107,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </Show>
         <Show when={activePage() === 'keyboard'}>
           <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} />
+        </Show>
+        <Show when={activePage() === 'sound'}>
+          <SettingsSoundPage />
         </Show>
         <Show when={activePage() === 'appearance'}>
           <SettingsAppearancePage setDesktopBackgroundJson={props.setDesktopBackgroundJson} />

@@ -322,6 +322,20 @@ fn json_i32_field(v: &serde_json::Value, key: &str) -> Result<i32, String> {
     i32::try_from(raw).map_err(|_| format!("{key} out of range"))
 }
 
+fn json_u32_field(v: &serde_json::Value, key: &str) -> Result<u32, String> {
+    let raw = v
+        .get(key)
+        .and_then(|x| x.as_u64())
+        .ok_or_else(|| format!("missing {key}"))?;
+    u32::try_from(raw).map_err(|_| format!("{key} out of range"))
+}
+
+fn json_bool_field(v: &serde_json::Value, key: &str) -> Result<bool, String> {
+    v.get(key)
+        .and_then(|x| x.as_bool())
+        .ok_or_else(|| format!("missing {key}"))
+}
+
 fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut first = String::new();
@@ -386,6 +400,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_theme" {
         let json = crate::settings_config::read_theme_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/audio_state" {
+        let json = crate::audio_control::read_audio_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -469,6 +489,20 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
             let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
             crate::settings_config::write_theme_settings(theme)?;
+        }
+        "/audio_default" => {
+            let id = json_u32_field(&v, "id")?;
+            crate::audio_control::set_default_audio_device(id)?;
+        }
+        "/audio_volume" => {
+            let id = json_u32_field(&v, "id")?;
+            let volume_percent = json_u32_field(&v, "volume_percent")?;
+            crate::audio_control::set_audio_volume_percent(id, volume_percent)?;
+        }
+        "/audio_mute" => {
+            let id = json_u32_field(&v, "id")?;
+            let muted = json_bool_field(&v, "muted")?;
+            crate::audio_control::set_audio_mute(id, muted)?;
         }
         "/screenshot_region" => {
             let x = json_i32_field(&v, "x")?;
