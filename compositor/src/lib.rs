@@ -8,6 +8,7 @@ pub mod window_registry;
 
 mod audio_control;
 mod backdrop_render;
+mod bluetooth_control;
 mod calloop_xwm;
 mod capture;
 mod capture_ext;

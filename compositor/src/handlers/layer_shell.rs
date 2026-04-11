@@ -13,9 +13,17 @@ use smithay::{
 use crate::CompositorState;
 
 impl CompositorState {
-    fn layer_surface_target_output(&self, output: Option<&WlOutput>) -> Option<smithay::output::Output> {
+    fn layer_surface_target_output(
+        &self,
+        output: Option<&WlOutput>,
+    ) -> Option<smithay::output::Output> {
         output
-            .and_then(|wl_output| self.space.outputs().find(|output| output.owns(wl_output)).cloned())
+            .and_then(|wl_output| {
+                self.space
+                    .outputs()
+                    .find(|output| output.owns(wl_output))
+                    .cloned()
+            })
             .or_else(|| self.shell_effective_primary_output())
             .or_else(|| self.space.outputs().next().cloned())
     }

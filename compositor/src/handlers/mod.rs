@@ -6,6 +6,7 @@ use std::io::Write;
 
 use crate::{chrome_bridge::ChromeEvent, CompositorState};
 
+use smithay::delegate_layer_shell;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
@@ -15,7 +16,6 @@ use smithay::wayland::selection::data_device::{
     ServerDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
-use smithay::delegate_layer_shell;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
 

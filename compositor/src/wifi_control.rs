@@ -111,7 +111,11 @@ fn ensure_nmcli() -> Result<(), String> {
 
 fn read_wifi_radio_enabled() -> Result<bool, String> {
     let raw = run_nmcli_capture(&["-t", "-e", "yes", "-f", "WIFI", "general", "status"])?;
-    let value = raw.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
+    let value = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
     Ok(value.eq_ignore_ascii_case("enabled"))
 }
 
@@ -144,7 +148,11 @@ fn read_wifi_devices() -> Result<Vec<WifiDeviceState>, String> {
     devices.sort_by(|a, b| {
         wifi_device_rank(&a.state)
             .cmp(&wifi_device_rank(&b.state))
-            .then_with(|| a.device.to_ascii_lowercase().cmp(&b.device.to_ascii_lowercase()))
+            .then_with(|| {
+                a.device
+                    .to_ascii_lowercase()
+                    .cmp(&b.device.to_ascii_lowercase())
+            })
     });
     Ok(devices)
 }
@@ -219,7 +227,9 @@ fn read_wifi_access_points(saved_ssids: &BTreeSet<String>) -> Result<Vec<WifiAcc
             requires_password: wifi_security_requires_password(parts[3].trim()),
         };
         match deduped.get_mut(&ssid) {
-            Some(existing) if should_replace_access_point(existing, &candidate) => *existing = candidate,
+            Some(existing) if should_replace_access_point(existing, &candidate) => {
+                *existing = candidate
+            }
             None => {
                 deduped.insert(ssid, candidate);
             }
@@ -232,7 +242,11 @@ fn read_wifi_access_points(saved_ssids: &BTreeSet<String>) -> Result<Vec<WifiAcc
             .cmp(&a.in_use)
             .then_with(|| b.is_saved.cmp(&a.is_saved))
             .then_with(|| b.signal_percent.cmp(&a.signal_percent))
-            .then_with(|| a.ssid.to_ascii_lowercase().cmp(&b.ssid.to_ascii_lowercase()))
+            .then_with(|| {
+                a.ssid
+                    .to_ascii_lowercase()
+                    .cmp(&b.ssid.to_ascii_lowercase())
+            })
     });
     Ok(access_points)
 }
@@ -243,7 +257,12 @@ fn should_replace_access_point(existing: &WifiAccessPoint, candidate: &WifiAcces
         .cmp(&existing.in_use)
         .then_with(|| candidate.is_saved.cmp(&existing.is_saved))
         .then_with(|| candidate.signal_percent.cmp(&existing.signal_percent))
-        .then_with(|| existing.security.is_empty().cmp(&candidate.security.is_empty()))
+        .then_with(|| {
+            existing
+                .security
+                .is_empty()
+                .cmp(&candidate.security.is_empty())
+        })
         .is_gt()
 }
 
@@ -280,7 +299,10 @@ fn run_nmcli_capture(args: &[&str]) -> Result<String, String> {
 }
 
 fn run_nmcli_status<const N: usize>(args: [&str; N]) -> Result<(), String> {
-    let args = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let args = args
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
     run_nmcli_status_vec(&args)
 }
 

@@ -18,7 +18,8 @@ use smithay::{
         foreign_toplevel_list::{ForeignToplevelListHandler, ForeignToplevelListState},
         idle_inhibit::IdleInhibitHandler,
         keyboard_shortcuts_inhibit::{
-            KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
+            KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState,
+            KeyboardShortcutsInhibitor,
         },
         shm::{with_buffer_contents_mut, BufferAccessError},
     },
@@ -107,7 +108,9 @@ impl CompositorState {
             .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
             .filter(|record| record.kind != crate::window_registry::WindowKind::ShellHosted)
             .filter(|record| shell_window_row_should_show(&record.info))
-            .filter(|record| !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id))
+            .filter(|record| {
+                !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+            })
             .map(|record| {
                 let logical_rect = self
                     .space
@@ -237,19 +240,22 @@ impl CompositorState {
             if !request.frame.is_alive() {
                 continue;
             }
-            let cropped = match crop_capture_image(&image, source.logical_rect, request.logical_region) {
-                Ok(cropped) => cropped,
-                Err(error) => {
-                    warn!(%error, output = %output_name, "screencopy crop failed");
-                    request.frame.failed();
-                    if request.buffer.is_alive() {
-                        request.buffer.release();
+            let cropped =
+                match crop_capture_image(&image, source.logical_rect, request.logical_region) {
+                    Ok(cropped) => cropped,
+                    Err(error) => {
+                        warn!(%error, output = %output_name, "screencopy crop failed");
+                        request.frame.failed();
+                        if request.buffer.is_alive() {
+                            request.buffer.release();
+                        }
+                        continue;
                     }
-                    continue;
-                }
-            };
+                };
             if request.with_damage {
-                request.frame.damage(0, 0, cropped.width(), cropped.height());
+                request
+                    .frame
+                    .damage(0, 0, cropped.width(), cropped.height());
             }
             if let Err(error) = write_image_to_shm_buffer(&request.buffer, &cropped) {
                 warn!(%error, output = %output_name, "screencopy write failed");
@@ -270,10 +276,14 @@ impl CompositorState {
                     continue;
                 }
             };
-            request.frame.flags(zwlr_screencopy_frame_v1::Flags::empty());
             request
                 .frame
-                .ready((now.as_secs() >> 32) as u32, now.as_secs() as u32, now.subsec_nanos());
+                .flags(zwlr_screencopy_frame_v1::Flags::empty());
+            request.frame.ready(
+                (now.as_secs() >> 32) as u32,
+                now.as_secs() as u32,
+                now.subsec_nanos(),
+            );
             if request.buffer.is_alive() {
                 request.buffer.release();
             }
@@ -288,7 +298,10 @@ impl ForeignToplevelListHandler for CompositorState {
 }
 
 impl IdleInhibitHandler for CompositorState {
-    fn inhibit(&mut self, surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+    fn inhibit(
+        &mut self,
+        surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
         if let Some(client) = surface.client() {
             self.idle_inhibit_surfaces
                 .insert((client.id(), surface.id().protocol_id()));
@@ -365,7 +378,9 @@ impl Dispatch<ZwlrScreencopyManagerV1, (), CompositorState> for ScreencopyManage
     }
 }
 
-impl Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState, CompositorState> for ScreencopyManagerState {
+impl Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState, CompositorState>
+    for ScreencopyManagerState
+{
     fn request(
         state: &mut CompositorState,
         _client: &Client,
@@ -458,7 +473,12 @@ fn init_screencopy_frame(
             used: AtomicBool::new(false),
         },
     );
-    frame.buffer(wl_shm::Format::Argb8888, buffer_size.w as u32, buffer_size.h as u32, (buffer_size.w * 4) as u32);
+    frame.buffer(
+        wl_shm::Format::Argb8888,
+        buffer_size.w as u32,
+        buffer_size.h as u32,
+        (buffer_size.w * 4) as u32,
+    );
     if frame.version() >= 3 {
         frame.buffer_done();
     }
@@ -497,7 +517,10 @@ fn queue_screencopy_copy(
     }
 }
 
-fn validate_screencopy_buffer(buffer: &WlBuffer, data: &ScreencopyFrameState) -> Result<(), String> {
+fn validate_screencopy_buffer(
+    buffer: &WlBuffer,
+    data: &ScreencopyFrameState,
+) -> Result<(), String> {
     with_buffer_contents_mut(buffer, |_, _, meta| {
         if meta.format != wl_shm::Format::Xrgb8888 && meta.format != wl_shm::Format::Argb8888 {
             return Err("screencopy requires wl_shm Xrgb8888 or Argb8888".to_string());
@@ -507,7 +530,9 @@ fn validate_screencopy_buffer(buffer: &WlBuffer, data: &ScreencopyFrameState) ->
         }
         let expected = Size::from((meta.width, meta.height));
         if expected != data.buffer_size {
-            return Err("screencopy buffer dimensions do not match advertised frame size".to_string());
+            return Err(
+                "screencopy buffer dimensions do not match advertised frame size".to_string(),
+            );
         }
         if meta.stride < meta.width * 4 {
             return Err("screencopy buffer stride is too small".to_string());
@@ -526,15 +551,20 @@ fn transformed_output_size(size: Size<i32, Buffer>, transform: Transform) -> Siz
     }
 }
 
-fn region_buffer_size(source: &CaptureSourceDescriptor, region: Rectangle<i32, Logical>) -> Size<i32, Buffer> {
+fn region_buffer_size(
+    source: &CaptureSourceDescriptor,
+    region: Rectangle<i32, Logical>,
+) -> Size<i32, Buffer> {
     if region == source.logical_rect {
         return source.buffer_size;
     }
     Size::from((
-        ((region.size.w as f64) * (source.buffer_size.w as f64 / source.logical_rect.size.w.max(1) as f64))
+        ((region.size.w as f64)
+            * (source.buffer_size.w as f64 / source.logical_rect.size.w.max(1) as f64))
             .round()
             .max(1.0) as i32,
-        ((region.size.h as f64) * (source.buffer_size.h as f64 / source.logical_rect.size.h.max(1) as f64))
+        ((region.size.h as f64)
+            * (source.buffer_size.h as f64 / source.logical_rect.size.h.max(1) as f64))
             .round()
             .max(1.0) as i32,
     ))
@@ -561,7 +591,10 @@ pub(crate) fn crop_capture_image(
     Ok(imageops::crop_imm(image, src_x, src_y, src_w, src_h).to_image())
 }
 
-pub(crate) fn write_image_to_shm_buffer(buffer: &WlBuffer, image: &RgbaImage) -> Result<(), String> {
+pub(crate) fn write_image_to_shm_buffer(
+    buffer: &WlBuffer,
+    image: &RgbaImage,
+) -> Result<(), String> {
     with_buffer_contents_mut(buffer, |ptr, len, data| {
         let width = data.width.max(1) as usize;
         let height = data.height.max(1) as usize;
@@ -589,7 +622,11 @@ pub(crate) fn write_image_to_shm_buffer(buffer: &WlBuffer, image: &RgbaImage) ->
                 d[0] = s[2];
                 d[1] = s[1];
                 d[2] = s[0];
-                d[3] = if data.format == wl_shm::Format::Argb8888 { s[3] } else { 0xff };
+                d[3] = if data.format == wl_shm::Format::Argb8888 {
+                    s[3]
+                } else {
+                    0xff
+                };
             }
         }
         Ok(())

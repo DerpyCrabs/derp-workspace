@@ -3,6 +3,7 @@ import type { Accessor, Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
 import type { PerMonitorTileStates } from './tileState'
 import { SettingsAppearancePage } from './settings/SettingsAppearancePage'
+import { SettingsBluetoothPage } from './settings/SettingsBluetoothPage'
 import { SettingsDisplaysPage } from './settings/SettingsDisplaysPage'
 import { SettingsKeyboardPage } from './settings/SettingsKeyboardPage'
 import { SettingsSoundPage } from './settings/SettingsSoundPage'
@@ -12,7 +13,14 @@ import type { SettingsLayoutScreen } from './settings/settingsTypes'
 
 export type { SettingsLayoutScreen }
 
-type SettingsPageId = 'displays' | 'tiling' | 'keyboard' | 'sound' | 'wifi' | 'appearance'
+type SettingsPageId =
+  | 'displays'
+  | 'tiling'
+  | 'keyboard'
+  | 'sound'
+  | 'wifi'
+  | 'bluetooth'
+  | 'appearance'
 
 const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'displays', label: 'Displays' },
@@ -20,6 +28,7 @@ const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'keyboard', label: 'Keyboard' },
   { id: 'sound', label: 'Sound' },
   { id: 'wifi', label: 'Wi-Fi' },
+  { id: 'bluetooth', label: 'Bluetooth' },
   { id: 'appearance', label: 'Appearance' },
 ]
 
@@ -115,6 +124,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </Show>
         <Show when={activePage() === 'wifi'}>
           <SettingsWifiPage />
+        </Show>
+        <Show when={activePage() === 'bluetooth'}>
+          <SettingsBluetoothPage />
         </Show>
         <Show when={activePage() === 'appearance'}>
           <SettingsAppearancePage setDesktopBackgroundJson={props.setDesktopBackgroundJson} />

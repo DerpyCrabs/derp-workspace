@@ -38,7 +38,10 @@ fn portal_screencast_state() -> &'static (Mutex<PortalScreencastState>, Condvar)
     })
 }
 
-fn can_reuse_portal_screencast_selection(request_types: Option<u32>, cached_types: Option<u32>) -> bool {
+fn can_reuse_portal_screencast_selection(
+    request_types: Option<u32>,
+    cached_types: Option<u32>,
+) -> bool {
     request_types == Some(2) && cached_types == Some(2)
 }
 
@@ -434,6 +437,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/bluetooth_state" {
+        let json = crate::bluetooth_control::read_bluetooth_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/wifi_state" {
         let json = crate::wifi_control::read_wifi_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -533,6 +542,42 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
             let id = json_u32_field(&v, "id")?;
             let muted = json_bool_field(&v, "muted")?;
             crate::audio_control::set_audio_mute(id, muted)?;
+        }
+        "/bluetooth_scan" => {
+            crate::bluetooth_control::scan_bluetooth()?;
+        }
+        "/bluetooth_radio" => {
+            let enabled = json_bool_field(&v, "enabled")?;
+            crate::bluetooth_control::set_bluetooth_power(enabled)?;
+        }
+        "/bluetooth_pairable" => {
+            let enabled = json_bool_field(&v, "enabled")?;
+            crate::bluetooth_control::set_bluetooth_pairable(enabled)?;
+        }
+        "/bluetooth_discoverable" => {
+            let enabled = json_bool_field(&v, "enabled")?;
+            crate::bluetooth_control::set_bluetooth_discoverable(enabled)?;
+        }
+        "/bluetooth_pair_connect" => {
+            let address = json_string_field(&v, "address")?;
+            crate::bluetooth_control::pair_and_connect_bluetooth_device(&address)?;
+        }
+        "/bluetooth_connect" => {
+            let address = json_string_field(&v, "address")?;
+            crate::bluetooth_control::connect_bluetooth_device(&address)?;
+        }
+        "/bluetooth_disconnect" => {
+            let address = json_string_field(&v, "address")?;
+            crate::bluetooth_control::disconnect_bluetooth_device(&address)?;
+        }
+        "/bluetooth_trust" => {
+            let address = json_string_field(&v, "address")?;
+            let trusted = json_bool_field(&v, "trusted")?;
+            crate::bluetooth_control::set_bluetooth_trust(&address, trusted)?;
+        }
+        "/bluetooth_forget" => {
+            let address = json_string_field(&v, "address")?;
+            crate::bluetooth_control::forget_bluetooth_device(&address)?;
         }
         "/wifi_scan" => {
             crate::wifi_control::scan_wifi()?;

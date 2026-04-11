@@ -55,20 +55,18 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
-        dmabuf::{
-            DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
-        },
-        fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
+        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
+        fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         idle_inhibit::IdleInhibitManagerState,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
         selection::data_device::{set_data_device_selection, DataDeviceState},
+        shell::wlr_layer::{Layer, WlrLayerShellState},
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
-        shell::wlr_layer::{Layer, WlrLayerShellState},
         shm::ShmState,
         viewporter::ViewporterState,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
@@ -244,7 +242,9 @@ pub fn formats_for_linux_dmabuf_global(renderer: &GlesRenderer) -> Vec<Format> {
             .dmabuf_formats()
             .iter()
             .copied()
-            .filter(|f| matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) && f.modifier == modifierless)
+            .filter(|f| {
+                matches!(f.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) && f.modifier == modifierless
+            })
             .collect();
         tracing::warn!(
             "linux-dmabuf global: no modifierless XRGB/ARGB formats in EGL render set; falling back to texture/import formats"
@@ -274,11 +274,17 @@ pub fn formats_for_linux_dmabuf_global(renderer: &GlesRenderer) -> Vec<Format> {
         .iter()
         .map(|f| (f.code as u32, u64::from(f.modifier)))
         .collect();
-    tracing::warn!(?advertised_formats, "linux-dmabuf advertised format/modifier pairs");
+    tracing::warn!(
+        ?advertised_formats,
+        "linux-dmabuf advertised format/modifier pairs"
+    );
     out
 }
 
-fn client_allows_linux_dmabuf(_client: &smithay::reexports::wayland_server::Client, _dh: &DisplayHandle) -> bool {
+fn client_allows_linux_dmabuf(
+    _client: &smithay::reexports::wayland_server::Client,
+    _dh: &DisplayHandle,
+) -> bool {
     true
 }
 
@@ -1066,7 +1072,8 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(Option<u32>, WlSurface, Point<f64, Logical>)> {
-        if let Some((surface, point)) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
+        if let Some((surface, point)) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top])
+        {
             return Some((None, surface, point));
         }
         for elem in self.space.elements().rev() {
@@ -1972,16 +1979,13 @@ impl CompositorState {
                     )
             })
             .unwrap_or_else(|| {
-                tracing::warn!(
-                    "linux-dmabuf global falling back to v3 without default feedback"
-                );
+                tracing::warn!("linux-dmabuf global falling back to v3 without default feedback");
                 let display_handle = self.display_handle.clone();
-                self.dmabuf_state
-                    .create_global_with_filter::<Self, _>(
-                        &self.display_handle,
-                        formats.iter().copied(),
-                        move |client| client_allows_linux_dmabuf(client, &display_handle),
-                    )
+                self.dmabuf_state.create_global_with_filter::<Self, _>(
+                    &self.display_handle,
+                    formats.iter().copied(),
+                    move |client| client_allows_linux_dmabuf(client, &display_handle),
+                )
             });
         self.dmabuf_global = Some(global);
         self.capture_dmabuf_formats = formats
@@ -6070,7 +6074,10 @@ impl CompositorState {
                 cmd.env(key, value);
             }
             let child = cmd.spawn().map_err(|e| e.to_string())?;
-            tracing::debug!(pid = child.id(), "spawned Wayland client via direct fallback");
+            tracing::debug!(
+                pid = child.id(),
+                "spawned Wayland client via direct fallback"
+            );
         }
         self.shell_spawn_focus_above_window_id =
             Some(self.window_registry.highest_allocated_window_id());

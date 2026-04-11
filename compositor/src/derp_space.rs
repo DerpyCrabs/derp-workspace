@@ -143,8 +143,8 @@ where
         WindowSurface::Wayland(s) => {
             let surface = s.wl_surface();
             let mut out = Vec::new();
-            let popup_render_elements = PopupManager::popups_for_surface(surface).flat_map(
-                |(popup, popup_offset)| {
+            let popup_render_elements =
+                PopupManager::popups_for_surface(surface).flat_map(|(popup, popup_offset)| {
                     let offset = (window.geometry().loc + popup_offset - popup.geometry().loc)
                         .to_physical_precise_round(scale);
                     render_elements_from_surface_tree(
@@ -155,8 +155,7 @@ where
                         alpha,
                         Kind::Unspecified,
                     )
-                },
-            );
+                });
             for el in popup_render_elements {
                 if let Some(w) = crop_wrap_wayland_surface_element(el, scale, None) {
                     out.push((w, false));
@@ -183,10 +182,15 @@ where
             }
             out
         }
-        WindowSurface::X11(x11) => AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
-            .into_iter()
-            .filter_map(|el| crop_wrap_wayland_surface_element(el, scale, None).map(|cropped| (cropped, true)))
-            .collect(),
+        WindowSurface::X11(x11) => {
+            AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
+                .into_iter()
+                .filter_map(|el| {
+                    crop_wrap_wayland_surface_element(el, scale, None)
+                        .map(|cropped| (cropped, true))
+                })
+                .collect()
+        }
     }
 }
 
@@ -205,12 +209,12 @@ where
         alpha: f32,
     ) -> Vec<C> {
         match self {
-            DerpSpaceElem::Wayland(window) => render_window_elements_with_exclusion_mode(
-                window, renderer, location, scale, alpha,
-            )
-            .into_iter()
-            .map(|(el, _)| C::from(el))
-            .collect(),
+            DerpSpaceElem::Wayland(window) => {
+                render_window_elements_with_exclusion_mode(window, renderer, location, scale, alpha)
+                    .into_iter()
+                    .map(|(el, _)| C::from(el))
+                    .collect()
+            }
             DerpSpaceElem::X11(x11) => {
                 AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
                     .into_iter()

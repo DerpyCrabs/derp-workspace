@@ -111,13 +111,21 @@ pub fn read_audio_state_json() -> Result<String, String> {
     sinks.sort_by(|a, b| {
         b.is_default
             .cmp(&a.is_default)
-            .then_with(|| a.label.to_ascii_lowercase().cmp(&b.label.to_ascii_lowercase()))
+            .then_with(|| {
+                a.label
+                    .to_ascii_lowercase()
+                    .cmp(&b.label.to_ascii_lowercase())
+            })
             .then_with(|| a.id.cmp(&b.id))
     });
     sources.sort_by(|a, b| {
         b.is_default
             .cmp(&a.is_default)
-            .then_with(|| a.label.to_ascii_lowercase().cmp(&b.label.to_ascii_lowercase()))
+            .then_with(|| {
+                a.label
+                    .to_ascii_lowercase()
+                    .cmp(&b.label.to_ascii_lowercase())
+            })
             .then_with(|| a.id.cmp(&b.id))
     });
     playback_streams.sort_by(|a, b| {
@@ -237,7 +245,8 @@ fn run_wpctl_status<const N: usize>(args: [&str; N]) -> Result<(), String> {
 }
 
 fn parse_pw_dump_inventory(raw: &str) -> Result<Vec<AudioNodeInventory>, String> {
-    let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| format!("pw-dump: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("pw-dump: {e}"))?;
     let rows = value
         .as_array()
         .ok_or_else(|| "pw-dump: expected top-level array".to_string())?;
@@ -456,7 +465,10 @@ fn join_distinct_parts<const N: usize>(values: [&str; N], label: &str) -> String
         if trimmed.eq_ignore_ascii_case(label) {
             continue;
         }
-        if parts.iter().any(|existing| existing.eq_ignore_ascii_case(trimmed)) {
+        if parts
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(trimmed))
+        {
             continue;
         }
         parts.push(trimmed.to_string());
@@ -563,6 +575,9 @@ Video
 
     #[test]
     fn parse_wpctl_get_volume_handles_muted_output() {
-        assert_eq!(parse_wpctl_get_volume("Volume: 0.40 [MUTED]\n"), Some((4000, true)));
+        assert_eq!(
+            parse_wpctl_get_volume("Volume: 0.40 [MUTED]\n"),
+            Some((4000, true))
+        );
     }
 }
