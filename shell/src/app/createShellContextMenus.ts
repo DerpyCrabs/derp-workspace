@@ -621,6 +621,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       queueMicrotask(() => programsMenuSearchRef?.focus())
       return true
     },
+    e2eActivateProgramsMenuSelection() {
+      if (!programsMenuOpen()) return false
+      const items = programsMenuListItems()
+      const item = items[programsMenuHighlightIdx()]
+      if (!item || item.disabled) return false
+      activateProgramsMenuSelection()
+      return true
+    },
     setMenuAtlasHostRef(el: HTMLDivElement) {
       menuAtlasHostRef = el
     },

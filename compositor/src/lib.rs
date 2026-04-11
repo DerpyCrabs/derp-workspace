@@ -22,6 +22,7 @@ mod e2e;
 mod display_config;
 pub mod drm;
 mod exclusion_clip;
+mod gdm_settings;
 mod grabs;
 mod handlers;
 mod input;

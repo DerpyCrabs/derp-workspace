@@ -263,6 +263,16 @@ fn set_shell_programs_menu_query(
     )
 }
 
+fn activate_shell_programs_menu_selection(
+    browser: &Arc<Mutex<Option<Browser>>>,
+) -> Result<(), String> {
+    execute_shell_bridge_js(
+        browser,
+        "window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION&&window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION();"
+            .to_string(),
+    )
+}
+
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
     v.get(key)
         .and_then(|x| x.as_u64())
@@ -539,6 +549,18 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_keyboard" {
+        let json = crate::settings_config::read_keyboard_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_user" {
+        let json = crate::gdm_settings::read_gdm_autologin_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/audio_state" {
         let json = crate::audio_control::read_audio_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -599,6 +621,12 @@ fn handle_one(
             .and_then(|x| x.as_str())
             .ok_or_else(|| "programs_menu_query: missing query".to_string())?;
         set_shell_programs_menu_query(browser, query)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/programs_menu_activate" {
+        activate_shell_programs_menu_selection(browser)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -795,6 +823,17 @@ fn handle_one(
             let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
             crate::settings_config::write_theme_settings(theme)?;
+        }
+        "/settings_keyboard" => {
+            let keyboard =
+                serde_json::from_value::<crate::settings_config::KeyboardSettingsFile>(v)
+                    .map_err(|e| format!("invalid keyboard settings: {e}"))?;
+            uplink.settings_keyboard_apply(keyboard)?;
+        }
+        "/settings_user" => {
+            let update = serde_json::from_value::<crate::gdm_settings::GdmAutologinUpdate>(v)
+                .map_err(|e| format!("invalid user settings: {e}"))?;
+            crate::gdm_settings::write_gdm_autologin_settings(update)?;
         }
         "/audio_default" => {
             let id = json_u32_field(&v, "id")?;

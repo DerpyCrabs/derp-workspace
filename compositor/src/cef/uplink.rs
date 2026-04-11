@@ -65,6 +65,16 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn settings_keyboard_apply(
+        &self,
+        settings: crate::settings_config::KeyboardSettingsFile,
+    ) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.keyboard_apply_settings(&settings)?;
+            crate::settings_config::write_keyboard_settings(settings.clone())
+        })
+    }
+
     pub fn spawn_wayland_client(&self, command: String) {
         self.run(move |s| {
             if let Err(e) = s.try_spawn_wayland_client_sh(&command) {

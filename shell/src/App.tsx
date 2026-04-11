@@ -144,6 +144,7 @@ declare global {
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_SET_PROGRAMS_MENU_QUERY?: (query: string) => boolean
+    __DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION?: () => boolean
   }
 }
 
@@ -1199,8 +1200,11 @@ function App() {
           canvas,
           origin,
         ),
+        programs_menu_first_item: e2eQueryRect('[data-programs-menu-idx="0"]', main, canvas, origin),
+        settings_tab_user: e2eQueryRect('[data-settings-tab="user"]', main, canvas, origin),
         settings_tab_displays: e2eQueryRect('[data-settings-tab="displays"]', main, canvas, origin),
         settings_tab_tiling: e2eQueryRect('[data-settings-tab="tiling"]', main, canvas, origin),
+        settings_tab_keyboard: e2eQueryRect('[data-settings-tab="keyboard"]', main, canvas, origin),
         debug_reload_button: e2eQueryRect('[data-shell-debug-reload]', main, canvas, origin),
         debug_copy_snapshot_button: e2eQueryRect(
           '[data-shell-debug-copy-snapshot]',
@@ -2638,6 +2642,12 @@ function App() {
     }
     window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY = (query: string) =>
       shellContextMenus.e2eSetProgramsMenuQuery(query)
+    window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION = () =>
+      (
+        shellContextMenus as typeof shellContextMenus & {
+          e2eActivateProgramsMenuSelection: () => boolean
+        }
+      ).e2eActivateProgramsMenuSelection()
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
@@ -3239,6 +3249,7 @@ function App() {
       delete window.__DERP_E2E_REQUEST_SNAPSHOT
       delete window.__DERP_E2E_REQUEST_HTML
       delete window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY
+      delete window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION
     })
   })
   onCleanup(() => {

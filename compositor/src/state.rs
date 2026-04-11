@@ -35,7 +35,7 @@ use smithay::{
         LayerSurface as DesktopLayerSurface, PopupManager, Window, WindowSurfaceType,
     },
     input::{
-        keyboard::{keysyms, KeysymHandle, Layout, ModifiersState},
+        keyboard::{keysyms, KeysymHandle, Layout, ModifiersState, XkbConfig},
         Seat, SeatState,
     },
     reexports::{
@@ -814,6 +814,10 @@ impl CompositorState {
             shell_begin_frame_last: None,
         };
         crate::display_config::apply_keyboard_from_display_file(&mut s);
+        let keyboard_settings = crate::settings_config::read_keyboard_settings();
+        if !keyboard_settings.layouts.is_empty() {
+            let _ = s.keyboard_apply_settings(&keyboard_settings);
+        }
         crate::desktop_background::load_from_display_file_into(&mut s);
         s.session_default_layout_index = s.keyboard_layout_index_current();
         Ok(s)
@@ -823,6 +827,50 @@ impl CompositorState {
         self.keyboard_layout_by_window.clear();
         self.keyboard_layout_last_focus_window = None;
         self.keyboard_layout_focus_queue.clear();
+    }
+
+    pub(crate) fn keyboard_apply_settings(
+        &mut self,
+        settings: &crate::settings_config::KeyboardSettingsFile,
+    ) -> Result<(), String> {
+        if settings.layouts.is_empty() {
+            return Err("keyboard layouts cannot be empty".into());
+        }
+        let Some(handle) = self.seat.get_keyboard() else {
+            return Err("missing keyboard handle".into());
+        };
+        let base = crate::display_config::read_keyboard_from_display_file().unwrap_or_default();
+        let layout = settings
+            .layouts
+            .iter()
+            .map(|entry| entry.layout.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let variant = settings
+            .layouts
+            .iter()
+            .map(|entry| entry.variant.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let xkb_cfg = XkbConfig {
+            rules: base.rules.as_str(),
+            model: base.model.as_str(),
+            layout: layout.as_str(),
+            variant: variant.as_str(),
+            options: base.options.clone(),
+        };
+        handle
+            .set_xkb_config(self, xkb_cfg)
+            .map_err(|e| format!("set_xkb_config: {e:?}"))?;
+        handle.change_repeat_info(
+            i32::try_from(settings.repeat_rate).map_err(|_| "repeat_rate out of range".to_string())?,
+            i32::try_from(settings.repeat_delay_ms)
+                .map_err(|_| "repeat_delay_ms out of range".to_string())?,
+        );
+        self.keyboard_clear_per_window_layout_map();
+        self.session_default_layout_index = self.keyboard_layout_index_current();
+        self.emit_keyboard_layout_to_shell();
+        Ok(())
     }
 
     pub(crate) fn apply_desktop_background_from_display_file(

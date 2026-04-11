@@ -88,37 +88,10 @@ struct LiveHead {
 }
 
 pub fn apply_keyboard_from_display_file(state: &mut CompositorState) {
-    let Some(path) = display_config_path() else {
+    let Some(kb) = read_keyboard_from_display_file() else {
         return;
     };
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            tracing::warn!(
-                target: "derp_display_config",
-                ?e,
-                path = %path.display(),
-                "read display config for keyboard"
-            );
-            return;
-        }
-    };
-    let cfg: DisplayConfigFile = match serde_json::from_str(&raw) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                target: "derp_display_config",
-                ?e,
-                "parse display config for keyboard"
-            );
-            return;
-        }
-    };
-    if cfg.version != 1 {
-        return;
-    }
-    apply_keyboard_from_section(state, &cfg.keyboard);
+    apply_keyboard_from_section(state, &kb);
 }
 
 pub(crate) fn apply_keyboard_from_section(state: &mut CompositorState, kb: &KeyboardXkbFile) {
@@ -163,6 +136,38 @@ pub fn display_config_path() -> Option<PathBuf> {
     p.push("derp-workspace");
     p.push("display.json");
     Some(p)
+}
+
+pub fn read_keyboard_from_display_file() -> Option<KeyboardXkbFile> {
+    let path = display_config_path()?;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(
+                target: "derp_display_config",
+                ?e,
+                path = %path.display(),
+                "read display config for keyboard"
+            );
+            return None;
+        }
+    };
+    let cfg: DisplayConfigFile = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                target: "derp_display_config",
+                ?e,
+                "parse display config for keyboard"
+            );
+            return None;
+        }
+    };
+    if cfg.version != 1 {
+        return None;
+    }
+    Some(cfg.keyboard)
 }
 
 fn drm_connector_connected<D: ControlDevice>(drm: &D, conn: connector::Handle) -> bool {

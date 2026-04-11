@@ -8,12 +8,14 @@ import { SettingsDisplaysPage } from './settings/SettingsDisplaysPage'
 import { SettingsKeyboardPage } from './settings/SettingsKeyboardPage'
 import { SettingsSoundPage } from './settings/SettingsSoundPage'
 import { SettingsTilingPage } from './settings/SettingsTilingPage'
+import { SettingsUserPage } from './settings/SettingsUserPage'
 import { SettingsWifiPage } from './settings/SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settings/settingsTypes'
 
 export type { SettingsLayoutScreen }
 
 type SettingsPageId =
+  | 'user'
   | 'displays'
   | 'tiling'
   | 'keyboard'
@@ -23,6 +25,7 @@ type SettingsPageId =
   | 'appearance'
 
 const NAV: { id: SettingsPageId; label: string }[] = [
+  { id: 'user', label: 'User' },
   { id: 'displays', label: 'Displays' },
   { id: 'tiling', label: 'Tiling' },
   { id: 'keyboard', label: 'Keyboard' },
@@ -94,6 +97,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         role="tabpanel"
         data-settings-active-page={activePage()}
       >
+        <Show when={activePage() === 'user'}>
+          <SettingsUserPage />
+        </Show>
         <Show when={activePage() === 'displays'}>
           <SettingsDisplaysPage
             screenDraft={props.screenDraft}

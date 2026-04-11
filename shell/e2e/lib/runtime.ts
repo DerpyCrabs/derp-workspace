@@ -116,8 +116,11 @@ export interface ShellControls {
   taskbar_debug_toggle?: Rect | null
   taskbar_power_toggle?: Rect | null
   programs_menu_search?: Rect | null
+  programs_menu_first_item?: Rect | null
+  settings_tab_user?: Rect | null
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
+  settings_tab_keyboard?: Rect | null
   debug_reload_button?: Rect | null
   debug_copy_snapshot_button?: Rect | null
   debug_crosshair_toggle?: Rect | null

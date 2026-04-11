@@ -36,9 +36,37 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('settings window opens from taskbar, switches tabs, and reopens from keybind', async ({ base }) => {
     const settingsOpen = await openSettings(base, 'click')
+    assert(settingsOpen.shell.controls?.settings_tab_user, 'missing settings user tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_displays, 'missing settings displays tab rect')
+    assert(settingsOpen.shell.controls?.settings_tab_keyboard, 'missing settings keyboard tab rect')
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    await clickRect(base, settingsOpen.shell.controls.settings_tab_user)
+    const userHtml = await waitFor(
+      'wait for settings user page',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-root]')
+        return html.includes('data-settings-active-page="user"') && html.includes('data-settings-user-page')
+          ? html
+          : null
+      },
+      5000,
+      100,
+    )
+    await clickRect(base, settingsOpen.shell.controls.settings_tab_keyboard)
+    const keyboardHtml = await waitFor(
+      'wait for settings keyboard page',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-root]')
+        return html.includes('data-settings-active-page="keyboard"') &&
+          html.includes('data-settings-keyboard-page') &&
+          html.includes('Apply keyboard settings')
+          ? html
+          : null
+      },
+      5000,
+      100,
+    )
     await clickRect(base, settingsOpen.shell.controls.settings_tab_tiling)
     await waitFor(
       'wait for settings tiling page',
@@ -59,7 +87,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    const keyboardSettings = await getJson(base, '/settings_keyboard')
+    const userSettings = await getJson(base, '/settings_user')
     await writeTextArtifact('settings-root.html', settingsHtml)
+    await writeTextArtifact('settings-user-page.html', userHtml)
+    await writeTextArtifact('settings-keyboard-page.html', keyboardHtml)
+    await writeJsonArtifact('settings-keyboard.json', keyboardSettings)
+    await writeJsonArtifact('settings-user.json', userSettings)
     const shellBeforeClose = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shellBeforeClose, SHELL_UI_SETTINGS_WINDOW_ID)
     await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
