@@ -8,7 +8,7 @@ const tsxBin = process.platform === 'win32'
   ? path.join(repoRoot, 'shell', 'node_modules', '.bin', 'tsx.cmd')
   : path.join(repoRoot, 'shell', 'node_modules', '.bin', 'tsx')
 
-const child = spawn(tsxBin, [path.join(here, 'run.ts')], {
+const child = spawn(tsxBin, [path.join(here, 'run.ts'), ...process.argv.slice(2)], {
   stdio: 'inherit',
   env: process.env,
 })

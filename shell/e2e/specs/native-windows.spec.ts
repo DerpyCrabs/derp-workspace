@@ -1,6 +1,4 @@
 import {
-  GREEN_NATIVE_TITLE,
-  RED_NATIVE_TITLE,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -10,6 +8,7 @@ import {
   clickPoint,
   compositorWindowById,
   defineGroup,
+  ensureNativePair,
   getJson,
   getSnapshots,
   openDebug,
@@ -18,8 +17,6 @@ import {
   runKeybind,
   shellWindowStack,
   shellWindowById,
-  spawnNativeWindow,
-  taskbarEntry,
   taskbarForMonitor,
   waitFor,
   waitForNativeFocus,
@@ -47,37 +44,15 @@ function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnaps
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('spawn native red and green windows', async ({ base, state }) => {
-    state.redSpawn = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: RED_NATIVE_TITLE,
-      token: 'native-red',
-      strip: 'red',
-    })
-    state.greenSpawn = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: GREEN_NATIVE_TITLE,
-      token: 'native-green',
-      strip: 'green',
-    })
-    state.spawnedNativeWindowIds.add(state.redSpawn.window.window_id)
-    state.spawnedNativeWindowIds.add(state.greenSpawn.window.window_id)
-    await waitFor(
-      'wait for native taskbar rows',
-      async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return taskbarEntry(shell, state.redSpawn!.window.window_id) &&
-          taskbarEntry(shell, state.greenSpawn!.window.window_id)
-          ? shell
-          : null
-      },
-      8000,
-      125,
-    )
-    await writeJsonArtifact('native-red-spawn.json', state.redSpawn.snapshot)
-    await writeJsonArtifact('native-green-spawn.json', state.greenSpawn.snapshot)
+    const { red, green } = await ensureNativePair(base, state)
+    await writeJsonArtifact('native-red-spawn.json', red.snapshot)
+    await writeJsonArtifact('native-green-spawn.json', green.snapshot)
   })
 
   test('native taskbar focus and tile left/right', async ({ base, state }) => {
-    const redId = state.redSpawn!.window.window_id
-    const greenId = state.greenSpawn!.window.window_id
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shell, redId)
     await waitForNativeFocus(base, redId)
@@ -121,7 +96,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('native maximize fullscreen and tile up/down transitions', async ({ base, state }) => {
-    const redId = state.redSpawn!.window.window_id
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shell, redId)
     await waitForNativeFocus(base, redId)
@@ -202,7 +178,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('native and shell windows share focus stacking and taskbar parity', async ({ base, state }) => {
-    const redId = state.redSpawn!.window.window_id
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
     await openSettings(base, 'click')
     await openDebug(base)
     const paritySnapshots = await getSnapshots(base)
@@ -242,8 +219,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('js and native windows preserve restack order across focus changes', async ({ base, state }) => {
-    const redId = state.redSpawn!.window.window_id
-    const greenId = state.greenSpawn!.window.window_id
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
     const trackedWindowIds = [redId, greenId, SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID]
 
     await openSettings(base, 'click')

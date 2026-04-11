@@ -18,6 +18,12 @@ if [[ -z "${DERP_E2E_NATIVE_BIN:-}" ]]; then
   remote_env+=("export DERP_E2E_NATIVE_BIN=$(printf '%q' "$REMOTE_REPO/target/release/derp-test-client")")
 fi
 
+remote_args=()
+for arg in "$@"; do
+  remote_args+=("$(printf '%q' "$arg")")
+done
+remote_args_str="${remote_args[*]:-}"
+
 echo "=== remote mkdir ==="
 ssh_base mkdir -p "$REMOTE_REPO"
 
@@ -36,5 +42,5 @@ ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 $(printf '%s\n' "${remote_env[@]}")
-exec node shell/e2e/run.mjs
+exec node shell/e2e/run.mjs ${remote_args_str}
 EOF

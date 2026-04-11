@@ -5,9 +5,9 @@ import {
   assert,
   crashWindow,
   defineGroup,
+  ensureNativeWindow,
   getJson,
   postJson,
-  spawnNativeWindow,
   taskbarEntry,
   waitFor,
   waitForWindowGone,
@@ -24,12 +24,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {
-    state.crashProbe = await spawnNativeWindow(base, state.knownWindowIds, {
+    state.crashProbe = await ensureNativeWindow(base, state, 'crashProbe', {
       title: CRASH_NATIVE_TITLE,
       token: 'native-crash-probe',
       strip: 'orange',
     })
-    state.spawnedNativeWindowIds.add(state.crashProbe.window.window_id)
     await waitFor(
       'wait for crash probe taskbar row',
       async () => {

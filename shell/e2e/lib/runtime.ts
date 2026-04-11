@@ -374,6 +374,67 @@ export function createState(base: string): E2eState {
   }
 }
 
+function syncTrackedNativeWindow(
+  compositor: CompositorSnapshot,
+  current: NativeSpawnResult | null,
+  title: string,
+): NativeSpawnResult | null {
+  if (!current) return null
+  const window = compositorWindowById(compositor, current.window.window_id)
+  if (!window || window.title !== title || window.app_id !== NATIVE_APP_ID || window.shell_hosted) {
+    return null
+  }
+  return { snapshot: compositor, window, command: current.command }
+}
+
+export async function normalizeTransientShellState(base: string): Promise<ShellSnapshot> {
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (!shell.programs_menu_open && !shell.power_menu_open && !shell.snap_picker_open) {
+      return shell
+    }
+    await tapKey(base, KEY.escape)
+    try {
+      shell = await waitFor(
+        'wait for transient shell overlays to close',
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return !next.programs_menu_open && !next.power_menu_open && !next.snap_picker_open ? next : null
+        },
+        1500,
+        50,
+      )
+    } catch {
+      shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    }
+  }
+  if (shell.programs_menu_open || shell.power_menu_open || shell.snap_picker_open) {
+    throw new Error('failed to close transient shell overlays')
+  }
+  return shell
+}
+
+export async function ensureDesktopApps(base: string, state: E2eState): Promise<DesktopAppEntry[]> {
+  if (state.desktopApps.length > 0) return state.desktopApps
+  const desktopApplications = await getJson<{ apps?: DesktopAppEntry[] }>(base, '/desktop_applications')
+  state.desktopApps = Array.isArray(desktopApplications?.apps) ? desktopApplications.apps : []
+  return state.desktopApps
+}
+
+export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  const shell = await normalizeTransientShellState(base)
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  state.knownWindowIds = new Set(compositor.windows.map((window) => window.window_id))
+  state.redSpawn = syncTrackedNativeWindow(compositor, state.redSpawn, RED_NATIVE_TITLE)
+  state.greenSpawn = syncTrackedNativeWindow(compositor, state.greenSpawn, GREEN_NATIVE_TITLE)
+  state.crashProbe = syncTrackedNativeWindow(compositor, state.crashProbe, CRASH_NATIVE_TITLE)
+  if (state.launcherWindowId !== null && !compositorWindowById(compositor, state.launcherWindowId)) {
+    state.launcherWindowId = null
+  }
+  await ensureDesktopApps(base, state)
+  return { compositor, shell }
+}
+
 export function stateHome(): string {
   if (process.env.XDG_STATE_HOME) return process.env.XDG_STATE_HOME
   const home = process.env.HOME
@@ -915,6 +976,88 @@ export async function spawnNativeWindow(base: string, knownWindowIds: Set<number
   )
   knownWindowIds.add(result.window.window_id)
   return result
+}
+
+export async function waitForTaskbarEntry(base: string, windowId: number, timeoutMs = 8000): Promise<ShellSnapshot> {
+  return waitFor(
+    `wait for taskbar row ${windowId}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return taskbarEntry(shell, windowId) ? shell : null
+    },
+    timeoutMs,
+    125,
+  )
+}
+
+async function closeWindowBestEffort(base: string, windowId: number): Promise<void> {
+  try {
+    await closeWindow(base, windowId)
+    await waitForWindowGone(base, windowId, 4000)
+    return
+  } catch {}
+  try {
+    await crashWindow(base, windowId)
+    await waitForWindowGone(base, windowId, 4000)
+  } catch {}
+}
+
+async function reuseNativeWindow(base: string, state: E2eState, title: string): Promise<NativeSpawnResult | null> {
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const matches = compositor.windows
+    .filter((window) => !window.shell_hosted && window.app_id === NATIVE_APP_ID && window.title === title)
+    .sort((a, b) => b.window_id - a.window_id)
+  if (matches.length === 0) return null
+  const keep = matches[0]
+  for (const extra of matches.slice(1)) {
+    await closeWindowBestEffort(base, extra.window_id)
+  }
+  state.knownWindowIds.add(keep.window_id)
+  await waitForTaskbarEntry(base, keep.window_id)
+  const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const window = compositorWindowById(snapshot, keep.window_id)
+  if (!window) return null
+  return { snapshot, window, command: 'existing' }
+}
+
+export async function ensureNativeWindow(
+  base: string,
+  state: E2eState,
+  key: 'redSpawn' | 'greenSpawn' | 'crashProbe',
+  options: { title: string; token: string; strip: string; width?: number; height?: number },
+): Promise<NativeSpawnResult> {
+  await primeState(base, state)
+  const existing = state[key]
+  if (existing) {
+    state.spawnedNativeWindowIds.add(existing.window.window_id)
+    await waitForTaskbarEntry(base, existing.window.window_id)
+    return existing
+  }
+  const reused = await reuseNativeWindow(base, state, options.title)
+  if (reused) {
+    state[key] = reused
+    state.spawnedNativeWindowIds.add(reused.window.window_id)
+    return reused
+  }
+  const spawned = await spawnNativeWindow(base, state.knownWindowIds, options)
+  state[key] = spawned
+  state.spawnedNativeWindowIds.add(spawned.window.window_id)
+  await waitForTaskbarEntry(base, spawned.window.window_id)
+  return spawned
+}
+
+export async function ensureNativePair(base: string, state: E2eState): Promise<{ red: NativeSpawnResult; green: NativeSpawnResult }> {
+  const red = await ensureNativeWindow(base, state, 'redSpawn', {
+    title: RED_NATIVE_TITLE,
+    token: 'native-red',
+    strip: 'red',
+  })
+  const green = await ensureNativeWindow(base, state, 'greenSpawn', {
+    title: GREEN_NATIVE_TITLE,
+    token: 'native-green',
+    strip: 'green',
+  })
+  return { red, green }
 }
 
 export function pickMonitorMove(outputs: OutputSnapshot[], currentOutputName: string): { action: 'move_monitor_left' | 'move_monitor_right'; target: OutputSnapshot } | null {

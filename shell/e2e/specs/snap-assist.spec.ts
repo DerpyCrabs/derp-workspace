@@ -10,6 +10,7 @@ import {
   compositorWindowById,
   createTimingMarks,
   defineGroup,
+  ensureNativePair,
   getJson,
   getSnapshots,
   movePoint,
@@ -199,8 +200,8 @@ async function focusNativeWindow(base: string, windowId: number): Promise<{ comp
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('dragging a native titlebar into the strip opens the picker and snaps on release', async ({ base, state }) => {
-    const redId = state.redSpawn?.window.window_id
-    assert(redId, 'missing red native window')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
     const focused = await focusNativeWindow(base, redId)
     const focusedWindow = compositorWindowById(focused.compositor, redId)
     const output = focused.compositor.outputs.find((entry) => entry.name === focusedWindow?.output_name) ?? null
@@ -243,8 +244,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('drag picker commits a native window layout', async ({ base, state }) => {
     const timing = createTimingMarks('snap native picker')
-    const redId = state.redSpawn?.window.window_id
-    assert(redId, 'missing red native window')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
     await timing.step('focus native window', () => focusNativeWindow(base, redId))
     const shellFocused = await timing.step('read shell snapshot', () => getJson<ShellSnapshot>(base, '/test/state/shell'))
     const controls = windowControls(shellFocused, redId)
@@ -282,8 +283,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('drag picker closes when pointer leaves the strip and picker', async ({ base, state }) => {
-    const redId = state.redSpawn?.window.window_id
-    assert(redId, 'missing red native window')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
     const focused = await focusNativeWindow(base, redId)
     const controls = windowControls(focused.shell, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
@@ -368,8 +369,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('picker stays monitor-local for native and shell windows on multi-monitor setups', async ({ base, state }) => {
-    const redId = state.greenSpawn?.window.window_id
-    assert(redId, 'missing green native window')
+    const { green } = await ensureNativePair(base, state)
+    const redId = green.window.window_id
     const initial = await getSnapshots(base)
     if (initial.compositor.outputs.length < 2) {
       return

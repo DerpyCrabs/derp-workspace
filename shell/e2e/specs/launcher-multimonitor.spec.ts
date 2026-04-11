@@ -8,11 +8,14 @@ import {
   clickPoint,
   compositorWindowById,
   defineGroup,
+  ensureDesktopApps,
+  ensureNativePair,
   findLauncherCandidate,
   getJson,
   getShellHtml,
   getSnapshots,
   openProgramsMenu,
+  openSettings,
   pickMonitorMove,
   pointInRect,
   postJson,
@@ -35,6 +38,7 @@ import {
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('programs menu opens searches and optionally launches a terminal app', async ({ base, state }) => {
+    const desktopApps = await ensureDesktopApps(base, state)
     const menuOpen = await openProgramsMenu(base, 'click')
     assert(menuOpen.controls?.programs_menu_search, 'missing programs menu search control')
     assert(menuOpen.controls.taskbar_programs_toggle, 'missing programs menu toggle')
@@ -53,7 +57,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    const launcherCandidate = findLauncherCandidate(state.desktopApps)
+    const launcherCandidate = findLauncherCandidate(desktopApps)
     if (!launcherCandidate) {
       printNote('no stable terminal launcher candidate found')
     } else {
@@ -115,6 +119,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('multi-monitor taskbars and native/js window moves stay aligned', async ({ base, state }) => {
+    const { green } = await ensureNativePair(base, state)
     const { compositor, shell } = await getSnapshots(base)
     if (compositor.outputs.length < 2) {
       throw new SkipError('requires at least two outputs')
@@ -138,7 +143,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(primaryMonitors.size === 1, `expected primary-only controls on one monitor, got ${[...primaryMonitors].join(', ')}`)
 
-    const redId = state.greenSpawn!.window.window_id
+    const redId = green.window.window_id
     const redShell = shellWindowById(shell, redId)
     const redCompositor = compositorWindowById(compositor, redId)
     assert(redShell?.output_name, 'missing green shell output name')
@@ -179,7 +184,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       target_output: nativeMove.target.name,
     }
 
-    await activateTaskbarWindow(base, await getJson<ShellSnapshot>(base, '/test/state/shell'), SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsOpen = await openSettings(base, 'click')
+    await activateTaskbarWindow(base, settingsOpen.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsWindow = shellWindowById(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow?.output_name, 'missing settings output name')

@@ -11,27 +11,78 @@ import {
   discoverReadyBase,
   ensureArtifactDir,
   nativeBin,
+  primeState,
   testLabel,
   writeJsonArtifact,
   writeTextArtifact,
 } from './lib/runtime.ts'
 import { groups } from './specs/index.ts'
 
+function normalizeSelector(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/^shell\/e2e\/specs\//, '')
+    .replace(/^e2e\/specs\//, '')
+    .replace(/^specs\//, '')
+    .toLowerCase()
+}
+
+function selectorVariants(groupName: string): Set<string> {
+  const normalized = normalizeSelector(groupName)
+  const withoutSpec = normalized.replace(/\.spec\.ts$/, '')
+  const withoutTs = normalized.replace(/\.ts$/, '')
+  return new Set([normalized, withoutSpec, withoutTs])
+}
+
+function selectGroups(selectors: string[]) {
+  if (selectors.length === 0) {
+    return { selected: groups, unmatched: [] as string[] }
+  }
+  const selected = groups.filter((group) => {
+    const variants = selectorVariants(group.name)
+    return selectors.some((selector) => variants.has(normalizeSelector(selector)))
+  })
+  const matchedSelectors = new Set(
+    selectors.filter((selector) =>
+      groups.some((group) => {
+        const variants = selectorVariants(group.name)
+        return variants.has(normalizeSelector(selector))
+      }),
+    ),
+  )
+  return {
+    selected,
+    unmatched: selectors.filter((selector) => !matchedSelectors.has(selector)),
+  }
+}
+
 async function main(): Promise<void> {
+  const selectors = process.argv.slice(2).flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
+  const { selected, unmatched } = selectGroups(selectors)
+  if (unmatched.length > 0) {
+    throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${groups.map((group) => group.name).join(', ')}`)
+  }
+  if (selected.length === 0) {
+    throw new Error(`no e2e spec files selected; available: ${groups.map((group) => group.name).join(', ')}`)
+  }
   await ensureArtifactDir()
   const base = await discoverReadyBase()
   const runStart = Date.now()
-  const reporter = createReporter(groups.map((group) => group.name))
+  const reporter = createReporter(selected.map((group) => group.name))
   const state = createState(base)
-  let currentGroupName = groups[0]?.name ?? 'suite'
+  await primeState(base, state)
+  let currentGroupName = selected[0]?.name ?? 'suite'
   let currentTestName = 'bootstrap'
 
   try {
-    for (const group of groups) {
+    for (const group of selected) {
       currentGroupName = group.name
       reporter.startGroup(group.name)
       for (const entry of group.tests) {
         currentTestName = entry.name
+        await primeState(base, state)
         await reporter.run(group.name, entry.name, () => entry.run({ base, state }))
       }
     }
