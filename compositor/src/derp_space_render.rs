@@ -7,7 +7,7 @@ use smithay::output::Output;
 use smithay::utils::Scale;
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::derp_space::DerpSpaceElem;
+use crate::derp_space::{render_window_elements_with_exclusion_mode, DerpSpaceElem};
 use crate::state::CompositorState;
 
 pub(crate) type DerpWinRenderEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
@@ -21,10 +21,12 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
 ) -> Vec<(
     SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
     Option<u32>,
+    bool,
 )> {
     let mut out: Vec<(
         SpaceRenderElements<GlesRenderer, DerpWinRenderEl>,
         Option<u32>,
+        bool,
     )> = Vec::new();
     let output_scale = output.current_scale().fractional_scale();
 
@@ -48,7 +50,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 Scale::from(output_scale),
                 alpha,
             ) {
-                out.push((SpaceRenderElements::Surface(el), None));
+                out.push((SpaceRenderElements::Surface(el), None, true));
             }
         }
         lower
@@ -69,14 +71,33 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             let render_origin = eloc - elem.geometry().loc;
             let location = render_origin - output_geo.loc;
             let loc_phys = location.to_physical_precise_round(Scale::from(output_scale));
-            for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
-                elem,
-                renderer,
-                loc_phys,
-                Scale::from(output_scale),
-                alpha,
-            ) {
-                out.push((SpaceRenderElements::Element(Wrap::from(el)), wid));
+            match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    for (el, include_self_decor) in render_window_elements_with_exclusion_mode(
+                        window,
+                        renderer,
+                        loc_phys,
+                        Scale::from(output_scale),
+                        alpha,
+                    ) {
+                        out.push((
+                            SpaceRenderElements::Element(Wrap::from(el)),
+                            wid,
+                            include_self_decor,
+                        ));
+                    }
+                }
+                DerpSpaceElem::X11(_) => {
+                    for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
+                        elem,
+                        renderer,
+                        loc_phys,
+                        Scale::from(output_scale),
+                        alpha,
+                    ) {
+                        out.push((SpaceRenderElements::Element(Wrap::from(el)), wid, true));
+                    }
+                }
             }
         }
     }
@@ -94,7 +115,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             Scale::from(output_scale),
             alpha,
         ) {
-            out.push((SpaceRenderElements::Surface(el), None));
+            out.push((SpaceRenderElements::Surface(el), None, true));
         }
     }
 

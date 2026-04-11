@@ -128,6 +128,68 @@ where
     CropRenderElement::from_element(el, scale, crop)
 }
 
+pub(crate) fn render_window_elements_with_exclusion_mode<R>(
+    window: &Window,
+    renderer: &mut R,
+    location: Point<i32, Physical>,
+    scale: Scale<f64>,
+    alpha: f32,
+) -> Vec<(CropRenderElement<WaylandSurfaceRenderElement<R>>, bool)>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + Texture + 'static,
+{
+    match window.underlying_surface() {
+        WindowSurface::Wayland(s) => {
+            let surface = s.wl_surface();
+            let mut out = Vec::new();
+            let popup_render_elements = PopupManager::popups_for_surface(surface).flat_map(
+                |(popup, popup_offset)| {
+                    let offset = (window.geometry().loc + popup_offset - popup.geometry().loc)
+                        .to_physical_precise_round(scale);
+                    render_elements_from_surface_tree(
+                        renderer,
+                        popup.wl_surface(),
+                        location + offset,
+                        scale,
+                        alpha,
+                        Kind::Unspecified,
+                    )
+                },
+            );
+            for el in popup_render_elements {
+                if let Some(w) = crop_wrap_wayland_surface_element(el, scale, None) {
+                    out.push((w, false));
+                }
+            }
+            let main_els = render_elements_from_surface_tree(
+                renderer,
+                surface,
+                location,
+                scale,
+                alpha,
+                Kind::Unspecified,
+            );
+            let global_clip = wayland_window_needs_geometry_clip(window).then(|| {
+                let wg = window.geometry();
+                let loc = location + wg.loc.to_physical_precise_round(scale);
+                let size = wg.size.to_physical_precise_round(scale);
+                Rectangle::new(loc, size)
+            });
+            for el in main_els {
+                if let Some(w) = crop_wrap_wayland_surface_element(el, scale, global_clip) {
+                    out.push((w, true));
+                }
+            }
+            out
+        }
+        WindowSurface::X11(x11) => AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
+            .into_iter()
+            .filter_map(|el| crop_wrap_wayland_surface_element(el, scale, None).map(|cropped| (cropped, true)))
+            .collect(),
+    }
+}
+
 impl<R> AsRenderElements<R> for DerpSpaceElem
 where
     R: Renderer + ImportAll,
@@ -143,60 +205,12 @@ where
         alpha: f32,
     ) -> Vec<C> {
         match self {
-            DerpSpaceElem::Wayland(window) => match window.underlying_surface() {
-                WindowSurface::Wayland(s) => {
-                    let surface = s.wl_surface();
-                    let mut out: Vec<C> = Vec::new();
-                    let popup_render_elements = PopupManager::popups_for_surface(surface).flat_map(
-                        |(popup, popup_offset)| {
-                            let offset = (window.geometry().loc + popup_offset
-                                - popup.geometry().loc)
-                                .to_physical_precise_round(scale);
-                            render_elements_from_surface_tree(
-                                renderer,
-                                popup.wl_surface(),
-                                location + offset,
-                                scale,
-                                alpha,
-                                Kind::Unspecified,
-                            )
-                        },
-                    );
-                    for el in popup_render_elements {
-                        if let Some(w) = crop_wrap_wayland_surface_element(el, scale, None) {
-                            out.push(C::from(w));
-                        }
-                    }
-                    let main_els = render_elements_from_surface_tree(
-                        renderer,
-                        surface,
-                        location,
-                        scale,
-                        alpha,
-                        Kind::Unspecified,
-                    );
-                    let global_clip = wayland_window_needs_geometry_clip(window).then(|| {
-                        let wg = window.geometry();
-                        let loc = location + wg.loc.to_physical_precise_round(scale);
-                        let size = wg.size.to_physical_precise_round(scale);
-                        Rectangle::new(loc, size)
-                    });
-                    for el in main_els {
-                        if let Some(w) = crop_wrap_wayland_surface_element(el, scale, global_clip) {
-                            out.push(C::from(w));
-                        }
-                    }
-                    out
-                }
-                WindowSurface::X11(x11) => {
-                    AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
-                        .into_iter()
-                        .filter_map(|el| {
-                            crop_wrap_wayland_surface_element(el, scale, None).map(C::from)
-                        })
-                        .collect()
-                }
-            },
+            DerpSpaceElem::Wayland(window) => render_window_elements_with_exclusion_mode(
+                window, renderer, location, scale, alpha,
+            )
+            .into_iter()
+            .map(|(el, _)| C::from(el))
+            .collect(),
             DerpSpaceElem::X11(x11) => {
                 AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
                     .into_iter()

@@ -1463,6 +1463,7 @@ impl CompositorState {
         &self,
         output: &Output,
         elem_window: Option<u32>,
+        include_self_decor: bool,
     ) -> Vec<Rectangle<i32, Logical>> {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
@@ -1499,10 +1500,12 @@ impl CompositorState {
                         }
                     }
                 }
-                if let Some(rs) = self.shell_exclusion_decor.get(&self_id) {
-                    for r in rs {
-                        if let Some(i) = r.intersection(visible) {
-                            out.push(i);
+                if include_self_decor {
+                    if let Some(rs) = self.shell_exclusion_decor.get(&self_id) {
+                        for r in rs {
+                            if let Some(i) = r.intersection(visible) {
+                                out.push(i);
+                            }
                         }
                     }
                 }
@@ -1520,8 +1523,10 @@ impl CompositorState {
         &self,
         output: &Output,
         elem_window: Option<u32>,
+        include_self_decor: bool,
     ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
-        let zones = self.shell_exclusion_clip_rects_logical(output, elem_window);
+        let zones =
+            self.shell_exclusion_clip_rects_logical(output, elem_window, include_self_decor);
         if zones.is_empty() {
             return None;
         }

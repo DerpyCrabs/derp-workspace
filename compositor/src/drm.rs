@@ -271,8 +271,9 @@ impl DrmHead {
                     if let Some(ref el) = shell_menu {
                         render_elements.push(DesktopStack::ShellDma(el));
                     }
-                    for (el, wid) in tagged {
-                        let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(output, wid);
+                    for (el, wid, include_self_decor) in tagged {
+                        let excl_ctx = state
+                            .shell_exclusion_clip_ctx_for_draw(output, wid, include_self_decor);
                         match excl_ctx {
                             None => render_elements.push(DesktopStack::Space(
                                 crate::desktop_stack::FractionalDamageSpaceElements::new(

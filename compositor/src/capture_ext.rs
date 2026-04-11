@@ -509,7 +509,7 @@ fn render_window_output_texture(
             1.0,
         )
         .into_iter()
-        .filter_map(|(el, wid)| (wid == Some(window_id)).then_some(el))
+        .filter_map(|(el, wid, _)| (wid == Some(window_id)).then_some(el))
         .collect();
     let rendered_bounds = elements.iter().fold(None::<Rectangle<i32, Physical>>, |acc, el| {
         let geo = el.geometry(Scale::from(1.0));
