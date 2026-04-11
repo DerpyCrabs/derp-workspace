@@ -7,17 +7,19 @@ import { SettingsDisplaysPage } from './settings/SettingsDisplaysPage'
 import { SettingsKeyboardPage } from './settings/SettingsKeyboardPage'
 import { SettingsSoundPage } from './settings/SettingsSoundPage'
 import { SettingsTilingPage } from './settings/SettingsTilingPage'
+import { SettingsWifiPage } from './settings/SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settings/settingsTypes'
 
 export type { SettingsLayoutScreen }
 
-type SettingsPageId = 'displays' | 'tiling' | 'keyboard' | 'sound' | 'appearance'
+type SettingsPageId = 'displays' | 'tiling' | 'keyboard' | 'sound' | 'wifi' | 'appearance'
 
 const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'displays', label: 'Displays' },
   { id: 'tiling', label: 'Tiling' },
   { id: 'keyboard', label: 'Keyboard' },
   { id: 'sound', label: 'Sound' },
+  { id: 'wifi', label: 'Wi-Fi' },
   { id: 'appearance', label: 'Appearance' },
 ]
 
@@ -50,7 +52,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   return (
     <div class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-panel) text-left text-(--shell-text) [&_strong]:text-shell-hud-strong">
       <nav
-        class="flex w-[13rem] shrink-0 flex-col gap-0.5 border-r border-(--shell-border) bg-(--shell-surface-elevated) py-3 pr-2 pl-2"
+        class="flex w-52 shrink-0 flex-col gap-0.5 border-r border-(--shell-border) bg-(--shell-surface-elevated) py-3 pr-2 pl-2"
         aria-label="Settings sections"
       >
         <p class="mb-2 px-2 text-[0.68rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
@@ -110,6 +112,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </Show>
         <Show when={activePage() === 'sound'}>
           <SettingsSoundPage />
+        </Show>
+        <Show when={activePage() === 'wifi'}>
+          <SettingsWifiPage />
         </Show>
         <Show when={activePage() === 'appearance'}>
           <SettingsAppearancePage setDesktopBackgroundJson={props.setDesktopBackgroundJson} />

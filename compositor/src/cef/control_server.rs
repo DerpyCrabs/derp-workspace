@@ -336,6 +336,30 @@ fn json_bool_field(v: &serde_json::Value, key: &str) -> Result<bool, String> {
         .ok_or_else(|| format!("missing {key}"))
 }
 
+fn json_string_field(v: &serde_json::Value, key: &str) -> Result<String, String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("missing {key}"))
+}
+
+fn json_optional_string_field(v: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
+    match v.get(key) {
+        Some(serde_json::Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(serde_json::Value::Null) | None => Ok(None),
+        _ => Err(format!("{key} must be a string or null")),
+    }
+}
+
 fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut first = String::new();
@@ -406,6 +430,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/audio_state" {
         let json = crate::audio_control::read_audio_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/wifi_state" {
+        let json = crate::wifi_control::read_wifi_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -503,6 +533,22 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
             let id = json_u32_field(&v, "id")?;
             let muted = json_bool_field(&v, "muted")?;
             crate::audio_control::set_audio_mute(id, muted)?;
+        }
+        "/wifi_scan" => {
+            crate::wifi_control::scan_wifi()?;
+        }
+        "/wifi_radio" => {
+            let enabled = json_bool_field(&v, "enabled")?;
+            crate::wifi_control::set_wifi_radio(enabled)?;
+        }
+        "/wifi_connect" => {
+            let ssid = json_string_field(&v, "ssid")?;
+            let password = json_optional_string_field(&v, "password")?;
+            crate::wifi_control::connect_wifi(&ssid, password.as_deref())?;
+        }
+        "/wifi_disconnect" => {
+            let device = json_optional_string_field(&v, "device")?;
+            crate::wifi_control::disconnect_wifi(device.as_deref())?;
         }
         "/screenshot_region" => {
             let x = json_i32_field(&v, "x")?;

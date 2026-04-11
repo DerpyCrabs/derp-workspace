@@ -39,6 +39,7 @@ pub mod state;
 mod tile_preview_render;
 mod volume;
 mod wayland_listener;
+mod wifi_control;
 pub mod xwayland;
 
 pub use derp_space::DerpSpaceElem;
