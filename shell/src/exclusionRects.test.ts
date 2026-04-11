@@ -33,4 +33,27 @@ describe('mergeExclusionRects', () => {
       { x: 0, y: 0, w: 100, h: 10, window_id: 6 },
     ])
   })
+
+  it('drops empty rects and merges contained horizontal chains transitively', () => {
+    expect(
+      mergeExclusionRects([
+        { x: 0, y: 0, w: 100, h: 10 },
+        { x: 20, y: 0, w: 30, h: 10 },
+        { x: 90, y: 0, w: 10, h: 10 },
+        { x: 100, y: 0, w: 25, h: 10 },
+        { x: 4, y: 10, w: 0, h: 12 },
+        { x: 4, y: 10, w: 12, h: 0 },
+      ]),
+    ).toEqual([{ x: 0, y: 0, w: 125, h: 10 }])
+  })
+
+  it('merges vertical runs even when bridging rects arrive out of order', () => {
+    expect(
+      mergeExclusionRects([
+        { x: 8, y: 20, w: 24, h: 10, window_id: 9 },
+        { x: 8, y: 0, w: 24, h: 10, window_id: 9 },
+        { x: 8, y: 10, w: 24, h: 10, window_id: 9 },
+      ]),
+    ).toEqual([{ x: 8, y: 0, w: 24, h: 30, window_id: 9 }])
+  })
 })

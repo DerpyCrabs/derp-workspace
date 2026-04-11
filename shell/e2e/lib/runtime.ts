@@ -798,6 +798,30 @@ export async function waitForProgramsMenuClosed(base: string, timeoutMs = 5000):
   )
 }
 
+export async function waitForPowerMenuOpen(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for power menu open',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.power_menu_open ? shell : null
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForPowerMenuClosed(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for power menu closed',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.power_menu_open ? null : shell
+    },
+    timeoutMs,
+    100,
+  )
+}
+
 export async function openSettings(base: string, method: 'click' | 'keybind' = 'click'): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.settings_window_visible && shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized !== true) {
@@ -832,6 +856,14 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
     await clickRect(base, shell.controls.taskbar_programs_toggle)
   }
   return waitForProgramsMenuOpen(base)
+}
+
+export async function openPowerMenu(base: string): Promise<ShellSnapshot> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.power_menu_open) return waitForPowerMenuOpen(base)
+  assert(shell.controls?.taskbar_power_toggle, 'missing taskbar power toggle')
+  await clickRect(base, shell.controls.taskbar_power_toggle)
+  return waitForPowerMenuOpen(base)
 }
 
 export function shellQuote(value: string): string {

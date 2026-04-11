@@ -16,6 +16,7 @@ import {
   openSettings,
   outputForWindow,
   runKeybind,
+  shellWindowStack,
   shellWindowById,
   spawnNativeWindow,
   taskbarEntry,
@@ -27,6 +28,22 @@ import {
   writeJsonArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+
+function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
+  const tracked = new Set(windowIds)
+  return shellWindowStack(shell).filter((windowId) => tracked.has(windowId))
+}
+
+function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnapshot, focusedWindowId: number, windowIds: number[], label: string) {
+  const before = trackedStack(beforeShell, windowIds)
+  const after = trackedStack(afterShell, windowIds)
+  const expected = [focusedWindowId, ...before.filter((windowId) => windowId !== focusedWindowId)]
+  assert(
+    after.length === expected.length,
+    `${label}: expected ${expected.length} tracked windows, got ${after.length} (${after.join(', ')})`,
+  )
+  assert(after.join(',') === expected.join(','), `${label}: expected ${expected.join(', ')}, got ${after.join(', ')}`)
+}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('spawn native red and green windows', async ({ base, state }) => {
@@ -222,5 +239,60 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should be frontmost after taskbar activate')
     await writeJsonArtifact('native-js-parity-shell.json', settingsFocused.shell)
+  })
+
+  test('js and native windows preserve restack order across focus changes', async ({ base, state }) => {
+    const redId = state.redSpawn!.window.window_id
+    const greenId = state.greenSpawn!.window.window_id
+    const trackedWindowIds = [redId, greenId, SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID]
+
+    await openSettings(base, 'click')
+    const debugOpen = await openDebug(base)
+    const redWindow = compositorWindowById(debugOpen.compositor, redId)
+    assert(redWindow, 'missing red compositor window')
+
+    await clickPoint(base, redWindow.x + redWindow.width / 2, redWindow.y + redWindow.height / 2)
+    const redFocused = await waitForNativeFocus(base, redId)
+    assertRestackToFront(debugOpen.shell, redFocused.shell, redId, trackedWindowIds, 'red focus restack order')
+
+    await activateTaskbarWindow(base, redFocused.shell, greenId)
+    const greenFocused = await waitForNativeFocus(base, greenId)
+    assertRestackToFront(redFocused.shell, greenFocused.shell, greenId, trackedWindowIds, 'green focus restack order')
+
+    await activateTaskbarWindow(base, greenFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertRestackToFront(
+      greenFocused.shell,
+      settingsFocused.shell,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      trackedWindowIds,
+      'settings focus restack order',
+    )
+
+    await activateTaskbarWindow(base, settingsFocused.shell, SHELL_UI_DEBUG_WINDOW_ID)
+    const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    assertRestackToFront(
+      settingsFocused.shell,
+      debugFocused.shell,
+      SHELL_UI_DEBUG_WINDOW_ID,
+      trackedWindowIds,
+      'debug focus restack order',
+    )
+
+    await activateTaskbarWindow(base, debugFocused.shell, redId)
+    const redRefocused = await waitForNativeFocus(base, redId)
+    assertRestackToFront(
+      debugFocused.shell,
+      redRefocused.shell,
+      redId,
+      trackedWindowIds,
+      'red refocus restack order',
+    )
+
+    await writeJsonArtifact('native-js-restack-red.json', redFocused.shell)
+    await writeJsonArtifact('native-js-restack-green.json', greenFocused.shell)
+    await writeJsonArtifact('native-js-restack-settings.json', settingsFocused.shell)
+    await writeJsonArtifact('native-js-restack-debug.json', debugFocused.shell)
+    await writeJsonArtifact('native-js-restack-red-refocused.json', redRefocused.shell)
   })
 })

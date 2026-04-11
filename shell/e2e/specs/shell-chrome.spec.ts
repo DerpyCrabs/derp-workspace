@@ -1,15 +1,23 @@
 import {
   SHELL_UI_SETTINGS_WINDOW_ID,
+  activateTaskbarWindow,
   assert,
   assertTopWindow,
+  clickPoint,
   clickRect,
   closeTaskbarWindow,
+  compositorWindowById,
   defineGroup,
   getJson,
   getShellHtml,
   getSnapshots,
   openDebug,
+  openPowerMenu,
+  openProgramsMenu,
   openSettings,
+  waitForPowerMenuClosed,
+  waitForPowerMenuOpen,
+  waitForProgramsMenuClosed,
   waitFor,
   waitForShellUiFocus,
   waitForWindowGone,
@@ -134,5 +142,62 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     await writeJsonArtifact('debug-shell.json', crosshairOff)
+  })
+
+  test('taskbar context menus switch cleanly without disturbing shell focus', async ({ base }) => {
+    await openSettings(base, 'click')
+    await openDebug(base)
+    const shellBeforeFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await activateTaskbarWindow(base, shellBeforeFocus, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsWindow = compositorWindowById(settingsFocused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(settingsWindow, 'missing settings compositor window')
+
+    const powerOpen = await openPowerMenu(base)
+    assert(powerOpen.power_menu_open, 'power menu should be open')
+    assert(!powerOpen.programs_menu_open, 'programs menu should stay closed while power menu is open')
+    assertTopWindow(powerOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'power menu should not change focused shell window')
+    const powerHtml = await getShellHtml(base, '[aria-label="Power"]')
+    assert(powerHtml.includes('Suspend'), 'power menu missing suspend action')
+    assert(powerHtml.includes('Restart'), 'power menu missing restart action')
+    assert(powerHtml.includes('Shut down'), 'power menu missing shutdown action')
+
+    const programsOpen = await openProgramsMenu(base, 'click')
+    assert(programsOpen.programs_menu_open, 'programs menu should be open')
+    assert(!programsOpen.power_menu_open, 'power menu should close when programs menu opens')
+    assertTopWindow(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'programs menu should not change focused shell window')
+    const programsHtml = await getShellHtml(base, '[aria-label="Application search"]')
+    assert(programsHtml.includes('Search apps, keywords, and commands'), 'programs menu missing search placeholder')
+
+    await clickPoint(
+      base,
+      settingsWindow.x + settingsWindow.width / 2,
+      settingsWindow.y + Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
+    )
+    const programsClosed = await waitForProgramsMenuClosed(base)
+    assert(!programsClosed.power_menu_open, 'power menu should remain closed after dismissing programs menu')
+    assertTopWindow(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after dismissing programs menu')
+
+    await openPowerMenu(base)
+    const powerReopened = await waitForPowerMenuOpen(base)
+    assertTopWindow(powerReopened, SHELL_UI_SETTINGS_WINDOW_ID, 'reopened power menu should not change focused shell window')
+
+    await clickPoint(
+      base,
+      settingsWindow.x + settingsWindow.width / 2,
+      settingsWindow.y + Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
+    )
+    const powerClosed = await waitForPowerMenuClosed(base)
+    assertTopWindow(powerClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after dismissing power menu')
+
+    await writeJsonArtifact('taskbar-context-menus.json', {
+      powerOpen,
+      programsOpen,
+      programsClosed,
+      powerReopened,
+      powerClosed,
+    })
+    await writeTextArtifact('taskbar-power-menu.html', powerHtml)
+    await writeTextArtifact('taskbar-programs-menu.html', programsHtml)
   })
 })
