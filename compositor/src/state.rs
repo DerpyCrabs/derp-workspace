@@ -278,6 +278,10 @@ pub fn formats_for_linux_dmabuf_global(renderer: &GlesRenderer) -> Vec<Format> {
     out
 }
 
+fn client_allows_linux_dmabuf(_client: &smithay::reexports::wayland_server::Client, _dh: &DisplayHandle) -> bool {
+    true
+}
+
 pub(crate) fn normalize_capture_dmabuf_format(format: Format) -> Format {
     let modifier = if format.modifier == Modifier::Invalid {
         Modifier::Linear
@@ -1947,6 +1951,7 @@ impl CompositorState {
             .ok()
             .and_then(|device| device.try_get_render_node().ok().flatten());
         let render_node_dev_id = render_node.as_ref().map(|node| node.dev_id());
+        let display_handle = self.display_handle.clone();
         let global = render_node
             .and_then(|node| {
                 DmabufFeedbackBuilder::new(node.dev_id(), formats.iter().copied())
@@ -1955,14 +1960,23 @@ impl CompositorState {
             })
             .map(|feedback| {
                 self.dmabuf_state
-                    .create_global_with_default_feedback::<Self>(&self.display_handle, &feedback)
+                    .create_global_with_filter_and_default_feedback::<Self, _>(
+                        &self.display_handle,
+                        &feedback,
+                        move |client| client_allows_linux_dmabuf(client, &display_handle),
+                    )
             })
             .unwrap_or_else(|| {
                 tracing::warn!(
                     "linux-dmabuf global falling back to v3 without default feedback"
                 );
+                let display_handle = self.display_handle.clone();
                 self.dmabuf_state
-                    .create_global::<Self>(&self.display_handle, formats.iter().copied())
+                    .create_global_with_filter::<Self, _>(
+                        &self.display_handle,
+                        formats.iter().copied(),
+                        move |client| client_allows_linux_dmabuf(client, &display_handle),
+                    )
             });
         self.dmabuf_global = Some(global);
         self.capture_dmabuf_formats = formats
@@ -1971,7 +1985,7 @@ impl CompositorState {
             .map(normalize_capture_dmabuf_format)
             .collect();
         self.capture_dmabuf_device = render_node_dev_id;
-        tracing::debug!("linux-dmabuf global created (native client buffers)");
+        tracing::debug!("linux-dmabuf global created");
     }
 
     /// DRM session handle for **Ctrl+Alt+F1–F12** VT switching ([`crate::input`]).
@@ -4853,6 +4867,11 @@ impl CompositorState {
                 let i = self
                     .shell_window_info_to_output_local_layout(&info)
                     .unwrap_or_else(|| info.clone());
+                let capture_identifier = self
+                    .capture_toplevel_handles
+                    .get(&i.window_id)
+                    .map(|handle| handle.identifier())
+                    .unwrap_or_default();
                 shell_wire::ShellWindowSnapshot {
                     window_id: i.window_id,
                     surface_id: i.surface_id,
@@ -4873,6 +4892,7 @@ impl CompositorState {
                     title: i.title,
                     app_id: i.app_id,
                     output_name: i.output_name,
+                    capture_identifier,
                 }
             })
             .collect();

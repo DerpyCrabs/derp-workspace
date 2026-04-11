@@ -32,6 +32,7 @@ export type PortalScreencastRequestState =
   | {
       pending: true
       request_id: number
+      types: number | null
     }
 
 function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
@@ -106,7 +107,9 @@ function asPortalScreencastRequestState(value: unknown): PortalScreencastRequest
   if (typeof requestId !== 'number' || !Number.isInteger(requestId) || requestId < 1) {
     throw new Error('Invalid screencast picker response: bad request_id.')
   }
-  return { pending: true, request_id: requestId }
+  const types =
+    typeof row.types === 'number' && Number.isInteger(row.types) && row.types > 0 ? row.types : null
+  return { pending: true, request_id: requestId, types }
 }
 
 export async function fetchPortalScreencastRequestState(

@@ -271,6 +271,7 @@ pub fn apply_message(
                         "title": &w.title,
                         "app_id": &w.app_id,
                         "output_name": &w.output_name,
+                        "capture_identifier": &w.capture_identifier,
                     })
                 })
                 .collect();

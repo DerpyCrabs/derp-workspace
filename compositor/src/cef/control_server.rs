@@ -2,18 +2,26 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::cef::uplink::UplinkToCompositor;
 
 struct PortalScreencastRequest {
     request_id: u64,
+    types: Option<u32>,
     selection: Option<Option<String>>,
 }
 
 struct PortalScreencastState {
     next_request_id: u64,
     current: Option<PortalScreencastRequest>,
+    last_confirmed: Option<PortalScreencastSelection>,
+}
+
+struct PortalScreencastSelection {
+    types: Option<u32>,
+    selection: String,
+    confirmed_at: Instant,
 }
 
 fn portal_screencast_state() -> &'static (Mutex<PortalScreencastState>, Condvar) {
@@ -23,10 +31,15 @@ fn portal_screencast_state() -> &'static (Mutex<PortalScreencastState>, Condvar)
             Mutex::new(PortalScreencastState {
                 next_request_id: 1,
                 current: None,
+                last_confirmed: None,
             }),
             Condvar::new(),
         )
     })
+}
+
+fn can_reuse_portal_screencast_selection(request_types: Option<u32>, cached_types: Option<u32>) -> bool {
+    request_types == Some(2) && cached_types == Some(2)
 }
 
 fn cors_headers() -> &'static str {
@@ -183,19 +196,45 @@ fn portal_screencast_request_json() -> String {
     let state = lock.lock().expect("portal_screencast_state");
     if let Some(request) = state.current.as_ref() {
         if request.selection.is_none() {
-            return format!(r#"{{"pending":true,"request_id":{}}}"#, request.request_id);
+            return match request.types {
+                Some(types) => {
+                    format!(
+                        r#"{{"pending":true,"request_id":{},"types":{}}}"#,
+                        request.request_id, types
+                    )
+                }
+                None => format!(r#"{{"pending":true,"request_id":{}}}"#, request.request_id),
+            };
         }
     }
     r#"{"pending":false}"#.to_string()
 }
 
-fn portal_screencast_pick() -> String {
+fn portal_screencast_pick(v: &serde_json::Value) -> String {
     let (lock, condvar) = portal_screencast_state();
     let mut state = lock.lock().expect("portal_screencast_state");
+    let types = v
+        .get("types")
+        .and_then(|x| x.as_u64())
+        .and_then(|x| u32::try_from(x).ok())
+        .filter(|x| *x != 0);
+    let reuse = state.last_confirmed.take().and_then(|cached| {
+        if cached.confirmed_at.elapsed() <= Duration::from_secs(8)
+            && can_reuse_portal_screencast_selection(types, cached.types)
+        {
+            Some(cached.selection)
+        } else {
+            None
+        }
+    });
+    if let Some(selection) = reuse {
+        return selection;
+    }
     let request_id = state.next_request_id;
     state.next_request_id += 1;
     state.current = Some(PortalScreencastRequest {
         request_id,
+        types,
         selection: None,
     });
     condvar.notify_all();
@@ -242,7 +281,15 @@ fn portal_screencast_respond(v: &serde_json::Value) -> Result<(), String> {
     if current.request_id != request_id {
         return Ok(());
     }
-    current.selection = Some(selection);
+    let current_types = current.types;
+    current.selection = Some(selection.clone());
+    if let Some(selection) = selection {
+        state.last_confirmed = Some(PortalScreencastSelection {
+            types: current_types,
+            selection,
+            confirmed_at: Instant::now(),
+        });
+    }
     condvar.notify_all();
     Ok(())
 }
@@ -380,7 +427,7 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
 
     if req_path == "/portal_screencast_pick" {
-        let selection = portal_screencast_pick();
+        let selection = portal_screencast_pick(&v);
         write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
             .map_err(|e| e.to_string())?;
         return Ok(());

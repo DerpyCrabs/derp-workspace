@@ -660,6 +660,7 @@ pub struct ShellWindowSnapshot {
     pub title: String,
     pub app_id: String,
     pub output_name: String,
+    pub capture_identifier: String,
 }
 
 pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
@@ -674,15 +675,18 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         let tb = w.title.as_bytes();
         let ab = w.app_id.as_bytes();
         let ob = w.output_name.as_bytes();
+        let cb = w.capture_identifier.as_bytes();
         if tb.len() > MAX_WINDOW_STRING_BYTES as usize
             || ab.len() > MAX_WINDOW_STRING_BYTES as usize
             || ob.len() > MAX_WINDOW_STRING_BYTES as usize
+            || cb.len() > MAX_WINDOW_STRING_BYTES as usize
         {
             return None;
         }
         let tl = u32::try_from(tb.len()).ok()?;
         let al = u32::try_from(ab.len()).ok()?;
         let olen = u32::try_from(ob.len()).ok()?;
+        let clen = u32::try_from(cb.len()).ok()?;
         body.extend_from_slice(&w.window_id.to_le_bytes());
         body.extend_from_slice(&w.surface_id.to_le_bytes());
         body.extend_from_slice(&w.stack_z.to_le_bytes());
@@ -701,6 +705,8 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(ab);
         body.extend_from_slice(&olen.to_le_bytes());
         body.extend_from_slice(ob);
+        body.extend_from_slice(&clen.to_le_bytes());
+        body.extend_from_slice(cb);
     }
     let body_len = u32::try_from(body.len()).ok()?;
     if body_len > MAX_BODY_BYTES {
@@ -1821,7 +1827,7 @@ fn decode_window_list_compositor_body(
     let mut off = 8usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 52 > body.len() {
+        if off + 56 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -1879,6 +1885,21 @@ fn decode_window_list_compositor_body(
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
         off += output_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let capture_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if capture_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        if off + capture_len > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let capture_identifier = std::str::from_utf8(&body[off..off + capture_len])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += capture_len;
         windows.push(ShellWindowSnapshot {
             window_id,
             surface_id,
@@ -1895,6 +1916,7 @@ fn decode_window_list_compositor_body(
             title,
             app_id,
             output_name,
+            capture_identifier,
         });
     }
     if off != body.len() {
@@ -1977,6 +1999,55 @@ mod tests {
                     refresh_milli_hz: 60000,
                 }],
                 shell_chrome_primary: Some("DP-1".to_string()),
+            })
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn window_list_round_trip_preserves_capture_identifier() {
+        let packet = encode_window_list(&[ShellWindowSnapshot {
+            window_id: 7,
+            surface_id: 9,
+            stack_z: 11,
+            x: 13,
+            y: 15,
+            w: 640,
+            h: 480,
+            minimized: 0,
+            maximized: 1,
+            fullscreen: 0,
+            client_side_decoration: 1,
+            shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
+            title: "Example".to_string(),
+            app_id: "app.example".to_string(),
+            output_name: "DP-1".to_string(),
+            capture_identifier: "capture-identifier-123".to_string(),
+        }])
+        .unwrap();
+        let mut buf = packet;
+
+        assert_eq!(
+            pop_compositor_to_shell_message(&mut buf).unwrap(),
+            Some(DecodedCompositorToShellMessage::WindowList {
+                windows: vec![ShellWindowSnapshot {
+                    window_id: 7,
+                    surface_id: 9,
+                    stack_z: 11,
+                    x: 13,
+                    y: 15,
+                    w: 640,
+                    h: 480,
+                    minimized: 0,
+                    maximized: 1,
+                    fullscreen: 0,
+                    client_side_decoration: 1,
+                    shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
+                    title: "Example".to_string(),
+                    app_id: "app.example".to_string(),
+                    output_name: "DP-1".to_string(),
+                    capture_identifier: "capture-identifier-123".to_string(),
+                }]
             })
         );
         assert!(buf.is_empty());

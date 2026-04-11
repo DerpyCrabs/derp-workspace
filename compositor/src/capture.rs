@@ -108,16 +108,36 @@ impl CompositorState {
             .filter(|record| record.kind != crate::window_registry::WindowKind::ShellHosted)
             .filter(|record| shell_window_row_should_show(&record.info))
             .filter(|record| !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id))
-            .map(|record| CaptureSourceDescriptor {
-                key: CaptureSourceKey::Window(record.info.window_id),
-                title: record.info.title.clone(),
-                app_id: record.info.app_id.clone(),
-                output_name: record.info.output_name.clone(),
-                logical_rect: Rectangle::new(
-                    (record.info.x, record.info.y).into(),
-                    (record.info.width.max(1), record.info.height.max(1)).into(),
-                ),
-                buffer_size: Size::from((record.info.width.max(1), record.info.height.max(1))),
+            .map(|record| {
+                let logical_rect = self
+                    .space
+                    .elements()
+                    .find(|elem| self.derp_elem_window_id(elem) == Some(record.info.window_id))
+                    .and_then(|elem| self.space.element_geometry(elem))
+                    .unwrap_or_else(|| {
+                        Rectangle::new(
+                            (record.info.x, record.info.y).into(),
+                            (record.info.width.max(1), record.info.height.max(1)).into(),
+                        )
+                    });
+                let scale = self
+                    .space
+                    .outputs()
+                    .find(|output| output.name() == record.info.output_name)
+                    .map(|output| output.current_scale().fractional_scale())
+                    .unwrap_or(1.0);
+                let buffer_size = Size::from((
+                    ((logical_rect.size.w as f64) * scale).round().max(1.0) as i32,
+                    ((logical_rect.size.h as f64) * scale).round().max(1.0) as i32,
+                ));
+                CaptureSourceDescriptor {
+                    key: CaptureSourceKey::Window(record.info.window_id),
+                    title: record.info.title.clone(),
+                    app_id: record.info.app_id.clone(),
+                    output_name: record.info.output_name.clone(),
+                    logical_rect,
+                    buffer_size,
+                }
             })
             .collect()
     }

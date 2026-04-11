@@ -1,3 +1,4 @@
 [screencast]
 chooser_type=simple
 chooser_cmd=@DERP_SCREENCAST_PICKER@
+force_mod_linear=0

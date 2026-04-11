@@ -198,27 +198,6 @@ function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): LayoutScree
   }
 }
 
-function screenUnionBBox(rows: LayoutScreen[]): { x: number; y: number; w: number; h: number } | null {
-  if (rows.length === 0) return null
-  let minX = Infinity
-  let minY = Infinity
-  let maxR = -Infinity
-  let maxB = -Infinity
-  for (const row of rows) {
-    minX = Math.min(minX, row.x)
-    minY = Math.min(minY, row.y)
-    maxR = Math.max(maxR, row.x + row.width)
-    maxB = Math.max(maxB, row.y + row.height)
-  }
-  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
-  return {
-    x: minX,
-    y: minY,
-    w: Math.max(1, Math.round(maxR - minX)),
-    h: Math.max(1, Math.round(maxB - minY)),
-  }
-}
-
 function monitorRefreshLabel(milli: number): string {
   if (!milli || milli <= 0) return '—'
   const hz = milli / 1000
@@ -356,6 +335,7 @@ type DerpWindow = {
   maximized: boolean
   fullscreen: boolean
   shell_flags: number
+  capture_identifier: string
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -413,6 +393,10 @@ function buildWindowsMapFromList(
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
       shell_flags,
+      capture_identifier:
+        typeof r.capture_identifier === 'string'
+          ? r.capture_identifier
+          : (prev?.get(wid)?.capture_identifier ?? ''),
     })
   }
   return next
@@ -441,6 +425,7 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
         maximized: false,
         fullscreen: false,
         shell_flags: next.get(wid)?.shell_flags ?? 0,
+        capture_identifier: next.get(wid)?.capture_identifier ?? '',
       })
       break
     }
@@ -735,6 +720,7 @@ function App() {
     null,
   )
   const [portalPickerRequestId, setPortalPickerRequestId] = createSignal<number | null>(null)
+  const [portalPickerTypes, setPortalPickerTypes] = createSignal<number | null>(null)
   const [portalPickerBusy, setPortalPickerBusy] = createSignal(false)
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
@@ -853,10 +839,11 @@ function App() {
     if (!portalPickerVisible()) return
     setPortalPickerBusy(false)
     setPortalPickerRequestId(null)
+    setPortalPickerTypes(null)
     hideShellFloatingWire()
   }
 
-  function beginPortalPicker(requestId: number) {
+  function beginPortalPicker(requestId: number, types: number | null) {
     if (portalPickerRequestId() === requestId) return
     if (screenshotMode()) stopScreenshotMode()
     shellContextMenus.hideContextMenu()
@@ -864,6 +851,7 @@ function App() {
     clearShellActionIssue()
     setPortalPickerBusy(false)
     setPortalPickerRequestId(requestId)
+    setPortalPickerTypes(types)
   }
 
   async function resolvePortalPicker(selection: string | null) {
@@ -964,7 +952,7 @@ function App() {
       try {
         const state = await fetchPortalScreencastRequestState(base)
         if (cancelled) return
-        if (state.pending) beginPortalPicker(state.request_id)
+        if (state.pending) beginPortalPicker(state.request_id, state.types)
         else closePortalPickerUi()
       } catch (error) {
         if (!cancelled && portalPickerVisible()) {
@@ -1314,6 +1302,22 @@ function App() {
     )
   }
 
+  const portalPickerWindows = createMemo(() => {
+    return [...windowsList()]
+      .filter((w) => !w.minimized)
+      .filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0)
+      .filter((w) => w.capture_identifier.trim().length > 0)
+      .sort((a, b) => {
+        const aFocused = focusedWindowId() === a.window_id ? 1 : 0
+        const bFocused = focusedWindowId() === b.window_id ? 1 : 0
+        if (aFocused !== bFocused) return bFocused - aFocused
+        if (a.stack_z !== b.stack_z) return b.stack_z - a.stack_z
+        const aTitle = (a.title || a.app_id).trim()
+        const bTitle = (b.title || b.app_id).trim()
+        return aTitle.localeCompare(bTitle)
+      })
+  })
+
   const portalPickerOutputs = createMemo(() => {
     return [...screenDraft.rows].sort((a, b) => {
       if (a.x !== b.x) return a.x - b.x
@@ -1324,7 +1328,7 @@ function App() {
 
   const portalPickerPreviewMetrics = createMemo(() => {
     const rows = portalPickerOutputs()
-    const union = screenUnionBBox(rows)
+    const union = unionBBoxFromScreens(rows)
     if (!union) return null
     const scale = Math.max(
       0.001,
@@ -1345,6 +1349,16 @@ function App() {
       width: Math.max(1, row.width * scale),
       height: Math.max(1, row.height * scale),
     }))
+  })
+
+  const portalPickerCanSelectMonitor = createMemo(() => {
+    const types = portalPickerTypes()
+    return types === null || (types & 1) !== 0
+  })
+
+  const portalPickerCanSelectWindow = createMemo(() => {
+    const types = portalPickerTypes()
+    return types === null || (types & 2) !== 0
   })
 
   const portalPickerLayout = createMemo(() => {
@@ -1407,7 +1421,6 @@ function App() {
         hideShellFloatingWire()
         return
       }
-      void portalPickerOutputs().length
       const layout = portalPickerLayout()
       const og = outputGeom()
       const ph = outputPhysical()
@@ -1466,9 +1479,19 @@ function App() {
               >
                 <div class="mb-4 flex items-start justify-between gap-4">
                   <div>
-                    <div class="text-lg font-semibold">Share a display</div>
+                    <div class="text-lg font-semibold">
+                      {portalPickerCanSelectMonitor() && !portalPickerCanSelectWindow()
+                        ? 'Share a display'
+                        : portalPickerCanSelectWindow() && !portalPickerCanSelectMonitor()
+                          ? 'Share a window'
+                          : 'Share a window or display'}
+                    </div>
                     <div class="text-(--shell-text-muted) text-sm">
-                      Pick which monitor `xdg-desktop-portal-wlr` should share.
+                      {portalPickerCanSelectMonitor() && !portalPickerCanSelectWindow()
+                        ? 'Pick a display for `xdg-desktop-portal-wlr`.'
+                        : portalPickerCanSelectWindow() && !portalPickerCanSelectMonitor()
+                          ? 'Pick a native window for `xdg-desktop-portal-wlr`.'
+                          : 'Pick a native window or display for `xdg-desktop-portal-wlr`.'}
                     </div>
                   </div>
                   <button
@@ -1482,59 +1505,131 @@ function App() {
                     {portalPickerBusy() ? 'Working…' : 'Cancel'}
                   </button>
                 </div>
-                <div class="border border-(--shell-border) bg-(--shell-surface) mb-3 rounded-lg p-2.5">
-                  <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                    <span class="text-[0.78rem] font-medium text-(--shell-text)">Monitor layout</span>
-                    <span class="text-[0.72rem] text-(--shell-text-dim)">
-                      Selection follows your saved display arrangement
-                    </span>
-                  </div>
-                  <div class="bg-(--shell-display-preview-bg) relative aspect-2/1 w-full overflow-hidden rounded-md border border-(--shell-border)">
-                    <div class="bg-(--shell-display-preview-glow) pointer-events-none absolute inset-0" />
-                    <For each={portalPickerPreviewMetrics() ?? []}>
-                      {(rect) => (
-                        (() => {
-                          const physical = physicalPixelsForScreen(rect.row, outputGeom(), outputPhysical())
-                          return (
-                            <button
-                              type="button"
-                              disabled={portalPickerBusy() || !rect.row.name}
-                              class="border border-(--shell-display-card-border) bg-(--shell-display-card-bg) text-(--shell-text) absolute flex flex-col items-start justify-between overflow-hidden rounded-md px-2 py-1.5 text-left transition-shadow hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
-                              classList={{
-                                'border-(--shell-display-card-primary-border) bg-(--shell-display-card-primary-bg)':
-                                  shellChromePrimaryName() === rect.row.name,
-                              }}
-                              style={{
-                                left: `${(rect.left / PORTAL_PICKER_PREVIEW_W) * 100}%`,
-                                top: `${(rect.top / PORTAL_PICKER_PREVIEW_H) * 100}%`,
-                                width: `${(rect.width / PORTAL_PICKER_PREVIEW_W) * 100}%`,
-                                height: `${(rect.height / PORTAL_PICKER_PREVIEW_H) * 100}%`,
-                              }}
-                              onClick={() => {
-                                void resolvePortalPicker(`Monitor: ${rect.row.name}`)
-                              }}
-                            >
-                              <div class="min-w-0">
-                                <div class="truncate text-[0.74rem] font-semibold">{rect.row.name || '—'}</div>
-                                <div class="text-[0.66rem] text-(--shell-text-muted)">
-                                  {formatMonitorPixels(physical.width, physical.height)}
+                <Show when={portalPickerCanSelectWindow()}>
+                  <div class="border border-(--shell-border) bg-(--shell-surface) mb-3 rounded-lg p-2.5">
+                    <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                      <span class="text-[0.78rem] font-medium text-(--shell-text)">Native windows</span>
+                      <span class="text-[0.72rem] text-(--shell-text-dim)">
+                        Shell-backed windows are hidden from sharing
+                      </span>
+                    </div>
+                    <Show
+                      when={portalPickerWindows().length > 0}
+                      fallback={
+                        <div class="text-(--shell-text-muted) rounded-md border border-dashed border-(--shell-border) px-3 py-6 text-center text-sm">
+                          No native windows are ready to share.
+                        </div>
+                      }
+                    >
+                      <div class="grid max-h-[min(24rem,40vh)] grid-cols-1 gap-2 overflow-auto pr-1 md:grid-cols-2">
+                        <For each={portalPickerWindows()}>
+                          {(win) => {
+                            const monitorName = win.output_name || 'Current display'
+                            const title = (win.title || win.app_id || 'Untitled window').trim()
+                            const appId = win.app_id.trim()
+                            return (
+                              <button
+                                type="button"
+                                disabled={portalPickerBusy()}
+                                class="border border-(--shell-border) bg-(--shell-surface-elevated) hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
+                                onClick={() => {
+                                  void resolvePortalPicker(`Window: ${win.capture_identifier}`)
+                                }}
+                              >
+                                <div class="flex items-start justify-between gap-2">
+                                  <div class="min-w-0">
+                                    <div class="truncate text-[0.82rem] font-semibold text-(--shell-text)">
+                                      {title}
+                                    </div>
+                                    <div class="truncate text-[0.72rem] text-(--shell-text-dim)">
+                                      {appId || 'Unknown app'}
+                                    </div>
+                                  </div>
+                                  <Show when={focusedWindowId() === win.window_id}>
+                                    <span class="rounded-full border border-(--shell-accent) px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide text-(--shell-accent)">
+                                      Focused
+                                    </span>
+                                  </Show>
                                 </div>
-                              </div>
-                              <Show when={shellChromePrimaryName() === rect.row.name}>
-                                <span class="rounded-full border border-(--shell-accent) px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide text-(--shell-accent)">
-                                  Primary
-                                </span>
-                              </Show>
-                            </button>
-                          )
-                        })()
-                      )}
-                    </For>
+                                <div class="flex flex-wrap gap-x-3 gap-y-1 text-[0.68rem] text-(--shell-text-muted)">
+                                  <span>{monitorName}</span>
+                                  <span>{formatMonitorPixels(win.width, win.height)}</span>
+                                  <Show when={win.fullscreen}>
+                                    <span>Fullscreen</span>
+                                  </Show>
+                                  <Show when={!win.fullscreen && win.maximized}>
+                                    <span>Maximized</span>
+                                  </Show>
+                                </div>
+                              </button>
+                            )
+                          }}
+                        </For>
+                      </div>
+                    </Show>
                   </div>
-                </div>
-                <Show when={portalPickerOutputs().length === 0}>
-                  <div class="text-(--shell-text-muted) rounded-xl border border-dashed border-(--shell-border) px-4 py-8 text-center text-sm">
-                    Waiting for display layout from the compositor.
+                </Show>
+                <Show when={portalPickerCanSelectMonitor()}>
+                  <div class="border border-(--shell-border) bg-(--shell-surface) mb-3 rounded-lg p-2.5">
+                    <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                      <span class="text-[0.78rem] font-medium text-(--shell-text)">Displays</span>
+                      <span class="text-[0.72rem] text-(--shell-text-dim)">
+                        Selection follows your saved display arrangement
+                      </span>
+                    </div>
+                    <Show
+                      when={portalPickerOutputs().length > 0}
+                      fallback={
+                        <div class="text-(--shell-text-muted) rounded-md border border-dashed border-(--shell-border) px-3 py-6 text-center text-sm">
+                          Waiting for display layout from the compositor.
+                        </div>
+                      }
+                    >
+                      <div class="bg-(--shell-display-preview-bg) relative aspect-2/1 w-full overflow-hidden rounded-md border border-(--shell-border)">
+                        <div class="bg-(--shell-display-preview-glow) pointer-events-none absolute inset-0" />
+                        <For each={portalPickerPreviewMetrics() ?? []}>
+                          {(rect) => (
+                            (() => {
+                              const physical = physicalPixelsForScreen(rect.row, outputGeom(), outputPhysical())
+                              return (
+                                <button
+                                  type="button"
+                                  disabled={portalPickerBusy() || !rect.row.name}
+                                  class="border border-(--shell-display-card-border) bg-(--shell-display-card-bg) text-(--shell-text) absolute flex flex-col items-start justify-between overflow-hidden rounded-md px-2 py-1.5 text-left transition-shadow hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
+                                  classList={{
+                                    'border-(--shell-display-card-primary-border) bg-(--shell-display-card-primary-bg)':
+                                      shellChromePrimaryName() === rect.row.name,
+                                  }}
+                                  style={{
+                                    left: `${(rect.left / PORTAL_PICKER_PREVIEW_W) * 100}%`,
+                                    top: `${(rect.top / PORTAL_PICKER_PREVIEW_H) * 100}%`,
+                                    width: `${(rect.width / PORTAL_PICKER_PREVIEW_W) * 100}%`,
+                                    height: `${(rect.height / PORTAL_PICKER_PREVIEW_H) * 100}%`,
+                                  }}
+                                  onClick={() => {
+                                    void resolvePortalPicker(`Monitor: ${rect.row.name}`)
+                                  }}
+                                >
+                                  <div class="min-w-0">
+                                    <div class="truncate text-[0.74rem] font-semibold">
+                                      {rect.row.name || '—'}
+                                    </div>
+                                    <div class="text-[0.66rem] text-(--shell-text-muted)">
+                                      {formatMonitorPixels(physical.width, physical.height)}
+                                    </div>
+                                  </div>
+                                  <Show when={shellChromePrimaryName() === rect.row.name}>
+                                    <span class="rounded-full border border-(--shell-accent) px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide text-(--shell-accent)">
+                                      Primary
+                                    </span>
+                                  </Show>
+                                </button>
+                              )
+                            })()
+                          )}
+                        </For>
+                      </div>
+                    </Show>
                   </div>
                 </Show>
               </div>

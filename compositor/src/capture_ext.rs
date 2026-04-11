@@ -9,10 +9,11 @@ use std::{
 
 use smithay::{
     backend::{
-        allocator::{dmabuf::Dmabuf, Buffer as AllocatorBuffer},
+        allocator::{dmabuf::Dmabuf, Buffer as AllocatorBuffer, Fourcc},
         renderer::{
-            gles::{GlesRenderer, GlesTarget},
-            Bind, Blit, TextureFilter,
+            element::Element,
+            gles::{GlesRenderer, GlesTarget, GlesTexture},
+            Bind, Blit, Frame, Offscreen, Renderer, TextureFilter,
         },
     },
     output::Output,
@@ -21,7 +22,7 @@ use smithay::{
         protocol::{wl_buffer::WlBuffer, wl_shm},
         Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
     },
-    utils::{Buffer, Logical, Physical, Rectangle, Size, Transform},
+    utils::{Buffer, Logical, Physical, Rectangle, Scale, Size, Transform},
     wayland::{
         dmabuf::get_dmabuf,
         foreign_toplevel_list::ForeignToplevelHandle,
@@ -100,6 +101,7 @@ pub(crate) struct PendingImageCopyCapture {
     frame: ExtImageCopyCaptureFrameV1,
     session: ExtImageCopyCaptureSessionV1,
     frame_active: Arc<AtomicBool>,
+    window_id: Option<u32>,
     output_name: String,
     output_logical_rect: Rectangle<i32, Logical>,
     logical_region: Rectangle<i32, Logical>,
@@ -113,6 +115,7 @@ struct CaptureWindowId(pub u32);
 #[derive(Debug)]
 struct ResolvedCaptureRequest {
     source: CaptureSourceDescriptor,
+    window_id: Option<u32>,
     output_name: String,
     output_logical_rect: Rectangle<i32, Logical>,
     logical_region: Rectangle<i32, Logical>,
@@ -205,42 +208,65 @@ impl CompositorState {
                 request.frame_active.store(false, Ordering::Release);
                 continue;
             }
+            let window_id = request.window_id;
             let write_result = match request.buffer.clone() {
-                ValidatedCaptureBuffer::Shm(buffer) => {
-                    let Some(image) = image.as_ref() else {
-                        fail_image_copy_request(
-                            request,
-                            ext_image_copy_capture_frame_v1::FailureReason::Unknown,
-                        );
-                        continue;
-                    };
-                    let cropped = match crop_capture_image(
-                        image,
+                ValidatedCaptureBuffer::Shm(buffer) => match window_id {
+                    Some(window_id) => render_window_capture_image(
+                        self,
+                        renderer,
+                        window_id,
+                        &request.output_name,
                         request.output_logical_rect,
                         request.logical_region,
-                    ) {
-                        Ok(cropped) => cropped,
-                        Err(error) => {
-                            warn!(%error, output = %output_name, "ext image copy crop failed");
+                        request.buffer_size,
+                    )
+                    .and_then(|rendered| write_image_to_shm_buffer(&buffer, &rendered)),
+                    None => {
+                        let Some(image) = image.as_ref() else {
                             fail_image_copy_request(
                                 request,
                                 ext_image_copy_capture_frame_v1::FailureReason::Unknown,
                             );
                             continue;
-                        }
-                    };
-                    write_image_to_shm_buffer(&buffer, &cropped)
-                }
-                ValidatedCaptureBuffer::Dmabuf(mut dmabuf) => {
-                    write_output_to_dmabuf(
+                        };
+                        let cropped = match crop_capture_image(
+                            image,
+                            request.output_logical_rect,
+                            request.logical_region,
+                        ) {
+                            Ok(cropped) => cropped,
+                            Err(error) => {
+                                warn!(%error, output = %output_name, "ext image copy crop failed");
+                                fail_image_copy_request(
+                                    request,
+                                    ext_image_copy_capture_frame_v1::FailureReason::Unknown,
+                                );
+                                continue;
+                            }
+                        };
+                        write_image_to_shm_buffer(&buffer, &cropped)
+                    }
+                },
+                ValidatedCaptureBuffer::Dmabuf(mut dmabuf) => match window_id {
+                    Some(window_id) => render_window_to_dmabuf(
+                        self,
+                        renderer,
+                        window_id,
+                        &request.output_name,
+                        request.output_logical_rect,
+                        request.logical_region,
+                        request.buffer_size,
+                        &mut dmabuf,
+                    ),
+                    None => write_output_to_dmabuf(
                         renderer,
                         framebuffer,
                         output_source.buffer_size,
                         request.output_logical_rect,
                         request.logical_region,
                         &mut dmabuf,
-                    )
-                }
+                    ),
+                },
             };
             if let Err(error) = write_result {
                 warn!(%error, output = %output_name, "ext image copy write failed");
@@ -298,9 +324,10 @@ impl CompositorState {
                 output_name: source.output_name.clone(),
                 output_logical_rect: source.logical_rect,
                 logical_region: source.logical_rect,
+                window_id: None,
                 source,
             }),
-            CaptureSourceKey::Window(_) => {
+            CaptureSourceKey::Window(window_id) => {
                 let output = self
                     .space
                     .outputs()
@@ -310,6 +337,7 @@ impl CompositorState {
                     output_name: output_source.output_name.clone(),
                     output_logical_rect: output_source.logical_rect,
                     logical_region: source.logical_rect,
+                    window_id: Some(*window_id),
                     source,
                 })
             }
@@ -358,23 +386,19 @@ fn send_session_constraints(
     if let Ok(mut size) = data.buffer_size.lock() {
         *size = descriptor.buffer_size;
     }
-    session.shm_format(wl_shm::Format::Argb8888.into());
-    let mut dmabuf_formats: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
-    for format in &state.capture_dmabuf_formats {
-        dmabuf_formats
-            .entry(format.code as u32)
-            .or_default()
-            .push(u64::from(format.modifier));
-    }
-    for (format, modifiers) in dmabuf_formats {
-        let mut bytes = Vec::with_capacity(modifiers.len() * std::mem::size_of::<u64>());
-        for modifier in modifiers {
-            bytes.extend_from_slice(&modifier.to_ne_bytes());
-        }
-        session.dmabuf_format(format, bytes);
-    }
+    session.shm_format(wl_shm::Format::Xrgb8888.into());
     if let Some(device) = state.capture_dmabuf_device {
-        session.dmabuf_device((device as u64).to_ne_bytes().to_vec());
+        session.dmabuf_device(device.to_ne_bytes().to_vec());
+        let mut formats: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        for format in &state.capture_dmabuf_formats {
+            formats
+                .entry(format.code as u32)
+                .or_default()
+                .extend_from_slice(&u64::from(format.modifier).to_ne_bytes());
+        }
+        for (code, modifiers) in formats {
+            session.dmabuf_format(code, modifiers);
+        }
     }
     session.buffer_size(descriptor.buffer_size.w as u32, descriptor.buffer_size.h as u32);
     session.done();
@@ -388,18 +412,18 @@ fn validate_ext_buffer(
     if let Ok(dmabuf) = get_dmabuf(buffer) {
         let dmabuf = dmabuf.clone();
         let actual = AllocatorBuffer::size(&dmabuf);
+        let format = normalize_capture_dmabuf_format(AllocatorBuffer::format(&dmabuf));
         if actual != expected_size {
             return Err("ext image copy buffer dimensions do not match advertised size".to_string());
         }
-        let format = normalize_capture_dmabuf_format(AllocatorBuffer::format(&dmabuf));
         if !state.capture_dmabuf_formats.contains(&format) {
             return Err("ext image copy dmabuf format is not advertised".to_string());
         }
         return Ok(ValidatedCaptureBuffer::Dmabuf(dmabuf));
     }
     with_buffer_contents_mut(buffer, |_, _, meta| {
-        if meta.format != wl_shm::Format::Argb8888 {
-            return Err("ext image copy requires wl_shm Argb8888".to_string());
+        if meta.format != wl_shm::Format::Xrgb8888 {
+            return Err("ext image copy requires wl_shm Xrgb8888".to_string());
         }
         if meta.width <= 0 || meta.height <= 0 {
             return Err("ext image copy buffer dimensions must be positive".to_string());
@@ -452,6 +476,173 @@ fn write_output_to_dmabuf(
     renderer
         .blit(framebuffer, &mut target, src, dst, TextureFilter::Linear)
         .map_err(|error| error.to_string())
+}
+
+fn render_window_output_texture(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    window_id: u32,
+    output_name: &str,
+) -> Result<
+    (
+        GlesTexture,
+        Size<i32, Buffer>,
+        Rectangle<i32, Logical>,
+        Option<Rectangle<i32, Physical>>,
+    ),
+    String,
+> {
+    let output = state
+        .space
+        .outputs()
+        .find(|output| output.name() == output_name)
+        .ok_or_else(|| "capture output is no longer available".to_string())?;
+    let output_source = state
+        .capture_output_source(&output)
+        .ok_or_else(|| "capture output source is no longer available".to_string())?;
+    let elements: Vec<_> =
+        crate::derp_space_render::derp_space_render_elements_with_window_ids(
+            &state.space,
+            state,
+            renderer,
+            &output,
+            1.0,
+        )
+        .into_iter()
+        .filter_map(|(el, wid)| (wid == Some(window_id)).then_some(el))
+        .collect();
+    let rendered_bounds = elements.iter().fold(None::<Rectangle<i32, Physical>>, |acc, el| {
+        let geo = el.geometry(Scale::from(1.0));
+        Some(match acc {
+            Some(bounds) => {
+                let left = bounds.loc.x.min(geo.loc.x);
+                let top = bounds.loc.y.min(geo.loc.y);
+                let right = (bounds.loc.x + bounds.size.w).max(geo.loc.x + geo.size.w);
+                let bottom = (bounds.loc.y + bounds.size.h).max(geo.loc.y + geo.size.h);
+                Rectangle::new((left, top).into(), (right - left, bottom - top).into())
+            }
+            None => geo,
+        })
+    });
+    let mut offscreen: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, output_source.buffer_size)
+        .map_err(|error| error.to_string())?;
+    {
+        let mut target = renderer.bind(&mut offscreen).map_err(|error| error.to_string())?;
+        let target_size =
+            Size::<i32, Physical>::from((output_source.buffer_size.w, output_source.buffer_size.h));
+        let damage = [Rectangle::from_size(target_size)];
+        let mut frame = renderer
+            .render(&mut target, target_size, Transform::Normal)
+            .map_err(|error| error.to_string())?;
+        frame
+            .clear([0.0, 0.0, 0.0, 0.0].into(), &damage)
+            .map_err(|error| error.to_string())?;
+        smithay::backend::renderer::utils::draw_render_elements(&mut frame, 1.0, &elements, &damage)
+            .map_err(|error| error.to_string())?;
+        let _ = frame.finish().map_err(|error| error.to_string())?;
+    }
+    Ok((
+        offscreen,
+        output_source.buffer_size,
+        output_source.logical_rect,
+        rendered_bounds,
+    ))
+}
+
+fn blit_capture_region_to_target(
+    renderer: &mut GlesRenderer,
+    source: &GlesTarget<'_>,
+    output_buffer_size: Size<i32, Buffer>,
+    output_rect: Rectangle<i32, Logical>,
+    capture_rect: Rectangle<i32, Logical>,
+    rendered_bounds: Option<Rectangle<i32, Physical>>,
+    target: &mut GlesTarget<'_>,
+    target_size: Size<i32, Buffer>,
+) -> Result<(), String> {
+    let capture_src = capture_region_buffer_rect(output_buffer_size, output_rect, capture_rect);
+    let src = rendered_bounds
+        .map(|bounds| {
+            let left = bounds.loc.x.max(capture_src.loc.x);
+            let top = bounds.loc.y.max(capture_src.loc.y);
+            let right =
+                (bounds.loc.x + bounds.size.w).min(capture_src.loc.x + capture_src.size.w);
+            let bottom =
+                (bounds.loc.y + bounds.size.h).min(capture_src.loc.y + capture_src.size.h);
+            if right > left && bottom > top {
+                Rectangle::new((left, top).into(), (right - left, bottom - top).into())
+            } else {
+                capture_src
+            }
+        })
+        .unwrap_or(capture_src);
+    let dst = Rectangle::new((0, 0).into(), (target_size.w, target_size.h).into());
+    renderer
+        .blit(source, target, src, dst, TextureFilter::Nearest)
+        .map_err(|error| error.to_string())
+}
+
+fn render_window_capture_image(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    window_id: u32,
+    output_name: &str,
+    output_rect: Rectangle<i32, Logical>,
+    capture_rect: Rectangle<i32, Logical>,
+    buffer_size: Size<i32, Buffer>,
+) -> Result<image::RgbaImage, String> {
+    let (mut source_offscreen, output_buffer_size, output_logical_rect, rendered_bounds) =
+        render_window_output_texture(state, renderer, window_id, output_name)?;
+    let source = renderer.bind(&mut source_offscreen).map_err(|error| error.to_string())?;
+    if output_buffer_size == buffer_size && output_logical_rect == output_rect && output_rect == capture_rect {
+        return crate::screenshot::capture_output_image(
+            renderer,
+            &source,
+            output_buffer_size,
+            Transform::Normal,
+        );
+    }
+    let mut cropped: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, buffer_size)
+        .map_err(|error| error.to_string())?;
+    let mut target = renderer.bind(&mut cropped).map_err(|error| error.to_string())?;
+    blit_capture_region_to_target(
+        renderer,
+        &source,
+        output_buffer_size,
+        output_rect,
+        capture_rect,
+        rendered_bounds,
+        &mut target,
+        buffer_size,
+    )?;
+    crate::screenshot::capture_output_image(renderer, &target, buffer_size, Transform::Normal)
+}
+
+fn render_window_to_dmabuf(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    window_id: u32,
+    output_name: &str,
+    output_rect: Rectangle<i32, Logical>,
+    capture_rect: Rectangle<i32, Logical>,
+    buffer_size: Size<i32, Buffer>,
+    dmabuf: &mut Dmabuf,
+) -> Result<(), String> {
+    let (mut source_offscreen, output_buffer_size, _, rendered_bounds) =
+        render_window_output_texture(state, renderer, window_id, output_name)?;
+    let source = renderer.bind(&mut source_offscreen).map_err(|error| error.to_string())?;
+    let mut target = renderer.bind(dmabuf).map_err(|error| error.to_string())?;
+    blit_capture_region_to_target(
+        renderer,
+        &source,
+        output_buffer_size,
+        output_rect,
+        capture_rect,
+        rendered_bounds,
+        &mut target,
+        buffer_size,
+    )
 }
 
 impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, (), CompositorState> for ExtImageCaptureManagerState {
@@ -789,6 +980,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                     frame: resource.clone(),
                     session: data.session.clone(),
                     frame_active: data.frame_active.clone(),
+                    window_id: resolved.window_id,
                     output_name: resolved.output_name,
                     output_logical_rect: resolved.output_logical_rect,
                     logical_region: resolved.logical_region,
