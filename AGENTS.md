@@ -1,5 +1,7 @@
 Project implements wayland compositor with the js shell running in CEF OSR. JS shell controls everything it can.
 Shell is written in solid js, mind the reactivity and performance.
+The current goal is to port most of the features from https://github.com/DerpyCrabs/derp-media-server
+by migrating tests and extending UX with support for multi-monitor configurations and native wayland windows in addition to js windows.
 All testing is on the remote machine, instead of asking user to do something add logs, update remote and fetch logs to debug.
 
 Rules:
@@ -13,3 +15,5 @@ Rules:
 - for compositor, native window lifecycle, or e2e harness changes add or update a remote e2e test and keep fetched local artifacts under .artifacts/e2e
 - if you need logs use ./scripts/fetch-logs.sh
 - debug everything yourself on remote machine (but if you add logs use warn and delete after debugging)
+- if you see that test is flaky or broken - check that it wasn't broken by you and always fix it even if you have unrelated task
+- flaky tests can be bugs in existing code, make sure that test is really flaky and not uncovering some bug
