@@ -189,6 +189,7 @@ wrap_load_handler! {
             host.set_focus(1);
             host.invalidate(PaintElementType::VIEW);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
+                state.shell_ipc_on_shell_load_success();
                 state.send_shell_output_layout();
             })));
         }

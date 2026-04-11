@@ -10,7 +10,6 @@
 #
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
 # REMOTE_HOST, REMOTE_REPO. quick_shell runs remote npm ci + build by default (tar excludes node_modules).
-# Set DERP_REMOTE_BUILD_SHELL=0 to skip remote npm (HMR: Vite on a dev machine).
 #
 # Auto mode compares the working tree to scripts/.derp-remote-update-snapshot (gitignored), not git:
 # uncommitted edits and multiple pushes between commits are detected from file contents.

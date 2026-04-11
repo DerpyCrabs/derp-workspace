@@ -428,6 +428,7 @@ pub struct CompositorState {
 
     /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
     shell_ipc_stall_timeout: Option<Duration>,
+    shell_ipc_watchdog_armed: bool,
     /// Last time a length-prefixed message was decoded from the shell peer.
     shell_ipc_last_rx: Option<Instant>,
     /// Last compositor ping sent (throttle while shell may reply with [`shell_wire::MSG_SHELL_PONG`]).
@@ -765,6 +766,7 @@ impl CompositorState {
             shell_resize_shell_grab: None,
             shell_ui_pointer_grab: None,
             shell_ipc_stall_timeout,
+            shell_ipc_watchdog_armed: false,
             shell_ipc_last_rx: None,
             shell_ipc_last_compositor_ping: None,
             shell_ipc_last_pong: None,
@@ -4228,6 +4230,15 @@ impl CompositorState {
         self.shell_ipc_last_rx = Some(Instant::now());
     }
 
+    pub(crate) fn shell_ipc_on_shell_load_success(&mut self) {
+        self.shell_ipc_watchdog_armed = true;
+        self.shell_ipc_last_rx = Some(Instant::now());
+        self.shell_ipc_last_compositor_ping = None;
+        self.shell_ipc_last_pong = None;
+        self.shell_ipc_unanswered_ping_since = None;
+        self.shell_ipc_ping_late_warned_for = None;
+    }
+
     pub(crate) fn shell_ipc_on_pong(&mut self) {
         self.shell_ipc_last_pong = Some(Instant::now());
         self.shell_ipc_ping_late_warned_for = None;
@@ -4239,10 +4250,15 @@ impl CompositorState {
             return;
         };
         if !self.shell_cef_active() {
+            self.shell_ipc_watchdog_armed = false;
+            self.shell_ipc_last_rx = None;
             self.shell_ipc_last_compositor_ping = None;
             self.shell_ipc_last_pong = None;
             self.shell_ipc_unanswered_ping_since = None;
             self.shell_ipc_ping_late_warned_for = None;
+            return;
+        }
+        if !self.shell_ipc_watchdog_armed {
             return;
         }
         let Some(last_rx) = self.shell_ipc_last_rx else {
