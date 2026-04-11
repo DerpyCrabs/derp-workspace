@@ -558,10 +558,13 @@ fn run_cef(
     let uplink = UplinkToCompositor::new(cef_tx.clone());
     let control_rx = crate::cef::control_server::start(uplink.clone());
     let inject_js = match control_rx.recv() {
-        Ok(Ok(port)) => Some(format!(
-            r#"window.__DERP_SPAWN_URL="http://127.0.0.1:{port}/spawn";window.__DERP_SHELL_HTTP="http://127.0.0.1:{port}";"#,
-            port = port
-        )),
+        Ok(Ok(port)) => {
+            let base = format!("http://127.0.0.1:{port}");
+            let _ = std::fs::write(crate::cef::runtime_dir().join("derp-shell-http-url"), &base);
+            Some(format!(
+                r#"window.__DERP_SPAWN_URL="{base}/spawn";window.__DERP_SHELL_HTTP="{base}";"#,
+            ))
+        }
         Ok(Err(error)) => {
             tracing::error!(%error, "cef: control server failed before binding");
             None

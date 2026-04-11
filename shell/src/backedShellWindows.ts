@@ -4,6 +4,7 @@ import { type CanvasOrigin, rectGlobalToCanvasLocal } from './shellCoords'
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
 export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
 export const SHELL_UI_SCREENSHOT_WINDOW_ID = 9003
+export const SHELL_UI_PORTAL_PICKER_WINDOW_ID = 9004
 
 export const SHELL_UI_DEBUG_TITLE = 'Debug'
 export const SHELL_UI_DEBUG_APP_ID = 'derp.debug'

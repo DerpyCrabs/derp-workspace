@@ -230,8 +230,13 @@ impl DrmHead {
                             for t in backdrop.textures {
                                 render_elements.push(DesktopStack::BackdropTex(t));
                             }
+                            let capture_needs_full_damage = state.active_image_copy_capture_sessions > 0
+                                || state.capture_force_full_damage_frames > 0
+                                || !state.pending_screencopy_copies.is_empty()
+                                || !state.pending_image_copy_captures.is_empty();
                             let age_for_render = if state.shell_exclusion_zones_need_full_damage
                                 || state.screenshot_overlay_needs_full_damage
+                                || capture_needs_full_damage
                             {
                                 0usize
                             } else {
@@ -247,6 +252,9 @@ impl DrmHead {
                             if out.is_ok() {
                                 state.shell_exclusion_zones_need_full_damage = false;
                                 state.screenshot_overlay_needs_full_damage = false;
+                                if state.capture_force_full_damage_frames > 0 {
+                                    state.capture_force_full_damage_frames -= 1;
+                                }
                             }
                             out
                         }
@@ -291,8 +299,13 @@ impl DrmHead {
                     for t in backdrop.textures {
                         render_elements.push(DesktopStack::BackdropTex(t));
                     }
+                    let capture_needs_full_damage = state.active_image_copy_capture_sessions > 0
+                        || state.capture_force_full_damage_frames > 0
+                        || !state.pending_screencopy_copies.is_empty()
+                        || !state.pending_image_copy_captures.is_empty();
                     let age_for_render = if state.shell_exclusion_zones_need_full_damage
                         || state.screenshot_overlay_needs_full_damage
+                        || capture_needs_full_damage
                     {
                         0usize
                     } else {
@@ -308,6 +321,9 @@ impl DrmHead {
                     if out.is_ok() {
                         state.shell_exclusion_zones_need_full_damage = false;
                         state.screenshot_overlay_needs_full_damage = false;
+                        if state.capture_force_full_damage_frames > 0 {
+                            state.capture_force_full_damage_frames -= 1;
+                        }
                     }
                     out
                 };

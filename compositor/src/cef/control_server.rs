@@ -1,8 +1,33 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 use crate::cef::uplink::UplinkToCompositor;
+
+struct PortalScreencastRequest {
+    request_id: u64,
+    selection: Option<Option<String>>,
+}
+
+struct PortalScreencastState {
+    next_request_id: u64,
+    current: Option<PortalScreencastRequest>,
+}
+
+fn portal_screencast_state() -> &'static (Mutex<PortalScreencastState>, Condvar) {
+    static STATE: OnceLock<(Mutex<PortalScreencastState>, Condvar)> = OnceLock::new();
+    STATE.get_or_init(|| {
+        (
+            Mutex::new(PortalScreencastState {
+                next_request_id: 1,
+                current: None,
+            }),
+            Condvar::new(),
+        )
+    })
+}
 
 fn cors_headers() -> &'static str {
     "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
@@ -28,18 +53,21 @@ fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<Result<u16, 
     std::thread::spawn(crate::cef::desktop_apps::warm_applications_cache);
 
     for conn in listener.incoming() {
-        let mut stream = match conn {
+        let stream = match conn {
             Ok(s) => s,
             Err(_) => continue,
         };
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         let uplink_cl = uplink.clone();
-        if let Err(e) = handle_one(&mut stream, &uplink_cl) {
-            let msg = e.replace('\r', "").replace('\n', "");
-            let body = format!(r#"{{"error":"{}"}}"#, msg.replace('"', "'"));
-            let _ = write_http_json_error(&mut stream, 500, &body);
-        }
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            if let Err(e) = handle_one(&mut stream, &uplink_cl) {
+                let msg = e.replace('\r', "").replace('\n', "");
+                let body = format!(r#"{{"error":"{}"}}"#, msg.replace('"', "'"));
+                let _ = write_http_json_error(&mut stream, 500, &body);
+            }
+        });
     }
 }
 
@@ -144,6 +172,81 @@ fn percent_decode_component(input: &str) -> Result<String, String> {
     String::from_utf8(out).map_err(|e| e.to_string())
 }
 
+fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
+    v.get(key)
+        .and_then(|x| x.as_u64())
+        .ok_or_else(|| format!("missing {key}"))
+}
+
+fn portal_screencast_request_json() -> String {
+    let (lock, _) = portal_screencast_state();
+    let state = lock.lock().expect("portal_screencast_state");
+    if let Some(request) = state.current.as_ref() {
+        if request.selection.is_none() {
+            return format!(r#"{{"pending":true,"request_id":{}}}"#, request.request_id);
+        }
+    }
+    r#"{"pending":false}"#.to_string()
+}
+
+fn portal_screencast_pick() -> String {
+    let (lock, condvar) = portal_screencast_state();
+    let mut state = lock.lock().expect("portal_screencast_state");
+    let request_id = state.next_request_id;
+    state.next_request_id += 1;
+    state.current = Some(PortalScreencastRequest {
+        request_id,
+        selection: None,
+    });
+    condvar.notify_all();
+    let timeout = Duration::from_secs(90);
+    let (mut state, _) = condvar
+        .wait_timeout_while(state, timeout, |state| {
+            state
+                .current
+                .as_ref()
+                .map(|request| request.request_id == request_id && request.selection.is_none())
+                .unwrap_or(false)
+        })
+        .expect("portal_screencast_state");
+    let selection = match state.current.take() {
+        Some(request) if request.request_id == request_id => request.selection.flatten(),
+        Some(request) => {
+            state.current = Some(request);
+            None
+        }
+        None => None,
+    };
+    selection.unwrap_or_default()
+}
+
+fn portal_screencast_respond(v: &serde_json::Value) -> Result<(), String> {
+    let request_id = json_u64_field(v, "request_id")?;
+    let selection = match v.get("selection") {
+        Some(serde_json::Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(serde_json::Value::Null) | None => None,
+        _ => return Err("selection must be a string or null".into()),
+    };
+    let (lock, condvar) = portal_screencast_state();
+    let mut state = lock.lock().expect("portal_screencast_state");
+    let Some(current) = state.current.as_mut() else {
+        return Ok(());
+    };
+    if current.request_id != request_id {
+        return Ok(());
+    }
+    current.selection = Some(selection);
+    condvar.notify_all();
+    Ok(())
+}
+
 fn wallpaper_preview_allowed(canon: &Path) -> bool {
     let Some(s) = canon.to_str() else {
         return false;
@@ -210,6 +313,12 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/portal_screencast_request" {
+        let json = portal_screencast_request_json();
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_app_usage" {
         let json = crate::desktop_app_usage::read_desktop_app_usage_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -270,6 +379,13 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
     let body_str = std::str::from_utf8(&body).map_err(|_| "invalid utf-8 body".to_string())?;
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
 
+    if req_path == "/portal_screencast_pick" {
+        let selection = portal_screencast_pick();
+        write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     match req_path {
         "/session_quit" => uplink.quit_compositor(),
         "/session_power" => {
@@ -322,6 +438,9 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         }
         "/screenshot_cancel" => {
             uplink.screenshot_cancel();
+        }
+        "/portal_screencast_respond" => {
+            portal_screencast_respond(&v)?;
         }
         _ => {
             write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)

@@ -25,6 +25,15 @@ function summarizeBody(body: string): string {
   return body.length > 200 ? `${body.slice(0, 200)}...` : body
 }
 
+export type PortalScreencastRequestState =
+  | {
+      pending: false
+    }
+  | {
+      pending: true
+      request_id: number
+    }
+
 function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
@@ -65,6 +74,60 @@ export async function postShellJson(path: string, body: object, base: string | n
       text,
     )
   }
+}
+
+export async function getShellJson(path: string, base: string | null): Promise<unknown> {
+  if (!base) {
+    throw new Error('Shell HTTP bridge is unavailable.')
+  }
+  const res = await fetch(`${base}${path}`)
+  const text = await res.text()
+  if (!res.ok) {
+    throw new ShellHttpError(
+      `Shell HTTP ${path} failed (${res.status}): ${summarizeBody(text) || 'empty response'}`,
+      res.status,
+      text,
+    )
+  }
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`Shell HTTP ${path} returned invalid JSON: ${error}`)
+  }
+}
+
+function asPortalScreencastRequestState(value: unknown): PortalScreencastRequestState {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Invalid screencast picker response: expected an object.')
+  }
+  const row = value as Record<string, unknown>
+  if (row.pending !== true) return { pending: false }
+  const requestId = row.request_id
+  if (typeof requestId !== 'number' || !Number.isInteger(requestId) || requestId < 1) {
+    throw new Error('Invalid screencast picker response: bad request_id.')
+  }
+  return { pending: true, request_id: requestId }
+}
+
+export async function fetchPortalScreencastRequestState(
+  base: string | null,
+): Promise<PortalScreencastRequestState> {
+  return asPortalScreencastRequestState(await getShellJson('/portal_screencast_request', base))
+}
+
+export async function respondPortalScreencastRequest(
+  requestId: number,
+  selection: string | null,
+  base: string | null,
+): Promise<void> {
+  await postShellJson(
+    '/portal_screencast_respond',
+    {
+      request_id: requestId,
+      selection,
+    },
+    base,
+  )
 }
 
 export async function beginScreenshotRegionMode(base: string | null): Promise<void> {

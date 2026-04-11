@@ -1,6 +1,7 @@
 import { clientRectToGlobalLogical } from './shellCoords'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
+  SHELL_UI_PORTAL_PICKER_WINDOW_ID,
   SHELL_UI_SCREENSHOT_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
 } from './backedShellWindows'

@@ -331,6 +331,8 @@ pub struct CompositorState {
     pub(crate) screenshot_selection_anchor: Option<Point<i32, Logical>>,
     pub(crate) screenshot_selection_current: Option<Point<i32, Logical>>,
     pub(crate) screenshot_overlay_needs_full_damage: bool,
+    pub(crate) capture_force_full_damage_frames: u8,
+    pub(crate) active_image_copy_capture_sessions: usize,
     pub popups: PopupManager,
 
     pub xwayland_shell_state: XWaylandShellState,
@@ -691,6 +693,8 @@ impl CompositorState {
             screenshot_selection_anchor: None,
             screenshot_selection_current: None,
             screenshot_overlay_needs_full_damage: false,
+            capture_force_full_damage_frames: 0,
+            active_image_copy_capture_sessions: 0,
             popups,
             xwayland_shell_state,
             x11_wm_slot: None,

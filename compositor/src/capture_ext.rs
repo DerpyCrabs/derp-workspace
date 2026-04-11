@@ -72,6 +72,7 @@ pub(crate) struct ImageCaptureSourceData {
 pub(crate) struct ImageCopyCaptureSessionState {
     source: CaptureSourceKey,
     frame_active: Arc<AtomicBool>,
+    registered_for_full_damage: AtomicBool,
     buffer_size: Mutex<Size<i32, Buffer>>,
 }
 
@@ -338,6 +339,16 @@ fn fail_image_copy_request(
     request.frame_active.store(false, Ordering::Release);
 }
 
+fn release_image_copy_session(state: &mut CompositorState, data: &ImageCopyCaptureSessionState) {
+    if data
+        .registered_for_full_damage
+        .swap(false, Ordering::AcqRel)
+        && state.active_image_copy_capture_sessions > 0
+    {
+        state.active_image_copy_capture_sessions -= 1;
+    }
+}
+
 fn send_session_constraints(
     state: &CompositorState,
     session: &ExtImageCopyCaptureSessionV1,
@@ -592,13 +603,16 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, (), CompositorState> for ExtImageCap
                 let session_data = ImageCopyCaptureSessionState {
                     source: source_data.key,
                     frame_active: Arc::new(AtomicBool::new(false)),
+                    registered_for_full_damage: AtomicBool::new(true),
                     buffer_size: Mutex::new(Size::from((1, 1))),
                 };
+                state.active_image_copy_capture_sessions += 1;
                 let session = data_init.init(session, session_data);
                 if let Some(data) = session.data::<ImageCopyCaptureSessionState>() {
                     if let Some(descriptor) = state.capture_source_descriptor(&data.source) {
                         send_session_constraints(state, &session, data, &descriptor);
                     } else {
+                        release_image_copy_session(state, data);
                         session.stopped();
                     }
                 }
@@ -650,7 +664,9 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ImageCopyCaptureSessionState, Compos
                 };
                 data_init.init(frame, frame_data);
             }
-            ext_image_copy_capture_session_v1::Request::Destroy => {}
+            ext_image_copy_capture_session_v1::Request::Destroy => {
+                release_image_copy_session(state, data);
+            }
             _ => {}
         }
     }
@@ -740,6 +756,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                 };
                 let Some(resolved) = state.resolve_image_copy_request(&session_data.source) else {
                     if data.session.is_alive() {
+                        release_image_copy_session(state, session_data);
                         data.session.stopped();
                     }
                     resource.failed(ext_image_copy_capture_frame_v1::FailureReason::Stopped);
@@ -778,6 +795,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                     buffer_size: resolved.source.buffer_size,
                     buffer: validated_buffer,
                 });
+                state.capture_force_full_damage_frames = state.capture_force_full_damage_frames.max(8);
                 state.loop_signal.wakeup();
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {

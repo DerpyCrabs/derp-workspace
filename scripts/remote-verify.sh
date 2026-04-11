@@ -64,6 +64,22 @@ if [[ ! -f /usr/local/share/xdg-desktop-portal/derp-portals.conf ]]; then
   echo "remote-verify: missing installed portal config: /usr/local/share/xdg-desktop-portal/derp-portals.conf" >&2
   exit 1
 fi
+if [[ ! -f /etc/xdg/xdg-desktop-portal-wlr/Derp ]]; then
+  echo "remote-verify: missing xdg-desktop-portal-wlr config: /etc/xdg/xdg-desktop-portal-wlr/Derp" >&2
+  exit 1
+fi
+if [[ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal-wlr/Derp" ]]; then
+  echo "remote-verify: missing user xdg-desktop-portal-wlr config: ${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal-wlr/Derp" >&2
+  exit 1
+fi
+if [[ ! -x /usr/local/bin/derp-screencast-picker ]]; then
+  echo "remote-verify: missing screencast picker helper: /usr/local/bin/derp-screencast-picker" >&2
+  exit 1
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "remote-verify: missing runtime command: curl" >&2
+  exit 1
+fi
 uid="$(id -u)"
 if [[ -S "/run/user/$uid/bus" ]] && command -v busctl >/dev/null 2>&1; then
   export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"

@@ -468,6 +468,7 @@ fn queue_screencopy_copy(
                 buffer,
                 with_damage,
             });
+            state.capture_force_full_damage_frames = state.capture_force_full_damage_frames.max(8);
             state.loop_signal.wakeup();
         }
         Err(error) => {

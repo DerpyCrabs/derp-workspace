@@ -72,8 +72,14 @@ import {
 } from './tileZones'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
 import { hideShellFloatingWire } from './shellFloatingWire'
+import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { getMonitorLayout } from './tilingConfig'
-import { postShellJson, spawnViaShellHttp } from './shellBridge'
+import {
+  fetchPortalScreencastRequestState,
+  postShellJson,
+  respondPortalScreencastRequest,
+  spawnViaShellHttp,
+} from './shellBridge'
 import { shellHttpBase } from './shellHttp'
 import { startThemeDomSync } from './themeDom'
 import { refreshThemeSettingsFromRemote } from './themeStore'
@@ -82,6 +88,7 @@ import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
 import type { AssistOverlayState, ExclusionHudZone, LayoutScreen } from './app/types'
+import { Portal } from 'solid-js/web'
 
 declare global {
   interface Window {
@@ -140,6 +147,10 @@ type ScreenshotSelectionState = {
   pointerId: number | null
 }
 
+const PORTAL_PICKER_PREVIEW_W = 520
+const PORTAL_PICKER_PREVIEW_H = 260
+const PORTAL_PICKER_PREVIEW_PAD = 16
+
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
   const th = CHROME_TITLEBAR_PX
   const tb = reserveTaskbar ? CHROME_TASKBAR_RESERVE_PX : 0
@@ -187,11 +198,50 @@ function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): LayoutScree
   }
 }
 
+function screenUnionBBox(rows: LayoutScreen[]): { x: number; y: number; w: number; h: number } | null {
+  if (rows.length === 0) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxR = -Infinity
+  let maxB = -Infinity
+  for (const row of rows) {
+    minX = Math.min(minX, row.x)
+    minY = Math.min(minY, row.y)
+    maxR = Math.max(maxR, row.x + row.width)
+    maxB = Math.max(maxB, row.y + row.height)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(1, Math.round(maxR - minX)),
+    h: Math.max(1, Math.round(maxB - minY)),
+  }
+}
+
 function monitorRefreshLabel(milli: number): string {
   if (!milli || milli <= 0) return '—'
   const hz = milli / 1000
   const t = hz.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
   return `${t} Hz`
+}
+
+function formatMonitorPixels(width: number, height: number): string {
+  return `${Math.max(1, Math.round(width))}x${Math.max(1, Math.round(height))}`
+}
+
+function physicalPixelsForScreen(
+  screen: Pick<LayoutScreen, 'width' | 'height'>,
+  outputGeom: { w: number; h: number } | null,
+  outputPhysical: { w: number; h: number } | null,
+) {
+  if (!outputGeom || !outputPhysical) return { width: screen.width, height: screen.height }
+  const sx = outputPhysical.w / Math.max(1, outputGeom.w)
+  const sy = outputPhysical.h / Math.max(1, outputGeom.h)
+  return {
+    width: Math.max(1, Math.round(screen.width * sx)),
+    height: Math.max(1, Math.round(screen.height * sy)),
+  }
 }
 
 function shellBuildLabelText(): string {
@@ -684,6 +734,8 @@ function App() {
   const [screenshotSelection, setScreenshotSelection] = createSignal<ScreenshotSelectionState | null>(
     null,
   )
+  const [portalPickerRequestId, setPortalPickerRequestId] = createSignal<number | null>(null)
+  const [portalPickerBusy, setPortalPickerBusy] = createSignal(false)
   const [exclusionZonesHud, setExclusionZonesHud] = createSignal<ExclusionHudZone[]>([])
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
@@ -696,6 +748,7 @@ function App() {
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
+  const portalPickerVisible = createMemo(() => portalPickerRequestId() !== null)
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
   let exclusionZonesRaf = 0
@@ -796,6 +849,37 @@ function App() {
     shellWireSend('shell_blur_ui_window')
   }
 
+  function closePortalPickerUi() {
+    if (!portalPickerVisible()) return
+    setPortalPickerBusy(false)
+    setPortalPickerRequestId(null)
+    hideShellFloatingWire()
+  }
+
+  function beginPortalPicker(requestId: number) {
+    if (portalPickerRequestId() === requestId) return
+    if (screenshotMode()) stopScreenshotMode()
+    shellContextMenus.hideContextMenu()
+    closeAllAtlasSelects()
+    clearShellActionIssue()
+    setPortalPickerBusy(false)
+    setPortalPickerRequestId(requestId)
+  }
+
+  async function resolvePortalPicker(selection: string | null) {
+    const requestId = portalPickerRequestId()
+    if (requestId === null || portalPickerBusy()) return
+    setPortalPickerBusy(true)
+    try {
+      await respondPortalScreencastRequest(requestId, selection, shellHttpBase())
+      closePortalPickerUi()
+      clearShellActionIssue()
+    } catch (error) {
+      setPortalPickerBusy(false)
+      reportShellActionIssue(`Screen share picker failed: ${describeError(error)}`)
+    }
+  }
+
   function waitForAnimationFrame() {
     return new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve())
@@ -866,6 +950,36 @@ function App() {
     reportShellActionIssue,
     describeError,
     dismissFloatingWire: hideShellFloatingWire,
+  })
+
+  createEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      const base = shellHttpBase()
+      if (!base) {
+        if (!cancelled) timer = setTimeout(() => void poll(), 400)
+        return
+      }
+      try {
+        const state = await fetchPortalScreencastRequestState(base)
+        if (cancelled) return
+        if (state.pending) beginPortalPicker(state.request_id)
+        else closePortalPickerUi()
+      } catch (error) {
+        if (!cancelled && portalPickerVisible()) {
+          closePortalPickerUi()
+          reportShellActionIssue(`Screen share picker failed: ${describeError(error)}`)
+        }
+      } finally {
+        if (!cancelled) timer = setTimeout(() => void poll(), portalPickerVisible() ? 150 : 400)
+      }
+    }
+    void poll()
+    onCleanup(() => {
+      cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
+    })
   })
 
   const workspacePartition = createMemo(() => {
@@ -1197,6 +1311,237 @@ function App() {
           )}
         </Show>
       </div>
+    )
+  }
+
+  const portalPickerOutputs = createMemo(() => {
+    return [...screenDraft.rows].sort((a, b) => {
+      if (a.x !== b.x) return a.x - b.x
+      if (a.y !== b.y) return a.y - b.y
+      return a.name.localeCompare(b.name)
+    })
+  })
+
+  const portalPickerPreviewMetrics = createMemo(() => {
+    const rows = portalPickerOutputs()
+    const union = screenUnionBBox(rows)
+    if (!union) return null
+    const scale = Math.max(
+      0.001,
+      Math.min(
+        (PORTAL_PICKER_PREVIEW_W - PORTAL_PICKER_PREVIEW_PAD * 2) / union.w,
+        (PORTAL_PICKER_PREVIEW_H - PORTAL_PICKER_PREVIEW_PAD * 2) / union.h,
+      ),
+    )
+    const contentW = union.w * scale
+    const contentH = union.h * scale
+    const offsetX = (PORTAL_PICKER_PREVIEW_W - contentW) / 2 - union.x * scale
+    const offsetY = (PORTAL_PICKER_PREVIEW_H - contentH) / 2 - union.y * scale
+    return rows.map((row, index) => ({
+      index,
+      row,
+      left: offsetX + row.x * scale,
+      top: offsetY + row.y * scale,
+      width: Math.max(1, row.width * scale),
+      height: Math.max(1, row.height * scale),
+    }))
+  })
+
+  const portalPickerLayout = createMemo(() => {
+    const main = mainRef
+    const og = outputGeom()
+    const target = workspacePartition().primary
+    if (!main || !og || !target) return null
+    const targetCss = layoutScreenCssRect(target, layoutCanvasOrigin())
+    const screenCss = canvasRectToClientCss(
+      targetCss.x,
+      targetCss.y,
+      targetCss.width,
+      targetCss.height,
+      main.getBoundingClientRect(),
+      og.w,
+      og.h,
+    )
+    const width = Math.max(320, Math.min(960, screenCss.width - 48))
+    const maxHeight = Math.max(280, screenCss.height - 48)
+    const stripHeight = Math.max(1, canvasCss().h - shellContextMenus.shellMenuAtlasTop())
+    const anchorX = Math.round(screenCss.left + (screenCss.width - width) / 2)
+    const anchorY = Math.round(screenCss.top + Math.max(24, (screenCss.height - maxHeight) / 2))
+    return {
+      placement: {
+        left: '50%',
+        top: `${Math.max(8, Math.round((stripHeight - maxHeight) / 2))}px`,
+        width: `${Math.round(width)}px`,
+        'max-height': `${Math.round(maxHeight)}px`,
+        transform: 'translateX(-50%)',
+      } as const,
+      anchor: {
+        x: anchorX,
+        y: anchorY,
+        alignAboveY: anchorY,
+      },
+    }
+  })
+
+  function PortalPickerOverlay() {
+    let panel: HTMLDivElement | undefined
+
+    onMount(() => {
+      acquireAtlasOverlayPointer()
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          void resolvePortalPicker(null)
+        }
+      }
+      document.addEventListener('keydown', onKeyDown, true)
+      onCleanup(() => {
+        document.removeEventListener('keydown', onKeyDown, true)
+        releaseAtlasOverlayPointer()
+        hideShellFloatingWire()
+      })
+    })
+
+    createEffect(() => {
+      if (!portalPickerVisible()) {
+        hideShellFloatingWire()
+        return
+      }
+      void portalPickerOutputs().length
+      const layout = portalPickerLayout()
+      const og = outputGeom()
+      const ph = outputPhysical()
+      const rid = requestAnimationFrame(() => {
+        const main = mainRef
+        const atlas = shellContextMenus.atlasHostEl()
+        if (!main || !atlas || !panel || !layout || !og || !ph) return
+        pushShellFloatingWireFromDom({
+          main,
+          atlasHost: atlas,
+          panel,
+          anchor: layout.anchor,
+          canvasW: og.w,
+          canvasH: og.h,
+          physicalW: ph.w,
+          physicalH: ph.h,
+          contextMenuAtlasBufferH: contextMenuAtlasBufferH(),
+          screens: screenDraft.rows,
+          layoutOrigin: layoutCanvasOrigin(),
+        })
+      })
+      onCleanup(() => cancelAnimationFrame(rid))
+    })
+
+    return (
+      <Show when={shellContextMenus.atlasHostEl()} keyed>
+        {(host) => (
+          <Portal mount={host}>
+            <div
+              class="absolute inset-0 z-90000"
+              onContextMenu={(e) => {
+                e.preventDefault()
+              }}
+              onPointerDown={(e) => {
+                if (!(e.target instanceof Node)) return
+                if (panel?.contains(e.target)) return
+                e.preventDefault()
+                e.stopPropagation()
+                void resolvePortalPicker(null)
+              }}
+            >
+              <div
+                ref={(el) => {
+                  panel = el
+                }}
+                class="absolute border border-white/12 bg-(--shell-overlay) p-5 text-(--shell-text) shadow-2xl"
+                style={
+                  portalPickerLayout()?.placement ?? {
+                    left: '50%',
+                    top: '8px',
+                    width: 'min(960px, calc(100vw - 48px))',
+                    'max-height': 'min(760px, calc(100% - 16px))',
+                    transform: 'translateX(-50%)',
+                  }
+                }
+              >
+                <div class="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <div class="text-lg font-semibold">Share a display</div>
+                    <div class="text-(--shell-text-muted) text-sm">
+                      Pick which monitor `xdg-desktop-portal-wlr` should share.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={portalPickerBusy()}
+                    class="rounded-lg border border-(--shell-border) px-3 py-1.5 text-sm text-(--shell-text-muted) transition-colors hover:bg-(--shell-hover)"
+                    onClick={() => {
+                      void resolvePortalPicker(null)
+                    }}
+                  >
+                    {portalPickerBusy() ? 'Working…' : 'Cancel'}
+                  </button>
+                </div>
+                <div class="border border-(--shell-border) bg-(--shell-surface) mb-3 rounded-lg p-2.5">
+                  <div class="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                    <span class="text-[0.78rem] font-medium text-(--shell-text)">Monitor layout</span>
+                    <span class="text-[0.72rem] text-(--shell-text-dim)">
+                      Selection follows your saved display arrangement
+                    </span>
+                  </div>
+                  <div class="bg-(--shell-display-preview-bg) relative aspect-2/1 w-full overflow-hidden rounded-md border border-(--shell-border)">
+                    <div class="bg-(--shell-display-preview-glow) pointer-events-none absolute inset-0" />
+                    <For each={portalPickerPreviewMetrics() ?? []}>
+                      {(rect) => (
+                        (() => {
+                          const physical = physicalPixelsForScreen(rect.row, outputGeom(), outputPhysical())
+                          return (
+                            <button
+                              type="button"
+                              disabled={portalPickerBusy() || !rect.row.name}
+                              class="border border-(--shell-display-card-border) bg-(--shell-display-card-bg) text-(--shell-text) absolute flex flex-col items-start justify-between overflow-hidden rounded-md px-2 py-1.5 text-left transition-shadow hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
+                              classList={{
+                                'border-(--shell-display-card-primary-border) bg-(--shell-display-card-primary-bg)':
+                                  shellChromePrimaryName() === rect.row.name,
+                              }}
+                              style={{
+                                left: `${(rect.left / PORTAL_PICKER_PREVIEW_W) * 100}%`,
+                                top: `${(rect.top / PORTAL_PICKER_PREVIEW_H) * 100}%`,
+                                width: `${(rect.width / PORTAL_PICKER_PREVIEW_W) * 100}%`,
+                                height: `${(rect.height / PORTAL_PICKER_PREVIEW_H) * 100}%`,
+                              }}
+                              onClick={() => {
+                                void resolvePortalPicker(`Monitor: ${rect.row.name}`)
+                              }}
+                            >
+                              <div class="min-w-0">
+                                <div class="truncate text-[0.74rem] font-semibold">{rect.row.name || '—'}</div>
+                                <div class="text-[0.66rem] text-(--shell-text-muted)">
+                                  {formatMonitorPixels(physical.width, physical.height)}
+                                </div>
+                              </div>
+                              <Show when={shellChromePrimaryName() === rect.row.name}>
+                                <span class="rounded-full border border-(--shell-accent) px-1.5 py-[0.08rem] text-[0.56rem] font-semibold uppercase tracking-wide text-(--shell-accent)">
+                                  Primary
+                                </span>
+                              </Show>
+                            </button>
+                          )
+                        })()
+                      )}
+                    </For>
+                  </div>
+                </div>
+                <Show when={portalPickerOutputs().length === 0}>
+                  <div class="text-(--shell-text-muted) rounded-xl border border-dashed border-(--shell-border) px-4 py-8 text-center text-sm">
+                    Waiting for display layout from the compositor.
+                  </div>
+                </Show>
+              </div>
+            </div>
+          </Portal>
+        )}
+      </Show>
     )
   }
 
@@ -2555,6 +2900,7 @@ function App() {
         })
       }
       if (screenshotMode()) stopScreenshotMode()
+      if (portalPickerVisible()) closePortalPickerUi()
     }
 
     const onWindowTouchEnd = () => {
@@ -2707,6 +3053,10 @@ function App() {
 
       <Show when={screenshotMode()}>
         <ScreenshotOverlay />
+      </Show>
+
+      <Show when={portalPickerVisible()}>
+        <PortalPickerOverlay />
       </Show>
 
       <ShellSurfaceLayers
