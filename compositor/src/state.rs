@@ -2031,6 +2031,8 @@ impl CompositorState {
             | "tile_right"
             | "tile_up"
             | "tile_down"
+            | "tab_next"
+            | "tab_previous"
             | "move_monitor_left"
             | "move_monitor_right" => self.shell_send_keybind(action),
             "cycle_keyboard_layout" => self.keyboard_cycle_layout_for_shortcut(),

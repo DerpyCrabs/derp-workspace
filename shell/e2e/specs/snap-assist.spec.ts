@@ -173,6 +173,10 @@ async function openPickerFromMaximizeButton(base: string, windowId: number): Pro
   return waitForPickerOpen(base, windowId)
 }
 
+async function focusShellWindow(base: string, window: WindowSnapshot): Promise<void> {
+  await clickPoint(base, window.x + window.width / 2, window.y + Math.min(80, Math.max(40, window.height / 4)))
+}
+
 async function focusNativeWindow(base: string, windowId: number): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
   const { compositor, shell } = await getSnapshots(base)
   if (compositor.focused_window_id === windowId) {
@@ -308,7 +312,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('maximize button picker snaps the settings window and keeps shell focus parity', async ({ base }) => {
     const opened = await openSettings(base, 'click')
-    await activateTaskbarWindow(base, opened.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    await focusShellWindow(base, opened.window)
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')
@@ -338,7 +342,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('maximize button right click opens picker and 3x3 top two-thirds keeps partial height', async ({ base }) => {
     const opened = await openSettings(base, 'click')
-    await activateTaskbarWindow(base, opened.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    await focusShellWindow(base, opened.window)
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')

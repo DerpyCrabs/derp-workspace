@@ -26,7 +26,7 @@ run_tar_sync() {
   remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && tar xzf -' "$REMOTE_REPO" "$REMOTE_REPO")
   (
     cd "$REPO_ROOT"
-    tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git .
+    tar czf - --exclude=target --exclude=shell/node_modules --exclude=shell/dist --exclude=.git --exclude=.artifacts .
   ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh" >/dev/null
 }
 

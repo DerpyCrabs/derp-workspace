@@ -55,6 +55,7 @@ type ShellWindowFrameProps = {
   onMaximize: () => void
   onClose: () => void
   shellUiRegister?: { id: number; z: number; getEnv: () => ShellUiMeasureEnv | null }
+  tabStrip?: JSX.Element
   children?: JSX.Element
 }
 
@@ -160,10 +161,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           }}
           onPointerDown={(e) => {
             if (!e.isPrimary || e.button !== 0) return
-            props.onFocusRequest?.()
+            if (!readAcc(props.focused)) props.onFocusRequest?.()
           }}
           onTouchStart={() => {
-            props.onFocusRequest?.()
+            if (!readAcc(props.focused)) props.onFocusRequest?.()
           }}
         >
           {props.children}
@@ -182,7 +183,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
-          props.onFocusRequest?.()
+          if (!readAcc(props.focused)) props.onFocusRequest?.()
           if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           e.preventDefault()
           e.stopPropagation()
@@ -192,7 +193,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
-          props.onFocusRequest?.()
+          if (!readAcc(props.focused)) props.onFocusRequest?.()
           if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
           const t = e.changedTouches[0]
           if (!t) return
@@ -204,15 +205,22 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(t.clientX, t.clientY)
         }}
       >
-        <span
-          class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
-          classList={{
-            'text-(--shell-text-muted)': !readAcc(props.focused),
-            'text-(--shell-text)': readAcc(props.focused),
-          }}
+        <Show
+          when={props.tabStrip}
+          fallback={
+            <span
+              class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
+              classList={{
+                'text-(--shell-text-muted)': !readAcc(props.focused),
+                'text-(--shell-text)': readAcc(props.focused),
+              }}
+            >
+              {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}
+            </span>
+          }
         >
-          {model()?.title || model()?.app_id || `window ${model()?.window_id ?? 0}`}
-        </span>
+          <div class="min-w-0 flex-1 overflow-hidden">{props.tabStrip}</div>
+        </Show>
         <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
@@ -228,7 +236,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             data-shell-maximize-trigger={model()?.window_id ?? 0}
             class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
-            onPointerDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              e.stopPropagation()
+              if (e.button !== 2) return
+              e.preventDefault()
+              props.onSnapAssistOpen?.(e.currentTarget.getBoundingClientRect())
+            }}
             onClick={() => props.onMaximize()}
             onContextMenu={(e) => {
               e.preventDefault()

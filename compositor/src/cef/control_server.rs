@@ -273,6 +273,50 @@ fn activate_shell_programs_menu_selection(
     )
 }
 
+fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
+    execute_shell_bridge_js(
+        browser,
+        "window.__DERP_E2E_OPEN_TEST_WINDOW&&window.__DERP_E2E_OPEN_TEST_WINDOW();".to_string(),
+    )
+}
+
+fn merge_shell_windows_into_group(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    source_window_id: u32,
+    target_window_id: u32,
+) -> Result<(), String> {
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_MERGE_WINDOWS&&window.__DERP_E2E_MERGE_WINDOWS({source_window_id},{target_window_id});"
+        ),
+    )
+}
+
+fn select_shell_grouped_window(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    window_id: u32,
+) -> Result<(), String> {
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_SELECT_GROUP_WINDOW&&window.__DERP_E2E_SELECT_GROUP_WINDOW({window_id});"
+        ),
+    )
+}
+
+fn cycle_shell_group_tabs(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    delta: i32,
+) -> Result<(), String> {
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_CYCLE_GROUP_TABS&&window.__DERP_E2E_CYCLE_GROUP_TABS({delta});"
+        ),
+    )
+}
+
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
     v.get(key)
         .and_then(|x| x.as_u64())
@@ -631,6 +675,35 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/shell_window/open" {
+        open_shell_test_window(browser)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/workspace/merge" {
+        let source_window_id = json_u32_field(&v, "source_window_id")?;
+        let target_window_id = json_u32_field(&v, "target_window_id")?;
+        merge_shell_windows_into_group(browser, source_window_id, target_window_id)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/workspace/select" {
+        let window_id = json_u32_field(&v, "window_id")?;
+        select_shell_grouped_window(browser, window_id)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/workspace/cycle" {
+        let delta = v.get("delta").and_then(|x| x.as_i64()).unwrap_or(1);
+        let delta = i32::try_from(delta).map_err(|_| "workspace cycle delta out of range".to_string())?;
+        cycle_shell_group_tabs(browser, delta)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/portal_screencast_pick" {
         let selection = portal_screencast_pick(&v);
         write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
@@ -734,6 +807,8 @@ fn handle_one(
             | "tile_right"
             | "tile_up"
             | "tile_down"
+            | "tab_next"
+            | "tab_previous"
             | "move_monitor_left"
             | "move_monitor_right" => {}
             _ => return Err("keybind: unsupported action".into()),

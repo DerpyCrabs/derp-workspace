@@ -26,6 +26,33 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
+async function switchSettingsPage(
+  base: string,
+  controlKey:
+    | 'settings_tab_user'
+    | 'settings_tab_displays'
+    | 'settings_tab_tiling'
+    | 'settings_tab_keyboard',
+  pageId: 'user' | 'displays' | 'tiling' | 'keyboard',
+  marker: string,
+): Promise<string> {
+  return waitFor(
+    `wait for settings ${pageId} page`,
+    async () => {
+      const html = await getShellHtml(base, '[data-settings-root]')
+      if (html.includes(`data-settings-active-page="${pageId}"`) && html.includes(marker)) {
+        return html
+      }
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = shell.controls?.[controlKey]
+      if (rect) await clickRect(base, rect)
+      return null
+    },
+    5000,
+    100,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('bootstrap snapshots and launcher catalog', async ({ base, state }) => {
     const { compositor, shell } = await getSnapshots(base)
@@ -50,50 +77,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(settingsOpen.shell.controls?.settings_tab_keyboard, 'missing settings keyboard tab rect')
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     await clickRect(base, settingsOpen.shell.controls.settings_tab_user)
-    const userHtml = await waitFor(
-      'wait for settings user page',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('data-settings-active-page="user"') && html.includes('data-settings-user-page')
-          ? html
-          : null
-      },
-      5000,
-      100,
+    const userHtml = await switchSettingsPage(base, 'settings_tab_user', 'user', 'data-settings-user-page')
+    const keyboardHtml = await switchSettingsPage(
+      base,
+      'settings_tab_keyboard',
+      'keyboard',
+      'Apply keyboard settings',
     )
-    await clickRect(base, settingsOpen.shell.controls.settings_tab_keyboard)
-    const keyboardHtml = await waitFor(
-      'wait for settings keyboard page',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('data-settings-active-page="keyboard"') &&
-          html.includes('data-settings-keyboard-page') &&
-          html.includes('Apply keyboard settings')
-          ? html
-          : null
-      },
-      5000,
-      100,
-    )
-    await clickRect(base, settingsOpen.shell.controls.settings_tab_tiling)
-    await waitFor(
-      'wait for settings tiling page',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('data-settings-active-page="tiling"') ? html : null
-      },
-      5000,
-      100,
-    )
-    await clickRect(base, settingsOpen.shell.controls.settings_tab_displays)
-    const settingsHtml = await waitFor(
-      'wait for settings displays page',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('data-settings-active-page="displays"') ? html : null
-      },
-      5000,
-      100,
+    await switchSettingsPage(base, 'settings_tab_tiling', 'tiling', 'data-settings-active-page="tiling"')
+    const settingsHtml = await switchSettingsPage(
+      base,
+      'settings_tab_displays',
+      'displays',
+      'data-settings-displays-page',
     )
     const keyboardSettings = await getJson(base, '/settings_keyboard')
     const userSettings = await getJson(base, '/settings_user')

@@ -12,11 +12,13 @@ import X from 'lucide-solid/icons/x'
 import { For, Show, createSignal, onCleanup, type Component } from 'solid-js'
 
 export type TaskbarWindowRow = {
+  group_id: string
   window_id: number
   title: string
   app_id: string
   minimized: boolean
   output_name: string
+  tab_count: number
 }
 
 export type TaskbarProps = {
@@ -48,7 +50,8 @@ const clockDateFormatter = new Intl.DateTimeFormat([], {
 })
 
 function windowLabel(w: TaskbarWindowRow) {
-  return w.title || w.app_id || `Window ${w.window_id}`
+  const label = w.title || w.app_id || `Window ${w.window_id}`
+  return w.tab_count > 1 ? `${label} (+${w.tab_count - 1})` : label
 }
 
 function keyboardIndicator(label: string) {
@@ -152,6 +155,7 @@ export function Taskbar(props: TaskbarProps) {
                 <button
                   type="button"
                   class="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left text-xs touch-manipulation"
+                  data-shell-taskbar-group={w.group_id}
                   data-shell-taskbar-window-activate={w.window_id}
                   aria-current={active() ? 'true' : undefined}
                   onClick={() => props.onTaskbarActivate(w.window_id)}

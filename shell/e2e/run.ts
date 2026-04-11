@@ -92,12 +92,14 @@ async function main(): Promise<void> {
       base,
       native_bin: nativeBin(),
       duration_ms: Date.now() - runStart,
+      timings: reporter.timingSummary(),
       settings_window_id: SHELL_UI_SETTINGS_WINDOW_ID,
       debug_window_id: SHELL_UI_DEBUG_WINDOW_ID,
       red_window_id: state.redSpawn?.window.window_id ?? null,
       green_window_id: state.greenSpawn?.window.window_id ?? null,
       launcher_window_id: state.launcherWindowId,
       crash_probe_window_id: state.crashProbe?.window.window_id ?? null,
+      shell_test_window_ids: [...state.spawnedShellWindowIds],
       tiled_output: state.tiledOutput,
       multi_monitor_native_move: state.multiMonitorNativeMove,
       multi_monitor_shell_move: state.multiMonitorShellMove,
@@ -117,7 +119,11 @@ async function main(): Promise<void> {
     )
     throw error
   } finally {
-    await cleanupShellWindows(base, [SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID])
+    await cleanupShellWindows(base, [
+      SHELL_UI_DEBUG_WINDOW_ID,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      ...state.spawnedShellWindowIds,
+    ])
     await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
     reporter.printSummary()
   }

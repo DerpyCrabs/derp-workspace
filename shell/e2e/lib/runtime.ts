@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 export const BTN_LEFT = 0x110
 export const BTN_RIGHT = 0x111
 export const NATIVE_APP_ID = 'derp.e2e.native'
+export const SHELL_TEST_APP_ID = 'derp.test-shell'
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
 export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
 export const RED_NATIVE_TITLE = 'Derp Native Red'
@@ -106,9 +107,26 @@ export interface ShellTaskbar {
 }
 
 export interface ShellTaskbarWindow {
+  group_id?: string
   window_id: number
+  tab_count?: number
   activate?: Rect | null
   close?: Rect | null
+}
+
+export interface ShellTabButton {
+  window_id: number
+  rect?: Rect | null
+  close?: Rect | null
+  active: boolean
+}
+
+export interface ShellTabGroup {
+  group_id: string
+  visible_window_id: number
+  hidden_window_ids: number[]
+  member_window_ids: number[]
+  tabs: ShellTabButton[]
 }
 
 export interface ShellWindowControls {
@@ -155,6 +173,7 @@ export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
   taskbar_windows: ShellTaskbarWindow[]
+  tab_groups?: ShellTabGroup[]
   window_controls?: ShellWindowControls[]
   controls: ShellControls
   settings_window_visible: boolean
@@ -198,6 +217,7 @@ export interface E2eState {
   redSpawn: NativeSpawnResult | null
   greenSpawn: NativeSpawnResult | null
   crashProbe: NativeSpawnResult | null
+  spawnedShellWindowIds: Set<number>
   launcherWindowId: number | null
   screenshot: { path?: string; [key: string]: unknown } | null
   multiMonitorNativeMove: { window_id: number; target_output: string } | null
@@ -220,9 +240,36 @@ export interface TestGroup {
   tests: TestEntry[]
 }
 
+export type TimingEvent = {
+  kind: 'wait' | 'step' | 'mark'
+  label: string
+  elapsedMs: number
+  totalMs?: number
+  attempts?: number
+  status?: 'passed' | 'timed_out' | 'errored'
+}
+
+type TestTimingResult = {
+  groupName: string
+  name: string
+  status: 'passed' | 'failed' | 'skipped'
+  elapsedMs: number
+  timings: TimingEvent[]
+}
+
+let activeTimingSink: TimingEvent[] | null = null
+
+function setActiveTimingSink(next: TimingEvent[] | null): void {
+  activeTimingSink = next
+}
+
+function recordTimingEvent(event: TimingEvent): void {
+  activeTimingSink?.push(event)
+}
+
 class Reporter {
   private readonly startedAt = Date.now()
-  private readonly results: Array<{ groupName: string; name: string; status: 'passed' | 'failed' | 'skipped'; elapsedMs: number }> = []
+  private readonly results: TestTimingResult[] = []
   private readonly startedGroups: string[] = []
   private readonly testCounts = new Map<string, number>()
   private readonly groups: string[]
@@ -245,25 +292,69 @@ class Reporter {
     this.testCounts.set(groupName, index)
     process.stdout.write(`  ${color(' RUN ', ANSI.bold, ANSI.black, ANSI.bgCyan)} ${color(`[${index}]`, ANSI.cyan)} ${name}\n`)
     const testStartedAt = Date.now()
+    const timings: TimingEvent[] = []
+    setActiveTimingSink(timings)
     try {
       const value = await fn()
       const elapsedMs = Date.now() - testStartedAt
-      this.results.push({ groupName, name, status: 'passed', elapsedMs })
+      this.results.push({ groupName, name, status: 'passed', elapsedMs, timings })
       process.stdout.write(`  ${color(' PASS ', ANSI.bold, ANSI.green)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
+      this.printSlowTimings(timings)
       return value
     } catch (error) {
       const elapsedMs = Date.now() - testStartedAt
       if (error instanceof SkipError) {
-        this.results.push({ groupName, name, status: 'skipped', elapsedMs })
+        this.results.push({ groupName, name, status: 'skipped', elapsedMs, timings })
         process.stdout.write(
           `  ${color(' SKIP ', ANSI.bold, ANSI.yellow)} ${name} ${color(error.message, ANSI.dim)} ${color(formatMs(elapsedMs), ANSI.dim)}\n`,
         )
+        this.printSlowTimings(timings)
         return null
       }
-      this.results.push({ groupName, name, status: 'failed', elapsedMs })
+      this.results.push({ groupName, name, status: 'failed', elapsedMs, timings })
       process.stdout.write(`  ${color(' FAIL ', ANSI.bold, ANSI.red)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
+      this.printSlowTimings(timings)
       throw error
+    } finally {
+      setActiveTimingSink(null)
     }
+  }
+
+  private printSlowTimings(timings: TimingEvent[]): void {
+    const slow = [...timings]
+      .filter((timing) => timing.elapsedMs >= 250)
+      .sort((a, b) => b.elapsedMs - a.elapsedMs)
+      .slice(0, 5)
+    for (const timing of slow) {
+      const attempts = timing.attempts && timing.attempts > 1 ? ` attempts ${timing.attempts}` : ''
+      const status = timing.kind === 'wait' && timing.status ? ` ${timing.status}` : ''
+      process.stdout.write(
+        `${color('   Time ', ANSI.dim)} ${timing.kind}${status} :: ${timing.label} ${color(`${formatMs(timing.elapsedMs)}${attempts}`, ANSI.dim)}\n`,
+      )
+    }
+  }
+
+  timingSummary() {
+    const tests = this.results.map((result) => ({
+      group_name: result.groupName,
+      test_name: result.name,
+      status: result.status,
+      elapsed_ms: result.elapsedMs,
+      timings: result.timings,
+      slowest_timing:
+        [...result.timings].sort((a, b) => b.elapsedMs - a.elapsedMs)[0] ?? null,
+    }))
+    const slowest = tests
+      .flatMap((test) =>
+        test.timings.map((timing) => ({
+          group_name: test.group_name,
+          test_name: test.test_name,
+          ...timing,
+        })),
+      )
+      .sort((a, b) => b.elapsedMs - a.elapsedMs)
+      .slice(0, 20)
+    return { tests, slowest }
   }
 
   printSummary(): void {
@@ -348,9 +439,24 @@ export function createTimingMarks(name: string): TimingMarks {
     process.stdout.write(
       `${color('   Time ', ANSI.dim)} ${name} :: ${label} ${color(`+${formatMs(deltaMs)} total ${formatMs(totalMs)}`, ANSI.dim)}\n`,
     )
+    recordTimingEvent({
+      kind: 'mark',
+      label: `${name} :: ${label}`,
+      elapsedMs: deltaMs,
+      totalMs,
+    })
   }
   const step = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const stepStartedAt = Date.now()
     const value = await fn()
+    const elapsedMs = Date.now() - stepStartedAt
+    recordTimingEvent({
+      kind: 'step',
+      label: `${name} :: ${label}`,
+      elapsedMs,
+      totalMs: Date.now() - startedAt,
+      status: 'passed',
+    })
     mark(label)
     return value
   }
@@ -366,6 +472,7 @@ export function createState(base: string): E2eState {
     redSpawn: null,
     greenSpawn: null,
     crashProbe: null,
+    spawnedShellWindowIds: new Set(),
     launcherWindowId: null,
     screenshot: null,
     multiMonitorNativeMove: null,
@@ -547,15 +654,33 @@ export function approxEqual(actual: number, expected: number, tolerance: number,
 export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 100): Promise<T> {
   const started = Date.now()
   let lastError: unknown = null
+  let attempts = 0
   while (Date.now() - started < timeoutMs) {
+    attempts += 1
     try {
       const value = await fn()
-      if (value) return value
+      if (value) {
+        recordTimingEvent({
+          kind: 'wait',
+          label: description,
+          elapsedMs: Date.now() - started,
+          attempts,
+          status: 'passed',
+        })
+        return value
+      }
     } catch (error) {
       lastError = error
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
+  recordTimingEvent({
+    kind: 'wait',
+    label: description,
+    elapsedMs: Date.now() - started,
+    attempts,
+    status: lastError ? 'errored' : 'timed_out',
+  })
   if (lastError) {
     throw new Error(`${description}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
   }
@@ -658,6 +783,14 @@ export function shellWindowById(snapshot: { windows: WindowSnapshot[] }, windowI
 
 export function taskbarEntry(shellSnapshot: ShellSnapshot, windowId: number): ShellTaskbarWindow | null {
   return shellSnapshot.taskbar_windows.find((entry) => entry.window_id === windowId) || null
+}
+
+export function tabGroupByWindow(shellSnapshot: ShellSnapshot, windowId: number): ShellTabGroup | null {
+  return shellSnapshot.tab_groups?.find((group) => group.member_window_ids.includes(windowId)) || null
+}
+
+export function tabGroupById(shellSnapshot: ShellSnapshot, groupId: string): ShellTabGroup | null {
+  return shellSnapshot.tab_groups?.find((group) => group.group_id === groupId) || null
 }
 
 export function windowControls(shellSnapshot: ShellSnapshot, windowId: number): ShellWindowControls | null {
@@ -905,6 +1038,56 @@ export async function openDebug(base: string): Promise<{ compositor: CompositorS
   assert(shell.controls?.taskbar_debug_toggle, 'missing taskbar debug toggle')
   await clickRect(base, shell.controls.taskbar_debug_toggle)
   return waitForDebugVisible(base)
+}
+
+export async function openShellTestWindow(
+  base: string,
+  state: E2eState,
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  const before = await getSnapshots(base)
+  const liveShellTestWindowIds = new Set(
+    before.shell.windows
+      .filter((entry) => entry.shell_hosted && entry.app_id === SHELL_TEST_APP_ID)
+      .map((entry) => entry.window_id),
+  )
+  await postJson(base, '/test/shell_window/open', {})
+  const result = await waitFor(
+    'wait for shell test window',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shell.windows.find(
+        (entry) =>
+          entry.shell_hosted &&
+          entry.app_id === SHELL_TEST_APP_ID &&
+          !liveShellTestWindowIds.has(entry.window_id),
+      )
+      return window ? { compositor, shell, window } : null
+    },
+    8000,
+    125,
+  )
+  state.spawnedShellWindowIds.add(result.window.window_id)
+  state.knownWindowIds.add(result.window.window_id)
+  return result
+}
+
+export async function mergeWindowsIntoGroup(
+  base: string,
+  sourceWindowId: number,
+  targetWindowId: number,
+): Promise<void> {
+  await postJson(base, '/test/workspace/merge', {
+    source_window_id: sourceWindowId,
+    target_window_id: targetWindowId,
+  })
+}
+
+export async function selectGroupedWindow(base: string, windowId: number): Promise<void> {
+  await postJson(base, '/test/workspace/select', { window_id: windowId })
+}
+
+export async function cycleGroupedTabs(base: string, delta: 1 | -1): Promise<void> {
+  await postJson(base, '/test/workspace/cycle', { delta })
 }
 
 export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {

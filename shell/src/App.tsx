@@ -40,7 +40,14 @@ import {
   rectGlobalToCanvasLocal,
 } from './shellCoords'
 import { SettingsPanel } from './SettingsPanel'
-import { buildBackedWindowOpenPayload } from './backedShellWindows'
+import {
+  buildBackedWindowOpenPayload,
+  buildShellTestWindowOpenPayload,
+  isShellTestWindowId,
+  shellTestWindowId,
+  shellTestWindowTitle,
+  SHELL_UI_TEST_APP_ID,
+} from './backedShellWindows'
 import {
   flushShellUiWindowsSyncNow,
   registerShellUiWindow,
@@ -91,6 +98,8 @@ import { createShellContextMenus } from './app/createShellContextMenus'
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
+import { ShellTestWindowContent } from './ShellTestWindowContent'
+import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import type {
   AssistOverlayState,
   ExclusionHudZone,
@@ -102,6 +111,19 @@ import type {
 } from './app/types'
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
+import { nextActiveWindowAfterRemoval, resolveGroupVisibleWindowId, windowLabel as groupedWindowLabel } from './tabGroupOps'
+import { buildTaskbarGroupRows } from './taskbarGroups'
+import {
+  cycleWorkspaceTab,
+  groupIdForWindow,
+  loadWorkspaceState,
+  mergeWorkspaceGroups,
+  persistWorkspaceState,
+  reconcileWorkspaceState,
+  setWorkspaceActiveTab,
+  workspaceStatesEqual,
+  type WorkspaceState,
+} from './workspaceState'
 
 declare global {
   interface Window {
@@ -157,6 +179,10 @@ declare global {
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_SET_PROGRAMS_MENU_QUERY?: (query: string) => boolean
     __DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION?: () => boolean
+    __DERP_E2E_OPEN_TEST_WINDOW?: () => boolean
+    __DERP_E2E_MERGE_WINDOWS?: (sourceWindowId: number, targetWindowId: number) => boolean
+    __DERP_E2E_SELECT_GROUP_WINDOW?: (windowId: number) => boolean
+    __DERP_E2E_CYCLE_GROUP_TABS?: (delta: number) => boolean
   }
 }
 
@@ -416,6 +442,14 @@ type DerpWindow = {
   fullscreen: boolean
   shell_flags: number
   capture_identifier: string
+}
+
+type WorkspaceGroupModel = {
+  id: string
+  members: DerpWindow[]
+  visibleWindowId: number
+  visibleWindow: DerpWindow
+  hiddenWindowIds: number[]
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -732,6 +766,7 @@ function App() {
     h: typeof window !== 'undefined' ? window.innerHeight : 600,
   })
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
+  const [workspaceState, setWorkspaceState] = createSignal<WorkspaceState>(loadWorkspaceState())
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<string | null>(null)
   const [volumeOverlay, setVolumeOverlay] = createSignal<{
@@ -1162,6 +1197,62 @@ function App() {
     return out
   })
 
+  createEffect(() => {
+    const liveWindowIds = windowsListIds()
+    setWorkspaceState((prev) => {
+      const next = reconcileWorkspaceState(prev, liveWindowIds)
+      return workspaceStatesEqual(prev, next) ? prev : next
+    })
+  })
+
+  createEffect(() => {
+    persistWorkspaceState(workspaceState())
+  })
+
+  const workspaceGroups = createMemo<WorkspaceGroupModel[]>(() => {
+    const state = workspaceState()
+    const windowsById = allWindowsMap()
+    const groups: WorkspaceGroupModel[] = []
+    for (const group of state.groups) {
+      const members = group.windowIds
+        .map((windowId) => windowsById.get(windowId))
+        .filter((window): window is DerpWindow => !!window)
+      if (members.length === 0) continue
+      const visibleWindowId = resolveGroupVisibleWindowId(state, group.id, members)
+      const visibleWindow =
+        members.find((window) => window.window_id === visibleWindowId) ??
+        members.find((window) => !window.minimized) ??
+        members[0]
+      if (!visibleWindow) continue
+      groups.push({
+        id: group.id,
+        members,
+        visibleWindowId: visibleWindow.window_id,
+        visibleWindow,
+        hiddenWindowIds: members
+          .map((window) => window.window_id)
+          .filter((windowId) => windowId !== visibleWindow.window_id),
+      })
+    }
+    groups.sort(
+      (a, b) =>
+        b.visibleWindow.stack_z - a.visibleWindow.stack_z ||
+        b.visibleWindow.window_id - a.visibleWindow.window_id,
+    )
+    return groups
+  })
+
+  const activeWorkspaceGroupId = createMemo(() => {
+    const focused = focusedWindowId()
+    return focused == null ? null : groupIdForWindow(workspaceState(), focused)
+  })
+
+  const focusedTaskbarWindowId = createMemo(() => {
+    const groupId = activeWorkspaceGroupId()
+    if (!groupId) return focusedWindowId()
+    return workspaceGroups().find((group) => group.id === groupId)?.visibleWindow.window_id ?? focusedWindowId()
+  })
+
   const dragSnapAssistContext = createMemo(() => {
     const windowId = dragWindowId()
     if (windowId == null) return null
@@ -1201,16 +1292,19 @@ function App() {
         rect: e2eSnapshotRect(taskbarEl, main, canvas, origin),
       }
     })
-    const taskbarWindowButtons = windowsList().map((w) => ({
-      window_id: w.window_id,
+    const taskbarGroupRows = buildTaskbarGroupRows(workspaceGroups())
+    const taskbarWindowButtons = taskbarGroupRows.map((row) => ({
+      group_id: row.group_id,
+      window_id: row.window_id,
+      tab_count: row.tab_count,
       activate: e2eQueryRect(
-        `[data-shell-taskbar-window-activate="${w.window_id}"]`,
+        `[data-shell-taskbar-window-activate="${row.window_id}"]`,
         main,
         canvas,
         origin,
       ),
       close: e2eQueryRect(
-        `[data-shell-taskbar-window-close="${w.window_id}"]`,
+        `[data-shell-taskbar-window-close="${row.window_id}"]`,
         main,
         canvas,
         origin,
@@ -1221,6 +1315,18 @@ function App() {
       titlebar: e2eQueryRect(`[data-shell-titlebar="${w.window_id}"]`, main, canvas, origin),
       maximize: e2eQueryRect(`[data-shell-maximize-trigger="${w.window_id}"]`, main, canvas, origin),
       snap_picker: e2eQueryRect(`[data-shell-snap-picker-trigger="${w.window_id}"]`, main, canvas, origin),
+    }))
+    const tabGroups = workspaceGroups().map((group) => ({
+      group_id: group.id,
+      visible_window_id: group.visibleWindowId,
+      hidden_window_ids: [...group.hiddenWindowIds],
+      member_window_ids: group.members.map((member) => member.window_id),
+      tabs: group.members.map((member) => ({
+        window_id: member.window_id,
+        rect: e2eQueryRect(`[data-workspace-tab="${member.window_id}"]`, main, canvas, origin),
+        close: e2eQueryRect(`[data-workspace-tab-close="${member.window_id}"]`, main, canvas, origin),
+        active: member.window_id === group.visibleWindowId,
+      })),
     }))
     const snapPreviewRect =
       main && canvas && activeSnapPreviewCanvas
@@ -1266,6 +1372,7 @@ function App() {
       snap_hover_span: assistOverlay()?.hoverSpan ?? null,
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
       window_stack_order: stackOrderedWindows.map((w) => w.window_id),
+      tab_groups: tabGroups,
       windows: windowsList().map((w) => ({
         window_id: w.window_id,
         title: w.title,
@@ -1383,21 +1490,219 @@ function App() {
     })
   })
 
-  function ShellDeskWindowRow(props: { windowId: number }) {
-    const winModel = createMemo((): ShellWindowModel | undefined => {
-      const r = allWindowsMap().get(props.windowId)
-      if (!r || r.minimized) return undefined
-      return { ...r, snap_tiled: perMonitorTiles.isTiled(props.windowId) }
+  function syncWindowGeometry(targetWindowId: number, fromWindow: DerpWindow) {
+    const layoutFlag = fromWindow.maximized ? SHELL_LAYOUT_MAXIMIZED : SHELL_LAYOUT_FLOATING
+    shellWireSend(
+      'set_geometry',
+      targetWindowId,
+      fromWindow.x,
+      fromWindow.y,
+      fromWindow.width,
+      fromWindow.height,
+      layoutFlag,
+    )
+    setWindows((map) => {
+      const current = map.get(targetWindowId)
+      if (!current) return map
+      const next = new Map(map)
+      next.set(targetWindowId, {
+        ...current,
+        x: fromWindow.x,
+        y: fromWindow.y,
+        width: fromWindow.width,
+        height: fromWindow.height,
+        output_name: fromWindow.output_name,
+        maximized: fromWindow.maximized,
+      })
+      return next
     })
-    const stackZ = createMemo(() => allWindowsMap().get(props.windowId)?.stack_z ?? 0)
-    const rowFocused = createMemo(() => focusedWindowId() === props.windowId)
-    const windowId = props.windowId
+  }
+
+  function focusWindowViaShell(windowId: number) {
+    const window = allWindowsMap().get(windowId)
+    if (!window) return false
+    if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
+      shellWireSend('shell_focus_ui_window', windowId)
+      return true
+    }
+    shellWireSend('taskbar_activate', windowId)
+    return true
+  }
+
+  function mergeGroupWindow(sourceWindowId: number, targetWindowId: number) {
+    if (sourceWindowId === targetWindowId) return false
+    const sourceWindow = allWindowsMap().get(sourceWindowId)
+    const targetWindow = allWindowsMap().get(targetWindowId)
+    if (!sourceWindow || !targetWindow) return false
+    setWorkspaceState((prev) => mergeWorkspaceGroups(prev, sourceWindowId, targetWindowId))
+    if (sourceWindow.output_name === targetWindow.output_name) {
+      syncWindowGeometry(sourceWindowId, targetWindow)
+    }
+    queueMicrotask(() => {
+      if (!sourceWindow.minimized) shellWireSend('minimize', sourceWindowId)
+    })
+    return true
+  }
+
+  function selectGroupWindow(windowId: number) {
+    const groupId = groupIdForWindow(workspaceState(), windowId)
+    if (!groupId) return false
+    const group = workspaceGroups().find((entry) => entry.id === groupId)
+    if (!group) return false
+    if (group.visibleWindowId === windowId) {
+      const window = allWindowsMap().get(windowId)
+      if (
+        window &&
+        !window.minimized &&
+        activeWorkspaceGroupId() === groupId &&
+        focusedWindowId() === windowId
+      ) {
+        return true
+      }
+      if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
+        shellWireSend('shell_focus_ui_window', windowId)
+        return true
+      }
+      return focusWindowViaShell(windowId)
+    }
+    const targetWindow = allWindowsMap().get(windowId)
+    if (targetWindow && targetWindow.output_name === group.visibleWindow.output_name) {
+      syncWindowGeometry(windowId, group.visibleWindow)
+    }
+    setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, windowId))
+    queueMicrotask(() => {
+      shellWireSend('taskbar_activate', windowId)
+      if (!group.visibleWindow.minimized) shellWireSend('minimize', group.visibleWindow.window_id)
+    })
+    return true
+  }
+
+  function closeGroupWindow(windowId: number) {
+    const groupId = groupIdForWindow(workspaceState(), windowId)
+    const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
+    const closingWindow = allWindowsMap().get(windowId)
+    if (groupId && group && closingWindow) {
+      const nextVisibleId = nextActiveWindowAfterRemoval(workspaceState(), groupId, windowId)
+      if (nextVisibleId !== null && group.visibleWindowId === windowId) {
+        const nextWindow = allWindowsMap().get(nextVisibleId)
+        if (nextWindow && nextWindow.output_name === closingWindow.output_name) {
+          syncWindowGeometry(nextVisibleId, closingWindow)
+        }
+        setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, nextVisibleId))
+        queueMicrotask(() => shellWireSend('taskbar_activate', nextVisibleId))
+      }
+    }
+    shellWireSend('close', windowId)
+  }
+
+  function cycleFocusedWorkspaceGroup(delta: 1 | -1) {
+    const fallbackWindowId = focusedTaskbarWindowId() ?? workspaceGroups()[0]?.visibleWindowId ?? null
+    const groupId =
+      activeWorkspaceGroupId() ??
+      (fallbackWindowId !== null ? groupIdForWindow(workspaceState(), fallbackWindowId) : null)
+    if (!groupId) return false
+    const next = cycleWorkspaceTab(workspaceState(), groupId, delta)
+    if (workspaceStatesEqual(next, workspaceState())) return false
+    const nextWindowId = next.activeTabByGroupId[groupId]
+    return selectGroupWindow(nextWindowId)
+  }
+
+  function renderShellWindowContent(windowId: number) {
+    if (windowId === SHELL_UI_DEBUG_WINDOW_ID) {
+      return (
+        <ShellDebugHudContent
+          onReload={() => location.reload()}
+          onCopySnapshot={copyDebugHudSnapshot}
+          shellBuildLabel={shellBuildLabel}
+          hudFps={hudFps}
+          crosshairCursor={crosshairCursor}
+          setCrosshairCursor={setCrosshairCursor}
+          outputGeom={outputGeom}
+          layoutUnionBbox={layoutUnionBbox}
+          layoutCanvasOrigin={layoutCanvasOrigin}
+          panelHostForHud={panelHostForHud}
+          shellChromePrimaryName={shellChromePrimaryName}
+          viewportCss={viewportCss}
+          windowsCount={() => windowsList().length}
+          pointerClient={pointerClient}
+          pointerInMain={pointerInMain}
+          rootPointerDowns={rootPointerDowns}
+          exclusionZonesHud={exclusionZonesHud}
+        />
+      )
+    }
+    if (windowId === SHELL_UI_SETTINGS_WINDOW_ID) {
+      return (
+        <SettingsPanel
+          screenDraft={screenDraft}
+          setScreenDraft={setScreenDraft}
+          shellChromePrimaryName={shellChromePrimaryName}
+          autoShellChromeMonitorName={autoShellChromeMonitorName}
+          canSessionControl={canSessionControl}
+          uiScalePercent={uiScalePercent}
+          orientationPickerOpen={orientationPickerOpen}
+          setOrientationPickerOpen={setOrientationPickerOpen}
+          tilingCfgRev={tilingCfgRev}
+          setTilingCfgRev={setTilingCfgRev}
+          perMonitorTiles={perMonitorTiles}
+          bumpSnapChrome={() => bumpSnapChrome()}
+          scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
+          applyAutoLayout={(name) => applyAutoLayout(name)}
+          setShellPrimary={(name) => shellWireSend('set_shell_primary', name)}
+          setUiScale={(pct) => shellWireSend('set_ui_scale', pct)}
+          applyCompositorLayoutFromDraft={() => {
+            const screens = screenDraft.rows.map((r) => ({
+              name: r.name,
+              x: r.x,
+              y: r.y,
+              transform: r.transform,
+            }))
+            shellWireSend('set_output_layout', JSON.stringify({ screens }))
+          }}
+          monitorRefreshLabel={monitorRefreshLabel}
+          keyboardLayoutLabel={keyboardLayoutLabel}
+          setDesktopBackgroundJson={(json) => shellWireSend('set_desktop_background', json)}
+        />
+      )
+    }
+    if (isShellTestWindowId(windowId)) {
+      const window = allWindowsMap().get(windowId)
+      return <ShellTestWindowContent windowId={windowId} title={window?.title || groupedWindowLabel({ window_id: windowId, title: '', app_id: SHELL_UI_TEST_APP_ID })} />
+    }
+    return undefined
+  }
+
+  createEffect(() => {
+    for (const group of workspaceGroups()) {
+      if (group.members.length < 2) continue
+      for (const hiddenWindowId of group.hiddenWindowIds) {
+        const window = allWindowsMap().get(hiddenWindowId)
+        if (window && !window.minimized) shellWireSend('minimize', hiddenWindowId)
+      }
+    }
+  })
+
+  function WorkspaceGroupFrame(props: { groupId: string }) {
+    const group = createMemo(() => workspaceGroups().find((entry) => entry.id === props.groupId) ?? null)
+    const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
+    const winModel = createMemo((): ShellWindowModel | undefined => {
+      const currentVisibleWindowId = visibleWindowId()
+      if (currentVisibleWindowId == null) return undefined
+      const r = allWindowsMap().get(currentVisibleWindowId)
+      if (!r || r.minimized) return undefined
+      return { ...r, snap_tiled: perMonitorTiles.isTiled(r.window_id) }
+    })
+    const stackZ = createMemo(() => {
+      const currentVisibleWindowId = visibleWindowId()
+      return currentVisibleWindowId == null ? 0 : (allWindowsMap().get(currentVisibleWindowId)?.stack_z ?? 0)
+    })
+    const rowFocused = createMemo(() => activeWorkspaceGroupId() === props.groupId)
     const deskShellUiReg = createMemo(() => {
       stackZ()
       outputGeom()
       layoutCanvasOrigin()
       return {
-        id: props.windowId,
+        id: visibleWindowId() ?? 0,
         z: stackZ(),
         getEnv: (): ShellUiMeasureEnv | null => {
           const main = mainRef
@@ -1413,84 +1718,61 @@ function App() {
       }
     })
     return (
-      <Show when={winModel} fallback={null}>
+      <Show when={winModel()} fallback={null}>
         <ShellWindowFrame
           win={winModel}
           repaintKey={snapChromeRev}
           stackZ={stackZ}
           focused={rowFocused}
           shellUiRegister={deskShellUiReg()}
+          tabStrip={
+            group() && group()!.members.length > 1 ? (
+              <WorkspaceTabStrip
+                groupId={props.groupId}
+                tabs={group()!.members.map((member) => ({
+                  window_id: member.window_id,
+                  title: member.title,
+                  app_id: member.app_id,
+                  active: member.window_id === group()!.visibleWindowId,
+                }))}
+                onSelectTab={selectGroupWindow}
+                onCloseTab={closeGroupWindow}
+              />
+            ) : undefined
+          }
           onFocusRequest={() => {
-            shellWireSend('shell_focus_ui_window', windowId)
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) focusWindowViaShell(currentVisibleWindowId)
           }}
-          onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(windowId, cx, cy)}
+          onTitlebarPointerDown={(cx, cy) => {
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) beginShellWindowMove(currentVisibleWindowId, cx, cy)
+          }}
           onSnapAssistOpen={(anchorRect) => {
-            shellWireSend('shell_focus_ui_window', windowId)
-            openSnapAssistPicker(windowId, 'button', anchorRect)
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId == null) return
+            focusWindowViaShell(currentVisibleWindowId)
+            openSnapAssistPicker(currentVisibleWindowId, 'button', anchorRect)
           }}
-          onResizeEdgeDown={(edges, cx, cy) => beginShellWindowResize(windowId, edges, cx, cy)}
+          onResizeEdgeDown={(edges, cx, cy) => {
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) beginShellWindowResize(currentVisibleWindowId, edges, cx, cy)
+          }}
           onMinimize={() => {
-            shellWireSend('minimize', windowId)
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) shellWireSend('minimize', currentVisibleWindowId)
           }}
           onMaximize={() => {
-            toggleShellMaximizeForWindow(windowId)
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) toggleShellMaximizeForWindow(currentVisibleWindowId)
           }}
           onClose={() => {
-            shellWireSend('close', windowId)
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) closeGroupWindow(currentVisibleWindowId)
           }}
         >
-          <Show when={windowId === SHELL_UI_DEBUG_WINDOW_ID}>
-            <ShellDebugHudContent
-              onReload={() => location.reload()}
-              onCopySnapshot={copyDebugHudSnapshot}
-              shellBuildLabel={shellBuildLabel}
-              hudFps={hudFps}
-              crosshairCursor={crosshairCursor}
-              setCrosshairCursor={setCrosshairCursor}
-              outputGeom={outputGeom}
-              layoutUnionBbox={layoutUnionBbox}
-              layoutCanvasOrigin={layoutCanvasOrigin}
-              panelHostForHud={panelHostForHud}
-              shellChromePrimaryName={shellChromePrimaryName}
-              viewportCss={viewportCss}
-              windowsCount={() => windowsList().length}
-              pointerClient={pointerClient}
-              pointerInMain={pointerInMain}
-              rootPointerDowns={rootPointerDowns}
-              exclusionZonesHud={exclusionZonesHud}
-            />
-          </Show>
-          <Show when={windowId === SHELL_UI_SETTINGS_WINDOW_ID}>
-            <SettingsPanel
-              screenDraft={screenDraft}
-              setScreenDraft={setScreenDraft}
-              shellChromePrimaryName={shellChromePrimaryName}
-              autoShellChromeMonitorName={autoShellChromeMonitorName}
-              canSessionControl={canSessionControl}
-              uiScalePercent={uiScalePercent}
-              orientationPickerOpen={orientationPickerOpen}
-              setOrientationPickerOpen={setOrientationPickerOpen}
-              tilingCfgRev={tilingCfgRev}
-              setTilingCfgRev={setTilingCfgRev}
-              perMonitorTiles={perMonitorTiles}
-              bumpSnapChrome={() => bumpSnapChrome()}
-              scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
-              applyAutoLayout={(name) => applyAutoLayout(name)}
-              setShellPrimary={(name) => shellWireSend('set_shell_primary', name)}
-              setUiScale={(pct) => shellWireSend('set_ui_scale', pct)}
-              applyCompositorLayoutFromDraft={() => {
-                const screens = screenDraft.rows.map((r) => ({
-                  name: r.name,
-                  x: r.x,
-                  y: r.y,
-                  transform: r.transform,
-                }))
-                shellWireSend('set_output_layout', JSON.stringify({ screens }))
-              }}
-              monitorRefreshLabel={monitorRefreshLabel}
-              keyboardLayoutLabel={keyboardLayoutLabel}
-              setDesktopBackgroundJson={(json) => shellWireSend('set_desktop_background', json)}
-            />
+          <Show when={visibleWindowId() !== null}>
+            {renderShellWindowContent(visibleWindowId()!)}
           </Show>
         </ShellWindowFrame>
       </Show>
@@ -1964,19 +2246,26 @@ function App() {
     return map
   })
 
+  const taskbarGroupsByMonitor = createMemo(() => {
+    const part = workspacePartition()
+    const fallback =
+      part.primary.name || screenDraft.rows.find((row) => row.name)?.name || ''
+    const map = new Map<string, WorkspaceGroupModel[]>()
+    for (const group of workspaceGroups()) {
+      const key = group.visibleWindow.output_name || fallback
+      const bucket = map.get(key)
+      if (bucket) bucket.push(group)
+      else map.set(key, [group])
+    }
+    return map
+  })
+
   const taskbarScreens = createMemo(() =>
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
   function taskbarRowsForScreen(s: LayoutScreen) {
-    const list = windowsByMonitor().get(s.name) ?? []
-    return list.map((w) => ({
-      window_id: w.window_id,
-      title: w.title,
-      app_id: w.app_id,
-      minimized: w.minimized,
-      output_name: w.output_name,
-    }))
+    return buildTaskbarGroupRows(taskbarGroupsByMonitor().get(s.name) ?? [])
   }
 
   function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
@@ -2255,6 +2544,34 @@ function App() {
 
   function openSettingsShellWindow() {
     openBackedShellWindow('settings')
+  }
+
+  function nextShellTestWindowOpenId() {
+    const used = new Set(
+      windowsList()
+        .filter((window) => isShellTestWindowId(window.window_id) || window.app_id === SHELL_UI_TEST_APP_ID)
+        .map((window) => window.window_id),
+    )
+    for (let instance = 0; instance <= 99; instance += 1) {
+      const windowId = shellTestWindowId(instance)
+      if (!used.has(windowId)) return windowId
+    }
+    return null
+  }
+
+  function openShellTestWindow() {
+    const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
+    const co = layoutCanvasOrigin()
+    const part = workspacePartition()
+    const mon = list.find((screen) => screen.name === part.primary.name) ?? list[0] ?? null
+    const windowId = nextShellTestWindowOpenId()
+    if (!mon || windowId === null) return false
+    const reserveTb = reserveTaskbarForMon(mon)
+    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const title = shellTestWindowTitle(windowId - shellTestWindowId(0))
+    const payload = buildShellTestWindowOpenPayload(mon.name, work, windowId, title, co)
+    shellWireSend('backed_window_open', JSON.stringify(payload))
+    return true
   }
 
   function toggleShellMaximizeForWindow(wid: number) {
@@ -2923,6 +3240,12 @@ function App() {
           e2eActivateProgramsMenuSelection: () => boolean
         }
       ).e2eActivateProgramsMenuSelection()
+    window.__DERP_E2E_OPEN_TEST_WINDOW = () => openShellTestWindow()
+    window.__DERP_E2E_MERGE_WINDOWS = (sourceWindowId: number, targetWindowId: number) =>
+      mergeGroupWindow(sourceWindowId, targetWindowId)
+    window.__DERP_E2E_SELECT_GROUP_WINDOW = (windowId: number) => selectGroupWindow(windowId)
+    window.__DERP_E2E_CYCLE_GROUP_TABS = (delta: number) =>
+      cycleFocusedWorkspaceGroup(delta < 0 ? -1 : 1)
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
@@ -2993,6 +3316,14 @@ function App() {
         }
         if (action === 'open_settings') {
           toggleSettingsShellWindow()
+          return
+        }
+        if (action === 'tab_next') {
+          cycleFocusedWorkspaceGroup(1)
+          return
+        }
+        if (action === 'tab_previous') {
+          cycleFocusedWorkspaceGroup(-1)
           return
         }
         if (action === 'screenshot_region') {
@@ -3525,6 +3856,10 @@ function App() {
       delete window.__DERP_E2E_REQUEST_HTML
       delete window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY
       delete window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION
+      delete window.__DERP_E2E_OPEN_TEST_WINDOW
+      delete window.__DERP_E2E_MERGE_WINDOWS
+      delete window.__DERP_E2E_SELECT_GROUP_WINDOW
+      delete window.__DERP_E2E_CYCLE_GROUP_TABS
     })
   })
   onCleanup(() => {
@@ -3607,7 +3942,9 @@ function App() {
         )}
       </Show>
 
-      <For each={windowsListIds()}>{(wid) => <ShellDeskWindowRow windowId={wid as number} />}</For>
+      <For each={workspaceGroups().map((group) => group.id)}>
+        {(groupId) => <WorkspaceGroupFrame groupId={groupId} />}
+      </For>
 
       {volumeOverlayHud()}
 
@@ -3684,7 +4021,7 @@ function App() {
         powerMenuOpen={shellContextMenus.powerMenuOpen}
         onPowerMenuClick={shellContextMenus.onPowerMenuClick}
         taskbarRowsForScreen={taskbarRowsForScreen}
-        focusedWindowId={focusedWindowId}
+        focusedWindowId={focusedTaskbarWindowId}
         keyboardLayoutLabel={keyboardLayoutLabel}
         settingsHudFrameVisible={settingsHudFrameVisible}
         onSettingsPanelToggle={toggleSettingsShellWindow}
@@ -3694,10 +4031,25 @@ function App() {
           else minimizeDebugShellWindow()
         }}
         onTaskbarActivate={(id) => {
-          shellWireSend('taskbar_activate', id)
+          const groupId = groupIdForWindow(workspaceState(), id)
+          const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
+          if (!group) {
+            shellWireSend('taskbar_activate', id)
+            return
+          }
+          const visibleWindow = group.visibleWindow
+          if (visibleWindow.minimized) {
+            shellWireSend('taskbar_activate', visibleWindow.window_id)
+            return
+          }
+          if (activeWorkspaceGroupId() === group.id) {
+            shellWireSend('minimize', visibleWindow.window_id)
+            return
+          }
+          shellWireSend('taskbar_activate', visibleWindow.window_id)
         }}
         onTaskbarClose={(id) => {
-          shellWireSend('close', id)
+          closeGroupWindow(id)
         }}
         snapStrip={snapStripState}
         snapStripScreen={() => dragSnapAssistContext()?.screen ?? null}

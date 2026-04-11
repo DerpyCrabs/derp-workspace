@@ -49,6 +49,8 @@ pub(crate) fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Opt
         KEY_d | KEY_D => Some("toggle_programs_menu"),
         KEY_f | KEY_F => Some("toggle_fullscreen"),
         KEY_m | KEY_M => Some("toggle_maximize"),
+        KEY_bracketleft => Some("tab_previous"),
+        KEY_bracketright => Some("tab_next"),
         KEY_Left => Some("tile_left"),
         KEY_Right => Some("tile_right"),
         KEY_Up => Some("tile_up"),
