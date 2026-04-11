@@ -22,3 +22,27 @@ export type AssistOverlayState = {
   hoverSpan: import('../assistGrid').AssistGridSpan | null
   workCanvas: { x: number; y: number; w: number; h: number }
 }
+
+export type SnapAssistPickerAnchorRect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+export type SnapAssistPickerSource = 'button' | 'strip'
+
+export type SnapAssistPickerState = {
+  windowId: number
+  monitorName: string
+  source: SnapAssistPickerSource
+  anchorRect: SnapAssistPickerAnchorRect
+  autoHover: boolean
+}
+
+export type SnapAssistStripState = {
+  monitorName: string
+  open: boolean
+}

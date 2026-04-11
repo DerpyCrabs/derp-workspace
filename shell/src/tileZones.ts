@@ -9,9 +9,15 @@ export type SnapZone =
   | 'left-third'
   | 'center-third'
   | 'right-third'
+  | 'top-left-two-thirds'
+  | 'top-center-two-thirds'
+  | 'top-right-two-thirds'
   | 'top-left-third'
   | 'top-center-third'
   | 'top-right-third'
+  | 'bottom-left-two-thirds'
+  | 'bottom-center-two-thirds'
+  | 'bottom-right-two-thirds'
   | 'bottom-left-third'
   | 'bottom-center-third'
   | 'bottom-right-third'
@@ -23,7 +29,9 @@ export const LEFT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-left',
   'bottom-left',
   'left-third',
+  'top-left-two-thirds',
   'top-left-third',
+  'bottom-left-two-thirds',
   'bottom-left-third',
 ])
 
@@ -32,13 +40,18 @@ export const RIGHT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-right',
   'bottom-right',
   'right-third',
+  'top-right-two-thirds',
   'top-right-third',
+  'bottom-right-two-thirds',
   'bottom-right-third',
 ])
 
 export const TOP_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-left',
   'top-right',
+  'top-left-two-thirds',
+  'top-center-two-thirds',
+  'top-right-two-thirds',
   'top-left-third',
   'top-center-third',
   'top-right-third',
@@ -47,6 +60,9 @@ export const TOP_ZONES: ReadonlySet<SnapZone> = new Set([
 export const BOTTOM_ZONES: ReadonlySet<SnapZone> = new Set([
   'bottom-left',
   'bottom-right',
+  'bottom-left-two-thirds',
+  'bottom-center-two-thirds',
+  'bottom-right-two-thirds',
   'bottom-left-third',
   'bottom-center-third',
   'bottom-right-third',
@@ -57,6 +73,8 @@ function defaultSnapZoneBoundsLocal(zone: SnapZone, ww: number, wh: number): Rec
   const halfH = Math.round(wh / 2)
   const thirdW = Math.round(ww / 3)
   const twoThirdW = Math.round((ww * 2) / 3)
+  const thirdH = Math.round(wh / 3)
+  const twoThirdH = Math.round((wh * 2) / 3)
   const ox = 0
   const oy = 0
   switch (zone) {
@@ -85,12 +103,34 @@ function defaultSnapZoneBoundsLocal(zone: SnapZone, ww: number, wh: number): Rec
       return { x: ox + thirdW, y: oy, width: twoThirdW - thirdW, height: wh }
     case 'right-third':
       return { x: ox + twoThirdW, y: oy, width: ww - twoThirdW, height: wh }
+    case 'top-left-two-thirds':
+      return { x: ox, y: oy, width: thirdW, height: twoThirdH }
+    case 'top-center-two-thirds':
+      return { x: ox + thirdW, y: oy, width: twoThirdW - thirdW, height: twoThirdH }
+    case 'top-right-two-thirds':
+      return { x: ox + twoThirdW, y: oy, width: ww - twoThirdW, height: twoThirdH }
     case 'top-left-third':
       return { x: ox, y: oy, width: thirdW, height: halfH }
     case 'top-center-third':
       return { x: ox + thirdW, y: oy, width: twoThirdW - thirdW, height: halfH }
     case 'top-right-third':
       return { x: ox + twoThirdW, y: oy, width: ww - twoThirdW, height: halfH }
+    case 'bottom-left-two-thirds':
+      return { x: ox, y: oy + thirdH, width: thirdW, height: wh - thirdH }
+    case 'bottom-center-two-thirds':
+      return {
+        x: ox + thirdW,
+        y: oy + thirdH,
+        width: twoThirdW - thirdW,
+        height: wh - thirdH,
+      }
+    case 'bottom-right-two-thirds':
+      return {
+        x: ox + twoThirdW,
+        y: oy + thirdH,
+        width: ww - twoThirdW,
+        height: wh - thirdH,
+      }
     case 'bottom-left-third':
       return { x: ox, y: oy + halfH, width: thirdW, height: wh - halfH }
     case 'bottom-center-third':

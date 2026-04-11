@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const BTN_LEFT = 0x110
+export const BTN_RIGHT = 0x111
 export const NATIVE_APP_ID = 'derp.e2e.native'
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
 export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
@@ -110,6 +111,22 @@ export interface ShellTaskbarWindow {
   close?: Rect | null
 }
 
+export interface ShellWindowControls {
+  window_id: number
+  titlebar?: Rect | null
+  maximize?: Rect | null
+  snap_picker?: Rect | null
+}
+
+export interface AssistSpanSnapshot {
+  gridCols: number
+  gridRows: number
+  gc0: number
+  gc1: number
+  gr0: number
+  gr1: number
+}
+
 export interface ShellControls {
   taskbar_programs_toggle?: Rect | null
   taskbar_settings_toggle?: Rect | null
@@ -124,6 +141,13 @@ export interface ShellControls {
   debug_reload_button?: Rect | null
   debug_copy_snapshot_button?: Rect | null
   debug_crosshair_toggle?: Rect | null
+  snap_strip_trigger?: Rect | null
+  snap_picker_root?: Rect | null
+  snap_picker_first_cell?: Rect | null
+  snap_picker_top_center_cell?: Rect | null
+  snap_picker_hgutter_col0?: Rect | null
+  snap_picker_right_two_thirds?: Rect | null
+  snap_picker_top_two_thirds_left?: Rect | null
   [key: string]: Rect | null | undefined
 }
 
@@ -131,6 +155,7 @@ export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
   taskbar_windows: ShellTaskbarWindow[]
+  window_controls?: ShellWindowControls[]
   controls: ShellControls
   settings_window_visible: boolean
   debug_window_visible: boolean
@@ -138,6 +163,13 @@ export interface ShellSnapshot {
   power_menu_open: boolean
   programs_menu_query: string
   crosshair_cursor: boolean
+  snap_picker_open?: boolean
+  snap_picker_window_id?: number | null
+  snap_picker_source?: string | null
+  snap_picker_monitor?: string | null
+  snap_preview_visible?: boolean
+  snap_preview_rect?: Rect | null
+  snap_hover_span?: AssistSpanSnapshot | null
   window_stack_order?: number[]
   focused_window_id?: number | null
   [key: string]: unknown
@@ -298,6 +330,31 @@ export function createReporter(groups: string[]): Reporter {
 
 export function printNote(message: string): void {
   process.stdout.write(`${color('    Note ', ANSI.dim)} ${message}\n`)
+}
+
+export type TimingMarks = {
+  mark: (label: string) => void
+  step: <T>(label: string, fn: () => Promise<T>) => Promise<T>
+}
+
+export function createTimingMarks(name: string): TimingMarks {
+  const startedAt = Date.now()
+  let lastAt = startedAt
+  const mark = (label: string) => {
+    const now = Date.now()
+    const deltaMs = now - lastAt
+    const totalMs = now - startedAt
+    lastAt = now
+    process.stdout.write(
+      `${color('   Time ', ANSI.dim)} ${name} :: ${label} ${color(`+${formatMs(deltaMs)} total ${formatMs(totalMs)}`, ANSI.dim)}\n`,
+    )
+  }
+  const step = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const value = await fn()
+    mark(label)
+    return value
+  }
+  return { mark, step }
 }
 
 export function createState(base: string): E2eState {
@@ -479,8 +536,31 @@ export async function clickRect(base: string, rect: Rect): Promise<void> {
   await clickPoint(base, point.x, point.y)
 }
 
+export function assertRectMinSize(
+  label: string,
+  rect: Rect | null | undefined,
+  minWidth: number,
+  minHeight = minWidth,
+): Rect {
+  assert(rect, `${label}: missing rect`)
+  if (rect.width < minWidth || rect.height < minHeight) {
+    throw new Error(
+      `${label}: suspiciously small target ${rect.width}x${rect.height} at ${rect.global_x},${rect.global_y}; expected at least ${minWidth}x${minHeight}`,
+    )
+  }
+  return rect
+}
+
 export async function clickPoint(base: string, x: number, y: number): Promise<void> {
   await postJson(base, '/test/input/click', { x, y, button: BTN_LEFT })
+}
+
+export async function movePoint(base: string, x: number, y: number): Promise<void> {
+  await postJson(base, '/test/input/pointer_move', { x, y })
+}
+
+export async function pointerButton(base: string, button: number, action: 'press' | 'release'): Promise<void> {
+  await postJson(base, '/test/input/pointer_button', { button, action })
 }
 
 export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 16): Promise<void> {
@@ -517,6 +597,10 @@ export function shellWindowById(snapshot: { windows: WindowSnapshot[] }, windowI
 
 export function taskbarEntry(shellSnapshot: ShellSnapshot, windowId: number): ShellTaskbarWindow | null {
   return shellSnapshot.taskbar_windows.find((entry) => entry.window_id === windowId) || null
+}
+
+export function windowControls(shellSnapshot: ShellSnapshot, windowId: number): ShellWindowControls | null {
+  return shellSnapshot.window_controls?.find((entry) => entry.window_id === windowId) || null
 }
 
 export function taskbarForMonitor(shellSnapshot: ShellSnapshot, monitorName: string): ShellTaskbar | null {

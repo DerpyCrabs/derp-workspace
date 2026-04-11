@@ -52,11 +52,15 @@ import {
   shellUiWindowMeasureFromEnv,
 } from './shellUiWindows'
 import {
+  type AssistGridShape,
+  type AssistGridSpan,
   assistGridGutterPx,
+  assistShapeFromSpan,
   assistSpanFromWorkAreaPoint,
   DEFAULT_ASSIST_GRID_SHAPE,
   snapZoneAndPreviewFromAssistSpan,
 } from './assistGrid'
+import { SnapAssistPicker } from './SnapAssistPicker'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
 import {
   computeTiledResizeRects,
@@ -87,7 +91,15 @@ import { createShellContextMenus } from './app/createShellContextMenus'
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
-import type { AssistOverlayState, ExclusionHudZone, LayoutScreen } from './app/types'
+import type {
+  AssistOverlayState,
+  ExclusionHudZone,
+  LayoutScreen,
+  SnapAssistPickerAnchorRect,
+  SnapAssistPickerState,
+  SnapAssistPickerSource,
+  SnapAssistStripState,
+} from './app/types'
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
 
@@ -197,6 +209,26 @@ function e2eQueryRect(
   origin: CanvasOrigin | null,
 ): E2eRectSnapshot | null {
   return e2eSnapshotRect(document.querySelector(selector), main, canvas, origin)
+}
+
+function e2eQueryLargestRect(
+  selector: string,
+  main: HTMLElement | null,
+  canvas: { w: number; h: number } | null,
+  origin: CanvasOrigin | null,
+): E2eRectSnapshot | null {
+  let best: E2eRectSnapshot | null = null
+  let bestArea = -1
+  for (const el of document.querySelectorAll(selector)) {
+    const rect = e2eSnapshotRect(el, main, canvas, origin)
+    if (!rect) continue
+    const area = rect.width * rect.height
+    if (area > bestArea) {
+      best = rect
+      bestArea = area
+    }
+  }
+  return best
 }
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
@@ -532,12 +564,20 @@ function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map
 const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
 const perMonitorTiles = new PerMonitorTileStates()
 const dragPreTileSnapshot = new Map<number, { x: number; y: number; w: number; h: number }>()
-let activeSnapDropCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapPreviewCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapZone: SnapZone | null = null
 let activeSnapScreen: LayoutScreen | null = null
+let activeSnapWindowId: number | null = null
 let tilePreviewRaf = 0
 let lastTilePreviewKey = ''
+
+type SnapAssistContext = {
+  windowId: number
+  screen: LayoutScreen
+  workGlobal: { x: number; y: number; w: number; h: number }
+  workCanvas: { x: number; y: number; w: number; h: number }
+  shape: AssistGridShape
+}
 
 const TASKBAR_HEIGHT = 44
 const SHELL_WIRE_DEGRADED_WITH_HTTP =
@@ -777,6 +817,8 @@ function App() {
   const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
+  const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
+  const [dragWindowId, setDragWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
   const atlasSelectClosers = new Set<() => boolean>()
@@ -1120,6 +1162,30 @@ function App() {
     return out
   })
 
+  const dragSnapAssistContext = createMemo(() => {
+    const windowId = dragWindowId()
+    if (windowId == null) return null
+    return resolveSnapAssistContext(windowId)
+  })
+
+  const snapStripState = createMemo<SnapAssistStripState | null>(() => {
+    const context = dragSnapAssistContext()
+    if (!context) return null
+    return {
+      monitorName: context.screen.name,
+      open: snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === context.windowId,
+    }
+  })
+
+  createEffect(() => {
+    const picker = snapAssistPicker()
+    if (!picker) return
+    const context = resolveSnapAssistContext(picker.windowId, picker.monitorName)
+    if (!context) {
+      closeSnapAssistPicker()
+    }
+  })
+
   function buildE2eShellSnapshot() {
     const origin = layoutCanvasOrigin()
     const logicalCanvas = layoutUnionBbox()
@@ -1150,6 +1216,35 @@ function App() {
         origin,
       ),
     }))
+    const windowControls = windowsList().map((w) => ({
+      window_id: w.window_id,
+      titlebar: e2eQueryRect(`[data-shell-titlebar="${w.window_id}"]`, main, canvas, origin),
+      maximize: e2eQueryRect(`[data-shell-maximize-trigger="${w.window_id}"]`, main, canvas, origin),
+      snap_picker: e2eQueryRect(`[data-shell-snap-picker-trigger="${w.window_id}"]`, main, canvas, origin),
+    }))
+    const snapPreviewRect =
+      main && canvas && activeSnapPreviewCanvas
+        ? (() => {
+            const { ox, oy } = canvasOriginXY(origin)
+            const css = canvasRectToClientCss(
+              activeSnapPreviewCanvas.x,
+              activeSnapPreviewCanvas.y,
+              activeSnapPreviewCanvas.w,
+              activeSnapPreviewCanvas.h,
+              main.getBoundingClientRect(),
+              canvas.w,
+              canvas.h,
+            )
+            return {
+              x: Math.round(css.left),
+              y: Math.round(css.top),
+              width: Math.round(css.width),
+              height: Math.round(css.height),
+              global_x: Math.round(ox + css.left),
+              global_y: Math.round(oy + css.top),
+            }
+          })()
+        : null
     return {
       captured_at_ms: Date.now(),
       viewport: viewportCss(),
@@ -1162,6 +1257,13 @@ function App() {
       power_menu_open: shellContextMenus.powerMenuOpen(),
       debug_window_visible: debugHudFrameVisible(),
       settings_window_visible: settingsHudFrameVisible(),
+      snap_picker_open: snapAssistPicker() !== null,
+      snap_picker_window_id: snapAssistPicker()?.windowId ?? null,
+      snap_picker_source: snapAssistPicker()?.source ?? null,
+      snap_picker_monitor: snapAssistPicker()?.monitorName ?? null,
+      snap_preview_visible: activeSnapPreviewCanvas !== null,
+      snap_preview_rect: snapPreviewRect,
+      snap_hover_span: assistOverlay()?.hoverSpan ?? null,
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
       window_stack_order: stackOrderedWindows.map((w) => w.window_id),
       windows: windowsList().map((w) => ({
@@ -1218,9 +1320,42 @@ function App() {
           canvas,
           origin,
         ),
+        snap_strip_trigger: e2eQueryRect('[data-shell-snap-strip-trigger]', main, canvas, origin),
+        snap_picker_root: e2eQueryRect('[data-shell-snap-picker]', main, canvas, origin),
+        snap_picker_first_cell: e2eQueryLargestRect(
+          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-testid="snap-assist-master-cell"]',
+          main,
+          canvas,
+          origin,
+        ),
+        snap_picker_top_center_cell: e2eQueryLargestRect(
+          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="1"][data-gc1="1"][data-gr0="0"][data-gr1="0"]',
+          main,
+          canvas,
+          origin,
+        ),
+        snap_picker_hgutter_col0: e2eQueryLargestRect(
+          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-testid="snap-assist-hgutter-col0"]',
+          main,
+          canvas,
+          origin,
+        ),
+        snap_picker_right_two_thirds: e2eQueryLargestRect(
+          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="1"][data-gc1="2"][data-gr0="0"][data-gr1="1"]',
+          main,
+          canvas,
+          origin,
+        ),
+        snap_picker_top_two_thirds_left: e2eQueryLargestRect(
+          '[data-shell-snap-picker] [data-assist-mini-grid="3x3"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="0"][data-gc1="0"][data-gr0="0"][data-gr1="1"]',
+          main,
+          canvas,
+          origin,
+        ),
       },
       taskbars: taskbarButtons,
       taskbar_windows: taskbarWindowButtons,
+      window_controls: windowControls,
     }
   }
 
@@ -1289,6 +1424,10 @@ function App() {
             shellWireSend('shell_focus_ui_window', windowId)
           }}
           onTitlebarPointerDown={(cx, cy) => beginShellWindowMove(windowId, cx, cy)}
+          onSnapAssistOpen={(anchorRect) => {
+            shellWireSend('shell_focus_ui_window', windowId)
+            openSnapAssistPicker(windowId, 'button', anchorRect)
+          }}
           onResizeEdgeDown={(edges, cx, cy) => beginShellWindowResize(windowId, edges, cx, cy)}
           onMinimize={() => {
             shellWireSend('minimize', windowId)
@@ -2011,6 +2150,8 @@ function App() {
       const mon = el.getAttribute('data-shell-taskbar-monitor') ?? ''
       addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
     }
+    addEl(main.querySelector('[data-shell-snap-picker]'), 'snap-picker')
+    addEl(main.querySelector('[data-shell-snap-strip-trigger]'), 'snap-strip')
     const stripLabels = ['t', 'l', 'r', 'b'] as const
     for (const decoWin of stackedWindowsList()) {
       if (decoWin.minimized) continue
@@ -2046,6 +2187,15 @@ function App() {
   createEffect(() => {
     fullscreenTaskbarExclusionSig()
     queueMicrotask(() => scheduleExclusionZonesSync())
+  })
+
+  createEffect(() => {
+    snapAssistPicker()
+    queueMicrotask(() => {
+      scheduleTilePreviewSync()
+      flushShellUiWindowsSyncNow()
+      syncExclusionZonesNow()
+    })
   })
 
   function bumpSnapChrome() {
@@ -2127,6 +2277,213 @@ function App() {
     shellWireSend('set_geometry', wid, r.x, r.y, r.w, r.h, SHELL_LAYOUT_MAXIMIZED)
   }
 
+  function snapAssistAnchorRect(rect: DOMRect): SnapAssistPickerAnchorRect {
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+    }
+  }
+
+  function resetSnapAssistState() {
+    activeSnapPreviewCanvas = null
+    activeSnapZone = null
+    activeSnapScreen = null
+    activeSnapWindowId = null
+  }
+
+  function clearTilePreviewWire() {
+    if (tilePreviewRaf) {
+      cancelAnimationFrame(tilePreviewRaf)
+      tilePreviewRaf = 0
+    }
+    lastTilePreviewKey = ''
+    shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+  }
+
+  function clearSnapAssistSelection() {
+    resetSnapAssistState()
+    setAssistOverlay(null)
+    scheduleTilePreviewSync()
+  }
+
+  function closeSnapAssistPicker() {
+    setSnapAssistPicker(null)
+    clearSnapAssistSelection()
+  }
+
+  function resolveSnapAssistContext(
+    windowId: number,
+    preferredMonitorName?: string | null,
+    shape: AssistGridShape = DEFAULT_ASSIST_GRID_SHAPE,
+  ): SnapAssistContext | null {
+    const window = allWindowsMap().get(windowId)
+    if (!window || window.minimized) return null
+    const canvas = outputGeom()
+    const origin = layoutCanvasOrigin()
+    const screens = screensListForLayout(screenDraft.rows, canvas, origin)
+    if (screens.length === 0) return null
+    const screen =
+      (preferredMonitorName ? screens.find((entry) => entry.name === preferredMonitorName) : undefined) ??
+      pickScreenForWindow(window, screens, origin) ??
+      screens[0]
+    if (!screen || getMonitorLayout(screen.name).layout.type !== 'manual-snap') return null
+    const reserveTaskbar = reserveTaskbarForMon(screen)
+    const workGlobal = monitorWorkAreaGlobal(screen, reserveTaskbar)
+    return {
+      windowId,
+      screen,
+      workGlobal,
+      workCanvas: rectGlobalToCanvasLocal(workGlobal.x, workGlobal.y, workGlobal.w, workGlobal.h, origin),
+      shape,
+    }
+  }
+
+  function applySnapAssistZonePreview(
+    context: SnapAssistContext,
+    zone: SnapZone,
+    previewRect: TileRect,
+  ) {
+    const origin = layoutCanvasOrigin()
+    activeSnapZone = zone
+    activeSnapScreen = context.screen
+    activeSnapWindowId = context.windowId
+    const previewGlobal = {
+      x: previewRect.x,
+      y: previewRect.y - CHROME_TITLEBAR_PX,
+      w: previewRect.width,
+      h: previewRect.height + CHROME_TITLEBAR_PX,
+    }
+    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
+      previewGlobal.x,
+      previewGlobal.y,
+      previewGlobal.w,
+      previewGlobal.h,
+      origin,
+    )
+  }
+
+  function updateSnapAssistFromSpan(context: SnapAssistContext, span: AssistGridSpan | null) {
+    const shape = span ? assistShapeFromSpan(span) : context.shape
+    if (!span || !shape) {
+      clearSnapAssistSelection()
+      return
+    }
+    const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, context.workGlobal)
+    applySnapAssistZonePreview(context, zone, previewRect)
+    setAssistOverlay({
+      shape,
+      gutterPx: assistGridGutterPx(context.workGlobal, shape),
+      hoverSpan: span,
+      workCanvas: context.workCanvas,
+    })
+    scheduleTilePreviewSync()
+  }
+
+  function updateSnapAssistFromEdgeZone(context: SnapAssistContext, zone: SnapZone | null) {
+    if (!zone) {
+      clearSnapAssistSelection()
+      return
+    }
+    const workRect: TileRect = {
+      x: context.workGlobal.x,
+      y: context.workGlobal.y,
+      width: context.workGlobal.w,
+      height: context.workGlobal.h,
+    }
+    const previewRect = snapZoneToBoundsWithOccupied(
+      zone,
+      workRect,
+      occupiedSnapZonesOnMonitor(context.screen, context.windowId),
+    )
+    applySnapAssistZonePreview(context, zone, previewRect)
+    setAssistOverlay(null)
+    scheduleTilePreviewSync()
+  }
+
+  function commitSnapAssistSelection(windowId: number, closePicker = false) {
+    const snapWindowId = activeSnapWindowId ?? windowId
+    const droppedZone = activeSnapZone
+    const snapScreen = activeSnapScreen
+    resetSnapAssistState()
+    setAssistOverlay(null)
+    if (closePicker) setSnapAssistPicker(null)
+    clearTilePreviewWire()
+    if (droppedZone === null || !snapScreen) {
+      dragPreTileSnapshot.delete(snapWindowId)
+      return
+    }
+    const currentWindow = allWindowsMap().get(snapWindowId)
+    const preTile =
+      dragPreTileSnapshot.get(snapWindowId) ??
+      perMonitorTiles.preTileGeometry.get(snapWindowId) ??
+      (currentWindow
+        ? {
+            x: currentWindow.x,
+            y: currentWindow.y,
+            w: currentWindow.width,
+            h: currentWindow.height,
+          }
+        : null)
+    if (preTile) {
+      perMonitorTiles.preTileGeometry.set(snapWindowId, preTile)
+    }
+    const origin = layoutCanvasOrigin()
+    const reserveTaskbar = reserveTaskbarForMon(snapScreen)
+    const work = monitorWorkAreaGlobal(snapScreen, reserveTaskbar)
+    const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
+    const occupied = occupiedSnapZonesOnMonitor(snapScreen, snapWindowId)
+    const previousMonitor = perMonitorTiles.findMonitorForTiledWindow(snapWindowId)
+    if (previousMonitor !== null && previousMonitor !== snapScreen.name) {
+      perMonitorTiles.stateFor(previousMonitor).untileWindow(snapWindowId)
+    }
+    const globalBounds = perMonitorTiles
+      .stateFor(snapScreen.name)
+      .tileWindow(snapWindowId, droppedZone, workRect, occupied)
+    const localBounds = rectGlobalToCanvasLocal(
+      globalBounds.x,
+      globalBounds.y,
+      globalBounds.width,
+      globalBounds.height,
+      origin,
+    )
+    shellWireSend(
+      'set_geometry',
+      snapWindowId,
+      localBounds.x,
+      localBounds.y,
+      localBounds.w,
+      localBounds.h,
+      SHELL_LAYOUT_FLOATING,
+    )
+    applyGeometryToWindowMaps(snapWindowId, localBounds, { maximized: false })
+    dragPreTileSnapshot.delete(snapWindowId)
+    scheduleExclusionZonesSync()
+    bumpSnapChrome()
+  }
+
+  function openSnapAssistPicker(
+    windowId: number,
+    source: SnapAssistPickerSource,
+    anchorRect: DOMRect,
+    autoHover = true,
+    preferredMonitorName?: string | null,
+  ) {
+    const context = resolveSnapAssistContext(windowId, preferredMonitorName)
+    if (!context) return
+    clearSnapAssistSelection()
+    setSnapAssistPicker({
+      windowId,
+      monitorName: context.screen.name,
+      source,
+      anchorRect: snapAssistAnchorRect(anchorRect),
+      autoHover,
+    })
+  }
+
   /** Shell → compositor window move (same wire as `cef_host` `shell_uplink`). */
   let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
   let shellMoveDeltaLogSeq = 0
@@ -2150,6 +2507,13 @@ function App() {
 
   function flushTilePreviewWire() {
     tilePreviewRaf = 0
+    if (snapAssistPicker()) {
+      if (lastTilePreviewKey !== '0') {
+        lastTilePreviewKey = '0'
+        shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
+      }
+      return
+    }
     const snap = activeSnapPreviewCanvas
     if (!snap) {
       if (lastTilePreviewKey !== '0') {
@@ -2174,17 +2538,8 @@ function App() {
     if (shellWindowResize !== null) return
     shellMoveLog('titlebar_begin_request', { windowId, clientX, clientY })
     shellMoveDeltaLogSeq = 0
-    activeSnapDropCanvas = null
-    activeSnapPreviewCanvas = null
-    activeSnapZone = null
-    activeSnapScreen = null
-    lastTilePreviewKey = ''
-    if (tilePreviewRaf) {
-      cancelAnimationFrame(tilePreviewRaf)
-      tilePreviewRaf = 0
-    }
-    shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
-    setAssistOverlay(null)
+    closeSnapAssistPicker()
+    clearTilePreviewWire()
     const main = mainRef
     const og = outputGeom()
     const w = allWindowsMap().get(windowId)
@@ -2245,6 +2600,7 @@ function App() {
       return
     }
     shellWindowDrag = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY) }
+    setDragWindowId(windowId)
     shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
@@ -2293,109 +2649,60 @@ function App() {
     const mainRect = main.getBoundingClientRect()
     const glob = clientPointToGlobalLogical(cx, cy, mainRect, og.w, og.h, co)
     const list = screensListForLayout(screenDraft.rows, outputGeom(), co)
-    if (list.length === 0) {
-      activeSnapDropCanvas = null
-      activeSnapPreviewCanvas = null
-      activeSnapZone = null
-      activeSnapScreen = null
-      setAssistOverlay(null)
-      scheduleTilePreviewSync()
-      return
-    }
     const mon = pickScreenForPointerSnap(glob.x, glob.y, list)
+    const pickerEl = main.querySelector('[data-shell-snap-picker]') as HTMLElement | null
+    const pickerOpen = snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === wid
+    if (pickerEl) {
+      const pickerRect = pickerEl.getBoundingClientRect()
+      if (
+        pickerOpen &&
+        cx >= pickerRect.left &&
+        cx <= pickerRect.right &&
+        cy >= pickerRect.top &&
+        cy <= pickerRect.bottom
+      ) {
+        return
+      }
+    }
+    const stripEl = main.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
+    if (stripEl) {
+      const stripRect = stripEl.getBoundingClientRect()
+      if (cx >= stripRect.left && cx <= stripRect.right && cy >= stripRect.top && cy <= stripRect.bottom) {
+        if (!pickerOpen) {
+          openSnapAssistPicker(wid, 'strip', stripRect, false, mon?.name)
+        }
+        return
+      }
+    }
+    if (pickerOpen) {
+      closeSnapAssistPicker()
+    }
     if (!mon) {
-      activeSnapDropCanvas = null
-      activeSnapPreviewCanvas = null
-      activeSnapZone = null
-      activeSnapScreen = null
-      setAssistOverlay(null)
-      scheduleTilePreviewSync()
+      clearSnapAssistSelection()
       return
     }
-    if (getMonitorLayout(mon.name).layout.type !== 'manual-snap') {
-      activeSnapDropCanvas = null
-      activeSnapPreviewCanvas = null
-      activeSnapZone = null
-      activeSnapScreen = null
-      setAssistOverlay(null)
-      scheduleTilePreviewSync()
+    const context = resolveSnapAssistContext(wid, mon.name)
+    if (!context) {
+      clearSnapAssistSelection()
       return
     }
-    const reserveTb = reserveTaskbarForMon(mon)
-    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const work = context.workGlobal
     const inAssistTopStrip =
       glob.x >= work.x &&
       glob.x <= work.x + work.w &&
       ((glob.y >= work.y && glob.y <= work.y + TILE_SNAP_EDGE_PX) ||
         (glob.y < work.y && work.y - glob.y <= TILE_SNAP_EDGE_PX))
 
-    const gridShape = DEFAULT_ASSIST_GRID_SHAPE
-
     if (inAssistTopStrip) {
-      const wl = rectGlobalToCanvasLocal(work.x, work.y, work.w, work.h, co)
-      const gutterPx = assistGridGutterPx(work, gridShape)
       const pxForAssist = Math.max(work.x, Math.min(glob.x, work.x + work.w))
       const pyForAssist = Math.max(work.y, Math.min(glob.y, work.y + work.h))
-      const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, gridShape, work)
-      if (span) {
-        const { zone, previewRect: pr } = snapZoneAndPreviewFromAssistSpan(span, gridShape, work)
-        const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
-        const occupied = occupiedSnapZonesOnMonitor(mon, wid)
-        const snapBounds = snapZoneToBoundsWithOccupied(zone, workRect, occupied)
-        const snapG = {
-          x: snapBounds.x,
-          y: snapBounds.y,
-          w: snapBounds.width,
-          h: snapBounds.height,
-        }
-        activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
-        activeSnapZone = zone
-        activeSnapScreen = mon
-        const th = CHROME_TITLEBAR_PX
-        const previewG = { x: pr.x, y: pr.y - th, w: pr.width, h: pr.height + th }
-        activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
-      } else {
-        activeSnapDropCanvas = null
-        activeSnapPreviewCanvas = null
-        activeSnapZone = null
-        activeSnapScreen = null
-      }
-      setAssistOverlay({
-        shape: gridShape,
-        gutterPx,
-        hoverSpan: span,
-        workCanvas: { x: wl.x, y: wl.y, w: wl.w, h: wl.h },
-      })
-      scheduleTilePreviewSync()
+      const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, context.shape, work)
+      updateSnapAssistFromSpan(context, span)
       return
     }
 
-    setAssistOverlay(null)
     const zone = hitTestSnapZoneGlobal(glob.x, glob.y, work)
-    if (!zone) {
-      activeSnapDropCanvas = null
-      activeSnapPreviewCanvas = null
-      activeSnapZone = null
-      activeSnapScreen = null
-      scheduleTilePreviewSync()
-      return
-    }
-    const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
-    const occupied = occupiedSnapZonesOnMonitor(mon, wid)
-    const snapBounds = snapZoneToBoundsWithOccupied(zone, workRect, occupied)
-    const snapG = {
-      x: snapBounds.x,
-      y: snapBounds.y,
-      w: snapBounds.width,
-      h: snapBounds.height,
-    }
-    activeSnapDropCanvas = rectGlobalToCanvasLocal(snapG.x, snapG.y, snapG.w, snapG.h, co)
-    activeSnapZone = zone
-    activeSnapScreen = mon
-    const th = CHROME_TITLEBAR_PX
-    const previewG = { x: snapG.x, y: snapG.y - th, w: snapG.w, h: snapG.h + th }
-    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(previewG.x, previewG.y, previewG.w, previewG.h, co)
-    scheduleTilePreviewSync()
+    updateSnapAssistFromEdgeZone(context, zone)
   }
 
   function endShellWindowMove(reason: string) {
@@ -2403,40 +2710,8 @@ function App() {
     const id = shellWindowDrag.windowId
     shellMoveLog('titlebar_end', { windowId: id, reason })
     shellWindowDrag = null
-    const snap = activeSnapDropCanvas
-    const droppedZone = activeSnapZone
-    activeSnapDropCanvas = null
-    activeSnapPreviewCanvas = null
-    activeSnapZone = null
-    setAssistOverlay(null)
-    const snapMon = activeSnapScreen
-    activeSnapScreen = null
-    if (tilePreviewRaf) {
-      cancelAnimationFrame(tilePreviewRaf)
-      tilePreviewRaf = 0
-    }
-    lastTilePreviewKey = ''
-    shellWireSend('set_tile_preview', 0, 0, 0, 0, 0)
-    if (snap && droppedZone !== null && snapMon) {
-      const pre = dragPreTileSnapshot.get(id)
-      if (pre) perMonitorTiles.preTileGeometry.set(id, pre)
-      const co = layoutCanvasOrigin()
-      const reserveTb = reserveTaskbarForMon(snapMon)
-      const work = monitorWorkAreaGlobal(snapMon, reserveTb)
-      const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
-      const occ = occupiedSnapZonesOnMonitor(snapMon, id)
-      const prevMon = perMonitorTiles.findMonitorForTiledWindow(id)
-      if (prevMon !== null && prevMon !== snapMon.name) {
-        perMonitorTiles.stateFor(prevMon).untileWindow(id)
-      }
-      const gb = perMonitorTiles.stateFor(snapMon.name).tileWindow(id, droppedZone, workRect, occ)
-      const loc = rectGlobalToCanvasLocal(gb.x, gb.y, gb.width, gb.height, co)
-      shellWireSend('set_geometry', id, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
-      applyGeometryToWindowMaps(id, loc, { maximized: false })
-      scheduleExclusionZonesSync()
-      bumpSnapChrome()
-    }
-    dragPreTileSnapshot.delete(id)
+    setDragWindowId(null)
+    commitSnapAssistSelection(id, snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === id)
     shellWireSend('move_end', id)
   }
 
@@ -3344,6 +3619,55 @@ function App() {
         <PortalPickerOverlay />
       </Show>
 
+      <Show when={mainRef}>
+        <Show when={snapAssistPicker()} keyed>
+          {(picker) => (
+            <SnapAssistPicker
+              anchorRect={picker.anchorRect}
+              container={mainRef!}
+              hoverSpan={assistOverlay()?.hoverSpan ?? null}
+              autoHover={picker.autoHover}
+              shellUiWindowId={
+                (allWindowsMap().get(picker.windowId)?.shell_flags ?? 0) &
+                  SHELL_WINDOW_FLAG_SHELL_HOSTED
+                  ? picker.windowId
+                  : undefined
+              }
+              shellUiWindowZ={(allWindowsMap().get(picker.windowId)?.stack_z ?? 0) + 1}
+              getShellUiMeasureEnv={() => {
+                const main = mainRef
+                const og = outputGeom()
+                const co = layoutCanvasOrigin()
+                if (!main || !og || !co) return null
+                return {
+                  main,
+                  outputGeom: { w: og.w, h: og.h },
+                  origin: co,
+                }
+              }}
+              onHoverSpanChange={(span) => {
+                const context = resolveSnapAssistContext(picker.windowId, picker.monitorName)
+                if (!context) {
+                  closeSnapAssistPicker()
+                  return
+                }
+                updateSnapAssistFromSpan(context, span)
+              }}
+              onSelectSpan={(span) => {
+                const context = resolveSnapAssistContext(picker.windowId, picker.monitorName)
+                if (!context) {
+                  closeSnapAssistPicker()
+                  return
+                }
+                updateSnapAssistFromSpan(context, span)
+                commitSnapAssistSelection(picker.windowId, true)
+              }}
+              onClose={closeSnapAssistPicker}
+            />
+          )}
+        </Show>
+      </Show>
+
       <ShellSurfaceLayers
         assistOverlay={assistOverlay}
         mainEl={() => mainRef}
@@ -3375,6 +3699,8 @@ function App() {
         onTaskbarClose={(id) => {
           shellWireSend('close', id)
         }}
+        snapStrip={snapStripState}
+        snapStripScreen={() => dragSnapAssistContext()?.screen ?? null}
       />
 
       <ShellContextMenuLayer

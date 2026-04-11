@@ -28,6 +28,14 @@ export function assistShapeToDims(shape: AssistGridShape): { cols: number; rows:
   }
 }
 
+export function assistShapeFromSpan(span: AssistGridSpan): AssistGridShape | null {
+  if (span.gridCols === 2 && span.gridRows === 2) return '2x2'
+  if (span.gridCols === 3 && span.gridRows === 2) return '3x2'
+  if (span.gridCols === 2 && span.gridRows === 3) return '2x3'
+  if (span.gridCols === 3 && span.gridRows === 3) return '3x3'
+  return null
+}
+
 export function assistGridGutterPx(
   work: { w: number; h: number },
   shape: AssistGridShape,
@@ -168,9 +176,15 @@ const ALL_SNAP_ZONES: SnapZone[] = [
   'left-third',
   'center-third',
   'right-third',
+  'top-left-two-thirds',
+  'top-center-two-thirds',
+  'top-right-two-thirds',
   'top-left-third',
   'top-center-third',
   'top-right-third',
+  'bottom-left-two-thirds',
+  'bottom-center-two-thirds',
+  'bottom-right-two-thirds',
   'bottom-left-third',
   'bottom-center-third',
   'bottom-right-third',
@@ -185,14 +199,22 @@ function rectOverlapArea(a: TileRect, b: TileRect): number {
   return (x2 - x1) * (y2 - y1)
 }
 
+function rectArea(rect: TileRect): number {
+  return Math.max(0, rect.width) * Math.max(0, rect.height)
+}
+
 function bestSnapZoneForRect(workRect: TileRect, cell: TileRect): SnapZone {
   let best: SnapZone = 'center-third'
   let bestA = -1
+  let bestAreaDiff = Number.POSITIVE_INFINITY
+  const cellArea = rectArea(cell)
   for (const z of ALL_SNAP_ZONES) {
     const b = snapZoneToBounds(z, workRect)
     const a = rectOverlapArea(cell, b)
-    if (a > bestA) {
+    const areaDiff = Math.abs(rectArea(b) - cellArea)
+    if (a > bestA || (a === bestA && areaDiff < bestAreaDiff)) {
       bestA = a
+      bestAreaDiff = areaDiff
       best = z
     }
   }

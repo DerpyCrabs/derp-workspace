@@ -65,7 +65,7 @@ use smithay::{
         shell::wlr_layer::{Layer, WlrLayerShellState},
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
-            ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
+            SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
         },
         shm::ShmState,
         viewporter::ViewporterState,
@@ -2331,13 +2331,28 @@ impl CompositorState {
     }
 
     fn preferred_new_toplevel_size(&self, window: &Window) -> Option<(i32, i32)> {
+        let Some(toplevel) = window.toplevel() else {
+            let geo = window.geometry().size;
+            if geo.w > 0 && geo.h > 0 {
+                return Some((geo.w, geo.h));
+            }
+            let bbox = window.bbox().size;
+            if bbox.w > 0 && bbox.h > 0 {
+                return Some((bbox.w, bbox.h));
+            }
+            return None;
+        };
         let geo = window.geometry().size;
         if geo.w > 0 && geo.h > 0 {
-            return Some((geo.w, geo.h));
+            let clamped =
+                self.clamp_wayland_toplevel_content_size(toplevel.wl_surface(), geo.w, geo.h);
+            return Some((clamped.w, clamped.h));
         }
         let bbox = window.bbox().size;
         if bbox.w > 0 && bbox.h > 0 {
-            return Some((bbox.w, bbox.h));
+            let clamped =
+                self.clamp_wayland_toplevel_content_size(toplevel.wl_surface(), bbox.w, bbox.h);
+            return Some((clamped.w, clamped.h));
         }
         None
     }
@@ -2413,17 +2428,75 @@ impl CompositorState {
         }
         let (x, y) = Self::centered_toplevel_origin_for_work_area(&work, width, height);
         let elem = DerpSpaceElem::Wayland(window.clone());
+        let current = window.geometry().size;
+        let needs_resize = current.w != width || current.h != height;
         let needs_reposition = self
             .space
             .element_location(&elem)
             .map(|loc| loc.x != x || loc.y != y)
             .unwrap_or(true);
-        if !needs_reposition {
+        if !needs_reposition && !needs_resize {
             return false;
+        }
+        if needs_resize {
+            tl.with_pending_state(|st| {
+                st.states.unset(xdg_toplevel::State::Fullscreen);
+                st.fullscreen_output = None;
+                st.states.unset(xdg_toplevel::State::Maximized);
+                st.size = Some(Size::from((width, height)));
+            });
+            tl.send_pending_configure();
         }
         self.space.map_element(elem.clone(), (x, y), true);
         self.space.raise_element(&elem, true);
         true
+    }
+
+    pub(crate) fn shell_managed_native_min_content_size(&self) -> Size<i32, Logical> {
+        let th = self.shell_chrome_titlebar_h.max(SHELL_TITLEBAR_HEIGHT).max(22);
+        let bd = self.shell_chrome_border_w.max(SHELL_BORDER_THICKNESS).max(0);
+        Size::from((
+            th.saturating_mul(6).saturating_add(bd.saturating_mul(4)).max(184),
+            th.saturating_mul(2).saturating_add(bd.saturating_mul(2)).max(64),
+        ))
+    }
+
+    pub(crate) fn clamp_wayland_toplevel_content_size(
+        &self,
+        wl_surface: &WlSurface,
+        width: i32,
+        height: i32,
+    ) -> Size<i32, Logical> {
+        let base = Size::from((width.max(1), height.max(1)));
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl_surface) else {
+            return base;
+        };
+        let shell_min = if self.window_registry.is_shell_hosted(window_id) {
+            Size::from((1, 1))
+        } else {
+            self.shell_managed_native_min_content_size()
+        };
+        let (min_size, max_size) = smithay::wayland::compositor::with_states(wl_surface, |states| {
+            let mut guard = states.cached_state.get::<SurfaceCachedState>();
+            let data = guard.current();
+            (data.min_size, data.max_size)
+        });
+        let min_width = min_size.w.max(1).max(shell_min.w);
+        let min_height = min_size.h.max(1).max(shell_min.h);
+        let max_width = if max_size.w == 0 {
+            i32::MAX
+        } else {
+            max_size.w.max(min_width)
+        };
+        let max_height = if max_size.h == 0 {
+            i32::MAX
+        } else {
+            max_size.h.max(min_height)
+        };
+        Size::from((
+            width.max(min_width).min(max_width),
+            height.max(min_height).min(max_height),
+        ))
     }
 
     pub fn new_toplevel_initial_location(
@@ -4915,6 +4988,7 @@ impl CompositorState {
         let tl = window.toplevel().unwrap();
         let wl = tl.wl_surface();
         let last_size = compute_clamped_resize_size(
+            self,
             wl,
             edges,
             initial_rect.size,
@@ -4980,6 +5054,7 @@ impl CompositorState {
         let tl = window.toplevel().unwrap();
         let wl = tl.wl_surface();
         let last_size = compute_clamped_resize_size(
+            self,
             wl,
             edges,
             initial_rect.size,

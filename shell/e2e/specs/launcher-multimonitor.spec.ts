@@ -87,12 +87,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
         12000,
         125,
       )
+      const stableLaunch = await waitFor(
+        'wait for launcher window minimum chrome-safe size',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const window = compositorWindowById(compositor, launched.window.window_id)
+          if (!window) return null
+          if (window.width < 160 || window.height < 48) return null
+          return { compositor, shell, window }
+        },
+        8000,
+        125,
+      )
       state.launcherWindowId = launched.window.window_id
       state.spawnedNativeWindowIds.add(launched.window.window_id)
       await writeJsonArtifact('programs-menu-launch.json', {
         query: launcherCandidate.query,
         app: launcherCandidate.app,
-        window: launched.window,
+        window: stableLaunch.window,
       })
     }
     await writeJsonArtifact('programs-menu-shell.json', menuByKeybind)
@@ -126,11 +138,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(primaryMonitors.size === 1, `expected primary-only controls on one monitor, got ${[...primaryMonitors].join(', ')}`)
 
-    const redId = state.redSpawn!.window.window_id
+    const redId = state.greenSpawn!.window.window_id
     const redShell = shellWindowById(shell, redId)
     const redCompositor = compositorWindowById(compositor, redId)
-    assert(redShell?.output_name, 'missing red shell output name')
-    assert(redCompositor, 'missing red compositor window')
+    assert(redShell?.output_name, 'missing green shell output name')
+    assert(redCompositor, 'missing green compositor window')
     assertTaskbarRowOnMonitor(shell, redId, redShell.output_name)
     const nativeMove = pickMonitorMove(compositor.outputs, redShell.output_name)
     if (!nativeMove) {

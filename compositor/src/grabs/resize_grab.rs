@@ -12,7 +12,7 @@ use smithay::{
         wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, Rectangle, Size},
-    wayland::{compositor, shell::xdg::SurfaceCachedState},
+    wayland::compositor,
 };
 use std::cell::RefCell;
 
@@ -41,6 +41,7 @@ impl From<xdg_toplevel::ResizeEdge> for ResizeEdge {
 
 /// Cumulative pointer delta in compositor logical space (same construction as [`ResizeSurfaceGrab::motion`]).
 pub fn compute_clamped_resize_size(
+    data: &CompositorState,
     wl_surface: &WlSurface,
     edges: ResizeEdge,
     initial_size: Size<i32, Logical>,
@@ -70,30 +71,7 @@ pub fn compute_clamped_resize_size(
         new_window_height = (initial_size.h as f64 + delta_y) as i32;
     }
 
-    let (min_size, max_size) = compositor::with_states(wl_surface, |states| {
-        let mut guard = states.cached_state.get::<SurfaceCachedState>();
-        let data = guard.current();
-        (data.min_size, data.max_size)
-    });
-
-    let min_width = min_size.w.max(1);
-    let min_height = min_size.h.max(1);
-
-    let max_width = if max_size.w == 0 {
-        i32::MAX
-    } else {
-        max_size.w
-    };
-    let max_height = if max_size.h == 0 {
-        i32::MAX
-    } else {
-        max_size.h
-    };
-
-    Size::from((
-        new_window_width.max(min_width).min(max_width),
-        new_window_height.max(min_height).min(max_height),
-    ))
+    data.clamp_wayland_toplevel_content_size(wl_surface, new_window_width, new_window_height)
 }
 
 pub fn resize_tracking_set_resizing(
@@ -170,6 +148,7 @@ impl PointerGrab<CompositorState> for ResizeSurfaceGrab {
 
         let delta = event.location - self.start_data.location;
         self.last_window_size = compute_clamped_resize_size(
+            data,
             self.window.toplevel().unwrap().wl_surface(),
             self.edges,
             self.initial_rect.size,

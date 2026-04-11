@@ -26,6 +26,7 @@ type Entry = {
 }
 
 const registry = new Map<number, Entry>()
+let nextRegistryToken = 1
 let generation = 0
 let raf = 0
 let lastWindowsJson: string | null = null
@@ -62,11 +63,12 @@ export function flushShellUiWindowsSyncNow() {
   flush()
 }
 
-export function registerShellUiWindow(id: number, measure: Entry['measure']) {
-  registry.set(id, { measure })
+export function registerShellUiWindow(_id: number, measure: Entry['measure']) {
+  const token = nextRegistryToken++
+  registry.set(token, { measure })
   scheduleShellUiWindowsSync()
   return () => {
-    registry.delete(id)
+    registry.delete(token)
     scheduleShellUiWindowsSync()
   }
 }

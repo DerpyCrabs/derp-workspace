@@ -2,7 +2,8 @@ import { For, Show, type Accessor } from 'solid-js'
 import { canvasRectToClientCss } from '../shellCoords'
 import { SnapAssistMasterGrid } from '../SnapAssistMasterGrid'
 import { Taskbar, type TaskbarWindowRow } from '../Taskbar'
-import type { AssistOverlayState, LayoutScreen } from './types'
+import { SnapAssistTopStrip } from './SnapAssistTopStrip'
+import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from './types'
 
 type ShellSurfaceLayersProps = {
   assistOverlay: Accessor<AssistOverlayState | null>
@@ -27,6 +28,8 @@ type ShellSurfaceLayersProps = {
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
+  snapStrip: Accessor<SnapAssistStripState | null>
+  snapStripScreen: Accessor<LayoutScreen | null>
 }
 
 export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
@@ -90,6 +93,16 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           )
         }}
       </For>
+
+      <Show when={props.snapStripScreen()}>
+        <Show when={props.snapStrip()}>
+          <SnapAssistTopStrip
+            strip={props.snapStrip()!}
+            screen={props.snapStripScreen()!}
+            screenCssRect={props.screenCssRect}
+          />
+        </Show>
+      </Show>
 
       <For each={props.taskbarScreens()}>
         {(screen) => {

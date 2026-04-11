@@ -49,6 +49,7 @@ type ShellWindowFrameProps = {
   stackZ: MaybeAcc<number>
   onFocusRequest?: () => void
   onTitlebarPointerDown: (clientX: number, clientY: number) => void
+  onSnapAssistOpen?: (anchorRect: DOMRect) => void
   onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
   onMinimize: () => void
   onMaximize: () => void
@@ -169,6 +170,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         </div>
       </Show>
       <div
+        data-shell-titlebar={model()?.window_id ?? 0}
         class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
         style={{
           top: `${layout().inset}px`,
@@ -223,10 +225,16 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
+            data-shell-maximize-trigger={model()?.window_id ?? 0}
             class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMaximize()}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              props.onSnapAssistOpen?.(e.currentTarget.getBoundingClientRect())
+            }}
           >
             {model()?.maximized ? (
               <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
