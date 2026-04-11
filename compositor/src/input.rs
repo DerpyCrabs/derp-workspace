@@ -25,7 +25,7 @@ use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
 #[allow(non_upper_case_globals)]
-fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Option<&'static str> {
+pub(crate) fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Option<&'static str> {
     use keysyms::*;
     if ctrl {
         return match raw_sym {
@@ -88,7 +88,7 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
 
 impl CompositorState {
     /// Logical pointer position **within the output** (`output_geo` from [`crate::state::CompositorState::space`]).
-    fn pointer_motion_output_local(
+    pub(crate) fn pointer_motion_output_local(
         &mut self,
         output_geo: Rectangle<i32, Logical>,
         local: Point<f64, Logical>,
@@ -246,7 +246,12 @@ impl CompositorState {
         workspace.loc.to_f64() + event.position_transformed(workspace.size)
     }
 
-    fn process_pointer_button(&mut self, button: u32, button_state: ButtonState, time_msec: u32) {
+    pub(crate) fn process_pointer_button(
+        &mut self,
+        button: u32,
+        button_state: ButtonState,
+        time_msec: u32,
+    ) {
         if self.handle_screenshot_pointer_button(button, button_state) {
             let pointer = self.seat.get_pointer().unwrap();
             let serial = SERIAL_COUNTER.next_serial();

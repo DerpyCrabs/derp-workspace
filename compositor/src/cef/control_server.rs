@@ -1,9 +1,12 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use cef::{Browser, CefString, ImplBrowser, ImplFrame};
+
+use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
 
 struct PortalScreencastRequest {
@@ -49,13 +52,20 @@ fn cors_headers() -> &'static str {
     "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
 }
 
-pub fn start(uplink: UplinkToCompositor) -> std::sync::mpsc::Receiver<Result<u16, String>> {
+pub fn start(
+    uplink: UplinkToCompositor,
+    browser: Arc<Mutex<Option<Browser>>>,
+) -> std::sync::mpsc::Receiver<Result<u16, String>> {
     let (tx, rx) = std::sync::mpsc::channel::<Result<u16, String>>();
-    std::thread::spawn(move || run(uplink, tx));
+    std::thread::spawn(move || run(uplink, browser, tx));
     rx
 }
 
-fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<Result<u16, String>>) {
+fn run(
+    uplink: UplinkToCompositor,
+    browser: Arc<Mutex<Option<Browser>>>,
+    port_tx: std::sync::mpsc::Sender<Result<u16, String>>,
+) {
     let listener = match TcpListener::bind("127.0.0.1:0") {
         Ok(l) => l,
         Err(e) => {
@@ -76,9 +86,10 @@ fn run(uplink: UplinkToCompositor, port_tx: std::sync::mpsc::Sender<Result<u16, 
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         let uplink_cl = uplink.clone();
+        let browser_cl = browser.clone();
         std::thread::spawn(move || {
             let mut stream = stream;
-            if let Err(e) = handle_one(&mut stream, &uplink_cl) {
+            if let Err(e) = handle_one(&mut stream, &uplink_cl, &browser_cl) {
                 let msg = e.replace('\r', "").replace('\n', "");
                 let body = format!(r#"{{"error":"{}"}}"#, msg.replace('"', "'"));
                 let _ = write_http_json_error(&mut stream, 500, &body);
@@ -186,6 +197,57 @@ fn percent_decode_component(input: &str) -> Result<String, String> {
         }
     }
     String::from_utf8(out).map_err(|e| e.to_string())
+}
+
+fn quote_js_string(input: &str) -> Result<String, String> {
+    serde_json::to_string(input).map_err(|e| format!("serialize js string: {e}"))
+}
+
+fn execute_shell_bridge_js(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    script: String,
+) -> Result<(), String> {
+    let guard = browser
+        .lock()
+        .map_err(|_| "shell browser lock poisoned".to_string())?;
+    let browser = guard
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "shell browser is unavailable".to_string())?;
+    let frame = browser
+        .main_frame()
+        .ok_or_else(|| "shell main frame is unavailable".to_string())?;
+    frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 0);
+    Ok(())
+}
+
+fn request_shell_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
+    let request_id = e2e_bridge::next_request_id();
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_REQUEST_SNAPSHOT&&window.__DERP_E2E_REQUEST_SNAPSHOT({request_id});"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3))
+}
+
+fn request_shell_html(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    selector: Option<&str>,
+) -> Result<String, String> {
+    let request_id = e2e_bridge::next_request_id();
+    let selector_js = match selector {
+        Some(value) => quote_js_string(value)?,
+        None => "null".to_string(),
+    };
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_REQUEST_HTML&&window.__DERP_E2E_REQUEST_HTML({request_id},{selector_js});"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_html(request_id, Duration::from_secs(3))
 }
 
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
@@ -325,6 +387,12 @@ fn json_i32_field(v: &serde_json::Value, key: &str) -> Result<i32, String> {
     i32::try_from(raw).map_err(|_| format!("{key} out of range"))
 }
 
+fn json_f64_field(v: &serde_json::Value, key: &str) -> Result<f64, String> {
+    v.get(key)
+        .and_then(|x| x.as_f64())
+        .ok_or_else(|| format!("missing {key}"))
+}
+
 fn json_u32_field(v: &serde_json::Value, key: &str) -> Result<u32, String> {
     let raw = v
         .get(key)
@@ -363,7 +431,11 @@ fn json_optional_string_field(v: &serde_json::Value, key: &str) -> Result<Option
     }
 }
 
-fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> Result<(), String> {
+fn handle_one(
+    stream: &mut std::net::TcpStream,
+    uplink: &UplinkToCompositor,
+    browser: &Arc<Mutex<Option<Browser>>>,
+) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut first = String::new();
     reader.read_line(&mut first).map_err(|e| e.to_string())?;
@@ -392,6 +464,29 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
 
     if method.eq_ignore_ascii_case("OPTIONS") {
         write_http_no_content(stream).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/compositor" {
+        let json = uplink.test_compositor_snapshot_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/shell" {
+        let json = request_shell_snapshot_json(browser)?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/html" {
+        let selector = query_str
+            .and_then(|query| query_param_raw(query, "selector"))
+            .map(percent_decode_component)
+            .transpose()?;
+        let html = request_shell_html(browser, selector.as_deref())?;
+        write_http_ok_bytes(stream, "text/html; charset=utf-8", html.as_bytes())
+            .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -489,6 +584,155 @@ fn handle_one(stream: &mut std::net::TcpStream, uplink: &UplinkToCompositor) -> 
         let selection = portal_screencast_pick(&v);
         write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
             .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/pointer_move" {
+        uplink.test_pointer_move(json_f64_field(&v, "x")?, json_f64_field(&v, "y")?)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/pointer_button" {
+        let button = v
+            .get("button")
+            .and_then(|x| x.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0x110);
+        let action = v
+            .get("action")
+            .and_then(|x| x.as_str())
+            .unwrap_or("press");
+        let pressed = match action {
+            "press" => true,
+            "release" => false,
+            _ => return Err("pointer_button: action must be press or release".into()),
+        };
+        uplink.test_pointer_button(button, pressed)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/click" {
+        let button = v
+            .get("button")
+            .and_then(|x| x.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0x110);
+        uplink.test_pointer_click(
+            json_f64_field(&v, "x")?,
+            json_f64_field(&v, "y")?,
+            button,
+        )?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/drag" {
+        let button = v
+            .get("button")
+            .and_then(|x| x.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0x110);
+        let steps = v
+            .get("steps")
+            .and_then(|x| x.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(12);
+        uplink.test_pointer_drag(
+            json_f64_field(&v, "x0")?,
+            json_f64_field(&v, "y0")?,
+            json_f64_field(&v, "x1")?,
+            json_f64_field(&v, "y1")?,
+            button,
+            steps,
+        )?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/key" {
+        let keycode = json_u32_field(&v, "keycode")?;
+        let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("tap");
+        match action {
+            "press" => uplink.test_key(keycode, true)?,
+            "release" => uplink.test_key(keycode, false)?,
+            "tap" => {
+                uplink.test_key(keycode, true)?;
+                uplink.test_key(keycode, false)?;
+            }
+            _ => return Err("key: action must be press, release, or tap".into()),
+        }
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/keybind" {
+        let action = v
+            .get("action")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "keybind: missing action".to_string())?;
+        match action {
+            "close_focused"
+            | "toggle_fullscreen"
+            | "toggle_maximize"
+            | "launch_terminal"
+            | "toggle_programs_menu"
+            | "open_settings"
+            | "tile_left"
+            | "tile_right"
+            | "tile_up"
+            | "tile_down"
+            | "move_monitor_left"
+            | "move_monitor_right" => {}
+            _ => return Err("keybind: unsupported action".into()),
+        }
+        uplink.test_super_keybind(action.to_string())?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/window/close" {
+        let window_id = json_u32_field(&v, "window_id")?;
+        uplink.shell_close(window_id);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/window/crash" {
+        let window_id = json_u32_field(&v, "window_id")?;
+        uplink.test_crash_window(window_id)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/screenshot" {
+        let rect = match (
+            v.get("x").and_then(|x| x.as_i64()),
+            v.get("y").and_then(|x| x.as_i64()),
+            v.get("width").and_then(|x| x.as_i64()),
+            v.get("height").and_then(|x| x.as_i64()),
+        ) {
+            (Some(x), Some(y), Some(width), Some(height)) => Some(smithay::utils::Rectangle::new(
+                (
+                    i32::try_from(x).map_err(|_| "screenshot x out of range".to_string())?,
+                    i32::try_from(y).map_err(|_| "screenshot y out of range".to_string())?,
+                )
+                    .into(),
+                (
+                    i32::try_from(width).map_err(|_| "screenshot width out of range".to_string())?,
+                    i32::try_from(height).map_err(|_| "screenshot height out of range".to_string())?,
+                )
+                    .into(),
+            )),
+            (None, None, None, None) => None,
+            _ => return Err("screenshot: provide x, y, width, and height together".into()),
+        };
+        let request_id = uplink.test_request_screenshot(rect)?;
+        let result = crate::e2e::wait_for_screenshot_result(request_id, Duration::from_secs(5))?;
+        let json = serde_json::to_string(&result)
+            .map_err(|e| format!("serialize screenshot result: {e}"))?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 

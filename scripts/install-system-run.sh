@@ -31,8 +31,8 @@ done
 cd "$REPO_ROOT"
 
 if [[ "$SHELL_ONLY" -eq 0 ]]; then
-  echo "=== cargo build --release (compositor) ==="
-  cargo build --release -p compositor
+  echo "=== cargo build --release (compositor + derp-test-client) ==="
+  cargo build --release -p compositor -p derp-test-client
 else
   echo "=== (--shell-only) skip cargo ==="
 fi

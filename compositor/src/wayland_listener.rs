@@ -42,6 +42,7 @@ pub fn init_wayland_listener(
                         tracing::warn!(?e, "wayland client dispatch failed");
                     }
                 }
+                state.state.handle_pending_wayland_client_disconnects();
                 Ok(PostAction::Continue)
             },
         )

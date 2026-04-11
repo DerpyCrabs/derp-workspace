@@ -152,6 +152,7 @@ export function Taskbar(props: TaskbarProps) {
                 <button
                   type="button"
                   class="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left text-xs touch-manipulation"
+                  data-shell-taskbar-window-activate={w.window_id}
                   aria-current={active() ? 'true' : undefined}
                   onClick={() => props.onTaskbarActivate(w.window_id)}
                 >
@@ -166,6 +167,7 @@ export function Taskbar(props: TaskbarProps) {
                 <button
                   type="button"
                   class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+                  data-shell-taskbar-window-close={w.window_id}
                   aria-label={`Close ${windowLabel(w)}`}
                   title={`Close ${windowLabel(w)}`}
                   onPointerDown={(e) => e.stopPropagation()}
@@ -211,6 +213,7 @@ export function Taskbar(props: TaskbarProps) {
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text)': props.debugPanelOpen,
             }}
+            data-shell-debug-toggle
             aria-pressed={props.debugPanelOpen}
             title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
             onClick={() => props.onDebugPanelToggle()}

@@ -6,7 +6,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex, OnceLock, Weak,
     },
     time::{Duration, Instant},
 };
@@ -85,6 +85,11 @@ use crate::{
     CalloopData,
 };
 use smithay::input::pointer::CursorImageStatus;
+
+fn disconnected_wayland_clients() -> &'static Mutex<Vec<ClientId>> {
+    static QUEUE: OnceLock<Mutex<Vec<ClientId>>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
@@ -1793,11 +1798,18 @@ impl CompositorState {
             Ok(())
         })();
         if let Err(error) = capture {
+            if let Some(request_id) = request.e2e_request_id {
+                crate::e2e::publish_screenshot_result(request_id, Err(error.clone()));
+            }
             tracing::warn!(%error, output = %output_name, "screenshot capture failed");
             return;
         }
         if request.is_complete() {
+            let request_id = request.e2e_request_id;
             if let Err(error) = self.finish_screenshot_request(request) {
+                if let Some(request_id) = request_id {
+                    crate::e2e::publish_screenshot_result(request_id, Err(error.clone()));
+                }
                 tracing::warn!(%error, "screenshot finalize failed");
             }
             return;
@@ -1811,7 +1823,26 @@ impl CompositorState {
     ) -> Result<PathBuf, String> {
         let image = request.finalize_image()?;
         let png = crate::screenshot::encode_png(&image)?;
-        let path = crate::screenshot::save_png(&png)?;
+        let path = if let Some(save_path) = request.save_path.as_ref() {
+            crate::screenshot::save_png_to_path(&png, save_path)?
+        } else {
+            crate::screenshot::save_png(&png)?
+        };
+        if let Some(request_id) = request.e2e_request_id {
+            crate::e2e::publish_screenshot_result(
+                request_id,
+                Ok(crate::e2e::E2eScreenshotResult {
+                    request_id,
+                    path: path.display().to_string(),
+                    width: image.width(),
+                    height: image.height(),
+                    captured_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis(),
+                }),
+            );
+        }
         self.publish_screenshot_clipboard(png);
         tracing::warn!(path = %path.display(), "screenshot saved");
         Ok(path)
@@ -1853,6 +1884,60 @@ impl CompositorState {
         }
         self.shell_spawn_focus_above_window_id = None;
         self.shell_raise_and_focus_window(window_id);
+    }
+
+    pub(crate) fn handle_pending_wayland_client_disconnects(&mut self) {
+        let pending = disconnected_wayland_clients()
+            .lock()
+            .map(|mut queue| std::mem::take(&mut *queue))
+            .unwrap_or_default();
+        for client_id in pending {
+            self.cleanup_disconnected_wayland_client(client_id);
+        }
+    }
+
+    fn cleanup_disconnected_wayland_client(&mut self, client_id: ClientId) {
+        let infos = self.window_registry.native_infos_for_client(&client_id);
+        if infos.is_empty() {
+            self.pending_deferred_toplevels
+                .retain(|(cid, _), _| cid != &client_id);
+            self.idle_inhibit_surfaces.retain(|(cid, _)| cid != &client_id);
+            return;
+        }
+        let focused_removed = infos
+            .iter()
+            .any(|info| self.keyboard_focused_window_id() == Some(info.window_id));
+        for info in &infos {
+            if let Some(window) = self.find_window_by_surface_id(info.surface_id) {
+                self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
+            }
+            self.clear_toplevel_layout_maps(info.window_id);
+            self.pending_gnome_initial_toplevels.remove(&info.window_id);
+            self.shell_window_stack_forget(info.window_id);
+            self.focus_history_remove_window(info.window_id);
+            if self.shell_last_non_shell_focus_window_id == Some(info.window_id) {
+                self.shell_last_non_shell_focus_window_id = None;
+            }
+            self.shell_minimized_windows.remove(&info.window_id);
+        }
+        self.pending_deferred_toplevels
+            .retain(|(cid, _), _| cid != &client_id);
+        self.idle_inhibit_surfaces.retain(|(cid, _)| cid != &client_id);
+        let removed = self.window_registry.remove_by_client_id(&client_id);
+        for info in removed {
+            tracing::warn!(
+                target: "derp_toplevel",
+                window_id = info.window_id,
+                title = %info.title,
+                app_id = %info.app_id,
+                pid = ?info.wayland_client_pid,
+                "wayland client disconnected; pruning native window"
+            );
+            self.shell_emit_chrome_window_unmapped(info.window_id, Some(info));
+        }
+        if focused_removed {
+            self.try_refocus_after_closed_toplevel();
+        }
     }
 
     pub(crate) fn handle_super_keybind(&mut self, action: &str) {
@@ -6302,5 +6387,9 @@ pub struct ClientState {
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
+        if let Ok(mut queue) = disconnected_wayland_clients().lock() {
+            queue.push(client_id);
+        }
+    }
 }

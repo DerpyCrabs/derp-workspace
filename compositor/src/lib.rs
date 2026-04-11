@@ -18,6 +18,7 @@ mod derp_space_render;
 mod desktop_app_usage;
 mod desktop_background;
 mod desktop_stack;
+mod e2e;
 mod display_config;
 pub mod drm;
 mod exclusion_clip;

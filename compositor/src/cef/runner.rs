@@ -555,8 +555,9 @@ fn run_cef(
         return;
     }
 
+    let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let uplink = UplinkToCompositor::new(cef_tx.clone());
-    let control_rx = crate::cef::control_server::start(uplink.clone());
+    let control_rx = crate::cef::control_server::start(uplink.clone(), browser_holder.clone());
     let inject_js = match control_rx.recv() {
         Ok(Ok(port)) => {
             let base = format!("http://127.0.0.1:{port}");
@@ -574,8 +575,6 @@ fn run_cef(
             None
         }
     };
-
-    let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone());
 
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));

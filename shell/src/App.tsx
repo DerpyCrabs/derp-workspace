@@ -131,14 +131,18 @@ declare global {
         | 'set_chrome_metrics'
         | 'set_desktop_background'
         | 'context_menu'
-        | 'backed_window_open',
+        | 'backed_window_open'
+        | 'e2e_snapshot_response'
+        | 'e2e_html_response',
       arg?: number | string,
-      arg2?: number,
-      arg3?: number,
-      arg4?: number,
-      arg5?: number,
-      arg6?: number,
+      arg2?: number | string,
+      arg3?: number | string,
+      arg4?: number | string,
+      arg5?: number | string,
+      arg6?: number | string,
     ) => void
+    __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
+    __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
   }
 }
 
@@ -151,6 +155,47 @@ type ScreenshotSelectionState = {
 const PORTAL_PICKER_PREVIEW_W = 520
 const PORTAL_PICKER_PREVIEW_H = 260
 const PORTAL_PICKER_PREVIEW_PAD = 16
+
+type E2eRectSnapshot = {
+  x: number
+  y: number
+  width: number
+  height: number
+  global_x: number
+  global_y: number
+}
+
+function e2eSnapshotRect(
+  el: Element | null,
+  _main: HTMLElement | null,
+  _canvas: { w: number; h: number } | null,
+  origin: CanvasOrigin | null,
+): E2eRectSnapshot | null {
+  if (!(el instanceof HTMLElement)) return null
+  const rect = el.getBoundingClientRect()
+  const x = Math.round(rect.left)
+  const y = Math.round(rect.top)
+  const width = Math.max(0, Math.round(rect.width))
+  const height = Math.max(0, Math.round(rect.height))
+  const { ox, oy } = canvasOriginXY(origin)
+  return {
+    x,
+    y,
+    width,
+    height,
+    global_x: ox + x,
+    global_y: oy + y,
+  }
+}
+
+function e2eQueryRect(
+  selector: string,
+  main: HTMLElement | null,
+  canvas: { w: number; h: number } | null,
+  origin: CanvasOrigin | null,
+): E2eRectSnapshot | null {
+  return e2eSnapshotRect(document.querySelector(selector), main, canvas, origin)
+}
 
 function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
   const th = CHROME_TITLEBAR_PX
@@ -1072,6 +1117,103 @@ function App() {
     }
     return out
   })
+
+  function buildE2eShellSnapshot() {
+    const origin = layoutCanvasOrigin()
+    const logicalCanvas = layoutUnionBbox()
+    const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
+    const main = mainRef ?? null
+    const taskbarButtons = Array.from(document.querySelectorAll('[data-shell-taskbar-monitor]')).map((el) => {
+      const taskbarEl = el as HTMLElement
+      return {
+        monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',
+        rect: e2eSnapshotRect(taskbarEl, main, canvas, origin),
+      }
+    })
+    const taskbarWindowButtons = windowsList().map((w) => ({
+      window_id: w.window_id,
+      activate: e2eQueryRect(
+        `[data-shell-taskbar-window-activate="${w.window_id}"]`,
+        main,
+        canvas,
+        origin,
+      ),
+      close: e2eQueryRect(
+        `[data-shell-taskbar-window-close="${w.window_id}"]`,
+        main,
+        canvas,
+        origin,
+      ),
+    }))
+    return {
+      captured_at_ms: Date.now(),
+      viewport: viewportCss(),
+      canvas_origin: origin ? { x: origin.x, y: origin.y } : null,
+      focused_window_id: focusedWindowId(),
+      shell_keyboard_layout: keyboardLayoutLabel(),
+      screenshot_mode: screenshotMode(),
+      programs_menu_open: shellContextMenus.programsMenuOpen(),
+      power_menu_open: shellContextMenus.powerMenuOpen(),
+      debug_window_visible: debugHudFrameVisible(),
+      settings_window_visible: settingsHudFrameVisible(),
+      programs_menu_query: shellContextMenus.programsMenuProps.query(),
+      windows: windowsList().map((w) => ({
+        window_id: w.window_id,
+        title: w.title,
+        app_id: w.app_id,
+        x: w.x,
+        y: w.y,
+        width: w.width,
+        height: w.height,
+        minimized: w.minimized,
+        maximized: w.maximized,
+        fullscreen: w.fullscreen,
+        shell_hosted: !!(w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED),
+      })),
+      controls: {
+        taskbar_programs_toggle: e2eQueryRect(
+          '[data-shell-programs-toggle]',
+          main,
+          canvas,
+          origin,
+        ),
+        taskbar_settings_toggle: e2eQueryRect(
+          '[data-shell-settings-toggle]',
+          main,
+          canvas,
+          origin,
+        ),
+        taskbar_debug_toggle: e2eQueryRect('[data-shell-debug-toggle]', main, canvas, origin),
+        taskbar_power_toggle: e2eQueryRect('[data-shell-power-toggle]', main, canvas, origin),
+        programs_menu_search: e2eQueryRect(
+          'input[aria-label="Search applications"]',
+          main,
+          canvas,
+          origin,
+        ),
+      },
+      taskbars: taskbarButtons,
+      taskbar_windows: taskbarWindowButtons,
+    }
+  }
+
+  function publishE2eShellSnapshot(requestId: number) {
+    const send = window.__derpShellWireSend
+    if (!send) return
+    send('e2e_snapshot_response', requestId, JSON.stringify(buildE2eShellSnapshot()))
+  }
+
+  function publishE2eShellHtml(requestId: number, selector?: string | null) {
+    const send = window.__derpShellWireSend
+    if (!send) return
+    let html = ''
+    if (selector && selector.trim().length > 0) {
+      html = (document.querySelector(selector)?.outerHTML ?? '').toString()
+    } else {
+      html = document.documentElement.outerHTML
+    }
+    send('e2e_html_response', requestId, html)
+  }
 
   const stackedWindowsList = createMemo(() => {
     return [...windowsList()].sort((a, b) => {
@@ -2465,6 +2607,12 @@ function App() {
     queueMicrotask(() => {
       shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
     })
+    window.__DERP_E2E_REQUEST_SNAPSHOT = (requestId: number) => {
+      publishE2eShellSnapshot(requestId)
+    }
+    window.__DERP_E2E_REQUEST_HTML = (requestId: number, selector?: string | null) => {
+      publishE2eShellHtml(requestId, selector)
+    }
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
@@ -3062,6 +3210,8 @@ function App() {
       window.removeEventListener('resize', onWindowResize)
       exclusionResizeObserver?.disconnect()
       document.removeEventListener('fullscreenchange', onFullscreenChange)
+      delete window.__DERP_E2E_REQUEST_SNAPSHOT
+      delete window.__DERP_E2E_REQUEST_HTML
     })
   })
   onCleanup(() => {

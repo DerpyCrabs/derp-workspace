@@ -27,7 +27,7 @@ run_tar_sync() {
   (
     cd "$REPO_ROOT"
     tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git .
-  ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh"
+  ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh" >/dev/null
 }
 
 require_remote_sync_tools() {

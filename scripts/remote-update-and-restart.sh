@@ -54,7 +54,7 @@ DERP_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-remote-update-snapshot"
 derp_remote_list_full_paths() {
   (
     cd "$REPO_ROOT" || exit 1
-    for d in compositor shell_wire resources scripts; do
+    for d in compositor shell_wire e2e-test-client resources scripts; do
       [[ -d "$d" ]] || continue
       find "$d" -type f 2>/dev/null || true
     done

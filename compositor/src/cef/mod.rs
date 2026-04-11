@@ -4,6 +4,7 @@ mod compositor_downlink;
 pub mod compositor_tx;
 mod control_server;
 mod desktop_apps;
+mod e2e_bridge;
 mod frame_sink;
 mod gnome_background;
 mod gnome_wallpaper_list;

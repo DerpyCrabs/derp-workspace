@@ -34,6 +34,8 @@ pub(crate) struct PendingScreenshotRequest {
     pub kind: ScreenshotRequestKind,
     remaining_outputs: Vec<String>,
     captured_outputs: Vec<CapturedOutputFrame>,
+    pub e2e_request_id: Option<u64>,
+    pub save_path: Option<PathBuf>,
 }
 
 impl PendingScreenshotRequest {
@@ -44,6 +46,8 @@ impl PendingScreenshotRequest {
             },
             remaining_outputs: vec![output_name],
             captured_outputs: Vec::new(),
+            e2e_request_id: None,
+            save_path: None,
         }
     }
 
@@ -58,7 +62,21 @@ impl PendingScreenshotRequest {
             kind: ScreenshotRequestKind::Region { logical_rect },
             remaining_outputs: outputs,
             captured_outputs: Vec::new(),
+            e2e_request_id: None,
+            save_path: None,
         })
+    }
+
+    pub(crate) fn for_region_e2e(
+        logical_rect: Rectangle<i32, Logical>,
+        outputs: Vec<String>,
+        request_id: u64,
+        save_path: PathBuf,
+    ) -> Result<Self, String> {
+        let mut request = Self::for_region(logical_rect, outputs)?;
+        request.e2e_request_id = Some(request_id);
+        request.save_path = Some(save_path);
+        Ok(request)
     }
 
     pub(crate) fn needs_output(&self, output_name: &str) -> bool {
@@ -142,6 +160,15 @@ pub(crate) fn save_png(bytes: &[u8]) -> Result<PathBuf, String> {
     let path = dir.join(format!("Screenshot-{stamp}.png"));
     std::fs::write(&path, bytes).map_err(|e| format!("write screenshot: {e}"))?;
     Ok(path)
+}
+
+pub(crate) fn save_png_to_path(bytes: &[u8], path: &PathBuf) -> Result<PathBuf, String> {
+    let Some(parent) = path.parent() else {
+        return Err("screenshot path has no parent directory".into());
+    };
+    std::fs::create_dir_all(parent).map_err(|e| format!("create screenshot dir: {e}"))?;
+    std::fs::write(path, bytes).map_err(|e| format!("write screenshot: {e}"))?;
+    Ok(path.clone())
 }
 
 fn screenshot_dir() -> Result<PathBuf, String> {

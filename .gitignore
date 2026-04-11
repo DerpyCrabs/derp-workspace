@@ -33,3 +33,5 @@ scripts/remote-install.env
 scripts/remote-install.local.md
 scripts/derp-session.local.env
 scripts/.derp-remote-update-snapshot
+/.artifacts/
+/tmp/e2e-artifacts/

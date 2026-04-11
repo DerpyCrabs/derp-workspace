@@ -10,5 +10,6 @@ Rules:
 - keep tailwind/style lint clean when editing shell ui files
 - after changes do ./scripts/remote-update-and-restart.sh
 - use ./scripts/remote-verify.sh to tar-sync sources to the remote machine and run verification there
+- for compositor, native window lifecycle, or e2e harness changes add or update a remote e2e test and keep fetched local artifacts under .artifacts/e2e
 - if you need logs use ./scripts/fetch-logs.sh
 - debug everything yourself on remote machine (but if you add logs use warn and delete after debugging)

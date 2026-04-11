@@ -1,4 +1,5 @@
 use smithay::reexports::calloop::channel::Sender;
+use smithay::utils::{Logical, Rectangle};
 
 use crate::cef::compositor_tx::CefToCompositor;
 
@@ -17,6 +18,21 @@ impl UplinkToCompositor {
             s.shell_note_shell_ipc_rx();
             f(s);
         })));
+    }
+
+    fn run_result<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut crate::state::CompositorState) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.cef_tx
+            .send(CefToCompositor::Run(Box::new(move |s| {
+                s.shell_note_shell_ipc_rx();
+                let _ = tx.send(f(s));
+            })))
+            .map_err(|_| "failed to queue compositor task".to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| "timed out waiting for compositor task".to_string())?
     }
 
     pub fn quit_compositor(&self) {
@@ -277,5 +293,64 @@ impl UplinkToCompositor {
         self.run(move |s| {
             s.cancel_screenshot_selection_mode();
         });
+    }
+
+    pub fn test_pointer_move(&self, x: f64, y: f64) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_move_global(x, y))
+    }
+
+    pub fn test_pointer_button(&self, button: u32, pressed: bool) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_button(button, pressed))
+    }
+
+    pub fn test_pointer_click(&self, x: f64, y: f64, button: u32) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_click(x, y, button))
+    }
+
+    pub fn test_pointer_drag(
+        &self,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        button: u32,
+        steps: u32,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_drag(x0, y0, x1, y1, button, steps))
+    }
+
+    pub fn test_key(&self, keycode: u32, pressed: bool) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.e2e_keyboard_key(
+                keycode,
+                if pressed {
+                    smithay::backend::input::KeyState::Pressed
+                } else {
+                    smithay::backend::input::KeyState::Released
+                },
+            )
+        })
+    }
+
+    pub fn test_super_keybind(&self, action: String) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.handle_super_keybind(&action);
+            Ok(())
+        })
+    }
+
+    pub fn test_crash_window(&self, window_id: u32) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_crash_window_client(window_id))
+    }
+
+    pub fn test_compositor_snapshot_json(&self) -> Result<String, String> {
+        self.run_result(move |s| s.e2e_compositor_snapshot_json())
+    }
+
+    pub fn test_request_screenshot(
+        &self,
+        rect: Option<Rectangle<i32, Logical>>,
+    ) -> Result<u64, String> {
+        self.run_result(move |s| s.e2e_request_screenshot(rect))
     }
 }

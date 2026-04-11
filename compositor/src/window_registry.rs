@@ -153,6 +153,38 @@ impl WindowRegistry {
         Some(wid)
     }
 
+    pub fn native_infos_for_client(&self, client_id: &ClientId) -> Vec<WindowInfo> {
+        self.by_surface
+            .iter()
+            .filter(|((cid, _), _)| cid == client_id)
+            .filter_map(|(_, wid)| self.records.get(wid))
+            .filter(|record| record.kind == WindowKind::Native)
+            .map(|record| record.info.clone())
+            .collect()
+    }
+
+    pub fn remove_by_client_id(&mut self, client_id: &ClientId) -> Vec<WindowInfo> {
+        let doomed: Vec<_> = self
+            .by_surface
+            .keys()
+            .filter(|(cid, _)| cid == client_id)
+            .cloned()
+            .collect();
+        let mut removed = Vec::new();
+        for key in doomed {
+            let Some(window_id) = self.by_surface.remove(&key) else {
+                continue;
+            };
+            let Some(record) = self.records.remove(&window_id) else {
+                continue;
+            };
+            if record.kind == WindowKind::Native {
+                removed.push(record.info);
+            }
+        }
+        removed
+    }
+
     pub fn highest_allocated_window_id(&self) -> WindowId {
         self.records
             .values()
