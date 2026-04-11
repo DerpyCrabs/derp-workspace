@@ -275,7 +275,10 @@ impl CompositorState {
             self.shell_focus_shell_ui_window(window_id);
             return true;
         }
-        let ui = self.shell_focused_ui_window_id == Some(window_id);
+        let ui = self.shell_focused_ui_window_id == Some(window_id)
+            || (self.shell_focused_ui_window_id.is_none()
+                && self.shell_ipc_keyboard_to_cef
+                && self.shell_last_sent_ui_focus_id == Some(window_id));
         if ui {
             let _ = self.shell_backed_minimize_if_any(window_id);
         } else {
@@ -512,6 +515,12 @@ impl CompositorState {
         } else {
             None
         };
+        let target_output_name = if let Some(work) = max_work {
+            self.output_for_window_position(work.loc.x, work.loc.y, work.size.w, work.size.h)
+        } else {
+            self.output_for_window_position(gx, gy, gw, gh)
+        }
+        .unwrap_or_default();
         let snap = self
             .window_registry
             .update_shell_hosted(window_id, |info, float_restore| {
@@ -536,6 +545,7 @@ impl CompositorState {
                     info.width = gw.max(1);
                     info.height = gh.max(1);
                 }
+                info.output_name = target_output_name.clone();
                 Some(info.clone())
             });
         let Some(Some(snap)) = snap else {

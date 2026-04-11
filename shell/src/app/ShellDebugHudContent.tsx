@@ -23,11 +23,12 @@ type ShellDebugHudContentProps = {
 
 export function ShellDebugHudContent(props: ShellDebugHudContentProps) {
   return (
-    <div class="px-4 py-3 text-left text-xs leading-snug [&_strong]:text-shell-hud-strong">
+    <div class="px-4 py-3 text-left text-xs leading-snug [&_strong]:text-shell-hud-strong" data-shell-debug-root>
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <span class="text-[0.8rem] font-semibold tracking-wide text-(--shell-text)">Debug</span>
         <button
           type="button"
+          data-shell-debug-reload
           class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
           onClick={() => props.onReload()}
         >
@@ -35,6 +36,7 @@ export function ShellDebugHudContent(props: ShellDebugHudContentProps) {
         </button>
         <button
           type="button"
+          data-shell-debug-copy-snapshot
           class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded px-2 py-0.5 text-[0.7rem]"
           onClick={() => props.onCopySnapshot()}
         >
@@ -49,6 +51,7 @@ export function ShellDebugHudContent(props: ShellDebugHudContentProps) {
       <label class="mb-2 flex cursor-pointer items-center gap-2 select-none text-(--shell-text-muted)">
         <input
           type="checkbox"
+          data-shell-debug-crosshair-toggle
           class="h-3.5 w-3.5 accent-shell-accent-ring"
           checked={props.crosshairCursor()}
           onChange={(e) => props.setCrosshairCursor(e.currentTarget.checked)}

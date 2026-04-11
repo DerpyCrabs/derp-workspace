@@ -5454,7 +5454,10 @@ impl CompositorState {
         }
 
         let kb = self.keyboard_focused_window_id();
-        let should_minimize = kb == Some(window_id);
+        let should_minimize = kb == Some(window_id)
+            || (kb.is_none()
+                && self.shell_focused_ui_window_id.is_none()
+                && self.shell_last_non_shell_focus_window_id == Some(window_id));
         if should_minimize {
             self.shell_minimize_window(window_id);
         } else {

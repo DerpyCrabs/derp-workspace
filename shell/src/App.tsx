@@ -143,6 +143,7 @@ declare global {
     ) => void
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
+    __DERP_E2E_SET_PROGRAMS_MENU_QUERY?: (query: string) => boolean
   }
 }
 
@@ -1123,6 +1124,9 @@ function App() {
     const logicalCanvas = layoutUnionBbox()
     const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
     const main = mainRef ?? null
+    const stackOrderedWindows = [...windowsList()].sort(
+      (a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id,
+    )
     const taskbarButtons = Array.from(document.querySelectorAll('[data-shell-taskbar-monitor]')).map((el) => {
       const taskbarEl = el as HTMLElement
       return {
@@ -1152,15 +1156,19 @@ function App() {
       focused_window_id: focusedWindowId(),
       shell_keyboard_layout: keyboardLayoutLabel(),
       screenshot_mode: screenshotMode(),
+      crosshair_cursor: crosshairCursor(),
       programs_menu_open: shellContextMenus.programsMenuOpen(),
       power_menu_open: shellContextMenus.powerMenuOpen(),
       debug_window_visible: debugHudFrameVisible(),
       settings_window_visible: settingsHudFrameVisible(),
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
+      window_stack_order: stackOrderedWindows.map((w) => w.window_id),
       windows: windowsList().map((w) => ({
         window_id: w.window_id,
         title: w.title,
         app_id: w.app_id,
+        output_name: w.output_name,
+        stack_z: w.stack_z,
         x: w.x,
         y: w.y,
         width: w.width,
@@ -1187,6 +1195,21 @@ function App() {
         taskbar_power_toggle: e2eQueryRect('[data-shell-power-toggle]', main, canvas, origin),
         programs_menu_search: e2eQueryRect(
           'input[aria-label="Search applications"]',
+          main,
+          canvas,
+          origin,
+        ),
+        settings_tab_displays: e2eQueryRect('[data-settings-tab="displays"]', main, canvas, origin),
+        settings_tab_tiling: e2eQueryRect('[data-settings-tab="tiling"]', main, canvas, origin),
+        debug_reload_button: e2eQueryRect('[data-shell-debug-reload]', main, canvas, origin),
+        debug_copy_snapshot_button: e2eQueryRect(
+          '[data-shell-debug-copy-snapshot]',
+          main,
+          canvas,
+          origin,
+        ),
+        debug_crosshair_toggle: e2eQueryRect(
+          '[data-shell-debug-crosshair-toggle]',
           main,
           canvas,
           origin,
@@ -2613,6 +2636,8 @@ function App() {
     window.__DERP_E2E_REQUEST_HTML = (requestId: number, selector?: string | null) => {
       publishE2eShellHtml(requestId, selector)
     }
+    window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY = (query: string) =>
+      shellContextMenus.e2eSetProgramsMenuQuery(query)
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
@@ -2761,6 +2786,7 @@ function App() {
             const next = new Map(m)
             next.set(fid, {
               ...cur,
+              output_name: tgtMon.name,
               x: loc.x,
               y: loc.y,
               width: loc.w,
@@ -3212,6 +3238,7 @@ function App() {
       document.removeEventListener('fullscreenchange', onFullscreenChange)
       delete window.__DERP_E2E_REQUEST_SNAPSHOT
       delete window.__DERP_E2E_REQUEST_HTML
+      delete window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY
     })
   })
   onCleanup(() => {

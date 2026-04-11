@@ -220,7 +220,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
   onCleanup(() => stopPreviewDrag())
 
   return (
-    <div class="space-y-4">
+    <div class="space-y-4" data-settings-displays-page>
       <h2 class="text-base font-semibold tracking-wide text-(--shell-text)">Displays</h2>
       <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
         <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">

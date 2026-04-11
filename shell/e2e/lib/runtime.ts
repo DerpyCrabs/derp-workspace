@@ -1,0 +1,869 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+export const BTN_LEFT = 0x110
+export const NATIVE_APP_ID = 'derp.e2e.native'
+export const SHELL_UI_DEBUG_WINDOW_ID = 9001
+export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
+export const RED_NATIVE_TITLE = 'Derp Native Red'
+export const GREEN_NATIVE_TITLE = 'Derp Native Green'
+export const CRASH_NATIVE_TITLE = 'Derp Native Crash Probe'
+export const ANSI = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  cyan: '\x1b[36m',
+  bgCyan: '\x1b[46m',
+  black: '\x1b[30m',
+} as const
+export const KEY = {
+  enter: 28,
+  escape: 1,
+  space: 57,
+  a: 30,
+  b: 48,
+  c: 46,
+  d: 32,
+  e: 18,
+  f: 33,
+  g: 34,
+  h: 35,
+  i: 23,
+  j: 36,
+  k: 37,
+  l: 38,
+  m: 50,
+  n: 49,
+  o: 24,
+  p: 25,
+  q: 16,
+  r: 19,
+  s: 31,
+  t: 20,
+  u: 22,
+  v: 47,
+  w: 17,
+  x: 45,
+  y: 21,
+  z: 44,
+} as const
+
+export interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+  global_x: number
+  global_y: number
+}
+
+export interface OutputSnapshot {
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  scale?: number
+  transform?: string
+  refresh_milli_hz?: number
+}
+
+export interface WindowSnapshot {
+  window_id: number
+  title: string
+  app_id: string
+  output_name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  minimized: boolean
+  maximized: boolean
+  fullscreen: boolean
+  shell_hosted: boolean
+  stack_z?: number
+  surface_id?: number
+  client_side_decoration?: boolean
+  wayland_client_pid?: number | null
+}
+
+export interface CompositorSnapshot {
+  windows: WindowSnapshot[]
+  outputs: OutputSnapshot[]
+  focused_window_id: number | null
+  focused_shell_ui_window_id: number | null
+  [key: string]: unknown
+}
+
+export interface ShellTaskbar {
+  monitor: string
+  rect: Rect
+}
+
+export interface ShellTaskbarWindow {
+  window_id: number
+  activate?: Rect | null
+  close?: Rect | null
+}
+
+export interface ShellControls {
+  taskbar_programs_toggle?: Rect | null
+  taskbar_settings_toggle?: Rect | null
+  taskbar_debug_toggle?: Rect | null
+  taskbar_power_toggle?: Rect | null
+  programs_menu_search?: Rect | null
+  settings_tab_displays?: Rect | null
+  settings_tab_tiling?: Rect | null
+  debug_reload_button?: Rect | null
+  debug_copy_snapshot_button?: Rect | null
+  debug_crosshair_toggle?: Rect | null
+  [key: string]: Rect | null | undefined
+}
+
+export interface ShellSnapshot {
+  windows: WindowSnapshot[]
+  taskbars: ShellTaskbar[]
+  taskbar_windows: ShellTaskbarWindow[]
+  controls: ShellControls
+  settings_window_visible: boolean
+  debug_window_visible: boolean
+  programs_menu_open: boolean
+  power_menu_open: boolean
+  programs_menu_query: string
+  crosshair_cursor: boolean
+  window_stack_order?: number[]
+  focused_window_id?: number | null
+  [key: string]: unknown
+}
+
+export interface DesktopAppEntry {
+  name?: string
+  exec?: string
+  executable?: string
+  generic_name?: string
+  full_name?: string
+  [key: string]: unknown
+}
+
+export interface NativeSpawnResult {
+  snapshot: CompositorSnapshot
+  window: WindowSnapshot
+  command: string
+}
+
+export interface E2eState {
+  base: string
+  knownWindowIds: Set<number>
+  spawnedNativeWindowIds: Set<number>
+  desktopApps: DesktopAppEntry[]
+  redSpawn: NativeSpawnResult | null
+  greenSpawn: NativeSpawnResult | null
+  crashProbe: NativeSpawnResult | null
+  launcherWindowId: number | null
+  screenshot: { path?: string; [key: string]: unknown } | null
+  multiMonitorNativeMove: { window_id: number; target_output: string } | null
+  multiMonitorShellMove: { window_id: number; target_output: string } | null
+  tiledOutput: string | null
+}
+
+export interface TestContext {
+  base: string
+  state: E2eState
+}
+
+export interface TestEntry {
+  name: string
+  run: (context: TestContext) => Promise<void>
+}
+
+export interface TestGroup {
+  name: string
+  tests: TestEntry[]
+}
+
+class Reporter {
+  private readonly startedAt = Date.now()
+  private readonly results: Array<{ groupName: string; name: string; status: 'passed' | 'failed' | 'skipped'; elapsedMs: number }> = []
+  private readonly startedGroups: string[] = []
+  private readonly testCounts = new Map<string, number>()
+  private readonly groups: string[]
+
+  constructor(groups: string[]) {
+    this.groups = groups
+  }
+
+  startGroup(name: string): void {
+    if (this.startedGroups.includes(name)) return
+    this.startedGroups.push(name)
+    process.stdout.write(this.startedGroups.length === 1 ? '' : '\n')
+    const index = this.startedGroups.length
+    const label = this.groups.length ? `[${index}/${this.groups.length}]` : `[${index}]`
+    process.stdout.write(`${color(' FILE ', ANSI.bold, ANSI.black, ANSI.bgCyan)} ${color(label, ANSI.cyan)} ${name}\n`)
+  }
+
+  async run<T>(groupName: string, name: string, fn: () => Promise<T>): Promise<T | null> {
+    const index = (this.testCounts.get(groupName) || 0) + 1
+    this.testCounts.set(groupName, index)
+    process.stdout.write(`  ${color(' RUN ', ANSI.bold, ANSI.black, ANSI.bgCyan)} ${color(`[${index}]`, ANSI.cyan)} ${name}\n`)
+    const testStartedAt = Date.now()
+    try {
+      const value = await fn()
+      const elapsedMs = Date.now() - testStartedAt
+      this.results.push({ groupName, name, status: 'passed', elapsedMs })
+      process.stdout.write(`  ${color(' PASS ', ANSI.bold, ANSI.green)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
+      return value
+    } catch (error) {
+      const elapsedMs = Date.now() - testStartedAt
+      if (error instanceof SkipError) {
+        this.results.push({ groupName, name, status: 'skipped', elapsedMs })
+        process.stdout.write(
+          `  ${color(' SKIP ', ANSI.bold, ANSI.yellow)} ${name} ${color(error.message, ANSI.dim)} ${color(formatMs(elapsedMs), ANSI.dim)}\n`,
+        )
+        return null
+      }
+      this.results.push({ groupName, name, status: 'failed', elapsedMs })
+      process.stdout.write(`  ${color(' FAIL ', ANSI.bold, ANSI.red)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
+      throw error
+    }
+  }
+
+  printSummary(): void {
+    const fileStats = new Map(this.groups.map((groupName) => [groupName, { failed: false, ran: false }]))
+    for (const result of this.results) {
+      const stats = fileStats.get(result.groupName) || { failed: false, ran: false }
+      stats.ran = true
+      if (result.status === 'failed') stats.failed = true
+      fileStats.set(result.groupName, stats)
+    }
+    const passedFiles = [...fileStats.values()].filter((stats) => stats.ran && !stats.failed).length
+    const failedFiles = [...fileStats.values()].filter((stats) => stats.failed).length
+    const passed = this.results.filter((result) => result.status === 'passed').length
+    const failed = this.results.filter((result) => result.status === 'failed').length
+    const skipped = this.results.filter((result) => result.status === 'skipped').length
+    const elapsedMs = Date.now() - this.startedAt
+    process.stdout.write('\n')
+    process.stdout.write(
+      `${color(' Test Files ', ANSI.dim)} ${color(`${passedFiles}/${this.groups.length || 1} passed`, ANSI.bold, failedFiles === 0 ? ANSI.green : ANSI.red)}\n`,
+    )
+    process.stdout.write(
+      `${color('      Tests ', ANSI.dim)} ${color(`${passed} passed`, ANSI.bold, ANSI.green)}${skipped ? ` ${color(`${skipped} skipped`, ANSI.bold, ANSI.yellow)}` : ''}${failed ? ` ${color(`${failed} failed`, ANSI.bold, ANSI.red)}` : ''}\n`,
+    )
+    process.stdout.write(`${color('   Duration ', ANSI.dim)} ${color(formatMs(elapsedMs), ANSI.bold)}\n`)
+  }
+}
+
+export class SkipError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SkipError'
+  }
+}
+
+export function defineGroup(importMetaUrl: string, register: (api: { test: (name: string, run: (context: TestContext) => Promise<void>) => void }) => void): TestGroup {
+  const tests: TestEntry[] = []
+  register({
+    test(name, run) {
+      tests.push({ name, run })
+    },
+  })
+  return {
+    name: path.basename(fileURLToPath(importMetaUrl)),
+    tests,
+  }
+}
+
+export function color(text: string, ...codes: string[]): string {
+  return `${codes.join('')}${text}${ANSI.reset}`
+}
+
+export function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+export function testLabel(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+export function createReporter(groups: string[]): Reporter {
+  return new Reporter(groups)
+}
+
+export function printNote(message: string): void {
+  process.stdout.write(`${color('    Note ', ANSI.dim)} ${message}\n`)
+}
+
+export function createState(base: string): E2eState {
+  return {
+    base,
+    knownWindowIds: new Set(),
+    spawnedNativeWindowIds: new Set(),
+    desktopApps: [],
+    redSpawn: null,
+    greenSpawn: null,
+    crashProbe: null,
+    launcherWindowId: null,
+    screenshot: null,
+    multiMonitorNativeMove: null,
+    multiMonitorShellMove: null,
+    tiledOutput: null,
+  }
+}
+
+export function stateHome(): string {
+  if (process.env.XDG_STATE_HOME) return process.env.XDG_STATE_HOME
+  const home = process.env.HOME
+  if (!home) throw new Error('HOME is unset')
+  return path.join(home, '.local', 'state')
+}
+
+export function runtimeDir(): string {
+  return process.env.XDG_RUNTIME_DIR || '/tmp'
+}
+
+export function artifactDir(): string {
+  return process.env.DERP_E2E_ARTIFACT_DIR || path.join(stateHome(), 'derp', 'e2e', 'artifacts')
+}
+
+export async function ensureArtifactDir(): Promise<string> {
+  const dir = artifactDir()
+  await mkdir(dir, { recursive: true })
+  return dir
+}
+
+export function artifactPath(name: string): string {
+  return path.join(artifactDir(), `${Date.now()}-${name}`)
+}
+
+export async function discoverBase(): Promise<string> {
+  if (process.env.DERP_E2E_BASE) return process.env.DERP_E2E_BASE.replace(/\/$/, '')
+  const urlFile = process.env.DERP_SHELL_HTTP_URL_FILE || path.join(runtimeDir(), 'derp-shell-http-url')
+  const base = (await readFile(urlFile, 'utf8')).trim()
+  if (!base.startsWith('http://127.0.0.1:')) {
+    throw new Error(`unexpected shell HTTP base in ${urlFile}: ${base}`)
+  }
+  return base.replace(/\/$/, '')
+}
+
+export async function discoverReadyBase(timeoutMs = 30000): Promise<string> {
+  return waitFor(
+    'wait for shell http base',
+    async () => {
+      const base = await discoverBase()
+      try {
+        await Promise.all([getJson<CompositorSnapshot>(base, '/test/state/compositor'), getJson<ShellSnapshot>(base, '/test/state/shell')])
+        return base
+      } catch {
+        return null
+      }
+    },
+    timeoutMs,
+    250,
+  )
+}
+
+export async function getJson<T = any>(base: string, requestPath: string): Promise<T> {
+  const res = await fetch(`${base}${requestPath}`)
+  const text = await res.text()
+  if (!res.ok) throw new Error(`GET ${requestPath} failed (${res.status}): ${text}`)
+  return JSON.parse(text) as T
+}
+
+export async function getText(base: string, requestPath: string): Promise<string> {
+  const res = await fetch(`${base}${requestPath}`)
+  const text = await res.text()
+  if (!res.ok) throw new Error(`GET ${requestPath} failed (${res.status}): ${text}`)
+  return text
+}
+
+export async function postJson<T = any>(base: string, requestPath: string, body: unknown): Promise<T> {
+  const res = await fetch(`${base}${requestPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`POST ${requestPath} failed (${res.status}): ${text}`)
+  if (!text) return null as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return text as T
+  }
+}
+
+export function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message)
+}
+
+export function rectCenter(rect: Rect): { x: number; y: number } {
+  return {
+    x: rect.global_x + rect.width / 2,
+    y: rect.global_y + rect.height / 2,
+  }
+}
+
+export function pointInRect(rect: Rect | null | undefined, point: { x: number; y: number }): boolean {
+  if (!rect) return false
+  return (
+    point.x >= rect.global_x &&
+    point.x <= rect.global_x + rect.width &&
+    point.y >= rect.global_y &&
+    point.y <= rect.global_y + rect.height
+  )
+}
+
+export function approxEqual(actual: number, expected: number, tolerance: number, label: string): void {
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error(`${label}: expected ${expected} +/- ${tolerance}, got ${actual}`)
+  }
+}
+
+export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 100): Promise<T> {
+  const started = Date.now()
+  let lastError: unknown = null
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const value = await fn()
+      if (value) return value
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  if (lastError) {
+    throw new Error(`${description}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  }
+  throw new Error(`${description}: timed out after ${timeoutMs}ms`)
+}
+
+export async function writeJsonArtifact(name: string, value: unknown): Promise<string> {
+  const filePath = artifactPath(name)
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`)
+  return filePath
+}
+
+export async function writeTextArtifact(name: string, value: string): Promise<string> {
+  const filePath = artifactPath(name)
+  await writeFile(filePath, value)
+  return filePath
+}
+
+export async function captureFailureArtifacts(base: string, label: string): Promise<void> {
+  try {
+    const [compositor, shell, html] = await Promise.all([
+      getJson<CompositorSnapshot>(base, '/test/state/compositor'),
+      getJson<ShellSnapshot>(base, '/test/state/shell'),
+      getText(base, '/test/state/html'),
+    ])
+    await writeJsonArtifact(`${label}-compositor.json`, compositor)
+    await writeJsonArtifact(`${label}-shell.json`, shell)
+    await writeTextArtifact(`${label}-shell.html`, html)
+  } catch (error) {
+    await writeTextArtifact(
+      `${label}-artifact-error.txt`,
+      error instanceof Error ? `${error.stack || error.message}\n` : `${String(error)}\n`,
+    )
+  }
+}
+
+export async function clickRect(base: string, rect: Rect): Promise<void> {
+  const point = rectCenter(rect)
+  await clickPoint(base, point.x, point.y)
+}
+
+export async function clickPoint(base: string, x: number, y: number): Promise<void> {
+  await postJson(base, '/test/input/click', { x, y, button: BTN_LEFT })
+}
+
+export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 16): Promise<void> {
+  await postJson(base, '/test/input/drag', { x0, y0, x1, y1, button: BTN_LEFT, steps })
+}
+
+export async function tapKey(base: string, keycode: number): Promise<void> {
+  await postJson(base, '/test/input/key', { keycode, action: 'tap' })
+}
+
+export async function typeText(base: string, text: string): Promise<void> {
+  for (const char of text.toLowerCase()) {
+    const keycode = KEY[char as keyof typeof KEY]
+    if (keycode === undefined) throw new Error(`unsupported text input character: ${char}`)
+    await tapKey(base, keycode)
+  }
+}
+
+export async function runKeybind(base: string, action: string): Promise<void> {
+  await postJson(base, '/test/keybind', { action })
+}
+
+export function findWindow(snapshot: { windows: WindowSnapshot[] }, predicate: (window: WindowSnapshot) => boolean): WindowSnapshot | null {
+  return snapshot.windows.find((window) => predicate(window)) || null
+}
+
+export function compositorWindowById(snapshot: { windows: WindowSnapshot[] }, windowId: number): WindowSnapshot | null {
+  return findWindow(snapshot, (window) => window.window_id === windowId)
+}
+
+export function shellWindowById(snapshot: { windows: WindowSnapshot[] }, windowId: number): WindowSnapshot | null {
+  return findWindow(snapshot, (window) => window.window_id === windowId)
+}
+
+export function taskbarEntry(shellSnapshot: ShellSnapshot, windowId: number): ShellTaskbarWindow | null {
+  return shellSnapshot.taskbar_windows.find((entry) => entry.window_id === windowId) || null
+}
+
+export function taskbarForMonitor(shellSnapshot: ShellSnapshot, monitorName: string): ShellTaskbar | null {
+  return shellSnapshot.taskbars.find((taskbar) => taskbar.monitor === monitorName) || null
+}
+
+export function outputForWindow(snapshot: CompositorSnapshot, window: WindowSnapshot): OutputSnapshot | null {
+  return snapshot.outputs.find((output) => output.name === window.output_name) || null
+}
+
+export function shellWindowStack(shellSnapshot: ShellSnapshot): number[] {
+  if (Array.isArray(shellSnapshot.window_stack_order) && shellSnapshot.window_stack_order.length > 0) {
+    return shellSnapshot.window_stack_order
+  }
+  return [...shellSnapshot.windows]
+    .sort((a, b) => (b.stack_z || 0) - (a.stack_z || 0) || b.window_id - a.window_id)
+    .map((window) => window.window_id)
+}
+
+export function topShellWindowId(shellSnapshot: ShellSnapshot): number | null {
+  return shellWindowStack(shellSnapshot)[0] ?? null
+}
+
+export function assertTopWindow(shellSnapshot: ShellSnapshot, windowId: number, label: string): void {
+  const top = topShellWindowId(shellSnapshot)
+  if (top !== windowId) {
+    throw new Error(`${label}: expected top window ${windowId}, got ${top}`)
+  }
+}
+
+export function assertTaskbarRowOnMonitor(shellSnapshot: ShellSnapshot, windowId: number, monitorName: string): void {
+  const row = taskbarEntry(shellSnapshot, windowId)
+  const taskbar = taskbarForMonitor(shellSnapshot, monitorName)
+  assert(row?.activate, `missing taskbar activate rect for window ${windowId}`)
+  assert(taskbar?.rect, `missing taskbar rect for monitor ${monitorName}`)
+  const center = rectCenter(row.activate)
+  if (!pointInRect(taskbar.rect, center)) {
+    throw new Error(`window ${windowId} taskbar row is not on monitor ${monitorName}`)
+  }
+}
+
+export function assertWindowTiled(window: WindowSnapshot, output: OutputSnapshot | null, taskbarRect: Rect | null | undefined, side: 'left' | 'right'): void {
+  assert(output, `missing output for window ${window.window_id}`)
+  assert(taskbarRect, `missing taskbar for output ${window.output_name}`)
+  const workX = output.x
+  const workWidth = output.width
+  const workBottom = taskbarRect.global_y
+  const expectedHalfWidth = Math.floor(workWidth / 2)
+  const expectedX = side === 'left' ? workX : workX + expectedHalfWidth
+  approxEqual(window.x, expectedX, 8, `${side} window x`)
+  approxEqual(window.width, expectedHalfWidth, 12, `${side} window width`)
+  assert(window.y >= output.y && window.y <= output.y + 80, `${side} window y: expected top inset within 80px, got ${window.y}`)
+  approxEqual(window.y + window.height, workBottom, 12, `${side} window bottom`)
+}
+
+export async function getSnapshots(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  const [compositor, shell] = await Promise.all([
+    getJson<CompositorSnapshot>(base, '/test/state/compositor'),
+    getJson<ShellSnapshot>(base, '/test/state/shell'),
+  ])
+  return { compositor, shell }
+}
+
+export async function getShellHtml(base: string, selector?: string): Promise<string> {
+  const suffix = selector ? `?selector=${encodeURIComponent(selector)}` : ''
+  return getText(base, `/test/state/html${suffix}`)
+}
+
+export async function activateTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
+  const row = taskbarEntry(shellSnapshot, windowId)
+  assert(row?.activate, `missing taskbar activate control for window ${windowId}`)
+  await clickRect(base, row.activate)
+}
+
+export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
+  const row = taskbarEntry(shellSnapshot, windowId)
+  assert(row?.close, `missing taskbar close control for window ${windowId}`)
+  await clickRect(base, row.close)
+}
+
+export async function closeWindow(base: string, windowId: number): Promise<void> {
+  await postJson(base, '/test/window/close', { window_id: windowId })
+}
+
+export async function crashWindow(base: string, windowId: number): Promise<void> {
+  await postJson(base, '/test/window/crash', { window_id: windowId })
+}
+
+export async function waitForWindowGone(base: string, windowId: number, timeoutMs = 6000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return waitFor(
+    `wait for window ${windowId} gone`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const compositorHas = compositor.windows.some((window) => window.window_id === windowId)
+      const shellHas = shell.windows.some((window) => window.window_id === windowId) || shell.taskbar_windows.some((entry) => entry.window_id === windowId)
+      return compositorHas || shellHas ? null : { compositor, shell }
+    },
+    timeoutMs,
+    125,
+  )
+}
+
+export async function waitForWindowMinimized(base: string, windowId: number, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return waitFor(
+    `wait for window ${windowId} minimized`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const compositorWindow = compositorWindowById(compositor, windowId)
+      const shellWindow = shellWindowById(shell, windowId)
+      if (!compositorWindow || !shellWindow) return null
+      return compositorWindow.minimized && shellWindow.minimized ? { compositor, shell } : null
+    },
+    timeoutMs,
+    125,
+  )
+}
+
+export async function waitForNativeFocus(base: string, windowId: number, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return waitFor(
+    `wait for native focus ${windowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      if (compositor.focused_window_id !== windowId) return null
+      assertTopWindow(shell, windowId, `native focus ${windowId}`)
+      return { compositor, shell }
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForShellUiFocus(base: string, windowId: number, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return waitFor(
+    `wait for shell ui focus ${windowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      if (compositor.focused_shell_ui_window_id !== windowId) return null
+      assertTopWindow(shell, windowId, `shell focus ${windowId}`)
+      return { compositor, shell }
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForSettingsVisible(base: string, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  return waitFor(
+    'wait for settings window',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      if (!shell.settings_window_visible || !window || window.minimized) return null
+      return { compositor, shell, window }
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForDebugVisible(base: string, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  return waitFor(
+    'wait for debug window',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shellWindowById(shell, SHELL_UI_DEBUG_WINDOW_ID)
+      if (!shell.debug_window_visible || !window || window.minimized) return null
+      return { compositor, shell, window }
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForProgramsMenuOpen(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for programs menu open',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_open && shell.controls?.programs_menu_search ? shell : null
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForProgramsMenuClosed(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for programs menu closed',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_open ? null : shell
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function openSettings(base: string, method: 'click' | 'keybind' = 'click'): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.settings_window_visible && shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized !== true) {
+    return waitForSettingsVisible(base)
+  }
+  if (method === 'keybind') {
+    await runKeybind(base, 'open_settings')
+  } else {
+    assert(shell.controls?.taskbar_settings_toggle, 'missing taskbar settings toggle')
+    await clickRect(base, shell.controls.taskbar_settings_toggle)
+  }
+  return waitForSettingsVisible(base)
+}
+
+export async function openDebug(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.debug_window_visible && shellWindowById(shell, SHELL_UI_DEBUG_WINDOW_ID)?.minimized !== true) {
+    return waitForDebugVisible(base)
+  }
+  assert(shell.controls?.taskbar_debug_toggle, 'missing taskbar debug toggle')
+  await clickRect(base, shell.controls.taskbar_debug_toggle)
+  return waitForDebugVisible(base)
+}
+
+export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.programs_menu_open) return waitForProgramsMenuOpen(base)
+  if (method === 'keybind') {
+    await runKeybind(base, 'toggle_programs_menu')
+  } else {
+    assert(shell.controls?.taskbar_programs_toggle, 'missing taskbar programs toggle')
+    await clickRect(base, shell.controls.taskbar_programs_toggle)
+  }
+  return waitForProgramsMenuOpen(base)
+}
+
+export function shellQuote(value: string): string {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`
+}
+
+export function nativeBin(): string {
+  return process.env.DERP_E2E_NATIVE_BIN || 'target/release/derp-test-client'
+}
+
+export function buildNativeSpawnCommand({ title, token, strip, width = 480, height = 320 }: { title: string; token: string; strip: string; width?: number; height?: number }): string {
+  return [
+    nativeBin(),
+    '--title',
+    shellQuote(title),
+    '--app-id',
+    NATIVE_APP_ID,
+    '--token',
+    shellQuote(token),
+    '--strip',
+    shellQuote(strip),
+    '--width',
+    String(width),
+    '--height',
+    String(height),
+  ].join(' ')
+}
+
+export async function spawnNativeWindow(base: string, knownWindowIds: Set<number>, { title, token, strip, width, height }: { title: string; token: string; strip: string; width?: number; height?: number }): Promise<NativeSpawnResult> {
+  const command = buildNativeSpawnCommand({ title, token, strip, width, height })
+  await postJson(base, '/spawn', { command })
+  const result = await waitFor(
+    `wait for ${title}`,
+    async () => {
+      const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const window = findWindow(
+        snapshot,
+        (entry) =>
+          !entry.shell_hosted &&
+          !knownWindowIds.has(entry.window_id) &&
+          entry.app_id === NATIVE_APP_ID &&
+          entry.title === title,
+      )
+      if (!window) return null
+      return { snapshot, window, command }
+    },
+    10000,
+    125,
+  )
+  knownWindowIds.add(result.window.window_id)
+  return result
+}
+
+export function pickMonitorMove(outputs: OutputSnapshot[], currentOutputName: string): { action: 'move_monitor_left' | 'move_monitor_right'; target: OutputSnapshot } | null {
+  const ordered = [...outputs].sort((a, b) => a.x - b.x || a.y - b.y || a.name.localeCompare(b.name))
+  const index = ordered.findIndex((output) => output.name === currentOutputName)
+  if (index < 0) return null
+  if (index + 1 < ordered.length) {
+    return { action: 'move_monitor_right', target: ordered[index + 1] }
+  }
+  if (index > 0) {
+    return { action: 'move_monitor_left', target: ordered[index - 1] }
+  }
+  return null
+}
+
+export function findLauncherCandidate(apps: DesktopAppEntry[]): { query: string; app: DesktopAppEntry } | null {
+  const candidates = [
+    { token: 'foot', re: /(^|[^a-z])foot([^a-z]|$)/i },
+    { token: 'kitty', re: /(^|[^a-z])kitty([^a-z]|$)/i },
+    { token: 'wezterm', re: /wezterm/i },
+    { token: 'alacritty', re: /alacritty/i },
+    { token: 'konsole', re: /konsole/i },
+    { token: 'terminal', re: /terminal/i },
+  ]
+  for (const candidate of candidates) {
+    const app = apps.find((entry) =>
+      [entry.name, entry.exec, entry.executable, entry.generic_name, entry.full_name]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .some((value) => candidate.re.test(value)),
+    )
+    if (app) return { query: candidate.token, app }
+  }
+  return null
+}
+
+export async function cleanupNativeWindows(base: string, windowIds: Set<number>): Promise<void> {
+  for (const windowId of [...windowIds]) {
+    try {
+      const { compositor } = await getSnapshots(base)
+      if (!compositorWindowById(compositor, windowId)) {
+        windowIds.delete(windowId)
+        continue
+      }
+    } catch {}
+    try {
+      await closeWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 4000)
+      windowIds.delete(windowId)
+      continue
+    } catch {}
+    try {
+      await crashWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 4000)
+      windowIds.delete(windowId)
+    } catch {}
+  }
+}
+
+export async function cleanupShellWindows(base: string, windowIds: number[]): Promise<void> {
+  for (const windowId of windowIds) {
+    try {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const shellWindow = shellWindowById(shell, windowId)
+      if (!shellWindow) continue
+      if (taskbarEntry(shell, windowId)?.close) {
+        await closeTaskbarWindow(base, shell, windowId)
+        await waitForWindowGone(base, windowId, 4000)
+      }
+    } catch {}
+  }
+}

@@ -614,6 +614,13 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     hideContextMenu,
     toggleProgramsMenuMeta,
     warmProgramsMenuItems,
+    e2eSetProgramsMenuQuery(value: string) {
+      if (!programsMenuOpen()) return false
+      setProgramsMenuQuery(value)
+      setProgramsMenuHighlightIdx(0)
+      queueMicrotask(() => programsMenuSearchRef?.focus())
+      return true
+    },
     setMenuAtlasHostRef(el: HTMLDivElement) {
       menuAtlasHostRef = el
     },

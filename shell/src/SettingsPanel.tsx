@@ -59,7 +59,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [activePage, setActivePage] = createSignal<SettingsPageId>('displays')
 
   return (
-    <div class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-panel) text-left text-(--shell-text) [&_strong]:text-shell-hud-strong">
+    <div
+      class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-panel) text-left text-(--shell-text) [&_strong]:text-shell-hud-strong"
+      data-settings-root
+    >
       <nav
         class="flex w-52 shrink-0 flex-col gap-0.5 border-r border-(--shell-border) bg-(--shell-surface-elevated) py-3 pr-2 pl-2"
         aria-label="Settings sections"
@@ -72,6 +75,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             <button
               type="button"
               role="tab"
+              data-settings-tab={item.id}
               aria-selected={activePage() === item.id}
               class="w-full cursor-pointer rounded-lg border-0 px-2.5 py-2 text-left text-[0.84rem] font-medium text-(--shell-text-muted) hover:bg-(--shell-surface-hover)"
               classList={{
@@ -88,6 +92,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       <div
         class="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3"
         role="tabpanel"
+        data-settings-active-page={activePage()}
       >
         <Show when={activePage() === 'displays'}>
           <SettingsDisplaysPage

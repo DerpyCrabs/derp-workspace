@@ -250,6 +250,19 @@ fn request_shell_html(
     e2e_bridge::wait_for_shell_html(request_id, Duration::from_secs(3))
 }
 
+fn set_shell_programs_menu_query(
+    browser: &Arc<Mutex<Option<Browser>>>,
+    query: &str,
+) -> Result<(), String> {
+    let query_js = quote_js_string(query)?;
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY&&window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY({query_js});"
+        ),
+    )
+}
+
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
     v.get(key)
         .and_then(|x| x.as_u64())
@@ -579,6 +592,16 @@ fn handle_one(
     }
     let body_str = std::str::from_utf8(&body).map_err(|_| "invalid utf-8 body".to_string())?;
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
+
+    if req_path == "/test/programs_menu_query" {
+        let query = v
+            .get("query")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "programs_menu_query: missing query".to_string())?;
+        set_shell_programs_menu_query(browser, query)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
 
     if req_path == "/portal_screencast_pick" {
         let selection = portal_screencast_pick(&v);
