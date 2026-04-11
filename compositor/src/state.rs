@@ -6012,6 +6012,7 @@ impl CompositorState {
             "XDG_SESSION_TYPE",
             "DESKTOP_SESSION",
             "DISPLAY",
+            "QT_WAYLAND_DISABLE_WINDOWDECORATION",
         ] {
             if let Ok(value) = std::env::var(key) {
                 envs.push((key.to_string(), value));
