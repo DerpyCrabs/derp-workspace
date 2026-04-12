@@ -1,8 +1,6 @@
 //! [`crate::CalloopData`] implements Smithay’s X11 / xwayland-shell handler traits so X11 events on
 //! the calloop loop forward into [`crate::CompositorState`] (the Wayland display still dispatches `CompositorState`).
 
-use std::io::Write;
-
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::{
     input::{
@@ -10,7 +8,7 @@ use smithay::{
     },
     utils::{Logical, Rectangle},
     wayland::selection::{
-        SelectionHandler, SelectionTarget,
+        SelectionHandler, SelectionSource, SelectionTarget,
         data_device::{DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler},
     },
     wayland::xwayland_shell::XWaylandShellHandler,
@@ -53,24 +51,38 @@ impl DndGrabHandler for CalloopData {}
 impl SelectionHandler for CalloopData {
     type SelectionUserData = std::sync::Arc<Vec<u8>>;
 
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        seat: Seat<Self>,
+    ) {
+        let seat = unsafe { &*(&seat as *const Seat<Self> as *const Seat<crate::CompositorState>) };
+        <crate::CompositorState as SelectionHandler>::new_selection(
+            &mut self.state,
+            ty,
+            source,
+            seat.clone(),
+        );
+    }
+
     fn send_selection(
         &mut self,
         ty: SelectionTarget,
         mime_type: String,
         fd: std::os::fd::OwnedFd,
-        _seat: Seat<Self>,
+        seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
-        if ty != SelectionTarget::Clipboard {
-            return;
-        }
-        if mime_type != "image/png" {
-            return;
-        }
-        let mut file = std::fs::File::from(fd);
-        if let Err(error) = file.write_all(user_data.as_slice()) {
-            tracing::warn!(%error, "clipboard image write failed");
-        }
+        let seat = unsafe { &*(&seat as *const Seat<Self> as *const Seat<crate::CompositorState>) };
+        <crate::CompositorState as SelectionHandler>::send_selection(
+            &mut self.state,
+            ty,
+            mime_type,
+            fd,
+            seat.clone(),
+            user_data,
+        );
     }
 }
 
@@ -153,6 +165,22 @@ impl XwmHandler for CalloopData {
 
     fn move_request(&mut self, xwm: XwmId, window: X11Surface, button: u32) {
         self.state.move_request(xwm, window, button);
+    }
+
+    fn allow_selection_access(&mut self, xwm: XwmId, selection: SelectionTarget) -> bool {
+        XwmHandler::allow_selection_access(&mut self.state, xwm, selection)
+    }
+
+    fn send_selection(&mut self, xwm: XwmId, selection: SelectionTarget, mime_type: String, fd: std::os::fd::OwnedFd) {
+        XwmHandler::send_selection(&mut self.state, xwm, selection, mime_type, fd);
+    }
+
+    fn new_selection(&mut self, xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        XwmHandler::new_selection(&mut self.state, xwm, selection, mime_types);
+    }
+
+    fn cleared_selection(&mut self, xwm: XwmId, selection: SelectionTarget) {
+        XwmHandler::cleared_selection(&mut self.state, xwm, selection);
     }
 
     fn disconnected(&mut self, xwm: XwmId) {

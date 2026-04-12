@@ -79,6 +79,7 @@ export interface WindowSnapshot {
   window_id: number
   title: string
   app_id: string
+  xwayland_scale?: number | null
   output_name: string
   x: number
   y: number
@@ -1211,9 +1212,21 @@ export function buildNativeSpawnCommand({ title, token, strip, width = 480, heig
   ].join(' ')
 }
 
+export async function spawnCommand(base: string, command: string): Promise<void> {
+  await postJson(base, '/spawn', { command })
+}
+
 export async function spawnNativeWindow(base: string, knownWindowIds: Set<number>, { title, token, strip, width, height }: { title: string; token: string; strip: string; width?: number; height?: number }): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({ title, token, strip, width, height })
-  await postJson(base, '/spawn', { command })
+  await spawnCommand(base, command)
+  return waitForSpawnedWindow(base, knownWindowIds, { title, appId: NATIVE_APP_ID, command })
+}
+
+export async function waitForSpawnedWindow(
+  base: string,
+  knownWindowIds: Set<number>,
+  { title, appId, command }: { title: string; appId: string; command: string },
+): Promise<NativeSpawnResult> {
   const result = await waitFor(
     `wait for ${title}`,
     async () => {
@@ -1223,7 +1236,7 @@ export async function spawnNativeWindow(base: string, knownWindowIds: Set<number
         (entry) =>
           !entry.shell_hosted &&
           !knownWindowIds.has(entry.window_id) &&
-          entry.app_id === NATIVE_APP_ID &&
+          entry.app_id === appId &&
           entry.title === title,
       )
       if (!window) return null
@@ -1236,29 +1249,25 @@ export async function spawnNativeWindow(base: string, knownWindowIds: Set<number
   return result
 }
 
+export async function spawnXtermCommandWindow(
+  base: string,
+  knownWindowIds: Set<number>,
+  { title, command }: { title: string; command: string },
+): Promise<NativeSpawnResult> {
+  const fullCommand = ['xterm', '-T', shellQuote(title), '-class', shellQuote(X11_XTERM_APP_ID), '-e', 'sh', '-lc', shellQuote(command)].join(' ')
+  await spawnCommand(base, fullCommand)
+  return waitForSpawnedWindow(base, knownWindowIds, {
+    title,
+    appId: X11_XTERM_APP_ID,
+    command: fullCommand,
+  })
+}
+
 export async function spawnXtermWindow(base: string, knownWindowIds: Set<number>, title: string): Promise<NativeSpawnResult> {
-  const command = ['xterm', '-T', shellQuote(title), '-class', shellQuote(X11_XTERM_APP_ID)].join(' ')
-  await postJson(base, '/spawn', { command })
-  const result = await waitFor(
-    `wait for ${title}`,
-    async () => {
-      const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-      const window = findWindow(
-        snapshot,
-        (entry) =>
-          !entry.shell_hosted &&
-          !knownWindowIds.has(entry.window_id) &&
-          entry.title === title &&
-          entry.app_id === X11_XTERM_APP_ID,
-      )
-      if (!window) return null
-      return { snapshot, window, command }
-    },
-    10000,
-    125,
-  )
-  knownWindowIds.add(result.window.window_id)
-  return result
+  return spawnXtermCommandWindow(base, knownWindowIds, {
+    title,
+    command: 'exec sh -lc "while :; do sleep 60; done"',
+  })
 }
 
 export async function ensureXtermWindow(base: string, state: E2eState, title: string): Promise<NativeSpawnResult> {

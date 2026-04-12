@@ -30,6 +30,47 @@ done
 
 cd "$REPO_ROOT"
 
+ensure_runtime_packages() {
+  local missing=() packages=()
+  command -v xterm >/dev/null 2>&1 || missing+=(xterm)
+  command -v xclip >/dev/null 2>&1 || missing+=(xclip)
+  command -v wl-copy >/dev/null 2>&1 || missing+=(wl-copy)
+  command -v wl-paste >/dev/null 2>&1 || missing+=(wl-paste)
+  [[ ${#missing[@]} -eq 0 ]] && return
+  if command -v apt-get >/dev/null 2>&1; then
+    for cmd in "${missing[@]}"; do
+      case "$cmd" in
+        xterm) packages+=(xterm) ;;
+        xclip) packages+=(xclip) ;;
+        wl-copy|wl-paste) packages+=(wl-clipboard) ;;
+      esac
+    done
+    mapfile -t packages < <(printf '%s\n' "${packages[@]}" | awk '!seen[$0]++')
+    echo "=== install runtime packages (${packages[*]}) ==="
+    sudo apt-get update
+    sudo apt-get install -y "${packages[@]}"
+    return
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    for cmd in "${missing[@]}"; do
+      case "$cmd" in
+        xterm) packages+=(xterm) ;;
+        xclip) packages+=(xclip) ;;
+        wl-copy|wl-paste) packages+=(wl-clipboard) ;;
+      esac
+    done
+    mapfile -t packages < <(printf '%s\n' "${packages[@]}" | awk '!seen[$0]++')
+    echo "=== install runtime packages (${packages[*]}) ==="
+    sudo pacman -Sy --noconfirm "${packages[@]}"
+    return
+  fi
+  echo "install-system: missing runtime commands: ${missing[*]}" >&2
+  echo "install-system: install xterm, xclip, and wl-clipboard on the remote host, then re-run." >&2
+  exit 1
+}
+
+ensure_runtime_packages
+
 if [[ "$SHELL_ONLY" -eq 0 ]]; then
   echo "=== cargo build --release (compositor + derp-test-client) ==="
   cargo build --release -p compositor -p derp-test-client

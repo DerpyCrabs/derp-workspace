@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
+    io::Write,
     os::fd::OwnedFd,
     path::PathBuf,
     process::Stdio,
@@ -48,7 +49,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
-            Display, DisplayHandle,
+            Client, Display, DisplayHandle,
         },
     },
     utils::{Buffer, Logical, Point, Rectangle, Serial, Size, Transform, SERIAL_COUNTER},
@@ -61,7 +62,14 @@ use smithay::{
         idle_inhibit::IdleInhibitManagerState,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
-        selection::data_device::{set_data_device_selection, DataDeviceState},
+        selection::{
+            data_device::{
+                clear_data_device_selection, current_data_device_selection_userdata,
+                request_data_device_client_selection, set_data_device_selection, DataDeviceState,
+            },
+            wlr_data_control::DataControlState,
+            SelectionTarget,
+        },
         shell::wlr_layer::{Layer, WlrLayerShellState},
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
@@ -351,6 +359,7 @@ pub struct CompositorState {
     pub(crate) pending_image_copy_captures: Vec<crate::capture_ext::PendingImageCopyCapture>,
     pub seat_state: SeatState<CompositorState>,
     pub data_device_state: DataDeviceState,
+    pub data_control_state: DataControlState,
     pub(crate) screenshot_request: Option<crate::screenshot::PendingScreenshotRequest>,
     pub(crate) screenshot_selection_active: bool,
     pub(crate) screenshot_selection_anchor: Option<Point<i32, Logical>>,
@@ -362,6 +371,7 @@ pub struct CompositorState {
 
     pub xwayland_shell_state: XWaylandShellState,
     pub x11_wm_slot: Option<(XwmId, X11Wm)>,
+    pub(crate) x11_client: Option<Client>,
 
     pub seat: Seat<Self>,
 
@@ -624,6 +634,7 @@ impl CompositorState {
             crate::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let data_control_state = DataControlState::new::<Self, _>(&dh, None, |_| true);
         let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let chrome_bridge = options.chrome_bridge;
         let shell_to_cef = options.shell_to_cef;
@@ -718,6 +729,7 @@ impl CompositorState {
             pending_image_copy_captures: Vec::new(),
             seat_state,
             data_device_state,
+            data_control_state,
             screenshot_request: None,
             screenshot_selection_active: false,
             screenshot_selection_anchor: None,
@@ -728,6 +740,7 @@ impl CompositorState {
             popups,
             xwayland_shell_state,
             x11_wm_slot: None,
+            x11_client: None,
             seat,
             chrome_bridge,
             window_registry,
@@ -2248,6 +2261,40 @@ impl CompositorState {
         })
     }
 
+    pub(crate) fn xwayland_scale_for_fractional_output(scale: f64) -> f64 {
+        let floor = scale.floor().max(1.0);
+        let ceil = scale.ceil().max(1.0);
+        if (scale - floor).abs() <= (ceil - scale).abs() {
+            floor
+        } else {
+            ceil
+        }
+    }
+
+    pub(crate) fn xwayland_scale_for_space_element(&self, elem: &DerpSpaceElem) -> f64 {
+        Self::xwayland_scale_for_fractional_output(self.fractional_scale_for_space_element(elem))
+    }
+
+    pub(crate) fn xwayland_client_scale_for_output_scale(output_scale: f64) -> f64 {
+        output_scale / Self::xwayland_scale_for_fractional_output(output_scale)
+    }
+
+    pub(crate) fn xwayland_client_scale_for_shell_ui(shell_ui_scale: f64) -> f64 {
+        Self::xwayland_client_scale_for_output_scale(shell_ui_scale)
+    }
+
+    pub(crate) fn apply_xwayland_client_scale(&self) {
+        let Some(client) = self.x11_client.as_ref() else {
+            return;
+        };
+        let scale = Self::xwayland_client_scale_for_shell_ui(self.shell_ui_scale);
+        <Self as smithay::wayland::compositor::CompositorHandler>::client_compositor_state(
+            self,
+            client,
+        )
+        .set_client_scale(scale);
+    }
+
     pub fn surface_under(
         &self,
         pos: Point<f64, Logical>,
@@ -3587,6 +3634,7 @@ impl CompositorState {
             return;
         }
         self.shell_ui_scale = scale;
+        self.apply_xwayland_client_scale();
         self.apply_shell_ui_scale_to_outputs();
         if self.display_config_save_suppressed {
             if self.workspace_logical_bounds().is_some() {
@@ -4721,6 +4769,11 @@ impl CompositorState {
                 None
             }
         })
+    }
+
+    pub(crate) fn xwayland_scale_for_window_id(&self, window_id: u32) -> Option<f64> {
+        let x11 = self.find_x11_window_by_window_id(window_id)?;
+        Some(self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11)))
     }
 
     fn window_id_for_space_elem(&self, elem: &DerpSpaceElem) -> Option<u32> {
@@ -7569,9 +7622,64 @@ impl XwmHandler for CompositorState {
         }
     }
 
+    fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .and_then(|surface| self.x11_window_containing_surface(&surface))
+            .is_some_and(|window| window.xwm_id() == Some(xwm))
+    }
+
+    fn send_selection(
+        &mut self,
+        _xwm: XwmId,
+        selection: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+    ) {
+        if selection != SelectionTarget::Clipboard {
+            return;
+        }
+        if let Some(user_data) = current_data_device_selection_userdata(&self.seat) {
+            if user_data.is_empty() || mime_type != "image/png" {
+                return;
+            }
+            let mut file = std::fs::File::from(fd);
+            if let Err(error) = file.write_all(user_data.as_slice()) {
+                tracing::warn!(%error, "clipboard image write failed");
+            }
+            return;
+        }
+        if let Err(error) = request_data_device_client_selection(&self.seat, mime_type, fd) {
+            tracing::warn!(?error, "failed to request current wayland clipboard for xwayland");
+        }
+    }
+
+    fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        if selection != SelectionTarget::Clipboard {
+            return;
+        }
+        set_data_device_selection(
+            &self.display_handle,
+            &self.seat,
+            mime_types,
+            Arc::new(Vec::new()),
+        );
+    }
+
+    fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
+        if selection != SelectionTarget::Clipboard {
+            return;
+        }
+        if current_data_device_selection_userdata(&self.seat).is_some() {
+            clear_data_device_selection(&self.display_handle, &self.seat);
+        }
+    }
+
     fn disconnected(&mut self, _xwm: XwmId) {
         tracing::warn!("XWayland WM disconnected from X server");
         self.x11_wm_slot = None;
+        self.x11_client = None;
     }
 }
 
@@ -7608,8 +7716,8 @@ impl XdgDecorationHandler for CompositorState {
 
 impl FractionalScaleHandler for CompositorState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = if self.x11_window_containing_surface(&surface).is_some() {
-            1.0
+        let scale = if let Some(x11) = self.x11_window_containing_surface(&surface) {
+            self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11))
         } else {
             self.wayland_window_containing_surface(&surface)
                 .map(|w| self.fractional_scale_for_space_element(&DerpSpaceElem::Wayland(w)))

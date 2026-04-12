@@ -3,6 +3,7 @@ use std::process::Stdio;
 
 use crate::{sidecar, CalloopData};
 use smithay::reexports::calloop::{EventLoop, LoopHandle};
+use smithay::wayland::compositor::CompositorHandler;
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 
 pub fn spawn_pending_sidecar(data: &mut CalloopData) {
@@ -49,6 +50,12 @@ pub fn start_xwayland(
                     display = display_number,
                     "XWayland ready; DISPLAY set for OSR / child processes"
                 );
+                d.state.x11_client = Some(client.clone());
+                d.state
+                    .client_compositor_state(&client)
+                    .set_client_scale(crate::state::CompositorState::xwayland_client_scale_for_shell_ui(
+                        d.state.shell_ui_scale,
+                    ));
                 match X11Wm::start_wm(loop_handle.clone(), &dh, x11_socket, client.clone()) {
                     Ok(wm) => {
                         let id = wm.id();
@@ -64,6 +71,7 @@ pub fn start_xwayland(
             }
             XWaylandEvent::Error => {
                 d.state.x11_wm_slot = None;
+                d.state.x11_client = None;
                 tracing::error!("XWayland failed to start (is `xwayland` installed?)");
                 spawn_pending_sidecar(d);
             }

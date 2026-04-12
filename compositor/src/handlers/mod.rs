@@ -14,9 +14,10 @@ use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
     set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
 };
-use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::wlr_data_control::DataControlHandler;
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::tablet_manager::TabletSeatHandler;
-use smithay::{delegate_data_device, delegate_output, delegate_seat};
+use smithay::{delegate_data_control, delegate_data_device, delegate_output, delegate_seat};
 
 impl SeatHandler for CompositorState {
     type KeyboardFocus = WlSurface;
@@ -69,6 +70,23 @@ impl TabletSeatHandler for CompositorState {}
 impl SelectionHandler for CompositorState {
     type SelectionUserData = std::sync::Arc<Vec<u8>>;
 
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        let Some((_, xwm)) = self.x11_wm_slot.as_mut() else {
+            return;
+        };
+        if let Err(error) = xwm.new_selection(ty, source.map(|source| source.mime_types())) {
+            tracing::warn!(?error, ?ty, "failed to set xwayland selection");
+        }
+    }
+
     fn send_selection(
         &mut self,
         ty: smithay::wayland::selection::SelectionTarget,
@@ -77,7 +95,16 @@ impl SelectionHandler for CompositorState {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
-        if ty != smithay::wayland::selection::SelectionTarget::Clipboard {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        if user_data.is_empty() {
+            let Some((_, xwm)) = self.x11_wm_slot.as_mut() else {
+                return;
+            };
+            if let Err(error) = xwm.send_selection(ty, mime_type, fd) {
+                tracing::warn!(?error, "failed to send x11 clipboard to wayland");
+            }
             return;
         }
         if mime_type != "image/png" {
@@ -96,8 +123,15 @@ impl DataDeviceHandler for CompositorState {
     }
 }
 
+impl DataControlHandler for CompositorState {
+    fn data_control_state(&mut self) -> &mut smithay::wayland::selection::wlr_data_control::DataControlState {
+        &mut self.data_control_state
+    }
+}
+
 impl WaylandDndGrabHandler for CompositorState {}
 
+delegate_data_control!(crate::CompositorState);
 delegate_data_device!(crate::CompositorState);
 
 impl OutputHandler for CompositorState {}
