@@ -27,8 +27,8 @@ pub fn start_xwayland(
         None::<u32>,
         std::iter::empty::<(&str, &str)>(),
         true,
-        Stdio::null(),
-        Stdio::null(),
+        Stdio::inherit(),
+        Stdio::inherit(),
         |_| (),
     )?;
 
@@ -45,21 +45,15 @@ pub fn start_xwayland(
                 display_number,
             } => {
                 std::env::set_var("DISPLAY", format!(":{}", display_number));
-                tracing::debug!(
+                tracing::warn!(
                     display = display_number,
                     "XWayland ready; DISPLAY set for OSR / child processes"
                 );
                 match X11Wm::start_wm(loop_handle.clone(), x11_socket, client.clone()) {
                     Ok(wm) => {
                         let id = wm.id();
+                        tracing::warn!(xwm_id = ?id, "X11Wm::start_wm succeeded");
                         d.state.x11_wm_slot = Some((id, wm));
-                        if let Some(out) = d.state.leftmost_output() {
-                            if let Some((_, ref mut wm)) = d.state.x11_wm_slot {
-                                if let Err(e) = wm.set_randr_primary_output(Some(&out)) {
-                                    tracing::debug!(?e, "xwm set_randr_primary_output");
-                                }
-                            }
-                        }
                     }
                     Err(e) => {
                         d.state.x11_wm_slot = None;

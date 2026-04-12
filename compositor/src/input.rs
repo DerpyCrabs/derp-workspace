@@ -333,7 +333,8 @@ impl CompositorState {
         let in_excl = self.point_in_shell_exclusion_zones(pos);
         let in_menu = self.shell_point_in_context_menu_global(pos);
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
-        let under_native = self.native_surface_under_no_shell_exclusion(pos).is_some();
+        let native_hit = self.native_surface_under_no_shell_exclusion(pos);
+        let under_native = native_hit.is_some();
         let force_native_buttons = under_native
             && !in_excl
             && !in_menu
@@ -492,26 +493,28 @@ impl CompositorState {
                     }
                     DerpSpaceElem::X11(x11) => {
                         if let Some(surf) = x11.wl_surface() {
-                            let window_id = self.window_registry.window_id_for_wl_surface(&surf);
-                            self.space.elements().for_each(|e| {
-                                e.set_activate(false);
-                                if let DerpSpaceElem::Wayland(w) = e {
-                                    w.toplevel().unwrap().send_pending_configure();
+                            if !x11.is_override_redirect() {
+                                let window_id = self.window_registry.window_id_for_wl_surface(&surf);
+                                self.space.elements().for_each(|e| {
+                                    e.set_activate(false);
+                                    if let DerpSpaceElem::Wayland(w) = e {
+                                        w.toplevel().unwrap().send_pending_configure();
+                                    }
+                                });
+                                self.space
+                                    .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
+                                x11.set_activate(true);
+                                keyboard.set_focus(self, Some(surf), serial);
+                                if let Some(window_id) = window_id {
+                                    self.shell_window_stack_touch(window_id);
+                                    self.shell_reply_window_list();
                                 }
-                            });
-                            self.space
-                                .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
-                            x11.set_activate(true);
-                            keyboard.set_focus(self, Some(surf), serial);
-                            if let Some(window_id) = window_id {
-                                self.shell_window_stack_touch(window_id);
-                                self.shell_reply_window_list();
+                                self.space.elements().for_each(|e| {
+                                    if let DerpSpaceElem::Wayland(w) = e {
+                                        w.toplevel().unwrap().send_pending_configure();
+                                    }
+                                });
                             }
-                            self.space.elements().for_each(|e| {
-                                if let DerpSpaceElem::Wayland(w) = e {
-                                    w.toplevel().unwrap().send_pending_configure();
-                                }
-                            });
                         }
                     }
                 }

@@ -67,6 +67,9 @@ type ShellWindowFrameProps = {
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
   let root: HTMLDivElement | undefined
+  const requestFocus = () => {
+    props.onFocusRequest?.()
+  }
   const model = createMemo((): ShellWindowModel | undefined => {
     const v = props.win
     return typeof v === 'function' ? (v as Accessor<ShellWindowModel | undefined>)() : v
@@ -168,10 +171,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           }}
           onPointerDown={(e) => {
             if (!e.isPrimary || e.button !== 0) return
-            if (!readAcc(props.focused)) props.onFocusRequest?.()
+            requestFocus()
           }}
           onTouchStart={() => {
-            if (!readAcc(props.focused)) props.onFocusRequest?.()
+            requestFocus()
           }}
         >
           {props.children}
@@ -190,7 +193,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
-          if (!readAcc(props.focused)) props.onFocusRequest?.()
+          requestFocus()
           if (titlebarInteractionTarget(e.target)) return
           e.preventDefault()
           e.stopPropagation()
@@ -200,7 +203,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
-          if (!readAcc(props.focused)) props.onFocusRequest?.()
+          requestFocus()
           if (titlebarInteractionTarget(e.target)) return
           const t = e.changedTouches[0]
           if (!t) return

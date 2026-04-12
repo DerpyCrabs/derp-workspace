@@ -2004,7 +2004,16 @@ function App() {
           }
           onFocusRequest={() => {
             const currentVisibleWindowId = visibleWindowId()
-            if (currentVisibleWindowId != null) focusWindowViaShell(currentVisibleWindowId)
+            if (currentVisibleWindowId == null) return
+            const window = allWindowsMap().get(currentVisibleWindowId)
+            if (!window) return
+            if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
+              shellWireSend('shell_focus_ui_window', currentVisibleWindowId)
+              return
+            }
+            if (!rowFocused()) {
+              shellWireSend('taskbar_activate', currentVisibleWindowId)
+            }
           }}
           onTitlebarPointerDown={(cx, cy) => {
             const currentVisibleWindowId = visibleWindowId()

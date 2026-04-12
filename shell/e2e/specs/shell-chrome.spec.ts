@@ -17,6 +17,7 @@ import {
   openPowerMenu,
   openProgramsMenu,
   openSettings,
+  openShellTestWindow,
   pointerWheel,
   pointInRect,
   assertRectMinSize,
@@ -59,6 +60,36 @@ async function switchSettingsPage(
     5000,
     100,
   )
+}
+
+function bodyClickPoint(
+  target: { x: number; y: number; width: number; height: number },
+  other: { x: number; y: number; width: number; height: number },
+): { x: number; y: number } {
+  const insetX = Math.min(16, Math.max(8, Math.floor(target.width / 18)))
+  const insetY = Math.min(16, Math.max(8, Math.floor(target.height / 18)))
+  const otherRect: Rect = {
+    x: other.x,
+    y: other.y,
+    global_x: other.x,
+    global_y: other.y,
+    width: other.width,
+    height: other.height,
+  }
+  const candidates = [
+    { x: target.x + insetX, y: target.y + insetY },
+    { x: target.x + insetX, y: target.y + Math.floor(target.height / 2) },
+    { x: target.x + Math.floor(target.width / 2), y: target.y + insetY },
+    { x: target.x + target.width - insetX, y: target.y + insetY },
+    { x: target.x + target.width - insetX, y: target.y + Math.floor(target.height / 2) },
+    { x: target.x + insetX, y: target.y + target.height - insetY },
+    { x: target.x + Math.floor(target.width / 2), y: target.y + target.height - insetY },
+    { x: target.x + target.width - insetX, y: target.y + target.height - insetY },
+  ]
+  for (const candidate of candidates) {
+    if (!pointInRect(otherRect, candidate)) return candidate
+  }
+  return { x: target.x + Math.floor(target.width / 2), y: target.y + Math.floor(target.height / 2) }
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
@@ -222,6 +253,40 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     await writeJsonArtifact('debug-shell.json', crosshairOff)
+  })
+
+  test('js windows raise to front when clicking content', async ({ base, state }) => {
+    const first = await openShellTestWindow(base, state)
+    const second = await openShellTestWindow(base, state)
+    const firstId = first.window.window_id
+    const secondId = second.window.window_id
+
+    const secondFocused = await waitForShellUiFocus(base, secondId)
+    assertTopWindow(secondFocused.shell, secondId, 'second js window should open frontmost')
+
+    const firstWindow = compositorWindowById(secondFocused.compositor, firstId)
+    const secondWindow = compositorWindowById(secondFocused.compositor, secondId)
+    assert(firstWindow, 'missing first js compositor window')
+    assert(secondWindow, 'missing second js compositor window')
+
+    const firstPoint = bodyClickPoint(firstWindow, secondWindow)
+    await clickPoint(base, firstPoint.x, firstPoint.y)
+    const firstFocused = await waitForShellUiFocus(base, firstId)
+    assertTopWindow(firstFocused.shell, firstId, 'first js window content click should bring it frontmost')
+
+    const secondPoint = bodyClickPoint(secondWindow, firstWindow)
+    await clickPoint(base, secondPoint.x, secondPoint.y)
+    const refocusedSecond = await waitForShellUiFocus(base, secondId)
+    assertTopWindow(refocusedSecond.shell, secondId, 'second js window content click should bring it frontmost')
+
+    await writeJsonArtifact('js-content-click-focus.json', {
+      firstId,
+      secondId,
+      firstPoint,
+      secondPoint,
+      firstFocused: firstFocused.shell,
+      refocusedSecond: refocusedSecond.shell,
+    })
   })
 
   test('taskbar context menus switch cleanly without disturbing shell focus', async ({ base }) => {

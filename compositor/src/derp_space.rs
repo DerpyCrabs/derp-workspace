@@ -44,14 +44,14 @@ impl SpaceElement for DerpSpaceElem {
     fn geometry(&self) -> Rectangle<i32, Logical> {
         match self {
             DerpSpaceElem::Wayland(w) => w.geometry(),
-            DerpSpaceElem::X11(x) => x.geometry(),
+            DerpSpaceElem::X11(x) => SpaceElement::geometry(x),
         }
     }
 
     fn bbox(&self) -> Rectangle<i32, Logical> {
         match self {
             DerpSpaceElem::Wayland(w) => w.bbox_with_popups(),
-            DerpSpaceElem::X11(x) => x.bbox(),
+            DerpSpaceElem::X11(x) => SpaceElement::bbox(x),
         }
     }
 

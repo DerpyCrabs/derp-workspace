@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 export const BTN_LEFT = 0x110
 export const BTN_RIGHT = 0x111
 export const NATIVE_APP_ID = 'derp.e2e.native'
+export const X11_XTERM_APP_ID = 'derp-x11-xterm'
 export const SHELL_TEST_APP_ID = 'derp.test-shell'
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
 export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
@@ -1233,6 +1234,43 @@ export async function spawnNativeWindow(base: string, knownWindowIds: Set<number
   )
   knownWindowIds.add(result.window.window_id)
   return result
+}
+
+export async function spawnXtermWindow(base: string, knownWindowIds: Set<number>, title: string): Promise<NativeSpawnResult> {
+  const command = ['xterm', '-T', shellQuote(title), '-class', shellQuote(X11_XTERM_APP_ID)].join(' ')
+  await postJson(base, '/spawn', { command })
+  const result = await waitFor(
+    `wait for ${title}`,
+    async () => {
+      const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const window = findWindow(
+        snapshot,
+        (entry) =>
+          !entry.shell_hosted &&
+          !knownWindowIds.has(entry.window_id) &&
+          entry.title === title &&
+          entry.app_id === X11_XTERM_APP_ID,
+      )
+      if (!window) return null
+      return { snapshot, window, command }
+    },
+    10000,
+    125,
+  )
+  knownWindowIds.add(result.window.window_id)
+  return result
+}
+
+export async function ensureXtermWindow(base: string, state: E2eState, title: string): Promise<NativeSpawnResult> {
+  syncTrackedWindows(state, await getJson<CompositorSnapshot>(base, '/test/state/compositor'))
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const matches = compositor.windows
+    .filter((window) => !window.shell_hosted && window.title === title && window.app_id === X11_XTERM_APP_ID)
+    .sort((a, b) => b.window_id - a.window_id)
+  for (const existing of matches) {
+    await closeWindowBestEffort(base, existing.window_id)
+  }
+  return spawnXtermWindow(base, state.knownWindowIds, title)
 }
 
 export async function waitForTaskbarEntry(base: string, windowId: number, timeoutMs = 8000): Promise<ShellSnapshot> {

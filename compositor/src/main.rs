@@ -34,6 +34,9 @@ struct Cli {
 
     #[arg(long, env = "CEF_SHELL_URL", value_name = "URL")]
     cef_shell_url: Option<String>,
+
+    #[arg(long, env = "DERP_ENABLE_XWAYLAND", default_value_t = true, value_name = "BOOL")]
+    xwayland: bool,
 }
 
 fn default_wayland_socket_name() -> String {
@@ -105,8 +108,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     data.pending_sidecar_cmd = cli.command.clone();
-    if let Err(e) = xwayland::start_xwayland(&mut event_loop, &mut data) {
-        tracing::error!(%e, "XWayland failed to spawn; continuing without DISPLAY");
+    if cli.xwayland {
+        if let Err(e) = xwayland::start_xwayland(&mut event_loop, &mut data) {
+            tracing::error!(%e, "XWayland failed to spawn; continuing without DISPLAY");
+            xwayland::spawn_pending_sidecar(&mut data);
+        }
+    } else {
+        tracing::warn!("XWayland disabled by configuration");
         xwayland::spawn_pending_sidecar(&mut data);
     }
 
