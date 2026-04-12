@@ -93,12 +93,22 @@ export interface WindowSnapshot {
   wayland_client_pid?: number | null
 }
 
+export interface CompositorWorkspaceRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface CompositorSnapshot {
   windows: WindowSnapshot[]
   outputs: OutputSnapshot[]
   focused_window_id: number | null
   focused_shell_ui_window_id: number | null
   orphaned_wayland_surface_protocol_ids?: number[]
+  pointer?: { x: number; y: number }
+  workspace?: CompositorWorkspaceRect | null
+  shell_context_menu_global?: CompositorWorkspaceRect | null
   [key: string]: unknown
 }
 
@@ -154,6 +164,8 @@ export interface ShellControls {
   taskbar_power_toggle?: Rect | null
   programs_menu_search?: Rect | null
   programs_menu_first_item?: Rect | null
+  programs_menu_panel?: Rect | null
+  programs_menu_list?: Rect | null
   tab_menu_pin?: Rect | null
   tab_menu_unpin?: Rect | null
   settings_tab_user?: Rect | null
@@ -173,6 +185,12 @@ export interface ShellControls {
   [key: string]: Rect | null | undefined
 }
 
+export interface ProgramsMenuListScroll {
+  scroll_top: number
+  scroll_height: number
+  client_height: number
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -185,6 +203,7 @@ export interface ShellSnapshot {
   programs_menu_open: boolean
   power_menu_open: boolean
   programs_menu_query: string
+  programs_menu_list_scroll?: ProgramsMenuListScroll | null
   crosshair_cursor: boolean
   snap_picker_open?: boolean
   snap_picker_window_id?: number | null
@@ -790,6 +809,10 @@ export async function clickPoint(base: string, x: number, y: number): Promise<vo
 
 export async function movePoint(base: string, x: number, y: number): Promise<void> {
   await postJson(base, '/test/input/pointer_move', { x, y })
+}
+
+export async function pointerWheel(base: string, deltaX: number, deltaY: number): Promise<void> {
+  await postJson(base, '/test/input/pointer_wheel', { delta_x: deltaX, delta_y: deltaY })
 }
 
 export async function pointerButton(base: string, button: number, action: 'press' | 'release'): Promise<void> {

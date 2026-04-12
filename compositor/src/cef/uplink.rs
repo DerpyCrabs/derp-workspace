@@ -329,6 +329,10 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.e2e_pointer_drag(x0, y0, x1, y1, button, steps))
     }
 
+    pub fn test_pointer_wheel(&self, delta_x: i32, delta_y: i32) -> Result<(), String> {
+        self.run_result(move |s| s.e2e_pointer_wheel(delta_x, delta_y))
+    }
+
     pub fn test_key(&self, keycode: u32, pressed: bool) -> Result<(), String> {
         self.run_result(move |s| {
             s.e2e_keyboard_key(

@@ -158,6 +158,7 @@ struct E2eCompositorSnapshot {
     shell_keyboard_focus: bool,
     screenshot_selection_active: bool,
     shell_context_menu_visible: bool,
+    shell_context_menu_global: Option<E2eRectSnapshot>,
     shell_pointer_grab_window_id: Option<u32>,
     shell_move_window_id: Option<u32>,
     shell_resize_window_id: Option<u32>,
@@ -267,6 +268,14 @@ impl CompositorState {
             self.e2e_pointer_move_global(x, y)?;
         }
         self.e2e_pointer_button(button, false)?;
+        Ok(())
+    }
+
+    pub(crate) fn e2e_pointer_wheel(&mut self, delta_x: i32, delta_y: i32) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
         Ok(())
     }
 
@@ -459,6 +468,15 @@ impl CompositorState {
             shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
             screenshot_selection_active: self.screenshot_selection_active,
             shell_context_menu_visible: self.shell_context_menu.is_some(),
+            shell_context_menu_global: self.shell_context_menu.as_ref().map(|m| {
+                let g = &m.global_rect;
+                E2eRectSnapshot {
+                    x: g.loc.x,
+                    y: g.loc.y,
+                    width: g.size.w,
+                    height: g.size.h,
+                }
+            }),
             shell_pointer_grab_window_id: self.shell_ui_pointer_grab,
             shell_move_window_id: self.shell_move_window_id,
             shell_resize_window_id: self.shell_resize_window_id,

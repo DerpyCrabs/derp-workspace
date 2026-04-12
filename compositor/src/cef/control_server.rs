@@ -653,6 +653,22 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/input/pointer_wheel" {
+        let delta_x = v
+            .get("delta_x")
+            .and_then(|x| x.as_i64())
+            .and_then(|raw| i32::try_from(raw).ok())
+            .unwrap_or(0);
+        let delta_y = v
+            .get("delta_y")
+            .and_then(|x| x.as_i64())
+            .and_then(|raw| i32::try_from(raw).ok())
+            .unwrap_or(-120);
+        uplink.test_pointer_wheel(delta_x, delta_y)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/input/click" {
         let button = v
             .get("button")

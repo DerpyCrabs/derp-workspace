@@ -12,10 +12,15 @@ import {
   getJson,
   getShellHtml,
   getSnapshots,
+  movePoint,
   openDebug,
   openPowerMenu,
   openProgramsMenu,
   openSettings,
+  pointerWheel,
+  pointInRect,
+  assertRectMinSize,
+  runKeybind,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
@@ -25,6 +30,7 @@ import {
   waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
+  type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -69,6 +75,82 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('bootstrap-compositor.json', compositor)
     await writeJsonArtifact('bootstrap-shell.json', shell)
     await writeJsonArtifact('desktop-applications.json', desktopApplications)
+  })
+
+  test('programs menu list scrolls with pointer wheel over launcher', async ({ base, state }) => {
+    assert(state.desktopApps.length >= 6, `need desktop apps for launcher scroll test, got ${state.desktopApps.length}`)
+    const opened = await openProgramsMenu(base, 'click')
+    assert(opened.programs_menu_open, 'programs menu should be open')
+    const metrics0 = opened.programs_menu_list_scroll
+    assert(metrics0, 'missing programs_menu_list_scroll')
+    assert(
+      metrics0.scroll_height > metrics0.client_height + 32,
+      `expected programs list overflow for wheel test (scroll_height ${metrics0.scroll_height} client_height ${metrics0.client_height})`,
+    )
+    const { compositor, shell } = await getSnapshots(base)
+    assert(shell.programs_menu_open, 'programs menu should stay open')
+    const menuG = compositor.shell_context_menu_global
+    assert(
+      menuG && menuG.width > 0 && menuG.height > 0,
+      'compositor must expose shell_context_menu_global while programs menu is open',
+    )
+    const menuAsRect: Rect = {
+      x: 0,
+      y: 0,
+      global_x: menuG.x,
+      global_y: menuG.y,
+      width: menuG.width,
+      height: menuG.height,
+    }
+    const px = menuG.x + menuG.width * 0.5
+    const py = menuG.y + menuG.height * 0.58
+    await movePoint(base, px, py)
+    const { compositor: comp2, shell: shell2 } = await getSnapshots(base)
+    const pt = comp2.pointer
+    assert(pt && Number.isFinite(pt.x) && Number.isFinite(pt.y), 'compositor snapshot missing pointer')
+    assert(
+      pointInRect(menuAsRect, pt),
+      `pointer ${pt.x},${pt.y} should be inside compositor shell_context_menu_global (x=${menuG.x} y=${menuG.y} w=${menuG.width} h=${menuG.height}; moved to ${px},${py})`,
+    )
+    const list = shell2.controls.programs_menu_list
+    assert(list, 'missing programs_menu_list')
+    assertRectMinSize('programs_menu_list', list, 32, 32)
+    assert(shell2.programs_menu_open, 'programs menu should stay open')
+    const beforeTop = metrics0.scroll_top
+    for (let i = 0; i < 28; i++) {
+      await pointerWheel(base, 0, 120)
+    }
+    const scrolledDown = await waitFor(
+      'programs menu scroll increases after wheel',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const m = shell.programs_menu_list_scroll
+        if (!m || !shell.programs_menu_open) return null
+        if (m.scroll_top > beforeTop + 8) return shell
+        return null
+      },
+      8000,
+      50,
+    )
+    const peak = scrolledDown.programs_menu_list_scroll?.scroll_top
+    assert(peak !== undefined && peak > beforeTop + 8, 'expected scroll_top after wheel down')
+    for (let i = 0; i < 24; i++) {
+      await pointerWheel(base, 0, -120)
+    }
+    await waitFor(
+      'programs menu scroll decreases after wheel up',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const m = shell.programs_menu_list_scroll
+        if (!m || !shell.programs_menu_open) return null
+        if (m.scroll_top < peak - 8) return shell
+        return null
+      },
+      8000,
+      50,
+    )
+    await runKeybind(base, 'toggle_programs_menu')
+    await waitForProgramsMenuClosed(base)
   })
 
   test('settings window opens from taskbar, switches tabs, and reopens from keybind', async ({ base }) => {

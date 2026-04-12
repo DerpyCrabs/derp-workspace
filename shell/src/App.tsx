@@ -1420,6 +1420,16 @@ function App() {
       snap_preview_rect: snapPreviewRect,
       snap_hover_span: assistOverlay()?.hoverSpan ?? null,
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
+      programs_menu_list_scroll: (() => {
+        if (!shellContextMenus.programsMenuOpen()) return null
+        const el = document.querySelector('[data-programs-menu-scroll]')
+        if (!(el instanceof HTMLElement)) return null
+        return {
+          scroll_top: el.scrollTop,
+          scroll_height: el.scrollHeight,
+          client_height: el.clientHeight,
+        }
+      })(),
       window_stack_order: stackOrderedWindows.map((w) => w.window_id),
       tab_groups: tabGroups,
       windows: windowsList().map((w) => ({
@@ -1459,6 +1469,8 @@ function App() {
           origin,
         ),
         programs_menu_first_item: e2eQueryRect('[data-programs-menu-idx="0"]', main, canvas, origin),
+        programs_menu_panel: e2eQueryRect('[data-shell-programs-menu-panel]', main, canvas, origin),
+        programs_menu_list: e2eQueryRect('[data-programs-menu-scroll]', main, canvas, origin),
         tab_menu_pin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
         tab_menu_unpin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
         settings_tab_user: e2eQueryRect('[data-settings-tab="user"]', main, canvas, origin),

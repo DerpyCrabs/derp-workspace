@@ -48,6 +48,7 @@ export function ProgramsContextMenu(props: ProgramsContextMenuProps) {
 
   return (
     <div
+      data-shell-programs-menu-panel
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex flex-col overflow-hidden"
       role="group"
       aria-label="Application search"
@@ -81,7 +82,7 @@ export function ProgramsContextMenu(props: ProgramsContextMenuProps) {
           }}
         />
       </div>
-      <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2">
+      <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" data-programs-menu-scroll>
         <For each={props.items()}>
           {(item, idx) => (
             <button
