@@ -488,6 +488,27 @@ fn apply_message(
                 "items": rows,
             }));
         }
+        shell_wire::DecodedCompositorToShellMessage::TraySniMenu { menu } => {
+            let rows: Vec<Value> = menu
+                .entries
+                .into_iter()
+                .map(|e| {
+                    json!({
+                        "dbusmenu_id": e.dbusmenu_id,
+                        "label": e.label,
+                        "separator": e.separator,
+                        "enabled": e.enabled,
+                    })
+                })
+                .collect();
+            pending_details.push(json!({
+                "type": "tray_sni_menu",
+                "request_serial": menu.request_serial,
+                "notifier_id": menu.notifier_id,
+                "menu_path": menu.menu_path,
+                "entries": rows,
+            }));
+        }
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
             pending_details.push(json!({
                 "type": "programs_menu_toggle",

@@ -282,9 +282,21 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn sni_tray_activate(&self, id: String, context_menu: bool) {
+    pub fn sni_tray_activate(&self, id: String) {
         self.run(move |s| {
-            s.sni_tray_activate_clicked(id, context_menu);
+            s.sni_tray_activate_clicked(id);
+        });
+    }
+
+    pub fn sni_tray_open_menu(&self, id: String, request_serial: u32) {
+        self.run(move |s| {
+            s.sni_tray_open_menu(id, request_serial);
+        });
+    }
+
+    pub fn sni_tray_menu_event(&self, id: String, menu_path: String, item_id: i32) {
+        self.run(move |s| {
+            s.sni_tray_menu_event(id, menu_path, item_id);
         });
     }
 

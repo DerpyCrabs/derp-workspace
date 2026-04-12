@@ -20,7 +20,14 @@ import { canvasRectToClientCss } from '../shellCoords'
 import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '../shellBridge'
 import type { LayoutScreen } from './types'
 
-type MenuKind = 'programs' | 'power' | 'tab' | null
+type MenuKind = 'programs' | 'power' | 'tab' | 'tray_sni' | null
+
+export type TraySniMenuEntry = {
+  dbusmenu_id: number
+  label: string
+  separator: boolean
+  enabled: boolean
+}
 
 type CreateShellContextMenusArgs = {
   mainEl: Accessor<HTMLElement | undefined>
@@ -45,6 +52,7 @@ type CreateShellContextMenusArgs = {
   dismissFloatingWire: () => void
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
+  onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
 }
 
 function layoutScreenCssRect(
@@ -98,6 +106,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
   const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
   const [tabMenuHighlightIdx, setTabMenuHighlightIdx] = createSignal(0)
+  const [traySniHighlightIdx, setTraySniHighlightIdx] = createSignal(0)
+  const [traySniPendingSerial, setTraySniPendingSerial] = createSignal(0)
+  const [traySniNotifierId, setTraySniNotifierId] = createSignal('')
+  const [traySniMenuPath, setTraySniMenuPath] = createSignal('')
+  const [traySniEntries, setTraySniEntries] = createSignal<TraySniMenuEntry[]>([])
   const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
   const [tabMenuWindowId, setTabMenuWindowId] = createSignal<number | null>(null)
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
@@ -119,6 +132,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
   const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
   const tabMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'tab')
+  const traySniMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'tray_sni')
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
@@ -129,6 +143,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       setPowerMenuHighlightIdx(0)
       setTabMenuHighlightIdx(0)
       setTabMenuWindowId(null)
+      setTraySniHighlightIdx(0)
+      setTraySniPendingSerial(0)
+      setTraySniNotifierId('')
+      setTraySniMenuPath('')
+      setTraySniEntries([])
     }
   })
 
@@ -141,6 +160,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setPowerMenuHighlightIdx(0)
     setTabMenuHighlightIdx(0)
     setTabMenuWindowId(null)
+    setTraySniHighlightIdx(0)
+    setTraySniPendingSerial(0)
+    setTraySniNotifierId('')
+    setTraySniMenuPath('')
+    setTraySniEntries([])
     args.dismissFloatingWire()
   }
 
@@ -333,6 +357,46 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setCtxMenuOpen(true)
   }
 
+  function openTraySniMenu(notifierId: string, requestSerial: number, clientX: number, clientY: number) {
+    args.closeAllAtlasSelects()
+    setCtxMenuAnchor({ x: Math.round(clientX), y: Math.round(clientY), alignAboveY: Math.round(clientY) })
+    setCtxMenuKind('tray_sni')
+    setTraySniPendingSerial(requestSerial >>> 0)
+    setTraySniNotifierId(notifierId)
+    setTraySniMenuPath('')
+    setTraySniEntries([
+      { dbusmenu_id: -1, label: 'Loading…', separator: false, enabled: false },
+    ])
+    setTraySniHighlightIdx(0)
+    setCtxMenuOpen(true)
+  }
+
+  function applyTraySniMenuDetail(detail: {
+    request_serial: number
+    notifier_id: string
+    menu_path: string
+    entries: TraySniMenuEntry[]
+  }) {
+    if (!ctxMenuOpen() || ctxMenuKind() !== 'tray_sni') return
+    if ((detail.request_serial >>> 0) !== traySniPendingSerial()) return
+    if (detail.notifier_id !== traySniNotifierId()) return
+    setTraySniMenuPath(detail.menu_path)
+    const next = detail.entries
+    if (next.length === 0) {
+      setTraySniEntries([
+        {
+          dbusmenu_id: -1,
+          label: detail.menu_path ? 'Empty menu' : 'No menu for this icon',
+          separator: false,
+          enabled: false,
+        },
+      ])
+    } else {
+      setTraySniEntries(next)
+    }
+    setTraySniHighlightIdx(0)
+  }
+
   const powerMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!powerMenuOpen()) return []
     const http = shellHttpBase() !== null
@@ -374,6 +438,21 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     return args.tabMenuItems(windowId)
   })
 
+  const traySniMenuListItems = createMemo((): ShellContextMenuItem[] => {
+    if (!traySniMenuOpen()) return []
+    const nid = traySniNotifierId()
+    const path = traySniMenuPath()
+    return traySniEntries().map((e) => ({
+      label: e.label,
+      separator: e.separator,
+      disabled: e.separator ? true : !e.enabled,
+      action: () => {
+        if (e.separator || e.dbusmenu_id < 0 || !e.enabled) return
+        args.onTraySniMenuPick(nid, path, e.dbusmenu_id)
+      },
+    }))
+  })
+
   createEffect(() => {
     if (!tabMenuOpen()) return
     const windowId = tabMenuWindowId()
@@ -407,6 +486,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (ctxMenuKind() === 'programs') return programsMenuListItems()
     if (ctxMenuKind() === 'power') return powerMenuListItems()
     if (ctxMenuKind() === 'tab') return tabMenuListItems()
+    if (ctxMenuKind() === 'tray_sni') return traySniMenuListItems()
     return []
   })
 
@@ -462,6 +542,56 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     item.action()
     hideContextMenu()
   }
+
+  function moveTraySniMenuHighlight(delta: number) {
+    const items = traySniMenuListItems()
+    const n = items.length
+    if (n === 0) return
+    let idx = traySniHighlightIdx()
+    for (let step = 0; step < n; step++) {
+      idx = (idx + delta + n) % n
+      const it = items[idx]
+      if (it && !it.separator && !it.disabled) {
+        setTraySniHighlightIdx(idx)
+        return
+      }
+    }
+  }
+
+  function activateTraySniMenuSelection() {
+    if (!traySniMenuOpen()) return
+    const item = traySniMenuListItems()[traySniHighlightIdx()]
+    if (!item || item.disabled || item.separator) return
+    item.action()
+    hideContextMenu()
+  }
+
+  createEffect(() => {
+    if (!traySniMenuOpen()) return
+    const list = traySniMenuListItems()
+    const n = list.length
+    const idx = traySniHighlightIdx()
+    if (n === 0) {
+      if (idx !== 0) setTraySniHighlightIdx(0)
+      return
+    }
+    if (idx >= n) setTraySniHighlightIdx(n - 1)
+    if (idx < 0) setTraySniHighlightIdx(0)
+    const cur = list[idx]
+    if (cur?.separator || cur?.disabled) moveTraySniMenuHighlight(1)
+  })
+
+  createEffect(() => {
+    if (!traySniMenuOpen()) return
+    const idx = traySniHighlightIdx()
+    void traySniMenuListItems().length
+    queueMicrotask(() => {
+      const panel = menuPanelRef
+      if (!panel) return
+      const el = panel.querySelector(`[data-tray-sni-menu-idx="${idx}"]`)
+      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    })
+  })
 
   createEffect(() => {
     if (!programsMenuOpen()) return
@@ -681,6 +811,47 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         if (last >= 0) setTabMenuHighlightIdx(last)
       }
     }
+    if (traySniMenuOpen()) {
+      const items = traySniMenuListItems()
+      const n = items.filter((item) => !item.disabled && !item.separator).length
+      if (e.key === 'ArrowDown') {
+        if (n > 0) {
+          e.preventDefault()
+          moveTraySniMenuHighlight(1)
+        }
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        if (n > 0) {
+          e.preventDefault()
+          moveTraySniMenuHighlight(-1)
+        }
+        return
+      }
+      if (!e.repeat && !e.isComposing && e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        activateTraySniMenuSelection()
+        return
+      }
+      if (e.key === 'Home' && n > 0) {
+        e.preventDefault()
+        const first = items.findIndex((item) => !item.disabled && !item.separator)
+        if (first >= 0) setTraySniHighlightIdx(first)
+        return
+      }
+      if (e.key === 'End' && n > 0) {
+        e.preventDefault()
+        let last = -1
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (!items[i]?.disabled && !items[i]?.separator) {
+            last = i
+            break
+          }
+        }
+        if (last >= 0) setTraySniHighlightIdx(last)
+      }
+    }
   }
 
   const onCtxPointerDown = (e: PointerEvent) => {
@@ -689,6 +860,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (target instanceof Element && target.closest('[data-shell-programs-toggle]')) return
     if (target instanceof Element && target.closest('[data-shell-settings-toggle]')) return
     if (target instanceof Element && target.closest('[data-shell-power-toggle]')) return
+    if (target instanceof Element && target.closest('[data-shell-tray-strip]')) return
     const panel = menuPanelRef
     if (panel && target instanceof Node && panel.contains(target)) return
     hideContextMenu()
@@ -706,10 +878,13 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     programsMenuOpen,
     powerMenuOpen,
     tabMenuOpen,
+    traySniMenuOpen,
     shellMenuAtlasTop,
     onProgramsMenuClick,
     onPowerMenuClick,
     openTabMenu,
+    openTraySniMenu,
+    applyTraySniMenuDetail,
     hideContextMenu,
     toggleProgramsMenuMeta,
     warmProgramsMenuItems,
@@ -746,6 +921,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     tabMenuProps: {
       items: tabMenuListItems,
       highlightIdx: tabMenuHighlightIdx,
+      setPanelRef(el: HTMLDivElement) {
+        menuPanelRef = el
+      },
+      closeContextMenu: hideContextMenu,
+    },
+    traySniMenuProps: {
+      items: traySniMenuListItems,
+      highlightIdx: traySniHighlightIdx,
       setPanelRef(el: HTMLDivElement) {
         menuPanelRef = el
       },

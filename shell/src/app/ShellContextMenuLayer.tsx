@@ -2,6 +2,7 @@ import { Show, type Accessor } from 'solid-js'
 import { PowerContextMenu } from './PowerContextMenu'
 import { ProgramsContextMenu } from './ProgramsContextMenu'
 import { TabContextMenu } from './TabContextMenu'
+import { TraySniContextMenu } from './TraySniContextMenu'
 
 type ShellContextMenuLayerProps = {
   ctxMenuOpen: Accessor<boolean>
@@ -11,9 +12,11 @@ type ShellContextMenuLayerProps = {
   programsMenuOpen: Accessor<boolean>
   powerMenuOpen: Accessor<boolean>
   tabMenuOpen: Accessor<boolean>
+  traySniMenuOpen: Accessor<boolean>
   programsMenuProps: Parameters<typeof ProgramsContextMenu>[0]
   powerMenuProps: Parameters<typeof PowerContextMenu>[0]
   tabMenuProps: Parameters<typeof TabContextMenu>[0]
+  traySniMenuProps: Parameters<typeof TraySniContextMenu>[0]
 }
 
 export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
@@ -43,6 +46,9 @@ export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
       </Show>
       <Show when={props.tabMenuOpen()}>
         <TabContextMenu {...props.tabMenuProps} />
+      </Show>
+      <Show when={props.traySniMenuOpen()}>
+        <TraySniContextMenu {...props.traySniMenuProps} />
       </Show>
     </div>
   )

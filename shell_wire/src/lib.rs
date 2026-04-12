@@ -1109,6 +1109,9 @@ pub enum DecodedCompositorToShellMessage {
     TraySni {
         items: Vec<TraySniItemWire>,
     },
+    TraySniMenu {
+        menu: TraySniMenuWire,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1116,6 +1119,28 @@ pub struct TraySniItemWire {
     pub id: String,
     pub title: String,
     pub icon_png: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraySniMenuEntryWire {
+    pub dbusmenu_id: i32,
+    pub label: String,
+    pub separator: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraySniMenuWire {
+    pub request_serial: u32,
+    pub notifier_id: String,
+    pub menu_path: String,
+    pub entries: Vec<TraySniMenuEntryWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SniTrayLoopMsg {
+    Items(Vec<TraySniItemWire>),
+    Menu(TraySniMenuWire),
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {

@@ -33,7 +33,8 @@ export type TaskbarProps = {
   trayReservedPx: number
   sniTrayItems: TaskbarSniItem[]
   trayIconSlotPx: number
-  onSniTrayActivate: (id: string, contextMenu: boolean) => void
+  onSniTrayActivate: (id: string) => void
+  onSniTrayContextMenu: (id: string, clientX: number, clientY: number) => void
   programsMenuOpen: boolean
   onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   powerMenuOpen: boolean
@@ -266,10 +267,10 @@ export function Taskbar(props: TaskbarProps) {
                     class="box-border flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent px-0.5 text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) touch-manipulation"
                     style={{ width: `${slot()}px`, 'min-width': `${slot()}px` }}
                     title={it.title}
-                    onClick={() => props.onSniTrayActivate(it.id, false)}
+                    onClick={() => props.onSniTrayActivate(it.id)}
                     onContextMenu={(e) => {
                       e.preventDefault()
-                      props.onSniTrayActivate(it.id, true)
+                      props.onSniTrayContextMenu(it.id, e.clientX, e.clientY)
                     }}
                   >
                     <Show when={src()} fallback={<AppWindow class="h-5 w-5 opacity-70" stroke-width={2} />}>

@@ -94,7 +94,7 @@ import {
 import { shellHttpBase } from './shellHttp'
 import { startThemeDomSync } from './themeDom'
 import { refreshThemeSettingsFromRemote } from './themeStore'
-import { createShellContextMenus } from './app/createShellContextMenus'
+import { createShellContextMenus, type TraySniMenuEntry } from './app/createShellContextMenus'
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
@@ -178,7 +178,9 @@ declare global {
         | 'backed_window_open'
         | 'e2e_snapshot_response'
         | 'e2e_html_response'
-        | 'sni_tray_activate',
+        | 'sni_tray_activate'
+        | 'sni_tray_open_menu'
+        | 'sni_tray_menu_event',
       arg?: number | string,
       arg2?: number | string,
       arg3?: number | string,
@@ -436,6 +438,18 @@ type DerpShellDetail =
   | {
       type: 'tray_sni'
       items: { id: string; title: string; icon_base64: string }[]
+    }
+  | {
+      type: 'tray_sni_menu'
+      request_serial: number
+      notifier_id: string
+      menu_path: string
+      entries: {
+        dbusmenu_id: number
+        label: string
+        separator: boolean
+        enabled: boolean
+      }[]
     }
 type DerpWindow = {
   window_id: number
@@ -696,9 +710,11 @@ function shellWireSend(
     | 'set_chrome_metrics'
     | 'set_desktop_background'
     | 'backed_window_open'
-    | 'sni_tray_activate',
+    | 'sni_tray_activate'
+    | 'sni_tray_open_menu'
+    | 'sni_tray_menu_event',
   arg?: number | string,
-  arg2?: number,
+  arg2?: number | string,
   arg3?: number,
   arg4?: number,
   arg5?: number,
@@ -773,13 +789,17 @@ function shellWireSend(
     fn(op, arg, arg2, arg3, arg4, arg5)
   } else if (op === 'set_chrome_metrics' && typeof arg === 'number' && arg2 !== undefined) {
     fn(op, arg, arg2)
-  } else if (
-    op === 'sni_tray_activate' &&
-    typeof arg === 'string' &&
-    arg2 !== undefined &&
-    (arg2 === 0 || arg2 === 1)
-  ) {
+  } else if (op === 'sni_tray_activate' && typeof arg === 'string') {
+    fn(op, arg)
+  } else if (op === 'sni_tray_open_menu' && typeof arg === 'string' && typeof arg2 === 'number') {
     fn(op, arg, arg2)
+  } else if (
+    op === 'sni_tray_menu_event' &&
+    typeof arg === 'string' &&
+    typeof arg2 === 'string' &&
+    arg3 !== undefined
+  ) {
+    fn(op, arg, arg2, arg3)
   } else if (op === 'shell_blur_ui_window' || op === 'shell_ui_grab_end') {
     fn(op)
   } else {
@@ -794,6 +814,7 @@ function canSessionControl(): boolean {
 
 function App() {
   const shellBuildLabel = shellBuildLabelText()
+  let traySniMenuNextSerial = 0
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -1128,6 +1149,9 @@ function App() {
     },
     tabMenuWindowAvailable: (windowId: number) => {
       return allWindowsMap().has(windowId) && groupIdForWindow(workspaceState(), windowId) !== null
+    },
+    onTraySniMenuPick: (notifierId, menuPath, dbusmenuId) => {
+      shellWireSend('sni_tray_menu_event', notifierId, menuPath, dbusmenuId)
     },
   })
 
@@ -3760,6 +3784,44 @@ function App() {
         queueMicrotask(() => scheduleExclusionZonesSync())
         return
       }
+      if (d.type === 'tray_sni_menu') {
+        const raw = d as Record<string, unknown>
+        const rs = raw.request_serial
+        const request_serial =
+          typeof rs === 'number' && Number.isFinite(rs)
+            ? rs >>> 0
+            : typeof rs === 'string'
+              ? Number.parseInt(rs, 10) >>> 0
+              : 0
+        const notifier_id = typeof raw.notifier_id === 'string' ? raw.notifier_id : ''
+        const menu_path = typeof raw.menu_path === 'string' ? raw.menu_path : ''
+        const entries: TraySniMenuEntry[] = []
+        const entRaw = raw.entries
+        if (Array.isArray(entRaw)) {
+          for (const row of entRaw) {
+            if (!row || typeof row !== 'object') continue
+            const o = row as Record<string, unknown>
+            const idRaw = o.dbusmenu_id
+            const dbusmenu_id =
+              typeof idRaw === 'number' && Number.isFinite(idRaw)
+                ? Math.trunc(idRaw)
+                : typeof idRaw === 'string'
+                  ? Math.trunc(Number(idRaw))
+                  : 0
+            const label = typeof o.label === 'string' ? o.label : ''
+            const separator = !!o.separator
+            const enabled = o.enabled !== false
+            entries.push({ dbusmenu_id, label, separator, enabled })
+          }
+        }
+        shellContextMenus.applyTraySniMenuDetail({
+          request_serial,
+          notifier_id,
+          menu_path,
+          entries,
+        })
+        return
+      }
       if (d.type === 'keybind') {
         const action = typeof d.action === 'string' ? d.action : ''
         const fid = focusedWindowId()
@@ -4516,8 +4578,14 @@ function App() {
         trayReservedPx={trayReservedPx}
         sniTrayItems={sniTrayItems}
         trayIconSlotPx={trayIconSlotPx}
-        onSniTrayActivate={(id, contextMenu) => {
-          shellWireSend('sni_tray_activate', id, contextMenu ? 1 : 0)
+        onSniTrayActivate={(id) => {
+          shellWireSend('sni_tray_activate', id)
+        }}
+        onSniTrayContextMenu={(id, cx, cy) => {
+          traySniMenuNextSerial = (traySniMenuNextSerial + 1) >>> 0
+          const serial = traySniMenuNextSerial
+          shellContextMenus.openTraySniMenu(id, serial, cx, cy)
+          shellWireSend('sni_tray_open_menu', id, serial)
         }}
         snapStrip={snapStripState}
         snapStripScreen={() => dragSnapAssistContext()?.screen ?? null}
@@ -4531,9 +4599,11 @@ function App() {
         programsMenuOpen={shellContextMenus.programsMenuOpen}
         powerMenuOpen={shellContextMenus.powerMenuOpen}
         tabMenuOpen={shellContextMenus.tabMenuOpen}
+        traySniMenuOpen={shellContextMenus.traySniMenuOpen}
         programsMenuProps={shellContextMenus.programsMenuProps}
         powerMenuProps={shellContextMenus.powerMenuProps}
         tabMenuProps={shellContextMenus.tabMenuProps}
+        traySniMenuProps={shellContextMenus.traySniMenuProps}
       />
 
       <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">

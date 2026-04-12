@@ -4,6 +4,7 @@ export type ShellContextMenuItem = {
   badge?: string
   disabled?: boolean
   title?: string
+  separator?: boolean
 }
 
 export type LogicalWorkspaceBounds = {

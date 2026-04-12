@@ -31,7 +31,8 @@ type ShellSurfaceLayersProps = {
   trayReservedPx: Accessor<number>
   sniTrayItems: Accessor<TaskbarSniItem[]>
   trayIconSlotPx: Accessor<number>
-  onSniTrayActivate: (id: string, contextMenu: boolean) => void
+  onSniTrayActivate: (id: string) => void
+  onSniTrayContextMenu: (id: string, clientX: number, clientY: number) => void
   snapStrip: Accessor<SnapAssistStripState | null>
   snapStripScreen: Accessor<LayoutScreen | null>
 }
@@ -135,6 +136,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                     props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 40
                   }
                   onSniTrayActivate={props.onSniTrayActivate}
+                  onSniTrayContextMenu={props.onSniTrayContextMenu}
                   programsMenuOpen={props.programsMenuOpen()}
                   onProgramsMenuClick={props.onProgramsMenuClick}
                   powerMenuOpen={props.powerMenuOpen()}

@@ -700,16 +700,21 @@ impl CompositorState {
             })
             .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
-        let (sni_to_loop_tx, sni_rx) = channel::channel::<Vec<shell_wire::TraySniItemWire>>();
+        let (sni_to_loop_tx, sni_rx) = channel::channel::<shell_wire::SniTrayLoopMsg>();
         let (sni_cmd_tx, sni_cmd_rx) =
             std::sync::mpsc::channel::<crate::sni_tray::SniTrayCmd>();
         crate::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
         event_loop
             .handle()
             .insert_source(sni_rx, |ev, _, d: &mut CalloopData| match ev {
-                CalloopChannelEvent::Msg(items) => {
-                    d.state.on_sni_tray_items_updated(items);
-                }
+                CalloopChannelEvent::Msg(msg) => match msg {
+                    shell_wire::SniTrayLoopMsg::Items(items) => {
+                        d.state.on_sni_tray_items_updated(items);
+                    }
+                    shell_wire::SniTrayLoopMsg::Menu(menu) => {
+                        d.state.on_sni_tray_menu_updated(menu);
+                    }
+                },
                 CalloopChannelEvent::Closed => {}
             })
             .map_err(|e| format!("sni tray channel: {e}"))?;
@@ -4667,11 +4672,31 @@ impl CompositorState {
         self.sync_tray_hints_to_shell();
     }
 
-    pub(crate) fn sni_tray_activate_clicked(&mut self, id: String, context_menu: bool) {
+    pub(crate) fn on_sni_tray_menu_updated(&mut self, menu: shell_wire::TraySniMenuWire) {
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TraySniMenu { menu });
+    }
+
+    pub(crate) fn sni_tray_activate_clicked(&mut self, id: String) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::sni_tray::SniTrayCmd::Activate {
+            let _ = tx.send(crate::sni_tray::SniTrayCmd::Activate { id });
+        }
+    }
+
+    pub(crate) fn sni_tray_open_menu(&mut self, id: String, request_serial: u32) {
+        if let Some(tx) = &self.sni_tray_cmd_tx {
+            let _ = tx.send(crate::sni_tray::SniTrayCmd::OpenMenu {
                 id,
-                context_menu,
+                request_serial,
+            });
+        }
+    }
+
+    pub(crate) fn sni_tray_menu_event(&mut self, id: String, menu_path: String, item_id: i32) {
+        if let Some(tx) = &self.sni_tray_cmd_tx {
+            let _ = tx.send(crate::sni_tray::SniTrayCmd::MenuEvent {
+                id,
+                menu_path,
+                item_id,
             });
         }
     }
