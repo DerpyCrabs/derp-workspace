@@ -4,12 +4,12 @@ use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
     MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
 
-fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
-    let Ok(js) = serde_json::to_string(&detail) else {
+fn dispatch_shell_detail(browser: &Browser, detail: &Value) {
+    let Ok(js) = serde_json::to_string(detail) else {
         return;
     };
     let code = format!("window.dispatchEvent(new CustomEvent('derp-shell',{{detail:{js}}}));");
@@ -19,10 +19,59 @@ fn dispatch_shell_detail(browser: &Browser, detail: serde_json::Value) {
     frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
 }
 
-pub fn apply_message(
-    msg: shell_wire::DecodedCompositorToShellMessage,
+fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
+    if details.is_empty() {
+        return;
+    }
+    if details.len() == 1 {
+        dispatch_shell_detail(browser, &details[0]);
+        return;
+    }
+    let Ok(js) = serde_json::to_string(details) else {
+        return;
+    };
+    let code = format!(
+        "(()=>{{const derpShellBatch={js};for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{{detail:derpShellBatch[i]}}));}})();"
+    );
+    let Some(frame) = browser.main_frame() else {
+        return;
+    };
+    frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
+}
+
+fn flush_shell_details(browser: Option<&Browser>, details: &mut Vec<Value>) {
+    if details.is_empty() {
+        return;
+    }
+    let Some(browser) = browser else {
+        details.clear();
+        return;
+    };
+    dispatch_shell_detail_batch(browser, details);
+    details.clear();
+}
+
+pub fn apply_messages(
+    messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
     browser: &Mutex<Option<Browser>>,
     view_state: &Mutex<OsrViewState>,
+) {
+    let Ok(guard) = browser.lock() else {
+        return;
+    };
+    let browser = guard.as_ref();
+    let mut pending_details = Vec::new();
+    for msg in messages {
+        apply_message(msg, browser, view_state, &mut pending_details);
+    }
+    flush_shell_details(browser, &mut pending_details);
+}
+
+fn apply_message(
+    msg: shell_wire::DecodedCompositorToShellMessage,
+    browser: Option<&Browser>,
+    view_state: &Mutex<OsrViewState>,
+    pending_details: &mut Vec<Value>,
 ) {
     match msg {
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
@@ -38,25 +87,18 @@ pub fn apply_message(
                 let ph = physical_h.max(1) as i32;
                 g.set_physical_size(pw, ph);
             }
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            if let Some(host) = b.host() {
-                host.was_resized();
-                host.notify_screen_info_changed();
-                host.invalidate(cef::PaintElementType::VIEW);
+            if let Some(b) = browser {
+                if let Some(host) = b.host() {
+                    host.was_resized();
+                    host.notify_screen_info_changed();
+                    host.invalidate(cef::PaintElementType::VIEW);
+                }
             }
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "output_geometry",
-                    "logical_width": logical_w,
-                    "logical_height": logical_h,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "output_geometry",
+                "logical_width": logical_w,
+                "logical_height": logical_h,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w,
@@ -84,23 +126,20 @@ pub fn apply_message(
                 let ph = canvas_physical_h.max(1) as i32;
                 g.set_physical_size(pw, ph);
             }
-            let Ok(guard) = browser.lock() else {
-                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout browser lock poisoned");
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            if let Some(b) = browser {
+                if let Some(host) = b.host() {
+                    tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout was_resized notify_screen invalidate");
+                    host.was_resized();
+                    host.notify_screen_info_changed();
+                    host.invalidate(cef::PaintElementType::VIEW);
+                } else {
+                    tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout no browser host");
+                }
+            } else {
                 tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout missing browser");
                 return;
-            };
-            if let Some(host) = b.host() {
-                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout was_resized notify_screen invalidate");
-                host.was_resized();
-                host.notify_screen_info_changed();
-                host.invalidate(cef::PaintElementType::VIEW);
-            } else {
-                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout no browser host");
             }
-            let screens_j: Vec<serde_json::Value> = screens
+            let screens_j: Vec<Value> = screens
                 .iter()
                 .map(|s| {
                     json!({
@@ -123,21 +162,18 @@ pub fn apply_message(
                     coy = coy.min(s.y);
                 }
             }
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "output_layout",
-                    "canvas_logical_width": canvas_logical_w,
-                    "canvas_logical_height": canvas_logical_h,
-                    "canvas_logical_origin_x": cox,
-                    "canvas_logical_origin_y": coy,
-                    "canvas_physical_width": canvas_physical_w,
-                    "canvas_physical_height": canvas_physical_h,
-                    "context_menu_atlas_buffer_h": context_menu_atlas_buffer_h,
-                    "screens": screens_j,
-                    "shell_chrome_primary": shell_chrome_primary,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "output_layout",
+                "canvas_logical_width": canvas_logical_w,
+                "canvas_logical_height": canvas_logical_h,
+                "canvas_logical_origin_x": cox,
+                "canvas_logical_origin_y": coy,
+                "canvas_physical_width": canvas_physical_w,
+                "canvas_physical_height": canvas_physical_h,
+                "context_menu_atlas_buffer_h": context_menu_atlas_buffer_h,
+                "screens": screens_j,
+                "shell_chrome_primary": shell_chrome_primary,
+            }));
             tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout dispatch_shell_detail done");
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMapped {
@@ -152,40 +188,22 @@ pub fn apply_message(
             client_side_decoration,
             output_name,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "window_mapped",
-                    "window_id": window_id,
-                    "surface_id": surface_id,
-                    "x": x,
-                    "y": y,
-                    "width": w,
-                    "height": h,
-                    "title": title,
-                    "app_id": app_id,
-                    "client_side_decoration": client_side_decoration,
-                    "output_name": output_name,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "window_mapped",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+                "title": title,
+                "app_id": app_id,
+                "client_side_decoration": client_side_decoration,
+                "output_name": output_name,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({ "type": "window_unmapped", "window_id": window_id }),
-            );
+            pending_details.push(json!({ "type": "window_unmapped", "window_id": window_id }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
             window_id,
@@ -199,28 +217,19 @@ pub fn apply_message(
             client_side_decoration,
             output_name,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "window_geometry",
-                    "window_id": window_id,
-                    "surface_id": surface_id,
-                    "x": x,
-                    "y": y,
-                    "width": w,
-                    "height": h,
-                    "maximized": maximized,
-                    "fullscreen": fullscreen,
-                    "client_side_decoration": client_side_decoration,
-                    "output_name": output_name,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "window_geometry",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+                "maximized": maximized,
+                "fullscreen": fullscreen,
+                "client_side_decoration": client_side_decoration,
+                "output_name": output_name,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
             window_id,
@@ -228,30 +237,15 @@ pub fn apply_message(
             title,
             app_id,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "window_metadata",
-                    "window_id": window_id,
-                    "surface_id": surface_id,
-                    "title": title,
-                    "app_id": app_id,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "window_metadata",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "title": title,
+                "app_id": app_id,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
             let list: Vec<_> = windows
                 .iter()
                 .map(|w| {
@@ -275,63 +269,39 @@ pub fn apply_message(
                     })
                 })
                 .collect();
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "window_list",
-                    "windows": list,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "window_list",
+                "windows": list,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,
             minimized,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "window_state",
-                    "window_id": window_id,
-                    "minimized": minimized,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "window_state",
+                "window_id": window_id,
+                "minimized": minimized,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "focus_changed",
-                    "surface_id": surface_id,
-                    "window_id": window_id,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "focus_changed",
+                "surface_id": surface_id,
+                "window_id": window_id,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            flush_shell_details(browser, pending_details);
+            let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
         }
@@ -343,16 +313,13 @@ pub fn apply_message(
             titlebar_drag_window_id: _,
             modifiers,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            flush_shell_details(browser, pending_details);
+            let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-
             let ev = MouseEvent { x, y, modifiers };
             let ty = match button {
                 1 => MouseButtonType::MIDDLE,
@@ -369,16 +336,13 @@ pub fn apply_message(
             delta_y,
             modifiers,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            flush_shell_details(browser, pending_details);
+            let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
@@ -391,16 +355,13 @@ pub fn apply_message(
             character,
             unmodified_character,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            flush_shell_details(browser, pending_details);
+            let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-
             let ty = match cef_key_type {
                 shell_wire::CEF_KEYEVENT_RAWKEYDOWN => KeyEventType::RAWKEYDOWN,
                 shell_wire::CEF_KEYEVENT_KEYDOWN => KeyEventType::KEYDOWN,
@@ -425,16 +386,13 @@ pub fn apply_message(
             x,
             y,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
+            flush_shell_details(browser, pending_details);
+            let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-
             let ty = match phase {
                 shell_wire::TOUCH_PHASE_MOVED => TouchEventType::MOVED,
                 shell_wire::TOUCH_PHASE_PRESSED => TouchEventType::PRESSED,
@@ -442,13 +400,11 @@ pub fn apply_message(
                 shell_wire::TOUCH_PHASE_CANCELLED => TouchEventType::CANCELLED,
                 _ => TouchEventType::RELEASED,
             };
-
             let pressure = match phase {
                 shell_wire::TOUCH_PHASE_PRESSED => 1.0_f32,
                 shell_wire::TOUCH_PHASE_MOVED => 1.0_f32,
                 _ => 0.0_f32,
             };
-
             let ev = TouchEvent {
                 id: touch_id,
                 x: x as f32,
@@ -464,104 +420,49 @@ pub fn apply_message(
             host.send_touch_event(Some(&ev));
         }
         shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "context_menu_dismiss",
-                }),
-            );
+            pending_details.push(json!({
+                "type": "context_menu_dismiss",
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::Keybind {
             action,
             target_window_id,
             output_name,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "keybind",
-                    "action": action,
-                    "target_window_id": target_window_id,
-                    "output_name": output_name,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "keybind",
+                "action": action,
+                "target_window_id": target_window_id,
+                "output_name": output_name,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "keyboard_layout",
-                    "label": label,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "keyboard_layout",
+                "label": label,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
             volume_linear_percent_x100,
             muted,
             state_known,
         } => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "volume_overlay",
-                    "volume_linear_percent_x100": volume_linear_percent_x100,
-                    "muted": muted,
-                    "state_known": state_known,
-                }),
-            );
+            pending_details.push(json!({
+                "type": "volume_overlay",
+                "volume_linear_percent_x100": volume_linear_percent_x100,
+                "muted": muted,
+                "state_known": state_known,
+            }));
         }
-
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "programs_menu_toggle",
-                }),
-            );
+            pending_details.push(json!({
+                "type": "programs_menu_toggle",
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::Ping => {
-            let Ok(guard) = browser.lock() else {
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                return;
-            };
-            dispatch_shell_detail(
-                b,
-                json!({
-                    "type": "compositor_ping",
-                }),
-            );
+            pending_details.push(json!({
+                "type": "compositor_ping",
+            }));
         }
     }
 }

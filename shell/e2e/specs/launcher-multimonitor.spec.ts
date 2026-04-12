@@ -89,6 +89,7 @@ async function launchTerminalAppFromProgramsMenu(
       const window = compositor.windows.find((entry) => !entry.shell_hosted && !knownBefore.has(entry.window_id))
       if (!window) return null
       if (window.width < 160 || window.height < 48) return null
+      if (!window.title.trim()) return null
       if (shell.programs_menu_open) return null
       if (!taskbarEntry(shell, window.window_id)) return null
       return { compositor, shell, window }
@@ -167,6 +168,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         app: launcherCandidate.app,
         window: stableLaunch.window,
       })
+      await closeLaunchedWindowAndAssertNoGhost(base, stableLaunch.window)
     }
     await writeJsonArtifact('programs-menu-shell.json', menuByKeybind)
     if ((await getJson<ShellSnapshot>(base, '/test/state/shell')).programs_menu_open) {
@@ -188,6 +190,50 @@ export default defineGroup(import.meta.url, ({ test }) => {
       cycles.push({ launched: stableLaunch.window, closed })
     }
     await writeJsonArtifact('programs-menu-launcher-cleanup.json', {
+      query: launcherCandidate.query,
+      cycles,
+    })
+  })
+
+  test('launcher open-close cycles keep shell and compositor aligned', async ({ base, state }) => {
+    const desktopApps = await ensureDesktopApps(base, state)
+    const launcherCandidate = findLauncherCandidate(desktopApps)
+    if (!launcherCandidate) {
+      throw new SkipError('no stable terminal launcher candidate found')
+    }
+    const cycles: Array<{
+      launched: WindowSnapshot
+      aligned: { output_name: string; width: number; height: number }
+      closed: { compositor: CompositorSnapshot; shell: ShellSnapshot }
+    }> = []
+    for (let index = 0; index < 3; index += 1) {
+      const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
+      const aligned = await waitFor(
+        `wait for launcher alignment cycle ${index + 1}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const compWindow = compositorWindowById(compositor, stableLaunch.window.window_id)
+          const shellWindow = shellWindowById(shell, stableLaunch.window.window_id)
+          if (!compWindow || !shellWindow) return null
+          if (!shellWindow.output_name || compWindow.output_name !== shellWindow.output_name) return null
+          const taskbar = taskbarForMonitor(shell, shellWindow.output_name)
+          const row = taskbarEntry(shell, stableLaunch.window.window_id)
+          if (!taskbar?.rect || !row?.activate) return null
+          if (!pointInRect(taskbar.rect, rectCenter(row.activate))) return null
+          if (compWindow.width < 160 || compWindow.height < 48) return null
+          return {
+            output_name: shellWindow.output_name,
+            width: compWindow.width,
+            height: compWindow.height,
+          }
+        },
+        5000,
+        75,
+      )
+      const closed = await closeLaunchedWindowAndAssertNoGhost(base, stableLaunch.window)
+      cycles.push({ launched: stableLaunch.window, aligned, closed })
+    }
+    await writeJsonArtifact('programs-menu-launcher-alignment-cycles.json', {
       query: launcherCandidate.query,
       cycles,
     })

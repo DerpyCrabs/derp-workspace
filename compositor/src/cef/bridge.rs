@@ -8,20 +8,33 @@ use cef::{
 use crate::cef::compositor_downlink;
 use crate::cef::osr_view_state::OsrViewState;
 
+struct PendingCompositorMessages {
+    scheduled: bool,
+    messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
+}
+
 wrap_task! {
     struct ApplyCompositorToShellTask {
         browser_holder: Arc<Mutex<Option<Browser>>>,
         view_state: Arc<Mutex<OsrViewState>>,
-        msg: shell_wire::DecodedCompositorToShellMessage,
+        pending_messages: Arc<Mutex<PendingCompositorMessages>>,
     }
 
     impl Task {
         fn execute(&self) {
-            compositor_downlink::apply_message(
-                self.msg.clone(),
-                &self.browser_holder,
-                &self.view_state,
-            );
+            loop {
+                let messages = {
+                    let Ok(mut guard) = self.pending_messages.lock() else {
+                        return;
+                    };
+                    if guard.messages.is_empty() {
+                        guard.scheduled = false;
+                        return;
+                    }
+                    std::mem::take(&mut guard.messages)
+                };
+                compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+            }
         }
     }
 }
@@ -50,6 +63,7 @@ wrap_task! {
 pub struct ShellToCefLink {
     browser_holder: Arc<Mutex<Option<Browser>>>,
     view_state: Arc<Mutex<OsrViewState>>,
+    pending_messages: Arc<Mutex<PendingCompositorMessages>>,
 }
 
 impl ShellToCefLink {
@@ -60,6 +74,10 @@ impl ShellToCefLink {
         Self {
             browser_holder,
             view_state,
+            pending_messages: Arc::new(Mutex::new(PendingCompositorMessages {
+                scheduled: false,
+                messages: Vec::new(),
+            })),
         }
     }
 
@@ -72,12 +90,31 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        let should_post = {
+            let Ok(mut guard) = self.pending_messages.lock() else {
+                return;
+            };
+            guard.messages.push(msg);
+            if guard.scheduled {
+                false
+            } else {
+                guard.scheduled = true;
+                true
+            }
+        };
+        if !should_post {
+            return;
+        }
         let mut task = ApplyCompositorToShellTask::new(
             self.browser_holder.clone(),
             self.view_state.clone(),
-            msg,
+            self.pending_messages.clone(),
         );
-        let _ = post_task(ThreadId::UI, Some(&mut task));
+        if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            if let Ok(mut guard) = self.pending_messages.lock() {
+                guard.scheduled = false;
+            }
+        }
     }
 
     pub fn schedule_external_begin_frame(&self) {

@@ -2779,7 +2779,7 @@ impl CompositorState {
                 tl.send_configure();
             }
         }
-        let (has_identity, title, app_id) = {
+        let (ready_to_map, title, app_id) = {
             let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
             let bbox = pending.window.bbox();
             let has_buffer_extent = bbox.size.w >= 1 && bbox.size.h >= 1;
@@ -2797,6 +2797,7 @@ impl CompositorState {
             });
             let parent_p = pending.window.toplevel().and_then(|t| t.parent());
             let ident = !app_id.trim().is_empty();
+            let ready = ident && has_buffer_extent;
             let geo = pending.window.geometry();
             tracing::warn!(
                 target: "derp_toplevel",
@@ -2807,7 +2808,7 @@ impl CompositorState {
                 geo = ?geo,
                 has_buffer_extent,
                 has_identity = ident,
-                will_map_now = ident,
+                will_map_now = ready,
                 "xdg sync deferred toplevel state"
             );
             tracing::warn!(
@@ -2819,12 +2820,12 @@ impl CompositorState {
                 parent_wl_surface_protocol_id = ?parent_p.as_ref().map(|p| p.id().protocol_id()),
                 has_buffer_extent,
                 has_identity = ident,
-                will_map_now = ident,
+                will_map_now = ready,
                 "xdg sync deferred toplevel detail"
             );
-            (ident, title, app_id)
+            (ready, title, app_id)
         };
-        if has_identity {
+        if ready_to_map {
             let pending = self.pending_deferred_toplevels.remove(&key).unwrap();
             let wl0 = pending.window.toplevel().unwrap().wl_surface();
             let _ = self.window_registry.set_title(wl0, title);
