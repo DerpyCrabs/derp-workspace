@@ -3322,6 +3322,11 @@ function App() {
     })
   }
 
+  function isShellHostedWindow(windowId: number): boolean {
+    const flags = windows().get(windowId)?.shell_flags ?? 0
+    return (flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+  }
+
   function applyShellWindowMove(clientX: number, clientY: number) {
     if (!shellWindowDrag) return
     const cx = Math.round(clientX)
@@ -3341,9 +3346,12 @@ function App() {
         if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
           shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
         }
+        const shellHosted = isShellHostedWindow(wid)
         batch(() => {
           bumpShellWindowPosition(wid, dx, dy)
-          shellWireSend('move_delta', dx, dy)
+          if (!shellHosted) {
+            shellWireSend('move_delta', dx, dy)
+          }
         })
       }
       shellWindowDrag.lastX = cx
@@ -3499,7 +3507,9 @@ function App() {
       if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
         shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
       }
-      shellWireSend('resize_delta', dx, dy)
+      if (!isShellHostedWindow(shellWindowResize.windowId)) {
+        shellWireSend('resize_delta', dx, dy)
+      }
       shellWindowResize.lastX = cx
       shellWindowResize.lastY = cy
       return

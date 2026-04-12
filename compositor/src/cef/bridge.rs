@@ -13,6 +13,28 @@ struct PendingCompositorMessages {
     messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
 }
 
+fn push_pending_message(
+    messages: &mut Vec<shell_wire::DecodedCompositorToShellMessage>,
+    msg: shell_wire::DecodedCompositorToShellMessage,
+) {
+    if let shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+        window_id,
+        ..
+    } = &msg
+    {
+        messages.retain(|pending| {
+            !matches!(
+                pending,
+                shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                    window_id: pending_window_id,
+                    ..
+                } if pending_window_id == window_id
+            )
+        });
+    }
+    messages.push(msg);
+}
+
 wrap_task! {
     struct ApplyCompositorToShellTask {
         browser_holder: Arc<Mutex<Option<Browser>>>,
@@ -94,7 +116,7 @@ impl ShellToCefLink {
             let Ok(mut guard) = self.pending_messages.lock() else {
                 return;
             };
-            guard.messages.push(msg);
+            push_pending_message(&mut guard.messages, msg);
             if guard.scheduled {
                 false
             } else {

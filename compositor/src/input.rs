@@ -99,6 +99,7 @@ impl CompositorState {
         let pos = local + output_geo.loc.to_f64();
         self.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
         let pointer = self.seat.get_pointer().unwrap();
+        let prev = pointer.current_location();
         let serial = SERIAL_COUNTER.next_serial();
 
         if self.screenshot_selection_active() {
@@ -127,6 +128,32 @@ impl CompositorState {
         } else {
             self.surface_under(pos)
         };
+
+        let dx = (pos.x - prev.x).round() as i32;
+        let dy = (pos.y - prev.y).round() as i32;
+        if dx != 0 || dy != 0 {
+            if self.shell_move_window_id.is_none() {
+                if let Some((window_id, start)) = self.shell_backed_move_candidate {
+                    let travel = ((pos.x - start.x).powi(2) + (pos.y - start.y).powi(2)).sqrt();
+                    if travel >= 8.0 {
+                        self.shell_move_try_begin_backed(window_id);
+                        self.shell_backed_move_candidate = None;
+                    }
+                }
+            }
+            if self
+                .shell_move_window_id
+                .is_some_and(|window_id| self.window_registry.is_shell_hosted(window_id))
+            {
+                self.shell_move_delta(dx, dy);
+            }
+            if self
+                .shell_resize_window_id
+                .is_some_and(|window_id| self.window_registry.is_shell_hosted(window_id))
+            {
+                self.shell_resize_delta(dx, dy);
+            }
+        }
 
         pointer.motion(
             self,
@@ -351,6 +378,10 @@ impl CompositorState {
                 self.keyboard_on_focus_surface_changed(None);
                 self.shell_ipc_keyboard_to_cef = true;
                 self.shell_emit_shell_ui_focus_from_point(pos);
+                if button == BTN_LEFT {
+                    self.shell_backed_move_candidate =
+                        self.shell_backed_titlebar_window_at(pos).map(|window_id| (window_id, pos));
+                }
             }
             pointer.button(
                 self,
@@ -397,6 +428,7 @@ impl CompositorState {
                 }
             }
             if button == BTN_LEFT && button_state == ButtonState::Released {
+                self.shell_backed_move_candidate = None;
                 self.shell_resize_end_active();
                 self.shell_move_end_active();
                 self.shell_ui_pointer_grab_end();

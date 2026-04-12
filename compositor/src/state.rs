@@ -422,6 +422,7 @@ pub struct CompositorState {
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
     /// (immediate flush) and from [`Self::shell_move_end`].
     pub(crate) shell_move_pending_delta: (i32, i32),
+    pub(crate) shell_backed_move_candidate: Option<(u32, Point<f64, Logical>)>,
     /// Shell-initiated interactive resize ([`shell_wire::MSG_SHELL_RESIZE_*`]).
     pub(crate) shell_resize_window_id: Option<u32>,
     pub(crate) shell_resize_edges: Option<crate::grabs::resize_grab::ResizeEdge>,
@@ -764,6 +765,7 @@ impl CompositorState {
             shell_close_pending_native_windows: HashSet::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
+            shell_backed_move_candidate: None,
             shell_resize_window_id: None,
             shell_resize_edges: None,
             shell_resize_initial_rect: None,
@@ -2939,6 +2941,31 @@ impl CompositorState {
         }
     }
 
+    fn shell_emit_requested_native_geometry(
+        &mut self,
+        window_id: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        output_name: String,
+        maximized: bool,
+    ) {
+        let snapshot = self.window_registry.update_native(window_id, |info| {
+            info.x = x;
+            info.y = y;
+            info.width = w.max(1);
+            info.height = h.max(1);
+            info.output_name = output_name.clone();
+            info.maximized = maximized;
+            info.fullscreen = false;
+            info.clone()
+        });
+        if let Some(info) = snapshot {
+            self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
+        }
+    }
+
     fn sync_registry_from_space_for_wayland(&mut self, window: &Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
@@ -5027,6 +5054,38 @@ impl CompositorState {
             .set_focus(self, Some(wl.clone()), k_serial);
     }
 
+    fn shell_emit_interactive_resize_geometry(
+        &mut self,
+        window_id: u32,
+        initial_rect: Rectangle<i32, Logical>,
+        edges: crate::grabs::resize_grab::ResizeEdge,
+        width: i32,
+        height: i32,
+    ) {
+        let Some(mut info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        let width = width.max(1);
+        let height = height.max(1);
+        let mut x = initial_rect.loc.x;
+        let mut y = initial_rect.loc.y;
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::LEFT) {
+            x = initial_rect.loc.x + initial_rect.size.w - width;
+        }
+        if edges.intersects(crate::grabs::resize_grab::ResizeEdge::TOP) {
+            y = initial_rect.loc.y + initial_rect.size.h - height;
+        }
+        info.x = x;
+        info.y = y;
+        info.width = width;
+        info.height = height;
+        info.output_name = self
+            .output_for_window_position(x, y, width, height)
+            .unwrap_or_default();
+        self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
+        self.shell_nudge_cef_repaint();
+    }
+
     pub fn shell_resize_delta(&mut self, dx: i32, dy: i32) {
         use crate::grabs::resize_grab::compute_clamped_resize_size;
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -5078,6 +5137,13 @@ impl CompositorState {
             state.size = Some(last_size);
         });
         tl.send_pending_configure();
+        self.shell_emit_interactive_resize_geometry(
+            wid,
+            initial_rect,
+            edges,
+            last_size.w,
+            last_size.h,
+        );
     }
 
     pub fn shell_resize_end(&mut self, window_id: u32) {
@@ -5145,6 +5211,13 @@ impl CompositorState {
         });
         tl.send_pending_configure();
         resize_tracking_set_waiting_last_commit(wl, edges, initial_rect);
+        self.shell_emit_interactive_resize_geometry(
+            window_id,
+            initial_rect,
+            edges,
+            last_size.w,
+            last_size.h,
+        );
 
         self.shell_resize_window_id = None;
         self.shell_resize_edges = None;
@@ -5320,7 +5393,15 @@ impl CompositorState {
         tl.send_pending_configure();
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), (map_x, map_y), true);
-        self.notify_geometry_if_changed(&window);
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            map_x,
+            map_y,
+            content_w,
+            content_h,
+            target_output_name,
+            layout_state == 1,
+        );
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {

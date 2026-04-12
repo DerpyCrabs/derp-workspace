@@ -52,6 +52,42 @@ impl CompositorState {
         Rectangle::new(Point::from((ox, oy)), Size::from((ow.max(1), oh.max(1))))
     }
 
+    pub(crate) fn shell_backed_titlebar_window_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<u32> {
+        let placement = self.shell_ui_placement_topmost_for_input_at(pos)?;
+        if !self.window_registry.is_shell_hosted(placement.id) {
+            return None;
+        }
+        let info = self.window_registry.window_info(placement.id)?;
+        if info.minimized {
+            return None;
+        }
+        let outer = self.shell_backed_outer_global_rect(&info);
+        let border = if info.maximized {
+            0
+        } else {
+            self.shell_chrome_border_w.max(0)
+        };
+        let titlebar_h = self.shell_chrome_titlebar_h.max(0);
+        if titlebar_h <= 0 {
+            return None;
+        }
+        let left = outer.loc.x.saturating_add(border) as f64;
+        let top = outer.loc.y.saturating_add(border) as f64;
+        let right = outer
+            .loc
+            .x
+            .saturating_add(outer.size.w.saturating_sub(border)) as f64;
+        let bottom = top + titlebar_h as f64;
+        if pos.x >= left && pos.x < right && pos.y >= top && pos.y < bottom {
+            Some(placement.id)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn shell_backed_placements(&self) -> Vec<ShellUiWindowPlacement> {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
