@@ -92,5 +92,5 @@ impl ShmHandler for CompositorState {
     }
 }
 
-delegate_compositor!(CompositorState);
-delegate_shm!(CompositorState);
+delegate_compositor!(crate::CompositorState);
+delegate_shm!(crate::CompositorState);

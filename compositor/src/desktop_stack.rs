@@ -19,6 +19,7 @@ use smithay::backend::renderer::{
 };
 use smithay::desktop::space::SpaceRenderElements;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::utils::user_data::UserDataMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tracing::warn;
@@ -125,8 +126,10 @@ where
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        self.inner.draw(frame, src, dst, damage, opaque_regions)
+        self.inner
+            .draw(frame, src, dst, damage, opaque_regions, cache)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -248,9 +251,12 @@ where
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         if self.exclusion.zones.is_empty() {
-            return self.inner.draw(frame, src, dst, damage, opaque_regions);
+            return self
+                .inner
+                .draw(frame, src, dst, damage, opaque_regions, cache);
         }
         let mut clipped: Vec<Rectangle<i32, Physical>> = Vec::new();
         for d in damage {
@@ -286,7 +292,8 @@ where
             );
             return Ok(());
         }
-        self.inner.draw(frame, src, dst, &clipped, opaque_regions)
+        self.inner
+            .draw(frame, src, dst, &clipped, opaque_regions, cache)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -400,6 +407,7 @@ impl RenderElement<GlesRenderer> for ShellDmaElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         if frame.context_id() != self.context_id {
             warn!("trying to render texture from different renderer context");
@@ -493,8 +501,10 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for FractionalD
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        self.inner.draw(frame, src, dst, damage, opaque_regions)
+        self.inner
+            .draw(frame, src, dst, damage, opaque_regions, cache)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -679,23 +689,56 @@ where
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
         match self {
-            DesktopStack::Space(x) => x.draw(frame, src, dst, damage, opaque_regions),
-            DesktopStack::SpaceClip(x) => x.draw(frame, src, dst, damage, opaque_regions),
+            DesktopStack::Space(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
+            DesktopStack::SpaceClip(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
             DesktopStack::ShellDma(x) => {
-                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+                RenderElement::<GlesRenderer>::draw(
+                    x,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                )
             }
-            DesktopStack::Pointer(x) => x.draw(frame, src, dst, damage, opaque_regions),
-            DesktopStack::CursorTex(x) => x.draw(frame, src, dst, damage, opaque_regions),
+            DesktopStack::Pointer(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
+            DesktopStack::CursorTex(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
             DesktopStack::TilePreview(x) => {
-                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+                RenderElement::<GlesRenderer>::draw(
+                    x,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                )
             }
             DesktopStack::BackdropSolid(x) => {
-                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+                RenderElement::<GlesRenderer>::draw(
+                    x,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                )
             }
             DesktopStack::BackdropTex(x) => {
-                RenderElement::<GlesRenderer>::draw(x, frame, src, dst, damage, opaque_regions)
+                RenderElement::<GlesRenderer>::draw(
+                    x,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                )
             }
             DesktopStack::_Catcher(_) => unreachable!(),
         }

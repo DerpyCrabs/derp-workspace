@@ -493,7 +493,7 @@ impl XdgShellHandler for CompositorState {
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
 }
 
-delegate_xdg_shell!(CompositorState);
+delegate_xdg_shell!(crate::CompositorState);
 
 fn check_grab(
     seat: &Seat<CompositorState>,

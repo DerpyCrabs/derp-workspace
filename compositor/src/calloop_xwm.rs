@@ -1,9 +1,18 @@
 //! [`crate::CalloopData`] implements Smithay’s X11 / xwayland-shell handler traits so X11 events on
 //! the calloop loop forward into [`crate::CompositorState`] (the Wayland display still dispatches `CompositorState`).
 
+use std::io::Write;
+
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::{
+    input::{
+        Seat, SeatHandler, SeatState, dnd::DndGrabHandler, pointer::CursorImageStatus,
+    },
     utils::{Logical, Rectangle},
+    wayland::selection::{
+        SelectionHandler, SelectionTarget,
+        data_device::{DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler},
+    },
     wayland::xwayland_shell::XWaylandShellHandler,
     xwayland::{
         xwm::{Reorder, ResizeEdge, X11Window, XwmId},
@@ -12,6 +21,66 @@ use smithay::{
 };
 
 use crate::CalloopData;
+
+impl SeatHandler for CalloopData {
+    type KeyboardFocus = WlSurface;
+    type PointerFocus = WlSurface;
+    type TouchFocus = WlSurface;
+
+    fn seat_state(&mut self) -> &mut SeatState<Self> {
+        unsafe {
+            &mut *(
+                <crate::CompositorState as SeatHandler>::seat_state(&mut self.state)
+                    as *mut SeatState<crate::CompositorState>
+                    as *mut SeatState<Self>
+            )
+        }
+    }
+
+    fn cursor_image(&mut self, seat: &Seat<Self>, image: CursorImageStatus) {
+        let seat = unsafe { &*(seat as *const Seat<Self> as *const Seat<crate::CompositorState>) };
+        <crate::CompositorState as SeatHandler>::cursor_image(&mut self.state, seat, image);
+    }
+
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        let seat = unsafe { &*(seat as *const Seat<Self> as *const Seat<crate::CompositorState>) };
+        <crate::CompositorState as SeatHandler>::focus_changed(&mut self.state, seat, focused);
+    }
+}
+
+impl DndGrabHandler for CalloopData {}
+
+impl SelectionHandler for CalloopData {
+    type SelectionUserData = std::sync::Arc<Vec<u8>>;
+
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        user_data: &Self::SelectionUserData,
+    ) {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        if mime_type != "image/png" {
+            return;
+        }
+        let mut file = std::fs::File::from(fd);
+        if let Err(error) = file.write_all(user_data.as_slice()) {
+            tracing::warn!(%error, "clipboard image write failed");
+        }
+    }
+}
+
+impl WaylandDndGrabHandler for CalloopData {}
+
+impl DataDeviceHandler for CalloopData {
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.state.data_device_state
+    }
+}
 
 impl XWaylandShellHandler for CalloopData {
     fn xwayland_shell_state(

@@ -643,15 +643,15 @@ pub(crate) fn buffer_access_error(error: BufferAccessError) -> String {
     }
 }
 
-smithay::delegate_foreign_toplevel_list!(CompositorState);
-smithay::delegate_idle_inhibit!(CompositorState);
-smithay::delegate_keyboard_shortcuts_inhibit!(CompositorState);
+smithay::delegate_foreign_toplevel_list!(crate::CompositorState);
+smithay::delegate_idle_inhibit!(crate::CompositorState);
+smithay::delegate_keyboard_shortcuts_inhibit!(crate::CompositorState);
 smithay::reexports::wayland_server::delegate_global_dispatch!(
-    CompositorState: [ZwlrScreencopyManagerV1: ()] => ScreencopyManagerState
+    crate::CompositorState: [ZwlrScreencopyManagerV1: ()] => ScreencopyManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ZwlrScreencopyManagerV1: ()] => ScreencopyManagerState
+    crate::CompositorState: [ZwlrScreencopyManagerV1: ()] => ScreencopyManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ZwlrScreencopyFrameV1: ScreencopyFrameState] => ScreencopyManagerState
+    crate::CompositorState: [ZwlrScreencopyFrameV1: ScreencopyFrameState] => ScreencopyManagerState
 );

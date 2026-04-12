@@ -481,6 +481,7 @@ fn write_output_to_dmabuf(
     let mut target = renderer.bind(dmabuf).map_err(|error| error.to_string())?;
     renderer
         .blit(framebuffer, &mut target, src, dst, TextureFilter::Linear)
+        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
@@ -588,6 +589,7 @@ fn blit_capture_region_to_target(
     let dst = Rectangle::new((0, 0).into(), (target_size.w, target_size.h).into());
     renderer
         .blit(source, target, src, dst, TextureFilter::Nearest)
+        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
@@ -1039,29 +1041,29 @@ pub(crate) fn capture_tag_toplevel_handle(handle: &ForeignToplevelHandle, window
 }
 
 smithay::reexports::wayland_server::delegate_global_dispatch!(
-    CompositorState: [ExtOutputImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtOutputImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtOutputImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtOutputImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_global_dispatch!(
-    CompositorState: [ExtForeignToplevelImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtForeignToplevelImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtForeignToplevelImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtForeignToplevelImageCaptureSourceManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtImageCaptureSourceV1: ImageCaptureSourceData] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtImageCaptureSourceV1: ImageCaptureSourceData] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_global_dispatch!(
-    CompositorState: [ExtImageCopyCaptureManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtImageCopyCaptureManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtImageCopyCaptureManagerV1: ()] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtImageCopyCaptureManagerV1: ()] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtImageCopyCaptureSessionV1: ImageCopyCaptureSessionState] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtImageCopyCaptureSessionV1: ImageCopyCaptureSessionState] => ExtImageCaptureManagerState
 );
 smithay::reexports::wayland_server::delegate_dispatch!(
-    CompositorState: [ExtImageCopyCaptureFrameV1: ImageCopyCaptureFrameState] => ExtImageCaptureManagerState
+    crate::CompositorState: [ExtImageCopyCaptureFrameV1: ImageCopyCaptureFrameState] => ExtImageCaptureManagerState
 );

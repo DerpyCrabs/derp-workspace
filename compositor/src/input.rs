@@ -233,7 +233,7 @@ impl CompositorState {
             if let Some(out) = self
                 .space
                 .outputs()
-                .find(|o| o.name().eq_ignore_ascii_case(n))
+                .find(|o| o.name().eq_ignore_ascii_case(&n))
             {
                 return self.space.output_geometry(out);
             }

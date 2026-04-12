@@ -4762,6 +4762,8 @@ impl CompositorState {
             .output_for_window_position(location.x, location.y, width, height)
             .unwrap_or_else(|| prev.output_name.clone());
         let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
+        let minimized = self.shell_minimized_x11_windows.contains_key(&window_id)
+            || (window.is_hidden() && prev.minimized);
         let info = self.window_registry.update_native(window_id, |info| {
             info.title = title.clone();
             info.app_id = app_id.clone();
@@ -4771,7 +4773,7 @@ impl CompositorState {
             info.width = width;
             info.height = height;
             info.output_name = output_name.clone();
-            info.minimized = window.is_minimized();
+            info.minimized = minimized;
             info.maximized = window.is_maximized();
             info.fullscreen = window.is_fullscreen();
             info.client_side_decoration = window.is_decorated();
@@ -6420,11 +6422,8 @@ impl CompositorState {
         if let Err(error) = x11.set_activated(false) {
             tracing::warn!(window_id, ?error, "x11 set_activated failed");
         }
-        if let Err(error) = x11.set_suspended(true) {
-            tracing::warn!(window_id, ?error, "x11 set_suspended failed");
-        }
-        if let Err(error) = x11.set_mapped(false) {
-            tracing::warn!(window_id, ?error, "x11 set_mapped(false) failed");
+        if let Err(error) = x11.set_hidden(true) {
+            tracing::warn!(window_id, ?error, "x11 set_hidden failed");
         }
         self.space.unmap_elem(&DerpSpaceElem::X11(x11.clone()));
         let _ = self.window_registry.update_native(window_id, |window_info| {
@@ -6515,16 +6514,15 @@ impl CompositorState {
         });
         self.shell_pending_native_focus_window_id = Some(window_id);
         let _ = self.window_registry.set_minimized(window_id, false);
-        if let Err(error) = x11.set_suspended(false) {
-            tracing::warn!(window_id, ?error, "x11 set_suspended(false) failed");
-        }
-        if let Err(error) = x11.set_mapped(true) {
-            tracing::warn!(window_id, ?error, "x11 set_mapped(true) failed");
+        if let Err(error) = x11.set_hidden(false) {
+            tracing::warn!(window_id, ?error, "x11 set_hidden(false) failed");
         }
         let rect = Rectangle::new(
             Point::from((info.x, info.y)),
             Size::from((info.width.max(1), info.height.max(1))),
         );
+        self.space
+            .map_element(DerpSpaceElem::X11(x11.clone()), (rect.loc.x, rect.loc.y), false);
         self.apply_x11_window_bounds(window_id, &x11, rect, info.maximized, info.fullscreen);
         if let Err(error) = x11.set_activated(true) {
             tracing::warn!(window_id, ?error, "x11 set_activated(true) failed");
@@ -7665,12 +7663,12 @@ impl DmabufHandler for CompositorState {
     }
 }
 
-smithay::delegate_xdg_decoration!(CompositorState);
-smithay::delegate_fractional_scale!(CompositorState);
-smithay::delegate_viewporter!(CompositorState);
-smithay::delegate_cursor_shape!(CompositorState);
-smithay::delegate_xwayland_shell!(CompositorState);
-smithay::delegate_dmabuf!(CompositorState);
+smithay::delegate_xdg_decoration!(crate::CompositorState);
+smithay::delegate_fractional_scale!(crate::CompositorState);
+smithay::delegate_viewporter!(crate::CompositorState);
+smithay::delegate_cursor_shape!(crate::CompositorState);
+smithay::delegate_xwayland_shell!(crate::CompositorState);
+smithay::delegate_dmabuf!(crate::CompositorState);
 
 #[derive(Default)]
 pub struct ClientState {

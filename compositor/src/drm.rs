@@ -618,6 +618,7 @@ impl DrmSession {
                     subpixel: Subpixel::Unknown,
                     make: "derp-workspace".into(),
                     model: "DRM".into(),
+                    serial_number: "N/A".into(),
                 },
             );
             let _global = output.create_global::<CompositorState>(display);
@@ -1072,6 +1073,7 @@ pub fn init_drm(
                 subpixel: Subpixel::Unknown,
                 make: "derp-workspace".into(),
                 model: "DRM".into(),
+                serial_number: "N/A".into(),
             },
         );
         let _global = output.create_global::<CompositorState>(&mut data.display_handle);

@@ -12,8 +12,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::data_device::{
-    set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
-    ServerDndGrabHandler,
+    set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
@@ -63,7 +62,7 @@ impl SeatHandler for CompositorState {
     }
 }
 
-delegate_seat!(CompositorState);
+delegate_seat!(crate::CompositorState);
 
 impl TabletSeatHandler for CompositorState {}
 
@@ -92,16 +91,15 @@ impl SelectionHandler for CompositorState {
 }
 
 impl DataDeviceHandler for CompositorState {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
     }
 }
 
-impl ClientDndGrabHandler for CompositorState {}
-impl ServerDndGrabHandler for CompositorState {}
+impl WaylandDndGrabHandler for CompositorState {}
 
-delegate_data_device!(CompositorState);
+delegate_data_device!(crate::CompositorState);
 
 impl OutputHandler for CompositorState {}
-delegate_output!(CompositorState);
-delegate_layer_shell!(CompositorState);
+delegate_output!(crate::CompositorState);
+delegate_layer_shell!(crate::CompositorState);

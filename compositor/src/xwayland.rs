@@ -49,7 +49,7 @@ pub fn start_xwayland(
                     display = display_number,
                     "XWayland ready; DISPLAY set for OSR / child processes"
                 );
-                match X11Wm::start_wm(loop_handle.clone(), x11_socket, client.clone()) {
+                match X11Wm::start_wm(loop_handle.clone(), &dh, x11_socket, client.clone()) {
                     Ok(wm) => {
                         let id = wm.id();
                         tracing::warn!(xwm_id = ?id, "X11Wm::start_wm succeeded");
