@@ -1,11 +1,12 @@
 use clap::Parser;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_registry, delegate_shm, delegate_xdg_shell,
-    delegate_xdg_window,
+    delegate_compositor, delegate_output, delegate_registry, delegate_seat, delegate_shm,
+    delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{Capability, SeatHandler, SeatState},
     shell::{
         xdg::{
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
@@ -20,7 +21,7 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_shm, wl_surface},
+    protocol::{wl_output, wl_surface},
     Connection, QueueHandle,
 };
 
@@ -53,6 +54,7 @@ fn main() {
     let xdg_shell_state = XdgShell::bind(&globals, &qh).expect("bind xdg_shell");
     let output_state = OutputState::new(&globals, &qh);
     let registry_state = RegistryState::new(&globals);
+    let seat_state = SeatState::new(&globals, &qh);
 
     let surface = compositor_state.create_surface(&qh);
     let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
@@ -68,6 +70,7 @@ fn main() {
     let mut state = TestClient {
         registry_state,
         output_state,
+        seat_state,
         _compositor_state: compositor_state,
         shm_state,
         _xdg_shell_state: xdg_shell_state,
@@ -93,6 +96,7 @@ fn main() {
 struct TestClient {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
     _compositor_state: CompositorState,
     shm_state: Shm,
     _xdg_shell_state: XdgShell,
@@ -127,7 +131,7 @@ impl TestClient {
                     self.width as i32,
                     self.height as i32,
                     stride,
-                    wl_shm::Format::Argb8888,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
                 )
                 .expect("create buffer");
             self.buffer = Some(buffer);
@@ -144,7 +148,7 @@ impl TestClient {
                     self.width as i32,
                     self.height as i32,
                     stride,
-                    wl_shm::Format::Argb8888,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
                 )
                 .expect("create fallback buffer");
             self.buffer = Some(buffer);
@@ -458,11 +462,42 @@ impl ShmHandler for TestClient {
     }
 }
 
+impl SeatHandler for TestClient {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wayland_client::protocol::wl_seat::WlSeat) {
+    }
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wayland_client::protocol::wl_seat::WlSeat,
+        _capability: Capability,
+    ) {
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+        _capability: Capability,
+    ) {
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wayland_client::protocol::wl_seat::WlSeat) {
+    }
+}
+
 delegate_compositor!(TestClient);
 delegate_output!(TestClient);
 delegate_shm!(TestClient);
 delegate_xdg_shell!(TestClient);
 delegate_xdg_window!(TestClient);
+delegate_seat!(TestClient);
 delegate_registry!(TestClient);
 
 impl ProvidesRegistryState for TestClient {
@@ -470,5 +505,5 @@ impl ProvidesRegistryState for TestClient {
         &mut self.registry_state
     }
 
-    registry_handlers!(OutputState);
+    registry_handlers!(OutputState, SeatState);
 }

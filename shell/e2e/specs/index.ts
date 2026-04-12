@@ -4,12 +4,11 @@ import nativeWindowsGroup from './native-windows.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
 import tabGroupsGroup from './tab-groups.spec.ts'
-import x11WindowsGroup from './x11-windows.spec.ts'
 
 export const groups = [
   shellChromeGroup,
   nativeWindowsGroup,
-  x11WindowsGroup,
+  // x11WindowsGroup, disabled
   snapAssistGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,

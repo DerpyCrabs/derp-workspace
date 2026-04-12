@@ -1,7 +1,7 @@
 import { For, Show, type Accessor } from 'solid-js'
 import { canvasRectToClientCss } from '../shellCoords'
 import { SnapAssistMasterGrid } from '../SnapAssistMasterGrid'
-import { Taskbar, type TaskbarWindowRow } from '../Taskbar'
+import { Taskbar, type TaskbarSniItem, type TaskbarWindowRow } from '../Taskbar'
 import { SnapAssistTopStrip } from './SnapAssistTopStrip'
 import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from './types'
 
@@ -28,6 +28,10 @@ type ShellSurfaceLayersProps = {
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
+  trayReservedPx: Accessor<number>
+  sniTrayItems: Accessor<TaskbarSniItem[]>
+  trayIconSlotPx: Accessor<number>
+  onSniTrayActivate: (id: string, contextMenu: boolean) => void
   snapStrip: Accessor<SnapAssistStripState | null>
   snapStripScreen: Accessor<LayoutScreen | null>
 }
@@ -121,6 +125,16 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                 <Taskbar
                   monitorName={screen.name}
                   isPrimary={props.isPrimaryTaskbarScreen(screen)}
+                  trayReservedPx={
+                    props.isPrimaryTaskbarScreen(screen) ? props.trayReservedPx() : 0
+                  }
+                  sniTrayItems={
+                    props.isPrimaryTaskbarScreen(screen) ? props.sniTrayItems() : []
+                  }
+                  trayIconSlotPx={
+                    props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 40
+                  }
+                  onSniTrayActivate={props.onSniTrayActivate}
                   programsMenuOpen={props.programsMenuOpen()}
                   onProgramsMenuClick={props.onProgramsMenuClick}
                   powerMenuOpen={props.powerMenuOpen()}

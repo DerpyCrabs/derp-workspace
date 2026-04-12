@@ -282,6 +282,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn sni_tray_activate(&self, id: String, context_menu: bool) {
+        self.run(move |s| {
+            s.sni_tray_activate_clicked(id, context_menu);
+        });
+    }
+
     pub fn screenshot_region(&self, x: i32, y: i32, width: i32, height: i32) {
         self.run(move |s| {
             if let Err(error) = s.request_screenshot_region(smithay::utils::Rectangle::new(

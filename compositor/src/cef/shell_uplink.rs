@@ -228,6 +228,11 @@ fn handle_uplink_list(
         "shell_ipc_pong" => {
             uplink.shell_ipc_pong();
         }
+        "sni_tray_activate" => {
+            let id = cef_string_userfree_to_string(&args.string(1));
+            let ctx = args.int(2) != 0;
+            uplink.sni_tray_activate(id, ctx);
+        }
         "set_desktop_background" => {
             let json = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_set_desktop_background(json);
@@ -731,6 +736,32 @@ wrap_v8_handler! {
                     let json = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
                 }
+                "sni_tray_activate" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("sni_tray_activate requires notifier id string");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("sni_tray_activate: id must be a string");
+                    }
+                    let id = cef_string_userfree_to_string(&a1.string_value());
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("sni_tray_activate requires context flag (0 or 1)");
+                    };
+                    let ctx = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_uint() != 0 {
+                        a2.uint_value() as i32
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("sni_tray_activate: context must be a number");
+                    };
+                    if ctx != 0 && ctx != 1 {
+                        return_exception!("sni_tray_activate: context must be 0 or 1");
+                    }
+                    let _ = list.set_string(1, Some(&CefString::from(id.as_str())));
+                    let _ = list.set_int(2, ctx);
+                }
                 "e2e_snapshot_response" | "e2e_html_response" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("e2e response requires request id");
@@ -759,7 +790,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, e2e_snapshot_response, e2e_html_response)"
+                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, e2e_snapshot_response, e2e_html_response)"
                     );
                 }
             }

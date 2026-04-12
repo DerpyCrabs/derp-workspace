@@ -368,6 +368,9 @@ pub struct CompositorState {
     pub(crate) capture_force_full_damage_frames: u8,
     pub(crate) active_image_copy_capture_sessions: usize,
     pub popups: PopupManager,
+    pub(crate) shell_tray_strip_global: Option<Rectangle<i32, Logical>>,
+    pub(crate) sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::sni_tray::SniTrayCmd>>,
+    pub(crate) sni_tray_slot_count: u32,
 
     pub xwayland_shell_state: XWaylandShellState,
     pub x11_wm_slot: Option<(XwmId, X11Wm)>,
@@ -697,6 +700,20 @@ impl CompositorState {
             })
             .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
+        let (sni_to_loop_tx, sni_rx) = channel::channel::<Vec<shell_wire::TraySniItemWire>>();
+        let (sni_cmd_tx, sni_cmd_rx) =
+            std::sync::mpsc::channel::<crate::sni_tray::SniTrayCmd>();
+        crate::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
+        event_loop
+            .handle()
+            .insert_source(sni_rx, |ev, _, d: &mut CalloopData| match ev {
+                CalloopChannelEvent::Msg(items) => {
+                    d.state.on_sni_tray_items_updated(items);
+                }
+                CalloopChannelEvent::Closed => {}
+            })
+            .map_err(|e| format!("sni tray channel: {e}"))?;
+
         let mut s = Self {
             start_time,
             display_handle: dh,
@@ -738,6 +755,9 @@ impl CompositorState {
             capture_force_full_damage_frames: 0,
             active_image_copy_capture_sessions: 0,
             popups,
+            shell_tray_strip_global: None,
+            sni_tray_cmd_tx: Some(sni_cmd_tx),
+            sni_tray_slot_count: 0,
             xwayland_shell_state,
             x11_wm_slot: None,
             x11_client: None,
@@ -1487,6 +1507,8 @@ impl CompositorState {
         struct EzRoot {
             #[serde(default)]
             rects: Vec<EzRect>,
+            #[serde(default)]
+            tray_strip: Option<EzRect>,
         }
         let Ok(root) = serde_json::from_str::<EzRoot>(json) else {
             return;
@@ -1494,6 +1516,7 @@ impl CompositorState {
         let Some(ws) = self.workspace_logical_bounds() else {
             self.shell_exclusion_global.clear();
             self.shell_exclusion_decor.clear();
+            self.shell_tray_strip_global = None;
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
             return;
@@ -1515,11 +1538,25 @@ impl CompositorState {
                 Some(id) => next_decor.entry(id).or_default().push(clamped),
             }
         }
+        let next_tray_strip = root.tray_strip.and_then(|e| {
+            if e.w < 1 || e.h < 1 {
+                return None;
+            }
+            let w = e.w.max(1);
+            let h = e.h.max(1);
+            let r = Rectangle::new(
+                Point::<i32, Logical>::from((e.x, e.y)),
+                Size::<i32, Logical>::from((w, h)),
+            );
+            r.intersection(ws)
+        });
         let changed =
             next_global != self.shell_exclusion_global || next_decor != self.shell_exclusion_decor;
+        let tray_changed = next_tray_strip != self.shell_tray_strip_global;
         self.shell_exclusion_global = next_global;
         self.shell_exclusion_decor = next_decor;
-        if changed {
+        self.shell_tray_strip_global = next_tray_strip;
+        if changed || tray_changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }
@@ -4522,6 +4559,7 @@ impl CompositorState {
             window_id,
         });
         self.shell_reply_window_list();
+        self.sync_tray_hints_to_shell();
     }
 
     pub(crate) fn shell_note_shell_ipc_rx(&mut self) {
@@ -4602,6 +4640,40 @@ impl CompositorState {
             "shell watchdog: no CEF/compositor activity within timeout; stopping compositor (stuck shell / JS)"
         );
         self.stop_event_loop();
+    }
+
+    pub(crate) fn sync_tray_hints_to_shell(&self) {
+        let sni_n = self.sni_tray_slot_count;
+        let slot_w: i32 = 40;
+        if self.shell_effective_primary_output().is_none() {
+            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TrayHints {
+                slot_count: 0,
+                slot_w,
+                reserved_w: 0,
+            });
+            return;
+        }
+        let reserved_w = sni_n.saturating_mul(slot_w.max(1) as u32);
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TrayHints {
+            slot_count: sni_n,
+            slot_w,
+            reserved_w,
+        });
+    }
+
+    pub(crate) fn on_sni_tray_items_updated(&mut self, items: Vec<shell_wire::TraySniItemWire>) {
+        self.sni_tray_slot_count = items.len() as u32;
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TraySni { items });
+        self.sync_tray_hints_to_shell();
+    }
+
+    pub(crate) fn sni_tray_activate_clicked(&mut self, id: String, context_menu: bool) {
+        if let Some(tx) = &self.sni_tray_cmd_tx {
+            let _ = tx.send(crate::sni_tray::SniTrayCmd::Activate {
+                id,
+                context_menu,
+            });
+        }
     }
 
     /// True if the pointer is over the Solid shell layer (desktop), not the native Wayland client beneath.

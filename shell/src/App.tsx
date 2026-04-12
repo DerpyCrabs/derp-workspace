@@ -98,6 +98,7 @@ import { createShellContextMenus } from './app/createShellContextMenus'
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
+import type { TaskbarSniItem } from './Taskbar'
 import { ShellTestWindowContent } from './ShellTestWindowContent'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import type {
@@ -176,7 +177,8 @@ declare global {
         | 'context_menu'
         | 'backed_window_open'
         | 'e2e_snapshot_response'
-        | 'e2e_html_response',
+        | 'e2e_html_response'
+        | 'sni_tray_activate',
       arg?: number | string,
       arg2?: number | string,
       arg3?: number | string,
@@ -429,6 +431,11 @@ type DerpShellDetail =
       volume_linear_percent_x100: number
       muted: boolean
       state_known: boolean
+    }
+  | { type: 'tray_hints'; slot_count: number; slot_w: number; reserved_w: number }
+  | {
+      type: 'tray_sni'
+      items: { id: string; title: string; icon_base64: string }[]
     }
 type DerpWindow = {
   window_id: number
@@ -688,7 +695,8 @@ function shellWireSend(
     | 'set_tile_preview'
     | 'set_chrome_metrics'
     | 'set_desktop_background'
-    | 'backed_window_open',
+    | 'backed_window_open'
+    | 'sni_tray_activate',
   arg?: number | string,
   arg2?: number,
   arg3?: number,
@@ -764,6 +772,13 @@ function shellWireSend(
   ) {
     fn(op, arg, arg2, arg3, arg4, arg5)
   } else if (op === 'set_chrome_metrics' && typeof arg === 'number' && arg2 !== undefined) {
+    fn(op, arg, arg2)
+  } else if (
+    op === 'sni_tray_activate' &&
+    typeof arg === 'string' &&
+    arg2 !== undefined &&
+    (arg2 === 0 || arg2 === 1)
+  ) {
     fn(op, arg, arg2)
   } else if (op === 'shell_blur_ui_window' || op === 'shell_ui_grab_end') {
     fn(op)
@@ -872,6 +887,9 @@ function App() {
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
   const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
   const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
+  const [trayReservedPx, setTrayReservedPx] = createSignal(0)
+  const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
+  const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(40)
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
@@ -2818,7 +2836,7 @@ function App() {
       hud.push({ label, ...z })
     }
     addEl(main.querySelector('[data-shell-panel]'), 'panel')
-    for (const el of main.querySelectorAll('[data-shell-taskbar]')) {
+    for (const el of main.querySelectorAll('[data-shell-taskbar-exclude]')) {
       const mon = el.getAttribute('data-shell-taskbar-monitor') ?? ''
       addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
     }
@@ -2841,7 +2859,16 @@ function App() {
     }
     setExclusionZonesHud(hud)
     const sentRects = mergeExclusionRects(rects)
-    const payload = JSON.stringify({ rects: sentRects })
+    let tray_strip: { x: number; y: number; w: number; h: number } | null = null
+    const trayStripEl = main.querySelector('[data-shell-tray-strip]')
+    if (trayStripEl) {
+      const r = trayStripEl.getBoundingClientRect()
+      if (r.width >= 1 && r.height >= 1) {
+        const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
+        tray_strip = { x: z.x, y: z.y, w: z.w, h: z.h }
+      }
+    }
+    const payload = JSON.stringify({ rects: sentRects, tray_strip })
     if (typeof window.__derpShellWireSend === 'function' && payload !== lastExclusionZonesJson) {
       lastExclusionZonesJson = payload
       window.__derpShellWireSend('set_exclusion_zones', payload)
@@ -3704,6 +3731,35 @@ function App() {
         dispatchAudioStateChanged({ reason: 'volume_overlay' })
         return
       }
+      if (d.type === 'tray_hints') {
+        const rw = typeof d.reserved_w === 'number' && Number.isFinite(d.reserved_w) ? Math.max(0, d.reserved_w) : 0
+        setTrayReservedPx(rw)
+        const sw =
+          typeof d.slot_w === 'number' && Number.isFinite(d.slot_w)
+            ? Math.max(24, Math.min(64, Math.round(d.slot_w)))
+            : 40
+        setTrayIconSlotPx(sw)
+        queueMicrotask(() => scheduleExclusionZonesSync())
+        return
+      }
+      if (d.type === 'tray_sni') {
+        const raw = (d as { items?: unknown }).items
+        const next: TaskbarSniItem[] = []
+        if (Array.isArray(raw)) {
+          for (const row of raw) {
+            if (row && typeof row === 'object') {
+              const o = row as Record<string, unknown>
+              const id = typeof o.id === 'string' ? o.id : ''
+              const title = typeof o.title === 'string' ? o.title : ''
+              const icon_base64 = typeof o.icon_base64 === 'string' ? o.icon_base64 : ''
+              if (id) next.push({ id, title, icon_base64 })
+            }
+          }
+        }
+        setSniTrayItems(next)
+        queueMicrotask(() => scheduleExclusionZonesSync())
+        return
+      }
       if (d.type === 'keybind') {
         const action = typeof d.action === 'string' ? d.action : ''
         const fid = focusedWindowId()
@@ -4456,6 +4512,12 @@ function App() {
         }}
         onTaskbarClose={(id) => {
           closeGroupWindow(id)
+        }}
+        trayReservedPx={trayReservedPx}
+        sniTrayItems={sniTrayItems}
+        trayIconSlotPx={trayIconSlotPx}
+        onSniTrayActivate={(id, contextMenu) => {
+          shellWireSend('sni_tray_activate', id, contextMenu ? 1 : 0)
         }}
         snapStrip={snapStripState}
         snapStripScreen={() => dragSnapAssistContext()?.screen ?? null}

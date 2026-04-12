@@ -148,9 +148,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assertRectMinSize('programs_menu_list', list, 32, 32)
     assert(shell2.programs_menu_open, 'programs menu should stay open')
     const beforeTop = metrics0.scroll_top
-    for (let i = 0; i < 28; i++) {
-      await pointerWheel(base, 0, 120)
-    }
+    await pointerWheel(base, 0, 120)
     const scrolledDown = await waitFor(
       'programs menu scroll increases after wheel',
       async () => {
@@ -165,9 +163,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const peak = scrolledDown.programs_menu_list_scroll?.scroll_top
     assert(peak !== undefined && peak > beforeTop + 8, 'expected scroll_top after wheel down')
-    for (let i = 0; i < 24; i++) {
-      await pointerWheel(base, 0, -120)
-    }
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await pointerWheel(base, 0, -120)
     await waitFor(
       'programs menu scroll decreases after wheel up',
       async () => {

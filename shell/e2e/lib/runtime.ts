@@ -1194,8 +1194,20 @@ export function nativeBin(): string {
   return process.env.DERP_E2E_NATIVE_BIN || 'target/release/derp-test-client'
 }
 
-export function buildNativeSpawnCommand({ title, token, strip, width = 480, height = 320 }: { title: string; token: string; strip: string; width?: number; height?: number }): string {
-  return [
+export function buildNativeSpawnCommand({
+  title,
+  token,
+  strip,
+  width = 480,
+  height = 320,
+}: {
+  title: string
+  token: string
+  strip: string
+  width?: number
+  height?: number
+}): string {
+  const parts = [
     nativeBin(),
     '--title',
     shellQuote(title),
@@ -1209,14 +1221,19 @@ export function buildNativeSpawnCommand({ title, token, strip, width = 480, heig
     String(width),
     '--height',
     String(height),
-  ].join(' ')
+  ]
+  return parts.join(' ')
 }
 
 export async function spawnCommand(base: string, command: string): Promise<void> {
   await postJson(base, '/spawn', { command })
 }
 
-export async function spawnNativeWindow(base: string, knownWindowIds: Set<number>, { title, token, strip, width, height }: { title: string; token: string; strip: string; width?: number; height?: number }): Promise<NativeSpawnResult> {
+export async function spawnNativeWindow(
+  base: string,
+  knownWindowIds: Set<number>,
+  { title, token, strip, width, height }: { title: string; token: string; strip: string; width?: number; height?: number },
+): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({ title, token, strip, width, height })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId: NATIVE_APP_ID, command })

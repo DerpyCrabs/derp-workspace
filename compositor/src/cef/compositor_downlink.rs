@@ -4,6 +4,7 @@ use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
     MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
 };
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
@@ -452,6 +453,39 @@ fn apply_message(
                 "volume_linear_percent_x100": volume_linear_percent_x100,
                 "muted": muted,
                 "state_known": state_known,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::TrayHints {
+            slot_count,
+            slot_w,
+            reserved_w,
+        } => {
+            pending_details.push(json!({
+                "type": "tray_hints",
+                "slot_count": slot_count,
+                "slot_w": slot_w,
+                "reserved_w": reserved_w,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
+            let rows: Vec<Value> = items
+                .into_iter()
+                .map(|it| {
+                    let b64 = if it.icon_png.is_empty() {
+                        String::new()
+                    } else {
+                        B64.encode(&it.icon_png)
+                    };
+                    json!({
+                        "id": it.id,
+                        "title": it.title,
+                        "icon_base64": b64,
+                    })
+                })
+                .collect();
+            pending_details.push(json!({
+                "type": "tray_sni",
+                "items": rows,
             }));
         }
         shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle => {

@@ -98,6 +98,7 @@ pub const MSG_COMPOSITOR_KEYBOARD_LAYOUT: u32 = 52;
 pub const MSG_COMPOSITOR_VOLUME_OVERLAY: u32 = 53;
 /// Shell → compositor: replace registered **shell UI windows** (global layout + z); compositor derives buffer rects.
 pub const MSG_SHELL_WINDOWS_SYNC: u32 = 54;
+pub const MSG_COMPOSITOR_TRAY_HINTS: u32 = 55;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -1100,6 +1101,21 @@ pub enum DecodedCompositorToShellMessage {
         muted: bool,
         state_known: bool,
     },
+    TrayHints {
+        slot_count: u32,
+        slot_w: i32,
+        reserved_w: u32,
+    },
+    TraySni {
+        items: Vec<TraySniItemWire>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraySniItemWire {
+    pub id: String,
+    pub title: String,
+    pub icon_png: Vec<u8>,
 }
 
 pub fn encode_compositor_pointer_move(x: i32, y: i32, modifiers: u32) -> Vec<u8> {
@@ -1155,6 +1171,17 @@ pub fn encode_compositor_programs_menu_toggle() -> Vec<u8> {
     let mut v = Vec::with_capacity(12);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_PROGRAMS_MENU_TOGGLE.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_tray_hints(slot_count: u32, slot_w: i32, reserved_w: u32) -> Vec<u8> {
+    let body_len = 16u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_TRAY_HINTS.to_le_bytes());
+    v.extend_from_slice(&slot_count.to_le_bytes());
+    v.extend_from_slice(&slot_w.to_le_bytes());
+    v.extend_from_slice(&reserved_w.to_le_bytes());
     v
 }
 
@@ -1783,6 +1810,19 @@ fn decode_compositor_to_shell_body(
                 volume_linear_percent_x100,
                 muted: flags & 1 != 0,
                 state_known: flags & 2 != 0,
+            })
+        }
+        MSG_COMPOSITOR_TRAY_HINTS => {
+            if body.len() != 16 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let slot_count = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let slot_w = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let reserved_w = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            Ok(DecodedCompositorToShellMessage::TrayHints {
+                slot_count,
+                slot_w,
+                reserved_w,
             })
         }
         MSG_SPAWN_WAYLAND_CLIENT

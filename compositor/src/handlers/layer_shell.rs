@@ -85,7 +85,7 @@ impl WlrLayerShellHandler for CompositorState {
     }
 }
 
-pub(crate) fn handle_commit(state: &CompositorState, root: &WlSurface) {
+pub(crate) fn handle_commit(state: &mut CompositorState, root: &WlSurface) {
     let Some((output, layer)) = state.layer_surface_for_root(root) else {
         return;
     };

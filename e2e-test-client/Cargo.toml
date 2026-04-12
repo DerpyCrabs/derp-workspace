@@ -7,3 +7,4 @@ edition = "2021"
 clap = { version = "4.6.0", features = ["derive"] }
 smithay-client-toolkit = "0.20.0"
 wayland-client = "0.31.14"
+wayland-protocols = { version = "0.32", features = ["client"] }
