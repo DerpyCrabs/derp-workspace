@@ -198,6 +198,7 @@ impl XdgShellHandler for CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
+            self.shell_close_pending_native_windows.remove(&window_id);
             self.shell_window_stack_forget(window_id);
             self.focus_history_remove_window(window_id);
             if self.shell_last_non_shell_focus_window_id == Some(window_id) {

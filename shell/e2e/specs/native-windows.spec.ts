@@ -14,6 +14,7 @@ import {
   openDebug,
   openSettings,
   outputForWindow,
+  pointInRect,
   runKeybind,
   shellWindowStack,
   shellWindowById,
@@ -40,6 +41,50 @@ function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnaps
     `${label}: expected ${expected.length} tracked windows, got ${after.length} (${after.join(', ')})`,
   )
   assert(after.join(',') === expected.join(','), `${label}: expected ${expected.join(', ')}, got ${after.join(', ')}`)
+}
+
+function windowContainsPoint(
+  window: { x: number; y: number; width: number; height: number },
+  point: { x: number; y: number },
+): boolean {
+  return pointInRect(
+    {
+      x: window.x,
+      y: window.y,
+      width: window.width,
+      height: window.height,
+      global_x: window.x,
+      global_y: window.y,
+    },
+    point,
+  )
+}
+
+function visibleWindowClickPoint(shell: ShellSnapshot, windowId: number): { x: number; y: number } {
+  const target = shellWindowById(shell, windowId)
+  assert(target, `missing shell snapshot for window ${windowId}`)
+  const stack = shellWindowStack(shell)
+  const targetStackIndex = stack.indexOf(windowId)
+  assert(targetStackIndex >= 0, `window ${windowId} missing from shell stack`)
+  const blockers = stack
+    .slice(0, targetStackIndex)
+    .map((id) => shellWindowById(shell, id))
+    .filter((window): window is NonNullable<typeof window> => !!window && !window.minimized)
+  const insetX = Math.min(96, Math.max(48, Math.floor(target.width / 8)))
+  const insetY = Math.min(96, Math.max(48, Math.floor(target.height / 8)))
+  const candidates = [
+    { x: target.x + insetX, y: target.y + insetY },
+    { x: target.x + insetX, y: target.y + target.height - insetY },
+    { x: target.x + target.width - insetX, y: target.y + insetY },
+    { x: target.x + target.width - insetX, y: target.y + target.height - insetY },
+    { x: target.x + insetX, y: target.y + target.height / 2 },
+    { x: target.x + target.width / 2, y: target.y + insetY },
+  ]
+  const visible = candidates.find((candidate) =>
+    windowContainsPoint(target, candidate) && blockers.every((window) => !windowContainsPoint(window, candidate)),
+  )
+  assert(visible, `window ${windowId} has no exposed click point`)
+  return visible
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
@@ -189,7 +234,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(redCompositor, 'missing red compositor window')
     assert(settingsCompositor, 'missing settings compositor window')
     assert(debugCompositor, 'missing debug compositor window')
-    await clickPoint(base, redCompositor.x + redCompositor.width / 2, redCompositor.y + redCompositor.height / 2)
+    const redClickPoint = visibleWindowClickPoint(paritySnapshots.shell, redId)
+    await clickPoint(base, redClickPoint.x, redClickPoint.y)
     await waitForNativeFocus(base, redId)
     const shellBeforeSettingsFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeSettingsFocus, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -229,7 +275,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const redWindow = compositorWindowById(debugOpen.compositor, redId)
     assert(redWindow, 'missing red compositor window')
 
-    await clickPoint(base, redWindow.x + redWindow.width / 2, redWindow.y + redWindow.height / 2)
+    const redClickPoint = visibleWindowClickPoint(debugOpen.shell, redId)
+    await clickPoint(base, redClickPoint.x, redClickPoint.y)
     const redFocused = await waitForNativeFocus(base, redId)
     assertRestackToFront(debugOpen.shell, redFocused.shell, redId, trackedWindowIds, 'red focus restack order')
 

@@ -98,6 +98,7 @@ export interface CompositorSnapshot {
   outputs: OutputSnapshot[]
   focused_window_id: number | null
   focused_shell_ui_window_id: number | null
+  orphaned_wayland_surface_protocol_ids?: number[]
   [key: string]: unknown
 }
 
@@ -261,6 +262,7 @@ type TestTimingResult = {
 }
 
 let activeTimingSink: TimingEvent[] | null = null
+let timingLogsEnabled = true
 
 function setActiveTimingSink(next: TimingEvent[] | null): void {
   activeTimingSink = next
@@ -270,10 +272,16 @@ function recordTimingEvent(event: TimingEvent): void {
   activeTimingSink?.push(event)
 }
 
+export function setTimingLogsEnabled(enabled: boolean): void {
+  timingLogsEnabled = enabled
+}
+
 class Reporter {
   private readonly startedAt = Date.now()
   private readonly results: TestTimingResult[] = []
   private readonly startedGroups: string[] = []
+  private readonly finishedGroups = new Set<string>()
+  private readonly groupStartedAt = new Map<string, number>()
   private readonly testCounts = new Map<string, number>()
   private readonly groups: string[]
 
@@ -284,10 +292,20 @@ class Reporter {
   startGroup(name: string): void {
     if (this.startedGroups.includes(name)) return
     this.startedGroups.push(name)
+    this.groupStartedAt.set(name, Date.now())
     process.stdout.write(this.startedGroups.length === 1 ? '' : '\n')
     const index = this.startedGroups.length
     const label = this.groups.length ? `[${index}/${this.groups.length}]` : `[${index}]`
     process.stdout.write(`${color(' FILE ', ANSI.bold, ANSI.black, ANSI.bgCyan)} ${color(label, ANSI.cyan)} ${name}\n`)
+  }
+
+  finishGroup(name: string): void {
+    if (this.finishedGroups.has(name)) return
+    this.finishedGroups.add(name)
+    const startedAt = this.groupStartedAt.get(name)
+    if (startedAt == null) return
+    const elapsedMs = Date.now() - startedAt
+    process.stdout.write(`${color('   File ', ANSI.dim)} ${name} ${color(formatMs(elapsedMs), ANSI.dim)}\n`)
   }
 
   async run<T>(groupName: string, name: string, fn: () => Promise<T>): Promise<T | null> {
@@ -324,6 +342,7 @@ class Reporter {
   }
 
   private printSlowTimings(timings: TimingEvent[]): void {
+    if (!timingLogsEnabled) return
     const slow = [...timings]
       .filter((timing) => timing.elapsedMs >= 250)
       .sort((a, b) => b.elapsedMs - a.elapsedMs)
@@ -439,9 +458,11 @@ export function createTimingMarks(name: string): TimingMarks {
     const deltaMs = now - lastAt
     const totalMs = now - startedAt
     lastAt = now
-    process.stdout.write(
-      `${color('   Time ', ANSI.dim)} ${name} :: ${label} ${color(`+${formatMs(deltaMs)} total ${formatMs(totalMs)}`, ANSI.dim)}\n`,
-    )
+    if (timingLogsEnabled) {
+      process.stdout.write(
+        `${color('   Time ', ANSI.dim)} ${name} :: ${label} ${color(`+${formatMs(deltaMs)} total ${formatMs(totalMs)}`, ANSI.dim)}\n`,
+      )
+    }
     recordTimingEvent({
       kind: 'mark',
       label: `${name} :: ${label}`,
@@ -1056,6 +1077,12 @@ export async function waitForPowerMenuClosed(base: string, timeoutMs = 5000): Pr
 export async function openSettings(base: string, method: 'click' | 'keybind' = 'click'): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.settings_window_visible && shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized !== true) {
+    try {
+      await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 150)
+    } catch {
+      await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    }
     return waitForSettingsVisible(base)
   }
   if (method === 'keybind') {
@@ -1070,6 +1097,12 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
 export async function openDebug(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.debug_window_visible && shellWindowById(shell, SHELL_UI_DEBUG_WINDOW_ID)?.minimized !== true) {
+    try {
+      await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID, 150)
+    } catch {
+      await activateTaskbarWindow(base, shell, SHELL_UI_DEBUG_WINDOW_ID)
+      await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    }
     return waitForDebugVisible(base)
   }
   assert(shell.controls?.taskbar_debug_toggle, 'missing taskbar debug toggle')
@@ -1191,16 +1224,18 @@ export async function waitForTaskbarEntry(base: string, windowId: number, timeou
   )
 }
 
-async function closeWindowBestEffort(base: string, windowId: number): Promise<void> {
+async function closeWindowBestEffort(base: string, windowId: number): Promise<boolean> {
   try {
     await closeWindow(base, windowId)
-    await waitForWindowGone(base, windowId, 4000)
-    return
+    await waitForWindowGone(base, windowId, 250)
+    return true
   } catch {}
   try {
     await crashWindow(base, windowId)
-    await waitForWindowGone(base, windowId, 4000)
+    await waitForWindowGone(base, windowId, 2000)
+    return true
   } catch {}
+  return false
 }
 
 async function reuseNativeWindow(base: string, state: E2eState, title: string): Promise<NativeSpawnResult | null> {
@@ -1304,15 +1339,10 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
       }
     } catch {}
     try {
-      await closeWindow(base, windowId)
-      await waitForWindowGone(base, windowId, 4000)
-      windowIds.delete(windowId)
-      continue
-    } catch {}
-    try {
-      await crashWindow(base, windowId)
-      await waitForWindowGone(base, windowId, 4000)
-      windowIds.delete(windowId)
+      if (await closeWindowBestEffort(base, windowId)) {
+        windowIds.delete(windowId)
+        continue
+      }
     } catch {}
   }
 }

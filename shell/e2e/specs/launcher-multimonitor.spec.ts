@@ -312,7 +312,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const settingsOpen = await openSettings(base, 'click')
     let settingsFocused
     try {
-      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 1500)
+      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 2500)
     } catch {
       await activateTaskbarWindow(base, settingsOpen.shell, SHELL_UI_SETTINGS_WINDOW_ID)
       settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)

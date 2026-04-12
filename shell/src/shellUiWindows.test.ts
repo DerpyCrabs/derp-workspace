@@ -6,6 +6,29 @@ afterEach(() => {
 })
 
 describe('shellUiWindows', () => {
+  it('flushes shell-ui window payloads on the same turn', async () => {
+    const send = vi.fn()
+    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellUiWindows')
+    mod.registerShellUiWindow(8, () => ({
+      id: 8,
+      z: 3,
+      gx: 12,
+      gy: 24,
+      gw: 320,
+      gh: 240,
+    }))
+
+    await Promise.resolve()
+    expect(send).toHaveBeenCalledTimes(1)
+
+    mod.flushShellUiWindowsSyncNow()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
   it('skips redundant shell-ui window payloads', async () => {
     const send = vi.fn()
     vi.stubGlobal('window', { __derpShellWireSend: send })

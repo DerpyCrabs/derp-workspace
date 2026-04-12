@@ -7,9 +7,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::input::keyboard::FilterResult;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat;
 
+use crate::derp_space::DerpSpaceElem;
 use crate::window_registry::WindowKind;
 use crate::CompositorState;
 
@@ -166,6 +168,7 @@ struct E2eCompositorSnapshot {
     workspace: Option<E2eRectSnapshot>,
     outputs: Vec<E2eOutputSnapshot>,
     windows: Vec<E2eWindowSnapshot>,
+    orphaned_wayland_surface_protocol_ids: Vec<u32>,
 }
 
 impl CompositorState {
@@ -428,6 +431,23 @@ impl CompositorState {
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+        let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self
+            .space
+            .elements()
+            .filter_map(|elem| match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    let toplevel = window.toplevel()?;
+                    let wl_surface = toplevel.wl_surface();
+                    self.window_registry
+                        .window_id_for_wl_surface(wl_surface)
+                        .is_none()
+                        .then_some(wl_surface.id().protocol_id())
+                }
+                _ => None,
+            })
+            .collect();
+        orphaned_wayland_surface_protocol_ids.sort_unstable();
+        orphaned_wayland_surface_protocol_ids.dedup();
         serde_json::to_string(&E2eCompositorSnapshot {
             captured_at_ms: self.e2e_now_ms(),
             pointer: E2ePointSnapshot {
@@ -449,6 +469,7 @@ impl CompositorState {
             workspace,
             outputs,
             windows,
+            orphaned_wayland_surface_protocol_ids,
         })
         .map_err(|e| format!("serialize compositor snapshot: {e}"))
     }

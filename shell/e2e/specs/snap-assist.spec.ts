@@ -201,9 +201,15 @@ async function focusNativeWindow(base: string, windowId: number): Promise<{ comp
 }
 
 async function focusSettingsWindow(base: string) {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+  const { compositor, shell } = await getSnapshots(base)
+  if (compositor.focused_shell_ui_window_id === SHELL_UI_SETTINGS_WINDOW_ID) {
+    try {
+      assertTopWindow(shell, SHELL_UI_SETTINGS_WINDOW_ID, `shell focus ${SHELL_UI_SETTINGS_WINDOW_ID}`)
+      return { compositor, shell }
+    } catch {}
+  }
   try {
+    await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
     return await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 600)
   } catch {
     const nextShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -443,9 +449,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await pointerButton(base, 0x110, 'release')
     }
 
-    const opened = await openSettings(base, 'click')
-    await activateTaskbarWindow(base, opened.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    await openSettings(base, 'click')
+    const settingsFocused = await focusSettingsWindow(base)
     const settingsWindow = compositorWindowById(settingsFocused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow, 'missing settings compositor window')
     const shellMove = pickMonitorMove(settingsFocused.compositor.outputs, settingsWindow.output_name)

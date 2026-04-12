@@ -29,10 +29,12 @@ const registry = new Map<number, Entry>()
 let nextRegistryToken = 1
 let generation = 0
 let raf = 0
+let microtaskQueued = false
 let lastWindowsJson: string | null = null
 
 function flush() {
   raf = 0
+  microtaskQueued = false
   const windows: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> = []
   for (const [, e] of registry) {
     const m = e.measure()
@@ -51,6 +53,10 @@ function flush() {
 }
 
 export function scheduleShellUiWindowsSync() {
+  if (!microtaskQueued) {
+    microtaskQueued = true
+    queueMicrotask(flush)
+  }
   if (raf) return
   raf = requestAnimationFrame(flush)
 }

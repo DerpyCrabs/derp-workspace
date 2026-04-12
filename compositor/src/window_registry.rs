@@ -163,6 +163,19 @@ impl WindowRegistry {
             .collect()
     }
 
+    pub fn native_surface_keys_for_client(&self, client_id: &ClientId) -> Vec<(ClientId, u32)> {
+        self.by_surface
+            .iter()
+            .filter(|((cid, _), _)| cid == client_id)
+            .filter_map(|(key, wid)| {
+                self.records
+                    .get(wid)
+                    .filter(|record| record.kind == WindowKind::Native)
+                    .map(|_| key.clone())
+            })
+            .collect()
+    }
+
     pub fn remove_by_client_id(&mut self, client_id: &ClientId) -> Vec<WindowInfo> {
         let doomed: Vec<_> = self
             .by_surface

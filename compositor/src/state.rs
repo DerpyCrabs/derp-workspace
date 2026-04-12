@@ -416,6 +416,7 @@ pub struct CompositorState {
     shell_spawn_focus_above_window_id: Option<u32>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
+    pub(crate) shell_close_pending_native_windows: HashSet<u32>,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     pub(crate) shell_move_window_id: Option<u32>,
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
@@ -760,6 +761,7 @@ impl CompositorState {
             focus_history_non_shell: Vec::new(),
             shell_spawn_focus_above_window_id: None,
             shell_minimized_windows: HashMap::new(),
+            shell_close_pending_native_windows: HashSet::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
             shell_resize_window_id: None,
@@ -1951,6 +1953,11 @@ impl CompositorState {
 
     fn cleanup_disconnected_wayland_client(&mut self, client_id: ClientId) {
         let infos = self.window_registry.native_infos_for_client(&client_id);
+        let doomed_surface_keys: HashSet<_> = self
+            .window_registry
+            .native_surface_keys_for_client(&client_id)
+            .into_iter()
+            .collect();
         if infos.is_empty() {
             self.pending_deferred_toplevels
                 .retain(|(cid, _), _| cid != &client_id);
@@ -1960,12 +1967,32 @@ impl CompositorState {
         let focused_removed = infos
             .iter()
             .any(|info| self.keyboard_focused_window_id() == Some(info.window_id));
+        let doomed_windows: Vec<_> = self
+            .space
+            .elements()
+            .filter_map(|elem| match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    let toplevel = window.toplevel()?;
+                    let wl_surface = toplevel.wl_surface();
+                    let client = wl_surface.client()?;
+                    doomed_surface_keys
+                        .contains(&(client.id(), wl_surface.id().protocol_id()))
+                        .then_some(window.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for window in doomed_windows {
+            self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
+        }
         for info in &infos {
             if let Some(window) = self.find_window_by_surface_id(info.surface_id) {
                 self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
             }
             self.clear_toplevel_layout_maps(info.window_id);
             self.pending_gnome_initial_toplevels.remove(&info.window_id);
+            self.shell_close_pending_native_windows
+                .remove(&info.window_id);
             self.shell_window_stack_forget(info.window_id);
             self.focus_history_remove_window(info.window_id);
             if self.shell_last_non_shell_focus_window_id == Some(info.window_id) {
@@ -5351,6 +5378,7 @@ impl CompositorState {
         let Some(tl) = window.toplevel() else {
             return;
         };
+        self.shell_close_pending_native_windows.insert(window_id);
         tracing::warn!(
             target: "derp_toplevel",
             window_id,
@@ -5360,6 +5388,67 @@ impl CompositorState {
             "shell_close_window send_close"
         );
         tl.send_close();
+    }
+
+    pub(crate) fn hide_close_requested_window_if_bufferless(&mut self, root: &WlSurface) {
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(root) else {
+            return;
+        };
+        if !self
+            .shell_close_pending_native_windows
+            .contains(&window_id)
+        {
+            return;
+        }
+        let buffer_removed = smithay::wayland::compositor::with_states(root, |states| {
+            matches!(
+                states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                    .current()
+                    .buffer,
+                Some(smithay::wayland::compositor::BufferAssignment::Removed)
+            )
+        });
+        let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == root).then_some(w.clone())
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        let bbox = window.bbox();
+        let lost_buffer_extent = bbox.size.w < 1 || bbox.size.h < 1;
+        if !buffer_removed && !lost_buffer_extent {
+            return;
+        }
+        tracing::warn!(
+            target: "derp_toplevel",
+            window_id,
+            wl_surface_protocol_id = root.id().protocol_id(),
+            bbox_w = bbox.size.w,
+            bbox_h = bbox.size.h,
+            buffer_removed,
+            "shell-close pending native window lost content; hiding before destroy"
+        );
+        self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
+        self.clear_toplevel_layout_maps(window_id);
+        self.shell_window_stack_forget(window_id);
+        self.focus_history_remove_window(window_id);
+        if self.shell_last_non_shell_focus_window_id == Some(window_id) {
+            self.shell_last_non_shell_focus_window_id = None;
+        }
+        if self.keyboard_focused_window_id() == Some(window_id) {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat
+                .get_keyboard()
+                .unwrap()
+                .set_focus(self, Option::<WlSurface>::None, serial);
+            self.keyboard_on_focus_surface_changed(None);
+            self.try_refocus_after_closed_toplevel();
+        }
     }
 
     pub fn shell_set_window_fullscreen(&mut self, window_id: u32, enabled: bool) {
@@ -5581,7 +5670,6 @@ impl CompositorState {
             .insert(window_id, window.clone());
         self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
         self.window_registry.set_minimized(window_id, true);
-
         if self.shell_last_non_shell_focus_window_id == Some(window_id) {
             self.shell_last_non_shell_focus_window_id = None;
         }

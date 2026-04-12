@@ -40,6 +40,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     await crashWindow(base, state.crashProbe.window.window_id)
     const crashGone = await waitForWindowGone(base, state.crashProbe.window.window_id)
+    assert(
+      ((crashGone.compositor.orphaned_wayland_surface_protocol_ids as number[] | undefined) ?? []).length === 0,
+      `orphaned mapped wayland surfaces remained after crash cleanup: ${JSON.stringify(
+        crashGone.compositor.orphaned_wayland_surface_protocol_ids ?? [],
+      )}`,
+    )
     state.spawnedNativeWindowIds.delete(state.crashProbe.window.window_id)
     await writeJsonArtifact('native-crash-cleanup-compositor.json', crashGone.compositor)
     await writeJsonArtifact('native-crash-cleanup-shell.json', crashGone.shell)

@@ -64,6 +64,7 @@ impl CompositorHandler for CompositorState {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
+            self.hide_close_requested_window_if_bufferless(&root);
             let window = self.space.elements().find_map(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())

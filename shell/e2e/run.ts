@@ -12,6 +12,7 @@ import {
   ensureArtifactDir,
   nativeBin,
   primeState,
+  setTimingLogsEnabled,
   testLabel,
   writeJsonArtifact,
   writeTextArtifact,
@@ -58,8 +59,23 @@ function selectGroups(selectors: string[]) {
   }
 }
 
+function parseArgs(argv: string[]) {
+  const selectors: string[] = []
+  let showTimeLogs = true
+  for (const value of argv) {
+    if (value === '--no-time-logs') {
+      showTimeLogs = false
+      continue
+    }
+    selectors.push(value)
+  }
+  return { selectors, showTimeLogs }
+}
+
 async function main(): Promise<void> {
-  const selectors = process.argv.slice(2).flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
+  const args = parseArgs(process.argv.slice(2))
+  setTimingLogsEnabled(args.showTimeLogs)
+  const selectors = args.selectors.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
   const { selected, unmatched } = selectGroups(selectors)
   if (unmatched.length > 0) {
     throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${groups.map((group) => group.name).join(', ')}`)
@@ -79,10 +95,14 @@ async function main(): Promise<void> {
     for (const group of selected) {
       currentGroupName = group.name
       reporter.startGroup(group.name)
-      for (const entry of group.tests) {
-        currentTestName = entry.name
-        await primeState(base, state)
-        await reporter.run(group.name, entry.name, () => entry.run({ base, state }))
+      try {
+        for (const entry of group.tests) {
+          currentTestName = entry.name
+          await primeState(base, state)
+          await reporter.run(group.name, entry.name, () => entry.run({ base, state }))
+        }
+      } finally {
+        reporter.finishGroup(group.name)
       }
     }
 
