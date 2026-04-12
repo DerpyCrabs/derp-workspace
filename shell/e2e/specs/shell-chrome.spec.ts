@@ -1,4 +1,5 @@
 import {
+  ensureNativePair,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
   assert,
@@ -19,6 +20,7 @@ import {
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
   waitFor,
+  waitForNativeFocus,
   waitForShellUiFocus,
   waitForWindowGone,
   writeJsonArtifact,
@@ -195,5 +197,74 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     await writeTextArtifact('taskbar-power-menu.html', powerHtml)
     await writeTextArtifact('taskbar-programs-menu.html', programsHtml)
+  })
+
+  test('native windows do not cover focused shell windows during taskbar menu churn', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
+    const settingsOpen = await openSettings(base, 'click')
+    const redWindow = compositorWindowById(settingsOpen.compositor, redId)
+    const greenWindow = compositorWindowById(settingsOpen.compositor, greenId)
+    const settingsWindow = compositorWindowById(settingsOpen.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(redWindow, 'missing red compositor window')
+    assert(greenWindow, 'missing green compositor window')
+    assert(settingsWindow, 'missing settings compositor window')
+
+    const shellBeforeRedFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await activateTaskbarWindow(base, shellBeforeRedFocus, redId)
+    await waitForNativeFocus(base, redId)
+
+    const shellBeforeSettingsFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await activateTaskbarWindow(base, shellBeforeSettingsFocus, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should restack above native windows')
+
+    const contentPoints = [
+      {
+        x: settingsWindow.x + Math.min(80, Math.max(24, Math.floor(settingsWindow.width / 5))),
+        y: settingsWindow.y + Math.min(92, Math.max(36, Math.floor(settingsWindow.height / 4))),
+      },
+      {
+        x: settingsWindow.x + Math.max(48, Math.floor(settingsWindow.width / 2)),
+        y: settingsWindow.y + Math.max(64, Math.floor(settingsWindow.height / 2)),
+      },
+    ]
+
+    for (const [index, point] of contentPoints.entries()) {
+      await clickPoint(base, point.x, point.y)
+      const refocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+      assertTopWindow(refocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, `settings content click ${index} should stay frontmost`)
+    }
+
+    const powerOpen = await openPowerMenu(base)
+    assertTopWindow(powerOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'power menu should not let native windows overtake settings')
+    const programsOpen = await openProgramsMenu(base, 'click')
+    assertTopWindow(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'programs menu should not let native windows overtake settings')
+
+    await clickPoint(base, contentPoints[0].x, contentPoints[0].y)
+    const programsClosed = await waitForProgramsMenuClosed(base)
+    assertTopWindow(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after menu dismiss')
+    await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+
+    const shellBeforeGreenFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await activateTaskbarWindow(base, shellBeforeGreenFocus, greenId)
+    await waitForNativeFocus(base, greenId)
+    const shellBeforeRefocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await activateTaskbarWindow(base, shellBeforeRefocus, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsRefocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTopWindow(settingsRefocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should recover above native windows after native refocus')
+
+    await clickPoint(base, contentPoints[1].x, contentPoints[1].y)
+    const finalFocus = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTopWindow(finalFocus.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should remain clickable after native focus churn')
+
+    await writeJsonArtifact('shell-chrome-native-menu-focus.json', {
+      settingsFocused: settingsFocused.shell,
+      programsOpen,
+      programsClosed,
+      settingsRefocused: settingsRefocused.shell,
+      finalFocus: finalFocus.shell,
+    })
   })
 })

@@ -250,70 +250,10 @@ fn request_shell_html(
     e2e_bridge::wait_for_shell_html(request_id, Duration::from_secs(3))
 }
 
-fn set_shell_programs_menu_query(
-    browser: &Arc<Mutex<Option<Browser>>>,
-    query: &str,
-) -> Result<(), String> {
-    let query_js = quote_js_string(query)?;
-    execute_shell_bridge_js(
-        browser,
-        format!(
-            "window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY&&window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY({query_js});"
-        ),
-    )
-}
-
-fn activate_shell_programs_menu_selection(
-    browser: &Arc<Mutex<Option<Browser>>>,
-) -> Result<(), String> {
-    execute_shell_bridge_js(
-        browser,
-        "window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION&&window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION();"
-            .to_string(),
-    )
-}
-
 fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
     execute_shell_bridge_js(
         browser,
         "window.__DERP_E2E_OPEN_TEST_WINDOW&&window.__DERP_E2E_OPEN_TEST_WINDOW();".to_string(),
-    )
-}
-
-fn merge_shell_windows_into_group(
-    browser: &Arc<Mutex<Option<Browser>>>,
-    source_window_id: u32,
-    target_window_id: u32,
-) -> Result<(), String> {
-    execute_shell_bridge_js(
-        browser,
-        format!(
-            "window.__DERP_E2E_MERGE_WINDOWS&&window.__DERP_E2E_MERGE_WINDOWS({source_window_id},{target_window_id});"
-        ),
-    )
-}
-
-fn select_shell_grouped_window(
-    browser: &Arc<Mutex<Option<Browser>>>,
-    window_id: u32,
-) -> Result<(), String> {
-    execute_shell_bridge_js(
-        browser,
-        format!(
-            "window.__DERP_E2E_SELECT_GROUP_WINDOW&&window.__DERP_E2E_SELECT_GROUP_WINDOW({window_id});"
-        ),
-    )
-}
-
-fn cycle_shell_group_tabs(
-    browser: &Arc<Mutex<Option<Browser>>>,
-    delta: i32,
-) -> Result<(), String> {
-    execute_shell_bridge_js(
-        browser,
-        format!(
-            "window.__DERP_E2E_CYCLE_GROUP_TABS&&window.__DERP_E2E_CYCLE_GROUP_TABS({delta});"
-        ),
     )
 }
 
@@ -659,47 +599,8 @@ fn handle_one(
     let body_str = std::str::from_utf8(&body).map_err(|_| "invalid utf-8 body".to_string())?;
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
 
-    if req_path == "/test/programs_menu_query" {
-        let query = v
-            .get("query")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| "programs_menu_query: missing query".to_string())?;
-        set_shell_programs_menu_query(browser, query)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    if req_path == "/test/programs_menu_activate" {
-        activate_shell_programs_menu_selection(browser)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
     if req_path == "/test/shell_window/open" {
         open_shell_test_window(browser)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    if req_path == "/test/workspace/merge" {
-        let source_window_id = json_u32_field(&v, "source_window_id")?;
-        let target_window_id = json_u32_field(&v, "target_window_id")?;
-        merge_shell_windows_into_group(browser, source_window_id, target_window_id)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    if req_path == "/test/workspace/select" {
-        let window_id = json_u32_field(&v, "window_id")?;
-        select_shell_grouped_window(browser, window_id)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    if req_path == "/test/workspace/cycle" {
-        let delta = v.get("delta").and_then(|x| x.as_i64()).unwrap_or(1);
-        let delta = i32::try_from(delta).map_err(|_| "workspace cycle delta out of range".to_string())?;
-        cycle_shell_group_tabs(browser, delta)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -723,10 +624,7 @@ fn handle_one(
             .and_then(|x| x.as_u64())
             .and_then(|value| u32::try_from(value).ok())
             .unwrap_or(0x110);
-        let action = v
-            .get("action")
-            .and_then(|x| x.as_str())
-            .unwrap_or("press");
+        let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("press");
         let pressed = match action {
             "press" => true,
             "release" => false,
@@ -743,11 +641,7 @@ fn handle_one(
             .and_then(|x| x.as_u64())
             .and_then(|value| u32::try_from(value).ok())
             .unwrap_or(0x110);
-        uplink.test_pointer_click(
-            json_f64_field(&v, "x")?,
-            json_f64_field(&v, "y")?,
-            button,
-        )?;
+        uplink.test_pointer_click(json_f64_field(&v, "x")?, json_f64_field(&v, "y")?, button)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -846,8 +740,10 @@ fn handle_one(
                 )
                     .into(),
                 (
-                    i32::try_from(width).map_err(|_| "screenshot width out of range".to_string())?,
-                    i32::try_from(height).map_err(|_| "screenshot height out of range".to_string())?,
+                    i32::try_from(width)
+                        .map_err(|_| "screenshot width out of range".to_string())?,
+                    i32::try_from(height)
+                        .map_err(|_| "screenshot height out of range".to_string())?,
                 )
                     .into(),
             )),

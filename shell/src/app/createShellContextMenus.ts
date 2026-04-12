@@ -20,7 +20,7 @@ import { canvasRectToClientCss } from '../shellCoords'
 import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '../shellBridge'
 import type { LayoutScreen } from './types'
 
-type MenuKind = 'programs' | 'power' | null
+type MenuKind = 'programs' | 'power' | 'tab' | null
 
 type CreateShellContextMenusArgs = {
   mainEl: Accessor<HTMLElement | undefined>
@@ -43,6 +43,8 @@ type CreateShellContextMenusArgs = {
   reportShellActionIssue: (message: string) => void
   describeError: (error: unknown) => string
   dismissFloatingWire: () => void
+  tabMenuItems: (windowId: number) => ShellContextMenuItem[]
+  tabMenuWindowAvailable: (windowId: number) => boolean
 }
 
 function layoutScreenCssRect(
@@ -95,7 +97,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [programsMenuQuery, setProgramsMenuQuery] = createSignal('')
   const [programsMenuHighlightIdx, setProgramsMenuHighlightIdx] = createSignal(0)
   const [powerMenuHighlightIdx, setPowerMenuHighlightIdx] = createSignal(0)
+  const [tabMenuHighlightIdx, setTabMenuHighlightIdx] = createSignal(0)
   const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
+  const [tabMenuWindowId, setTabMenuWindowId] = createSignal<number | null>(null)
   const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
   const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
   const [programsUsageCounts, setProgramsUsageCounts] = createSignal(getDesktopAppUsageCounts())
@@ -114,6 +118,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
   const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
+  const tabMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'tab')
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
@@ -122,6 +127,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       setProgramsMenuHighlightIdx(0)
       setProgramsMenuOutputName(null)
       setPowerMenuHighlightIdx(0)
+      setTabMenuHighlightIdx(0)
+      setTabMenuWindowId(null)
     }
   })
 
@@ -132,6 +139,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setProgramsMenuHighlightIdx(0)
     setProgramsMenuOutputName(null)
     setPowerMenuHighlightIdx(0)
+    setTabMenuHighlightIdx(0)
+    setTabMenuWindowId(null)
     args.dismissFloatingWire()
   }
 
@@ -315,6 +324,15 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setCtxMenuOpen(true)
   }
 
+  function openTabMenu(windowId: number, clientX: number, clientY: number) {
+    args.closeAllAtlasSelects()
+    setCtxMenuAnchor({ x: Math.round(clientX), y: Math.round(clientY), alignAboveY: Math.round(clientY) })
+    setCtxMenuKind('tab')
+    setTabMenuWindowId(windowId)
+    setTabMenuHighlightIdx(0)
+    setCtxMenuOpen(true)
+  }
+
   const powerMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!powerMenuOpen()) return []
     const http = shellHttpBase() !== null
@@ -349,6 +367,21 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     ]
   })
 
+  const tabMenuListItems = createMemo((): ShellContextMenuItem[] => {
+    if (!tabMenuOpen()) return []
+    const windowId = tabMenuWindowId()
+    if (windowId == null) return []
+    return args.tabMenuItems(windowId)
+  })
+
+  createEffect(() => {
+    if (!tabMenuOpen()) return
+    const windowId = tabMenuWindowId()
+    if (windowId == null || !args.tabMenuWindowAvailable(windowId) || tabMenuListItems().length === 0) {
+      hideContextMenu()
+    }
+  })
+
   const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!programsMenuOpen()) return []
     if (programsMenuBusy() && !programsCatalog.loaded) return [{ label: 'Loading…', action: () => {} }]
@@ -373,6 +406,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const menuListItems = createMemo(() => {
     if (ctxMenuKind() === 'programs') return programsMenuListItems()
     if (ctxMenuKind() === 'power') return powerMenuListItems()
+    if (ctxMenuKind() === 'tab') return tabMenuListItems()
     return []
   })
 
@@ -402,6 +436,28 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   function activatePowerMenuSelection() {
     if (!powerMenuOpen()) return
     const item = powerMenuListItems()[powerMenuHighlightIdx()]
+    if (!item || item.disabled) return
+    item.action()
+    hideContextMenu()
+  }
+
+  function moveTabMenuHighlight(delta: number) {
+    const items = tabMenuListItems()
+    const n = items.length
+    if (n === 0) return
+    let idx = tabMenuHighlightIdx()
+    for (let step = 0; step < n; step++) {
+      idx = (idx + delta + n) % n
+      if (!items[idx]?.disabled) {
+        setTabMenuHighlightIdx(idx)
+        return
+      }
+    }
+  }
+
+  function activateTabMenuSelection() {
+    if (!tabMenuOpen()) return
+    const item = tabMenuListItems()[tabMenuHighlightIdx()]
     if (!item || item.disabled) return
     item.action()
     hideContextMenu()
@@ -584,6 +640,47 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         if (last >= 0) setPowerMenuHighlightIdx(last)
       }
     }
+    if (tabMenuOpen()) {
+      const items = tabMenuListItems()
+      const n = items.filter((item) => !item.disabled).length
+      if (e.key === 'ArrowDown') {
+        if (n > 0) {
+          e.preventDefault()
+          moveTabMenuHighlight(1)
+        }
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        if (n > 0) {
+          e.preventDefault()
+          moveTabMenuHighlight(-1)
+        }
+        return
+      }
+      if (!e.repeat && !e.isComposing && e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        activateTabMenuSelection()
+        return
+      }
+      if (e.key === 'Home' && n > 0) {
+        e.preventDefault()
+        const first = items.findIndex((item) => !item.disabled)
+        if (first >= 0) setTabMenuHighlightIdx(first)
+        return
+      }
+      if (e.key === 'End' && n > 0) {
+        e.preventDefault()
+        let last = -1
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (!items[i]?.disabled) {
+            last = i
+            break
+          }
+        }
+        if (last >= 0) setTabMenuHighlightIdx(last)
+      }
+    }
   }
 
   const onCtxPointerDown = (e: PointerEvent) => {
@@ -608,27 +705,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     ctxMenuOpen,
     programsMenuOpen,
     powerMenuOpen,
+    tabMenuOpen,
     shellMenuAtlasTop,
     onProgramsMenuClick,
     onPowerMenuClick,
+    openTabMenu,
     hideContextMenu,
     toggleProgramsMenuMeta,
     warmProgramsMenuItems,
-    e2eSetProgramsMenuQuery(value: string) {
-      if (!programsMenuOpen()) return false
-      setProgramsMenuQuery(value)
-      setProgramsMenuHighlightIdx(0)
-      queueMicrotask(() => programsMenuSearchRef?.focus())
-      return true
-    },
-    e2eActivateProgramsMenuSelection() {
-      if (!programsMenuOpen()) return false
-      const items = programsMenuListItems()
-      const item = items[programsMenuHighlightIdx()]
-      if (!item || item.disabled) return false
-      activateProgramsMenuSelection()
-      return true
-    },
     setMenuAtlasHostRef(el: HTMLDivElement) {
       menuAtlasHostRef = el
     },
@@ -654,6 +738,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     powerMenuProps: {
       items: powerMenuListItems,
       highlightIdx: powerMenuHighlightIdx,
+      setPanelRef(el: HTMLDivElement) {
+        menuPanelRef = el
+      },
+      closeContextMenu: hideContextMenu,
+    },
+    tabMenuProps: {
+      items: tabMenuListItems,
+      highlightIdx: tabMenuHighlightIdx,
       setPanelRef(el: HTMLDivElement) {
         menuPanelRef = el
       },

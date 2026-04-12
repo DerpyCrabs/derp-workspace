@@ -296,6 +296,17 @@ impl WindowRegistry {
         Some(f(&mut record.info, &mut record.shell_hosted_float_restore))
     }
 
+    pub fn update_native<F, T>(&mut self, window_id: WindowId, f: F) -> Option<T>
+    where
+        F: FnOnce(&mut WindowInfo) -> T,
+    {
+        let record = self.records.get_mut(&window_id)?;
+        if record.kind != WindowKind::Native {
+            return None;
+        }
+        Some(f(&mut record.info))
+    }
+
     pub fn shell_hosted_infos(&self) -> Vec<WindowInfo> {
         self.records
             .values()

@@ -99,6 +99,9 @@ pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_WIDTH: i32 = 800;
 pub const DEFAULT_XDG_TOPLEVEL_HEIGHT: i32 = 600;
+pub const DEFAULT_XDG_TOPLEVEL_STAGGER_X: i32 = 32;
+pub const DEFAULT_XDG_TOPLEVEL_STAGGER_Y: i32 = 24;
+pub const DEFAULT_XDG_TOPLEVEL_STAGGER_STEPS: i32 = 6;
 pub const GNOME_AUTO_MAXIMIZE_THRESHOLD_PERCENT: i32 = 90;
 /// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
@@ -2024,8 +2027,10 @@ impl CompositorState {
                     tracing::warn!(%error, "screenshot current output request failed");
                 }
             }
+            "toggle_programs_menu" => {
+                self.programs_menu_toggle_from_super(SERIAL_COUNTER.next_serial());
+            }
             "launch_terminal"
-            | "toggle_programs_menu"
             | "open_settings"
             | "tile_left"
             | "tile_right"
@@ -2383,6 +2388,48 @@ impl CompositorState {
         (x, y)
     }
 
+    fn staggered_toplevel_origin_for_output(
+        &self,
+        output: &Output,
+        work: &Rectangle<i32, Logical>,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
+        let (base_x, base_y) = Self::centered_toplevel_origin_for_work_area(work, width, height);
+        let output_name = output.name();
+        let stagger_index = (self
+            .space
+            .elements()
+            .filter_map(|element| {
+                let DerpSpaceElem::Wayland(window) = element else {
+                    return None;
+                };
+                let toplevel = window.toplevel()?;
+                let window_id = self
+                    .window_registry
+                    .window_id_for_wl_surface(toplevel.wl_surface())?;
+                let info = self.window_registry.window_info(window_id)?;
+                if self.window_info_is_solid_shell_host(&info)
+                    || info.minimized
+                    || info.output_name != output_name
+                {
+                    return None;
+                }
+                Some(window_id)
+            })
+            .count() as i32)
+            % DEFAULT_XDG_TOPLEVEL_STAGGER_STEPS.max(1);
+        let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(width);
+        let max_y = work.loc.y.saturating_add(work.size.h).saturating_sub(height);
+        let x = base_x
+            .saturating_add(stagger_index.saturating_mul(DEFAULT_XDG_TOPLEVEL_STAGGER_X))
+            .clamp(work.loc.x, max_x.max(work.loc.x));
+        let y = base_y
+            .saturating_add(stagger_index.saturating_mul(DEFAULT_XDG_TOPLEVEL_STAGGER_Y))
+            .clamp(work.loc.y, max_y.max(work.loc.y));
+        (x, y)
+    }
+
     fn should_auto_maximize_new_toplevel(
         work: &Rectangle<i32, Logical>,
         width: i32,
@@ -2428,7 +2475,7 @@ impl CompositorState {
         if Self::should_auto_maximize_new_toplevel(&work, width, height) {
             return self.apply_toplevel_maximize_layout(window);
         }
-        let (x, y) = Self::centered_toplevel_origin_for_work_area(&work, width, height);
+        let (x, y) = self.staggered_toplevel_origin_for_output(&out, &work, width, height);
         let elem = DerpSpaceElem::Wayland(window.clone());
         let current = window.geometry().size;
         let needs_resize = current.w != width || current.h != height;
@@ -2515,7 +2562,7 @@ impl CompositorState {
         let (width, height) = self
             .preferred_new_toplevel_size(window)
             .unwrap_or((DEFAULT_XDG_TOPLEVEL_WIDTH, DEFAULT_XDG_TOPLEVEL_HEIGHT));
-        Self::centered_toplevel_origin_for_work_area(&work, width, height)
+        self.staggered_toplevel_origin_for_output(&out, &work, width, height)
     }
 
     pub(crate) fn shell_effective_primary_output(&self) -> Option<Output> {
@@ -5184,6 +5231,9 @@ impl CompositorState {
         else {
             return;
         };
+        let target_output_name = self
+            .output_for_window_position(x, y, w, h)
+            .unwrap_or_default();
 
         if layout_state == 0 {
             self.clear_toplevel_layout_maps(window_id);
@@ -5194,6 +5244,36 @@ impl CompositorState {
                     self.toplevel_floating_restore.insert(window_id, s);
                 }
             }
+        }
+
+        if info.minimized {
+            let _ = self.window_registry.update_native(window_id, |window_info| {
+                if layout_state == 1 {
+                    window_info.maximized = true;
+                } else {
+                    window_info.maximized = false;
+                }
+                window_info.x = x;
+                window_info.y = y;
+                window_info.width = w.max(1);
+                window_info.height = h.max(1);
+                window_info.output_name = target_output_name.clone();
+            });
+            if let Some(window) = self.shell_minimized_windows.get(&window_id) {
+                let tl = window.toplevel().unwrap();
+                tl.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.fullscreen_output = None;
+                    if layout_state == 1 {
+                        state.states.set(xdg_toplevel::State::Maximized);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                    }
+                    state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
+                });
+                tl.send_pending_configure();
+            }
+            return;
         }
 
         let (map_x, map_y, content_w, content_h) = (x, y, w.max(1), h.max(1));

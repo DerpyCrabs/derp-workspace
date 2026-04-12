@@ -16,4 +16,5 @@ Rules:
 - if you need logs use ./scripts/fetch-logs.sh
 - debug everything yourself on remote machine (but if you add logs use warn and delete after debugging)
 - if you see that test is flaky or broken - check that it wasn't broken by you and always fix it even if you have unrelated task
-- flaky tests can be bugs in existing code, make sure that test is really flaky and not uncovering some bug
+- tests should use real user interactions where possible, if they don't work it can indicate bugs and needs to be fixed, not replaced with some test only api
+- flaky tests can be bugs in existing code, make sure that test is really flaky and not uncovering some bug. Tests should never be run in parallel

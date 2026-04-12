@@ -14,6 +14,9 @@ export const SHELL_UI_SETTINGS_TITLE = 'Settings'
 export const SHELL_UI_SETTINGS_APP_ID = 'derp.settings'
 export const SHELL_UI_TEST_TITLE_PREFIX = 'JS Test Window'
 export const SHELL_UI_TEST_APP_ID = 'derp.test-shell'
+const SHELL_BACKED_WINDOW_STAGGER_X = 28
+const SHELL_BACKED_WINDOW_STAGGER_Y = 24
+const SHELL_BACKED_WINDOW_STAGGER_STEPS = 6
 
 export type BackedWindowOpenPayload = {
   window_id: number
@@ -29,6 +32,7 @@ export type BackedWindowOpenPayload = {
 export function defaultBackedClientAreaGlobal(
   work: { x: number; y: number; w: number; h: number },
   kind: 'debug' | 'settings' | 'test',
+  staggerIndex = 0,
 ): { x: number; y: number; w: number; h: number } {
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
@@ -46,8 +50,9 @@ export function defaultBackedClientAreaGlobal(
   }
   const outerW = cw + bd * 2
   const outerH = ch + th + bd * 2
-  let gx0 = work.x + Math.floor((work.w - outerW) / 2)
-  let gy0 = work.y + Math.floor((work.h - outerH) / 2)
+  const staggerStep = Math.max(0, Math.trunc(staggerIndex)) % SHELL_BACKED_WINDOW_STAGGER_STEPS
+  let gx0 = work.x + Math.floor((work.w - outerW) / 2) + staggerStep * SHELL_BACKED_WINDOW_STAGGER_X
+  let gy0 = work.y + Math.floor((work.h - outerH) / 2) + staggerStep * SHELL_BACKED_WINDOW_STAGGER_Y
   const gxOuter = Math.min(
     Math.max(gx0, work.x),
     work.x + Math.max(0, work.w - Math.max(1, outerW)),
@@ -66,8 +71,9 @@ export function buildBackedWindowOpenPayload(
   work: { x: number; y: number; w: number; h: number },
   kind: 'debug' | 'settings',
   origin: CanvasOrigin,
+  staggerIndex = 0,
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, kind)
+  const global = defaultBackedClientAreaGlobal(work, kind, staggerIndex)
   const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
   if (kind === 'debug') {
     return {
@@ -111,8 +117,9 @@ export function buildShellTestWindowOpenPayload(
   windowId: number,
   title: string,
   origin: CanvasOrigin,
+  staggerIndex = 0,
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'test')
+  const global = defaultBackedClientAreaGlobal(work, 'test', staggerIndex)
   const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
   return {
     window_id: windowId,

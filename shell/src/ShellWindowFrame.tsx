@@ -42,6 +42,12 @@ function readAcc<T>(v: MaybeAcc<T>): T {
   return typeof v === 'function' ? (v as Accessor<T>)() : v
 }
 
+function titlebarInteractionTarget(target: EventTarget | null): HTMLElement | null {
+  return target instanceof HTMLElement
+    ? target.closest('[data-shell-titlebar-controls], [data-workspace-tab], [data-workspace-tab-close]')
+    : null
+}
+
 type ShellWindowFrameProps = {
   win: ShellWindowModel | Accessor<ShellWindowModel | undefined>
   repaintKey?: MaybeAcc<number>
@@ -126,6 +132,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       ref={(el) => {
         root = el
       }}
+      data-shell-window-frame={model()?.window_id ?? 0}
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
@@ -172,7 +179,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       </Show>
       <div
         data-shell-titlebar={model()?.window_id ?? 0}
-        class="absolute right-0 left-0 box-border flex items-center gap-1.5 py-0 pr-1.5 pl-2.5 select-none touch-none"
+        class="absolute right-0 left-0 box-border flex items-center gap-1.5 border-b border-(--shell-border) py-0 pr-1.5 pl-2.5 select-none touch-none"
         style={{
           top: `${layout().inset}px`,
           height: `${layout().th}px`,
@@ -184,7 +191,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary) return
           if (e.button !== 0) return
           if (!readAcc(props.focused)) props.onFocusRequest?.()
-          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
+          if (titlebarInteractionTarget(e.target)) return
           e.preventDefault()
           e.stopPropagation()
           console.log(
@@ -194,7 +201,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
         onTouchStart={(e) => {
           if (!readAcc(props.focused)) props.onFocusRequest?.()
-          if ((e.target as HTMLElement).closest('[data-shell-titlebar-controls]')) return
+          if (titlebarInteractionTarget(e.target)) return
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
@@ -224,7 +231,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
           <button
             type="button"
-            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-base leading-none font-bold"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-base leading-none font-bold text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -234,7 +241,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           <button
             type="button"
             data-shell-maximize-trigger={model()?.window_id ?? 0}
-            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-sm leading-none"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-sm leading-none text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => {
               e.stopPropagation()
@@ -275,7 +282,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="border-0 bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text) m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-none p-0 text-lg leading-none"
+            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-lg leading-none text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text)"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}

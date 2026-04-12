@@ -111,16 +111,25 @@ import type {
 } from './app/types'
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
-import { nextActiveWindowAfterRemoval, resolveGroupVisibleWindowId, windowLabel as groupedWindowLabel } from './tabGroupOps'
+import {
+  findMergeTarget,
+  nextActiveWindowAfterRemoval,
+  resolveGroupVisibleWindowId,
+  windowLabel as groupedWindowLabel,
+  type TabMergeTarget,
+} from './tabGroupOps'
 import { buildTaskbarGroupRows } from './taskbarGroups'
 import {
   cycleWorkspaceTab,
   groupIdForWindow,
+  isWorkspaceWindowPinned,
   loadWorkspaceState,
-  mergeWorkspaceGroups,
+  moveWorkspaceWindowToGroup,
   persistWorkspaceState,
   reconcileWorkspaceState,
   setWorkspaceActiveTab,
+  setWorkspaceWindowPinned,
+  splitWorkspaceWindowToOwnGroup,
   workspaceStatesEqual,
   type WorkspaceState,
 } from './workspaceState'
@@ -177,12 +186,7 @@ declare global {
     ) => void
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
-    __DERP_E2E_SET_PROGRAMS_MENU_QUERY?: (query: string) => boolean
-    __DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION?: () => boolean
     __DERP_E2E_OPEN_TEST_WINDOW?: () => boolean
-    __DERP_E2E_MERGE_WINDOWS?: (sourceWindowId: number, targetWindowId: number) => boolean
-    __DERP_E2E_SELECT_GROUP_WINDOW?: (windowId: number) => boolean
-    __DERP_E2E_CYCLE_GROUP_TABS?: (delta: number) => boolean
   }
 }
 
@@ -450,6 +454,24 @@ type WorkspaceGroupModel = {
   visibleWindowId: number
   visibleWindow: DerpWindow
   hiddenWindowIds: number[]
+}
+
+type TabDragState = {
+  pointerId: number
+  windowId: number
+  sourceGroupId: string
+  startClientX: number
+  startClientY: number
+  currentClientX: number
+  currentClientY: number
+  dragging: boolean
+  detached: boolean
+  target: TabMergeTarget | null
+}
+
+function workspaceGroupWindowIds(state: WorkspaceState, windowId: number): number[] {
+  const groupId = groupIdForWindow(state, windowId)
+  return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -854,10 +876,16 @@ function App() {
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
   const [dragWindowId, setDragWindowId] = createSignal<number | null>(null)
+  const [tabDragState, setTabDragState] = createSignal<TabDragState | null>(null)
+  const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
   const atlasSelectClosers = new Set<() => boolean>()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
+  const pendingGroupCloseActivations = new Map<
+    number,
+    { groupId: string; nextVisibleId: number; closingWindow: DerpWindow }
+  >()
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
   const portalPickerVisible = createMemo(() => portalPickerRequestId() !== null)
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
@@ -1063,6 +1091,20 @@ function App() {
     reportShellActionIssue,
     describeError,
     dismissFloatingWire: hideShellFloatingWire,
+    tabMenuItems: (windowId: number) => {
+      const pinned = isWorkspaceWindowPinned(workspaceState(), windowId)
+      return [
+        {
+          label: pinned ? 'Unpin tab' : 'Pin tab',
+          action: () => {
+            setWorkspaceState((prev) => setWorkspaceWindowPinned(prev, windowId, !pinned))
+          },
+        },
+      ]
+    },
+    tabMenuWindowAvailable: (windowId: number) => {
+      return allWindowsMap().has(windowId) && groupIdForWindow(workspaceState(), windowId) !== null
+    },
   })
 
   createEffect(() => {
@@ -1326,6 +1368,7 @@ function App() {
         rect: e2eQueryRect(`[data-workspace-tab="${member.window_id}"]`, main, canvas, origin),
         close: e2eQueryRect(`[data-workspace-tab-close="${member.window_id}"]`, main, canvas, origin),
         active: member.window_id === group.visibleWindowId,
+        pinned: isWorkspaceWindowPinned(workspaceState(), member.window_id),
       })),
     }))
     const snapPreviewRect =
@@ -1410,6 +1453,8 @@ function App() {
           origin,
         ),
         programs_menu_first_item: e2eQueryRect('[data-programs-menu-idx="0"]', main, canvas, origin),
+        tab_menu_pin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
+        tab_menu_unpin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
         settings_tab_user: e2eQueryRect('[data-settings-tab="user"]', main, canvas, origin),
         settings_tab_displays: e2eQueryRect('[data-settings-tab="displays"]', main, canvas, origin),
         settings_tab_tiling: e2eQueryRect('[data-settings-tab="tiling"]', main, canvas, origin),
@@ -1502,20 +1547,96 @@ function App() {
       layoutFlag,
     )
     setWindows((map) => {
-      const current = map.get(targetWindowId)
-      if (!current) return map
-      const next = new Map(map)
-      next.set(targetWindowId, {
-        ...current,
-        x: fromWindow.x,
-        y: fromWindow.y,
-        width: fromWindow.width,
-        height: fromWindow.height,
-        output_name: fromWindow.output_name,
-        maximized: fromWindow.maximized,
-      })
-      return next
+      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), targetWindowId)
+      let next = map
+      let changed = false
+      for (const windowId of groupWindowIds) {
+        const current = next.get(windowId)
+        if (!current) continue
+        if (!changed) {
+          next = new Map(next)
+          changed = true
+        }
+        next.set(windowId, {
+          ...current,
+          x: fromWindow.x,
+          y: fromWindow.y,
+          width: fromWindow.width,
+          height: fromWindow.height,
+          output_name: fromWindow.output_name,
+          maximized: fromWindow.maximized,
+        })
+      }
+      return changed ? next : map
     })
+  }
+
+  function moveWindowUnderPointer(windowId: number, clientX: number, clientY: number) {
+    const main = mainRef
+    const canvas = outputGeom()
+    const window = allWindowsMap().get(windowId)
+    if (!main || !canvas || !window) return false
+    const local = clientPointToCanvasLocal(
+      clientX,
+      clientY,
+      main.getBoundingClientRect(),
+      canvas.w,
+      canvas.h,
+    )
+    const nextX = Math.round(local.x - window.width / 2)
+    const nextY = Math.round(local.y + CHROME_TITLEBAR_PX / 2)
+    shellWireSend(
+      'set_geometry',
+      windowId,
+      nextX,
+      nextY,
+      window.width,
+      window.height,
+      SHELL_LAYOUT_FLOATING,
+    )
+    setWindows((map) => {
+      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), windowId)
+      let next = map
+      let changed = false
+      for (const groupWindowId of groupWindowIds) {
+        const current = next.get(groupWindowId)
+        if (!current) continue
+        if (!changed) {
+          next = new Map(next)
+          changed = true
+        }
+        next.set(groupWindowId, {
+          ...current,
+          x: nextX,
+          y: nextY,
+          maximized: false,
+        })
+      }
+      return changed ? next : map
+    })
+    return true
+  }
+
+  function syncHiddenGroupWindowGeometry(visibleWindowId: number) {
+    const groupId = groupIdForWindow(workspaceState(), visibleWindowId)
+    const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
+    const visibleWindow = allWindowsMap().get(visibleWindowId)
+    if (!group || group.visibleWindowId !== visibleWindowId || !visibleWindow) return
+    for (const hiddenWindowId of group.hiddenWindowIds) {
+      const hiddenWindow = allWindowsMap().get(hiddenWindowId)
+      if (
+        hiddenWindow &&
+        hiddenWindow.x === visibleWindow.x &&
+        hiddenWindow.y === visibleWindow.y &&
+        hiddenWindow.width === visibleWindow.width &&
+        hiddenWindow.height === visibleWindow.height &&
+        hiddenWindow.output_name === visibleWindow.output_name &&
+        hiddenWindow.maximized === visibleWindow.maximized
+      ) {
+        continue
+      }
+      syncWindowGeometry(hiddenWindowId, visibleWindow)
+    }
   }
 
   function focusWindowViaShell(windowId: number) {
@@ -1529,19 +1650,89 @@ function App() {
     return true
   }
 
-  function mergeGroupWindow(sourceWindowId: number, targetWindowId: number) {
-    if (sourceWindowId === targetWindowId) return false
+  function applyTabDrop(sourceWindowId: number, target: TabMergeTarget) {
+    const prevState = workspaceState()
+    const sourceGroupId = groupIdForWindow(prevState, sourceWindowId)
+    const targetGroup = workspaceGroups().find((entry) => entry.id === target.groupId)
     const sourceWindow = allWindowsMap().get(sourceWindowId)
-    const targetWindow = allWindowsMap().get(targetWindowId)
-    if (!sourceWindow || !targetWindow) return false
-    setWorkspaceState((prev) => mergeWorkspaceGroups(prev, sourceWindowId, targetWindowId))
-    if (sourceWindow.output_name === targetWindow.output_name) {
-      syncWindowGeometry(sourceWindowId, targetWindow)
+    if (!sourceGroupId || !targetGroup || !sourceWindow) return false
+    const sameGroup = sourceGroupId === target.groupId
+    const nextState = moveWorkspaceWindowToGroup(prevState, sourceWindowId, target.groupId, target.insertIndex)
+    if (workspaceStatesEqual(nextState, prevState)) return false
+    setWorkspaceState(nextState)
+    if (!sameGroup) {
+      syncWindowGeometry(sourceWindowId, targetGroup.visibleWindow)
+      queueMicrotask(() => {
+        if (!sourceWindow.minimized) shellWireSend('minimize', sourceWindowId)
+      })
     }
+    return true
+  }
+
+  function detachGroupWindow(windowId: number, clientX: number, clientY: number) {
+    const prevState = workspaceState()
+    const sourceGroupId = groupIdForWindow(prevState, windowId)
+    const sourceGroup = sourceGroupId
+      ? workspaceGroups().find((entry) => entry.id === sourceGroupId)
+      : null
+    const sourceWindow = allWindowsMap().get(windowId)
+    if (!sourceGroupId || !sourceGroup || !sourceWindow || sourceGroup.members.length < 2) return false
+    const nextState = splitWorkspaceWindowToOwnGroup(prevState, windowId)
+    if (workspaceStatesEqual(nextState, prevState)) return false
+    const nextVisibleId =
+      sourceGroup.visibleWindowId === windowId
+        ? nextActiveWindowAfterRemoval(prevState, sourceGroupId, windowId)
+        : null
+    setWorkspaceState(nextState)
+    if (nextVisibleId !== null) {
+      syncWindowGeometry(nextVisibleId, sourceGroup.visibleWindow)
+      queueMicrotask(() => {
+        shellWireSend('taskbar_activate', nextVisibleId)
+      })
+    }
+    moveWindowUnderPointer(windowId, clientX, clientY)
     queueMicrotask(() => {
-      if (!sourceWindow.minimized) shellWireSend('minimize', sourceWindowId)
+      shellWireSend('taskbar_activate', windowId)
     })
     return true
+  }
+
+  function startTabPointerGesture(
+    windowId: number,
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+    button: number,
+  ) {
+    if (button !== 0) return
+    const sourceGroupId = groupIdForWindow(workspaceState(), windowId)
+    if (!sourceGroupId) return
+    shellContextMenus.hideContextMenu()
+    setSuppressTabClickWindowId(null)
+    setTabDragState({
+      pointerId,
+      windowId,
+      sourceGroupId,
+      startClientX: clientX,
+      startClientY: clientY,
+      currentClientX: clientX,
+      currentClientY: clientY,
+      dragging: false,
+      detached: false,
+      target: null,
+    })
+  }
+
+  function finishTabPointerGesture(pointerId: number, clientX: number, clientY: number) {
+    const drag = tabDragState()
+    if (!drag || drag.pointerId !== pointerId) return
+    const nextTarget = drag.dragging
+      ? findMergeTarget(workspaceState(), drag.windowId, clientX, clientY, drag.detached) ?? drag.target
+      : drag.target
+    const merged = drag.dragging && nextTarget ? applyTabDrop(drag.windowId, nextTarget) : false
+    const changed = merged || drag.detached
+    setTabDragState(null)
+    if (changed) setSuppressTabClickWindowId(drag.windowId)
   }
 
   function selectGroupWindow(windowId: number) {
@@ -1566,9 +1757,7 @@ function App() {
       return focusWindowViaShell(windowId)
     }
     const targetWindow = allWindowsMap().get(windowId)
-    if (targetWindow && targetWindow.output_name === group.visibleWindow.output_name) {
-      syncWindowGeometry(windowId, group.visibleWindow)
-    }
+    if (targetWindow) syncWindowGeometry(windowId, group.visibleWindow)
     setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, windowId))
     queueMicrotask(() => {
       shellWireSend('taskbar_activate', windowId)
@@ -1584,13 +1773,16 @@ function App() {
     if (groupId && group && closingWindow) {
       const nextVisibleId = nextActiveWindowAfterRemoval(workspaceState(), groupId, windowId)
       if (nextVisibleId !== null && group.visibleWindowId === windowId) {
-        const nextWindow = allWindowsMap().get(nextVisibleId)
-        if (nextWindow && nextWindow.output_name === closingWindow.output_name) {
-          syncWindowGeometry(nextVisibleId, closingWindow)
-        }
-        setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, nextVisibleId))
-        queueMicrotask(() => shellWireSend('taskbar_activate', nextVisibleId))
+        pendingGroupCloseActivations.set(windowId, {
+          groupId,
+          nextVisibleId,
+          closingWindow: { ...closingWindow },
+        })
+      } else {
+        pendingGroupCloseActivations.delete(windowId)
       }
+    } else {
+      pendingGroupCloseActivations.delete(windowId)
     }
     shellWireSend('close', windowId)
   }
@@ -1682,6 +1874,47 @@ function App() {
     }
   })
 
+  const onTabDragPointerMove = (event: PointerEvent) => {
+    const prev = tabDragState()
+    if (!prev || prev.pointerId !== event.pointerId) return
+    const dx = event.clientX - prev.startClientX
+    const dy = event.clientY - prev.startClientY
+    const dragging = prev.dragging || Math.hypot(dx, dy) >= 40
+    const target = dragging
+      ? findMergeTarget(workspaceState(), prev.windowId, event.clientX, event.clientY, prev.detached)
+      : null
+    let detached = prev.detached
+    if (dragging && !detached && (target === null || Math.abs(dy) >= 80)) {
+      detached = detachGroupWindow(prev.windowId, event.clientX, event.clientY)
+    } else if (dragging && detached) {
+      moveWindowUnderPointer(prev.windowId, event.clientX, event.clientY)
+    }
+    setTabDragState({
+      ...prev,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+      dragging,
+      detached,
+      target,
+    })
+  }
+  const onTabDragPointerUp = (event: PointerEvent) => {
+    finishTabPointerGesture(event.pointerId, event.clientX, event.clientY)
+  }
+  const onTabDragPointerCancel = (event: PointerEvent) => {
+    const prev = tabDragState()
+    if (!prev || prev.pointerId !== event.pointerId) return
+    setTabDragState(null)
+  }
+  document.addEventListener('pointermove', onTabDragPointerMove, true)
+  document.addEventListener('pointerup', onTabDragPointerUp, true)
+  document.addEventListener('pointercancel', onTabDragPointerCancel, true)
+  onCleanup(() => {
+    document.removeEventListener('pointermove', onTabDragPointerMove, true)
+    document.removeEventListener('pointerup', onTabDragPointerUp, true)
+    document.removeEventListener('pointercancel', onTabDragPointerCancel, true)
+  })
+
   function WorkspaceGroupFrame(props: { groupId: string }) {
     const group = createMemo(() => workspaceGroups().find((entry) => entry.id === props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
@@ -1726,7 +1959,7 @@ function App() {
           focused={rowFocused}
           shellUiRegister={deskShellUiReg()}
           tabStrip={
-            group() && group()!.members.length > 1 ? (
+            group() ? (
               <WorkspaceTabStrip
                 groupId={props.groupId}
                 tabs={group()!.members.map((member) => ({
@@ -1734,9 +1967,20 @@ function App() {
                   title: member.title,
                   app_id: member.app_id,
                   active: member.window_id === group()!.visibleWindowId,
+                  pinned: isWorkspaceWindowPinned(workspaceState(), member.window_id),
                 }))}
+                dragWindowId={tabDragState()?.windowId ?? null}
+                dropTarget={tabDragState()?.target ?? null}
+                suppressClickWindowId={suppressTabClickWindowId()}
                 onSelectTab={selectGroupWindow}
+                onConsumeSuppressedClick={(windowId) => {
+                  if (suppressTabClickWindowId() === windowId) setSuppressTabClickWindowId(null)
+                }}
                 onCloseTab={closeGroupWindow}
+                onTabPointerDown={startTabPointerGesture}
+                onTabContextMenu={(windowId, clientX, clientY) => {
+                  shellContextMenus.openTabMenu(windowId, clientX, clientY)
+                }}
               />
             ) : undefined
           }
@@ -1775,6 +2019,67 @@ function App() {
             {renderShellWindowContent(visibleWindowId()!)}
           </Show>
         </ShellWindowFrame>
+      </Show>
+    )
+  }
+
+  function TabDragOverlay() {
+    const drag = createMemo(() => tabDragState())
+    const dropIndicator = createMemo(() => {
+      const target = drag()?.target
+      if (!target) return null
+      const slot = document.querySelector(
+        `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
+      ) as HTMLElement | null
+      const strip = document.querySelector(
+        `[data-workspace-tab-strip="${target.groupId}"]`,
+      ) as HTMLElement | null
+      if (!slot) return null
+      const slotRect = slot.getBoundingClientRect()
+      const stripRect = strip?.getBoundingClientRect() ?? slotRect
+      return {
+        line: {
+          left: `${Math.round(slotRect.left - 2)}px`,
+          top: `${Math.round(stripRect.top + 2)}px`,
+          width: '4px',
+          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
+        },
+        highlight: {
+          left: `${Math.round(stripRect.left)}px`,
+          top: `${Math.round(stripRect.top)}px`,
+          width: `${Math.round(stripRect.width)}px`,
+          height: `${Math.round(stripRect.height)}px`,
+        },
+        key: `${target.groupId}:${target.insertIndex}`,
+      }
+    })
+    return (
+      <Show when={drag()?.dragging}>
+        <div
+          data-tab-drag-capture={drag()!.windowId}
+          class="fixed inset-0 z-470120 cursor-grabbing"
+          onContextMenu={(event) => event.preventDefault()}
+          onPointerMove={onTabDragPointerMove}
+          onPointerUp={onTabDragPointerUp}
+          onPointerCancel={onTabDragPointerCancel}
+        >
+          <Show when={dropIndicator()} keyed>
+            {(indicator) => (
+              <>
+                <div
+                  data-tab-drop-indicator={indicator.key}
+                  class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
+                  style={indicator.highlight}
+                />
+                <div
+                  data-tab-drop-indicator-line={indicator.key}
+                  class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
+                  style={indicator.line}
+                />
+              </>
+            )}
+          </Show>
+        </div>
       </Show>
     )
   }
@@ -2497,18 +2802,26 @@ function App() {
     patch: Partial<DerpWindow> = {},
   ) {
     setWindows((m) => {
-      const cur = m.get(wid)
-      if (!cur) return m
-      const n = new Map(m)
-      n.set(wid, {
-        ...cur,
-        ...patch,
-        x: loc.x,
-        y: loc.y,
-        width: loc.w,
-        height: loc.h,
-      })
-      return n
+      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), wid)
+      let next = m
+      let changed = false
+      for (const groupWindowId of groupWindowIds) {
+        const current = next.get(groupWindowId)
+        if (!current) continue
+        if (!changed) {
+          next = new Map(next)
+          changed = true
+        }
+        next.set(groupWindowId, {
+          ...current,
+          ...patch,
+          x: loc.x,
+          y: loc.y,
+          width: loc.w,
+          height: loc.h,
+        })
+      }
+      return changed ? next : m
     })
   }
 
@@ -2534,7 +2847,13 @@ function App() {
     if (!mon) return
     const reserveTb = reserveTaskbarForMon(mon)
     const work = monitorWorkAreaGlobal(mon, reserveTb)
-    const payload = buildBackedWindowOpenPayload(mon.name, work, kind, co)
+    const staggerIndex = windowsList().filter(
+      (window) =>
+        window.output_name === mon.name &&
+        !window.minimized &&
+        (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
+    ).length
+    const payload = buildBackedWindowOpenPayload(mon.name, work, kind, co, staggerIndex)
     shellWireSend('backed_window_open', JSON.stringify(payload))
   }
 
@@ -2569,7 +2888,13 @@ function App() {
     const reserveTb = reserveTaskbarForMon(mon)
     const work = monitorWorkAreaGlobal(mon, reserveTb)
     const title = shellTestWindowTitle(windowId - shellTestWindowId(0))
-    const payload = buildShellTestWindowOpenPayload(mon.name, work, windowId, title, co)
+    const staggerIndex = windowsList().filter(
+      (window) =>
+        window.output_name === mon.name &&
+        !window.minimized &&
+        (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
+    ).length
+    const payload = buildShellTestWindowOpenPayload(mon.name, work, windowId, title, co, staggerIndex)
     shellWireSend('backed_window_open', JSON.stringify(payload))
     return true
   }
@@ -2924,11 +3249,19 @@ function App() {
   /** Optimistic HUD position in output-local integers; matches compositor `move_delta` after layout unification. */
   function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
     setWindows((m) => {
-      const w = m.get(windowId)
-      if (!w) return m
-      const next = new Map(m)
-      next.set(windowId, { ...w, x: w.x + dx, y: w.y + dy })
-      return next
+      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), windowId)
+      let next = m
+      let changed = false
+      for (const groupWindowId of groupWindowIds) {
+        const current = next.get(groupWindowId)
+        if (!current) continue
+        if (!changed) {
+          next = new Map(next)
+          changed = true
+        }
+        next.set(groupWindowId, { ...current, x: current.x + dx, y: current.y + dy })
+      }
+      return changed ? next : m
     })
   }
 
@@ -3232,20 +3565,7 @@ function App() {
     window.__DERP_E2E_REQUEST_HTML = (requestId: number, selector?: string | null) => {
       publishE2eShellHtml(requestId, selector)
     }
-    window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY = (query: string) =>
-      shellContextMenus.e2eSetProgramsMenuQuery(query)
-    window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION = () =>
-      (
-        shellContextMenus as typeof shellContextMenus & {
-          e2eActivateProgramsMenuSelection: () => boolean
-        }
-      ).e2eActivateProgramsMenuSelection()
     window.__DERP_E2E_OPEN_TEST_WINDOW = () => openShellTestWindow()
-    window.__DERP_E2E_MERGE_WINDOWS = (sourceWindowId: number, targetWindowId: number) =>
-      mergeGroupWindow(sourceWindowId, targetWindowId)
-    window.__DERP_E2E_SELECT_GROUP_WINDOW = (windowId: number) => selectGroupWindow(windowId)
-    window.__DERP_E2E_CYCLE_GROUP_TABS = (delta: number) =>
-      cycleFocusedWorkspaceGroup(delta < 0 ? -1 : 1)
 
     wireWatchPoll = setInterval(() => {
       if (!nativeWireHadBeenReady) return
@@ -3666,8 +3986,11 @@ function App() {
       }
       if (d.type === 'window_unmapped') {
         const wid = coerceShellWindowId(d.window_id)
+        const pendingCloseActivation =
+          wid !== null ? pendingGroupCloseActivations.get(wid) ?? null : null
         let relayoutMon: string | null = null
         if (wid !== null) {
+          pendingGroupCloseActivations.delete(wid)
           setFocusedWindowId((prev) => (prev === wid ? null : prev))
           const w = windows().get(wid)
           if (w) relayoutMon = w.output_name || fallbackMonitorKey()
@@ -3675,6 +3998,22 @@ function App() {
           perMonitorTiles.preTileGeometry.delete(wid)
         }
         setWindows((m) => applyDetail(m, d))
+        if (pendingCloseActivation) {
+          queueMicrotask(() => {
+            syncWindowGeometry(
+              pendingCloseActivation.nextVisibleId,
+              pendingCloseActivation.closingWindow,
+            )
+            setWorkspaceState((prev) =>
+              setWorkspaceActiveTab(
+                prev,
+                pendingCloseActivation.groupId,
+                pendingCloseActivation.nextVisibleId,
+              ),
+            )
+            shellWireSend('taskbar_activate', pendingCloseActivation.nextVisibleId)
+          })
+        }
         queueMicrotask(() => flushShellUiWindowsSyncNow())
         if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
         return
@@ -3689,6 +4028,7 @@ function App() {
         setWindows((m) => applyDetail(m, d))
         if (wid !== null) {
           queueMicrotask(() => {
+            syncHiddenGroupWindowGeometry(wid)
             const w2 = windows().get(wid!)
             const fb = fallbackMonitorKey()
             const newMon = w2 ? w2.output_name || fb : null
@@ -3854,12 +4194,7 @@ function App() {
       document.removeEventListener('fullscreenchange', onFullscreenChange)
       delete window.__DERP_E2E_REQUEST_SNAPSHOT
       delete window.__DERP_E2E_REQUEST_HTML
-      delete window.__DERP_E2E_SET_PROGRAMS_MENU_QUERY
-      delete window.__DERP_E2E_ACTIVATE_PROGRAMS_MENU_SELECTION
       delete window.__DERP_E2E_OPEN_TEST_WINDOW
-      delete window.__DERP_E2E_MERGE_WINDOWS
-      delete window.__DERP_E2E_SELECT_GROUP_WINDOW
-      delete window.__DERP_E2E_CYCLE_GROUP_TABS
     })
   })
   onCleanup(() => {
@@ -3945,6 +4280,8 @@ function App() {
       <For each={workspaceGroups().map((group) => group.id)}>
         {(groupId) => <WorkspaceGroupFrame groupId={groupId} />}
       </For>
+
+      <TabDragOverlay />
 
       {volumeOverlayHud()}
 
@@ -4062,8 +4399,10 @@ function App() {
         shellMenuAtlasTop={shellContextMenus.shellMenuAtlasTop}
         programsMenuOpen={shellContextMenus.programsMenuOpen}
         powerMenuOpen={shellContextMenus.powerMenuOpen}
+        tabMenuOpen={shellContextMenus.tabMenuOpen}
         programsMenuProps={shellContextMenus.programsMenuProps}
         powerMenuProps={shellContextMenus.powerMenuProps}
+        tabMenuProps={shellContextMenus.tabMenuProps}
       />
 
       <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">

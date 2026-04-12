@@ -524,9 +524,6 @@ impl CompositorState {
         let snap = self
             .window_registry
             .update_shell_hosted(window_id, |info, float_restore| {
-                if info.minimized {
-                    return Some(info.clone());
-                }
                 if layout_state == 1 {
                     if let Some(work) = max_work {
                         if !info.maximized && float_restore.is_none() {

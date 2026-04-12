@@ -1,9 +1,12 @@
 import {
+  KEY,
   SHELL_UI_SETTINGS_WINDOW_ID,
   SkipError,
   activateTaskbarWindow,
   assert,
   assertTaskbarRowOnMonitor,
+  closeTaskbarWindow,
+  closeWindow,
   clickRect,
   clickPoint,
   compositorWindowById,
@@ -18,23 +21,132 @@ import {
   openSettings,
   pickMonitorMove,
   pointInRect,
-  postJson,
   printNote,
   rectCenter,
   runKeybind,
   shellWindowById,
+  tapKey,
   taskbarEntry,
   taskbarForMonitor,
+  typeText,
   waitFor,
   waitForNativeFocus,
   waitForProgramsMenuClosed,
-  waitForProgramsMenuOpen,
   waitForShellUiFocus,
+  waitForTaskbarEntry,
+  waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
   type CompositorSnapshot,
+  type DesktopAppEntry,
   type ShellSnapshot,
+  type WindowSnapshot,
 } from '../lib/runtime.ts'
+
+async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot) {
+  assert(shell.controls?.programs_menu_search, 'missing programs menu search control')
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  if (compositor.shell_keyboard_focus) {
+    return shell
+  }
+  await clickRect(base, shell.controls.programs_menu_search)
+  await waitFor(
+    'wait for launcher search focus',
+    async () => {
+      const next = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      return next.shell_keyboard_focus ? next : null
+    },
+    2000,
+    50,
+  )
+  return getJson<ShellSnapshot>(base, '/test/state/shell')
+}
+
+async function launchTerminalAppFromProgramsMenu(
+  base: string,
+  state: { desktopApps: DesktopAppEntry[]; launcherWindowId: number | null; spawnedNativeWindowIds: Set<number> },
+  launcherCandidate: { query: string; app: DesktopAppEntry },
+) {
+  await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+  await typeText(base, launcherCandidate.query)
+  const filteredMenu = await waitFor(
+    `wait for launcher query ${launcherCandidate.query}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_query === launcherCandidate.query && shell.controls?.programs_menu_first_item
+        ? shell
+        : null
+    },
+    5000,
+    100,
+  )
+  assert(filteredMenu.controls?.programs_menu_first_item, 'missing first launcher result rect')
+  const knownBefore = new Set((await getJson<CompositorSnapshot>(base, '/test/state/compositor')).windows.map((window) => window.window_id))
+  await tapKey(base, KEY.enter)
+  const launched = await waitFor(
+    `wait for launcher spawned window ${launcherCandidate.query}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = compositor.windows.find((entry) => !entry.shell_hosted && !knownBefore.has(entry.window_id))
+      if (!window) return null
+      return { compositor, shell, window }
+    },
+    12000,
+    125,
+  )
+  const stableLaunch = await waitFor(
+    `wait for launcher stable size ${launcherCandidate.query}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = compositorWindowById(compositor, launched.window.window_id)
+      if (!window) return null
+      if (window.width < 160 || window.height < 48) return null
+      return { compositor, shell, window }
+    },
+    8000,
+    125,
+  )
+  state.launcherWindowId = launched.window.window_id
+  state.spawnedNativeWindowIds.add(launched.window.window_id)
+  await waitForProgramsMenuClosed(base)
+  await waitForTaskbarEntry(base, launched.window.window_id)
+  return {
+    filteredMenu,
+    launched,
+    stableLaunch,
+  }
+}
+
+async function closeLaunchedWindowAndAssertNoGhost(
+  base: string,
+  launchedWindow: WindowSnapshot,
+) {
+  const shellBeforeClose = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (taskbarEntry(shellBeforeClose, launchedWindow.window_id)?.close) {
+    await closeTaskbarWindow(base, shellBeforeClose, launchedWindow.window_id)
+  } else {
+    await closeWindow(base, launchedWindow.window_id)
+  }
+  await waitForWindowGone(base, launchedWindow.window_id)
+  return waitFor(
+    `wait for no tiny launcher ghost ${launchedWindow.window_id}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const suspiciousGhosts = compositor.windows.filter(
+        (window) =>
+          !window.shell_hosted &&
+          (window.app_id === launchedWindow.app_id || window.title === launchedWindow.title) &&
+          !window.minimized &&
+          (window.width < 160 || window.height < 48),
+      )
+      if (suspiciousGhosts.length > 0) return null
+      if (taskbarEntry(shell, launchedWindow.window_id)) return null
+      return { compositor, shell, suspiciousGhosts }
+    },
+    5000,
+    100,
+  )
+}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('programs menu opens searches and optionally launches a terminal app', async ({ base, state }) => {
@@ -44,10 +156,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(menuOpen.controls.taskbar_programs_toggle, 'missing programs menu toggle')
     await clickRect(base, menuOpen.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(base)
-    await openProgramsMenu(base, 'keybind')
-    const menuByKeybind = await waitForProgramsMenuOpen(base)
-    assert(menuByKeybind.controls?.programs_menu_search, 'missing programs menu search control after keybind')
-    await postJson(base, '/test/programs_menu_query', { query: 'a' })
+    const menuByKeybind = await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+    await typeText(base, 'a')
     await waitFor(
       'wait for programs menu query',
       async () => {
@@ -63,48 +173,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     } else {
       await runKeybind(base, 'toggle_programs_menu')
       await waitForProgramsMenuClosed(base)
-      const menuForLaunch = await openProgramsMenu(base, 'keybind')
-      assert(menuForLaunch.controls?.programs_menu_search, 'missing programs menu search control for launch')
-      await postJson(base, '/test/programs_menu_query', { query: launcherCandidate.query })
-      const filteredMenu = await waitFor(
-        'wait for launcher query',
-        async () => {
-          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          return shell.programs_menu_query === launcherCandidate.query && shell.controls?.programs_menu_first_item
-            ? shell
-            : null
-        },
-        5000,
-        100,
-      )
-      assert(filteredMenu.controls?.programs_menu_first_item, 'missing first launcher result rect')
-      const knownBefore = new Set((await getJson<CompositorSnapshot>(base, '/test/state/compositor')).windows.map((window) => window.window_id))
-      await postJson(base, '/test/programs_menu_activate', {})
-      const launched = await waitFor(
-        'wait for launcher spawned window',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const window = compositor.windows.find((entry) => !entry.shell_hosted && !knownBefore.has(entry.window_id))
-          if (!window) return null
-          return { compositor, shell, window }
-        },
-        12000,
-        125,
-      )
-      const stableLaunch = await waitFor(
-        'wait for launcher window minimum chrome-safe size',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const window = compositorWindowById(compositor, launched.window.window_id)
-          if (!window) return null
-          if (window.width < 160 || window.height < 48) return null
-          return { compositor, shell, window }
-        },
-        8000,
-        125,
-      )
-      state.launcherWindowId = launched.window.window_id
-      state.spawnedNativeWindowIds.add(launched.window.window_id)
+      const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
       await writeJsonArtifact('programs-menu-launch.json', {
         query: launcherCandidate.query,
         app: launcherCandidate.app,
@@ -116,6 +185,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await runKeybind(base, 'toggle_programs_menu')
       await waitForProgramsMenuClosed(base)
     }
+  })
+
+  test('launcher app closes cleanly without leaving tiny native ghost windows', async ({ base, state }) => {
+    const desktopApps = await ensureDesktopApps(base, state)
+    const launcherCandidate = findLauncherCandidate(desktopApps)
+    if (!launcherCandidate) {
+      throw new SkipError('no stable terminal launcher candidate found')
+    }
+    const cycles: Array<{ launched: WindowSnapshot; closed: { compositor: CompositorSnapshot; shell: ShellSnapshot } }> = []
+    for (let index = 0; index < 2; index += 1) {
+      const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
+      const closed = await closeLaunchedWindowAndAssertNoGhost(base, stableLaunch.window)
+      cycles.push({ launched: stableLaunch.window, closed })
+    }
+    await writeJsonArtifact('programs-menu-launcher-cleanup.json', {
+      query: launcherCandidate.query,
+      cycles,
+    })
   })
 
   test('multi-monitor taskbars and native/js window moves stay aligned', async ({ base, state }) => {
@@ -156,7 +243,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await clickPoint(base, redCompositor.x + redCompositor.width / 2, redCompositor.y + redCompositor.height / 2)
     try {
       await waitForNativeFocus(base, redId, 1500)
-    } catch {}
+    } catch {
+      const shellBeforeRedFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await activateTaskbarWindow(base, shellBeforeRedFocus, redId)
+      await waitForNativeFocus(base, redId)
+    }
     await runKeybind(base, nativeMove.action)
     const nativeMoved = await waitFor(
       'wait for native monitor move',
@@ -185,8 +276,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
 
     const settingsOpen = await openSettings(base, 'click')
-    await activateTaskbarWindow(base, settingsOpen.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    let settingsFocused
+    try {
+      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 1500)
+    } catch {
+      await activateTaskbarWindow(base, settingsOpen.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    }
     const settingsWindow = shellWindowById(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow?.output_name, 'missing settings output name')
     assertTaskbarRowOnMonitor(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, settingsWindow.output_name)

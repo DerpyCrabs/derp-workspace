@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { groupTaskbarLabel, nextActiveWindowAfterRemoval, resolveGroupVisibleWindowId, tabsInGroup } from './tabGroupOps'
-import { createEmptyWorkspaceState, mergeWorkspaceGroups, reconcileWorkspaceState, setWorkspaceActiveTab } from './workspaceState'
+import {
+  clampTabInsertIndex,
+  findMergeTarget,
+  groupTaskbarLabel,
+  leadingPinnedTabCount,
+  mergeTargetFromElement,
+  nextActiveWindowAfterRemoval,
+  resolveGroupVisibleWindowId,
+  tabsInGroup,
+} from './tabGroupOps'
+import { createEmptyWorkspaceState, mergeWorkspaceGroups, reconcileWorkspaceState, setWorkspaceActiveTab, setWorkspaceWindowPinned } from './workspaceState'
 
 function makeWindow(window_id: number, title = `Window ${window_id}`, minimized = false) {
   return {
@@ -11,7 +20,28 @@ function makeWindow(window_id: number, title = `Window ${window_id}`, minimized 
   }
 }
 
+const OrigElement = globalThis.Element
+
+function asElem(props: Record<string, unknown>): Element {
+  return Object.assign(
+    Object.create((globalThis as unknown as { Element: { prototype: object } }).Element.prototype),
+    props,
+  ) as unknown as Element
+}
+
 describe('tabGroupOps', () => {
+  it('counts leading pinned tabs and clamps inserts after them', () => {
+    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+    const groupId = state.groups.find((group) => group.windowIds.includes(2))!.id
+    state = mergeWorkspaceGroups(state, 3, 1)
+    state = setWorkspaceWindowPinned(state, 2, true)
+    state = setWorkspaceWindowPinned(state, 1, true)
+    expect(leadingPinnedTabCount(state, groupId)).toBe(2)
+    expect(clampTabInsertIndex(state, groupId, 0, false)).toBe(2)
+    expect(clampTabInsertIndex(state, groupId, 1, false)).toBe(2)
+    expect(clampTabInsertIndex(state, groupId, 1, true)).toBe(1)
+  })
+
   it('returns tabs in the persisted group order', () => {
     const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
     const groupId = state.groups.find((group) => group.windowIds.includes(2))!.id
@@ -29,6 +59,7 @@ describe('tabGroupOps', () => {
     const state = {
       groups: [{ id: 'group-1', windowIds: [1, 2, 3] }],
       activeTabByGroupId: { 'group-1': 9 },
+      pinnedWindowIds: [],
       nextGroupSeq: 2,
     }
     expect(
@@ -44,6 +75,7 @@ describe('tabGroupOps', () => {
     const state = {
       groups: [{ id: 'group-1', windowIds: [10, 11, 12] }],
       activeTabByGroupId: { 'group-1': 11 },
+      pinnedWindowIds: [],
       nextGroupSeq: 2,
     }
     expect(nextActiveWindowAfterRemoval(state, 'group-1', 11)).toBe(12)
@@ -54,5 +86,91 @@ describe('tabGroupOps', () => {
     const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
     const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
     expect(groupTaskbarLabel(merged, groupId, [makeWindow(1, 'Alpha'), makeWindow(2, 'Beta')])).toBe('Beta (+1)')
+  })
+
+  it('parses tab drop slots from DOM attributes', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    try {
+      const slot = asElem({
+        closest(sel: string) {
+          if (sel === '[data-tab-drop-slot]') return this as unknown as Element
+          return null
+        },
+        getAttribute(name: string) {
+          return name === 'data-tab-drop-slot' ? 'group-2:3' : null
+        },
+      })
+      const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
+      expect(mergeTargetFromElement(slot, state, 1, 0)).toEqual({ groupId: 'group-2', insertIndex: 3 })
+    } finally {
+      globalThis.Element = OrigElement
+    }
+  })
+
+  it('uses tab body hit testing to choose before or after the hovered tab', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    try {
+      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      const tab = asElem({
+        closest(sel: string) {
+          if (sel === '[data-workspace-tab]') return this as unknown as Element
+          if (sel === '[data-tab-drop-slot]') return null
+          return null
+        },
+        getAttribute(name: string) {
+          if (name === 'data-workspace-tab') return '2'
+          if (name === 'data-workspace-tab-group') return 'group-2'
+          return null
+        },
+        getBoundingClientRect() {
+          return {
+            left: 100,
+            width: 100,
+            top: 0,
+            right: 200,
+            bottom: 40,
+            height: 40,
+            x: 100,
+            y: 0,
+          } as DOMRect
+        },
+      })
+      expect(mergeTargetFromElement(tab, state, 3, 120)).toEqual({ groupId: 'group-2', insertIndex: 0 })
+      expect(mergeTargetFromElement(tab, state, 3, 180)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+    } finally {
+      globalThis.Element = OrigElement
+    }
+  })
+
+  it('finds the first merge target from document.elementsFromPoint', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    const docHolder = globalThis as typeof globalThis & { document?: Document }
+    if (!docHolder.document) docHolder.document = {} as Document
+    const docAny = docHolder.document as Document & { elementsFromPoint?: (x: number, y: number) => Element[] }
+    const orig = docAny.elementsFromPoint
+    const slot = asElem({
+      closest(sel: string) {
+        if (sel === '[data-tab-drop-slot]') return this as unknown as Element
+        return null
+      },
+      getAttribute(name: string) {
+        return name === 'data-tab-drop-slot' ? 'group-2:1' : null
+      },
+    })
+    docAny.elementsFromPoint = () => [slot]
+    try {
+      const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
+      expect(findMergeTarget(state, 1, 10, 10)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+    } finally {
+      if (orig) docAny.elementsFromPoint = orig
+      else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      globalThis.Element = OrigElement
+    }
   })
 })

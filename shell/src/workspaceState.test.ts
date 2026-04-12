@@ -5,9 +5,13 @@ import {
   groupIdForWindow,
   loadWorkspaceState,
   mergeWorkspaceGroups,
+  moveWorkspaceWindowToGroup,
   persistWorkspaceState,
   reconcileWorkspaceState,
+  reorderWorkspaceWindowInGroup,
+  splitWorkspaceWindowToOwnGroup,
   setWorkspaceActiveTab,
+  setWorkspaceWindowPinned,
   type WorkspaceState,
 } from './workspaceState'
 
@@ -22,6 +26,7 @@ describe('workspaceState', () => {
       'group-1': 3,
       'group-2': 7,
     })
+    expect(next.pinnedWindowIds).toEqual([])
   })
 
   it('prunes unmapped windows and repairs invalid active tabs', () => {
@@ -34,11 +39,25 @@ describe('workspaceState', () => {
         'group-1': 4,
         'group-2': 9,
       },
+      pinnedWindowIds: [],
       nextGroupSeq: 3,
     }
     const next = reconcileWorkspaceState(state, [3])
     expect(next.groups).toEqual([{ id: 'group-1', windowIds: [3] }])
     expect(next.activeTabByGroupId).toEqual({ 'group-1': 3 })
+    expect(next.pinnedWindowIds).toEqual([])
+  })
+
+  it('drops pinned ids for windows removed during reconciliation', () => {
+    const state: WorkspaceState = {
+      groups: [{ id: 'group-1', windowIds: [3, 4] }],
+      activeTabByGroupId: { 'group-1': 4 },
+      pinnedWindowIds: [4, 9],
+      nextGroupSeq: 2,
+    }
+    const next = reconcileWorkspaceState(state, [3])
+    expect(next.groups).toEqual([{ id: 'group-1', windowIds: [3] }])
+    expect(next.pinnedWindowIds).toEqual([])
   })
 
   it('merges one window into the target group after the target member', () => {
@@ -63,6 +82,47 @@ describe('workspaceState', () => {
     expect(prev.activeTabByGroupId[groupId]).toBe(2)
   })
 
+  it('keeps pinned tabs at the front when reordering an unpinned tab', () => {
+    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+    const groupId = groupIdForWindow(state, 2)!
+    state = moveWorkspaceWindowToGroup(state, 3, groupId, 2)
+    state = setWorkspaceWindowPinned(state, 2, true)
+    const next = reorderWorkspaceWindowInGroup(state, groupId, 3, 0)
+    expect(next.groups.find((group) => group.id === groupId)?.windowIds).toEqual([2, 3, 1])
+  })
+
+  it('moves a pinned tab into the pinned block when pinning', () => {
+    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+    const groupId = groupIdForWindow(state, 2)!
+    state = moveWorkspaceWindowToGroup(state, 3, groupId, 2)
+    const next = setWorkspaceWindowPinned(state, 3, true)
+    expect(next.pinnedWindowIds).toEqual([3])
+    expect(next.groups.find((group) => group.id === groupId)?.windowIds).toEqual([3, 2, 1])
+  })
+
+  it('moves an unpinned tab behind the pinned block when merging', () => {
+    let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+    const groupId = groupIdForWindow(state, 2)!
+    state = setWorkspaceWindowPinned(state, 2, true)
+    const next = moveWorkspaceWindowToGroup(state, 3, groupId, 0)
+    expect(next.groups.find((group) => group.id === groupId)?.windowIds).toEqual([2, 3, 1])
+  })
+
+  it('splits a grouped window into its own group', () => {
+    const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+    const next = splitWorkspaceWindowToOwnGroup(merged, 1)
+    expect(next.groups).toEqual([
+      { id: 'group-2', windowIds: [2] },
+      { id: 'group-4', windowIds: [1] },
+      { id: 'group-3', windowIds: [3] },
+    ])
+    expect(next.activeTabByGroupId).toEqual({
+      'group-2': 2,
+      'group-3': 3,
+      'group-4': 1,
+    })
+  })
+
   it('persists and reloads workspace state', () => {
     const storage = new Map<string, string>()
     const adapter = {
@@ -73,7 +133,8 @@ describe('workspaceState', () => {
         storage.set(key, value)
       },
     }
-    const state = setWorkspaceActiveTab(reconcileWorkspaceState(createEmptyWorkspaceState(), [10, 11]), 'group-2', 11)
+    let state = setWorkspaceActiveTab(reconcileWorkspaceState(createEmptyWorkspaceState(), [10, 11]), 'group-2', 11)
+    state = setWorkspaceWindowPinned(state, 11, true)
     persistWorkspaceState(state, adapter)
     expect(loadWorkspaceState(adapter)).toEqual(state)
   })

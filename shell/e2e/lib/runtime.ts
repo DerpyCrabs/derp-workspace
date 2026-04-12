@@ -119,6 +119,7 @@ export interface ShellTabButton {
   rect?: Rect | null
   close?: Rect | null
   active: boolean
+  pinned?: boolean
 }
 
 export interface ShellTabGroup {
@@ -152,6 +153,8 @@ export interface ShellControls {
   taskbar_power_toggle?: Rect | null
   programs_menu_search?: Rect | null
   programs_menu_first_item?: Rect | null
+  tab_menu_pin?: Rect | null
+  tab_menu_unpin?: Rect | null
   settings_tab_user?: Rect | null
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
@@ -722,6 +725,15 @@ export async function clickRect(base: string, rect: Rect): Promise<void> {
   await clickPoint(base, point.x, point.y)
 }
 
+export async function rightClickPoint(base: string, x: number, y: number): Promise<void> {
+  await postJson(base, '/test/input/click', { x, y, button: BTN_RIGHT })
+}
+
+export async function rightClickRect(base: string, rect: Rect): Promise<void> {
+  const point = rectCenter(rect)
+  await rightClickPoint(base, point.x, point.y)
+}
+
 export function assertRectMinSize(
   label: string,
   rect: Rect | null | undefined,
@@ -751,6 +763,12 @@ export async function pointerButton(base: string, button: number, action: 'press
 
 export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 16): Promise<void> {
   await postJson(base, '/test/input/drag', { x0, y0, x1, y1, button: BTN_LEFT, steps })
+}
+
+export async function dragRectToRect(base: string, from: Rect, to: Rect, steps = 20): Promise<void> {
+  const start = rectCenter(from)
+  const end = rectCenter(to)
+  await dragBetweenPoints(base, start.x, start.y, end.x, end.y, steps)
 }
 
 export async function tapKey(base: string, keycode: number): Promise<void> {
@@ -1069,25 +1087,6 @@ export async function openShellTestWindow(
   state.spawnedShellWindowIds.add(result.window.window_id)
   state.knownWindowIds.add(result.window.window_id)
   return result
-}
-
-export async function mergeWindowsIntoGroup(
-  base: string,
-  sourceWindowId: number,
-  targetWindowId: number,
-): Promise<void> {
-  await postJson(base, '/test/workspace/merge', {
-    source_window_id: sourceWindowId,
-    target_window_id: targetWindowId,
-  })
-}
-
-export async function selectGroupedWindow(base: string, windowId: number): Promise<void> {
-  await postJson(base, '/test/workspace/select', { window_id: windowId })
-}
-
-export async function cycleGroupedTabs(base: string, delta: 1 | -1): Promise<void> {
-  await postJson(base, '/test/workspace/cycle', { delta })
 }
 
 export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {

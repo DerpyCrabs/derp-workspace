@@ -277,6 +277,7 @@ impl CompositorState {
         };
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.e2e_now_ms() as u32;
+        let keycode = keycode.saturating_add(8);
         keyboard.input::<(), _>(
             self,
             keycode.into(),

@@ -1,4 +1,4 @@
-import { For, Show, type Accessor, type JSX } from 'solid-js'
+import { For, Show, onCleanup, onMount, type Accessor, type JSX } from 'solid-js'
 import type { ShellContextMenuItem } from '../contextMenu'
 
 type ProgramsContextMenuProps = {
@@ -15,6 +15,36 @@ type ProgramsContextMenuProps = {
 
 export function ProgramsContextMenu(props: ProgramsContextMenuProps) {
   let searchRef: HTMLInputElement | undefined
+
+  const syncSearchFocus = () => {
+    queueMicrotask(() => searchRef?.focus())
+  }
+
+  const redirectLauncherTyping = (e: KeyboardEvent) => {
+    if (e.defaultPrevented || e.isComposing) return
+    if (document.activeElement === searchRef) return
+    if (e.ctrlKey || e.altKey || e.metaKey) return
+    if (e.key === 'Backspace') {
+      e.preventDefault()
+      e.stopPropagation()
+      props.setQuery(props.query().slice(0, -1))
+      syncSearchFocus()
+      return
+    }
+    if (e.key.length !== 1) return
+    e.preventDefault()
+    e.stopPropagation()
+    props.setQuery(`${props.query()}${e.key}`)
+    syncSearchFocus()
+  }
+
+  onMount(() => {
+    document.addEventListener('keydown', redirectLauncherTyping, true)
+  })
+
+  onCleanup(() => {
+    document.removeEventListener('keydown', redirectLauncherTyping, true)
+  })
 
   return (
     <div

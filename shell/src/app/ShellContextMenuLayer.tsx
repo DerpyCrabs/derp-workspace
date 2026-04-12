@@ -1,6 +1,7 @@
 import { Show, type Accessor } from 'solid-js'
 import { PowerContextMenu } from './PowerContextMenu'
 import { ProgramsContextMenu } from './ProgramsContextMenu'
+import { TabContextMenu } from './TabContextMenu'
 
 type ShellContextMenuLayerProps = {
   ctxMenuOpen: Accessor<boolean>
@@ -9,8 +10,10 @@ type ShellContextMenuLayerProps = {
   setMenuAtlasHostRef: (el: HTMLDivElement) => void
   programsMenuOpen: Accessor<boolean>
   powerMenuOpen: Accessor<boolean>
+  tabMenuOpen: Accessor<boolean>
   programsMenuProps: Parameters<typeof ProgramsContextMenu>[0]
   powerMenuProps: Parameters<typeof PowerContextMenu>[0]
+  tabMenuProps: Parameters<typeof TabContextMenu>[0]
 }
 
 export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
@@ -37,6 +40,9 @@ export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
       </Show>
       <Show when={props.powerMenuOpen()}>
         <PowerContextMenu {...props.powerMenuProps} />
+      </Show>
+      <Show when={props.tabMenuOpen()}>
+        <TabContextMenu {...props.tabMenuProps} />
       </Show>
     </div>
   )
