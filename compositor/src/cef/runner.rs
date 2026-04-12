@@ -598,9 +598,9 @@ fn run_cef(
     let deadline = Instant::now() + Duration::from_millis(800);
     while !handshake.load(Ordering::SeqCst) && Instant::now() < deadline {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(Duration::from_millis(1));
     }
-    for _ in 0..64 {
+    for _ in 0..32 {
         do_message_loop_work();
     }
 
@@ -646,7 +646,7 @@ fn run_cef(
     while !shutdown_requested.load(Ordering::Relaxed) && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(8));
+        thread::sleep(Duration::from_millis(4));
     }
 
     if let Ok(g) = browser_holder.lock() {

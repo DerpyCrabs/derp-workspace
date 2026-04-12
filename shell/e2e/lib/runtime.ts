@@ -531,9 +531,7 @@ export async function ensureDesktopApps(base: string, state: E2eState): Promise<
   return state.desktopApps
 }
 
-export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
-  const shell = await normalizeTransientShellState(base)
-  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+function syncTrackedWindows(state: E2eState, compositor: CompositorSnapshot): void {
   state.knownWindowIds = new Set(compositor.windows.map((window) => window.window_id))
   state.redSpawn = syncTrackedNativeWindow(compositor, state.redSpawn, RED_NATIVE_TITLE)
   state.greenSpawn = syncTrackedNativeWindow(compositor, state.greenSpawn, GREEN_NATIVE_TITLE)
@@ -541,6 +539,12 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
   if (state.launcherWindowId !== null && !compositorWindowById(compositor, state.launcherWindowId)) {
     state.launcherWindowId = null
   }
+}
+
+export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  const shell = await normalizeTransientShellState(base)
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  syncTrackedWindows(state, compositor)
   await ensureDesktopApps(base, state)
   return { compositor, shell }
 }
@@ -654,6 +658,14 @@ export function approxEqual(actual: number, expected: number, tolerance: number,
   }
 }
 
+function waitIntervalMs(intervalMs: number, attempts: number): number {
+  if (intervalMs <= 16) return intervalMs
+  if (attempts <= 1) return Math.min(intervalMs, 16)
+  if (attempts === 2) return Math.min(intervalMs, 32)
+  if (attempts === 3) return Math.min(intervalMs, 64)
+  return intervalMs
+}
+
 export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 100): Promise<T> {
   const started = Date.now()
   let lastError: unknown = null
@@ -675,7 +687,9 @@ export async function waitFor<T>(description: string, fn: () => Promise<T | null
     } catch (error) {
       lastError = error
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    const remainingMs = timeoutMs - (Date.now() - started)
+    if (remainingMs <= 0) break
+    await new Promise((resolve) => setTimeout(resolve, Math.min(remainingMs, waitIntervalMs(intervalMs, attempts))))
   }
   recordTimingEvent({
     kind: 'wait',
@@ -761,11 +775,11 @@ export async function pointerButton(base: string, button: number, action: 'press
   await postJson(base, '/test/input/pointer_button', { button, action })
 }
 
-export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 16): Promise<void> {
+export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 12): Promise<void> {
   await postJson(base, '/test/input/drag', { x0, y0, x1, y1, button: BTN_LEFT, steps })
 }
 
-export async function dragRectToRect(base: string, from: Rect, to: Rect, steps = 20): Promise<void> {
+export async function dragRectToRect(base: string, from: Rect, to: Rect, steps = 16): Promise<void> {
   const start = rectCenter(from)
   const end = rectCenter(to)
   await dragBetweenPoints(base, start.x, start.y, end.x, end.y, steps)
@@ -776,11 +790,16 @@ export async function tapKey(base: string, keycode: number): Promise<void> {
 }
 
 export async function typeText(base: string, text: string): Promise<void> {
+  const keycodes: number[] = []
   for (const char of text.toLowerCase()) {
     const keycode = KEY[char as keyof typeof KEY]
     if (keycode === undefined) throw new Error(`unsupported text input character: ${char}`)
-    await tapKey(base, keycode)
+    keycodes.push(keycode)
   }
+  if (keycodes.length === 0) {
+    return
+  }
+  await postJson(base, '/test/input/keys', { keycodes, action: 'tap' })
 }
 
 export async function runKeybind(base: string, action: string): Promise<void> {
@@ -1208,7 +1227,7 @@ export async function ensureNativeWindow(
   key: 'redSpawn' | 'greenSpawn' | 'crashProbe',
   options: { title: string; token: string; strip: string; width?: number; height?: number },
 ): Promise<NativeSpawnResult> {
-  await primeState(base, state)
+  syncTrackedWindows(state, await getJson<CompositorSnapshot>(base, '/test/state/compositor'))
   const existing = state[key]
   if (existing) {
     state.spawnedNativeWindowIds.add(existing.window.window_id)

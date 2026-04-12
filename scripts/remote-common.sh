@@ -30,9 +30,30 @@ run_tar_sync() {
   ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" bash -c "$remote_sh" >/dev/null
 }
 
+remote_repo_hash_path_list() {
+  local tmp out
+  tmp=$(mktemp)
+  "$@" >"$tmp"
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    printf 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    return
+  fi
+  out=$( (
+    cd "$REPO_ROOT" || exit 1
+    while IFS= read -r rel; do
+      [[ -z "$rel" ]] && continue
+      [[ -f "$rel" ]] || continue
+      sha256sum "$rel"
+    done <"$tmp"
+  ) | sha256sum | awk '{print $1}' )
+  rm -f "$tmp"
+  printf '%s' "$out"
+}
+
 require_remote_sync_tools() {
   local cmd
-  for cmd in ssh tar; do
+  for cmd in ssh tar sha256sum awk; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       echo "${REMOTE_COMMON_SCRIPT_NAME}: $cmd not found" >&2
       exit 1

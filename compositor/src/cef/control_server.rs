@@ -408,6 +408,24 @@ fn json_u32_field(v: &serde_json::Value, key: &str) -> Result<u32, String> {
     u32::try_from(raw).map_err(|_| format!("{key} out of range"))
 }
 
+fn json_u32_vec_field(v: &serde_json::Value, key: &str) -> Result<Vec<u32>, String> {
+    let values = v
+        .get(key)
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| format!("missing {key}"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| format!("{key} must contain only integers"))
+                .and_then(|raw| {
+                    u32::try_from(raw).map_err(|_| format!("{key} contains out-of-range keycode"))
+                })
+        })
+        .collect()
+}
+
 fn json_bool_field(v: &serde_json::Value, key: &str) -> Result<bool, String> {
     v.get(key)
         .and_then(|x| x.as_bool())
@@ -665,6 +683,24 @@ fn handle_one(
             button,
             steps,
         )?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/input/keys" {
+        let keycodes = json_u32_vec_field(&v, "keycodes")?;
+        let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("tap");
+        for keycode in keycodes {
+            match action {
+                "press" => uplink.test_key(keycode, true)?,
+                "release" => uplink.test_key(keycode, false)?,
+                "tap" => {
+                    uplink.test_key(keycode, true)?;
+                    uplink.test_key(keycode, false)?;
+                }
+                _ => return Err("keys: action must be press, release, or tap".into()),
+            }
+        }
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

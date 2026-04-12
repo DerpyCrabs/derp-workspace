@@ -72,7 +72,6 @@ async function main(): Promise<void> {
   const runStart = Date.now()
   const reporter = createReporter(selected.map((group) => group.name))
   const state = createState(base)
-  await primeState(base, state)
   let currentGroupName = selected[0]?.name ?? 'suite'
   let currentTestName = 'bootstrap'
 

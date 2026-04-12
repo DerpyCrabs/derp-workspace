@@ -95,21 +95,23 @@ async function waitForPickerOpen(base: string, windowId: number): Promise<ShellS
   )
 }
 
-async function openPickerWhileDragging(base: string, windowId: number): Promise<ShellSnapshot> {
-  return waitFor(
-    `wait for drag picker open ${windowId}`,
+async function waitForSnapStripTrigger(base: string) {
+  const shell = await waitFor(
+    'wait for snap strip trigger',
     async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const strip = shell.controls?.snap_strip_trigger
-      if (!strip) return null
-      const center = rectGlobalCenter(strip)
-      await movePoint(base, center.x, center.y)
-      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return next.snap_picker_open && next.snap_picker_window_id === windowId ? next : null
+      const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return current.controls?.snap_strip_trigger ? current : null
     },
     4000,
     100,
   )
+  return assertRectMinSize('snap strip trigger', shell.controls?.snap_strip_trigger, 12)
+}
+
+async function openPickerWhileDragging(base: string, windowId: number): Promise<ShellSnapshot> {
+  const stripCenter = rectGlobalCenter(await waitForSnapStripTrigger(base))
+  await movePoint(base, stripCenter.x, stripCenter.y)
+  return waitForPickerOpen(base, windowId)
 }
 
 async function waitForPickerClosed(base: string, windowId: number): Promise<ShellSnapshot> {
@@ -130,10 +132,10 @@ async function hoverPickerCellWhileDragging(
   rect: { global_x: number; global_y: number; width: number; height: number },
 ): Promise<ShellSnapshot> {
   const center = rectGlobalCenter(rect)
+  await movePoint(base, center.x, center.y)
   return waitFor(
     label,
     async () => {
-      await movePoint(base, center.x, center.y)
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       return shell.snap_hover_span ? shell : null
     },

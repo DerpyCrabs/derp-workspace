@@ -33,7 +33,6 @@ import {
   waitForNativeFocus,
   waitForProgramsMenuClosed,
   waitForShellUiFocus,
-  waitForTaskbarEntry,
   waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
@@ -83,36 +82,25 @@ async function launchTerminalAppFromProgramsMenu(
   assert(filteredMenu.controls?.programs_menu_first_item, 'missing first launcher result rect')
   const knownBefore = new Set((await getJson<CompositorSnapshot>(base, '/test/state/compositor')).windows.map((window) => window.window_id))
   await tapKey(base, KEY.enter)
-  const launched = await waitFor(
+  const stableLaunch = await waitFor(
     `wait for launcher spawned window ${launcherCandidate.query}`,
     async () => {
       const { compositor, shell } = await getSnapshots(base)
       const window = compositor.windows.find((entry) => !entry.shell_hosted && !knownBefore.has(entry.window_id))
       if (!window) return null
+      if (window.width < 160 || window.height < 48) return null
+      if (shell.programs_menu_open) return null
+      if (!taskbarEntry(shell, window.window_id)) return null
       return { compositor, shell, window }
     },
     12000,
     125,
   )
-  const stableLaunch = await waitFor(
-    `wait for launcher stable size ${launcherCandidate.query}`,
-    async () => {
-      const { compositor, shell } = await getSnapshots(base)
-      const window = compositorWindowById(compositor, launched.window.window_id)
-      if (!window) return null
-      if (window.width < 160 || window.height < 48) return null
-      return { compositor, shell, window }
-    },
-    8000,
-    125,
-  )
-  state.launcherWindowId = launched.window.window_id
-  state.spawnedNativeWindowIds.add(launched.window.window_id)
-  await waitForProgramsMenuClosed(base)
-  await waitForTaskbarEntry(base, launched.window.window_id)
+  state.launcherWindowId = stableLaunch.window.window_id
+  state.spawnedNativeWindowIds.add(stableLaunch.window.window_id)
   return {
     filteredMenu,
-    launched,
+    launched: stableLaunch,
     stableLaunch,
   }
 }
