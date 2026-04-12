@@ -892,6 +892,12 @@ function App() {
   let mainRef: HTMLElement | undefined
   let exclusionZonesRaf = 0
   let lastExclusionZonesJson: string | null = null
+  let compositorFollowupQueued = false
+  let compositorFollowupFlushWindows = false
+  let compositorFollowupSyncExclusion = false
+  let compositorFollowupRelayoutAll = false
+  let compositorFollowupResetScroll = false
+  const compositorFollowupRelayoutMonitors = new Set<string>()
   function closeAllAtlasSelects(): boolean {
     let any = false
     for (const f of atlasSelectClosers) {
@@ -2669,6 +2675,57 @@ function App() {
     }
   }
 
+  function scheduleCompositorFollowup(options?: {
+    flushWindows?: boolean
+    syncExclusion?: boolean
+    relayoutAll?: boolean
+    relayoutMonitor?: string | null
+    resetScroll?: boolean
+  }) {
+    if (options?.flushWindows) compositorFollowupFlushWindows = true
+    if (options?.syncExclusion) compositorFollowupSyncExclusion = true
+    if (options?.relayoutAll) compositorFollowupRelayoutAll = true
+    if (options?.resetScroll) compositorFollowupResetScroll = true
+    if (typeof options?.relayoutMonitor === 'string' && options.relayoutMonitor.length > 0) {
+      compositorFollowupRelayoutMonitors.add(options.relayoutMonitor)
+    }
+    if (compositorFollowupQueued) return
+    compositorFollowupQueued = true
+    queueMicrotask(() => {
+      compositorFollowupQueued = false
+      const flushWindows = compositorFollowupFlushWindows
+      const syncExclusion = compositorFollowupSyncExclusion
+      const relayoutAll = compositorFollowupRelayoutAll
+      const resetScroll = compositorFollowupResetScroll
+      const relayoutMonitors = relayoutAll ? [] : Array.from(compositorFollowupRelayoutMonitors)
+      compositorFollowupFlushWindows = false
+      compositorFollowupSyncExclusion = false
+      compositorFollowupRelayoutAll = false
+      compositorFollowupResetScroll = false
+      compositorFollowupRelayoutMonitors.clear()
+      try {
+        if (relayoutAll) {
+          relayoutAllAutoMonitors()
+        } else {
+          for (const monitorName of relayoutMonitors) {
+            applyAutoLayout(monitorName)
+          }
+        }
+        if (syncExclusion) scheduleExclusionZonesSync()
+        if (flushWindows) flushShellUiWindowsSyncNow()
+        if (resetScroll) {
+          window.scrollTo(0, 0)
+          document.documentElement.scrollTop = 0
+          document.documentElement.scrollLeft = 0
+          document.body.scrollTop = 0
+          document.body.scrollLeft = 0
+        }
+      } catch (e) {
+        console.error('[derp-shell] compositor follow-up', e)
+      }
+    })
+  }
+
   const fullscreenTaskbarExclusionSig = createMemo(() => {
     const byMon = windowsByMonitor()
     return taskbarScreens()
@@ -3867,18 +3924,12 @@ function App() {
             return null
           })
         }
-        queueMicrotask(() => {
-          scheduleExclusionZonesSync()
-          flushShellUiWindowsSyncNow()
-        })
+        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
         return
       }
       if (d.type === 'output_geometry') {
         setOutputGeom({ w: d.logical_width, h: d.logical_height })
-        queueMicrotask(() => {
-          scheduleExclusionZonesSync()
-          flushShellUiWindowsSyncNow()
-        })
+        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
         return
       }
       if (d.type === 'output_layout') {
@@ -3943,28 +3994,17 @@ function App() {
               : null
           setShellChromePrimaryName(pr)
         })
-        queueMicrotask(() => {
-          try {
-            scheduleExclusionZonesSync()
-            flushShellUiWindowsSyncNow()
-            relayoutAllAutoMonitors()
-            window.scrollTo(0, 0)
-            document.documentElement.scrollTop = 0
-            document.documentElement.scrollLeft = 0
-            document.body.scrollTop = 0
-            document.body.scrollLeft = 0
-          } catch (e) {
-            console.error('[derp-shell] output_layout follow-up', e)
-          }
+        scheduleCompositorFollowup({
+          syncExclusion: true,
+          flushWindows: true,
+          relayoutAll: true,
+          resetScroll: true,
         })
         return
       }
       if (d.type === 'window_list') {
         setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
-        queueMicrotask(() => {
-          scheduleExclusionZonesSync()
-          flushShellUiWindowsSyncNow()
-        })
+        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
         return
       }
       if (d.type === 'window_state') {
@@ -3980,8 +4020,7 @@ function App() {
           }
         }
         setWindows((m) => applyDetail(m, d))
-        queueMicrotask(() => flushShellUiWindowsSyncNow())
-        if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
+        scheduleCompositorFollowup({ flushWindows: true, relayoutMonitor: relayoutMon })
         return
       }
       if (d.type === 'window_unmapped') {
@@ -4014,8 +4053,7 @@ function App() {
             shellWireSend('taskbar_activate', pendingCloseActivation.nextVisibleId)
           })
         }
-        queueMicrotask(() => flushShellUiWindowsSyncNow())
-        if (relayoutMon !== null) queueMicrotask(() => applyAutoLayout(relayoutMon!))
+        scheduleCompositorFollowup({ flushWindows: true, relayoutMonitor: relayoutMon })
         return
       }
       if (d.type === 'window_geometry') {
@@ -4045,7 +4083,7 @@ function App() {
         const fb = fallbackMonitorKey()
         const mon =
           typeof d.output_name === 'string' && d.output_name.length > 0 ? d.output_name : fb
-        queueMicrotask(() => applyAutoLayout(mon))
+        scheduleCompositorFollowup({ relayoutMonitor: mon })
         return
       }
       if (d.type === 'window_metadata') {
