@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "root_dir_name": "file-browser-phase-1",
+  "entries": [
+    {
+      "id": "empty_dir",
+      "path": "empty-folder",
+      "kind": "directory"
+    },
+    {
+      "id": "hidden_dir",
+      "path": ".hidden-folder",
+      "kind": "directory"
+    },
+    {
+      "id": "nested_dir",
+      "path": "nested/alpha/beta",
+      "kind": "directory"
+    },
+    {
+      "id": "writable_text",
+      "path": "notes/writable-note.txt",
+      "kind": "text",
+      "text": "Phase 1 writable fixture\nThis file should reset between runs.\n"
+    },
+    {
+      "id": "read_only_text",
+      "path": "notes/read-only-note.txt",
+      "kind": "text",
+      "text": "Phase 1 read-only fixture\nThis file should refuse direct writes.\n",
+      "read_only": true
+    },
+    {
+      "id": "hidden_file",
+      "path": ".hidden-file.txt",
+      "kind": "text",
+      "text": "This hidden file should only appear when hidden items are shown.\n"
+    },
+    {
+      "id": "hidden_dir_file",
+      "path": ".hidden-folder/inside-hidden-folder.txt",
+      "kind": "text",
+      "text": "Hidden directory child\n"
+    },
+    {
+      "id": "nested_text",
+      "path": "nested/alpha/beta/nested-note.md",
+      "kind": "text",
+      "text": "# Nested fixture\n\nThis file proves nested traversal works.\n"
+    },
+    {
+      "id": "image_file",
+      "path": "media/blue-image.png",
+      "kind": "asset",
+      "asset": "assets/image.png.base64"
+    },
+    {
+      "id": "pdf_file",
+      "path": "media/derp-doc.pdf",
+      "kind": "asset",
+      "asset": "assets/document.pdf.base64"
+    },
+    {
+      "id": "video_file",
+      "path": "media/test-pattern.webm",
+      "kind": "asset",
+      "asset": "assets/video.webm.base64"
+    },
+    {
+      "id": "unsupported_file",
+      "path": "media/blob.bin",
+      "kind": "asset",
+      "asset": "assets/blob.bin.base64"
+    }
+  ]
+}

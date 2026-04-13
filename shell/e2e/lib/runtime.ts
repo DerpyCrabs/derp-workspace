@@ -199,6 +199,34 @@ export interface ProgramsMenuListScroll {
   client_height: number
 }
 
+export interface FileBrowserSnapshotRow {
+  path: string
+  name: string
+  kind: string | null
+  selected: boolean
+  rect?: Rect | null
+}
+
+export interface FileBrowserSnapshotBreadcrumb {
+  path: string
+  label: string
+  rect?: Rect | null
+}
+
+export interface FileBrowserSnapshotAction {
+  id: string
+  label: string
+  rect?: Rect | null
+}
+
+export interface FileBrowserSnapshot {
+  active_path: string | null
+  rows: FileBrowserSnapshotRow[]
+  breadcrumbs: FileBrowserSnapshotBreadcrumb[]
+  viewer_editor_title: string | null
+  primary_actions: FileBrowserSnapshotAction[]
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -223,7 +251,24 @@ export interface ShellSnapshot {
   snap_hover_span?: AssistSpanSnapshot | null
   window_stack_order?: number[]
   focused_window_id?: number | null
+  file_browser?: FileBrowserSnapshot | null
   [key: string]: unknown
+}
+
+export interface FileBrowserFixturePaths {
+  root_path: string
+  empty_dir: string
+  hidden_dir: string
+  nested_dir: string
+  hidden_file: string
+  hidden_dir_file: string
+  writable_text: string
+  read_only_text: string
+  nested_text: string
+  image_file: string
+  pdf_file: string
+  video_file: string
+  unsupported_file: string
 }
 
 export interface DesktopAppEntry {
@@ -1195,6 +1240,14 @@ export async function openShellTestWindow(
   state.spawnedShellWindowIds.add(result.window.window_id)
   state.knownWindowIds.add(result.window.window_id)
   return result
+}
+
+export async function prepareFileBrowserFixtures(base: string): Promise<FileBrowserFixturePaths> {
+  return postJson<FileBrowserFixturePaths>(base, '/test/file_browser_fixtures/prepare', {})
+}
+
+export async function resetFileBrowserFixtures(base: string): Promise<FileBrowserFixturePaths> {
+  return postJson<FileBrowserFixturePaths>(base, '/test/file_browser_fixtures/reset', {})
 }
 
 export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {

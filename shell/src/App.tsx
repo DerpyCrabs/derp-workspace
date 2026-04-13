@@ -1462,6 +1462,40 @@ function App() {
             }
           })()
         : null
+    const fileBrowserRows = Array.from(document.querySelectorAll('[data-file-browser-row]')).map((el) => {
+      const rowEl = el as HTMLElement
+      return {
+        path: rowEl.getAttribute('data-file-browser-path') ?? '',
+        name: rowEl.getAttribute('data-file-browser-name') ?? rowEl.textContent?.trim() ?? '',
+        kind: rowEl.getAttribute('data-file-browser-kind'),
+        selected:
+          rowEl.getAttribute('data-file-browser-selected') === 'true' ||
+          rowEl.getAttribute('aria-selected') === 'true',
+        rect: e2eSnapshotRect(rowEl, main, canvas, origin),
+      }
+    })
+    const fileBrowserBreadcrumbs = Array.from(document.querySelectorAll('[data-file-browser-breadcrumb]')).map((el) => {
+      const crumbEl = el as HTMLElement
+      return {
+        path: crumbEl.getAttribute('data-file-browser-path') ?? '',
+        label: crumbEl.getAttribute('data-file-browser-label') ?? crumbEl.textContent?.trim() ?? '',
+        rect: e2eSnapshotRect(crumbEl, main, canvas, origin),
+      }
+    })
+    const fileBrowserActivePathEl = document.querySelector('[data-file-browser-active-path]') as HTMLElement | null
+    const fileBrowserViewerTitleEl = document.querySelector(
+      '[data-file-browser-viewer-title], [data-file-browser-editor-title]',
+    ) as HTMLElement | null
+    const fileBrowserPrimaryActions = Array.from(document.querySelectorAll('[data-file-browser-primary-action]')).map(
+      (el) => {
+        const actionEl = el as HTMLElement
+        return {
+          id: actionEl.getAttribute('data-file-browser-primary-action') ?? '',
+          label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
+          rect: e2eSnapshotRect(actionEl, main, canvas, origin),
+        }
+      },
+    )
     return {
       captured_at_ms: Date.now(),
       viewport: viewportCss(),
@@ -1482,6 +1516,19 @@ function App() {
       snap_preview_visible: activeSnapPreviewCanvas !== null,
       snap_preview_rect: snapPreviewRect,
       snap_hover_span: assistOverlay()?.hoverSpan ?? null,
+      file_browser: {
+        active_path:
+          fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
+          fileBrowserActivePathEl?.textContent?.trim() ??
+          null,
+        rows: fileBrowserRows,
+        breadcrumbs: fileBrowserBreadcrumbs,
+        viewer_editor_title:
+          fileBrowserViewerTitleEl?.getAttribute('data-file-browser-document-title') ??
+          fileBrowserViewerTitleEl?.textContent?.trim() ??
+          null,
+        primary_actions: fileBrowserPrimaryActions,
+      },
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
       programs_menu_list_scroll: (() => {
         if (!shellContextMenus.programsMenuOpen()) return null

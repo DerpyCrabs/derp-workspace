@@ -5,6 +5,7 @@ pub mod compositor_tx;
 mod control_server;
 mod desktop_apps;
 mod e2e_bridge;
+mod file_browser_fixtures;
 mod frame_sink;
 mod gnome_background;
 mod gnome_wallpaper_list;

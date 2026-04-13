@@ -623,6 +623,18 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/file_browser_fixtures/prepare" {
+        let json = crate::cef::file_browser_fixtures::prepare_file_browser_fixtures_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/file_browser_fixtures/reset" {
+        let json = crate::cef::file_browser_fixtures::reset_file_browser_fixtures_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/portal_screencast_pick" {
         let selection = portal_screencast_pick(&v);
         write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
