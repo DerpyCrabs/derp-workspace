@@ -214,7 +214,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Update class: $UPDATE_CLASS (QUICK_SHELL=$QUICK_SHELL SYNC_ONLY=$SYNC_ONLY SKIP_REMOTE_INSTALL=$SKIP_REMOTE_INSTALL)"
   echo "Snapshot: $DERP_REMOTE_SNAPSHOT (content digests vs working tree, not git)"
   echo "Would: ssh ${REMOTE_USER}@${REMOTE_HOST} mkdir -p $(printf '%q' "$REMOTE_REPO")"
-  echo "Would: ( cd $(printf '%q' "$REPO_ROOT") && tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git . ) | ssh … tar xzf - in $(printf '%q' "$REMOTE_REPO")"
+  echo "Would: ( cd $(printf '%q' "$REPO_ROOT") && tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git . ) | ssh … wipe compositor/shell/…/scripts then tar xzf - in $(printf '%q' "$REMOTE_REPO")"
   if [[ "$SKIP_REMOTE_INSTALL" -eq 1 ]]; then
     if [[ "$SYNC_ONLY" -eq 1 ]]; then
       echo "Would: skip remote install-system-run.sh (sync_only)"
