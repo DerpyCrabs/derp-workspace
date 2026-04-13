@@ -3,6 +3,7 @@ import { PowerContextMenu } from './PowerContextMenu'
 import { ProgramsContextMenu } from './ProgramsContextMenu'
 import { TabContextMenu } from './TabContextMenu'
 import { TraySniContextMenu } from './TraySniContextMenu'
+import { VolumeContextMenu } from './VolumeContextMenu'
 
 type ShellContextMenuLayerProps = {
   ctxMenuOpen: Accessor<boolean>
@@ -11,10 +12,12 @@ type ShellContextMenuLayerProps = {
   setMenuAtlasHostRef: (el: HTMLDivElement) => void
   programsMenuOpen: Accessor<boolean>
   powerMenuOpen: Accessor<boolean>
+  volumeMenuOpen: Accessor<boolean>
   tabMenuOpen: Accessor<boolean>
   traySniMenuOpen: Accessor<boolean>
   programsMenuProps: Parameters<typeof ProgramsContextMenu>[0]
   powerMenuProps: Parameters<typeof PowerContextMenu>[0]
+  volumeMenuProps: Parameters<typeof VolumeContextMenu>[0]
   tabMenuProps: Parameters<typeof TabContextMenu>[0]
   traySniMenuProps: Parameters<typeof TraySniContextMenu>[0]
 }
@@ -22,10 +25,13 @@ type ShellContextMenuLayerProps = {
 export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
   return (
     <div
-      class="relative z-90000 contain-layout contain-paint overflow-hidden"
+      class="relative z-90000 contain-layout"
       classList={{
         'pointer-events-auto': props.ctxMenuOpen() || props.atlasOverlayPointerUsers() > 0,
         'pointer-events-none': !props.ctxMenuOpen() && props.atlasOverlayPointerUsers() === 0,
+        'overflow-visible': props.volumeMenuOpen(),
+        'overflow-hidden': !props.volumeMenuOpen(),
+        'contain-paint': !props.volumeMenuOpen(),
       }}
       ref={(el) => {
         props.setMenuAtlasHostRef(el)
@@ -43,6 +49,9 @@ export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
       </Show>
       <Show when={props.powerMenuOpen()}>
         <PowerContextMenu {...props.powerMenuProps} />
+      </Show>
+      <Show when={props.volumeMenuOpen()}>
+        <VolumeContextMenu {...props.volumeMenuProps} />
       </Show>
       <Show when={props.tabMenuOpen()}>
         <TabContextMenu {...props.tabMenuProps} />

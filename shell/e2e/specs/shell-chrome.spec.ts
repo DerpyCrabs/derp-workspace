@@ -16,6 +16,7 @@ import {
   openDebug,
   openPowerMenu,
   openProgramsMenu,
+  openVolumeMenu,
   openSettings,
   openShellTestWindow,
   pointerWheel,
@@ -25,6 +26,7 @@ import {
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
+  waitForVolumeMenuClosed,
   waitFor,
   waitForNativeFocus,
   waitForShellUiFocus,
@@ -341,6 +343,145 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     await writeTextArtifact('taskbar-power-menu.html', powerHtml)
     await writeTextArtifact('taskbar-programs-menu.html', programsHtml)
+  })
+
+  test('tray volume panel keeps nested selectors open and exposes mixer controls', async ({ base }) => {
+    const settingsOpen = await openSettings(base, 'click')
+    const settingsWindow = compositorWindowById(settingsOpen.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(settingsWindow, 'missing settings compositor window for tray volume test')
+
+    const opened = await openVolumeMenu(base)
+    assert(opened.volume_menu_open, 'volume menu should be open')
+    assert(opened.controls?.volume_menu_panel, 'missing volume menu panel rect')
+    assertTopWindow(opened, SHELL_UI_SETTINGS_WINDOW_ID, 'volume menu should not change focused shell window')
+    const overlayOpen = await waitFor(
+      'wait for tray volume compositor overlay',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        return snapshots.shell.volume_menu_open && snapshots.compositor.shell_context_menu_global ? snapshots : null
+      },
+      5000,
+      100,
+    )
+    assert(overlayOpen.compositor.shell_context_menu_global, 'missing tray volume compositor overlay rect')
+    assert(overlayOpen.compositor.shell_context_menu_global.width >= 200, 'tray volume overlay should be wide enough')
+    assert(overlayOpen.compositor.shell_context_menu_global.height >= 120, 'tray volume overlay should be tall enough')
+
+    const volumeHtml = await getShellHtml(base, '[data-shell-volume-menu-panel]')
+    assert(volumeHtml.includes('Output'), 'volume panel missing output section')
+    assert(volumeHtml.includes('Input'), 'volume panel missing input section')
+    assert(opened.controls.volume_input_select, 'missing volume input selector')
+    const withOutputSelect = await waitFor(
+      'wait for output selector to load',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (!shell.volume_menu_open) return null
+        return shell.controls.volume_output_select ? shell : null
+      },
+      5000,
+      100,
+    )
+    await clickRect(base, withOutputSelect.controls.volume_output_select!)
+    const outputExpanded = await waitFor(
+      'wait for volume output selector options',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (!shell.volume_menu_open) return null
+        return shell.controls.volume_output_option_0 ? shell : null
+      },
+      5000,
+      100,
+    )
+    assertTopWindow(outputExpanded, SHELL_UI_SETTINGS_WINDOW_ID, 'output selector should not disturb shell focus')
+    await clickRect(base, outputExpanded.controls.volume_output_option_1 ?? outputExpanded.controls.volume_output_option_0!)
+    const afterOutputPick = await waitFor(
+      'wait for output picker settle',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.volume_menu_open ? shell : null
+      },
+      5000,
+      100,
+    )
+    assert(afterOutputPick.controls.volume_menu_panel, 'volume panel should stay open after output selection')
+
+    const outputSlider = afterOutputPick.controls.volume_output_slider
+    assert(outputSlider, 'missing default output volume slider')
+    await clickPoint(
+      base,
+      outputSlider.x + Math.max(8, Math.floor(outputSlider.width * 0.8)),
+      outputSlider.y + Math.floor(outputSlider.height / 2),
+    )
+    const audioAfterOutputSlide = await getJson(base, '/audio_state')
+
+    const playbackSlider = afterOutputPick.controls.volume_playback_first_slider
+    let playbackMixerObserved = false
+    if (playbackSlider) {
+      await clickPoint(
+        base,
+        playbackSlider.x + Math.max(8, Math.floor(playbackSlider.width * 0.7)),
+        playbackSlider.y + Math.floor(playbackSlider.height / 2),
+      )
+      playbackMixerObserved = true
+    } else {
+      const mixerHtml = await getShellHtml(base, '[data-shell-volume-playback-list]')
+      playbackMixerObserved = mixerHtml.length > 0
+    }
+    assert(playbackMixerObserved || volumeHtml.includes('No active playback streams.'), 'playback rows should render or show an empty state')
+
+    await clickPoint(
+      base,
+      settingsWindow.x + Math.floor(settingsWindow.width / 2),
+      settingsWindow.y + Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
+    )
+    const closed = await waitForVolumeMenuClosed(base)
+    assertTopWindow(closed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after volume menu dismiss')
+
+    await writeTextArtifact('tray-volume-menu.html', volumeHtml)
+    await writeJsonArtifact('tray-volume-audio-state.json', audioAfterOutputSlide)
+    await writeJsonArtifact('tray-volume-shell.json', afterOutputPick)
+    await writeJsonArtifact('tray-volume-overlay.json', overlayOpen)
+  })
+
+  test('tray volume panel stays on the compositor overlay while native windows exist', async ({ base, state }) => {
+    await ensureNativePair(base, state)
+    const opened = await openVolumeMenu(base)
+    assert(opened.volume_menu_open, 'volume menu should open with native windows present')
+    const overlayOpen = await waitFor(
+      'wait for tray volume overlay with native windows',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (!snapshots.shell.volume_menu_open) return null
+        if (!snapshots.compositor.shell_context_menu_global) return null
+        const nativeCount = snapshots.compositor.windows.filter((window) => !window.shell_hosted).length
+        return nativeCount >= 2 ? snapshots : null
+      },
+      5000,
+      100,
+    )
+    assert(overlayOpen.compositor.shell_context_menu_global, 'missing tray volume overlay rect with native windows')
+    assert(overlayOpen.compositor.shell_context_menu_global.width >= 200, 'tray volume overlay with native windows should be wide enough')
+    assert(overlayOpen.compositor.shell_context_menu_global.height >= 120, 'tray volume overlay with native windows should be tall enough')
+    assert(overlayOpen.shell.controls?.volume_output_select, 'missing projected output selector rect')
+    await clickRect(base, overlayOpen.shell.controls.volume_output_select)
+    const outputExpanded = await waitFor(
+      'wait for tray volume output selector with native windows',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (!snapshots.shell.volume_menu_open) return null
+        if (!snapshots.compositor.shell_context_menu_global) return null
+        return snapshots.shell.controls?.volume_output_option_0 ? snapshots : null
+      },
+      5000,
+      100,
+    )
+    assert(outputExpanded.compositor.shell_context_menu_global, 'missing tray volume overlay rect after expanding selector')
+    assert(outputExpanded.compositor.shell_context_menu_global.width >= 200, 'expanded tray volume overlay should stay wide enough')
+    assert(outputExpanded.compositor.shell_context_menu_global.height >= 120, 'expanded tray volume overlay should stay tall enough')
+    assert(outputExpanded.shell.controls?.taskbar_volume_toggle, 'missing taskbar volume toggle while closing native overlay test')
+    await clickRect(base, outputExpanded.shell.controls.taskbar_volume_toggle)
+    await waitForVolumeMenuClosed(base)
+    await writeJsonArtifact('tray-volume-native-overlay.json', outputExpanded)
   })
 
   test('native windows do not cover focused shell windows during taskbar menu churn', async ({ base, state }) => {

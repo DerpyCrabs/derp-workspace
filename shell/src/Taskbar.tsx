@@ -8,6 +8,9 @@ import Monitor from 'lucide-solid/icons/monitor'
 import Power from 'lucide-solid/icons/power'
 import Settings from 'lucide-solid/icons/settings'
 import SquareTerminal from 'lucide-solid/icons/square-terminal'
+import Volume1 from 'lucide-solid/icons/volume-1'
+import Volume2 from 'lucide-solid/icons/volume-2'
+import VolumeX from 'lucide-solid/icons/volume-x'
 import X from 'lucide-solid/icons/x'
 import { For, Show, createSignal, onCleanup, type Component } from 'solid-js'
 
@@ -39,6 +42,10 @@ export type TaskbarProps = {
   onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   powerMenuOpen: boolean
   onPowerMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
+  volumeMenuOpen: boolean
+  onVolumeMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
+  volumeMuted: boolean
+  volumePercent: number | null
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
   keyboardLayoutLabel: string | null
@@ -175,6 +182,11 @@ function TaskbarWindowRows(props: {
 
 export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
+  let suppressVolumeClick = false
+  const volumeIcon = () => {
+    const Icon = props.volumeMuted ? VolumeX : (props.volumePercent ?? 0) <= 33 ? Volume1 : Volume2
+    return <Icon class="h-4 w-4" stroke-width={2} />
+  }
 
   if (props.isPrimary) {
     const interval = window.setInterval(() => setNow(new Date()), 15000)
@@ -286,6 +298,31 @@ export function Taskbar(props: TaskbarProps) {
               }}
             </For>
           </div>
+          <button
+            type="button"
+            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+            classList={{
+              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.volumeMenuOpen,
+            }}
+            data-shell-volume-toggle
+            aria-expanded={props.volumeMenuOpen}
+            aria-haspopup="dialog"
+            title={props.volumeMuted ? 'Volume muted' : props.volumePercent !== null ? `Volume ${props.volumePercent}%` : 'Volume'}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              suppressVolumeClick = true
+              props.onVolumeMenuClick(e)
+            }}
+            onClick={(e) => {
+              if (suppressVolumeClick) {
+                suppressVolumeClick = false
+                return
+              }
+              props.onVolumeMenuClick(e)
+            }}
+          >
+            {volumeIcon()}
+          </button>
           <button
             type="button"
             class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"

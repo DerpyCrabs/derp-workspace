@@ -14,13 +14,13 @@ import {
 import { createStore } from 'solid-js/store'
 import { atlasTopFromLayout, type ShellContextMenuItem } from '../contextMenu'
 import { searchDesktopApplications } from '../desktopAppSearch'
-import { pushShellFloatingWireFromDom } from '../shellFloatingPlacement'
+import { measureShellFloatingPlacementFromDom, pushShellFloatingWireFromDom } from '../shellFloatingPlacement'
 import { shellHttpBase } from '../shellHttp'
 import { canvasRectToClientCss } from '../shellCoords'
 import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '../shellBridge'
 import type { LayoutScreen } from './types'
 
-type MenuKind = 'programs' | 'power' | 'tab' | 'tray_sni' | null
+type MenuKind = 'programs' | 'power' | 'tab' | 'tray_sni' | 'volume' | null
 
 export type TraySniMenuEntry = {
   dbusmenu_id: number
@@ -53,6 +53,27 @@ type CreateShellContextMenusArgs = {
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
+}
+
+export function shouldHandleContextMenuNavigationKey(nestedInteractiveFocus: boolean): boolean {
+  if (!nestedInteractiveFocus) return true
+  return false
+}
+
+export function shouldDismissContextMenuPointerDown(args: {
+  target: EventTarget | null
+  panel: HTMLElement | undefined
+  nestedSurfaceHit: (target: Node) => boolean
+}): boolean {
+  const target = args.target
+  if (target instanceof Element && target.closest('[data-shell-programs-toggle]')) return false
+  if (target instanceof Element && target.closest('[data-shell-settings-toggle]')) return false
+  if (target instanceof Element && target.closest('[data-shell-power-toggle]')) return false
+  if (target instanceof Element && target.closest('[data-shell-volume-toggle]')) return false
+  if (target instanceof Element && target.closest('[data-shell-tray-strip]')) return false
+  if (target instanceof Node && args.panel?.contains(target)) return false
+  if (target instanceof Node && args.nestedSurfaceHit(target)) return false
+  return true
 }
 
 function layoutScreenCssRect(
@@ -128,11 +149,21 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   let menuAtlasHostRef: HTMLElement | undefined
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
+  const [menuPanelRevision, setMenuPanelRevision] = createSignal(0)
+  const [menuPanelLayoutRevision, setMenuPanelLayoutRevision] = createSignal(0)
+  const nestedContextMenuSurfaces = new Set<(target: Node) => boolean>()
+  const [nestedContextMenuFocusDepth, setNestedContextMenuFocusDepth] = createSignal(0)
+  function setMenuPanelRef(el: HTMLDivElement) {
+    menuPanelRef = el
+    setMenuPanelRevision((value) => value + 1)
+  }
+
 
   const programsMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'programs')
   const powerMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'power')
   const tabMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'tab')
   const traySniMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'tray_sni')
+  const volumeMenuOpen = createMemo(() => ctxMenuOpen() && ctxMenuKind() === 'volume')
 
   createEffect(() => {
     if (!ctxMenuOpen()) {
@@ -176,6 +207,37 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const clh = Math.max(1, g?.h ?? v.h)
     const cph = Math.max(1, p?.h ?? Math.round(clh * 1.5))
     return atlasTopFromLayout(clh, cph, ah)
+  })
+
+  const volumeMenuBounds = createMemo(() => {
+    const og = args.outputGeom()
+    const screens = screensListForLayout(args.screenDraftRows(), og, args.layoutCanvasOrigin())
+    const anchor = ctxMenuAnchor()
+    const probeX = anchor.x + 1
+    const probeY = (anchor.alignAboveY ?? anchor.y) + 1
+    const matched =
+      screens.find(
+        (screen) =>
+          probeX >= screen.x &&
+          probeX < screen.x + screen.width &&
+          probeY >= screen.y &&
+          probeY < screen.y + screen.height,
+      ) ?? screens[0]
+    if (matched) {
+      return {
+        x: matched.x,
+        y: matched.y,
+        w: matched.width,
+        h: matched.height,
+      }
+    }
+    const canvas = args.canvasCss()
+    return {
+      x: 0,
+      y: 0,
+      w: canvas.w,
+      h: canvas.h,
+    }
   })
 
   function programsMenuMetrics(outputName?: string | null) {
@@ -345,6 +407,19 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setCtxMenuAnchor({ x: rect.left, y: rect.bottom, alignAboveY: rect.top })
     setCtxMenuKind('power')
     setPowerMenuHighlightIdx(0)
+    setCtxMenuOpen(true)
+  }
+
+  function onVolumeMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
+    e.preventDefault()
+    if (ctxMenuOpen() && ctxMenuKind() === 'volume') {
+      hideContextMenu()
+      return
+    }
+    args.closeAllAtlasSelects()
+    const rect = e.currentTarget.getBoundingClientRect()
+    setCtxMenuAnchor({ x: rect.left, y: rect.bottom, alignAboveY: rect.top })
+    setCtxMenuKind('volume')
     setCtxMenuOpen(true)
   }
 
@@ -645,11 +720,25 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   })
 
   createEffect(() => {
+    void menuPanelRevision()
+    const panel = menuPanelRef
+    if (!panel) return
+    setMenuPanelLayoutRevision((value) => value + 1)
+    const observer = new ResizeObserver(() => {
+      setMenuPanelLayoutRevision((value) => value + 1)
+    })
+    observer.observe(panel)
+    onCleanup(() => observer.disconnect())
+  })
+
+  createEffect(() => {
     if (!ctxMenuOpen()) {
       args.dismissFloatingWire()
       return
     }
     void menuListItems().length
+    void menuPanelRevision()
+    void menuPanelLayoutRevision()
     void args.screenDraftRows().length
     const anchor = ctxMenuAnchor()
     const rid = requestAnimationFrame(() => {
@@ -676,6 +765,53 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     onCleanup(() => cancelAnimationFrame(rid))
   })
 
+  function projectCurrentMenuElementRect(el: Element | null) {
+    if (!(el instanceof HTMLElement)) return null
+    const main = args.mainEl()
+    const atlas = menuAtlasHostRef
+    const panel = menuPanelRef
+    const og = args.outputGeom()
+    const ph = args.outputPhysical()
+    if (!main || !atlas || !panel || !og || !ph || !panel.contains(el)) return null
+    const anchor = ctxMenuAnchor()
+    const { panelRect, placement } = measureShellFloatingPlacementFromDom({
+      main,
+      atlasHost: atlas,
+      panel,
+      anchor: { x: anchor.x, y: anchor.y, alignAboveY: anchor.alignAboveY },
+      canvasW: og.w,
+      canvasH: og.h,
+      physicalW: ph.w,
+      physicalH: ph.h,
+      contextMenuAtlasBufferH: args.contextMenuAtlasBufferH(),
+      screens: args.screenDraftRows(),
+      layoutOrigin: args.layoutCanvasOrigin(),
+    })
+    if (panelRect.width <= 0 || panelRect.height <= 0) return null
+    const rect = el.getBoundingClientRect()
+    const leftRatio = (rect.left - panelRect.left) / panelRect.width
+    const topRatio = (rect.top - panelRect.top) / panelRect.height
+    const rightRatio = (rect.right - panelRect.left) / panelRect.width
+    const bottomRatio = (rect.bottom - panelRect.top) / panelRect.height
+    const globalLeft = Math.round(placement.gx + leftRatio * placement.gw)
+    const globalTop = Math.round(placement.gy + topRatio * placement.gh)
+    const globalRight = Math.round(placement.gx + rightRatio * placement.gw)
+    const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
+    const width = Math.max(1, globalRight - globalLeft)
+    const height = Math.max(1, globalBottom - globalTop)
+    const origin = args.layoutCanvasOrigin()
+    const ox = origin?.x ?? 0
+    const oy = origin?.y ?? 0
+    return {
+      x: globalLeft - ox,
+      y: globalTop - oy,
+      width,
+      height,
+      global_x: globalLeft,
+      global_y: globalTop,
+    }
+  }
+
   const onCtxKeyDown = (e: KeyboardEvent) => {
     if (args.screenshotMode() && e.key === 'Escape') {
       e.preventDefault()
@@ -695,6 +831,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       toggleProgramsMenuMeta()
       return
     }
+    if (!shouldHandleContextMenuNavigationKey(nestedContextMenuFocusDepth() > 0)) return
     if (programsMenuOpen()) {
       const items = programsMenuListItems()
       const n = items.length
@@ -856,14 +993,17 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   const onCtxPointerDown = (e: PointerEvent) => {
     if (!ctxMenuOpen()) return
-    const target = e.target
-    if (target instanceof Element && target.closest('[data-shell-programs-toggle]')) return
-    if (target instanceof Element && target.closest('[data-shell-settings-toggle]')) return
-    if (target instanceof Element && target.closest('[data-shell-power-toggle]')) return
-    if (target instanceof Element && target.closest('[data-shell-tray-strip]')) return
-    const panel = menuPanelRef
-    if (panel && target instanceof Node && panel.contains(target)) return
-    hideContextMenu()
+    const shouldDismiss = shouldDismissContextMenuPointerDown({
+      target: e.target,
+      panel: menuPanelRef,
+      nestedSurfaceHit(target) {
+        for (const hit of nestedContextMenuSurfaces) {
+          if (hit(target)) return true
+        }
+        return false
+      },
+    })
+    if (shouldDismiss) hideContextMenu()
   }
 
   document.addEventListener('keydown', onCtxKeyDown, true)
@@ -877,21 +1017,36 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     ctxMenuOpen,
     programsMenuOpen,
     powerMenuOpen,
+    volumeMenuOpen,
     tabMenuOpen,
     traySniMenuOpen,
     shellMenuAtlasTop,
     onProgramsMenuClick,
     onPowerMenuClick,
+    onVolumeMenuClick,
     openTabMenu,
     openTraySniMenu,
     applyTraySniMenuDetail,
     hideContextMenu,
+    acquireNestedContextMenuFocus() {
+      setNestedContextMenuFocusDepth((n) => n + 1)
+    },
+    releaseNestedContextMenuFocus() {
+      setNestedContextMenuFocusDepth((n) => Math.max(0, n - 1))
+    },
+    registerNestedContextMenuSurface(fn: (target: Node) => boolean) {
+      nestedContextMenuSurfaces.add(fn)
+    },
+    unregisterNestedContextMenuSurface(fn: (target: Node) => boolean) {
+      nestedContextMenuSurfaces.delete(fn)
+    },
     toggleProgramsMenuMeta,
     warmProgramsMenuItems,
     setMenuAtlasHostRef(el: HTMLDivElement) {
       menuAtlasHostRef = el
     },
     atlasHostEl: () => menuAtlasHostRef,
+    projectCurrentMenuElementRect,
     programsMenuProps: {
       placement: programsMenuPlacement,
       query: programsMenuQuery,
@@ -904,34 +1059,33 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       setSearchRef(el: HTMLInputElement) {
         programsMenuSearchRef = el
       },
-      setPanelRef(el: HTMLDivElement) {
-        menuPanelRef = el
-      },
+      setPanelRef: setMenuPanelRef,
       activateSelection: activateProgramsMenuSelection,
       closeContextMenu: hideContextMenu,
     },
     powerMenuProps: {
       items: powerMenuListItems,
       highlightIdx: powerMenuHighlightIdx,
-      setPanelRef(el: HTMLDivElement) {
-        menuPanelRef = el
-      },
+      setPanelRef: setMenuPanelRef,
+      closeContextMenu: hideContextMenu,
+    },
+    volumeMenuProps: {
+      anchor: ctxMenuAnchor,
+      atlasTop: shellMenuAtlasTop,
+      bounds: volumeMenuBounds,
+      setPanelRef: setMenuPanelRef,
       closeContextMenu: hideContextMenu,
     },
     tabMenuProps: {
       items: tabMenuListItems,
       highlightIdx: tabMenuHighlightIdx,
-      setPanelRef(el: HTMLDivElement) {
-        menuPanelRef = el
-      },
+      setPanelRef: setMenuPanelRef,
       closeContextMenu: hideContextMenu,
     },
     traySniMenuProps: {
       items: traySniMenuListItems,
       highlightIdx: traySniHighlightIdx,
-      setPanelRef(el: HTMLDivElement) {
-        menuPanelRef = el
-      },
+      setPanelRef: setMenuPanelRef,
       closeContextMenu: hideContextMenu,
     },
   }

@@ -10,6 +10,7 @@ import {
 } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { useShellFloating } from './ShellFloatingContext'
+import { resolveSelectBehavior } from './selectBehavior'
 import {
   hideFloatingPlacementWire,
   pushShellFloatingWireFromDom,
@@ -27,6 +28,8 @@ export type SelectProps<T> = {
   minMenuWidthPx?: number
   open?: Accessor<boolean>
   setOpen?: (v: boolean) => void
+  placement?: 'floating' | 'inline'
+  contextMenuPolicy?: 'dismiss' | 'preserve'
 }
 
 const DEFAULT_TRIGGER_CLASS =
@@ -34,6 +37,9 @@ const DEFAULT_TRIGGER_CLASS =
 
 const DEFAULT_LIST_CLASS =
   'border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) absolute top-2 left-2 z-90000 flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-0.5'
+
+const DEFAULT_INLINE_LIST_CLASS =
+  'border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) mt-1 flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]'
 
 export const Select: Component<SelectProps<unknown>> = (props) => {
   const shellFloat = useShellFloating()
@@ -44,10 +50,18 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
     props.setOpen?.(v)
     if (props.open === undefined) setInternalOpen(v)
   }
+  const behavior = () =>
+    resolveSelectBehavior({
+      placement: props.placement,
+      contextMenuPolicy: props.contextMenuPolicy,
+    })
+  const preserveContextMenu = () => behavior().preserveContextMenu
+  const floatingPlacement = () => behavior().floatingPlacement
 
   let anchorWrap: HTMLDivElement | undefined
   let triggerBtn: HTMLButtonElement | undefined
   let panelEl: HTMLDivElement | undefined
+  let suppressTriggerClick = false
 
   const [anchorPt, setAnchorPt] = createSignal<ShellFloatingAnchor>({ x: 0, y: 0 })
 
@@ -64,13 +78,13 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   createEffect(() => {
-    if (!isOpen()) return
+    if (!isOpen() || !floatingPlacement()) return
     shellFloat.acquireAtlasOverlayPointer()
     onCleanup(() => shellFloat.releaseAtlasOverlayPointer())
   })
 
   createEffect(() => {
-    if (!isOpen()) return
+    if (!isOpen() || !floatingPlacement()) return
     const syncAnchor = () => {
       const b = triggerBtn?.getBoundingClientRect()
       if (b) {
@@ -101,6 +115,20 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   createEffect(() => {
+    if (!preserveContextMenu() || !isOpen()) return
+    shellFloat.acquireNestedContextMenuFocus()
+    onCleanup(() => shellFloat.releaseNestedContextMenuFocus())
+  })
+
+  createEffect(() => {
+    if (!preserveContextMenu() || !isOpen() || !behavior().registerNestedSurface) return
+    const hitTarget = (target: Node) => panelEl?.contains(target) === true
+    shellFloat.registerNestedContextMenuSurface(hitTarget)
+    onCleanup(() => shellFloat.unregisterNestedContextMenuSurface(hitTarget))
+  })
+
+  createEffect(() => {
+    if (!floatingPlacement()) return
     if (!isOpen()) {
       hideFloatingPlacementWire()
       return
@@ -166,63 +194,106 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
 
   const minW = () => Math.max(120, props.minMenuWidthPx ?? 120)
 
+  const openOrToggle = () => {
+    if (isOpen()) {
+      setIsOpen(false)
+      return
+    }
+    shellFloat.closeAllAtlasSelects()
+    if (behavior().dismissContextMenusOnOpen) shellFloat.dismissContextMenus()
+    if (floatingPlacement()) {
+      const b = triggerBtn?.getBoundingClientRect()
+      if (b) setAnchorPt({ x: b.left, y: b.bottom, alignAboveY: b.top })
+    }
+    setIsOpen(true)
+  }
+
   return (
     <div class="relative self-start" ref={(el) => (anchorWrap = el)}>
       <button
         type="button"
         ref={(el) => (triggerBtn = el)}
         class={props.triggerClass ?? DEFAULT_TRIGGER_CLASS}
+        onMouseDown={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          suppressTriggerClick = true
+          openOrToggle()
+        }}
         onPointerDown={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          if (isOpen()) {
-            setIsOpen(false)
+          suppressTriggerClick = true
+          openOrToggle()
+        }}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (suppressTriggerClick) {
+            suppressTriggerClick = false
             return
           }
-          shellFloat.closeAllAtlasSelects()
-          shellFloat.dismissContextMenus()
-          const b = triggerBtn?.getBoundingClientRect()
-          if (b) setAnchorPt({ x: b.left, y: b.bottom, alignAboveY: b.top })
-          setIsOpen(true)
+          openOrToggle()
         }}
       >
         {props.itemLabel(props.value)}
       </button>
       <Show when={isOpen()}>
         {(() => {
+          const list = (
+            <div
+              ref={(el) => (panelEl = el)}
+              class={
+                props.listClass ??
+                (floatingPlacement() ? DEFAULT_LIST_CLASS : DEFAULT_INLINE_LIST_CLASS)
+              }
+              style={{ 'min-width': `${minW()}px` }}
+              role="listbox"
+              data-select-list
+            >
+              <For each={props.options as unknown[]}>
+                {(opt, idx) => (
+                  <button
+                    type="button"
+                    class="bg-transparent hover:bg-(--shell-overlay-hover) block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
+                    classList={{
+                      'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-(--shell-text) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
+                        eq()(opt, props.value),
+                    }}
+                    role="option"
+                    aria-selected={eq()(opt, props.value)}
+                    data-select-option-idx={idx()}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      props.onChange(opt)
+                      setIsOpen(false)
+                    }}
+                    onPointerDown={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      props.onChange(opt)
+                      setIsOpen(false)
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      props.onChange(opt)
+                      setIsOpen(false)
+                    }}
+                  >
+                    {props.itemLabel(opt)}
+                  </button>
+                )}
+              </For>
+            </div>
+          )
+          if (!floatingPlacement()) return list
           const host = shellFloat.atlasHostEl()
           if (!host) return <></>
           return (
             <Portal mount={host}>
-              <div
-                ref={(el) => (panelEl = el)}
-                class={props.listClass ?? DEFAULT_LIST_CLASS}
-                style={{ 'min-width': `${minW()}px` }}
-                role="listbox"
-              >
-                <For each={props.options as unknown[]}>
-                  {(opt) => (
-                    <button
-                      type="button"
-                      class="bg-transparent hover:bg-(--shell-overlay-hover) block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
-                      classList={{
-                        'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-(--shell-text) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                          eq()(opt, props.value),
-                      }}
-                      role="option"
-                      aria-selected={eq()(opt, props.value)}
-                      onPointerDown={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        props.onChange(opt)
-                        setIsOpen(false)
-                      }}
-                    >
-                      {props.itemLabel(opt)}
-                    </button>
-                  )}
-                </For>
-              </div>
+              {list}
             </Portal>
           )
         })()}

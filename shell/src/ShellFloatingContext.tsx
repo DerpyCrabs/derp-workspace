@@ -7,6 +7,10 @@ export type ShellFloatingRegistry = {
   unregisterAtlasSelectCloser: (fn: () => boolean) => void
   closeAllAtlasSelects: () => boolean
   dismissContextMenus: () => void
+  acquireNestedContextMenuFocus: () => void
+  releaseNestedContextMenuFocus: () => void
+  registerNestedContextMenuSurface: (fn: (target: Node) => boolean) => void
+  unregisterNestedContextMenuSurface: (fn: (target: Node) => boolean) => void
   acquireAtlasOverlayPointer: () => void
   releaseAtlasOverlayPointer: () => void
   mainEl: () => HTMLElement | undefined

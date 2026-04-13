@@ -59,4 +59,18 @@ describe('sanitizeShellAudioState', () => {
     expect(state.playback_streams).toHaveLength(1)
     expect(state.capture_streams).toEqual([])
   })
+
+  it('clamps amplified volumes to 100 percent', () => {
+    const state = sanitizeShellAudioState({
+      sinks: [{ id: 1, label: 'Speakers', name: 'speakers', volume_percent: 102 }],
+      sources: [{ id: 2, label: 'Mic', name: 'mic', volume_percent: 160 }],
+      playback_streams: [{ id: 3, label: 'App', name: 'app', app_name: 'App', volume_percent: 140 }],
+      capture_streams: [{ id: 4, label: 'Capture', name: 'capture', app_name: 'Capture', volume_percent: 101 }],
+    })
+
+    expect(state.sinks[0]?.volume_percent).toBe(100)
+    expect(state.sources[0]?.volume_percent).toBe(100)
+    expect(state.playback_streams[0]?.volume_percent).toBe(100)
+    expect(state.capture_streams[0]?.volume_percent).toBe(100)
+  })
 })

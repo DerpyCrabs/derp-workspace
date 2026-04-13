@@ -20,6 +20,10 @@ type ShellSurfaceLayersProps = {
   onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   powerMenuOpen: Accessor<boolean>
   onPowerMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
+  volumeMenuOpen: Accessor<boolean>
+  onVolumeMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
+  volumeMuted: Accessor<boolean>
+  volumePercent: Accessor<number | null>
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
   focusedWindowId: Accessor<number | null>
   keyboardLayoutLabel: Accessor<string | null>
@@ -141,6 +145,10 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                   onProgramsMenuClick={props.onProgramsMenuClick}
                   powerMenuOpen={props.powerMenuOpen()}
                   onPowerMenuClick={props.onPowerMenuClick}
+                  volumeMenuOpen={props.volumeMenuOpen()}
+                  onVolumeMenuClick={props.onVolumeMenuClick}
+                  volumeMuted={props.volumeMuted()}
+                  volumePercent={props.volumePercent()}
                   windows={props.taskbarRowsForScreen(screen)}
                   focusedWindowId={props.focusedWindowId()}
                   keyboardLayoutLabel={

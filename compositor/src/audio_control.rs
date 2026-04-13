@@ -3,6 +3,8 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
+const MAX_UI_VOLUME_PERCENT: u16 = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AudioNodeKind {
     Sink,
@@ -161,7 +163,7 @@ pub fn set_audio_volume_percent(id: u32, volume_percent: u32) -> Result<(), Stri
     if id == 0 {
         return Err("audio_volume: missing id".into());
     }
-    let pct = volume_percent.min(200);
+    let pct = volume_percent.min(MAX_UI_VOLUME_PERCENT as u32);
     run_wpctl_status(["set-volume", &id.to_string(), &format!("{pct}%")])
 }
 
@@ -199,11 +201,14 @@ fn read_node_volume(id: u32) -> (u16, bool, bool) {
     else {
         return (0, false, false);
     };
-    let percent = ((linear_percent_x100 as u32 + 50) / 100)
-        .min(u16::MAX as u32)
-        .try_into()
-        .unwrap_or(u16::MAX);
+    let percent = percent_from_linear_x100(linear_percent_x100);
     (percent, muted, true)
+}
+
+fn percent_from_linear_x100(linear_percent_x100: u16) -> u16 {
+    let percent = ((linear_percent_x100 as u32 + 50) / 100)
+        .min(MAX_UI_VOLUME_PERCENT as u32);
+    percent.try_into().unwrap_or(MAX_UI_VOLUME_PERCENT)
 }
 
 fn run_capture(command: &str, args: &[&str]) -> Result<String, String> {
@@ -480,6 +485,7 @@ fn join_distinct_parts<const N: usize>(values: [&str; N], label: &str) -> String
 mod tests {
     use super::{
         parse_pw_dump_inventory, parse_wpctl_get_volume, parse_wpctl_status_default_ids,
+        percent_from_linear_x100,
         AudioNodeKind,
     };
 
@@ -579,5 +585,11 @@ Video
             parse_wpctl_get_volume("Volume: 0.40 [MUTED]\n"),
             Some((4000, true))
         );
+    }
+
+    #[test]
+    fn percent_from_linear_x100_clamps_amplified_values() {
+        assert_eq!(percent_from_linear_x100(10200), 100);
+        assert_eq!(percent_from_linear_x100(8000), 80);
     }
 }

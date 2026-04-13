@@ -163,7 +163,13 @@ export interface ShellControls {
   taskbar_programs_toggle?: Rect | null
   taskbar_settings_toggle?: Rect | null
   taskbar_debug_toggle?: Rect | null
+  taskbar_volume_toggle?: Rect | null
   taskbar_power_toggle?: Rect | null
+  volume_menu_panel?: Rect | null
+  volume_output_select?: Rect | null
+  volume_input_select?: Rect | null
+  volume_output_slider?: Rect | null
+  volume_playback_first_slider?: Rect | null
   programs_menu_search?: Rect | null
   programs_menu_first_item?: Rect | null
   programs_menu_panel?: Rect | null
@@ -204,6 +210,7 @@ export interface ShellSnapshot {
   debug_window_visible: boolean
   programs_menu_open: boolean
   power_menu_open: boolean
+  volume_menu_open?: boolean
   programs_menu_query: string
   programs_menu_list_scroll?: ProgramsMenuListScroll | null
   crosshair_cursor: boolean
@@ -1099,6 +1106,30 @@ export async function waitForPowerMenuClosed(base: string, timeoutMs = 5000): Pr
   )
 }
 
+export async function waitForVolumeMenuOpen(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for volume menu open',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.volume_menu_open && shell.controls?.volume_menu_panel ? shell : null
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForVolumeMenuClosed(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for volume menu closed',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.volume_menu_open ? null : shell
+    },
+    timeoutMs,
+    100,
+  )
+}
+
 export async function openSettings(base: string, method: 'click' | 'keybind' = 'click'): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.settings_window_visible && shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized !== true) {
@@ -1186,6 +1217,14 @@ export async function openPowerMenu(base: string): Promise<ShellSnapshot> {
   return waitForPowerMenuOpen(base)
 }
 
+export async function openVolumeMenu(base: string): Promise<ShellSnapshot> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell.volume_menu_open) return waitForVolumeMenuOpen(base)
+  assert(shell.controls?.taskbar_volume_toggle, 'missing taskbar volume toggle')
+  await clickRect(base, shell.controls.taskbar_volume_toggle)
+  return waitForVolumeMenuOpen(base)
+}
+
 export function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`
 }
@@ -1200,12 +1239,14 @@ export function buildNativeSpawnCommand({
   strip,
   width = 480,
   height = 320,
+  dropBufferAfterDraw = false,
 }: {
   title: string
   token: string
   strip: string
   width?: number
   height?: number
+  dropBufferAfterDraw?: boolean
 }): string {
   const parts = [
     nativeBin(),
@@ -1222,6 +1263,7 @@ export function buildNativeSpawnCommand({
     '--height',
     String(height),
   ]
+  if (dropBufferAfterDraw) parts.push('--drop-buffer-after-draw')
   return parts.join(' ')
 }
 
@@ -1232,9 +1274,16 @@ export async function spawnCommand(base: string, command: string): Promise<void>
 export async function spawnNativeWindow(
   base: string,
   knownWindowIds: Set<number>,
-  { title, token, strip, width, height }: { title: string; token: string; strip: string; width?: number; height?: number },
+  {
+    title,
+    token,
+    strip,
+    width,
+    height,
+    dropBufferAfterDraw,
+  }: { title: string; token: string; strip: string; width?: number; height?: number; dropBufferAfterDraw?: boolean },
 ): Promise<NativeSpawnResult> {
-  const command = buildNativeSpawnCommand({ title, token, strip, width, height })
+  const command = buildNativeSpawnCommand({ title, token, strip, width, height, dropBufferAfterDraw })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId: NATIVE_APP_ID, command })
 }

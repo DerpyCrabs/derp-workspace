@@ -44,7 +44,7 @@ pub(crate) fn try_volume_key(
         run_wpctl_quiet(&["set-mute", "@DEFAULT_AUDIO_SINK@", "0"]);
     }
     let args: &[&str] = if raw == KEY_XF86AudioRaiseVolume {
-        &["set-volume", "@DEFAULT_AUDIO_SINK@", "5%+"]
+        &["set-volume", "@DEFAULT_AUDIO_SINK@", "5%+", "-l", "1.0"]
     } else if raw == KEY_XF86AudioLowerVolume {
         &["set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"]
     } else {

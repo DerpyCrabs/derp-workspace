@@ -40,6 +40,7 @@ import {
   rectGlobalToCanvasLocal,
 } from './shellCoords'
 import { SettingsPanel } from './SettingsPanel'
+import { defaultAudioDevice, useShellAudioState } from './settings/useShellAudioState'
 import {
   buildBackedWindowOpenPayload,
   buildShellTestWindowOpenPayload,
@@ -832,10 +833,26 @@ function App() {
     muted: boolean
     stateKnown: boolean
   } | null>(null)
+  const [trayVolumeState, setTrayVolumeState] = createSignal<{
+    muted: boolean
+    volumePercent: number | null
+  }>({
+    muted: false,
+    volumePercent: null,
+  })
+  const shellAudio = useShellAudioState()
+  createEffect(() => {
+    const sink = defaultAudioDevice(shellAudio.state()?.sinks ?? [])
+    if (!sink) return
+    setTrayVolumeState({
+      muted: sink.muted,
+      volumePercent: sink.volume_known ? sink.volume_percent : null,
+    })
+  })
   const volumeOverlayHud = createMemo(() => {
     const v = volumeOverlay()
     if (!v) return null
-    const pct = Math.min(200, Math.round(v.linear / 100))
+    const pct = Math.min(100, Math.round(v.linear / 100))
     const barPct = Math.min(100, pct)
     const main = mainRef
     const og = outputGeom()
@@ -1372,6 +1389,9 @@ function App() {
     const logicalCanvas = layoutUnionBbox()
     const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
     const main = mainRef ?? null
+    const volumeMenuRect = (selector: string) =>
+      shellContextMenus.projectCurrentMenuElementRect(document.querySelector(selector)) ??
+      e2eQueryRect(selector, main, canvas, origin)
     const stackOrderedWindows = [...windowsList()].sort(
       (a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id,
     )
@@ -1452,6 +1472,7 @@ function App() {
       crosshair_cursor: crosshairCursor(),
       programs_menu_open: shellContextMenus.programsMenuOpen(),
       power_menu_open: shellContextMenus.powerMenuOpen(),
+      volume_menu_open: shellContextMenus.volumeMenuOpen(),
       debug_window_visible: debugHudFrameVisible(),
       settings_window_visible: settingsHudFrameVisible(),
       snap_picker_open: snapAssistPicker() !== null,
@@ -1503,7 +1524,17 @@ function App() {
           origin,
         ),
         taskbar_debug_toggle: e2eQueryRect('[data-shell-debug-toggle]', main, canvas, origin),
+        taskbar_volume_toggle: e2eQueryRect('[data-shell-volume-toggle]', main, canvas, origin),
         taskbar_power_toggle: e2eQueryRect('[data-shell-power-toggle]', main, canvas, origin),
+        volume_menu_panel: volumeMenuRect('[data-shell-volume-menu-panel]'),
+        volume_output_select: volumeMenuRect('[data-shell-volume-output-select] button'),
+        volume_output_option_0: volumeMenuRect('[data-shell-volume-output-select] [data-select-option-idx="0"]'),
+        volume_output_option_1: volumeMenuRect('[data-shell-volume-output-select] [data-select-option-idx="1"]'),
+        volume_input_select: volumeMenuRect('[data-shell-volume-input-select] button'),
+        volume_input_option_0: volumeMenuRect('[data-shell-volume-input-select] [data-select-option-idx="0"]'),
+        volume_input_option_1: volumeMenuRect('[data-shell-volume-input-select] [data-select-option-idx="1"]'),
+        volume_output_slider: volumeMenuRect('[data-shell-volume-output-default] input[type="range"]'),
+        volume_playback_first_slider: volumeMenuRect('[data-shell-volume-playback-row="first"] input[type="range"]'),
         programs_menu_search: e2eQueryRect(
           'input[aria-label="Search applications"]',
           main,
@@ -3748,6 +3779,10 @@ function App() {
           muted: !!d.muted,
           stateKnown: d.state_known !== false,
         })
+        setTrayVolumeState({
+          muted: !!d.muted,
+          volumePercent: d.state_known === false ? null : Math.min(100, Math.round(lin / 100)),
+        })
         volumeOverlayHideTimer = setTimeout(() => {
           setVolumeOverlay(null)
           volumeOverlayHideTimer = undefined
@@ -4422,6 +4457,10 @@ function App() {
     },
     closeAllAtlasSelects,
     dismissContextMenus: shellContextMenus.hideContextMenu,
+    acquireNestedContextMenuFocus: shellContextMenus.acquireNestedContextMenuFocus,
+    releaseNestedContextMenuFocus: shellContextMenus.releaseNestedContextMenuFocus,
+    registerNestedContextMenuSurface: shellContextMenus.registerNestedContextMenuSurface,
+    unregisterNestedContextMenuSurface: shellContextMenus.unregisterNestedContextMenuSurface,
     acquireAtlasOverlayPointer,
     releaseAtlasOverlayPointer,
     mainEl: () => mainRef,
@@ -4544,6 +4583,10 @@ function App() {
         onProgramsMenuClick={shellContextMenus.onProgramsMenuClick}
         powerMenuOpen={shellContextMenus.powerMenuOpen}
         onPowerMenuClick={shellContextMenus.onPowerMenuClick}
+        volumeMenuOpen={shellContextMenus.volumeMenuOpen}
+        onVolumeMenuClick={shellContextMenus.onVolumeMenuClick}
+        volumeMuted={() => trayVolumeState().muted}
+        volumePercent={() => trayVolumeState().volumePercent}
         taskbarRowsForScreen={taskbarRowsForScreen}
         focusedWindowId={focusedTaskbarWindowId}
         keyboardLayoutLabel={keyboardLayoutLabel}
@@ -4598,10 +4641,12 @@ function App() {
         shellMenuAtlasTop={shellContextMenus.shellMenuAtlasTop}
         programsMenuOpen={shellContextMenus.programsMenuOpen}
         powerMenuOpen={shellContextMenus.powerMenuOpen}
+        volumeMenuOpen={shellContextMenus.volumeMenuOpen}
         tabMenuOpen={shellContextMenus.tabMenuOpen}
         traySniMenuOpen={shellContextMenus.traySniMenuOpen}
         programsMenuProps={shellContextMenus.programsMenuProps}
         powerMenuProps={shellContextMenus.powerMenuProps}
+        volumeMenuProps={shellContextMenus.volumeMenuProps}
         tabMenuProps={shellContextMenus.tabMenuProps}
         traySniMenuProps={shellContextMenus.traySniMenuProps}
       />

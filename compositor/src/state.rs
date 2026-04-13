@@ -6138,16 +6138,10 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn hide_close_requested_window_if_bufferless(&mut self, root: &WlSurface) {
+    pub(crate) fn hide_bufferless_native_window(&mut self, root: &WlSurface) {
         let Some(window_id) = self.window_registry.window_id_for_wl_surface(root) else {
             return;
         };
-        if !self
-            .shell_close_pending_native_windows
-            .contains(&window_id)
-        {
-            return;
-        }
         let buffer_removed = smithay::wayland::compositor::with_states(root, |states| {
             matches!(
                 states
@@ -6179,15 +6173,22 @@ impl CompositorState {
             bbox_w = bbox.size.w,
             bbox_h = bbox.size.h,
             buffer_removed,
-            "shell-close pending native window lost content; hiding before destroy"
+            close_pending = self.shell_close_pending_native_windows.contains(&window_id),
+            "native window lost content; pruning stuck window"
         );
         self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
         self.clear_toplevel_layout_maps(window_id);
+        self.pending_gnome_initial_toplevels.remove(&window_id);
+        self.shell_close_pending_native_windows.remove(&window_id);
+        if self.shell_pending_native_focus_window_id == Some(window_id) {
+            self.shell_pending_native_focus_window_id = None;
+        }
         self.shell_window_stack_forget(window_id);
         self.focus_history_remove_window(window_id);
         if self.shell_last_non_shell_focus_window_id == Some(window_id) {
             self.shell_last_non_shell_focus_window_id = None;
         }
+        self.shell_minimized_windows.remove(&window_id);
         if self.keyboard_focused_window_id() == Some(window_id) {
             let serial = SERIAL_COUNTER.next_serial();
             self.seat
@@ -6196,6 +6197,10 @@ impl CompositorState {
                 .set_focus(self, Option::<WlSurface>::None, serial);
             self.keyboard_on_focus_surface_changed(None);
             self.try_refocus_after_closed_toplevel();
+        }
+        let removed = self.window_registry.snapshot_for_wl_surface(root);
+        if let Some(pruned_window_id) = self.window_registry.remove_by_wl_surface(root) {
+            self.shell_emit_chrome_window_unmapped(pruned_window_id, removed);
         }
     }
 

@@ -39,6 +39,8 @@ struct Args {
     width: u32,
     #[arg(long, default_value_t = 320)]
     height: u32,
+    #[arg(long, default_value_t = false)]
+    drop_buffer_after_draw: bool,
 }
 
 fn main() {
@@ -84,6 +86,8 @@ fn main() {
         exit: false,
         token: args.token,
         strip_color,
+        drop_buffer_after_draw: args.drop_buffer_after_draw,
+        buffer_dropped: false,
     };
 
     while !state.exit {
@@ -110,6 +114,8 @@ struct TestClient {
     exit: bool,
     token: String,
     strip_color: [u8; 4],
+    drop_buffer_after_draw: bool,
+    buffer_dropped: bool,
 }
 
 impl TestClient {
@@ -170,6 +176,16 @@ impl TestClient {
             .expect("attach buffer");
         self.window.wl_surface().commit();
         self.needs_redraw = false;
+    }
+
+    fn drop_buffer(&mut self) {
+        if self.buffer_dropped {
+            return;
+        }
+        self.window.wl_surface().attach(None, 0, 0);
+        self.window.wl_surface().commit();
+        self.buffer = None;
+        self.buffer_dropped = true;
     }
 }
 
@@ -378,6 +394,10 @@ impl CompositorHandler for TestClient {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        if self.drop_buffer_after_draw && !self.buffer_dropped {
+            self.drop_buffer();
+            return;
+        }
         self.draw(conn, qh);
     }
 

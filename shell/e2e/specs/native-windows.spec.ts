@@ -17,11 +17,13 @@ import {
   pointInRect,
   runKeybind,
   shellWindowStack,
+  spawnNativeWindow,
   shellWindowById,
   taskbarForMonitor,
   waitFor,
   waitForNativeFocus,
   waitForShellUiFocus,
+  waitForWindowGone,
   waitForWindowMinimized,
   writeJsonArtifact,
   type ShellSnapshot,
@@ -92,6 +94,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const { red, green } = await ensureNativePair(base, state)
     await writeJsonArtifact('native-red-spawn.json', red.snapshot)
     await writeJsonArtifact('native-green-spawn.json', green.snapshot)
+  })
+
+  test('decorated native window disappears when its client drops content', async ({ base, state }) => {
+    const dropped = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp Native Buffer Drop',
+      token: 'native-buffer-drop',
+      strip: 'green',
+      dropBufferAfterDraw: true,
+    })
+    state.spawnedNativeWindowIds.add(dropped.window.window_id)
+    const gone = await waitForWindowGone(base, dropped.window.window_id, 5000)
+    await writeJsonArtifact('native-buffer-drop-pruned-compositor.json', gone.compositor)
+    await writeJsonArtifact('native-buffer-drop-pruned-shell.json', gone.shell)
   })
 
   test('native taskbar focus and tile left/right', async ({ base, state }) => {

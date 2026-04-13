@@ -18,6 +18,20 @@ export type ShellFloatingScreenLike = {
   height: number
 }
 
+export type MeasuredShellFloatingPlacement = {
+  panelRect: DOMRect
+  placement: {
+    bx: number
+    by: number
+    bw: number
+    bh: number
+    gx: number
+    gy: number
+    gw: number
+    gh: number
+  }
+}
+
 export function placementWorkspaceBounds(
   screens: ReadonlyArray<ShellFloatingScreenLike>,
   layoutOrigin: { x: number; y: number } | null,
@@ -36,7 +50,7 @@ export function placementWorkspaceBounds(
   )
 }
 
-export function pushShellFloatingWireFromDom(args: {
+export function measureShellFloatingPlacementFromDom(args: {
   main: HTMLElement
   atlasHost: HTMLElement
   panel: HTMLElement
@@ -48,7 +62,7 @@ export function pushShellFloatingWireFromDom(args: {
   contextMenuAtlasBufferH: number
   screens: ReadonlyArray<ShellFloatingScreenLike>
   layoutOrigin: { x: number; y: number } | null
-}): boolean {
+}): MeasuredShellFloatingPlacement {
   const mainRect = args.main.getBoundingClientRect()
   const atlasRect = args.atlasHost.getBoundingClientRect()
   const panelRect = args.panel.getBoundingClientRect()
@@ -60,7 +74,7 @@ export function pushShellFloatingWireFromDom(args: {
     args.physicalH,
     args.contextMenuAtlasBufferH,
   )
-  const p = menuPlacementForCompositor(
+  const placement = menuPlacementForCompositor(
     mainRect,
     atlasRect,
     panelRect,
@@ -75,7 +89,34 @@ export function pushShellFloatingWireFromDom(args: {
     args.layoutOrigin,
     wsBounds,
   )
-  return shellContextMenuWire(true, p.bx, p.by, p.bw, p.bh, p.gx, p.gy, p.gw, p.gh)
+  return { panelRect, placement }
+}
+
+export function pushShellFloatingWireFromDom(args: {
+  main: HTMLElement
+  atlasHost: HTMLElement
+  panel: HTMLElement
+  anchor: ShellFloatingAnchor
+  canvasW: number
+  canvasH: number
+  physicalW: number
+  physicalH: number
+  contextMenuAtlasBufferH: number
+  screens: ReadonlyArray<ShellFloatingScreenLike>
+  layoutOrigin: { x: number; y: number } | null
+}): boolean {
+  const { placement } = measureShellFloatingPlacementFromDom(args)
+  return shellContextMenuWire(
+    true,
+    placement.bx,
+    placement.by,
+    placement.bw,
+    placement.bh,
+    placement.gx,
+    placement.gy,
+    placement.gw,
+    placement.gh,
+  )
 }
 
 export function hideFloatingPlacementWire(): void {

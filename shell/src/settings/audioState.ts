@@ -53,7 +53,7 @@ function asAudioDevice(value: unknown): ShellAudioDevice | null {
     label: asString(row.label) || asString(row.name) || `Device ${id}`,
     subtitle: asString(row.subtitle),
     name: asString(row.name),
-    volume_percent: Math.max(0, asInteger(row.volume_percent)),
+    volume_percent: Math.max(0, Math.min(100, asInteger(row.volume_percent))),
     volume_known: row.volume_known === true,
     muted: row.muted === true,
     is_default: row.is_default === true,
@@ -71,7 +71,7 @@ function asAudioStream(value: unknown): ShellAudioStream | null {
     subtitle: asString(row.subtitle),
     name: asString(row.name),
     app_name: asString(row.app_name),
-    volume_percent: Math.max(0, asInteger(row.volume_percent)),
+    volume_percent: Math.max(0, Math.min(100, asInteger(row.volume_percent))),
     volume_known: row.volume_known === true,
     muted: row.muted === true,
   }
@@ -124,7 +124,7 @@ export async function setShellAudioVolume(
     '/audio_volume',
     {
       id,
-      volume_percent: Math.max(0, Math.min(200, Math.round(volume_percent))),
+      volume_percent: Math.max(0, Math.min(100, Math.round(volume_percent))),
     },
     base,
   )
