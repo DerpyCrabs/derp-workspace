@@ -42,6 +42,7 @@ type CreateShellContextMenusArgs = {
   screenshotMode: Accessor<boolean>
   stopScreenshotMode: () => void
   closeAllAtlasSelects: () => boolean
+  openFileBrowser: (path?: string | null) => void
   spawnInCompositor: (cmd: string) => Promise<void>
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
@@ -538,23 +539,42 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!programsMenuOpen()) return []
-    if (programsMenuBusy() && !programsCatalog.loaded) return [{ label: 'Loading…', action: () => {} }]
+    const query = programsMenuQuery().trim().toLocaleLowerCase()
+    const builtins: ShellContextMenuItem[] =
+      query.length === 0 || 'files browser folder shell'.split(' ').some((token) => token.includes(query) || query.includes(token))
+        ? [
+            {
+              label: 'Files',
+              badge: 'shell',
+              title: 'Open the shell file browser',
+              action: () => args.openFileBrowser(),
+            },
+          ]
+        : []
+    if (programsMenuBusy() && !programsCatalog.loaded) {
+      return builtins.length > 0 ? [...builtins, { label: 'Loading…', action: () => {} }] : [{ label: 'Loading…', action: () => {} }]
+    }
     const err = programsMenuErr()
-    if (err && !programsCatalog.loaded) return [{ label: err, action: () => {} }]
+    if (err && !programsCatalog.loaded) {
+      return builtins.length > 0 ? [...builtins, { label: err, action: () => {} }] : [{ label: err, action: () => {} }]
+    }
     const q = programsMenuQuery().trim()
     const raw = programsCatalog.items
     if (programsCatalog.loaded && raw.length === 0) {
-      return [{ label: 'No applications found.', action: () => {} }]
+      return builtins.length > 0 ? builtins : [{ label: 'No applications found.', action: () => {} }]
     }
-    if (raw.length === 0) return [{ label: 'Loading…', action: () => {} }]
-    return searchDesktopApplications(raw, q, programsUsageCounts()).map((app) => ({
-      label: app.name,
-      badge: app.terminal ? 'tty' : undefined,
-      action: () => {
-        setProgramsUsageCounts(recordDesktopAppLaunch(app))
-        void args.spawnInCompositor(app.exec)
-      },
-    }))
+    if (raw.length === 0) return builtins.length > 0 ? builtins : [{ label: 'Loading…', action: () => {} }]
+    return [
+      ...builtins,
+      ...searchDesktopApplications(raw, q, programsUsageCounts()).map((app) => ({
+        label: app.name,
+        badge: app.terminal ? 'tty' : undefined,
+        action: () => {
+          setProgramsUsageCounts(recordDesktopAppLaunch(app))
+          void args.spawnInCompositor(app.exec)
+        },
+      })),
+    ]
   })
 
   const menuListItems = createMemo(() => {

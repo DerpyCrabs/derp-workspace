@@ -103,6 +103,14 @@ fn write_http_json_error(
     status: u16,
     json: &str,
 ) -> std::io::Result<()> {
+    write_http_json(stream, status, json)
+}
+
+fn write_http_json(
+    stream: &mut std::net::TcpStream,
+    status: u16,
+    json: &str,
+) -> std::io::Result<()> {
     let head = format!(
         "HTTP/1.1 {status} Error\r\n{}Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
         cors_headers(),
@@ -518,6 +526,39 @@ fn handle_one(
     if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_applications" {
         let json = crate::cef::desktop_apps::list_applications_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/roots" {
+        let json = crate::cef::file_browser::file_browser_roots_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/list" {
+        let q = query_str.ok_or_else(|| "file_browser/list: missing query".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "file_browser/list: missing p".to_string())?;
+        let path = percent_decode_component(p_enc)?;
+        let include_hidden = query_param_raw(q, "hidden")
+            .map(|value| matches!(value, "1" | "true" | "yes"))
+            .unwrap_or(false);
+        match crate::cef::file_browser::file_browser_list_directory_json(&path, include_hidden) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/stat" {
+        let q = query_str.ok_or_else(|| "file_browser/stat: missing query".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "file_browser/stat: missing p".to_string())?;
+        let path = percent_decode_component(p_enc)?;
+        match crate::cef::file_browser::file_browser_stat_path_json(&path) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?,
+        }
         return Ok(());
     }
 

@@ -162,7 +162,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       />
       <Show when={props.children}>
         <div
-          class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) p-2 text-(--shell-text)"
+          class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
           style={{
             left: `${layout().inset}px`,
             top: `${layout().inset + layout().th}px`,

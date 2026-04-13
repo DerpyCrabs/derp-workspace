@@ -43,10 +43,15 @@ import { SettingsPanel } from './SettingsPanel'
 import { defaultAudioDevice, useShellAudioState } from './settings/useShellAudioState'
 import {
   buildBackedWindowOpenPayload,
+  buildFileBrowserWindowOpenPayload,
   buildShellTestWindowOpenPayload,
+  fileBrowserWindowId,
+  fileBrowserWindowTitle,
+  isFileBrowserWindowId,
   isShellTestWindowId,
   shellTestWindowId,
   shellTestWindowTitle,
+  SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_TEST_APP_ID,
 } from './backedShellWindows'
 import {
@@ -100,6 +105,8 @@ import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
 import type { TaskbarSniItem } from './Taskbar'
+import { FileBrowserWindow } from './FileBrowserWindow'
+import { primeFileBrowserWindowPath } from './fileBrowserState'
 import { ShellTestWindowContent } from './ShellTestWindowContent'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import type {
@@ -1137,6 +1144,7 @@ function App() {
     screenshotMode,
     stopScreenshotMode,
     closeAllAtlasSelects,
+    openFileBrowser: (path) => openFileBrowserWindow(path),
     spawnInCompositor,
     postSessionPower,
     canSessionControl,
@@ -1998,6 +2006,16 @@ function App() {
     if (isShellTestWindowId(windowId)) {
       const window = allWindowsMap().get(windowId)
       return <ShellTestWindowContent windowId={windowId} title={window?.title || groupedWindowLabel({ window_id: windowId, title: '', app_id: SHELL_UI_TEST_APP_ID })} />
+    }
+    if (isFileBrowserWindowId(windowId)) {
+      return (
+        <FileBrowserWindow
+          windowId={windowId}
+          onOpenFile={(path) => {
+            reportShellActionIssue(`File viewers land in a later phase: ${path}`)
+          }}
+        />
+      )
     }
     return undefined
   }
@@ -3102,6 +3120,41 @@ function App() {
         (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
     ).length
     const payload = buildShellTestWindowOpenPayload(mon.name, work, windowId, title, co, staggerIndex)
+    shellWireSend('backed_window_open', JSON.stringify(payload))
+    return true
+  }
+
+  function nextFileBrowserWindowOpenId() {
+    const used = new Set(
+      windowsList()
+        .filter((window) => isFileBrowserWindowId(window.window_id) || window.app_id === SHELL_UI_FILE_BROWSER_APP_ID)
+        .map((window) => window.window_id),
+    )
+    for (let instance = 0; instance <= 99; instance += 1) {
+      const windowId = fileBrowserWindowId(instance)
+      if (!used.has(windowId)) return windowId
+    }
+    return null
+  }
+
+  function openFileBrowserWindow(path?: string | null) {
+    const list = screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin())
+    const co = layoutCanvasOrigin()
+    const part = workspacePartition()
+    const mon = list.find((screen) => screen.name === part.primary.name) ?? list[0] ?? null
+    const windowId = nextFileBrowserWindowOpenId()
+    if (!mon || windowId === null) return false
+    const reserveTb = reserveTaskbarForMon(mon)
+    const work = monitorWorkAreaGlobal(mon, reserveTb)
+    const title = fileBrowserWindowTitle(windowId - fileBrowserWindowId(0))
+    const staggerIndex = windowsList().filter(
+      (window) =>
+        window.output_name === mon.name &&
+        !window.minimized &&
+        (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
+    ).length
+    primeFileBrowserWindowPath(windowId, path)
+    const payload = buildFileBrowserWindowOpenPayload(mon.name, work, windowId, title, co, staggerIndex)
     shellWireSend('backed_window_open', JSON.stringify(payload))
     return true
   }

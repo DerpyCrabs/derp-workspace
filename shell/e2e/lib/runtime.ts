@@ -24,9 +24,15 @@ export const ANSI = {
   black: '\x1b[30m',
 } as const
 export const KEY = {
+  backspace: 14,
   enter: 28,
   escape: 1,
   space: 57,
+  home: 102,
+  left: 105,
+  right: 106,
+  end: 107,
+  down: 108,
   a: 30,
   b: 48,
   c: 46,
@@ -51,6 +57,7 @@ export const KEY = {
   v: 47,
   w: 17,
   x: 45,
+  up: 103,
   y: 21,
   z: 44,
 } as const
