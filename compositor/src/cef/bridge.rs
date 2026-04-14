@@ -17,11 +17,7 @@ fn push_pending_message(
     messages: &mut Vec<shell_wire::DecodedCompositorToShellMessage>,
     msg: shell_wire::DecodedCompositorToShellMessage,
 ) {
-    if let shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-        window_id,
-        ..
-    } = &msg
-    {
+    if let shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } = &msg {
         messages.retain(|pending| {
             !matches!(
                 pending,

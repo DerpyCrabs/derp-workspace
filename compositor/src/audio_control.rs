@@ -206,8 +206,7 @@ fn read_node_volume(id: u32) -> (u16, bool, bool) {
 }
 
 fn percent_from_linear_x100(linear_percent_x100: u16) -> u16 {
-    let percent = ((linear_percent_x100 as u32 + 50) / 100)
-        .min(MAX_UI_VOLUME_PERCENT as u32);
+    let percent = ((linear_percent_x100 as u32 + 50) / 100).min(MAX_UI_VOLUME_PERCENT as u32);
     percent.try_into().unwrap_or(MAX_UI_VOLUME_PERCENT)
 }
 
@@ -485,8 +484,7 @@ fn join_distinct_parts<const N: usize>(values: [&str; N], label: &str) -> String
 mod tests {
     use super::{
         parse_pw_dump_inventory, parse_wpctl_get_volume, parse_wpctl_status_default_ids,
-        percent_from_linear_x100,
-        AudioNodeKind,
+        percent_from_linear_x100, AudioNodeKind,
     };
 
     #[test]

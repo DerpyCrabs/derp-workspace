@@ -545,7 +545,9 @@ fn handle_one(
             .unwrap_or(false);
         match crate::cef::file_browser::file_browser_list_directory_json(&path, include_hidden) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -557,7 +559,9 @@ fn handle_one(
         let path = percent_decode_component(p_enc)?;
         match crate::cef::file_browser::file_browser_stat_path_json(&path) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }

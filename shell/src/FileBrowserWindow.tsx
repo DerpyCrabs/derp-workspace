@@ -124,9 +124,10 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     () => state.entries.find((entry) => entry.path === state.selectedPath) ?? null,
   )
 
-  async function loadDirectory(targetPath?: string | null, forceRoots = false) {
+  async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
     const base = shellHttpBase()
     const runId = ++requestSeq
+    const showHidden = showHiddenOverride ?? state.showHidden
     setBusy(true)
     setState('status', 'loading')
     setState('errorMessage', null)
@@ -138,7 +139,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       if (!path) {
         throw new Error('No file browser roots are available.')
       }
-      const listing = await listFileBrowserDirectory(path, state.showHidden, base)
+      const listing = await listFileBrowserDirectory(path, showHidden, base)
       if (runId !== requestSeq) return
       setState('activePath', listing.path)
       setState('parentPath', listing.parent_path)
@@ -185,7 +186,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     const nextShowHidden = !state.showHidden
     setFileBrowserShowHidden(nextShowHidden)
     setState('showHidden', nextShowHidden)
-    void loadDirectory(state.activePath)
+    void loadDirectory(state.activePath, false, nextShowHidden)
   }
 
   function applyRestoredState(value: unknown) {
@@ -195,7 +196,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     setState('showHidden', nextState.showHidden)
     setState('selectedPath', nextState.selectedPath)
     if (nextState.activePath || nextState.showHidden !== state.showHidden) {
-      void loadDirectory(nextState.activePath ?? state.activePath, true)
+      void loadDirectory(nextState.activePath ?? state.activePath, true, nextState.showHidden)
     }
   }
 

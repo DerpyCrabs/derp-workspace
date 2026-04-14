@@ -283,6 +283,10 @@ impl WindowRegistry {
             .map(|record| record.info.clone())
     }
 
+    pub fn window_record(&self, window_id: WindowId) -> Option<WindowRecord> {
+        self.records.get(&window_id).cloned()
+    }
+
     pub fn window_kind(&self, window_id: WindowId) -> Option<WindowKind> {
         self.records.get(&window_id).map(|record| record.kind)
     }

@@ -730,9 +730,7 @@ impl DrmSession {
             crate::cef::begin_frame_diag::CompositorScheduleKind::Idle
         };
         let min_gap = match schedule_kind {
-            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle => {
-                SHELL_BEGIN_MIN_WHEN_IDLE
-            }
+            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle => SHELL_BEGIN_MIN_WHEN_IDLE,
             crate::cef::begin_frame_diag::CompositorScheduleKind::Active
             | crate::cef::begin_frame_diag::CompositorScheduleKind::Forced => {
                 SHELL_BEGIN_MIN_WHEN_ACTIVE

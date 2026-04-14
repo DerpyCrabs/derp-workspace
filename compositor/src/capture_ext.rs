@@ -307,9 +307,9 @@ impl CompositorState {
                 .outputs()
                 .find(|output| output.name() == *output_name)
                 .and_then(|output| self.capture_output_source(output)),
-            CaptureSourceKey::Window(window_id) => self.capture_window_sources().into_iter().find(
-                |source| matches!(source.key, CaptureSourceKey::Window(id) if id == *window_id),
-            ),
+            CaptureSourceKey::Window(window_id) => {
+                self.capture_window_source_descriptor(*window_id)
+            }
         }
     }
 

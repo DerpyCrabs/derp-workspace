@@ -1,4 +1,7 @@
 import {
+  GREEN_NATIVE_TITLE,
+  NATIVE_APP_ID,
+  RED_NATIVE_TITLE,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -142,6 +145,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         try {
           assertWindowTiled(red, redOutput, taskbar.rect, 'left')
           assertWindowTiled(green, greenOutput, taskbar.rect, 'right')
+          assert(red.title === RED_NATIVE_TITLE, `expected red title ${RED_NATIVE_TITLE}, got ${red.title}`)
+          assert(green.title === GREEN_NATIVE_TITLE, `expected green title ${GREEN_NATIVE_TITLE}, got ${green.title}`)
+          assert(red.app_id === NATIVE_APP_ID, `expected red app_id ${NATIVE_APP_ID}, got ${red.app_id}`)
+          assert(green.app_id === NATIVE_APP_ID, `expected green app_id ${NATIVE_APP_ID}, got ${green.app_id}`)
+          assert(red.output_name === redOutput.name, `expected red output ${redOutput.name}, got ${red.output_name}`)
+          assert(green.output_name === greenOutput.name, `expected green output ${greenOutput.name}, got ${green.output_name}`)
         } catch {
           return null
         }

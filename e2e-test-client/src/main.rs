@@ -163,7 +163,13 @@ impl TestClient {
         let buffer = self.buffer.as_mut().expect("buffer ready");
         let canvas = self.pool.canvas(buffer).expect("buffer canvas");
 
-        draw_pattern(canvas, self.width, self.height, &self.token, self.strip_color);
+        draw_pattern(
+            canvas,
+            self.width,
+            self.height,
+            &self.token,
+            self.strip_color,
+        );
 
         self.window
             .wl_surface()
@@ -223,7 +229,9 @@ fn draw_pattern(canvas: &mut [u8], width: u32, height: u32, token: &str, strip_c
             } else if y < header_h {
                 mix(accent_a, accent_b, x as u32, width.max(1))
             } else if y >= height_i.saturating_sub(footer_h) {
-                footer_color(x, y, width_i, height_i, footer_h, bars, accent_b, accent_c, light)
+                footer_color(
+                    x, y, width_i, height_i, footer_h, bars, accent_b, accent_c, light,
+                )
             } else {
                 let gx = (x.saturating_sub(border_px)) / cell_w;
                 let gy = (y.saturating_sub(grid_top)) / cell_h;
@@ -487,7 +495,12 @@ impl SeatHandler for TestClient {
         &mut self.seat_state
     }
 
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wayland_client::protocol::wl_seat::WlSeat) {
+    fn new_seat(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
     }
 
     fn new_capability(
@@ -508,7 +521,12 @@ impl SeatHandler for TestClient {
     ) {
     }
 
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wayland_client::protocol::wl_seat::WlSeat) {
+    fn remove_seat(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
     }
 }
 

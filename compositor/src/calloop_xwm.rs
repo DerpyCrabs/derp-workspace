@@ -3,13 +3,11 @@
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::{
-    input::{
-        Seat, SeatHandler, SeatState, dnd::DndGrabHandler, pointer::CursorImageStatus,
-    },
+    input::{dnd::DndGrabHandler, pointer::CursorImageStatus, Seat, SeatHandler, SeatState},
     utils::{Logical, Rectangle},
     wayland::selection::{
-        SelectionHandler, SelectionSource, SelectionTarget,
         data_device::{DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler},
+        SelectionHandler, SelectionSource, SelectionTarget,
     },
     wayland::xwayland_shell::XWaylandShellHandler,
     xwayland::{
@@ -27,11 +25,9 @@ impl SeatHandler for CalloopData {
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         unsafe {
-            &mut *(
-                <crate::CompositorState as SeatHandler>::seat_state(&mut self.state)
-                    as *mut SeatState<crate::CompositorState>
-                    as *mut SeatState<Self>
-            )
+            &mut *(<crate::CompositorState as SeatHandler>::seat_state(&mut self.state)
+                as *mut SeatState<crate::CompositorState>
+                as *mut SeatState<Self>)
         }
     }
 
@@ -171,7 +167,13 @@ impl XwmHandler for CalloopData {
         XwmHandler::allow_selection_access(&mut self.state, xwm, selection)
     }
 
-    fn send_selection(&mut self, xwm: XwmId, selection: SelectionTarget, mime_type: String, fd: std::os::fd::OwnedFd) {
+    fn send_selection(
+        &mut self,
+        xwm: XwmId,
+        selection: SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+    ) {
         XwmHandler::send_selection(&mut self.state, xwm, selection, mime_type, fd);
     }
 

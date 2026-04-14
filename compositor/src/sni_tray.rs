@@ -9,8 +9,13 @@ use zbus::zvariant::{OwnedObjectPath, OwnedStructure, Signature, Value};
 use shell_wire::{SniTrayLoopMsg, TraySniItemWire, TraySniMenuEntryWire, TraySniMenuWire};
 
 pub enum SniTrayCmd {
-    Activate { id: String },
-    OpenMenu { id: String, request_serial: u32 },
+    Activate {
+        id: String,
+    },
+    OpenMenu {
+        id: String,
+        request_serial: u32,
+    },
     MenuEvent {
         id: String,
         menu_path: String,
@@ -265,7 +270,12 @@ fn dbusmenu_peel_kind(v: &Value) -> &'static str {
         Value::Bool(_) => "bool",
         Value::ObjectPath(_) => "object_path",
         Value::Signature(_) => "signature",
-        Value::U8(_) | Value::I16(_) | Value::U16(_) | Value::I32(_) | Value::U32(_) | Value::I64(_)
+        Value::U8(_)
+        | Value::I16(_)
+        | Value::U16(_)
+        | Value::I32(_)
+        | Value::U32(_)
+        | Value::I64(_)
         | Value::U64(_) => "int",
         Value::F64(_) => "f64",
         _ => "other",
@@ -470,9 +480,9 @@ fn dbusmenu_parse_get_layout_reply(
         }
     };
     let data = body.data();
-    let (rev, n1) = match data.deserialize_for_dynamic_signature::<_, u32>(
-        Signature::from_static_str_unchecked("u"),
-    ) {
+    let (rev, n1) = match data
+        .deserialize_for_dynamic_signature::<_, u32>(Signature::from_static_str_unchecked("u"))
+    {
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!(
@@ -579,24 +589,25 @@ fn fetch_dbusmenu_entries(
         "children-display".to_string(),
     ];
     let parse = || -> Vec<TraySniMenuEntryWire> {
-        let (which, reply) = match proxy.call_method("GetLayout", &(0i32, -1i32, &Vec::<String>::new())) {
-            Ok(m) => ("empty_props", m),
-            Err(e1) => match proxy.call_method("GetLayout", &(0i32, -1i32, &props_named)) {
-                Ok(m) => ("named_props", m),
-                Err(e2) => {
-                    tracing::warn!(
-                        target: "derp_sni_menu",
-                        notifier_id = %notifier_id,
-                        dest = %dest,
-                        menu_path = %menu_path,
-                        err_empty = %e1,
-                        err_named = %e2,
-                        "dbusmenu GetLayout failed (empty props and named props)"
-                    );
-                    return Vec::new();
-                }
-            },
-        };
+        let (which, reply) =
+            match proxy.call_method("GetLayout", &(0i32, -1i32, &Vec::<String>::new())) {
+                Ok(m) => ("empty_props", m),
+                Err(e1) => match proxy.call_method("GetLayout", &(0i32, -1i32, &props_named)) {
+                    Ok(m) => ("named_props", m),
+                    Err(e2) => {
+                        tracing::warn!(
+                            target: "derp_sni_menu",
+                            notifier_id = %notifier_id,
+                            dest = %dest,
+                            menu_path = %menu_path,
+                            err_empty = %e1,
+                            err_named = %e2,
+                            "dbusmenu GetLayout failed (empty props and named props)"
+                        );
+                        return Vec::new();
+                    }
+                },
+            };
         let out = dbusmenu_parse_get_layout_reply(&reply.body(), notifier_id, dest, menu_path);
         if out.is_empty() {
             tracing::warn!(
@@ -697,12 +708,8 @@ fn menu_event(conn: &Connection, full_id: &str, menu_path: &str, item_id: i32) {
         return;
     }
     let (dest, _) = notifier_dest_path(full_id);
-    let Ok(menu_proxy) = Proxy::new(
-        conn,
-        dest.as_str(),
-        menu_path,
-        "com.canonical.dbusmenu",
-    ) else {
+    let Ok(menu_proxy) = Proxy::new(conn, dest.as_str(), menu_path, "com.canonical.dbusmenu")
+    else {
         return;
     };
     let data = Value::from(0i32);

@@ -44,7 +44,10 @@ pub fn read_session_state() -> SessionStateFile {
     let Some(path) = session_state_path() else {
         return SessionStateFile::default();
     };
-    sanitize_session_state(crate::json_state::read_json_file(&path, "read session state"))
+    sanitize_session_state(crate::json_state::read_json_file(
+        &path,
+        "read session state",
+    ))
 }
 
 pub fn read_session_state_json() -> Result<String, String> {
@@ -55,11 +58,7 @@ pub fn write_session_state(state: SessionStateFile) -> Result<(), String> {
     let Some(path) = session_state_path() else {
         return Err("session state path unavailable".into());
     };
-    crate::json_state::write_json_file(
-        &path,
-        &sanitize_session_state(state),
-        "write session state",
-    )
+    crate::json_state::write_json_file(&path, &sanitize_session_state(state), "write session state")
 }
 
 pub fn write_session_state_json(value: Value) -> Result<String, String> {

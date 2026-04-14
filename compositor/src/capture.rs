@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -48,6 +48,12 @@ pub(crate) struct CaptureSourceDescriptor {
     pub buffer_size: Size<i32, Buffer>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CachedCaptureWindowSource {
+    pub output_name: String,
+    pub logical_rect: Rectangle<i32, Logical>,
+}
+
 #[derive(Debug)]
 pub(crate) struct ScreencopyManagerState {
     _global: GlobalId,
@@ -84,6 +90,105 @@ impl ScreencopyManagerState {
 }
 
 impl CompositorState {
+    fn capture_output_scales(&self) -> HashMap<String, f64> {
+        self.space
+            .outputs()
+            .map(|output| (output.name(), output.current_scale().fractional_scale()))
+            .collect()
+    }
+
+    fn capture_cached_window_source_from_info(
+        info: &crate::chrome_bridge::WindowInfo,
+    ) -> CachedCaptureWindowSource {
+        CachedCaptureWindowSource {
+            output_name: info.output_name.clone(),
+            logical_rect: Rectangle::new(
+                (info.x, info.y).into(),
+                (info.width.max(1), info.height.max(1)).into(),
+            ),
+        }
+    }
+
+    fn capture_cached_window_source_fallback(
+        &self,
+        record: &crate::window_registry::WindowRecord,
+    ) -> CachedCaptureWindowSource {
+        let logical_rect = self
+            .space
+            .elements()
+            .find(|elem| self.derp_elem_window_id(elem) == Some(record.info.window_id))
+            .and_then(|elem| self.space.element_geometry(elem))
+            .unwrap_or_else(|| {
+                Rectangle::new(
+                    (record.info.x, record.info.y).into(),
+                    (record.info.width.max(1), record.info.height.max(1)).into(),
+                )
+            });
+        CachedCaptureWindowSource {
+            output_name: record.info.output_name.clone(),
+            logical_rect,
+        }
+    }
+
+    fn capture_buffer_size_for_window_source(
+        cached: &CachedCaptureWindowSource,
+        output_scales: &HashMap<String, f64>,
+    ) -> Size<i32, Buffer> {
+        let scale = output_scales
+            .get(&cached.output_name)
+            .copied()
+            .unwrap_or(1.0);
+        Size::from((
+            ((cached.logical_rect.size.w as f64) * scale)
+                .round()
+                .max(1.0) as i32,
+            ((cached.logical_rect.size.h as f64) * scale)
+                .round()
+                .max(1.0) as i32,
+        ))
+    }
+
+    fn capture_window_source_descriptor_from_record(
+        &self,
+        record: &crate::window_registry::WindowRecord,
+        output_scales: &HashMap<String, f64>,
+    ) -> CaptureSourceDescriptor {
+        let cached = self
+            .capture_window_source_cache
+            .get(&record.info.window_id)
+            .cloned()
+            .unwrap_or_else(|| self.capture_cached_window_source_fallback(record));
+        CaptureSourceDescriptor {
+            key: CaptureSourceKey::Window(record.info.window_id),
+            title: record.info.title.clone(),
+            app_id: record.info.app_id.clone(),
+            output_name: cached.output_name.clone(),
+            logical_rect: cached.logical_rect,
+            buffer_size: Self::capture_buffer_size_for_window_source(&cached, output_scales),
+        }
+    }
+
+    pub(crate) fn capture_refresh_window_source_cache(&mut self, window_id: u32) {
+        let Some(record) = self.window_registry.window_record(window_id) else {
+            self.capture_window_source_cache.remove(&window_id);
+            return;
+        };
+        if record.kind == crate::window_registry::WindowKind::ShellHosted
+            || self.window_info_is_solid_shell_host(&record.info)
+        {
+            self.capture_window_source_cache.remove(&window_id);
+            return;
+        }
+        self.capture_window_source_cache.insert(
+            window_id,
+            Self::capture_cached_window_source_from_info(&record.info),
+        );
+    }
+
+    pub(crate) fn capture_forget_window_source_cache(&mut self, window_id: u32) {
+        self.capture_window_source_cache.remove(&window_id);
+    }
+
     pub(crate) fn capture_output_source(&self, output: &Output) -> Option<CaptureSourceDescriptor> {
         let logical_rect = self.space.output_geometry(output)?;
         let mode = output.current_mode()?;
@@ -102,6 +207,7 @@ impl CompositorState {
     }
 
     pub(crate) fn capture_window_sources(&self) -> Vec<CaptureSourceDescriptor> {
+        let output_scales = self.capture_output_scales();
         self.window_registry
             .all_records()
             .into_iter()
@@ -112,37 +218,25 @@ impl CompositorState {
                 !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
             })
             .map(|record| {
-                let logical_rect = self
-                    .space
-                    .elements()
-                    .find(|elem| self.derp_elem_window_id(elem) == Some(record.info.window_id))
-                    .and_then(|elem| self.space.element_geometry(elem))
-                    .unwrap_or_else(|| {
-                        Rectangle::new(
-                            (record.info.x, record.info.y).into(),
-                            (record.info.width.max(1), record.info.height.max(1)).into(),
-                        )
-                    });
-                let scale = self
-                    .space
-                    .outputs()
-                    .find(|output| output.name() == record.info.output_name)
-                    .map(|output| output.current_scale().fractional_scale())
-                    .unwrap_or(1.0);
-                let buffer_size = Size::from((
-                    ((logical_rect.size.w as f64) * scale).round().max(1.0) as i32,
-                    ((logical_rect.size.h as f64) * scale).round().max(1.0) as i32,
-                ));
-                CaptureSourceDescriptor {
-                    key: CaptureSourceKey::Window(record.info.window_id),
-                    title: record.info.title.clone(),
-                    app_id: record.info.app_id.clone(),
-                    output_name: record.info.output_name.clone(),
-                    logical_rect,
-                    buffer_size,
-                }
+                self.capture_window_source_descriptor_from_record(&record, &output_scales)
             })
             .collect()
+    }
+
+    pub(crate) fn capture_window_source_descriptor(
+        &self,
+        window_id: u32,
+    ) -> Option<CaptureSourceDescriptor> {
+        let record = self.window_registry.window_record(window_id)?;
+        if self.window_info_is_solid_shell_host(&record.info)
+            || record.kind == crate::window_registry::WindowKind::ShellHosted
+            || !shell_window_row_should_show(&record.info)
+            || self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+        {
+            return None;
+        }
+        let output_scales = self.capture_output_scales();
+        Some(self.capture_window_source_descriptor_from_record(&record, &output_scales))
     }
 
     pub(crate) fn capture_sync_toplevel_handles(&mut self) {

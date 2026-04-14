@@ -76,6 +76,7 @@ impl XdgShellHandler for CompositorState {
             .window_registry
             .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
+        self.capture_refresh_window_source_cache(reg.window_id);
 
         let existing_before = self.space.elements().count();
         let (map_x, map_y) = if map_at_output_origin {
@@ -198,6 +199,7 @@ impl XdgShellHandler for CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(wl);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(wl) {
+            self.capture_forget_window_source_cache(window_id);
             self.shell_close_pending_native_windows.remove(&window_id);
             self.shell_window_stack_forget(window_id);
             self.focus_history_remove_window(window_id);

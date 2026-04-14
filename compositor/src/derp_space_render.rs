@@ -75,11 +75,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let scale = Scale::from(output_scale);
                     let loc_phys = location.to_physical_precise_round(scale);
                     for (el, include_self_decor) in render_window_elements_with_exclusion_mode(
-                        window,
-                        renderer,
-                        loc_phys,
-                        scale,
-                        alpha,
+                        window, renderer, loc_phys, scale, alpha,
                     ) {
                         out.push((
                             SpaceRenderElements::Element(Wrap::from(el)),
@@ -92,11 +88,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let scale = Scale::from(output_scale);
                     let loc_phys = location.to_physical_precise_round(scale);
                     for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
-                        elem,
-                        renderer,
-                        loc_phys,
-                        scale,
-                        alpha,
+                        elem, renderer, loc_phys, scale, alpha,
                     ) {
                         out.push((SpaceRenderElements::Element(Wrap::from(el)), wid, true));
                     }

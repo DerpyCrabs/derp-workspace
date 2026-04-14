@@ -1,10 +1,10 @@
 use std::sync::Mutex;
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
     MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
 };
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;

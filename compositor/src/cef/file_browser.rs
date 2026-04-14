@@ -73,7 +73,9 @@ fn http_error(
         },
     })
     .unwrap_or_else(|_| {
-        format!(r#"{{"error":{{"code":"{code}","message":"failed to serialize error","path":null}}}}"#)
+        format!(
+            r#"{{"error":{{"code":"{code}","message":"failed to serialize error","path":null}}}}"#
+        )
     });
     FileBrowserHttpError { status, body }
 }
@@ -129,7 +131,10 @@ fn writable_flag(path: &Path, metadata: &fs::Metadata) -> Option<bool> {
     Some(true)
 }
 
-fn classify_entry(path: &Path, symlink_metadata: &fs::Metadata) -> (&'static str, bool, Option<fs::Metadata>) {
+fn classify_entry(
+    path: &Path,
+    symlink_metadata: &fs::Metadata,
+) -> (&'static str, bool, Option<fs::Metadata>) {
     let symlink = symlink_metadata.file_type().is_symlink();
     if !symlink {
         if symlink_metadata.is_dir() {
@@ -362,7 +367,10 @@ pub(crate) fn file_browser_list_directory_json(
             http_error(
                 500,
                 "io_error",
-                format!("failed to read directory entry in {}: {error}", canonical.display()),
+                format!(
+                    "failed to read directory entry in {}: {error}",
+                    canonical.display()
+                ),
                 Some(&canonical),
             )
         })?;
@@ -377,16 +385,28 @@ pub(crate) fn file_browser_list_directory_json(
         let b_dir = b.kind == "directory";
         b_dir
             .cmp(&a_dir)
-            .then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()))
+            .then_with(|| {
+                a.name
+                    .to_ascii_lowercase()
+                    .cmp(&b.name.to_ascii_lowercase())
+            })
             .then_with(|| a.path.cmp(&b.path))
     });
     let response = FileBrowserListResponse {
         path: canonical.to_string_lossy().into_owned(),
-        parent_path: canonical.parent().map(|value| value.to_string_lossy().into_owned()),
+        parent_path: canonical
+            .parent()
+            .map(|value| value.to_string_lossy().into_owned()),
         entries,
     };
-    serde_json::to_string(&response)
-        .map_err(|error| http_error(500, "io_error", format!("serialize list response: {error}"), Some(&canonical)))
+    serde_json::to_string(&response).map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize list response: {error}"),
+            Some(&canonical),
+        )
+    })
 }
 
 pub(crate) fn file_browser_stat_path_json(raw_path: &str) -> Result<String, FileBrowserHttpError> {
@@ -394,6 +414,12 @@ pub(crate) fn file_browser_stat_path_json(raw_path: &str) -> Result<String, File
     let response = FileBrowserStatResponse {
         entry: build_entry(&canonical)?,
     };
-    serde_json::to_string(&response)
-        .map_err(|error| http_error(500, "io_error", format!("serialize stat response: {error}"), Some(&canonical)))
+    serde_json::to_string(&response).map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize stat response: {error}"),
+            Some(&canonical),
+        )
+    })
 }

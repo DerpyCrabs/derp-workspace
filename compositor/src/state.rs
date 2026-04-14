@@ -350,6 +350,7 @@ pub struct CompositorState {
     pub layer_shell_state: WlrLayerShellState,
     pub(crate) foreign_toplevel_list_state: ForeignToplevelListState,
     pub(crate) capture_toplevel_handles: HashMap<u32, ForeignToplevelHandle>,
+    pub(crate) capture_window_source_cache: HashMap<u32, crate::capture::CachedCaptureWindowSource>,
     pub(crate) _idle_inhibit_manager_state: IdleInhibitManagerState,
     pub(crate) idle_inhibit_surfaces: HashSet<(ClientId, u32)>,
     pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
@@ -713,8 +714,7 @@ impl CompositorState {
             .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
         let (sni_to_loop_tx, sni_rx) = channel::channel::<shell_wire::SniTrayLoopMsg>();
-        let (sni_cmd_tx, sni_cmd_rx) =
-            std::sync::mpsc::channel::<crate::sni_tray::SniTrayCmd>();
+        let (sni_cmd_tx, sni_cmd_rx) = std::sync::mpsc::channel::<crate::sni_tray::SniTrayCmd>();
         crate::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
         event_loop
             .handle()
@@ -754,6 +754,7 @@ impl CompositorState {
             layer_shell_state,
             foreign_toplevel_list_state,
             capture_toplevel_handles: HashMap::new(),
+            capture_window_source_cache: HashMap::new(),
             _idle_inhibit_manager_state: idle_inhibit_manager_state,
             idle_inhibit_surfaces: HashSet::new(),
             keyboard_shortcuts_inhibit_state,
@@ -933,7 +934,8 @@ impl CompositorState {
             .set_xkb_config(self, xkb_cfg)
             .map_err(|e| format!("set_xkb_config: {e:?}"))?;
         handle.change_repeat_info(
-            i32::try_from(settings.repeat_rate).map_err(|_| "repeat_rate out of range".to_string())?,
+            i32::try_from(settings.repeat_rate)
+                .map_err(|_| "repeat_rate out of range".to_string())?,
             i32::try_from(settings.repeat_delay_ms)
                 .map_err(|_| "repeat_delay_ms out of range".to_string())?,
         );
@@ -1757,8 +1759,12 @@ impl CompositorState {
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.schedule_external_begin_frame(crate::cef::begin_frame_diag::CompositorScheduleKind::Forced);
-            link.schedule_external_begin_frame(crate::cef::begin_frame_diag::CompositorScheduleKind::Forced);
+            link.schedule_external_begin_frame(
+                crate::cef::begin_frame_diag::CompositorScheduleKind::Forced,
+            );
+            link.schedule_external_begin_frame(
+                crate::cef::begin_frame_diag::CompositorScheduleKind::Forced,
+            );
         } else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
         }
@@ -2076,7 +2082,8 @@ impl CompositorState {
         if infos.is_empty() {
             self.pending_deferred_toplevels
                 .retain(|(cid, _), _| cid != &client_id);
-            self.idle_inhibit_surfaces.retain(|(cid, _)| cid != &client_id);
+            self.idle_inhibit_surfaces
+                .retain(|(cid, _)| cid != &client_id);
             return;
         }
         let focused_removed = infos
@@ -2118,9 +2125,11 @@ impl CompositorState {
         }
         self.pending_deferred_toplevels
             .retain(|(cid, _), _| cid != &client_id);
-        self.idle_inhibit_surfaces.retain(|(cid, _)| cid != &client_id);
+        self.idle_inhibit_surfaces
+            .retain(|(cid, _)| cid != &client_id);
         let removed = self.window_registry.remove_by_client_id(&client_id);
         for info in removed {
+            self.capture_forget_window_source_cache(info.window_id);
             tracing::warn!(
                 target: "derp_toplevel",
                 window_id = info.window_id,
@@ -2169,15 +2178,8 @@ impl CompositorState {
             "toggle_programs_menu" => {
                 self.programs_menu_toggle_from_super(SERIAL_COUNTER.next_serial());
             }
-            "launch_terminal"
-            | "open_settings"
-            | "tile_left"
-            | "tile_right"
-            | "tile_up"
-            | "tile_down"
-            | "tab_next"
-            | "tab_previous"
-            | "move_monitor_left"
+            "launch_terminal" | "open_settings" | "tile_left" | "tile_right" | "tile_up"
+            | "tile_down" | "tab_next" | "tab_previous" | "move_monitor_left"
             | "move_monitor_right" => self.shell_send_keybind(action),
             "cycle_keyboard_layout" => self.keyboard_cycle_layout_for_shortcut(),
             _ => {}
@@ -2377,8 +2379,7 @@ impl CompositorState {
         };
         let scale = Self::xwayland_client_scale_for_shell_ui(self.shell_ui_scale);
         <Self as smithay::wayland::compositor::CompositorHandler>::client_compositor_state(
-            self,
-            client,
+            self, client,
         )
         .set_client_scale(scale);
     }
@@ -2609,7 +2610,11 @@ impl CompositorState {
             .count() as i32)
             % DEFAULT_XDG_TOPLEVEL_STAGGER_STEPS.max(1);
         let max_x = work.loc.x.saturating_add(work.size.w).saturating_sub(width);
-        let max_y = work.loc.y.saturating_add(work.size.h).saturating_sub(height);
+        let max_y = work
+            .loc
+            .y
+            .saturating_add(work.size.h)
+            .saturating_sub(height);
         let x = base_x
             .saturating_add(stagger_index.saturating_mul(DEFAULT_XDG_TOPLEVEL_STAGGER_X))
             .clamp(work.loc.x, max_x.max(work.loc.x));
@@ -2691,11 +2696,21 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_managed_native_min_content_size(&self) -> Size<i32, Logical> {
-        let th = self.shell_chrome_titlebar_h.max(SHELL_TITLEBAR_HEIGHT).max(22);
-        let bd = self.shell_chrome_border_w.max(SHELL_BORDER_THICKNESS).max(0);
+        let th = self
+            .shell_chrome_titlebar_h
+            .max(SHELL_TITLEBAR_HEIGHT)
+            .max(22);
+        let bd = self
+            .shell_chrome_border_w
+            .max(SHELL_BORDER_THICKNESS)
+            .max(0);
         Size::from((
-            th.saturating_mul(6).saturating_add(bd.saturating_mul(4)).max(184),
-            th.saturating_mul(2).saturating_add(bd.saturating_mul(2)).max(64),
+            th.saturating_mul(6)
+                .saturating_add(bd.saturating_mul(4))
+                .max(184),
+            th.saturating_mul(2)
+                .saturating_add(bd.saturating_mul(2))
+                .max(64),
         ))
     }
 
@@ -2714,11 +2729,12 @@ impl CompositorState {
         } else {
             self.shell_managed_native_min_content_size()
         };
-        let (min_size, max_size) = smithay::wayland::compositor::with_states(wl_surface, |states| {
-            let mut guard = states.cached_state.get::<SurfaceCachedState>();
-            let data = guard.current();
-            (data.min_size, data.max_size)
-        });
+        let (min_size, max_size) =
+            smithay::wayland::compositor::with_states(wl_surface, |states| {
+                let mut guard = states.cached_state.get::<SurfaceCachedState>();
+                let data = guard.current();
+                (data.min_size, data.max_size)
+            });
         let min_width = min_size.w.max(1).max(shell_min.w);
         let min_height = min_size.h.max(1).max(shell_min.h);
         let max_width = if max_size.w == 0 {
@@ -2819,11 +2835,9 @@ impl CompositorState {
         let Some(kbd) = self.seat.get_keyboard() else {
             return 0;
         };
-        kbd.with_xkb_state(self, |ctx| {
-            match ctx.xkb().lock() {
-                Ok(xkb) => xkb.active_layout().0,
-                Err(_) => 0,
-            }
+        kbd.with_xkb_state(self, |ctx| match ctx.xkb().lock() {
+            Ok(xkb) => xkb.active_layout().0,
+            Err(_) => 0,
         })
     }
 
@@ -3092,6 +3106,9 @@ impl CompositorState {
         let changed = self
             .window_registry
             .set_shell_layout(wl, gx, gy, gw, gh, output_name);
+        if let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) {
+            self.capture_refresh_window_source_cache(window_id);
+        }
         let (max, fs) = read_toplevel_tiling(wl);
         let tiling_changed = self
             .window_registry
@@ -3126,6 +3143,7 @@ impl CompositorState {
             info.clone()
         });
         if let Some(info) = snapshot {
+            self.capture_refresh_window_source_cache(info.window_id);
             self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
         }
     }
@@ -3144,6 +3162,9 @@ impl CompositorState {
         let _ = self
             .window_registry
             .set_shell_layout(wl, gx, gy, gw, gh, output_name);
+        if let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) {
+            self.capture_refresh_window_source_cache(window_id);
+        }
         let (max, fs) = read_toplevel_tiling(wl);
         let _ = self.window_registry.set_tiling_state(wl, max, fs);
     }
@@ -4190,6 +4211,7 @@ impl CompositorState {
         self.notify_geometry_for_window(window, true);
         let tn = target.name().to_string();
         let _ = self.window_registry.set_output_name_for_wl(wl, tn);
+        self.capture_refresh_window_source_cache(window_id);
     }
 
     fn migrate_x11_surface_to_work_area(
@@ -4734,10 +4756,7 @@ impl CompositorState {
 
     pub(crate) fn sni_tray_open_menu(&mut self, id: String, request_serial: u32) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::sni_tray::SniTrayCmd::OpenMenu {
-                id,
-                request_serial,
-            });
+            let _ = tx.send(crate::sni_tray::SniTrayCmd::OpenMenu { id, request_serial });
         }
     }
 
@@ -4795,7 +4814,11 @@ impl CompositorState {
             let x2 = g.loc.x.saturating_add(g.size.w) as f64;
             let y2 = g.loc.y.saturating_add(g.size.h) as f64;
             const EPS: f64 = 1.0e-6;
-            if px >= g.loc.x as f64 - EPS && px < x2 + EPS && py >= g.loc.y as f64 - EPS && py < y2 + EPS {
+            if px >= g.loc.x as f64 - EPS
+                && px < x2 + EPS
+                && py >= g.loc.y as f64 - EPS
+                && py < y2 + EPS
+            {
                 return true;
             }
         }
@@ -4970,12 +4993,10 @@ impl CompositorState {
 
     fn window_id_for_space_elem(&self, elem: &DerpSpaceElem) -> Option<u32> {
         match elem {
-            DerpSpaceElem::Wayland(window) => window
-                .toplevel()
-                .and_then(|toplevel| {
-                    self.window_registry
-                        .window_id_for_wl_surface(toplevel.wl_surface())
-                }),
+            DerpSpaceElem::Wayland(window) => window.toplevel().and_then(|toplevel| {
+                self.window_registry
+                    .window_id_for_wl_surface(toplevel.wl_surface())
+            }),
             DerpSpaceElem::X11(x11) => self.x11_window_id_for_surface(x11),
         }
     }
@@ -4984,11 +5005,7 @@ impl CompositorState {
         let title = window.title();
         let class = window.class();
         let instance = window.instance();
-        let app_id = if !class.is_empty() {
-            class
-        } else {
-            instance
-        };
+        let app_id = if !class.is_empty() { class } else { instance };
         (title, app_id)
     }
 
@@ -5024,6 +5041,7 @@ impl CompositorState {
             info.client_side_decoration = window.is_decorated();
             info.clone()
         })?;
+        self.capture_refresh_window_source_cache(info.window_id);
         Some(X11SyncResult {
             metadata_changed: prev.title != info.title
                 || prev.app_id != info.app_id
@@ -5075,7 +5093,11 @@ impl CompositorState {
         if window.is_override_redirect() {
             return None;
         }
-        if self.window_registry.window_id_for_wl_surface(surface).is_none() {
+        if self
+            .window_registry
+            .window_id_for_wl_surface(surface)
+            .is_none()
+        {
             let (title, app_id) = Self::x11_window_title_app_id(window);
             let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
             self.window_registry
@@ -5090,8 +5112,8 @@ impl CompositorState {
             return;
         };
         let window_id_pre = self.window_registry.window_id_for_wl_surface(&surface);
-        let keyboard_had_focus =
-            window_id_pre.is_some_and(|window_id| self.keyboard_focused_window_id() == Some(window_id));
+        let keyboard_had_focus = window_id_pre
+            .is_some_and(|window_id| self.keyboard_focused_window_id() == Some(window_id));
         self.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
         if let Some(window_id) = window_id_pre {
             self.clear_toplevel_layout_maps(window_id);
@@ -5109,6 +5131,7 @@ impl CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(&surface);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(&surface) {
+            self.capture_forget_window_source_cache(window_id);
             if emit_unmapped {
                 self.shell_emit_chrome_window_unmapped(window_id, removed);
             }
@@ -5297,7 +5320,10 @@ impl CompositorState {
             self.shell_move_pending_delta = (0, 0);
             return;
         };
-        let Some(loc) = self.space.element_location(&DerpSpaceElem::X11(x11.clone())) else {
+        let Some(loc) = self
+            .space
+            .element_location(&DerpSpaceElem::X11(x11.clone()))
+        else {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: no element_location");
             return;
         };
@@ -5311,7 +5337,8 @@ impl CompositorState {
             self.shell_move_pending_delta = (0, 0);
             return;
         }
-        self.space.map_element(DerpSpaceElem::X11(x11.clone()), after, true);
+        self.space
+            .map_element(DerpSpaceElem::X11(x11.clone()), after, true);
         self.shell_move_pending_delta = (0, 0);
         self.emit_x11_window_updates(&x11, true, false);
         tracing::debug!(
@@ -5356,7 +5383,10 @@ impl CompositorState {
                 return;
             };
         } else if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
-            let Some(_loc) = self.space.element_location(&DerpSpaceElem::X11(x11.clone())) else {
+            let Some(_loc) = self
+                .space
+                .element_location(&DerpSpaceElem::X11(x11.clone()))
+            else {
                 tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: no element_location");
                 return;
             };
@@ -5514,17 +5544,11 @@ impl CompositorState {
         rect.size.w = rect.size.w.max(DEFAULT_XDG_TOPLEVEL_WIDTH.max(1));
         rect.size.h = rect.size.h.max(DEFAULT_XDG_TOPLEVEL_HEIGHT.max(1));
         let Some(output) = self.new_toplevel_placement_output(None) else {
-            rect.loc = Point::from((
-                DEFAULT_XDG_TOPLEVEL_OFFSET_X,
-                DEFAULT_XDG_TOPLEVEL_OFFSET_Y,
-            ));
+            rect.loc = Point::from((DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y));
             return rect;
         };
         let Some(work) = self.shell_maximize_work_area_global_for_output(&output) else {
-            rect.loc = Point::from((
-                DEFAULT_XDG_TOPLEVEL_OFFSET_X,
-                DEFAULT_XDG_TOPLEVEL_OFFSET_Y,
-            ));
+            rect.loc = Point::from((DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y));
             return rect;
         };
         rect.size.w = rect.size.w.min(work.size.w.max(1));
@@ -5700,7 +5724,10 @@ impl CompositorState {
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
             return;
         };
-        let Some(loc) = self.space.element_location(&DerpSpaceElem::X11(x11.clone())) else {
+        let Some(loc) = self
+            .space
+            .element_location(&DerpSpaceElem::X11(x11.clone()))
+        else {
             return;
         };
         let geo = x11.geometry();
@@ -6037,19 +6064,22 @@ impl CompositorState {
             }
 
             if info.minimized {
-                let _ = self.window_registry.update_native(window_id, |window_info| {
-                    if layout_state == 1 {
-                        window_info.maximized = true;
-                    } else {
-                        window_info.maximized = false;
-                    }
-                    window_info.fullscreen = false;
-                    window_info.x = x;
-                    window_info.y = y;
-                    window_info.width = w.max(1);
-                    window_info.height = h.max(1);
-                    window_info.output_name = target_output_name.clone();
-                });
+                let _ = self
+                    .window_registry
+                    .update_native(window_id, |window_info| {
+                        if layout_state == 1 {
+                            window_info.maximized = true;
+                        } else {
+                            window_info.maximized = false;
+                        }
+                        window_info.fullscreen = false;
+                        window_info.x = x;
+                        window_info.y = y;
+                        window_info.width = w.max(1);
+                        window_info.height = h.max(1);
+                        window_info.output_name = target_output_name.clone();
+                    });
+                self.capture_refresh_window_source_cache(window_id);
                 if let Some(window) = self.shell_minimized_windows.get(&window_id) {
                     let tl = window.toplevel().unwrap();
                     tl.with_pending_state(|state| {
@@ -6114,15 +6144,18 @@ impl CompositorState {
             }
         }
         if info.minimized {
-            let _ = self.window_registry.update_native(window_id, |window_info| {
-                window_info.maximized = layout_state == 1;
-                window_info.fullscreen = false;
-                window_info.x = x;
-                window_info.y = y;
-                window_info.width = w.max(1);
-                window_info.height = h.max(1);
-                window_info.output_name = target_output_name.clone();
-            });
+            let _ = self
+                .window_registry
+                .update_native(window_id, |window_info| {
+                    window_info.maximized = layout_state == 1;
+                    window_info.fullscreen = false;
+                    window_info.x = x;
+                    window_info.y = y;
+                    window_info.width = w.max(1);
+                    window_info.height = h.max(1);
+                    window_info.output_name = target_output_name.clone();
+                });
+            self.capture_refresh_window_source_cache(window_id);
             if let Some(window) = self.shell_minimized_x11_windows.get(&window_id) {
                 let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
                 if let Err(error) = window.set_fullscreen(false) {
@@ -6300,6 +6333,7 @@ impl CompositorState {
         }
         let removed = self.window_registry.snapshot_for_wl_surface(root);
         if let Some(pruned_window_id) = self.window_registry.remove_by_wl_surface(root) {
+            self.capture_forget_window_source_cache(pruned_window_id);
             self.shell_emit_chrome_window_unmapped(pruned_window_id, removed);
         }
     }
@@ -6484,7 +6518,9 @@ impl CompositorState {
             return None;
         }
         let sid = self.window_registry.surface_id_for_window(window_id)?;
-        if self.find_window_by_surface_id(sid).is_some() || self.find_x11_window_by_surface_id(sid).is_some() {
+        if self.find_window_by_surface_id(sid).is_some()
+            || self.find_x11_window_by_surface_id(sid).is_some()
+        {
             Some(window_id)
         } else {
             None
@@ -6514,7 +6550,8 @@ impl CompositorState {
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
             return false;
         };
-        self.find_window_by_surface_id(sid).is_some() || self.find_x11_window_by_surface_id(sid).is_some()
+        self.find_window_by_surface_id(sid).is_some()
+            || self.find_x11_window_by_surface_id(sid).is_some()
     }
 
     fn pick_next_focus_target(&self) -> Option<u32> {
@@ -6654,10 +6691,11 @@ impl CompositorState {
 
             if self.keyboard_focused_window_id() == Some(window_id) {
                 let serial = SERIAL_COUNTER.next_serial();
-                self.seat
-                    .get_keyboard()
-                    .unwrap()
-                    .set_focus(self, Option::<WlSurface>::None, serial);
+                self.seat.get_keyboard().unwrap().set_focus(
+                    self,
+                    Option::<WlSurface>::None,
+                    serial,
+                );
                 self.keyboard_on_focus_surface_changed(None);
             }
 
@@ -6679,9 +6717,11 @@ impl CompositorState {
             tracing::warn!(window_id, ?error, "x11 set_hidden failed");
         }
         self.space.unmap_elem(&DerpSpaceElem::X11(x11.clone()));
-        let _ = self.window_registry.update_native(window_id, |window_info| {
-            window_info.minimized = true;
-        });
+        let _ = self
+            .window_registry
+            .update_native(window_id, |window_info| {
+                window_info.minimized = true;
+            });
         if self.shell_last_non_shell_focus_window_id == Some(window_id) {
             self.shell_last_non_shell_focus_window_id = None;
         }
@@ -6774,8 +6814,11 @@ impl CompositorState {
             Point::from((info.x, info.y)),
             Size::from((info.width.max(1), info.height.max(1))),
         );
-        self.space
-            .map_element(DerpSpaceElem::X11(x11.clone()), (rect.loc.x, rect.loc.y), false);
+        self.space.map_element(
+            DerpSpaceElem::X11(x11.clone()),
+            (rect.loc.x, rect.loc.y),
+            false,
+        );
         self.apply_x11_window_bounds(window_id, &x11, rect, info.maximized, info.fullscreen);
         if let Err(error) = x11.set_activated(true) {
             tracing::warn!(window_id, ?error, "x11 set_activated(true) failed");
@@ -7166,7 +7209,8 @@ impl CompositorState {
             self.shell_context_menu_overlay_id = Id::new();
             return;
         }
-        let Some(placement) = self.shell_validate_floating_rect(bx, by, bw, bh, gx, gy, gw, gh) else {
+        let Some(placement) = self.shell_validate_floating_rect(bx, by, bw, bh, gx, gy, gw, gh)
+        else {
             self.shell_context_menu = None;
             self.shell_context_menu_overlay_id = Id::new();
             return;
@@ -7210,9 +7254,9 @@ impl CompositorState {
             if row.id == 0 {
                 continue;
             }
-            let Some(placement) =
-                self.shell_validate_floating_rect(row.bx, row.by, row.bw, row.bh, row.gx, row.gy, row.gw, row.gh)
-            else {
+            let Some(placement) = self.shell_validate_floating_rect(
+                row.bx, row.by, row.bw, row.bh, row.gx, row.gy, row.gw, row.gh,
+            ) else {
                 continue;
             };
             next.push(ShellFloatingPlacement {
@@ -7628,9 +7672,7 @@ impl XWaylandShellHandler for CompositorState {
             }
             let elem = DerpSpaceElem::X11(window.clone());
             if self.space.elements().any(|e| *e == elem) && !info.minimized {
-                self.shell_emit_chrome_event(ChromeEvent::WindowMapped {
-                    info: info.clone(),
-                });
+                self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
                 self.shell_consider_focus_spawned_toplevel(info.window_id);
             }
         }
@@ -7687,17 +7729,11 @@ impl XwmHandler for CompositorState {
         }
         let elem = DerpSpaceElem::X11(window.clone());
         let was_mapped = self.space.elements().any(|e| *e == elem);
-        self.space.map_element(
-            elem,
-            (geo.loc.x, geo.loc.y),
-            false,
-        );
+        self.space.map_element(elem, (geo.loc.x, geo.loc.y), false);
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
                 if !was_mapped && !info.minimized {
-                    self.shell_emit_chrome_event(ChromeEvent::WindowMapped {
-                        info: info.clone(),
-                    });
+                    self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
                     self.shell_consider_focus_spawned_toplevel(info.window_id);
                 } else {
                     self.emit_x11_window_updates(&window, true, true);
@@ -7869,13 +7905,7 @@ impl XwmHandler for CompositorState {
         }
     }
 
-    fn resize_request(
-        &mut self,
-        _xwm: XwmId,
-        window: X11Surface,
-        _button: u32,
-        edges: ResizeEdge,
-    ) {
+    fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edges: ResizeEdge) {
         if let Some(window_id) = self.x11_window_id_for_surface(&window) {
             let edges_wire = match edges {
                 ResizeEdge::Top => crate::grabs::resize_grab::ResizeEdge::TOP,
@@ -7926,7 +7956,10 @@ impl XwmHandler for CompositorState {
             return;
         }
         if let Err(error) = request_data_device_client_selection(&self.seat, mime_type, fd) {
-            tracing::warn!(?error, "failed to request current wayland clipboard for xwayland");
+            tracing::warn!(
+                ?error,
+                "failed to request current wayland clipboard for xwayland"
+            );
         }
     }
 

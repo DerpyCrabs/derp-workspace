@@ -123,7 +123,9 @@ impl DataDeviceHandler for CompositorState {
 }
 
 impl DataControlHandler for CompositorState {
-    fn data_control_state(&mut self) -> &mut smithay::wayland::selection::wlr_data_control::DataControlState {
+    fn data_control_state(
+        &mut self,
+    ) -> &mut smithay::wayland::selection::wlr_data_control::DataControlState {
         &mut self.data_control_state
     }
 }

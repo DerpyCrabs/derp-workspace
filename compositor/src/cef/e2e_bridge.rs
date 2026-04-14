@@ -41,10 +41,15 @@ pub(crate) fn publish_shell_html(request_id: u64, html: String) {
     condvar.notify_all();
 }
 
-pub(crate) fn wait_for_shell_snapshot(request_id: u64, timeout: Duration) -> Result<String, String> {
+pub(crate) fn wait_for_shell_snapshot(
+    request_id: u64,
+    timeout: Duration,
+) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let (lock, condvar) = response_state();
-    let mut state = lock.lock().map_err(|_| "shell snapshot state poisoned".to_string())?;
+    let mut state = lock
+        .lock()
+        .map_err(|_| "shell snapshot state poisoned".to_string())?;
     loop {
         if let Some(json) = state.shell_snapshots.remove(&request_id) {
             return Ok(json);
@@ -67,7 +72,9 @@ pub(crate) fn wait_for_shell_snapshot(request_id: u64, timeout: Duration) -> Res
 pub(crate) fn wait_for_shell_html(request_id: u64, timeout: Duration) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let (lock, condvar) = response_state();
-    let mut state = lock.lock().map_err(|_| "shell html state poisoned".to_string())?;
+    let mut state = lock
+        .lock()
+        .map_err(|_| "shell html state poisoned".to_string())?;
     loop {
         if let Some(html) = state.shell_html.remove(&request_id) {
             return Ok(html);

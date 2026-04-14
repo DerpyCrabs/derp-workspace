@@ -98,7 +98,8 @@ fn read_manifest() -> Result<FixtureManifest, String> {
     let manifest_path = fixture_manifest_path();
     let body = fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read fixture manifest {}: {e}", manifest_path.display()))?;
-    serde_json::from_str(&body).map_err(|e| format!("parse fixture manifest {}: {e}", manifest_path.display()))
+    serde_json::from_str(&body)
+        .map_err(|e| format!("parse fixture manifest {}: {e}", manifest_path.display()))
 }
 
 fn write_fixture_file(path: &Path, bytes: &[u8], read_only: bool) -> Result<(), String> {
@@ -108,7 +109,8 @@ fn write_fixture_file(path: &Path, bytes: &[u8], read_only: bool) -> Result<(), 
     }
     fs::write(path, bytes).map_err(|e| format!("write fixture file {}: {e}", path.display()))?;
     if read_only {
-        let metadata = fs::metadata(path).map_err(|e| format!("stat fixture file {}: {e}", path.display()))?;
+        let metadata =
+            fs::metadata(path).map_err(|e| format!("stat fixture file {}: {e}", path.display()))?;
         let mut permissions = metadata.permissions();
         #[cfg(unix)]
         {
@@ -135,10 +137,14 @@ fn read_asset_bytes(asset_relative_path: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("decode fixture asset {}: {e}", asset_path.display()))
 }
 
-fn collect_fixture_paths(root: &Path, entries: &[FixtureEntry]) -> Result<FileBrowserFixturePaths, String> {
+fn collect_fixture_paths(
+    root: &Path,
+    entries: &[FixtureEntry],
+) -> Result<FileBrowserFixturePaths, String> {
     let mut by_id = BTreeMap::new();
     for entry in entries {
-        let relative_path = validate_relative_path(&entry.path, &format!("fixture entry {}", entry.id))?;
+        let relative_path =
+            validate_relative_path(&entry.path, &format!("fixture entry {}", entry.id))?;
         by_id.insert(
             entry.id.clone(),
             root.join(relative_path).to_string_lossy().into_owned(),
@@ -170,21 +176,27 @@ fn collect_fixture_paths(root: &Path, entries: &[FixtureEntry]) -> Result<FileBr
 fn recreate_fixture_tree() -> Result<FileBrowserFixturePaths, String> {
     let manifest = read_manifest()?;
     if manifest.version != 1 {
-        return Err(format!("unsupported fixture manifest version {}", manifest.version));
+        return Err(format!(
+            "unsupported fixture manifest version {}",
+            manifest.version
+        ));
     }
     let root = generated_fixture_root(&manifest)?;
     if root.exists() {
         fs::remove_dir_all(&root)
             .map_err(|e| format!("remove existing fixture root {}: {e}", root.display()))?;
     }
-    fs::create_dir_all(&root).map_err(|e| format!("create fixture root {}: {e}", root.display()))?;
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("create fixture root {}: {e}", root.display()))?;
     for entry in &manifest.entries {
-        let relative_path = validate_relative_path(&entry.path, &format!("fixture entry {}", entry.id))?;
+        let relative_path =
+            validate_relative_path(&entry.path, &format!("fixture entry {}", entry.id))?;
         let target_path = root.join(&relative_path);
         match entry.kind {
             FixtureEntryKind::Directory => {
-                fs::create_dir_all(&target_path)
-                    .map_err(|e| format!("create fixture directory {}: {e}", target_path.display()))?;
+                fs::create_dir_all(&target_path).map_err(|e| {
+                    format!("create fixture directory {}: {e}", target_path.display())
+                })?;
             }
             FixtureEntryKind::Text => {
                 let text = entry
@@ -207,9 +219,11 @@ fn recreate_fixture_tree() -> Result<FileBrowserFixturePaths, String> {
 }
 
 pub(crate) fn prepare_file_browser_fixtures_json() -> Result<String, String> {
-    serde_json::to_string(&recreate_fixture_tree()?).map_err(|e| format!("serialize file browser fixtures: {e}"))
+    serde_json::to_string(&recreate_fixture_tree()?)
+        .map_err(|e| format!("serialize file browser fixtures: {e}"))
 }
 
 pub(crate) fn reset_file_browser_fixtures_json() -> Result<String, String> {
-    serde_json::to_string(&recreate_fixture_tree()?).map_err(|e| format!("serialize file browser fixtures: {e}"))
+    serde_json::to_string(&recreate_fixture_tree()?)
+        .map_err(|e| format!("serialize file browser fixtures: {e}"))
 }

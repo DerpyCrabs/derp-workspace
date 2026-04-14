@@ -52,7 +52,9 @@ pub(crate) fn wait_for_screenshot_result(
 ) -> Result<E2eScreenshotResult, String> {
     let deadline = std::time::Instant::now() + timeout;
     let (lock, condvar) = screenshot_wait_state();
-    let mut state = lock.lock().map_err(|_| "screenshot wait state poisoned".to_string())?;
+    let mut state = lock
+        .lock()
+        .map_err(|_| "screenshot wait state poisoned".to_string())?;
     loop {
         if let Some(result) = state.results.remove(&request_id) {
             return result;
@@ -195,7 +197,10 @@ impl CompositorState {
         let min_y = ws.loc.y as f64;
         let max_x = (min_x + ws.size.w.max(0) as f64 - 1.0e-4).max(min_x);
         let max_y = (min_y + ws.size.h.max(0) as f64 - 1.0e-4).max(min_y);
-        Some(Point::from((pos.x.clamp(min_x, max_x), pos.y.clamp(min_y, max_y))))
+        Some(Point::from((
+            pos.x.clamp(min_x, max_x),
+            pos.y.clamp(min_y, max_y),
+        )))
     }
 
     pub(crate) fn e2e_pointer_move_global(&mut self, x: f64, y: f64) -> Result<(), String> {
@@ -246,12 +251,7 @@ impl CompositorState {
         Ok(())
     }
 
-    pub(crate) fn e2e_pointer_click(
-        &mut self,
-        x: f64,
-        y: f64,
-        button: u32,
-    ) -> Result<(), String> {
+    pub(crate) fn e2e_pointer_click(&mut self, x: f64, y: f64, button: u32) -> Result<(), String> {
         self.e2e_pointer_move_global(x, y)?;
         self.e2e_pointer_button(button, true)?;
         self.e2e_pointer_button(button, false)?;
@@ -357,7 +357,10 @@ impl CompositorState {
                         }
                     }
                 }
-                if state.shell_ipc_keyboard_to_cef && state.shell_cef_active() && state.shell_has_frame {
+                if state.shell_ipc_keyboard_to_cef
+                    && state.shell_cef_active()
+                    && state.shell_has_frame
+                {
                     state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
                     return FilterResult::Intercept(());
                 }
@@ -492,8 +495,16 @@ impl CompositorState {
                 }
             })
         } else {
-            let min_x = shell_floating_layers.iter().map(|layer| layer.global.x).min().unwrap_or(0);
-            let min_y = shell_floating_layers.iter().map(|layer| layer.global.y).min().unwrap_or(0);
+            let min_x = shell_floating_layers
+                .iter()
+                .map(|layer| layer.global.x)
+                .min()
+                .unwrap_or(0);
+            let min_y = shell_floating_layers
+                .iter()
+                .map(|layer| layer.global.y)
+                .min()
+                .unwrap_or(0);
             let max_x = shell_floating_layers
                 .iter()
                 .map(|layer| layer.global.x + layer.global.width)
@@ -521,7 +532,8 @@ impl CompositorState {
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
             shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
             screenshot_selection_active: self.screenshot_selection_active,
-            shell_context_menu_visible: self.shell_context_menu.is_some() || !shell_floating_layers.is_empty(),
+            shell_context_menu_visible: self.shell_context_menu.is_some()
+                || !shell_floating_layers.is_empty(),
             shell_context_menu_global,
             shell_floating_layers,
             shell_pointer_grab_window_id: self.shell_ui_pointer_grab,
@@ -559,12 +571,13 @@ impl CompositorState {
             .collect();
         let request_id = next_screenshot_request_id();
         let save_path = next_artifact_path("screenshot", "png")?;
-        self.screenshot_request = Some(crate::screenshot::PendingScreenshotRequest::for_region_e2e(
-            logical_rect,
-            outputs,
-            request_id,
-            save_path,
-        )?);
+        self.screenshot_request =
+            Some(crate::screenshot::PendingScreenshotRequest::for_region_e2e(
+                logical_rect,
+                outputs,
+                request_id,
+                save_path,
+            )?);
         self.loop_signal.wakeup();
         Ok(request_id)
     }

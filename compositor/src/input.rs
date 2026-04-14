@@ -382,8 +382,9 @@ impl CompositorState {
                 self.shell_ipc_keyboard_to_cef = true;
                 self.shell_emit_shell_ui_focus_from_point(pos);
                 if button == BTN_LEFT {
-                    self.shell_backed_move_candidate =
-                        self.shell_backed_titlebar_window_at(pos).map(|window_id| (window_id, pos));
+                    self.shell_backed_move_candidate = self
+                        .shell_backed_titlebar_window_at(pos)
+                        .map(|window_id| (window_id, pos));
                 }
             }
             pointer.button(
@@ -495,7 +496,8 @@ impl CompositorState {
                     DerpSpaceElem::X11(x11) => {
                         if let Some(surf) = x11.wl_surface() {
                             if !x11.is_override_redirect() {
-                                let window_id = self.window_registry.window_id_for_wl_surface(&surf);
+                                let window_id =
+                                    self.window_registry.window_id_for_wl_surface(&surf);
                                 self.space.elements().for_each(|e| {
                                     e.set_activate(false);
                                     if let DerpSpaceElem::Wayland(w) = e {

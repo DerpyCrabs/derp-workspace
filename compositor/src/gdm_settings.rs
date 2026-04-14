@@ -71,10 +71,13 @@ fn parse_gdm_autologin(raw: &str) -> (bool, Option<String>) {
     for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_daemon = trimmed[1..trimmed.len() - 1].trim().eq_ignore_ascii_case("daemon");
+            in_daemon = trimmed[1..trimmed.len() - 1]
+                .trim()
+                .eq_ignore_ascii_case("daemon");
             continue;
         }
-        if !in_daemon || trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+        if !in_daemon || trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';')
+        {
             continue;
         }
         let Some((key, value)) = trimmed.split_once('=') else {
@@ -83,7 +86,9 @@ fn parse_gdm_autologin(raw: &str) -> (bool, Option<String>) {
         let key = key.trim();
         let value = value.trim();
         if key.eq_ignore_ascii_case("AutomaticLoginEnable") {
-            enabled = value.eq_ignore_ascii_case("true") || value == "1" || value.eq_ignore_ascii_case("yes");
+            enabled = value.eq_ignore_ascii_case("true")
+                || value == "1"
+                || value.eq_ignore_ascii_case("yes");
         } else if key.eq_ignore_ascii_case("AutomaticLogin") {
             let value = value.trim_matches('"').trim();
             if !value.is_empty() {
@@ -142,7 +147,12 @@ fn rewrite_gdm_daemon_section(raw: &str, enabled: bool, user: &str) -> String {
             lines.splice(header_idx..daemon_end, replacement);
         }
         None => {
-            if !lines.is_empty() && !lines.last().map(|line| line.trim().is_empty()).unwrap_or(false) {
+            if !lines.is_empty()
+                && !lines
+                    .last()
+                    .map(|line| line.trim().is_empty())
+                    .unwrap_or(false)
+            {
                 lines.push(String::new());
             }
             lines.push("[daemon]".to_string());
@@ -215,7 +225,9 @@ pub fn read_gdm_autologin_settings_json() -> Result<String, String> {
     serde_json::to_string(&read_gdm_autologin_settings()?).map_err(|e| e.to_string())
 }
 
-pub fn write_gdm_autologin_settings(update: GdmAutologinUpdate) -> Result<GdmAutologinSettings, String> {
+pub fn write_gdm_autologin_settings(
+    update: GdmAutologinUpdate,
+) -> Result<GdmAutologinSettings, String> {
     let path = select_gdm_config_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(value) => value,
@@ -235,10 +247,7 @@ mod tests {
     #[test]
     fn parse_gdm_autologin_reads_daemon_values() {
         let raw = "[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=alice\n";
-        assert_eq!(
-            parse_gdm_autologin(raw),
-            (true, Some("alice".to_string()))
-        );
+        assert_eq!(parse_gdm_autologin(raw), (true, Some("alice".to_string())));
     }
 
     #[test]

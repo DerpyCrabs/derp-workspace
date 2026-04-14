@@ -35,7 +35,12 @@ struct Cli {
     #[arg(long, env = "CEF_SHELL_URL", value_name = "URL")]
     cef_shell_url: Option<String>,
 
-    #[arg(long, env = "DERP_ENABLE_XWAYLAND", default_value_t = true, value_name = "BOOL")]
+    #[arg(
+        long,
+        env = "DERP_ENABLE_XWAYLAND",
+        default_value_t = true,
+        value_name = "BOOL"
+    )]
     xwayland: bool,
 }
 

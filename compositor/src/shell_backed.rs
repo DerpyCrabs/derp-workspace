@@ -52,10 +52,7 @@ impl CompositorState {
         Rectangle::new(Point::from((ox, oy)), Size::from((ow.max(1), oh.max(1))))
     }
 
-    pub(crate) fn shell_backed_titlebar_window_at(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<u32> {
+    pub(crate) fn shell_backed_titlebar_window_at(&self, pos: Point<f64, Logical>) -> Option<u32> {
         let placement = self.shell_ui_placement_topmost_for_input_at(pos)?;
         if !self.window_registry.is_shell_hosted(placement.id) {
             return None;
@@ -220,6 +217,7 @@ impl CompositorState {
             return;
         }
         let info = self.window_registry.window_info(id).expect("inserted");
+        self.capture_refresh_window_source_cache(id);
         self.shell_backed_emit_mapped_metas(&info);
         self.shell_exclusion_zones_need_full_damage = true;
         self.shell_focus_shell_ui_window(id);
@@ -234,6 +232,7 @@ impl CompositorState {
             self.shell_blur_shell_ui_focus();
         }
         self.window_registry.remove_shell_hosted(window_id);
+        self.capture_forget_window_source_cache(window_id);
         self.shell_window_stack_forget(window_id);
         self.shell_ui_pointer_grab = None;
         self.shell_send_to_cef(

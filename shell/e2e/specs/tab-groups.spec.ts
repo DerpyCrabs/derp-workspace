@@ -4,6 +4,7 @@ import {
   activateTaskbarWindow,
   assert,
   assertTaskbarRowOnMonitor,
+  cleanupNativeWindows,
   clickRect,
   closeWindow,
   compositorWindowById,
@@ -30,6 +31,7 @@ import {
   waitForShellUiFocus,
   waitForWindowGone,
   writeJsonArtifact,
+  type E2eState,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -91,13 +93,20 @@ async function resolveNativeTabTarget(base: string, windowIds: number[]) {
       titlebar.global_x + titlebar.width <= output.x + output.width &&
       titlebar.global_y >= output.y &&
       titlebar.global_y + titlebar.height <= taskbar.rect.global_y
-    return usable ? { compositor, shell, windowId, group, tab } : null
+    return usable ? { compositor, shell, windowId, window, group, tab } : null
   }
 
   const visibleCandidates = await Promise.all(windowIds.map((windowId) => candidateState(windowId)))
   const initial = visibleCandidates
     .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-    .sort((a, b) => b.tab.rect!.width * b.tab.rect!.height - a.tab.rect!.width * a.tab.rect!.height || a.windowId - b.windowId)[0]
+    .sort(
+      (a, b) =>
+        Number(b.compositor.focused_window_id === b.windowId) -
+          Number(a.compositor.focused_window_id === a.windowId) ||
+        (b.window?.stack_z ?? 0) - (a.window?.stack_z ?? 0) ||
+        b.tab.rect!.width * b.tab.rect!.height - a.tab.rect!.width * a.tab.rect!.height ||
+        a.windowId - b.windowId,
+    )[0]
   if (initial) return initial
 
   let lastError: unknown = null
@@ -231,6 +240,17 @@ async function moveShellWindowToOtherMonitor(base: string, windowId: number) {
   )
 }
 
+async function ensureFreshNativePair(base: string, state: E2eState) {
+  await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
+  if (state.redSpawn) state.nativeLaunchByWindowId.delete(state.redSpawn.window.window_id)
+  if (state.greenSpawn) state.nativeLaunchByWindowId.delete(state.greenSpawn.window.window_id)
+  state.redSpawn = null
+  state.greenSpawn = null
+  state.multiMonitorNativeMove = null
+  state.tiledOutput = null
+  return ensureNativePair(base, state)
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('js test windows support multi-instance shell fixtures', async ({ base, state }) => {
     const timing = createTimingMarks('tab-js-fixtures')
@@ -261,7 +281,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const timing = createTimingMarks('tab-merge-native-js')
     let jsWindowId: number | null = null
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const initial = await getSnapshots(base)
       if (initial.compositor.outputs.length < 2) {
         throw new SkipError('requires at least two outputs')
@@ -320,7 +340,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const timing = createTimingMarks('tab-multimonitor-switch')
     let jsWindowId: number | null = null
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
       jsWindowId = jsWindow.window.window_id
       const { compositor } = await getSnapshots(base)
@@ -369,7 +389,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('tab menu closes when its window closes', async ({ base, state }) => {
     const timing = createTimingMarks('tab-menu-close-lifecycle')
-    const { red, green } = await ensureNativePair(base, state)
+    const { red, green } = await ensureFreshNativePair(base, state)
     const target = await timing.step('resolve visible native target', () =>
       resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
     )
@@ -401,7 +421,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     let jsWindowId: number | null = null
     let released = false
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
       jsWindowId = jsWindow.window.window_id
       await timing.step('move js window to other monitor', () =>
@@ -526,7 +546,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     let jsWindowIdB: number | null = null
     let released = false
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const jsWindowA = await timing.step('open first js test window', () => openShellTestWindow(base, state))
       jsWindowIdA = jsWindowA.window.window_id
       await timing.step('move first js window to other monitor', () =>
@@ -634,7 +654,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const timing = createTimingMarks('tab-native-geometry-and-close')
     let jsWindowId: number | null = null
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
       jsWindowId = jsWindow.window.window_id
       await timing.step('move js window to other monitor', () =>
@@ -721,7 +741,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const timing = createTimingMarks('tab-geometry-and-close')
     let jsWindowId: number | null = null
     try {
-      const { red, green } = await ensureNativePair(base, state)
+      const { red, green } = await ensureFreshNativePair(base, state)
       const initial = await getSnapshots(base)
       if (initial.compositor.outputs.length < 2) {
         throw new SkipError('requires at least two outputs')

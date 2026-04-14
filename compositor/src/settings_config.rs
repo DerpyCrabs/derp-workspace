@@ -142,11 +142,7 @@ fn keyboard_settings_from_display_defaults() -> KeyboardSettingsFile {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    let variants = kb
-        .variant
-        .split(',')
-        .map(str::trim)
-        .collect::<Vec<_>>();
+    let variants = kb.variant.split(',').map(str::trim).collect::<Vec<_>>();
     if layouts.is_empty() {
         return out;
     }

@@ -18,8 +18,8 @@ use smithay::backend::renderer::{
     ContextId, Frame, ImportDma, Renderer,
 };
 use smithay::desktop::space::SpaceRenderElements;
-use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use smithay::utils::user_data::UserDataMap;
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use std::convert::Infallible;
 use std::sync::Arc;
 use tracing::warn;
@@ -694,52 +694,44 @@ where
         match self {
             DesktopStack::Space(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
             DesktopStack::SpaceClip(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
-            DesktopStack::ShellDma(x) => {
-                RenderElement::<GlesRenderer>::draw(
-                    x,
-                    frame,
-                    src,
-                    dst,
-                    damage,
-                    opaque_regions,
-                    cache,
-                )
-            }
+            DesktopStack::ShellDma(x) => RenderElement::<GlesRenderer>::draw(
+                x,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
             DesktopStack::Pointer(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
             DesktopStack::CursorTex(x) => x.draw(frame, src, dst, damage, opaque_regions, cache),
-            DesktopStack::TilePreview(x) => {
-                RenderElement::<GlesRenderer>::draw(
-                    x,
-                    frame,
-                    src,
-                    dst,
-                    damage,
-                    opaque_regions,
-                    cache,
-                )
-            }
-            DesktopStack::BackdropSolid(x) => {
-                RenderElement::<GlesRenderer>::draw(
-                    x,
-                    frame,
-                    src,
-                    dst,
-                    damage,
-                    opaque_regions,
-                    cache,
-                )
-            }
-            DesktopStack::BackdropTex(x) => {
-                RenderElement::<GlesRenderer>::draw(
-                    x,
-                    frame,
-                    src,
-                    dst,
-                    damage,
-                    opaque_regions,
-                    cache,
-                )
-            }
+            DesktopStack::TilePreview(x) => RenderElement::<GlesRenderer>::draw(
+                x,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+            DesktopStack::BackdropSolid(x) => RenderElement::<GlesRenderer>::draw(
+                x,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
+            DesktopStack::BackdropTex(x) => RenderElement::<GlesRenderer>::draw(
+                x,
+                frame,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                cache,
+            ),
             DesktopStack::_Catcher(_) => unreachable!(),
         }
     }
