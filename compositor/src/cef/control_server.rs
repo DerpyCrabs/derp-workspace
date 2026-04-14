@@ -523,6 +523,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/perf" {
+        let json = crate::cef::begin_frame_diag::perf_counter_snapshot_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_applications" {
         let json = crate::cef::desktop_apps::list_applications_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -688,6 +694,12 @@ fn handle_one(
     if req_path == "/test/file_browser_fixtures/reset" {
         let json = crate::cef::file_browser_fixtures::reset_file_browser_fixtures_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/perf/reset" {
+        crate::cef::begin_frame_diag::reset_perf_counters();
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
 

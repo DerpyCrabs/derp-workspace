@@ -13,6 +13,7 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     if details.is_empty() {
         return;
     }
+    crate::cef::begin_frame_diag::note_shell_detail_batch(details.len());
     let Ok(js) = serde_json::to_string(details) else {
         return;
     };
@@ -174,6 +175,7 @@ fn apply_message(
             client_side_decoration,
             output_name,
         } => {
+            crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
             pending_details.push(json!({
                 "type": "window_mapped",
                 "window_id": window_id,
@@ -203,6 +205,7 @@ fn apply_message(
             client_side_decoration,
             output_name,
         } => {
+            crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
             pending_details.push(json!({
                 "type": "window_geometry",
                 "window_id": window_id,
@@ -223,6 +226,7 @@ fn apply_message(
             title,
             app_id,
         } => {
+            crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
             pending_details.push(json!({
                 "type": "window_metadata",
                 "window_id": window_id,
@@ -232,6 +236,7 @@ fn apply_message(
             }));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+            crate::cef::begin_frame_diag::note_shell_detail_window_list();
             let list: Vec<_> = windows
                 .iter()
                 .map(|w| {
@@ -264,6 +269,7 @@ fn apply_message(
             window_id,
             minimized,
         } => {
+            crate::cef::begin_frame_diag::note_shell_detail_window_state();
             pending_details.push(json!({
                 "type": "window_state",
                 "window_id": window_id,
@@ -274,6 +280,7 @@ fn apply_message(
             surface_id,
             window_id,
         } => {
+            crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
             pending_details.push(json!({
                 "type": "focus_changed",
                 "surface_id": surface_id,

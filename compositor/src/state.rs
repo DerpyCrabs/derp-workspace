@@ -5969,6 +5969,7 @@ impl CompositorState {
 
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
+        crate::cef::begin_frame_diag::note_shell_reply_window_list();
         self.shell_window_stack_seed_known_windows();
         self.capture_sync_toplevel_handles();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self

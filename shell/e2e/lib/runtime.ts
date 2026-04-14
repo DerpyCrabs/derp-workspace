@@ -281,6 +281,36 @@ export interface ShellSnapshot {
   [key: string]: unknown
 }
 
+export interface PerfBeginFrameSnapshot {
+  compositor_schedules: number
+  compositor_schedules_idle: number
+  compositor_schedules_active: number
+  compositor_schedules_forced: number
+  cef_send_external_begin_frame: number
+  drm_render_ticks: number
+}
+
+export interface PerfShellUpdateSnapshot {
+  batch_count: number
+  message_count: number
+  window_list_messages: number
+  window_mapped_messages: number
+  window_geometry_messages: number
+  window_metadata_messages: number
+  window_state_messages: number
+  focus_changed_messages: number
+}
+
+export interface PerfShellSyncSnapshot {
+  full_window_list_replies: number
+}
+
+export interface PerfCounterSnapshot {
+  begin_frame: PerfBeginFrameSnapshot
+  shell_updates: PerfShellUpdateSnapshot
+  shell_sync: PerfShellSyncSnapshot
+}
+
 export interface FileBrowserFixturePaths {
   root_path: string
   empty_dir: string
@@ -835,6 +865,10 @@ export async function getText(base: string, requestPath: string): Promise<string
   return text
 }
 
+export async function getPerfCounters(base: string): Promise<PerfCounterSnapshot> {
+  return getJson<PerfCounterSnapshot>(base, '/test/perf')
+}
+
 export async function postJson<T = any>(base: string, requestPath: string, body: unknown): Promise<T> {
   const res = await fetch(`${base}${requestPath}`, {
     method: 'POST',
@@ -849,6 +883,10 @@ export async function postJson<T = any>(base: string, requestPath: string, body:
   } catch {
     return text as T
   }
+}
+
+export async function resetPerfCounters(base: string): Promise<void> {
+  await postJson(base, '/test/perf/reset', {})
 }
 
 export function assert(condition: unknown, message: string): asserts condition {
