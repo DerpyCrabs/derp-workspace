@@ -168,6 +168,7 @@ import type {
 } from './app/types'
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
+import { DERP_SHELL_EVENT, installCompositorBatchHandler } from './compositorEvents'
 import {
   findMergeTarget,
   nextActiveWindowAfterRemoval,
@@ -4335,10 +4336,7 @@ function App() {
       tryRequestCompositorSync()
     }, 750)
 
-    const onDerpShell = (ev: Event) => {
-      const ce = ev as CustomEvent<DerpShellDetail>
-      const d = ce.detail
-      if (!d || typeof d !== 'object' || !('type' in d)) return
+    const applyCompositorDetail = (d: DerpShellDetail) => {
       if (d.type === 'context_menu_dismiss') {
         closeAllAtlasSelects()
         shellContextMenus.hideContextMenu()
@@ -4880,7 +4878,26 @@ function App() {
         return
       }
     }
-    window.addEventListener('derp-shell', onDerpShell as EventListener)
+
+    const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
+      if (details.length === 0) return
+      for (const detail of details) {
+        applyCompositorDetail(detail)
+      }
+    }
+
+    const onDerpShell = (ev: Event) => {
+      const ce = ev as CustomEvent<DerpShellDetail>
+      const d = ce.detail
+      if (!d || typeof d !== 'object' || !('type' in d)) return
+      applyCompositorBatch([d])
+    }
+
+    const removeCompositorBatchHandler = installCompositorBatchHandler((details) => {
+      applyCompositorBatch(details)
+    })
+
+    window.addEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
 
     const syncViewport = () =>
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
@@ -5006,7 +5023,8 @@ function App() {
 
     onCleanup(() => {
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
-      window.removeEventListener('derp-shell', onDerpShell as EventListener)
+      removeCompositorBatchHandler()
+      window.removeEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('pointerup', onWindowPointerUp)

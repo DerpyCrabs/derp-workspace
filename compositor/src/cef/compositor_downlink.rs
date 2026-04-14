@@ -9,30 +9,15 @@ use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
 
-fn dispatch_shell_detail(browser: &Browser, detail: &Value) {
-    let Ok(js) = serde_json::to_string(detail) else {
-        return;
-    };
-    let code = format!("window.dispatchEvent(new CustomEvent('derp-shell',{{detail:{js}}}));");
-    let Some(frame) = browser.main_frame() else {
-        return;
-    };
-    frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
-}
-
 fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     if details.is_empty() {
-        return;
-    }
-    if details.len() == 1 {
-        dispatch_shell_detail(browser, &details[0]);
         return;
     }
     let Ok(js) = serde_json::to_string(details) else {
         return;
     };
     let code = format!(
-        "(()=>{{const derpShellBatch={js};for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{{detail:derpShellBatch[i]}}));}})();"
+        "(()=>{{const derpShellBatch={js};const derpApplyCompositorBatch=window.__DERP_APPLY_COMPOSITOR_BATCH;if(typeof derpApplyCompositorBatch==='function'){{try{{derpApplyCompositorBatch(derpShellBatch);return;}}catch(err){{console.warn('[derp-shell-bridge] compositor batch handler failed',err);}}}}for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{{detail:derpShellBatch[i]}}));}})();"
     );
     let Some(frame) = browser.main_frame() else {
         return;
