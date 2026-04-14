@@ -572,6 +572,27 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(overlayOpen.compositor.shell_context_menu_global, 'missing tray volume compositor overlay rect')
+    const overlayRect = overlayOpen.compositor.shell_context_menu_global
+    const overlayStable = await waitFor(
+      'wait for stable tray volume overlay snapshot',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const overlay = snapshots.compositor.shell_context_menu_global
+        if (!snapshots.shell.volume_menu_open || !overlay) return null
+        if (
+          overlay.x !== overlayRect.x ||
+          overlay.y !== overlayRect.y ||
+          overlay.width !== overlayRect.width ||
+          overlay.height !== overlayRect.height
+        ) {
+          return null
+        }
+        return snapshots
+      },
+      1000,
+      100,
+    )
+    assert(overlayStable.compositor.shell_context_menu_global, 'tray volume overlay should stay stable across idle snapshots')
 
     const volumeReady = await waitFor(
       'wait for volume panel content',

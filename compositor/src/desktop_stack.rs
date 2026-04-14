@@ -301,6 +301,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct ShellDmaElement {
     id: Id,
     context_id: ContextId<GlesTexture>,

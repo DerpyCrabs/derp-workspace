@@ -176,6 +176,21 @@ pub(crate) struct BackdropWallpaperIdCache {
     pub ids: Vec<Id>,
 }
 
+pub(crate) struct CachedBackdropLayers {
+    pub key: crate::backdrop_render::BackdropCacheKey,
+    pub layers: crate::backdrop_render::BackdropLayers,
+}
+
+#[derive(Default)]
+pub(crate) struct CachedShellRenderOutput {
+    pub main: Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellMainCacheKey>>,
+    pub context_menu:
+        Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>>,
+    pub floating:
+        HashMap<u32, crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>>,
+    pub floating_order: Vec<u32>,
+}
+
 pub(crate) fn toplevel_should_defer_initial_map(
     parent: Option<&WlSurface>,
     _title: &str,
@@ -510,8 +525,9 @@ pub struct CompositorState {
         HashMap<PathBuf, Arc<crate::desktop_background::DesktopWallpaperCpu>>,
     pub(crate) desktop_wallpaper_gpu_by_path: HashMap<PathBuf, DesktopWallpaperGpuEntry>,
     wallpaper_decode_inflight: HashSet<PathBuf>,
-    pub(crate) desktop_backdrop_solid: SolidColorBuffer,
     pub(crate) backdrop_wallpaper_id_cache: HashMap<String, BackdropWallpaperIdCache>,
+    pub(crate) backdrop_layers_by_output: HashMap<String, CachedBackdropLayers>,
+    pub(crate) shell_render_cache_by_output: HashMap<String, CachedShellRenderOutput>,
     pub(crate) shell_begin_frame_last: Option<Instant>,
     pub(crate) shell_begin_frame_fast_until: Option<Instant>,
 }
@@ -876,11 +892,9 @@ impl CompositorState {
             desktop_wallpaper_cpu_by_path: HashMap::new(),
             desktop_wallpaper_gpu_by_path: HashMap::new(),
             wallpaper_decode_inflight: HashSet::new(),
-            desktop_backdrop_solid: SolidColorBuffer::new(
-                (1, 1),
-                Color32F::new(0.1, 0.1, 0.1, 1.0),
-            ),
             backdrop_wallpaper_id_cache: HashMap::new(),
+            backdrop_layers_by_output: HashMap::new(),
+            shell_render_cache_by_output: HashMap::new(),
             shell_begin_frame_last: None,
             shell_begin_frame_fast_until: None,
         };
@@ -951,6 +965,7 @@ impl CompositorState {
     ) {
         self.desktop_background_config = cfg.desktop_background.clone();
         self.desktop_background_by_output_name = cfg.desktop_background_outputs.clone();
+        self.backdrop_layers_by_output.clear();
         self.request_desktop_wallpaper_decode();
     }
 
@@ -3899,6 +3914,7 @@ impl CompositorState {
             || prev_size != self.shell_canvas_logical_size
             || prev_phys != self.shell_window_physical_px
         {
+            self.shell_dmabuf_dirty_force_full = true;
             tracing::warn!(
                 target: "derp_hotplug_shell",
                 prev_origin = ?prev_origin,
@@ -4407,6 +4423,7 @@ impl CompositorState {
         self.shell_move_end_active();
         self.shell_exclusion_zones_need_full_damage = true;
         self.shell_dmabuf_dirty_force_full = true;
+        self.backdrop_layers_by_output.clear();
         let output_names: Vec<String> = self.space.outputs().map(|o| o.name().into()).collect();
         tracing::warn!(
             target: "derp_hotplug_shell",

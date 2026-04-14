@@ -1,10 +1,13 @@
 //! Full-screen Solid / CEF **dma-buf** OSR plane for DRM and winit [`OutputDamageTracker::render_output`] paths.
 
+use std::sync::{Mutex, OnceLock};
+
 use smithay::{
     backend::allocator::Buffer,
     backend::renderer::{
         element::Id,
         gles::{GlesError, GlesRenderer},
+        utils::CommitCounter,
         ImportDma,
     },
     output::Output,
@@ -14,8 +17,84 @@ use smithay::{
 use crate::desktop_stack::ShellDmaElement;
 use crate::CompositorState;
 
-/// Log a bounded sample of what EGL can import (for correlating with `in_*_formats=false`).
 const SHELL_DMABUF_EGL_SAMPLE_LEN: usize = 32;
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ShellMainCacheKey {
+    pub output_geo: Rectangle<i32, Logical>,
+    pub output_scale_bits: u64,
+    pub canvas_origin: (i32, i32),
+    pub canvas_size: (u32, u32),
+    pub view_px: (u32, u32),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ShellOverlayCacheKey {
+    pub output_geo: Rectangle<i32, Logical>,
+    pub output_scale_bits: u64,
+    pub global_rect: Rectangle<i32, Logical>,
+    pub buffer_rect: Rectangle<i32, BufferCoord>,
+}
+
+pub(crate) struct CachedShellElement<K> {
+    pub key: K,
+    pub commit: CommitCounter,
+    pub element: Option<ShellDmaElement>,
+}
+
+#[derive(Default)]
+pub(crate) struct ShellOutputRenderElements {
+    pub floating: Vec<ShellDmaElement>,
+    pub context_menu: Option<ShellDmaElement>,
+    pub dmabuf: Option<ShellDmaElement>,
+    pub force_full_damage: bool,
+}
+
+#[derive(Default)]
+struct CacheStats {
+    hits: u64,
+    misses: u64,
+    forced_full_damage_misses: u64,
+    last_logged_total: u64,
+}
+
+fn shell_cache_stats() -> &'static Mutex<CacheStats> {
+    static STATS: OnceLock<Mutex<CacheStats>> = OnceLock::new();
+    STATS.get_or_init(|| Mutex::new(CacheStats::default()))
+}
+
+fn note_shell_cache_result(hit: bool, force_full_damage: bool) {
+    let Ok(mut stats) = shell_cache_stats().lock() else {
+        return;
+    };
+    if hit {
+        stats.hits += 1;
+    } else {
+        stats.misses += 1;
+        if force_full_damage {
+            stats.forced_full_damage_misses += 1;
+        }
+    }
+    let total = stats.hits + stats.misses;
+    if total.saturating_sub(stats.last_logged_total) < 256 {
+        return;
+    }
+    stats.last_logged_total = total;
+    let hit_rate = if total == 0 {
+        0.0
+    } else {
+        stats.hits as f64 / total as f64
+    };
+    tracing::debug!(
+        target: "derp_render_cache",
+        cache = "shell",
+        hits = stats.hits,
+        misses = stats.misses,
+        forced_full_damage_misses = stats.forced_full_damage_misses,
+        hit_rate,
+        "render cache stats"
+    );
+}
 
 fn sample_egl_dmabuf_pairs(renderer: &GlesRenderer) -> (Vec<(u32, u64)>, Vec<(u32, u64)>) {
     let rf = renderer.egl_context().dmabuf_render_formats();
@@ -155,24 +234,16 @@ fn log_shell_dmabuf_import_context(
     );
 }
 
-/// Build a letterboxed dma-buf shell layer (below toplevels, above background). Returns `None` when no frame.
-pub fn compositor_shell_dmabuf_element(
+fn build_main_shell_dmabuf_element(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
+    output_geo: Rectangle<i32, Logical>,
     output: &Output,
+    buf_w: u32,
+    buf_h: u32,
 ) -> Result<Option<ShellDmaElement>, GlesError> {
-    if !state.shell_has_frame || !state.shell_frame_is_dmabuf {
-        return Ok(None);
-    }
     let Some(ref dmabuf) = state.shell_dmabuf else {
         return Ok(None);
-    };
-    let Some(output_geo) = state.space.output_geometry(output) else {
-        return Ok(None);
-    };
-    let (buf_w, buf_h) = match state.shell_view_px {
-        Some(p) => p,
-        None => return Ok(None),
     };
     let Some(buffer_src) = shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h) else {
         return Ok(None);
@@ -262,18 +333,13 @@ pub fn compositor_shell_dmabuf_element(
 fn shell_overlay_element_for_placement(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
-    output: &Output,
+    output_geo: Rectangle<i32, Logical>,
+    output_scale: f64,
     placement: &crate::state::ShellContextMenuPlacement,
     overlay_id: &Id,
     error_label: &'static str,
 ) -> Result<Option<ShellDmaElement>, GlesError> {
-    if !state.shell_has_frame || !state.shell_frame_is_dmabuf {
-        return Ok(None);
-    }
     let Some(ref dmabuf) = state.shell_dmabuf else {
-        return Ok(None);
-    };
-    let Some(output_geo) = state.space.output_geometry(output) else {
         return Ok(None);
     };
     let menu_g = placement.global_rect;
@@ -316,10 +382,12 @@ fn shell_overlay_element_for_placement(
         Size::<f64, BufferCoord>::from((bsrc_w, bsrc_h)),
     );
 
-    let output_scale = Scale::from(output.current_scale().fractional_scale());
-    let scale_f = output.current_scale().fractional_scale();
+    let output_scale = Scale::from(output_scale);
     let d = inter.loc - output_geo.loc;
-    let shell_loc_phys = Point::<f64, Physical>::from((d.x as f64 * scale_f, d.y as f64 * scale_f));
+    let shell_loc_phys = Point::<f64, Physical>::from((
+        d.x as f64 * output_scale.x,
+        d.y as f64 * output_scale.x,
+    ));
     let shell_size_logical = inter.size;
 
     let damage_phys = if state.shell_dmabuf_dirty_force_full {
@@ -365,45 +433,168 @@ fn shell_overlay_element_for_placement(
     }
 }
 
-pub fn compositor_shell_context_menu_element(
-    state: &CompositorState,
-    renderer: &mut GlesRenderer,
-    output: &Output,
-) -> Result<Option<ShellDmaElement>, GlesError> {
-    let Some(placement) = state.shell_context_menu.as_ref() else {
-        return Ok(None);
-    };
-    shell_overlay_element_for_placement(
-        state,
-        renderer,
-        output,
-        placement,
-        &state.shell_context_menu_overlay_id,
-        "context menu dma-buf layer import failed",
-    )
-}
-
-pub fn compositor_shell_floating_elements(
-    state: &CompositorState,
-    renderer: &mut GlesRenderer,
-    output: &Output,
-) -> Result<Vec<ShellDmaElement>, GlesError> {
-    let mut out = Vec::new();
-    for layer in &state.shell_floating_layers {
-        let placement = crate::state::ShellContextMenuPlacement {
-            buffer_rect: layer.buffer_rect,
-            global_rect: layer.global_rect,
-        };
-        if let Some(el) = shell_overlay_element_for_placement(
-            state,
-            renderer,
-            output,
-            &placement,
-            &layer.overlay_id,
-            "floating layer dma-buf import failed",
-        )? {
-            out.push(el);
+fn cache_shell_element<K: Clone + PartialEq>(
+    slot: &mut Option<CachedShellElement<K>>,
+    key: K,
+    commit: CommitCounter,
+    build: impl FnOnce() -> Result<Option<ShellDmaElement>, GlesError>,
+) -> Result<(Option<ShellDmaElement>, bool), GlesError> {
+    if let Some(cached) = slot.as_ref() {
+        if cached.key == key && cached.commit == commit {
+            note_shell_cache_result(true, false);
+            return Ok((cached.element.clone(), false));
         }
     }
-    Ok(out)
+    let force_full_damage = slot.as_ref().is_some_and(|cached| cached.key != key);
+    let element = build()?;
+    *slot = Some(CachedShellElement {
+        key,
+        commit,
+        element: element.clone(),
+    });
+    note_shell_cache_result(false, force_full_damage);
+    Ok((element, force_full_damage))
+}
+
+pub fn compositor_shell_render_elements(
+    state: &mut CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<ShellOutputRenderElements, GlesError> {
+    let output_name = output.name();
+    let mut cache = state
+        .shell_render_cache_by_output
+        .remove(&output_name)
+        .unwrap_or_default();
+    let mut render = ShellOutputRenderElements::default();
+    let output_geo = state.space.output_geometry(output);
+    let output_scale = output.current_scale().fractional_scale();
+
+    if state.shell_has_frame && state.shell_frame_is_dmabuf {
+        if let (Some(output_geo), Some((buf_w, buf_h))) = (output_geo, state.shell_view_px) {
+            let key = ShellMainCacheKey {
+                output_geo,
+                output_scale_bits: output_scale.to_bits(),
+                canvas_origin: state.shell_canvas_logical_origin,
+                canvas_size: state.shell_canvas_logical_size,
+                view_px: (buf_w, buf_h),
+            };
+            let (element, force_full_damage) = cache_shell_element(
+                &mut cache.main,
+                key,
+                state.shell_dmabuf_commit,
+                || build_main_shell_dmabuf_element(state, renderer, output_geo, output, buf_w, buf_h),
+            )?;
+            render.dmabuf = element;
+            render.force_full_damage |= force_full_damage;
+        } else if cache.main.as_ref().is_some_and(|cached| cached.element.is_some()) {
+            render.force_full_damage = true;
+            cache.main = None;
+        } else {
+            cache.main = None;
+        }
+    } else if cache.main.as_ref().is_some_and(|cached| cached.element.is_some()) {
+        render.force_full_damage = true;
+        cache.main = None;
+    } else {
+        cache.main = None;
+    }
+
+    if let (Some(output_geo), Some(placement)) = (output_geo, state.shell_context_menu.clone()) {
+        let key = ShellOverlayCacheKey {
+            output_geo,
+            output_scale_bits: output_scale.to_bits(),
+            global_rect: placement.global_rect,
+            buffer_rect: placement.buffer_rect,
+        };
+        let (element, force_full_damage) = cache_shell_element(
+            &mut cache.context_menu,
+            key,
+            state.shell_dmabuf_commit,
+            || {
+                shell_overlay_element_for_placement(
+                    state,
+                    renderer,
+                    output_geo,
+                    output_scale,
+                    &placement,
+                    &state.shell_context_menu_overlay_id,
+                    "context menu dma-buf layer import failed",
+                )
+            },
+        )?;
+        render.context_menu = element;
+        render.force_full_damage |= force_full_damage;
+    } else if cache
+        .context_menu
+        .as_ref()
+        .is_some_and(|cached| cached.element.is_some())
+    {
+        render.force_full_damage = true;
+        cache.context_menu = None;
+    } else {
+        cache.context_menu = None;
+    }
+
+    let current_floating = state.shell_floating_layers.clone();
+    let current_ids: Vec<u32> = current_floating.iter().map(|layer| layer.id).collect();
+    if cache.floating_order != current_ids
+        && (cache.floating.iter().any(|(_, cached)| cached.element.is_some())
+            || !current_ids.is_empty())
+    {
+        render.force_full_damage = true;
+    }
+    cache.floating_order = current_ids.clone();
+    cache
+        .floating
+        .retain(|id, _| current_ids.iter().any(|current| current == id));
+
+    if let Some(output_geo) = output_geo {
+        for layer in current_floating {
+            let placement = crate::state::ShellContextMenuPlacement {
+                buffer_rect: layer.buffer_rect,
+                global_rect: layer.global_rect,
+            };
+            let key = ShellOverlayCacheKey {
+                output_geo,
+                output_scale_bits: output_scale.to_bits(),
+                global_rect: placement.global_rect,
+                buffer_rect: placement.buffer_rect,
+            };
+            let mut slot = cache.floating.remove(&layer.id);
+            let (element, force_full_damage) = cache_shell_element(
+                &mut slot,
+                key,
+                state.shell_dmabuf_commit,
+                || {
+                    shell_overlay_element_for_placement(
+                        state,
+                        renderer,
+                        output_geo,
+                        output_scale,
+                        &placement,
+                        &layer.overlay_id,
+                        "floating layer dma-buf import failed",
+                    )
+                },
+            )?;
+            if let Some(slot) = slot {
+                cache.floating.insert(layer.id, slot);
+            }
+            if let Some(element) = element {
+                render.floating.push(element);
+            }
+            render.force_full_damage |= force_full_damage;
+        }
+    } else if cache.floating.values().any(|cached| cached.element.is_some()) {
+        render.force_full_damage = true;
+        cache.floating.clear();
+        cache.floating_order.clear();
+    } else {
+        cache.floating.clear();
+        cache.floating_order.clear();
+    }
+
+    state.shell_render_cache_by_output.insert(output_name, cache);
+    Ok(render)
 }

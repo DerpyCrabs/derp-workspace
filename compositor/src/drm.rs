@@ -172,43 +172,17 @@ impl DrmHead {
                 output,
                 &mut render_elements,
             );
-            let shell_floating = match crate::shell_render::compositor_shell_floating_elements(
+            let shell_render = match crate::shell_render::compositor_shell_render_elements(
                 state, renderer, output,
             ) {
-                Ok(layers) => layers,
+                Ok(render) => render,
                 Err(e) => {
                     warn!(
                         target: "derp_shell_dmabuf",
                         ?e,
-                        "DRM render path: shell floating dma-buf layers skipped"
+                        "DRM render path: shell dma-buf layers skipped (details on this target above)"
                     );
-                    Vec::new()
-                }
-            };
-            let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
-                state, renderer, output,
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(
-                        target: "derp_shell_dmabuf",
-                        ?e,
-                        "DRM render path: shell context-menu dma-buf layer skipped"
-                    );
-                    None
-                }
-            };
-            let shell_dma = match crate::shell_render::compositor_shell_dmabuf_element(
-                state, renderer, output,
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(
-                        target: "derp_shell_dmabuf",
-                        ?e,
-                        "DRM render path: shell dma-buf layer skipped (details on this target above)"
-                    );
-                    None
+                    crate::shell_render::ShellOutputRenderElements::default()
                 }
             };
 
@@ -219,13 +193,13 @@ impl DrmHead {
             {
                 match space_render_elements(renderer, [&state.space], output, 1.0) {
                     Ok(space_els) => {
-                        for el in &shell_floating {
+                        for el in &shell_render.floating {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
-                        if let Some(ref el) = shell_menu {
+                        if let Some(ref el) = shell_render.context_menu {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
-                        if let Some(ref el) = shell_dma {
+                        if let Some(ref el) = shell_render.dmabuf {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
                         render_elements.extend(space_els.into_iter().map(|el| {
@@ -236,7 +210,8 @@ impl DrmHead {
                                 ),
                             )
                         }));
-                        let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
+                        let (backdrop, backdrop_force_full_damage) =
+                            crate::backdrop_render::desktop_backdrop_layers(
                             state,
                             output,
                             output_scale,
@@ -254,6 +229,8 @@ impl DrmHead {
                             || !state.pending_image_copy_captures.is_empty();
                         let age_for_render = if state.shell_exclusion_zones_need_full_damage
                             || state.screenshot_overlay_needs_full_damage
+                            || shell_render.force_full_damage
+                            || backdrop_force_full_damage
                             || capture_needs_full_damage
                         {
                             0usize
@@ -286,10 +263,10 @@ impl DrmHead {
                     output,
                     1.0,
                 );
-                for el in &shell_floating {
+                for el in &shell_render.floating {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
-                if let Some(ref el) = shell_menu {
+                if let Some(ref el) = shell_render.context_menu {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
                 for (el, wid, include_self_decor) in tagged {
@@ -307,10 +284,11 @@ impl DrmHead {
                         )),
                     }
                 }
-                if let Some(ref el) = shell_dma {
+                if let Some(ref el) = shell_render.dmabuf {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
-                let backdrop = crate::backdrop_render::build_desktop_backdrop_layers(
+                let (backdrop, backdrop_force_full_damage) =
+                    crate::backdrop_render::desktop_backdrop_layers(
                     state,
                     output,
                     output_scale,
@@ -327,6 +305,8 @@ impl DrmHead {
                     || !state.pending_image_copy_captures.is_empty();
                 let age_for_render = if state.shell_exclusion_zones_need_full_damage
                     || state.screenshot_overlay_needs_full_damage
+                    || shell_render.force_full_damage
+                    || backdrop_force_full_damage
                     || capture_needs_full_damage
                 {
                     0usize

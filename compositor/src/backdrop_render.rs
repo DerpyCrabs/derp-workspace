@@ -1,8 +1,15 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 use smithay::{
     backend::renderer::{
-        element::{solid::SolidColorRenderElement, Id, Kind},
+        element::{
+            solid::{SolidColorBuffer, SolidColorRenderElement},
+            Id, Kind,
+        },
+        utils::CommitCounter,
         Color32F,
     },
     output::Output,
@@ -13,9 +20,69 @@ use crate::desktop_stack::ShellDmaElement;
 use crate::display_config::DesktopBackgroundConfig;
 use crate::state::{BackdropWallpaperIdCache, CompositorState};
 
+#[derive(Clone)]
 pub(crate) struct BackdropLayers {
     pub solids: Vec<SolidColorRenderElement>,
     pub textures: Vec<ShellDmaElement>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct BackdropCacheKey {
+    pub output_geo: Rectangle<i32, Logical>,
+    pub scale_bits: u64,
+    pub mode: String,
+    pub fit: String,
+    pub solid_rgba_bits: [u32; 4],
+    pub wallpaper_path: Option<PathBuf>,
+    pub wallpaper_commit: Option<CommitCounter>,
+    pub workspace_bounds: Option<Rectangle<i32, Logical>>,
+    pub texture_size: Option<(i32, i32)>,
+}
+
+#[derive(Default)]
+struct CacheStats {
+    hits: u64,
+    misses: u64,
+    forced_full_damage_misses: u64,
+    last_logged_total: u64,
+}
+
+fn backdrop_cache_stats() -> &'static Mutex<CacheStats> {
+    static STATS: OnceLock<Mutex<CacheStats>> = OnceLock::new();
+    STATS.get_or_init(|| Mutex::new(CacheStats::default()))
+}
+
+fn note_backdrop_cache_result(hit: bool, force_full_damage: bool) {
+    let Ok(mut stats) = backdrop_cache_stats().lock() else {
+        return;
+    };
+    if hit {
+        stats.hits += 1;
+    } else {
+        stats.misses += 1;
+        if force_full_damage {
+            stats.forced_full_damage_misses += 1;
+        }
+    }
+    let total = stats.hits + stats.misses;
+    if total.saturating_sub(stats.last_logged_total) < 256 {
+        return;
+    }
+    stats.last_logged_total = total;
+    let hit_rate = if total == 0 {
+        0.0
+    } else {
+        stats.hits as f64 / total as f64
+    };
+    tracing::debug!(
+        target: "derp_render_cache",
+        cache = "backdrop",
+        hits = stats.hits,
+        misses = stats.misses,
+        forced_full_damage_misses = stats.forced_full_damage_misses,
+        hit_rate,
+        "render cache stats"
+    );
 }
 
 fn fit_norm(fit: &str) -> &'static str {
@@ -99,55 +166,52 @@ fn push_fill_cover(
     ));
 }
 
-pub(crate) fn build_desktop_backdrop_layers(
-    state: &mut CompositorState,
-    output: &Output,
+fn push_solid_backdrop(
+    solids: &mut Vec<SolidColorRenderElement>,
+    size: Size<i32, Logical>,
+    base_color: Color32F,
     scale_f: f64,
+) {
+    let solid = SolidColorBuffer::new(size, base_color);
+    solids.push(SolidColorRenderElement::from_buffer(
+        &solid,
+        Point::<i32, Physical>::from((0, 0)),
+        scale_f,
+        1.0,
+        Kind::Unspecified,
+    ));
+}
+
+fn build_desktop_backdrop_layers_uncached(
+    state: &mut CompositorState,
+    output_name: &str,
+    output_geo: Rectangle<i32, Logical>,
+    scale_f: f64,
+    cfg: &DesktopBackgroundConfig,
+    wallpaper: Option<(
+        PathBuf,
+        CommitCounter,
+        smithay::backend::renderer::gles::GlesTexture,
+        smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
+        i32,
+        i32,
+    )>,
 ) -> BackdropLayers {
     let mut solids: Vec<SolidColorRenderElement> = Vec::new();
     let mut textures: Vec<ShellDmaElement> = Vec::new();
-
-    let Some(output_geo) = state.space.output_geometry(output) else {
-        return BackdropLayers { solids, textures };
-    };
-    let output_name = output.name();
     let out_w = output_geo.size.w.max(1);
     let out_h = output_geo.size.h.max(1);
     let ow = out_w as f64;
     let oh = out_h as f64;
-    let cfg = state.desktop_background_for_output(output);
     let rgba = cfg.solid_rgba;
     let base_color = Color32F::new(rgba[0], rgba[1], rgba[2], rgba[3]);
-    let mode = cfg.mode.as_str();
-    let want_image = mode == "image" && !cfg.image_path.trim().is_empty();
-    let path_ok = wallpaper_path_for_cfg(cfg);
-    let gpu_ready = want_image
-        && path_ok
-            .as_ref()
-            .is_some_and(|p| state.desktop_wallpaper_gpu_by_path.contains_key(p));
 
-    if !gpu_ready {
-        state
-            .desktop_backdrop_solid
-            .update(output_geo.size, base_color);
-        solids.push(SolidColorRenderElement::from_buffer(
-            &state.desktop_backdrop_solid,
-            Point::<i32, Physical>::from((0, 0)),
-            scale_f,
-            1.0,
-            Kind::Unspecified,
-        ));
+    let Some((path, commit, texture, ctx_id, tex_w, tex_h)) = wallpaper else {
+        push_solid_backdrop(&mut solids, output_geo.size, base_color, scale_f);
         return BackdropLayers { solids, textures };
-    }
-
-    let path = path_ok.unwrap();
-    let entry = state.desktop_wallpaper_gpu_by_path.get(&path).unwrap();
-    let g = &entry.gpu;
-    let commit = entry.commit;
-    let texture = g.texture.clone();
-    let ctx_id = g.context_id.clone();
-    let tw = g.tex_w.max(1) as f64;
-    let th = g.tex_h.max(1) as f64;
+    };
+    let tw = tex_w.max(1) as f64;
+    let th = tex_h.max(1) as f64;
     let fit = fit_norm(&cfg.fit);
     let ws_s = state
         .workspace_logical_bounds()
@@ -169,16 +233,7 @@ pub(crate) fn build_desktop_backdrop_layers(
 
     match fit {
         "fit" => {
-            state
-                .desktop_backdrop_solid
-                .update(output_geo.size, base_color);
-            solids.push(SolidColorRenderElement::from_buffer(
-                &state.desktop_backdrop_solid,
-                Point::<i32, Physical>::from((0, 0)),
-                scale_f,
-                1.0,
-                Kind::Unspecified,
-            ));
+            push_solid_backdrop(&mut solids, output_geo.size, base_color, scale_f);
             let scale = (ow / tw).min(oh / th);
             let dw = (tw * scale).round().max(1.0) as i32;
             let dh = (th * scale).round().max(1.0) as i32;
@@ -231,16 +286,7 @@ pub(crate) fn build_desktop_backdrop_layers(
             }
         }
         "center" => {
-            state
-                .desktop_backdrop_solid
-                .update(output_geo.size, base_color);
-            solids.push(SolidColorRenderElement::from_buffer(
-                &state.desktop_backdrop_solid,
-                Point::<i32, Physical>::from((0, 0)),
-                scale_f,
-                1.0,
-                Kind::Unspecified,
-            ));
+            push_solid_backdrop(&mut solids, output_geo.size, base_color, scale_f);
             let scale = (ow / tw).min(oh / th).min(1.0);
             let dw = (tw * scale).round().max(1.0) as i32;
             let dh = (th * scale).round().max(1.0) as i32;
@@ -343,4 +389,68 @@ pub(crate) fn build_desktop_backdrop_layers(
     }
 
     BackdropLayers { solids, textures }
+}
+
+pub(crate) fn desktop_backdrop_layers(
+    state: &mut CompositorState,
+    output: &Output,
+    scale_f: f64,
+) -> (BackdropLayers, bool) {
+    let Some(output_geo) = state.space.output_geometry(output) else {
+        note_backdrop_cache_result(false, false);
+        return (
+            BackdropLayers {
+                solids: Vec::new(),
+                textures: Vec::new(),
+            },
+            false,
+        );
+    };
+    let output_name = output.name();
+    let cfg = state.desktop_background_for_output(output).clone();
+    let wallpaper = wallpaper_path_for_cfg(&cfg).and_then(|path| {
+        state
+            .desktop_wallpaper_gpu_by_path
+            .get(&path)
+            .map(|entry| {
+                (
+                    path,
+                    entry.commit,
+                    entry.gpu.texture.clone(),
+                    entry.gpu.context_id.clone(),
+                    entry.gpu.tex_w,
+                    entry.gpu.tex_h,
+                )
+            })
+    });
+    let key = BackdropCacheKey {
+        output_geo,
+        scale_bits: scale_f.to_bits(),
+        mode: cfg.mode.clone(),
+        fit: fit_norm(&cfg.fit).to_string(),
+        solid_rgba_bits: cfg.solid_rgba.map(f32::to_bits),
+        wallpaper_path: wallpaper.as_ref().map(|(path, ..)| path.clone()),
+        wallpaper_commit: wallpaper.as_ref().map(|(_, commit, ..)| *commit),
+        workspace_bounds: state.workspace_logical_bounds(),
+        texture_size: wallpaper
+            .as_ref()
+            .map(|(_, _, _, _, tex_w, tex_h)| (*tex_w, *tex_h)),
+    };
+    if let Some(cached) = state.backdrop_layers_by_output.get(&output_name) {
+        if cached.key == key {
+            note_backdrop_cache_result(true, false);
+            return (cached.layers.clone(), false);
+        }
+    }
+    let force_full_damage = state.backdrop_layers_by_output.contains_key(&output_name);
+    let layers =
+        build_desktop_backdrop_layers_uncached(state, &output_name, output_geo, scale_f, &cfg, wallpaper);
+    state
+        .backdrop_layers_by_output
+        .insert(output_name, crate::state::CachedBackdropLayers {
+            key,
+            layers: layers.clone(),
+        });
+    note_backdrop_cache_result(false, force_full_damage);
+    (layers, force_full_damage)
 }
