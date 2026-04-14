@@ -56,6 +56,15 @@ describe('matchDesktopApplication', () => {
     ).toMatchObject({ desktop_id: 'org.gnome.Nautilus.desktop' })
   })
 
+  it('matches exact icon-style app ids quickly', () => {
+    expect(
+      matchDesktopApplication(apps, {
+        title: 'Files',
+        app_id: 'org.gnome.Nautilus',
+      }),
+    ).toMatchObject({ desktop_id: 'org.gnome.Nautilus.desktop' })
+  })
+
   it('returns null when there is no credible match', () => {
     expect(
       matchDesktopApplication(apps, {

@@ -32,6 +32,8 @@ export type MeasuredShellFloatingPlacement = {
   }
 }
 
+let lastFloatingPlacementSignature: string | null = null
+
 export function placementWorkspaceBounds(
   screens: ReadonlyArray<ShellFloatingScreenLike>,
   layoutOrigin: { x: number; y: number } | null,
@@ -106,6 +108,18 @@ export function pushShellFloatingWireFromDom(args: {
   layoutOrigin: { x: number; y: number } | null
 }): boolean {
   const { placement } = measureShellFloatingPlacementFromDom(args)
+  const signature = [
+    placement.bx,
+    placement.by,
+    placement.bw,
+    placement.bh,
+    placement.gx,
+    placement.gy,
+    placement.gw,
+    placement.gh,
+  ].join(':')
+  if (signature === lastFloatingPlacementSignature) return true
+  lastFloatingPlacementSignature = signature
   return shellContextMenuWire(
     true,
     placement.bx,
@@ -120,5 +134,6 @@ export function pushShellFloatingWireFromDom(args: {
 }
 
 export function hideFloatingPlacementWire(): void {
+  lastFloatingPlacementSignature = null
   hideShellFloatingWire()
 }

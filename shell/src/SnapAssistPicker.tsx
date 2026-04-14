@@ -3,6 +3,7 @@ import type { AssistGridShape, AssistGridSpan } from './assistGrid'
 import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import type { SnapAssistPickerAnchorRect } from './app/types'
 import {
+  invalidateShellUiWindow,
   registerShellUiWindow,
   shellUiWindowMeasureFromEnv,
   type ShellUiMeasureEnv,
@@ -96,6 +97,12 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     if (top + height > viewportHeight - 8) top = viewportHeight - height - 8
     if (top < 8) top = 8
     return { left, top }
+  })
+
+  createEffect(() => {
+    if (!props.shellUiWindowId || props.shellUiWindowZ == null || !props.getShellUiMeasureEnv) return
+    position()
+    invalidateShellUiWindow(props.shellUiWindowId)
   })
 
   onMount(() => {

@@ -18,10 +18,28 @@ export type TaskbarWorkspaceRow = TaskbarGroupRow & {
   desktop_icon: string | null
 }
 
+function sameWindowMembers(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
+function sameWindowIds(left: readonly number[], right: readonly number[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
 export function buildWorkspaceGroups(
   workspaceState: WorkspaceState,
   windowsById: ReadonlyMap<number, DerpWindow>,
+  previous: WorkspaceGroupModel[] = [],
 ): WorkspaceGroupModel[] {
+  const previousById = new Map(previous.map((group) => [group.id, group]))
   const groups: WorkspaceGroupModel[] = []
   for (const group of workspaceState.groups) {
     const members = group.windowIds
@@ -34,20 +52,38 @@ export function buildWorkspaceGroups(
       members.find((window) => !window.minimized) ??
       members[0]
     if (!visibleWindow) continue
+    const hiddenWindowIds = members
+      .map((window) => window.window_id)
+      .filter((windowId) => windowId !== visibleWindow.window_id)
+    const previousGroup = previousById.get(group.id)
+    if (
+      previousGroup &&
+      previousGroup.visibleWindowId === visibleWindow.window_id &&
+      previousGroup.visibleWindow === visibleWindow &&
+      sameWindowMembers(previousGroup.members, members) &&
+      sameWindowIds(previousGroup.hiddenWindowIds, hiddenWindowIds)
+    ) {
+      groups.push(previousGroup)
+      continue
+    }
     groups.push({
       id: group.id,
       members,
       visibleWindowId: visibleWindow.window_id,
       visibleWindow,
-      hiddenWindowIds: members
-        .map((window) => window.window_id)
-        .filter((windowId) => windowId !== visibleWindow.window_id),
+      hiddenWindowIds,
     })
   }
   groups.sort(
     (a, b) =>
       b.visibleWindow.stack_z - a.visibleWindow.stack_z || b.visibleWindow.window_id - a.visibleWindow.window_id,
   )
+  if (
+    previous.length === groups.length &&
+    previous.every((group, index) => group === groups[index])
+  ) {
+    return previous
+  }
   return groups
 }
 
@@ -69,7 +105,12 @@ export function buildTaskbarRowsByMonitor(
   groups: readonly WorkspaceGroupModel[],
   apps: readonly DesktopAppMatchCandidate[],
   fallbackMonitorKey: string,
+  previous: ReadonlyMap<string, readonly TaskbarWorkspaceRow[]> = new Map(),
 ): Map<string, TaskbarWorkspaceRow[]> {
+  const previousRowsByGroupId = new Map<string, TaskbarWorkspaceRow>()
+  for (const rows of previous.values()) {
+    for (const row of rows) previousRowsByGroupId.set(row.group_id, row)
+  }
   const groupsByMonitor = new Map<string, WorkspaceGroupModel[]>()
   for (const group of groups) {
     const key = group.visibleWindow.output_name || fallbackMonitorKey
@@ -84,13 +125,43 @@ export function buildTaskbarRowsByMonitor(
         title: row.title,
         app_id: row.app_id,
       })
-      return {
+      const previousRow = previousRowsByGroupId.get(row.group_id)
+      const nextRow = {
         ...row,
         desktop_id: match?.desktop_id ?? null,
         desktop_icon: match?.icon ?? null,
       }
+      if (
+        previousRow &&
+        previousRow.window_id === nextRow.window_id &&
+        previousRow.title === nextRow.title &&
+        previousRow.app_id === nextRow.app_id &&
+        previousRow.minimized === nextRow.minimized &&
+        previousRow.output_name === nextRow.output_name &&
+        previousRow.tab_count === nextRow.tab_count &&
+        previousRow.desktop_id === nextRow.desktop_id &&
+        previousRow.desktop_icon === nextRow.desktop_icon
+      ) {
+        return previousRow
+      }
+      return nextRow
     })
-    rowsByMonitor.set(monitorName, rows)
+    const previousRows = previous.get(monitorName)
+    if (
+      previousRows &&
+      previousRows.length === rows.length &&
+      previousRows.every((row, index) => row === rows[index])
+    ) {
+      rowsByMonitor.set(monitorName, previousRows as TaskbarWorkspaceRow[])
+    } else {
+      rowsByMonitor.set(monitorName, rows)
+    }
+  }
+  if (
+    previous.size === rowsByMonitor.size &&
+    Array.from(rowsByMonitor.entries()).every(([monitorName, rows]) => previous.get(monitorName) === rows)
+  ) {
+    return previous as Map<string, TaskbarWorkspaceRow[]>
   }
   return rowsByMonitor
 }
@@ -105,9 +176,15 @@ type CreateWorkspaceSelectorsOptions = {
 }
 
 export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOptions) {
-  const workspaceGroups = createMemo(() =>
-    buildWorkspaceGroups(options.workspaceState(), options.windowsById()),
-  )
+  let previousWorkspaceGroups: WorkspaceGroupModel[] = []
+  const workspaceGroups = createMemo(() => {
+    previousWorkspaceGroups = buildWorkspaceGroups(
+      options.workspaceState(),
+      options.windowsById(),
+      previousWorkspaceGroups,
+    )
+    return previousWorkspaceGroups
+  })
 
   const workspaceGroupsById = createMemo(() => {
     const map = new Map<string, WorkspaceGroupModel>()
@@ -152,13 +229,16 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
     buildWindowsByMonitor(options.windowsList(), options.fallbackMonitorKey()),
   )
 
-  const taskbarRowsByMonitor = createMemo(() =>
-    buildTaskbarRowsByMonitor(
+  let previousTaskbarRowsByMonitor: ReadonlyMap<string, readonly TaskbarWorkspaceRow[]> = new Map()
+  const taskbarRowsByMonitor = createMemo(() => {
+    previousTaskbarRowsByMonitor = buildTaskbarRowsByMonitor(
       workspaceGroups(),
       options.desktopApps(),
       options.fallbackMonitorKey(),
-    ),
-  )
+      previousTaskbarRowsByMonitor,
+    )
+    return previousTaskbarRowsByMonitor as Map<string, TaskbarWorkspaceRow[]>
+  })
 
   const groupIdForWindow = (windowId: number | null | undefined) =>
     windowId == null ? null : workspaceGroupIdByWindowId().get(windowId) ?? null

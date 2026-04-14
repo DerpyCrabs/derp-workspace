@@ -7,8 +7,18 @@ type SearchMatch = {
   tokenPos: number
 }
 
+type PreparedSearchField = {
+  category: number
+  tokens: string[]
+}
+
+type PreparedSearchApp = {
+  fields: PreparedSearchField[]
+}
+
 const PREFIX_MATCH = 1
 const SUBSTRING_MATCH = 2
+const preparedSearchApps = new WeakMap<DesktopAppEntry, PreparedSearchApp>()
 
 function normalizeForSearch(value: string): string {
   return value
@@ -22,9 +32,8 @@ function tokenizeForSearch(value: string): string[] {
   return normalized === '' ? [] : normalized.split(/\s+/)
 }
 
-function bestTokenMatch(value: string | undefined, queryToken: string, category: number): SearchMatch | null {
-  if (!value) return null
-  const tokens = tokenizeForSearch(value)
+function bestPreparedTokenMatch(tokens: string[], queryToken: string, category: number): SearchMatch | null {
+  if (tokens.length === 0) return null
   let best: SearchMatch | null = null
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]
@@ -59,14 +68,29 @@ function bestTokenMatch(value: string | undefined, queryToken: string, category:
   return best
 }
 
+function prepareSearchApp(app: DesktopAppEntry): PreparedSearchApp {
+  const cached = preparedSearchApps.get(app)
+  if (cached) return cached
+  const prepared = {
+    fields: [
+      { category: 1, tokens: tokenizeForSearch(app.name) },
+      { category: 2, tokens: tokenizeForSearch(app.executable ?? '') },
+      ...(app.keywords ?? []).map((keyword) => ({
+        category: 3,
+        tokens: tokenizeForSearch(keyword),
+      })),
+      { category: 4, tokens: tokenizeForSearch(app.generic_name ?? '') },
+      { category: 5, tokens: tokenizeForSearch(app.full_name ?? '') },
+    ],
+  }
+  preparedSearchApps.set(app, prepared)
+  return prepared
+}
+
 function bestFieldMatch(app: DesktopAppEntry, queryToken: string): SearchMatch | null {
-  const matches = [
-    bestTokenMatch(app.name, queryToken, 1),
-    bestTokenMatch(app.executable, queryToken, 2),
-    ...(app.keywords ?? []).map((keyword) => bestTokenMatch(keyword, queryToken, 3)),
-    bestTokenMatch(app.generic_name, queryToken, 4),
-    bestTokenMatch(app.full_name, queryToken, 5),
-  ].filter((value): value is SearchMatch => value !== null)
+  const matches = prepareSearchApp(app).fields
+    .map((field) => bestPreparedTokenMatch(field.tokens, queryToken, field.category))
+    .filter((value): value is SearchMatch => value !== null)
   if (matches.length === 0) return null
   matches.sort((a, b) => {
     if (a.matchType !== b.matchType) return a.matchType - b.matchType

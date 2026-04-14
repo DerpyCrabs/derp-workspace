@@ -8,8 +8,8 @@ import {
   onMount,
 } from 'solid-js'
 import {
+  invalidateShellUiWindow,
   registerShellUiWindow,
-  scheduleShellUiWindowsSync,
   shellUiWindowMeasureFromEnv,
   type ShellUiMeasureEnv,
 } from './shellUiWindows'
@@ -127,7 +127,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     }
     readAcc(props.stackZ)
     props.shellUiRegister.z
-    scheduleShellUiWindowsSync()
+    invalidateShellUiWindow(props.shellUiRegister.id)
   })
 
   return (

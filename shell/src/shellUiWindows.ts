@@ -15,6 +15,7 @@ export type ShellUiMeasureEnv = {
 }
 
 type Entry = {
+  id: number
   measure: () => {
     id: number
     z: number
@@ -23,13 +24,25 @@ type Entry = {
     gw: number
     gh: number
   } | null
+  cached:
+    | {
+        id: number
+        z: number
+        gx: number
+        gy: number
+        gw: number
+        gh: number
+      }
+    | null
 }
 
 const registry = new Map<number, Entry>()
+const dirtyRegistryTokens = new Set<number>()
 let nextRegistryToken = 1
 let generation = 0
 let raf = 0
 let microtaskQueued = false
+let structureDirty = false
 let lastWindows:
   | Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>
   | null = null
@@ -59,10 +72,17 @@ function sameWindows(
 function flush() {
   raf = 0
   microtaskQueued = false
+  if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) return
+  for (const token of dirtyRegistryTokens) {
+    const entry = registry.get(token)
+    if (!entry) continue
+    entry.cached = entry.measure()
+  }
+  dirtyRegistryTokens.clear()
+  structureDirty = false
   const windows: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> = []
   for (const [, e] of registry) {
-    const m = e.measure()
-    if (m) windows.push(m)
+    if (e.cached) windows.push(e.cached)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
   const fn = window.__derpShellWireSend
@@ -92,12 +112,29 @@ export function flushShellUiWindowsSyncNow() {
   flush()
 }
 
+export function invalidateShellUiWindow(id: number) {
+  for (const [token, entry] of registry) {
+    if (entry.id !== id) continue
+    dirtyRegistryTokens.add(token)
+  }
+  scheduleShellUiWindowsSync()
+}
+
+export function invalidateAllShellUiWindows() {
+  for (const token of registry.keys()) dirtyRegistryTokens.add(token)
+  scheduleShellUiWindowsSync()
+}
+
 export function registerShellUiWindow(_id: number, measure: Entry['measure']) {
   const token = nextRegistryToken++
-  registry.set(token, { measure })
+  registry.set(token, { id: _id, measure, cached: null })
+  structureDirty = true
+  dirtyRegistryTokens.add(token)
   scheduleShellUiWindowsSync()
   return () => {
     registry.delete(token)
+    dirtyRegistryTokens.delete(token)
+    structureDirty = true
     scheduleShellUiWindowsSync()
   }
 }

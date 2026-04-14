@@ -23,11 +23,32 @@ export type DesktopAppWindowLike = {
   app_id: string
 }
 
+type PreparedDesktopAppMatchCandidate = {
+  app: DesktopAppMatchCandidate
+  desktopId: string
+  executable: string
+  name: string
+  generic: string
+  full: string
+  icon: string
+  texts: Array<{ normalized: string; tokens: Set<string> }>
+}
+
+type PreparedDesktopAppCollection = {
+  apps: PreparedDesktopAppMatchCandidate[]
+  byDesktopId: Map<string, PreparedDesktopAppMatchCandidate[]>
+  byExecutable: Map<string, PreparedDesktopAppMatchCandidate[]>
+  byIcon: Map<string, PreparedDesktopAppMatchCandidate[]>
+  matchCache: Map<string, DesktopAppMatchCandidate | null>
+}
+
 const [desktopAppItems, setDesktopAppItems] = createSignal<DesktopAppEntry[]>([])
 const [desktopAppsLoaded, setDesktopAppsLoaded] = createSignal(false)
 const [desktopAppsBusy, setDesktopAppsBusy] = createSignal(false)
 const [desktopAppsErr, setDesktopAppsErr] = createSignal<string | null>(null)
 let refreshPromise: Promise<void> | null = null
+const preparedAppCache = new WeakMap<DesktopAppMatchCandidate, PreparedDesktopAppMatchCandidate>()
+const preparedCollections = new WeakMap<readonly DesktopAppMatchCandidate[], PreparedDesktopAppCollection>()
 
 function summarizeBody(body: string): string {
   return body.length > 200 ? `${body.slice(0, 200)}...` : body
@@ -64,23 +85,86 @@ function candidateTextValues(app: DesktopAppMatchCandidate): string[] {
   ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
 }
 
+function appendPreparedIndex(
+  index: Map<string, PreparedDesktopAppMatchCandidate[]>,
+  key: string,
+  candidate: PreparedDesktopAppMatchCandidate,
+) {
+  if (!key) return
+  const existing = index.get(key)
+  if (existing) existing.push(candidate)
+  else index.set(key, [candidate])
+}
+
+function prepareDesktopAppCandidate(app: DesktopAppMatchCandidate): PreparedDesktopAppMatchCandidate {
+  const cached = preparedAppCache.get(app)
+  if (cached) return cached
+  const prepared = {
+    app,
+    desktopId: normalizeToken(app.desktop_id),
+    executable: normalizeToken(app.executable ?? app.exec),
+    name: normalizeToken(app.name),
+    generic: normalizeToken(app.generic_name),
+    full: normalizeToken(app.full_name),
+    icon: normalizeToken(app.icon),
+    texts: candidateTextValues(app).map((value) => ({
+      normalized: normalizeToken(value),
+      tokens: tokenSet(value),
+    })),
+  }
+  preparedAppCache.set(app, prepared)
+  return prepared
+}
+
+function prepareDesktopAppCollection(
+  apps: readonly DesktopAppMatchCandidate[],
+): PreparedDesktopAppCollection {
+  const cached = preparedCollections.get(apps)
+  if (cached) return cached
+  const preparedApps = apps.map((app) => prepareDesktopAppCandidate(app))
+  const collection: PreparedDesktopAppCollection = {
+    apps: preparedApps,
+    byDesktopId: new Map(),
+    byExecutable: new Map(),
+    byIcon: new Map(),
+    matchCache: new Map(),
+  }
+  for (const prepared of preparedApps) {
+    appendPreparedIndex(collection.byDesktopId, prepared.desktopId, prepared)
+    appendPreparedIndex(collection.byExecutable, prepared.executable, prepared)
+    appendPreparedIndex(collection.byIcon, prepared.icon, prepared)
+  }
+  preparedCollections.set(apps, collection)
+  return collection
+}
+
 export function matchDesktopApplication(
   apps: readonly DesktopAppMatchCandidate[],
   window: DesktopAppWindowLike,
 ): DesktopAppMatchCandidate | null {
   const appId = normalizeToken(window.app_id)
   const title = normalizeToken(window.title)
+  const signature = `${appId}\u0000${title}`
+  const prepared = prepareDesktopAppCollection(apps)
+  if (prepared.matchCache.has(signature)) {
+    return prepared.matchCache.get(signature) ?? null
+  }
   const appIdTokens = tokenSet(window.app_id)
   const titleTokens = tokenSet(window.title)
   let best: DesktopAppMatchCandidate | null = null
   let bestScore = -1
-  for (const app of apps) {
-    const desktopId = normalizeToken(app.desktop_id)
-    const executable = normalizeToken(app.executable ?? app.exec)
-    const name = normalizeToken(app.name)
-    const generic = normalizeToken(app.generic_name)
-    const full = normalizeToken(app.full_name)
-    const icon = normalizeToken(app.icon)
+  const exactMatches = new Set<PreparedDesktopAppMatchCandidate>()
+  for (const match of prepared.byDesktopId.get(appId) ?? []) exactMatches.add(match)
+  for (const match of prepared.byExecutable.get(appId) ?? []) exactMatches.add(match)
+  for (const match of prepared.byIcon.get(appId) ?? []) exactMatches.add(match)
+  if (exactMatches.size === 1) {
+    const result = [...exactMatches][0]!.app
+    prepared.matchCache.set(signature, result)
+    return result
+  }
+  const candidates = exactMatches.size > 1 ? [...exactMatches] : prepared.apps
+  for (const candidate of candidates) {
+    const { app, desktopId, executable, name, generic, full, icon } = candidate
     let score = 0
     if (appId) {
       if (desktopId === appId) score = Math.max(score, 1000)
@@ -97,17 +181,15 @@ export function matchDesktopApplication(
       if (full && title.includes(full)) score = Math.max(score, 760)
       if (generic && title.includes(generic)) score = Math.max(score, 720)
     }
-    const texts = candidateTextValues(app)
-    for (const value of texts) {
-      const normalized = normalizeToken(value)
+    for (const value of candidate.texts) {
+      const normalized = value.normalized
       if (!normalized) continue
-      const tokens = tokenSet(value)
       let overlap = 0
       for (const token of appIdTokens) {
-        if (tokens.has(token)) overlap += 1
+        if (value.tokens.has(token)) overlap += 1
       }
       for (const token of titleTokens) {
-        if (tokens.has(token)) overlap += 1
+        if (value.tokens.has(token)) overlap += 1
       }
       if (overlap > 0) score = Math.max(score, 500 + overlap * 25)
       if (appId && normalized.includes(appId)) score = Math.max(score, 680)
@@ -118,7 +200,9 @@ export function matchDesktopApplication(
       bestScore = score
     }
   }
-  return bestScore >= 500 ? best : null
+  const result = bestScore >= 500 ? best : null
+  prepared.matchCache.set(signature, result)
+  return result
 }
 
 async function refreshDesktopApplications(): Promise<void> {

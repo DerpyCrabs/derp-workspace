@@ -56,6 +56,7 @@ import {
 } from './backedShellWindows'
 import {
   flushShellUiWindowsSyncNow,
+  invalidateAllShellUiWindows,
   registerShellUiWindow,
   SHELL_WINDOW_FLAG_SHELL_HOSTED,
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -89,8 +90,8 @@ import {
 } from './tileZones'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
 import { createFloatingLayerStore } from './floatingLayers'
-import { hideShellFloatingWire, shellFloatingLayersWire } from './shellFloatingWire'
-import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
+import { shellFloatingLayersWire } from './shellFloatingWire'
+import { hideFloatingPlacementWire, pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { getMonitorLayout, loadTilingConfig, saveTilingConfig } from './tilingConfig'
 import {
   fetchPortalScreencastRequestState,
@@ -1082,7 +1083,7 @@ function App() {
     setPortalPickerBusy(false)
     setPortalPickerRequestId(null)
     setPortalPickerTypes(null)
-    hideShellFloatingWire()
+    hideFloatingPlacementWire()
   }
 
   function beginPortalPicker(requestId: number, types: number | null) {
@@ -1214,7 +1215,7 @@ function App() {
         ...layer.placement!,
       }))
     if (layers.length === 0) {
-      if (!portalPickerVisible()) hideShellFloatingWire()
+      if (!portalPickerVisible()) hideFloatingPlacementWire()
       return
     }
     shellFloatingLayersWire(layers)
@@ -2534,13 +2535,13 @@ function App() {
       onCleanup(() => {
         document.removeEventListener('keydown', onKeyDown, true)
         releaseAtlasOverlayPointer()
-        hideShellFloatingWire()
+        hideFloatingPlacementWire()
       })
     })
 
     createEffect(() => {
       if (!portalPickerVisible()) {
-        hideShellFloatingWire()
+        hideFloatingPlacementWire()
         return
       }
       const layout = portalPickerLayout()
@@ -3046,6 +3047,12 @@ function App() {
       flushShellUiWindowsSyncNow()
       syncExclusionZonesNow()
     })
+  })
+
+  createEffect(() => {
+    outputGeom()
+    layoutCanvasOrigin()
+    queueMicrotask(() => invalidateAllShellUiWindows())
   })
 
   function bumpSnapChrome() {
@@ -4760,6 +4767,7 @@ function App() {
     window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
     const onWindowResize = () => {
       syncViewport()
+      invalidateAllShellUiWindows()
       scheduleExclusionZonesSync()
     }
     window.addEventListener('resize', onWindowResize, { passive: true })
