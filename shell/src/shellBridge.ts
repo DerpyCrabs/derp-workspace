@@ -35,6 +35,13 @@ export type PortalScreencastRequestState =
       types: number | null
     }
 
+export type ShellSpawnRequest = {
+  command: string
+  desktop_id?: string
+  app_name?: string
+  session_restore?: boolean
+}
+
 function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
@@ -141,14 +148,22 @@ export async function cancelScreenshot(base: string | null): Promise<void> {
   await postShellJson('/screenshot_cancel', {}, base)
 }
 
-export async function spawnViaShellHttp(command: string, spawnUrl: string | undefined): Promise<void> {
+export async function spawnViaShellHttp(
+  command: string,
+  spawnUrl: string | undefined,
+  extra?: Omit<ShellSpawnRequest, 'command'>,
+): Promise<void> {
   if (!spawnUrl) {
     throw new Error('Shell spawn bridge is unavailable.')
   }
+  const body: ShellSpawnRequest = { command }
+  if (extra?.desktop_id) body.desktop_id = extra.desktop_id
+  if (extra?.app_name) body.app_name = extra.app_name
+  if (extra?.session_restore) body.session_restore = true
   const res = await fetch(spawnUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command }),
+    body: JSON.stringify(body),
   })
   const text = await res.text()
   if (!res.ok) {

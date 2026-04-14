@@ -1,4 +1,5 @@
 import {
+  KEY,
   ensureNativePair,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -6,6 +7,8 @@ import {
   assertTopWindow,
   clickPoint,
   clickRect,
+  cleanupNativeWindows,
+  cleanupShellWindows,
   closeTaskbarWindow,
   compositorWindowById,
   defineGroup,
@@ -22,7 +25,9 @@ import {
   pointerWheel,
   pointInRect,
   assertRectMinSize,
+  postJson,
   runKeybind,
+  tapKey,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
@@ -36,6 +41,61 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+
+type SessionStateResponse = {
+  version: number
+  shell: {
+    version: number
+    nextNativeWindowSeq: number
+    workspace: { groups: unknown[]; pinnedWindowRefs: unknown[]; nextGroupSeq: number }
+    tilingConfig: { monitors: Record<string, unknown> }
+    monitorTiles: unknown[]
+    preTileGeometry: unknown[]
+    shellWindows: Array<{ windowId: number }>
+    nativeWindows: Array<{ windowRef: string }>
+  }
+}
+
+async function waitForSessionRestoreIdle(base: string) {
+  await waitFor(
+    'wait for session restore idle',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.session_restore_active ? null : shell
+    },
+    20000,
+    100,
+  )
+}
+
+async function clearSessionState(base: string) {
+  await postJson(base, '/session_state', {
+    version: 1,
+    shell: {
+      version: 1,
+      nextNativeWindowSeq: 1,
+      workspace: { groups: [], pinnedWindowRefs: [], nextGroupSeq: 1 },
+      tilingConfig: { monitors: {} },
+      monitorTiles: [],
+      preTileGeometry: [],
+      shellWindows: [],
+      nativeWindows: [],
+    },
+  })
+}
+
+async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean) {
+  return waitFor(
+    `wait for session shell window ${windowId ?? 'none'} ${present ? 'present' : 'absent'}`,
+    async () => {
+      const state = await getJson<SessionStateResponse>(base, '/session_state')
+      const hasWindow = state.shell.shellWindows.some((entry) => entry.windowId === windowId)
+      return hasWindow === present ? state : null
+    },
+    5000,
+    100,
+  )
+}
 
 async function switchSettingsPage(
   base: string,
@@ -221,6 +281,111 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('settings-shell.json', settingsFocused.shell)
   })
 
+  test('session autosave toggle and power menu save restore actions work', async ({ base, state }) => {
+    await waitForSessionRestoreIdle(base)
+    const bootstrap = await getSnapshots(base)
+    await cleanupShellWindows(
+      base,
+      bootstrap.shell.windows.filter((window) => window.shell_hosted).map((window) => window.window_id),
+    )
+    await cleanupNativeWindows(
+      base,
+      new Set(bootstrap.compositor.windows.filter((window) => !window.shell_hosted).map((window) => window.window_id)),
+    )
+    state.spawnedNativeWindowIds.clear()
+    state.nativeLaunchByWindowId.clear()
+    await clearSessionState(base)
+    const settingsOpen = await openSettings(base, 'click')
+    assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, settingsOpen.shell.controls.settings_tab_tiling)
+    await waitFor(
+      'wait for tiling settings session controls',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.controls?.settings_session_autosave_disable && shell.controls?.settings_session_autosave_enable
+          ? shell
+          : null
+      },
+      5000,
+      100,
+    )
+
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control')
+    await clickRect(base, shell.controls.settings_session_autosave_disable)
+    await waitFor(
+      'wait for automatic save disabled',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        return html.includes('Automatic save disabled') ? html : null
+      },
+      5000,
+      100,
+    )
+
+    const shellTest = await openShellTestWindow(base, state)
+    const shellTestWindowId = shellTest.window.window_id
+    await waitForSessionShellWindow(base, shellTestWindowId, false)
+
+    shell = (await openSettings(base, 'click')).shell
+    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control')
+    await clickRect(base, shell.controls.settings_session_autosave_enable)
+    await waitFor(
+      'wait for automatic save enabled',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        return html.includes('Automatic save enabled') ? html : null
+      },
+      5000,
+      100,
+    )
+
+    await clearSessionState(base)
+    shell = (await openSettings(base, 'click')).shell
+    assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control after enabling')
+    await clickRect(base, shell.controls.settings_session_autosave_disable)
+    await waitForSessionShellWindow(base, shellTestWindowId, false)
+
+    let powerMenu = await openPowerMenu(base)
+    assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')
+    await tapKey(base, KEY.enter)
+    await waitForSessionShellWindow(base, shellTestWindowId, true)
+
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control for cleanup')
+    await clickRect(base, shell.controls.settings_session_autosave_enable)
+    await waitFor(
+      'wait for automatic save re-enabled for later tests',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        return html.includes('Automatic save enabled') ? html : null
+      },
+      5000,
+      100,
+    )
+
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await closeTaskbarWindow(base, shell, shellTestWindowId)
+    await waitForWindowGone(base, shellTestWindowId)
+
+    powerMenu = await openPowerMenu(base)
+    assert(powerMenu.controls?.power_menu_restore_session, 'missing restore workspace power control')
+    await tapKey(base, KEY.down)
+    await tapKey(base, KEY.enter)
+    const restored = await waitFor(
+      `wait for restored shell test window ${shellTestWindowId}`,
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.windows.some((window) => window.window_id === shellTestWindowId && !window.minimized) ? next : null
+      },
+      8000,
+      100,
+    )
+
+    await writeJsonArtifact('session-controls-shell.json', restored)
+    await writeJsonArtifact('session-controls-state.json', await getJson<SessionStateResponse>(base, '/session_state'))
+  })
+
   test('debug window opens and toggles crosshair state', async ({ base }) => {
     const debugOpen = await openDebug(base)
     assert(debugOpen.shell.controls?.debug_crosshair_toggle, 'missing debug crosshair toggle rect')
@@ -302,6 +467,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(!powerOpen.programs_menu_open, 'programs menu should stay closed while power menu is open')
     assertTopWindow(powerOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'power menu should not change focused shell window')
     const powerHtml = await getShellHtml(base, '[aria-label="Power"]')
+    assert(powerHtml.includes('Save workspace'), 'power menu missing save workspace action')
+    assert(powerHtml.includes('Restore workspace'), 'power menu missing restore workspace action')
     assert(powerHtml.includes('Suspend'), 'power menu missing suspend action')
     assert(powerHtml.includes('Restart'), 'power menu missing restart action')
     assert(powerHtml.includes('Shut down'), 'power menu missing shutdown action')

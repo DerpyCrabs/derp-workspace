@@ -33,6 +33,8 @@ export type BackedWindowOpenPayload = {
   h: number
 }
 
+export type BackedShellWindowKind = 'debug' | 'settings' | 'test' | 'file_browser'
+
 export function defaultBackedClientAreaGlobal(
   work: { x: number; y: number; w: number; h: number },
   kind: 'debug' | 'settings' | 'test' | 'file_browser',
@@ -172,4 +174,12 @@ export function buildFileBrowserWindowOpenPayload(
     w: loc.w,
     h: loc.h,
   }
+}
+
+export function backedShellWindowKind(windowId: number, appId?: string | null): BackedShellWindowKind | null {
+  if (windowId === SHELL_UI_DEBUG_WINDOW_ID || appId === SHELL_UI_DEBUG_APP_ID) return 'debug'
+  if (windowId === SHELL_UI_SETTINGS_WINDOW_ID || appId === SHELL_UI_SETTINGS_APP_ID) return 'settings'
+  if (isShellTestWindowId(windowId) || appId === SHELL_UI_TEST_APP_ID) return 'test'
+  if (isFileBrowserWindowId(windowId) || appId === SHELL_UI_FILE_BROWSER_APP_ID) return 'file_browser'
+  return null
 }

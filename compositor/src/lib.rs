@@ -30,6 +30,7 @@ mod json_state;
 mod pointer_render;
 mod screenshot;
 mod screenshot_overlay_render;
+mod session_state;
 mod settings_config;
 mod sni_tray;
 mod shell_backed;

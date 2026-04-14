@@ -45,7 +45,14 @@ type CreateShellContextMenusArgs = {
   stopScreenshotMode: () => void
   closeAllAtlasSelects: () => boolean
   openFileBrowser: (path?: string | null) => void
-  spawnInCompositor: (cmd: string) => Promise<void>
+  spawnInCompositor: (
+    cmd: string,
+    launch?: { command: string; desktopId: string | null; appName: string | null } | null,
+  ) => Promise<void>
+  saveSessionSnapshot: () => void
+  restoreSessionSnapshot: () => void
+  canSaveSessionSnapshot: () => boolean
+  canRestoreSessionSnapshot: () => boolean
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
   exitSession: () => void
@@ -496,24 +503,48 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
     return [
       {
+        actionId: 'save-session',
+        label: 'Save workspace',
+        badge: 'session',
+        disabled: !args.canSaveSessionSnapshot(),
+        title: args.canSaveSessionSnapshot()
+          ? 'Persist the current workspace snapshot now'
+          : 'Needs shell HTTP and an idle session restore state',
+        action: args.saveSessionSnapshot,
+      },
+      {
+        actionId: 'restore-session',
+        label: 'Restore workspace',
+        badge: 'session',
+        disabled: !args.canRestoreSessionSnapshot(),
+        title: args.canRestoreSessionSnapshot()
+          ? 'Apply the last saved workspace snapshot now'
+          : 'Needs a saved workspace snapshot and an idle session restore state',
+        action: args.restoreSessionSnapshot,
+      },
+      {
+        actionId: 'suspend',
         label: 'Suspend',
         disabled: !http,
         title: sysTitle,
         action: () => void args.postSessionPower('suspend'),
       },
       {
+        actionId: 'restart',
         label: 'Restart',
         disabled: !http,
         title: sysTitle,
         action: () => void args.postSessionPower('reboot'),
       },
       {
+        actionId: 'shutdown',
         label: 'Shut down',
         disabled: !http,
         title: sysTitle,
         action: () => void args.postSessionPower('poweroff'),
       },
       {
+        actionId: 'exit-session',
         label: 'Exit session',
         disabled: !args.canSessionControl(),
         title: args.canSessionControl()
@@ -588,7 +619,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         badge: app.terminal ? 'tty' : undefined,
         action: () => {
           setProgramsUsageCounts(recordDesktopAppLaunch(app))
-          void args.spawnInCompositor(app.exec)
+          void args.spawnInCompositor(app.exec, {
+            command: app.exec,
+            desktopId: app.desktop_id.trim() || null,
+            appName: app.name.trim() || null,
+          })
         },
       })),
     ]

@@ -56,6 +56,8 @@ export type SettingsPanelProps = {
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
   setDesktopBackgroundJson: (json: string) => void
+  sessionAutoSaveEnabled: Accessor<boolean>
+  setSessionAutoSaveEnabled: (enabled: boolean) => void
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -125,6 +127,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             bumpSnapChrome={props.bumpSnapChrome}
             scheduleExclusionZonesSync={props.scheduleExclusionZonesSync}
             applyAutoLayout={props.applyAutoLayout}
+            sessionAutoSaveEnabled={props.sessionAutoSaveEnabled}
+            setSessionAutoSaveEnabled={props.setSessionAutoSaveEnabled}
           />
         </Show>
         <Show when={activePage() === 'keyboard'}>

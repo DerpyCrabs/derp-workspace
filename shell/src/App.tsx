@@ -42,6 +42,7 @@ import {
 import { SettingsPanel } from './SettingsPanel'
 import { defaultAudioDevice, useShellAudioState } from './settings/useShellAudioState'
 import {
+  backedShellWindowKind,
   buildBackedWindowOpenPayload,
   buildFileBrowserWindowOpenPayload,
   buildShellTestWindowOpenPayload,
@@ -91,7 +92,7 @@ import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloati
 import { createFloatingLayerStore } from './floatingLayers'
 import { hideShellFloatingWire, shellFloatingLayersWire } from './shellFloatingWire'
 import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
-import { getMonitorLayout } from './tilingConfig'
+import { getMonitorLayout, loadTilingConfig, saveTilingConfig } from './tilingConfig'
 import {
   fetchPortalScreencastRequestState,
   postShellJson,
@@ -109,6 +110,30 @@ import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
 import type { TaskbarSniItem } from './Taskbar'
 import { FileBrowserWindow } from './FileBrowserWindow'
 import { primeFileBrowserWindowPath } from './fileBrowserState'
+import { matchNativeSessionWindow } from './nativeSessionMatch'
+import {
+  loadSessionSnapshot,
+  nativeWindowRef,
+  saveSessionSnapshot,
+  sanitizeSessionSnapshot,
+  shellWindowRef,
+  type NativeLaunchMetadata,
+  type SavedMonitorTileState,
+  type SavedNativeWindow,
+  type SavedRect,
+  type SavedShellWindow,
+  type SessionSnapshot,
+  type SessionWindowRef,
+} from './sessionSnapshot'
+import {
+  loadSessionPersistenceSettings,
+  setSessionAutoSaveEnabled as persistSessionAutoSaveEnabled,
+} from './sessionPersistenceSettings'
+import {
+  captureShellWindowState,
+  primeShellWindowState,
+  subscribeShellWindowState,
+} from './shellWindowState'
 import { ShellTestWindowContent } from './ShellTestWindowContent'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import type {
@@ -504,6 +529,22 @@ type TabDragState = {
 function workspaceGroupWindowIds(state: WorkspaceState, windowId: number): number[] {
   const groupId = groupIdForWindow(state, windowId)
   return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
+}
+
+function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
+  return (
+    (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
+    backedShellWindowKind(window.window_id, window.app_id) !== null
+  )
+}
+
+function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>): SavedRect {
+  return {
+    x: window.x,
+    y: window.y,
+    width: Math.max(1, window.width),
+    height: Math.max(1, window.height),
+  }
 }
 
 function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
@@ -947,8 +988,17 @@ function App() {
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
+  const [shellWindowStateRev, setShellWindowStateRev] = createSignal(0)
+  const [sessionAutoSaveEnabled, setSessionAutoSaveEnabled] = createSignal(loadSessionPersistenceSettings().autoSave)
+  const [savedSessionAvailable, setSavedSessionAvailable] = createSignal(false)
+  const [sessionPersistenceReady, setSessionPersistenceReady] = createSignal(false)
+  const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
+  const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
+  const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
+  const nativeLaunchMetadataByRef = new Map<SessionWindowRef, NativeLaunchMetadata>()
+  const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
   const pendingGroupCloseActivations = new Map<
     number,
     { groupId: string; nextVisibleId: number; closingWindow: DerpWindow }
@@ -965,6 +1015,285 @@ function App() {
   let compositorFollowupRelayoutAll = false
   let compositorFollowupResetScroll = false
   const compositorFollowupRelayoutMonitors = new Set<string>()
+  let sessionPersistTimer: ReturnType<typeof setTimeout> | undefined
+  let sessionRestoreStopTimer: ReturnType<typeof setTimeout> | undefined
+  let sessionPersistPoll: ReturnType<typeof setInterval> | undefined
+  let lastPersistedSessionJson = ''
+  let lastAppliedRestoreSignature = ''
+  function setNativeWindowRef(windowId: number, windowRef: SessionWindowRef) {
+    setNativeWindowRefs((prev) => {
+      if (prev.get(windowId) === windowRef) return prev
+      const next = new Map(prev)
+      next.set(windowId, windowRef)
+      return next
+    })
+  }
+  function nativeWindowRefForId(windowId: number): SessionWindowRef | null {
+    return nativeWindowRefs().get(windowId) ?? null
+  }
+  function assignNativeWindowRef(windowId: number): SessionWindowRef {
+    const existing = nativeWindowRefForId(windowId)
+    if (existing) return existing
+    const nextRef = nativeWindowRef(nextNativeWindowSeq())
+    setNextNativeWindowSeq((seq) => seq + 1)
+    setNativeWindowRef(windowId, nextRef)
+    return nextRef
+  }
+  function liveWindowIdForRef(windowRef: SessionWindowRef): number | null {
+    if (windowRef.startsWith('shell:')) {
+      const windowId = Number(windowRef.slice('shell:'.length))
+      return allWindowsMap().has(windowId) ? windowId : null
+    }
+    for (const [windowId, ref] of nativeWindowRefs()) {
+      if (ref === windowRef && allWindowsMap().has(windowId)) return windowId
+    }
+    return null
+  }
+  function savedWindowBoundsToLocalRect(bounds: SavedRect, outputName: string): SavedRect {
+    const screens = taskbarScreens()
+    const target = screens.find((screen) => screen.name === outputName) ?? screens[0] ?? null
+    if (!target) return bounds
+    const reserveTb = reserveTaskbarForMon(target)
+    const work = monitorWorkAreaGlobal(target, reserveTb)
+    const globalRect = rectCanvasLocalToGlobal(
+      bounds.x,
+      bounds.y,
+      bounds.width,
+      bounds.height,
+      layoutCanvasOrigin(),
+    )
+    const fitsOutput =
+      outputName === target.name &&
+      globalRect.x >= target.x &&
+      globalRect.y >= target.y &&
+      globalRect.x + globalRect.w <= target.x + target.width &&
+      globalRect.y + globalRect.h <= target.y + target.height
+    if (fitsOutput) return bounds
+    const width = Math.max(1, Math.min(bounds.width, work.w))
+    const height = Math.max(1, Math.min(bounds.height, work.h))
+    const x = work.x + Math.max(0, Math.floor((work.w - width) / 2))
+    const y = work.y + Math.max(0, Math.floor((work.h - height) / 2))
+    const local = rectGlobalToCanvasLocal(x, y, width, height, layoutCanvasOrigin())
+    return { x: local.x, y: local.y, width: local.w, height: local.h }
+  }
+  function restoreBackedShellWindow(record: SavedShellWindow) {
+    const current = allWindowsMap().get(record.windowId)
+    if (current) {
+      if (record.state !== null) primeShellWindowState(record.windowId, record.state)
+      return
+    }
+    const kind = backedShellWindowKind(record.windowId, record.appId)
+    if (!kind) return
+    if (record.state !== null) primeShellWindowState(record.windowId, record.state)
+    const bounds = savedWindowBoundsToLocalRect(record.bounds, record.outputName)
+    shellWireSend(
+      'backed_window_open',
+      JSON.stringify({
+        window_id: record.windowId,
+        title: record.title,
+        app_id: record.appId,
+        output_name: record.outputName,
+        x: bounds.x,
+        y: bounds.y,
+        w: bounds.width,
+        h: bounds.height,
+      }),
+    )
+  }
+  function assignPendingNativeLaunch(windowId: number): SessionWindowRef | null {
+    const nextLaunch = pendingNativeLaunches.shift() ?? null
+    if (!nextLaunch) return null
+    nativeLaunchMetadataByRef.set(nextLaunch.windowRef, nextLaunch.launch)
+    setNativeWindowRef(windowId, nextLaunch.windowRef)
+    return nextLaunch.windowRef
+  }
+  function tryAssignRestoredNativeWindow(windowId: number) {
+    const window = allWindowsMap().get(windowId)
+    if (!window || windowIsShellHosted(window)) return
+    if (nativeWindowRefForId(windowId)) return
+    const assignedRefs = new Set(Array.from(nativeWindowRefs().values()))
+    const snapshot = sessionRestoreSnapshot()
+    if (snapshot) {
+      const match = matchNativeSessionWindow(
+        {
+          title: window.title,
+          appId: window.app_id,
+          outputName: window.output_name,
+          maximized: window.maximized,
+          fullscreen: window.fullscreen,
+        },
+        snapshot.nativeWindows,
+        assignedRefs,
+      )
+      if (match) {
+        if (match.launch) nativeLaunchMetadataByRef.set(match.windowRef, match.launch)
+        setNativeWindowRef(windowId, match.windowRef)
+        return
+      }
+    }
+    if (assignPendingNativeLaunch(windowId)) return
+    assignNativeWindowRef(windowId)
+  }
+  function restoreWindowModes(snapshot: SessionSnapshot) {
+    const windowsById = allWindowsMap()
+    for (const record of snapshot.shellWindows) {
+      const live = windowsById.get(record.windowId)
+      if (!live) continue
+      if (record.minimized && !live.minimized) shellWireSend('minimize', live.window_id)
+      if (!record.minimized && record.maximized !== live.maximized) {
+        shellWireSend('set_maximized', live.window_id, record.maximized ? 1 : 0)
+      }
+      if (!record.minimized && record.fullscreen !== live.fullscreen) {
+        shellWireSend('set_fullscreen', live.window_id, record.fullscreen ? 1 : 0)
+      }
+    }
+    for (const record of snapshot.nativeWindows) {
+      const liveWindowId = liveWindowIdForRef(record.windowRef)
+      if (liveWindowId === null) continue
+      const live = windowsById.get(liveWindowId)
+      if (!live) continue
+      if (record.minimized && !live.minimized) shellWireSend('minimize', liveWindowId)
+      if (!record.minimized && record.maximized !== live.maximized) {
+        shellWireSend('set_maximized', liveWindowId, record.maximized ? 1 : 0)
+      }
+      if (!record.minimized && record.fullscreen !== live.fullscreen) {
+        shellWireSend('set_fullscreen', liveWindowId, record.fullscreen ? 1 : 0)
+      }
+    }
+  }
+  function applyRestoredWorkspace(snapshot: SessionSnapshot) {
+    const groups = snapshot.workspace.groups
+      .map((group) => {
+        const windowIds = group.windowRefs
+          .map((windowRef) => liveWindowIdForRef(windowRef))
+          .filter((windowId): windowId is number => windowId !== null)
+        if (windowIds.length === 0) return null
+        const activeWindowId =
+          (group.activeWindowRef ? liveWindowIdForRef(group.activeWindowRef) : null) ?? windowIds[0]
+        return {
+          id: group.id,
+          windowIds,
+          activeWindowId,
+        }
+      })
+      .filter((group): group is { id: string; windowIds: number[]; activeWindowId: number } => group !== null)
+    const pinnedWindowIds = snapshot.workspace.pinnedWindowRefs
+      .map((windowRef) => liveWindowIdForRef(windowRef))
+      .filter((windowId): windowId is number => windowId !== null)
+    const next: WorkspaceState = {
+      groups: groups.map((group) => ({ id: group.id, windowIds: group.windowIds })),
+      activeTabByGroupId: Object.fromEntries(groups.map((group) => [group.id, group.activeWindowId])),
+      pinnedWindowIds,
+      nextGroupSeq: snapshot.workspace.nextGroupSeq,
+    }
+    const reconciled = reconcileWorkspaceState(next, windowsListIds())
+    setWorkspaceState((prev) => (workspaceStatesEqual(prev, reconciled) ? prev : reconciled))
+  }
+  function applyRestoredTiles(snapshot: SessionSnapshot) {
+    const screens = taskbarScreens()
+    const co = layoutCanvasOrigin()
+    if (screens.length === 0 || !co) return
+    perMonitorTiles.clearAll()
+    for (const entry of snapshot.preTileGeometry) {
+      const windowId = liveWindowIdForRef(entry.windowRef)
+      if (windowId === null) continue
+      perMonitorTiles.preTileGeometry.set(windowId, {
+        x: entry.bounds.x,
+        y: entry.bounds.y,
+        w: entry.bounds.width,
+        h: entry.bounds.height,
+      })
+    }
+    for (const monitorState of snapshot.monitorTiles) {
+      const targetMonitor =
+        screens.find((screen) => screen.name === monitorState.outputName) ?? screens[0] ?? null
+      if (!targetMonitor) continue
+      const resolvedEntries = monitorState.entries
+        .map((entry) => {
+          const windowId = liveWindowIdForRef(entry.windowRef)
+          if (windowId === null) return null
+          return { windowId, zone: entry.zone, bounds: entry.bounds }
+        })
+        .filter((entry): entry is { windowId: number; zone: SnapZone; bounds: SavedRect } => entry !== null)
+      if (resolvedEntries.length === 0) continue
+      const { layout, params } = getMonitorLayout(targetMonitor.name)
+      let boundsByWindowId = new Map<number, SavedRect>()
+      if (layout.type === 'manual-snap') {
+        boundsByWindowId = new Map(resolvedEntries.map((entry) => [entry.windowId, entry.bounds]))
+      } else {
+        const reserveTb = reserveTaskbarForMon(targetMonitor)
+        const work = monitorWorkAreaGlobal(targetMonitor, reserveTb)
+        const rects = layout.computeLayout(
+          resolvedEntries.map((entry) => entry.windowId),
+          { x: work.x, y: work.y, width: work.w, height: work.h },
+          params,
+        )
+        boundsByWindowId = new Map(
+          Array.from(rects.entries()).map(([windowId, rect]) => [
+            windowId,
+            { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          ]),
+        )
+      }
+      perMonitorTiles.replaceMonitorEntries(
+        targetMonitor.name,
+        resolvedEntries.map((entry) => ({
+          windowId: entry.windowId,
+          zone: entry.zone,
+          bounds: boundsByWindowId.get(entry.windowId) ?? entry.bounds,
+        })),
+      )
+      for (const entry of resolvedEntries) {
+        const bounds = boundsByWindowId.get(entry.windowId) ?? entry.bounds
+        const local = rectGlobalToCanvasLocal(
+          bounds.x,
+          bounds.y,
+          bounds.width,
+          bounds.height,
+          co,
+        )
+        shellWireSend(
+          'set_geometry',
+          entry.windowId,
+          local.x,
+          local.y,
+          local.w,
+          local.h,
+          SHELL_LAYOUT_FLOATING,
+        )
+      }
+    }
+    bumpSnapChrome()
+    scheduleExclusionZonesSync()
+  }
+  function sessionSnapshotHasData(snapshot: SessionSnapshot): boolean {
+    return (
+      snapshot.shellWindows.length > 0 ||
+      snapshot.nativeWindows.length > 0 ||
+      snapshot.workspace.groups.length > 0 ||
+      snapshot.monitorTiles.length > 0 ||
+      snapshot.preTileGeometry.length > 0
+    )
+  }
+  async function persistLiveSessionSnapshotSoon() {
+    let snapshot: SessionSnapshot
+    let json: string
+    try {
+      snapshot = sanitizeSessionSnapshot(buildSessionSnapshot())
+      json = JSON.stringify(snapshot)
+    } catch (error) {
+      console.warn('[derp-shell-session] build failed', error)
+      return
+    }
+    if (json === lastPersistedSessionJson) return
+    try {
+      await saveSessionSnapshot(snapshot)
+      lastPersistedSessionJson = json
+      setSavedSessionAvailable(sessionSnapshotHasData(snapshot))
+    } catch (error) {
+      console.warn('[derp-shell-session] persist failed', error)
+    }
+  }
   function closeAllAtlasSelects(): boolean {
     return floatingLayers.closeByKind('select')
   }
@@ -1004,6 +1333,38 @@ function App() {
     } catch (error) {
       reportShellActionIssue(`Power action failed: ${describeError(error)}`)
       throw error
+    }
+  }
+
+  function updateSessionAutoSavePreference(enabled: boolean) {
+    persistSessionAutoSaveEnabled(enabled)
+    setSessionAutoSaveEnabled(enabled)
+  }
+
+  async function saveCurrentSessionSnapshot() {
+    try {
+      const snapshot = sanitizeSessionSnapshot(buildSessionSnapshot())
+      await saveSessionSnapshot(snapshot)
+      lastPersistedSessionJson = JSON.stringify(snapshot)
+      setSavedSessionAvailable(sessionSnapshotHasData(snapshot))
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Save workspace failed: ${describeError(error)}`)
+    }
+  }
+
+  async function restoreSavedSessionSnapshot() {
+    try {
+      const snapshot = await loadSessionSnapshot()
+      if (!sessionSnapshotHasData(snapshot)) {
+        reportShellActionIssue('Restore workspace failed: no saved workspace snapshot is available.')
+        return
+      }
+      setSavedSessionAvailable(true)
+      await startSessionRestore(snapshot)
+      clearShellActionIssue()
+    } catch (error) {
+      reportShellActionIssue(`Restore workspace failed: ${describeError(error)}`)
     }
   }
 
@@ -1147,6 +1508,11 @@ function App() {
     closeAllAtlasSelects,
     openFileBrowser: (path) => openFileBrowserWindow(path),
     spawnInCompositor,
+    saveSessionSnapshot: () => void saveCurrentSessionSnapshot(),
+    restoreSessionSnapshot: () => void restoreSavedSessionSnapshot(),
+    canSaveSessionSnapshot: () => shellHttpBase() !== null && !sessionRestoreSnapshot(),
+    canRestoreSessionSnapshot: () =>
+      shellHttpBase() !== null && savedSessionAvailable() && !sessionRestoreSnapshot(),
     postSessionPower,
     canSessionControl,
     exitSession: () => {
@@ -1339,6 +1705,72 @@ function App() {
     persistWorkspaceState(workspaceState())
   })
 
+  createEffect(() => {
+    const list = windowsList()
+    const liveIds = new Set(list.map((window) => window.window_id))
+    for (const window of list) {
+      if (windowIsShellHosted(window)) continue
+      if (!nativeWindowRefForId(window.window_id)) {
+        tryAssignRestoredNativeWindow(window.window_id)
+      }
+    }
+    setNativeWindowRefs((prev) => {
+      let next: Map<number, SessionWindowRef> | null = null
+      for (const [windowId] of prev) {
+        if (liveIds.has(windowId)) continue
+        if (!next) next = new Map(prev)
+        next.delete(windowId)
+      }
+      return next ?? prev
+    })
+  })
+
+  createEffect(() => {
+    const snapshot = sessionRestoreSnapshot()
+    windows()
+    nativeWindowRefs()
+    taskbarScreens()
+    layoutCanvasOrigin()
+    tilingCfgRev()
+    if (!snapshot) return
+    const signature = JSON.stringify({
+      shellWindowIds: snapshot.shellWindows.map((window) => window.windowId).filter((windowId) => allWindowsMap().has(windowId)),
+      nativeWindowRefs: snapshot.nativeWindows.map((window) => ({
+        windowRef: window.windowRef,
+        liveWindowId: liveWindowIdForRef(window.windowRef),
+      })),
+      outputs: taskbarScreens().map((screen) => screen.name),
+      tilingCfgRev: tilingCfgRev(),
+    })
+    if (signature === lastAppliedRestoreSignature) return
+    lastAppliedRestoreSignature = signature
+    restoreWindowModes(snapshot)
+    applyRestoredWorkspace(snapshot)
+    applyRestoredTiles(snapshot)
+  })
+
+  createEffect(() => {
+    sessionAutoSaveEnabled()
+    sessionPersistenceReady()
+    sessionRestoreSnapshot()
+    windows()
+    workspaceState()
+    nativeWindowRefs()
+    tilingCfgRev()
+    shellWindowStateRev()
+    if (!sessionAutoSaveEnabled() || !sessionPersistenceReady() || sessionRestoreSnapshot()) {
+      if (sessionPersistTimer !== undefined) {
+        clearTimeout(sessionPersistTimer)
+        sessionPersistTimer = undefined
+      }
+      return
+    }
+    if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
+    sessionPersistTimer = setTimeout(() => {
+      void persistLiveSessionSnapshotSoon()
+    }, 150)
+  })
+
   const workspaceGroups = createMemo<WorkspaceGroupModel[]>(() => {
     const state = workspaceState()
     const windowsById = allWindowsMap()
@@ -1412,6 +1844,53 @@ function App() {
     const logicalCanvas = layoutUnionBbox()
     const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
     const main = mainRef ?? null
+    const buildFileBrowserSnapshot = (root: ParentNode) => {
+      const fileBrowserActivePathEl = root.querySelector('[data-file-browser-active-path]') as HTMLElement | null
+      const fileBrowserViewerTitleEl = root.querySelector(
+        '[data-file-browser-viewer-title], [data-file-browser-editor-title]',
+      ) as HTMLElement | null
+      const fileBrowserRows = Array.from(root.querySelectorAll('[data-file-browser-row]')).map((el) => {
+        const rowEl = el as HTMLElement
+        return {
+          path: rowEl.getAttribute('data-file-browser-path') ?? '',
+          name: rowEl.getAttribute('data-file-browser-name') ?? rowEl.textContent?.trim() ?? '',
+          kind: rowEl.getAttribute('data-file-browser-kind'),
+          selected:
+            rowEl.getAttribute('data-file-browser-selected') === 'true' ||
+            rowEl.getAttribute('aria-selected') === 'true',
+          rect: e2eSnapshotRect(rowEl, main, canvas, origin),
+        }
+      })
+      const fileBrowserBreadcrumbs = Array.from(root.querySelectorAll('[data-file-browser-breadcrumb]')).map((el) => {
+        const crumbEl = el as HTMLElement
+        return {
+          path: crumbEl.getAttribute('data-file-browser-path') ?? '',
+          label: crumbEl.getAttribute('data-file-browser-label') ?? crumbEl.textContent?.trim() ?? '',
+          rect: e2eSnapshotRect(crumbEl, main, canvas, origin),
+        }
+      })
+      const fileBrowserPrimaryActions = Array.from(root.querySelectorAll('[data-file-browser-primary-action]')).map((el) => {
+        const actionEl = el as HTMLElement
+        return {
+          id: actionEl.getAttribute('data-file-browser-primary-action') ?? '',
+          label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
+          rect: e2eSnapshotRect(actionEl, main, canvas, origin),
+        }
+      })
+      return {
+        active_path:
+          fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
+          fileBrowserActivePathEl?.textContent?.trim() ??
+          null,
+        rows: fileBrowserRows,
+        breadcrumbs: fileBrowserBreadcrumbs,
+        viewer_editor_title:
+          fileBrowserViewerTitleEl?.getAttribute('data-file-browser-document-title') ??
+          fileBrowserViewerTitleEl?.textContent?.trim() ??
+          null,
+        primary_actions: fileBrowserPrimaryActions,
+      }
+    }
     const projectFloatingElementRect = (selector: string) => {
       const el = document.querySelector(selector)
       if (!(el instanceof HTMLElement)) return null
@@ -1518,40 +1997,27 @@ function App() {
             }
           })()
         : null
-    const fileBrowserRows = Array.from(document.querySelectorAll('[data-file-browser-row]')).map((el) => {
-      const rowEl = el as HTMLElement
-      return {
-        path: rowEl.getAttribute('data-file-browser-path') ?? '',
-        name: rowEl.getAttribute('data-file-browser-name') ?? rowEl.textContent?.trim() ?? '',
-        kind: rowEl.getAttribute('data-file-browser-kind'),
-        selected:
-          rowEl.getAttribute('data-file-browser-selected') === 'true' ||
-          rowEl.getAttribute('aria-selected') === 'true',
-        rect: e2eSnapshotRect(rowEl, main, canvas, origin),
-      }
-    })
-    const fileBrowserBreadcrumbs = Array.from(document.querySelectorAll('[data-file-browser-breadcrumb]')).map((el) => {
-      const crumbEl = el as HTMLElement
-      return {
-        path: crumbEl.getAttribute('data-file-browser-path') ?? '',
-        label: crumbEl.getAttribute('data-file-browser-label') ?? crumbEl.textContent?.trim() ?? '',
-        rect: e2eSnapshotRect(crumbEl, main, canvas, origin),
-      }
-    })
-    const fileBrowserActivePathEl = document.querySelector('[data-file-browser-active-path]') as HTMLElement | null
-    const fileBrowserViewerTitleEl = document.querySelector(
-      '[data-file-browser-viewer-title], [data-file-browser-editor-title]',
-    ) as HTMLElement | null
-    const fileBrowserPrimaryActions = Array.from(document.querySelectorAll('[data-file-browser-primary-action]')).map(
-      (el) => {
-        const actionEl = el as HTMLElement
+    const fileBrowserWindows = Array.from(document.querySelectorAll('[data-file-browser-active-path]'))
+      .map((el) => {
+        const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
+        if (!frameEl) return null
+        const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
+        if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
         return {
-          id: actionEl.getAttribute('data-file-browser-primary-action') ?? '',
-          label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
-          rect: e2eSnapshotRect(actionEl, main, canvas, origin),
+          window_id: rawWindowId,
+          ...buildFileBrowserSnapshot(frameEl),
         }
-      },
-    )
+      })
+      .filter((entry): entry is { window_id: number } & ReturnType<typeof buildFileBrowserSnapshot> => entry !== null)
+    const globalFileBrowserWindow =
+      fileBrowserWindows.find((entry) => entry.window_id === focusedWindowId()) ?? fileBrowserWindows[0] ?? null
+    let sessionSnapshot: SessionSnapshot | null = null
+    let sessionSnapshotError: string | null = null
+    try {
+      sessionSnapshot = buildSessionSnapshot()
+    } catch (error) {
+      sessionSnapshotError = error instanceof Error ? error.stack || error.message : String(error)
+    }
     return {
       captured_at_ms: Date.now(),
       viewport: viewportCss(),
@@ -1572,20 +2038,12 @@ function App() {
       snap_preview_visible: activeSnapPreviewCanvas !== null,
       snap_preview_rect: snapPreviewRect,
       snap_hover_span: assistOverlay()?.hoverSpan ?? null,
-      file_browser: {
-        active_path:
-          fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
-          fileBrowserActivePathEl?.textContent?.trim() ??
-          null,
-        rows: fileBrowserRows,
-        breadcrumbs: fileBrowserBreadcrumbs,
-        viewer_editor_title:
-          fileBrowserViewerTitleEl?.getAttribute('data-file-browser-document-title') ??
-          fileBrowserViewerTitleEl?.textContent?.trim() ??
-          null,
-        primary_actions: fileBrowserPrimaryActions,
-      },
+      file_browser: globalFileBrowserWindow,
+      file_browser_windows: fileBrowserWindows,
       programs_menu_query: shellContextMenus.programsMenuProps.query(),
+      session_snapshot: sessionSnapshot,
+      session_snapshot_error: sessionSnapshotError,
+      session_restore_active: sessionRestoreSnapshot() !== null,
       programs_menu_list_scroll: (() => {
         if (!shellContextMenus.programsMenuOpen()) return null
         const el = document.querySelector('[data-programs-menu-scroll]')
@@ -1653,6 +2111,20 @@ function App() {
         settings_tab_displays: e2eQueryRect('[data-settings-tab="displays"]', main, canvas, origin),
         settings_tab_tiling: e2eQueryRect('[data-settings-tab="tiling"]', main, canvas, origin),
         settings_tab_keyboard: e2eQueryRect('[data-settings-tab="keyboard"]', main, canvas, origin),
+        settings_session_autosave_enable: e2eQueryRect(
+          '[data-settings-session-autosave-enable]',
+          main,
+          canvas,
+          origin,
+        ),
+        settings_session_autosave_disable: e2eQueryRect(
+          '[data-settings-session-autosave-disable]',
+          main,
+          canvas,
+          origin,
+        ),
+        power_menu_save_session: e2eQueryRect('[data-power-menu-action="save-session"]', main, canvas, origin),
+        power_menu_restore_session: e2eQueryRect('[data-power-menu-action="restore-session"]', main, canvas, origin),
         debug_reload_button: e2eQueryRect('[data-shell-debug-reload]', main, canvas, origin),
         debug_copy_snapshot_button: e2eQueryRect(
           '[data-shell-debug-copy-snapshot]',
@@ -2048,6 +2520,8 @@ function App() {
           monitorRefreshLabel={monitorRefreshLabel}
           keyboardLayoutLabel={keyboardLayoutLabel}
           setDesktopBackgroundJson={(json) => shellWireSend('set_desktop_background', json)}
+          sessionAutoSaveEnabled={sessionAutoSaveEnabled}
+          setSessionAutoSaveEnabled={updateSessionAutoSavePreference}
         />
       )
     }
@@ -3207,6 +3681,164 @@ function App() {
     return true
   }
 
+  function buildSessionSnapshot(): SessionSnapshot {
+    const shellWindows: SavedShellWindow[] = []
+    const nativeWindows: SavedNativeWindow[] = []
+    for (const window of [...windowsList()].sort((a, b) => a.stack_z - b.stack_z || a.window_id - b.window_id)) {
+      if (windowIsShellHosted(window)) {
+        const kind = backedShellWindowKind(window.window_id, window.app_id)
+        if (!kind) continue
+        shellWindows.push({
+          windowId: window.window_id,
+          windowRef: shellWindowRef(window.window_id),
+          kind,
+          title: window.title,
+          appId: window.app_id,
+          outputName: window.output_name,
+          bounds: rectFromWindow(window),
+          minimized: window.minimized,
+          maximized: window.maximized,
+          fullscreen: window.fullscreen,
+          stackZ: window.stack_z,
+          state: captureShellWindowState(window.window_id) ?? null,
+        })
+        continue
+      }
+      const windowRef = nativeWindowRefForId(window.window_id)
+      if (!windowRef) continue
+      nativeWindows.push({
+        windowRef,
+        title: window.title,
+        appId: window.app_id,
+        outputName: window.output_name,
+        bounds: rectFromWindow(window),
+        minimized: window.minimized,
+        maximized: window.maximized,
+        fullscreen: window.fullscreen,
+        launch: nativeLaunchMetadataByRef.get(windowRef) ?? null,
+      })
+    }
+    return {
+      version: 1,
+      nextNativeWindowSeq: nextNativeWindowSeq(),
+      workspace: {
+        groups: workspaceState().groups
+          .map((group) => {
+            const windowRefs = group.windowIds
+              .map((windowId) => {
+                const window = allWindowsMap().get(windowId)
+                return window
+                  ? windowIsShellHosted(window)
+                    ? shellWindowRef(window.window_id)
+                    : nativeWindowRefForId(window.window_id)
+                  : null
+              })
+              .filter((windowRef): windowRef is SessionWindowRef => windowRef !== null)
+            if (windowRefs.length === 0) return null
+            const activeWindowRef = windowRefs.find(
+              (windowRef) => liveWindowIdForRef(windowRef) === workspaceState().activeTabByGroupId[group.id],
+            )
+            return {
+              id: group.id,
+              windowRefs,
+              activeWindowRef: activeWindowRef ?? windowRefs[0],
+            }
+          })
+          .filter(
+            (group): group is { id: string; windowRefs: SessionWindowRef[]; activeWindowRef: SessionWindowRef } =>
+              group !== null,
+          ),
+        pinnedWindowRefs: workspaceState().pinnedWindowIds
+          .map((windowId) => {
+            const window = allWindowsMap().get(windowId)
+            return window
+              ? windowIsShellHosted(window)
+                ? shellWindowRef(window.window_id)
+                : nativeWindowRefForId(window.window_id)
+              : null
+          })
+          .filter((windowRef): windowRef is SessionWindowRef => windowRef !== null),
+        nextGroupSeq: workspaceState().nextGroupSeq,
+      },
+      tilingConfig: loadTilingConfig(),
+      monitorTiles: perMonitorTiles.monitorEntries().map((monitor) => ({
+        outputName: monitor.outputName,
+        entries: monitor.entries
+          .map((entry) => {
+            const window = allWindowsMap().get(entry.windowId)
+            if (!window) return null
+            const windowRef = windowIsShellHosted(window)
+              ? shellWindowRef(window.window_id)
+              : nativeWindowRefForId(window.window_id)
+            if (!windowRef) return null
+            return {
+              windowRef,
+              zone: entry.zone,
+              bounds: {
+                x: entry.bounds.x,
+                y: entry.bounds.y,
+                width: entry.bounds.width,
+                height: entry.bounds.height,
+              },
+            }
+          })
+          .filter((entry): entry is SavedMonitorTileState['entries'][number] => entry !== null),
+      })),
+      preTileGeometry: Array.from(perMonitorTiles.preTileGeometry.entries())
+        .map(([windowId, bounds]) => {
+          const window = allWindowsMap().get(windowId)
+          if (!window) return null
+          const windowRef = windowIsShellHosted(window)
+            ? shellWindowRef(window.window_id)
+            : nativeWindowRefForId(window.window_id)
+          if (!windowRef) return null
+          return {
+            windowRef,
+            bounds: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h },
+          }
+        })
+        .filter((entry): entry is SessionSnapshot['preTileGeometry'][number] => entry !== null),
+      shellWindows,
+      nativeWindows,
+    }
+  }
+
+  function stopSessionRestore() {
+    if (sessionRestoreStopTimer !== undefined) {
+      clearTimeout(sessionRestoreStopTimer)
+      sessionRestoreStopTimer = undefined
+    }
+    lastAppliedRestoreSignature = ''
+    setSessionRestoreSnapshot(null)
+    setSessionPersistenceReady(true)
+  }
+
+  async function startSessionRestore(snapshot: SessionSnapshot) {
+    if (sessionRestoreStopTimer !== undefined) {
+      clearTimeout(sessionRestoreStopTimer)
+    }
+    setSessionPersistenceReady(false)
+    setSessionRestoreSnapshot(snapshot)
+    lastPersistedSessionJson = JSON.stringify(snapshot)
+    lastAppliedRestoreSignature = ''
+    setNextNativeWindowSeq(Math.max(1, snapshot.nextNativeWindowSeq))
+    saveTilingConfig(snapshot.tilingConfig)
+    setTilingCfgRev((n) => n + 1)
+    for (const nativeWindow of snapshot.nativeWindows) {
+      if (nativeWindow.launch) nativeLaunchMetadataByRef.set(nativeWindow.windowRef, nativeWindow.launch)
+    }
+    for (const shellWindow of [...snapshot.shellWindows].sort((a, b) => a.stackZ - b.stackZ)) {
+      restoreBackedShellWindow(shellWindow)
+    }
+    for (const nativeWindow of snapshot.nativeWindows) {
+      if (!nativeWindow.launch?.command) continue
+      void spawnInCompositor(nativeWindow.launch.command, nativeWindow.launch, true, nativeWindow.windowRef)
+    }
+    sessionRestoreStopTimer = setTimeout(() => {
+      stopSessionRestore()
+    }, 15000)
+  }
+
   function toggleShellMaximizeForWindow(wid: number) {
     const w = allWindowsMap().get(wid)
     if (!w) return
@@ -3831,17 +4463,47 @@ function App() {
     shellWireSend('resize_shell_grab_end')
   }
 
-  async function spawnInCompositor(cmd: string) {
+  async function spawnInCompositor(
+    cmd: string,
+    launch?: NativeLaunchMetadata | null,
+    sessionRestore = false,
+    forcedWindowRef?: SessionWindowRef | null,
+  ) {
     const trimmed = cmd.trim()
     if (!trimmed) return
+    const effectiveLaunch =
+      launch && launch.command.trim().length > 0
+        ? {
+            command: launch.command.trim(),
+            desktopId: launch.desktopId?.trim() || null,
+            appName: launch.appName?.trim() || null,
+          }
+        : {
+            command: trimmed,
+            desktopId: null,
+            appName: null,
+          }
+    const pendingWindowRef = forcedWindowRef ?? nativeWindowRef(nextNativeWindowSeq())
+    if (!forcedWindowRef) {
+      setNextNativeWindowSeq((seq) => seq + 1)
+    }
+    pendingNativeLaunches.push({ windowRef: pendingWindowRef, launch: effectiveLaunch })
+    nativeLaunchMetadataByRef.set(pendingWindowRef, effectiveLaunch)
     try {
       if (shellWireSend('spawn', trimmed)) {
         clearShellActionIssue()
         return
       }
-      await spawnViaShellHttp(trimmed, window.__DERP_SPAWN_URL)
+      await spawnViaShellHttp(trimmed, window.__DERP_SPAWN_URL, {
+        desktop_id: effectiveLaunch.desktopId ?? undefined,
+        app_name: effectiveLaunch.appName ?? undefined,
+        session_restore: sessionRestore,
+      })
       clearShellActionIssue()
     } catch (error) {
+      const index = pendingNativeLaunches.findIndex((entry) => entry.windowRef === pendingWindowRef)
+      if (index >= 0) pendingNativeLaunches.splice(index, 1)
+      nativeLaunchMetadataByRef.delete(pendingWindowRef)
       reportShellActionIssue(`Launch failed: ${describeError(error)}`)
     }
   }
@@ -3849,14 +4511,43 @@ function App() {
   onMount(() => {
     const stopThemeDomSync = startThemeDomSync()
     onCleanup(stopThemeDomSync)
+    const stopShellWindowStateSync = subscribeShellWindowState(() => {
+      setShellWindowStateRev((n) => n + 1)
+    })
+    onCleanup(stopShellWindowStateSync)
     void refreshThemeSettingsFromRemote()
     void shellContextMenus.warmProgramsMenuItems()
+    void loadSessionSnapshot()
+      .then((snapshot) => {
+        const hasSnapshotData = sessionSnapshotHasData(snapshot)
+        setSavedSessionAvailable(hasSnapshotData)
+        if (!hasSnapshotData) {
+          lastPersistedSessionJson = JSON.stringify(snapshot)
+          setNextNativeWindowSeq(snapshot.nextNativeWindowSeq)
+          setSessionPersistenceReady(true)
+          return
+        }
+        void startSessionRestore(snapshot)
+      })
+      .catch((error) => {
+        console.warn('[derp-shell-session] load failed', error)
+        setSessionPersistenceReady(true)
+      })
     console.log(
       '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
     )
     let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
     let compositorSyncAttempts = 0
     let nativeWireHadBeenReady = false
+    onCleanup(() => {
+      if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
+      if (sessionRestoreStopTimer !== undefined) clearTimeout(sessionRestoreStopTimer)
+      if (sessionPersistPoll !== undefined) clearInterval(sessionPersistPoll)
+    })
+    sessionPersistPoll = setInterval(() => {
+      if (!sessionAutoSaveEnabled() || !sessionPersistenceReady() || sessionRestoreSnapshot()) return
+      void persistLiveSessionSnapshotSoon()
+    }, 1000)
     const tryRequestCompositorSync = () => {
       if (shellWireSend('request_compositor_sync')) {
         if (typeof window.__derpShellWireSend === 'function') {

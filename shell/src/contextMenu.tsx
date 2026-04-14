@@ -1,4 +1,5 @@
 export type ShellContextMenuItem = {
+  actionId?: string
   label: string
   action: () => void
   badge?: string

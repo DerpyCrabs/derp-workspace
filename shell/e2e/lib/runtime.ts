@@ -194,6 +194,10 @@ export interface ShellControls {
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
   settings_tab_keyboard?: Rect | null
+  settings_session_autosave_enable?: Rect | null
+  settings_session_autosave_disable?: Rect | null
+  power_menu_save_session?: Rect | null
+  power_menu_restore_session?: Rect | null
   debug_reload_button?: Rect | null
   debug_copy_snapshot_button?: Rect | null
   debug_crosshair_toggle?: Rect | null
@@ -241,6 +245,10 @@ export interface FileBrowserSnapshot {
   primary_actions: FileBrowserSnapshotAction[]
 }
 
+export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
+  window_id: number
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -266,6 +274,10 @@ export interface ShellSnapshot {
   window_stack_order?: number[]
   focused_window_id?: number | null
   file_browser?: FileBrowserSnapshot | null
+  file_browser_windows?: FileBrowserWindowSnapshot[]
+  session_snapshot?: Record<string, unknown> | null
+  session_snapshot_error?: string | null
+  session_restore_active?: boolean
   [key: string]: unknown
 }
 
@@ -304,6 +316,7 @@ export interface E2eState {
   base: string
   knownWindowIds: Set<number>
   spawnedNativeWindowIds: Set<number>
+  nativeLaunchByWindowId: Map<number, string>
   desktopApps: DesktopAppEntry[]
   redSpawn: NativeSpawnResult | null
   greenSpawn: NativeSpawnResult | null
@@ -579,6 +592,7 @@ export function createState(base: string): E2eState {
     base,
     knownWindowIds: new Set(),
     spawnedNativeWindowIds: new Set(),
+    nativeLaunchByWindowId: new Map(),
     desktopApps: [],
     redSpawn: null,
     greenSpawn: null,
@@ -707,6 +721,84 @@ export async function discoverReadyBase(timeoutMs = 30000): Promise<string> {
     timeoutMs,
     250,
   )
+}
+
+export async function restartSession(state: E2eState, timeoutMs = 45000): Promise<string> {
+  const currentBase = state.base
+  try {
+    const compositor = await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
+    const shell = await getJson<ShellSnapshot>(currentBase, '/test/state/shell')
+    const liveLaunchKeys = new Map<string, string>()
+    for (const window of compositor.windows) {
+      const command = state.nativeLaunchByWindowId.get(window.window_id)
+      if (!command) continue
+      liveLaunchKeys.set(
+        JSON.stringify({
+          title: window.title,
+          appId: window.app_id,
+          outputName: window.output_name,
+          x: window.x,
+          y: window.y,
+          width: window.width,
+          height: window.height,
+        }),
+        command,
+      )
+    }
+    const shellSessionSnapshot =
+      shell.session_snapshot && !shell.session_snapshot_error ? structuredClone(shell.session_snapshot) : null
+    const nativeWindows = Array.isArray(shellSessionSnapshot?.nativeWindows) ? shellSessionSnapshot.nativeWindows : null
+    if (nativeWindows) {
+      for (const entry of nativeWindows) {
+        if (!entry || typeof entry !== 'object') continue
+        const row = entry as Record<string, unknown>
+        if (row.launch && typeof row.launch === 'object') continue
+        const bounds = row.bounds && typeof row.bounds === 'object' ? (row.bounds as Record<string, unknown>) : {}
+        const command = liveLaunchKeys.get(
+          JSON.stringify({
+            title: row.title,
+            appId: row.appId,
+            outputName: row.outputName,
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+          }),
+        )
+        if (!command) continue
+        row.launch = {
+          command,
+          desktopId: null,
+          appName: null,
+        }
+      }
+    }
+    const body =
+      shellSessionSnapshot
+        ? {
+            version: 1,
+            shell: shellSessionSnapshot,
+          }
+        : {}
+    await postJson(currentBase, '/session_reload', body)
+  } catch {}
+  await waitFor(
+    'wait for shell http restart',
+    async () => {
+      try {
+        await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
+        return null
+      } catch {
+        return true
+      }
+    },
+    15000,
+    250,
+  )
+  const nextBase = await discoverReadyBase(timeoutMs)
+  state.base = nextBase
+  state.knownWindowIds = new Set()
+  return nextBase
 }
 
 export async function getJson<T = any>(base: string, requestPath: string): Promise<T> {

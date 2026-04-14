@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onMount } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import {
   listFileBrowserDirectory,
@@ -13,8 +13,17 @@ import {
   createInitialFileBrowserWindowState,
   fileBrowserEntryIsDirectory,
   moveFileBrowserSelection,
+  sanitizeFileBrowserWindowMemento,
+  snapshotFileBrowserWindowMemento,
 } from './fileBrowserState'
 import { shellHttpBase } from './shellHttp'
+import {
+  notifyShellWindowStateChanged,
+  peekShellWindowState,
+  primedShellWindowStateVersion,
+  registerShellWindowStateSource,
+  subscribeShellWindowState,
+} from './shellWindowState'
 
 type FileBrowserWindowProps = {
   windowId: number
@@ -99,12 +108,16 @@ function buildBreadcrumbs(path: string | null, roots: readonly FileBrowserRoot[]
 }
 
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
+  const restoredState = sanitizeFileBrowserWindowMemento(peekShellWindowState(props.windowId))
   const initialPrefs = loadFileBrowserPrefs()
-  const [state, setState] = createStore(createInitialFileBrowserWindowState(initialPrefs.showHidden))
+  const [state, setState] = createStore(
+    createInitialFileBrowserWindowState(restoredState?.showHidden ?? initialPrefs.showHidden),
+  )
   const [busy, setBusy] = createSignal(false)
   let requestSeq = 0
+  let lastAppliedRestoredStateVersion = 0
   let rootRef: HTMLDivElement | undefined
-  const initialPath = consumeFileBrowserWindowPath(props.windowId)
+  const initialPath = consumeFileBrowserWindowPath(props.windowId) ?? restoredState?.activePath ?? null
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
   const selectedEntry = createMemo(
@@ -175,9 +188,45 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     void loadDirectory(state.activePath)
   }
 
+  function applyRestoredState(value: unknown) {
+    const nextState = sanitizeFileBrowserWindowMemento(value)
+    if (!nextState) return
+    setFileBrowserShowHidden(nextState.showHidden)
+    setState('showHidden', nextState.showHidden)
+    setState('selectedPath', nextState.selectedPath)
+    if (nextState.activePath || nextState.showHidden !== state.showHidden) {
+      void loadDirectory(nextState.activePath ?? state.activePath, true)
+    }
+  }
+
+  function applyPrimedRestoredState() {
+    const version = primedShellWindowStateVersion(props.windowId)
+    if (!version || version === lastAppliedRestoredStateVersion) return
+    lastAppliedRestoredStateVersion = version
+    applyRestoredState(peekShellWindowState(props.windowId))
+  }
+
   onMount(() => {
+    applyPrimedRestoredState()
     queueMicrotask(() => rootRef?.focus())
     void loadDirectory(initialPath, true)
+  })
+
+  const unregisterStateSource = registerShellWindowStateSource(props.windowId, () =>
+    snapshotFileBrowserWindowMemento(state),
+  )
+  onCleanup(unregisterStateSource)
+
+  const unsubscribeShellWindowState = subscribeShellWindowState(() => {
+    applyPrimedRestoredState()
+  })
+  onCleanup(unsubscribeShellWindowState)
+
+  createEffect(() => {
+    state.activePath
+    state.selectedPath
+    state.showHidden
+    notifyShellWindowStateChanged()
   })
 
   return (

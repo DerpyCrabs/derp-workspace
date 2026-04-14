@@ -574,6 +574,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/session_state" {
+        let json = crate::session_state::read_session_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/gnome_desktop_background" {
         let json = crate::cef::gnome_background::read_gnome_desktop_background_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -647,7 +653,12 @@ fn handle_one(
         return Ok(());
     }
 
-    if content_length > 8192 {
+    let max_content_length = if req_path == "/session_state" || req_path == "/session_reload" {
+        512 * 1024
+    } else {
+        8192
+    };
+    if content_length > max_content_length {
         return Err("body too large".into());
     }
 
@@ -865,6 +876,14 @@ fn handle_one(
 
     match req_path {
         "/session_quit" => uplink.quit_compositor(),
+        "/session_reload" => {
+            if v.get("shell").is_some() {
+                crate::session_state::write_session_state_json(v.clone())?;
+            }
+            unsafe {
+                libc::raise(libc::SIGUSR2);
+            }
+        }
         "/session_power" => {
             let action = v
                 .get("action")
@@ -894,6 +913,11 @@ fn handle_one(
                 .ok_or_else(|| "missing key".to_string())?
                 .to_string();
             crate::desktop_app_usage::increment_desktop_app_usage(key)?;
+        }
+        "/session_state" => {
+            let json = crate::session_state::write_session_state_json(v)?;
+            write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+            return Ok(());
         }
         "/settings_theme" => {
             let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)

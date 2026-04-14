@@ -192,7 +192,7 @@ async function navigateToFixtureRoot(
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('file browser fixtures prepare deterministically and expose snapshot contract', async ({ base }) => {
+  test('file browser fixtures prepare deterministically and expose snapshot contract', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     for (const fixturePath of [
       fixtures.root_path,
@@ -222,7 +222,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(pdfStats.size > 0, 'expected pdf fixture bytes')
     assert(videoStats.size > 0, 'expected video fixture bytes')
     assert(unsupportedStats.size > 0, 'expected unsupported fixture bytes')
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (!shell.file_browser) {
+      const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
+      shell = opened.shell
+    }
     assert(shell.file_browser && typeof shell.file_browser === 'object', 'missing file_browser snapshot section')
     assert(Array.isArray(shell.file_browser.rows), 'file_browser rows should be an array')
     assert(Array.isArray(shell.file_browser.breadcrumbs), 'file_browser breadcrumbs should be an array')

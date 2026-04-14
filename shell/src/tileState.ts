@@ -315,4 +315,39 @@ export class PerMonitorTileStates {
     this.stateFor(fromOutput).untileWindow(windowId)
     return this.stateFor(toOutput).tileWindow(windowId, zone, workArea, otherOccupiedOnDestination)
   }
+
+  clearAll(): void {
+    this.monitors.clear()
+    this.preTileGeometry.clear()
+  }
+
+  monitorEntries(): { outputName: string; entries: { windowId: number; zone: SnapZone; bounds: Rect }[] }[] {
+    const out: { outputName: string; entries: { windowId: number; zone: SnapZone; bounds: Rect }[] }[] = []
+    for (const [outputName, state] of this.monitors) {
+      const entries: { windowId: number; zone: SnapZone; bounds: Rect }[] = []
+      for (const [windowId, entry] of state.tiledWindows) {
+        entries.push({
+          windowId,
+          zone: entry.zone,
+          bounds: { ...entry.bounds },
+        })
+      }
+      if (entries.length > 0) out.push({ outputName, entries })
+    }
+    return out
+  }
+
+  replaceMonitorEntries(
+    outputName: string,
+    entries: readonly { windowId: number; zone: SnapZone; bounds: Rect }[],
+  ): void {
+    const state = this.stateFor(outputName)
+    state.clearAllTiled()
+    for (const entry of entries) {
+      state.tiledWindows.set(entry.windowId, {
+        zone: entry.zone,
+        bounds: { ...entry.bounds },
+      })
+    }
+  }
 }

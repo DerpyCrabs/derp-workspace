@@ -13,6 +13,12 @@ export type FileBrowserWindowState = {
   showHidden: boolean
 }
 
+export type FileBrowserWindowMemento = {
+  activePath: string | null
+  selectedPath: string | null
+  showHidden: boolean
+}
+
 const initialPathByWindowId = new Map<number, string | null>()
 
 export function createInitialFileBrowserWindowState(showHidden: boolean): FileBrowserWindowState {
@@ -40,6 +46,26 @@ export function consumeFileBrowserWindowPath(windowId: number): string | null {
 
 export function clearPrimedFileBrowserWindowPath(windowId: number): void {
   initialPathByWindowId.delete(windowId)
+}
+
+export function sanitizeFileBrowserWindowMemento(value: unknown): FileBrowserWindowMemento | null {
+  if (!value || typeof value !== 'object') return null
+  const row = value as Record<string, unknown>
+  return {
+    activePath: typeof row.activePath === 'string' ? row.activePath : null,
+    selectedPath: typeof row.selectedPath === 'string' ? row.selectedPath : null,
+    showHidden: row.showHidden === true,
+  }
+}
+
+export function snapshotFileBrowserWindowMemento(
+  state: Pick<FileBrowserWindowState, 'activePath' | 'selectedPath' | 'showHidden'>,
+): FileBrowserWindowMemento {
+  return {
+    activePath: state.activePath,
+    selectedPath: state.selectedPath,
+    showHidden: state.showHidden,
+  }
 }
 
 export function fileBrowserEntryIsDirectory(entry: Pick<FileBrowserEntry, 'kind'>): boolean {

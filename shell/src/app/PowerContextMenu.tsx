@@ -31,6 +31,7 @@ export function PowerContextMenu() {
               role="menuitem"
               title={item.title}
               data-power-menu-idx={idx()}
+              data-power-menu-action={item.actionId}
               onClick={() => {
                 if (item.disabled) return
                 item.action()

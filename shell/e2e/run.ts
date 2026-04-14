@@ -17,7 +17,7 @@ import {
   writeJsonArtifact,
   writeTextArtifact,
 } from './lib/runtime.ts'
-import { groups } from './specs/index.ts'
+import { allGroups, defaultGroups } from './specs/index.ts'
 
 function normalizeSelector(value: string): string {
   return value
@@ -39,15 +39,15 @@ function selectorVariants(groupName: string): Set<string> {
 
 function selectGroups(selectors: string[]) {
   if (selectors.length === 0) {
-    return { selected: groups, unmatched: [] as string[] }
+    return { selected: defaultGroups, unmatched: [] as string[] }
   }
-  const selected = groups.filter((group) => {
+  const selected = allGroups.filter((group) => {
     const variants = selectorVariants(group.name)
     return selectors.some((selector) => variants.has(normalizeSelector(selector)))
   })
   const matchedSelectors = new Set(
     selectors.filter((selector) =>
-      groups.some((group) => {
+      allGroups.some((group) => {
         const variants = selectorVariants(group.name)
         return variants.has(normalizeSelector(selector))
       }),
@@ -78,10 +78,10 @@ async function main(): Promise<void> {
   const selectors = args.selectors.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
   const { selected, unmatched } = selectGroups(selectors)
   if (unmatched.length > 0) {
-    throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${groups.map((group) => group.name).join(', ')}`)
+    throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${allGroups.map((group) => group.name).join(', ')}`)
   }
   if (selected.length === 0) {
-    throw new Error(`no e2e spec files selected; available: ${groups.map((group) => group.name).join(', ')}`)
+    throw new Error(`no e2e spec files selected; available: ${allGroups.map((group) => group.name).join(', ')}`)
   }
   await ensureArtifactDir()
   const base = await discoverReadyBase()
@@ -98,8 +98,8 @@ async function main(): Promise<void> {
       try {
         for (const entry of group.tests) {
           currentTestName = entry.name
-          await primeState(base, state)
-          await reporter.run(group.name, entry.name, () => entry.run({ base, state }))
+          await primeState(state.base, state)
+          await reporter.run(group.name, entry.name, () => entry.run({ base: state.base, state }))
         }
       } finally {
         reporter.finishGroup(group.name)
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
 
     const summary = {
       ok: true,
-      base,
+      base: state.base,
       native_bin: nativeBin(),
       duration_ms: Date.now() - runStart,
       timings: reporter.timingSummary(),
@@ -131,19 +131,19 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     const label = `failure-${Date.now()}-${testLabel(`${currentGroupName}-${currentTestName}`)}`
-    await captureFailureArtifacts(base, label)
+    await captureFailureArtifacts(state.base, label)
     await writeTextArtifact(
       `${label}-error.txt`,
       error instanceof Error ? `${error.stack || error.message}\n` : `${String(error)}\n`,
     )
     throw error
   } finally {
-    await cleanupShellWindows(base, [
+    await cleanupShellWindows(state.base, [
       SHELL_UI_DEBUG_WINDOW_ID,
       SHELL_UI_SETTINGS_WINDOW_ID,
       ...state.spawnedShellWindowIds,
     ])
-    await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
+    await cleanupNativeWindows(state.base, state.spawnedNativeWindowIds)
     reporter.printSummary()
   }
 }
