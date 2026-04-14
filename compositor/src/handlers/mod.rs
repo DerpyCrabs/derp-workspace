@@ -59,7 +59,6 @@ impl SeatHandler for CompositorState {
             surface_id,
             window_id,
         });
-        self.shell_reply_window_list();
     }
 }
 

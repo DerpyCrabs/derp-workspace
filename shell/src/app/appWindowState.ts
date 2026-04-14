@@ -186,6 +186,24 @@ export function buildWindowsMapFromList(
   return next
 }
 
+function nextStackZ(map: Map<number, DerpWindow>): number {
+  let max = 0
+  for (const window of map.values()) {
+    if (window.stack_z > max) max = window.stack_z
+  }
+  return max + 1
+}
+
+export function promoteWindowStack(map: Map<number, DerpWindow>, windowId: number): Map<number, DerpWindow> {
+  const window = map.get(windowId)
+  if (!window) return map
+  const stack_z = nextStackZ(map)
+  if (window.stack_z === stack_z) return map
+  const next = new Map(map)
+  next.set(windowId, { ...window, stack_z })
+  return next
+}
+
 export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
   const next = new Map(map)
   switch (detail.type) {
@@ -193,10 +211,13 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       const wid = coerceShellWindowId(detail.window_id)
       const sid = coerceShellWindowId(detail.surface_id)
       if (wid === null || sid === null) break
+      const shell_flags =
+        next.get(wid)?.shell_flags ??
+        (backedShellWindowKind(wid, detail.app_id) !== null ? SHELL_WINDOW_FLAG_SHELL_HOSTED : 0)
       next.set(wid, {
         window_id: wid,
         surface_id: sid,
-        stack_z: next.get(wid)?.stack_z ?? wid,
+        stack_z: nextStackZ(next),
         x: detail.x,
         y: detail.y,
         width: detail.width,
@@ -207,7 +228,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         minimized: false,
         maximized: false,
         fullscreen: false,
-        shell_flags: next.get(wid)?.shell_flags ?? 0,
+        shell_flags,
         capture_identifier: next.get(wid)?.capture_identifier ?? '',
       })
       break
@@ -254,7 +275,23 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       if (wid === null) break
       const w = next.get(wid)
       if (w) {
-        next.set(wid, { ...w, title: detail.title, app_id: detail.app_id })
+        next.set(wid, {
+          ...w,
+          title: detail.title,
+          app_id: detail.app_id,
+          shell_flags:
+            (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
+            backedShellWindowKind(wid, detail.app_id) !== null
+              ? w.shell_flags | SHELL_WINDOW_FLAG_SHELL_HOSTED
+              : w.shell_flags,
+        })
+      }
+      break
+    }
+    case 'focus_changed': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid !== null) {
+        return promoteWindowStack(next, wid)
       }
       break
     }

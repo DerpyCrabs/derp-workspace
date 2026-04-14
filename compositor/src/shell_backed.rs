@@ -203,7 +203,6 @@ impl CompositorState {
             if let Some(snap) = snap.as_ref() {
                 self.shell_backed_emit_geometry_messages(snap);
             }
-            self.shell_reply_window_list();
             self.shell_focus_shell_ui_window(id);
             return;
         }
@@ -223,7 +222,6 @@ impl CompositorState {
         let info = self.window_registry.window_info(id).expect("inserted");
         self.shell_backed_emit_mapped_metas(&info);
         self.shell_exclusion_zones_need_full_damage = true;
-        self.shell_reply_window_list();
         self.shell_focus_shell_ui_window(id);
     }
 
@@ -242,7 +240,6 @@ impl CompositorState {
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },
         );
         self.shell_exclusion_zones_need_full_damage = true;
-        self.shell_reply_window_list();
         true
     }
 
@@ -271,7 +268,6 @@ impl CompositorState {
             window_id,
             minimized: true,
         });
-        self.shell_reply_window_list();
         true
     }
 
@@ -294,7 +290,6 @@ impl CompositorState {
             minimized: false,
         });
         self.shell_backed_emit_geometry_messages(&snap);
-        self.shell_reply_window_list();
         true
     }
 
@@ -393,7 +388,6 @@ impl CompositorState {
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }
-        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_resize_try_begin_backed(
@@ -525,7 +519,6 @@ impl CompositorState {
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }
-        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_backed_set_window_geometry_ipc(
@@ -586,7 +579,6 @@ impl CompositorState {
         };
         self.shell_backed_emit_geometry_messages(&snap);
         self.shell_exclusion_zones_need_full_damage = true;
-        self.shell_reply_window_list();
         true
     }
 }

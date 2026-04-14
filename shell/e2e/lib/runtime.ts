@@ -646,6 +646,23 @@ export async function normalizeTransientShellState(base: string): Promise<ShellS
   return shell
 }
 
+export async function normalizePersistentShellState(base: string): Promise<ShellSnapshot> {
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const shellUiWindowIds = [SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID]
+  for (const windowId of shellUiWindowIds) {
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const shellWindow = shellWindowById(shell, windowId)
+    if (!shellWindow || shellWindow.minimized) continue
+    if (taskbarEntry(shell, windowId)?.close) {
+      await closeTaskbarWindow(base, shell, windowId)
+    } else {
+      await closeWindow(base, windowId)
+    }
+    await waitForWindowGone(base, windowId, 2000)
+  }
+  return getJson<ShellSnapshot>(base, '/test/state/shell')
+}
+
 export async function ensureDesktopApps(base: string, state: E2eState): Promise<DesktopAppEntry[]> {
   if (state.desktopApps.length > 0) return state.desktopApps
   const desktopApplications = await getJson<{ apps?: DesktopAppEntry[] }>(base, '/desktop_applications')
@@ -664,7 +681,10 @@ function syncTrackedWindows(state: E2eState, compositor: CompositorSnapshot): vo
 }
 
 export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
-  const shell = await normalizeTransientShellState(base)
+  await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
+  state.spawnedShellWindowIds.clear()
+  await normalizeTransientShellState(base)
+  const shell = await normalizePersistentShellState(base)
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
   syncTrackedWindows(state, compositor)
   await ensureDesktopApps(base, state)

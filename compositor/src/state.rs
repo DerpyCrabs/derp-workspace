@@ -1495,7 +1495,6 @@ impl CompositorState {
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_window_stack_touch(window_id);
         self.shell_emit_shell_ui_focus_if_changed(Some(window_id));
-        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_blur_shell_ui_focus(&mut self) {
@@ -6587,7 +6586,6 @@ impl CompositorState {
                     w.toplevel().unwrap().send_pending_configure();
                 }
             });
-            self.shell_reply_window_list();
             return;
         }
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
@@ -6611,7 +6609,6 @@ impl CompositorState {
             self.shell_pending_native_focus_window_id = Some(window_id);
         }
         self.emit_x11_window_updates(&x11, false, false);
-        self.shell_reply_window_list();
     }
 
     fn shell_emit_window_state(&mut self, window_id: u32, minimized: bool) {

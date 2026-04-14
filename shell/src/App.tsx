@@ -122,6 +122,7 @@ import {
   coerceShellWindowId,
   type DerpShellDetail,
   type DerpWindow,
+  promoteWindowStack,
   windowIsShellHosted,
   windowOnMonitor,
   workspaceGroupWindowIds,
@@ -655,6 +656,7 @@ function App() {
   const [savedSessionAvailable, setSavedSessionAvailable] = createSignal(false)
   const [sessionPersistenceReady, setSessionPersistenceReady] = createSignal(false)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
+  let windowSyncRecoveryAllowedAt = 0
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
   const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
@@ -1128,7 +1130,7 @@ function App() {
     setCrosshairCursor(true)
     queueMicrotask(() => {
       flushShellUiWindowsSyncNow()
-      shellWireSend('shell_focus_ui_window', SHELL_UI_SCREENSHOT_WINDOW_ID)
+      focusShellUiWindow(SHELL_UI_SCREENSHOT_WINDOW_ID)
     })
   }
 
@@ -1418,6 +1420,15 @@ function App() {
     restoreWindowModes(snapshot)
     applyRestoredWorkspace(snapshot)
     applyRestoredTiles(snapshot)
+  })
+
+  createEffect(() => {
+    const snapshot = sessionRestoreSnapshot()
+    windows()
+    nativeWindowRefs()
+    if (!snapshot) return
+    if (!sessionRestoreIsComplete(snapshot)) return
+    stopSessionRestore()
   })
 
   createEffect(() => {
@@ -1908,6 +1919,31 @@ function App() {
     })
   }
 
+  function requestWindowSyncRecovery() {
+    const now = Date.now()
+    if (now < windowSyncRecoveryAllowedAt) return
+    windowSyncRecoveryAllowedAt = now + 250
+    shellWireSend('request_compositor_sync')
+  }
+
+  function focusWindowLocally(windowId: number) {
+    setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
+    setWindows((map) => promoteWindowStack(map, windowId))
+  }
+
+  function focusShellUiWindow(windowId: number) {
+    focusWindowLocally(windowId)
+    shellWireSend('shell_focus_ui_window', windowId)
+  }
+
+  function activateTaskbarWindowViaShell(windowId: number) {
+    const window = allWindowsMap().get(windowId)
+    if (window && windowIsShellHosted(window) && !window.minimized) {
+      focusWindowLocally(windowId)
+    }
+    shellWireSend('taskbar_activate', windowId)
+  }
+
   function moveWindowUnderPointer(windowId: number, clientX: number, clientY: number) {
     const main = mainRef
     const canvas = outputGeom()
@@ -1980,10 +2016,10 @@ function App() {
     const window = allWindowsMap().get(windowId)
     if (!window) return false
     if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-      shellWireSend('shell_focus_ui_window', windowId)
+      focusShellUiWindow(windowId)
       return true
     }
-    shellWireSend('taskbar_activate', windowId)
+    activateTaskbarWindowViaShell(windowId)
     return true
   }
 
@@ -2024,12 +2060,12 @@ function App() {
     if (nextVisibleId !== null) {
       syncWindowGeometry(nextVisibleId, sourceGroup.visibleWindow)
       queueMicrotask(() => {
-        shellWireSend('taskbar_activate', nextVisibleId)
+        activateTaskbarWindowViaShell(nextVisibleId)
       })
     }
     moveWindowUnderPointer(windowId, clientX, clientY)
     queueMicrotask(() => {
-      shellWireSend('taskbar_activate', windowId)
+      activateTaskbarWindowViaShell(windowId)
     })
     return true
   }
@@ -2088,7 +2124,7 @@ function App() {
         return true
       }
       if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-        shellWireSend('shell_focus_ui_window', windowId)
+        focusShellUiWindow(windowId)
         return true
       }
       return focusWindowViaShell(windowId)
@@ -2097,7 +2133,7 @@ function App() {
     if (targetWindow) syncWindowGeometry(windowId, group.visibleWindow)
     setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, windowId))
     queueMicrotask(() => {
-      shellWireSend('taskbar_activate', windowId)
+      activateTaskbarWindowViaShell(windowId)
       if (!group.visibleWindow.minimized) shellWireSend('minimize', group.visibleWindow.window_id)
     })
     return true
@@ -2339,11 +2375,11 @@ function App() {
             const window = allWindowsMap().get(currentVisibleWindowId)
             if (!window) return
             if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-              shellWireSend('shell_focus_ui_window', currentVisibleWindowId)
+              focusShellUiWindow(currentVisibleWindowId)
               return
             }
             if (!rowFocused()) {
-              shellWireSend('taskbar_activate', currentVisibleWindowId)
+              activateTaskbarWindowViaShell(currentVisibleWindowId)
             }
           }}
           onTitlebarPointerDown={(cx, cy) => {
@@ -2494,7 +2530,7 @@ function App() {
           const point = screenshotPointFromClient(e.clientX, e.clientY)
           if (!point) return
           root?.setPointerCapture?.(e.pointerId)
-          shellWireSend('shell_focus_ui_window', SHELL_UI_SCREENSHOT_WINDOW_ID)
+          focusShellUiWindow(SHELL_UI_SCREENSHOT_WINDOW_ID)
           shellWireSend('shell_ui_grab_begin', SHELL_UI_SCREENSHOT_WINDOW_ID)
           setScreenshotSelection({
             start: point,
@@ -3505,6 +3541,23 @@ function App() {
     lastAppliedRestoreSignature = ''
     setSessionRestoreSnapshot(null)
     setSessionPersistenceReady(true)
+  }
+
+  function sessionRestoreIsComplete(snapshot: SessionSnapshot): boolean {
+    const windowsById = allWindowsMap()
+    for (const shellWindow of snapshot.shellWindows) {
+      const live = windowsById.get(shellWindow.windowId)
+      if (!live) return false
+      if (live.minimized !== shellWindow.minimized) return false
+    }
+    for (const nativeWindow of snapshot.nativeWindows) {
+      const liveWindowId = liveWindowIdForRef(nativeWindow.windowRef)
+      if (liveWindowId === null) return false
+      const live = windowsById.get(liveWindowId)
+      if (!live) return false
+      if (live.minimized !== nativeWindow.minimized) return false
+    }
+    return true
   }
 
   async function startSessionRestore(snapshot: SessionSnapshot) {
@@ -4631,7 +4684,12 @@ function App() {
       if (d.type === 'focus_changed') {
         const fw = coerceShellWindowId(d.window_id)
         if (fw != null) {
+          if (!windows().has(fw)) {
+            requestWindowSyncRecovery()
+            return
+          }
           setFocusedWindowId((prev) => (prev === fw ? prev : fw))
+          setWindows((m) => applyDetail(m, d))
         } else {
           setFocusedWindowId((prev) => {
             if (prev == null) return null
@@ -4730,6 +4788,10 @@ function App() {
         let relayoutMon: string | null = null
         if (wid !== null) {
           const w = windows().get(wid)
+          if (!w) {
+            requestWindowSyncRecovery()
+            return
+          }
           if (w) relayoutMon = w.output_name || fallbackMonitorKey()
         }
         if (d.minimized) {
@@ -4768,7 +4830,7 @@ function App() {
                 pendingCloseActivation.nextVisibleId,
               ),
             )
-            shellWireSend('taskbar_activate', pendingCloseActivation.nextVisibleId)
+            activateTaskbarWindowViaShell(pendingCloseActivation.nextVisibleId)
           })
         }
         scheduleCompositorFollowup({ flushWindows: true, relayoutMonitor: relayoutMon })
@@ -4779,6 +4841,10 @@ function App() {
         let prevMon: string | null = null
         if (wid !== null) {
           const w = windows().get(wid)
+          if (!w) {
+            requestWindowSyncRecovery()
+            return
+          }
           if (w) prevMon = w.output_name || fallbackMonitorKey()
         }
         setWindows((m) => applyDetail(m, d))
@@ -4805,6 +4871,11 @@ function App() {
         return
       }
       if (d.type === 'window_metadata') {
+        const wid = coerceShellWindowId(d.window_id)
+        if (wid !== null && !windows().has(wid)) {
+          requestWindowSyncRecovery()
+          return
+        }
         setWindows((m) => applyDetail(m, d))
         return
       }
@@ -5135,19 +5206,19 @@ function App() {
           const groupId = groupIdForWindow(workspaceState(), id)
           const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
           if (!group) {
-            shellWireSend('taskbar_activate', id)
+            activateTaskbarWindowViaShell(id)
             return
           }
           const visibleWindow = group.visibleWindow
           if (visibleWindow.minimized) {
-            shellWireSend('taskbar_activate', visibleWindow.window_id)
+            activateTaskbarWindowViaShell(visibleWindow.window_id)
             return
           }
           if (activeWorkspaceGroupId() === group.id) {
             shellWireSend('minimize', visibleWindow.window_id)
             return
           }
-          shellWireSend('taskbar_activate', visibleWindow.window_id)
+          activateTaskbarWindowViaShell(visibleWindow.window_id)
         }}
         onTaskbarClose={(id) => {
           closeGroupWindow(id)

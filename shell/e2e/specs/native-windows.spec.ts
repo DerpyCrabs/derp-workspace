@@ -309,10 +309,21 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'settings focus restack order',
     )
 
-    await activateTaskbarWindow(base, settingsFocused.shell, SHELL_UI_DEBUG_WINDOW_ID)
+    await activateTaskbarWindow(base, settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsMinimized = await waitForWindowMinimized(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(
+      shellWindowById(settingsMinimized.shell, SHELL_UI_SETTINGS_WINDOW_ID)?.minimized,
+      'settings taskbar activation should minimize when focused',
+    )
+
+    await activateTaskbarWindow(base, settingsMinimized.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsRestored = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTopWindow(settingsRestored.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should return to the front after restore')
+
+    await activateTaskbarWindow(base, settingsRestored.shell, SHELL_UI_DEBUG_WINDOW_ID)
     const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
     assertRestackToFront(
-      settingsFocused.shell,
+      settingsRestored.shell,
       debugFocused.shell,
       SHELL_UI_DEBUG_WINDOW_ID,
       trackedWindowIds,
@@ -332,6 +343,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('native-js-restack-red.json', redFocused.shell)
     await writeJsonArtifact('native-js-restack-green.json', greenFocused.shell)
     await writeJsonArtifact('native-js-restack-settings.json', settingsFocused.shell)
+    await writeJsonArtifact('native-js-restack-settings-restored.json', settingsRestored.shell)
     await writeJsonArtifact('native-js-restack-debug.json', debugFocused.shell)
     await writeJsonArtifact('native-js-restack-red-refocused.json', redRefocused.shell)
   })

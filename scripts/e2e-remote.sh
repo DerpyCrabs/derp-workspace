@@ -105,6 +105,25 @@ exec cargo build --release -p derp-test-client
 EOF
 fi
 
+if [[ "$SKIP_SYNC" -eq 1 ]]; then
+  echo "=== skip remote npm shell -> dist/ ==="
+else
+  echo "=== remote npm shell -> dist/ ==="
+  ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+if [[ -f shell/package.json ]]; then
+  cd shell
+  if [[ -f package-lock.json ]]; then
+    npm ci || npm install
+  else
+    npm install
+  fi
+  exec npm run build
+fi
+EOF
+fi
+
 echo "=== remote shell/e2e/run.mjs ==="
 ssh_base bash -s <<EOF
 set -euo pipefail
