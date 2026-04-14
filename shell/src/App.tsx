@@ -25,8 +25,6 @@ import {
 } from './exclusionRects'
 import { ShellWindowFrame, type ShellWindowModel } from './ShellWindowFrame'
 import {
-  canvasOriginXY,
-  type CanvasOrigin,
   canvasRectToClientCss,
   clientPointToCanvasLocal,
   clientPointerDeltaToCanvasLogical,
@@ -185,6 +183,7 @@ import {
   type WorkspaceState,
 } from './workspaceState'
 import { createWorkspaceSelectors } from './workspaceSelectors'
+import { buildE2eShellHtml, buildE2eShellSnapshot } from './e2eSnapshot'
 
 declare global {
   interface Window {
@@ -255,67 +254,6 @@ type ScreenshotSelectionState = {
 const PORTAL_PICKER_PREVIEW_W = 520
 const PORTAL_PICKER_PREVIEW_H = 260
 const PORTAL_PICKER_PREVIEW_PAD = 16
-
-type E2eRectSnapshot = {
-  x: number
-  y: number
-  width: number
-  height: number
-  global_x: number
-  global_y: number
-}
-
-function e2eSnapshotRect(
-  el: Element | null,
-  _main: HTMLElement | null,
-  _canvas: { w: number; h: number } | null,
-  origin: CanvasOrigin | null,
-): E2eRectSnapshot | null {
-  if (!(el instanceof HTMLElement)) return null
-  const rect = el.getBoundingClientRect()
-  const x = Math.round(rect.left)
-  const y = Math.round(rect.top)
-  const width = Math.max(0, Math.round(rect.width))
-  const height = Math.max(0, Math.round(rect.height))
-  const { ox, oy } = canvasOriginXY(origin)
-  return {
-    x,
-    y,
-    width,
-    height,
-    global_x: ox + x,
-    global_y: oy + y,
-  }
-}
-
-function e2eQueryRect(
-  selector: string,
-  main: HTMLElement | null,
-  canvas: { w: number; h: number } | null,
-  origin: CanvasOrigin | null,
-): E2eRectSnapshot | null {
-  return e2eSnapshotRect(document.querySelector(selector), main, canvas, origin)
-}
-
-function e2eQueryLargestRect(
-  selector: string,
-  main: HTMLElement | null,
-  canvas: { w: number; h: number } | null,
-  origin: CanvasOrigin | null,
-): E2eRectSnapshot | null {
-  let best: E2eRectSnapshot | null = null
-  let bestArea = -1
-  for (const el of document.querySelectorAll(selector)) {
-    const rect = e2eSnapshotRect(el, main, canvas, origin)
-    if (!rect) continue
-    const area = rect.width * rect.height
-    if (area > bestArea) {
-      best = rect
-      bestArea = area
-    }
-  }
-  return best
-}
 
 type TabDragState = {
   pointerId: number
@@ -1470,178 +1408,14 @@ function App() {
     }
   })
 
-  function buildE2eShellSnapshot() {
+  function publishE2eShellSnapshot(requestId: number) {
+    const send = window.__derpShellWireSend
+    if (!send) return
     const origin = layoutCanvasOrigin()
     const logicalCanvas = layoutUnionBbox()
     const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
-    const main = mainRef ?? null
-    const buildFileBrowserSnapshot = (root: ParentNode) => {
-      const fileBrowserActivePathEl = root.querySelector('[data-file-browser-active-path]') as HTMLElement | null
-      const fileBrowserViewerTitleEl = root.querySelector(
-        '[data-file-browser-viewer-title], [data-file-browser-editor-title]',
-      ) as HTMLElement | null
-      const fileBrowserRows = Array.from(root.querySelectorAll('[data-file-browser-row]')).map((el) => {
-        const rowEl = el as HTMLElement
-        return {
-          path: rowEl.getAttribute('data-file-browser-path') ?? '',
-          name: rowEl.getAttribute('data-file-browser-name') ?? rowEl.textContent?.trim() ?? '',
-          kind: rowEl.getAttribute('data-file-browser-kind'),
-          selected:
-            rowEl.getAttribute('data-file-browser-selected') === 'true' ||
-            rowEl.getAttribute('aria-selected') === 'true',
-          rect: e2eSnapshotRect(rowEl, main, canvas, origin),
-        }
-      })
-      const fileBrowserBreadcrumbs = Array.from(root.querySelectorAll('[data-file-browser-breadcrumb]')).map((el) => {
-        const crumbEl = el as HTMLElement
-        return {
-          path: crumbEl.getAttribute('data-file-browser-path') ?? '',
-          label: crumbEl.getAttribute('data-file-browser-label') ?? crumbEl.textContent?.trim() ?? '',
-          rect: e2eSnapshotRect(crumbEl, main, canvas, origin),
-        }
-      })
-      const fileBrowserPrimaryActions = Array.from(root.querySelectorAll('[data-file-browser-primary-action]')).map((el) => {
-        const actionEl = el as HTMLElement
-        return {
-          id: actionEl.getAttribute('data-file-browser-primary-action') ?? '',
-          label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
-          rect: e2eSnapshotRect(actionEl, main, canvas, origin),
-        }
-      })
-      return {
-        active_path:
-          fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
-          fileBrowserActivePathEl?.textContent?.trim() ??
-          null,
-        rows: fileBrowserRows,
-        breadcrumbs: fileBrowserBreadcrumbs,
-        viewer_editor_title:
-          fileBrowserViewerTitleEl?.getAttribute('data-file-browser-document-title') ??
-          fileBrowserViewerTitleEl?.textContent?.trim() ??
-          null,
-        primary_actions: fileBrowserPrimaryActions,
-      }
-    }
-    const projectFloatingElementRect = (selector: string) => {
-      const el = document.querySelector(selector)
-      if (!(el instanceof HTMLElement)) return null
-      const floatingRoot = el.closest('[data-floating-layer-id]') as HTMLElement | null
-      const layerId = floatingRoot?.getAttribute('data-floating-layer-id')
-      if (!layerId || !floatingRoot?.contains(el)) {
-        return shellContextMenus.projectCurrentMenuElementRect(el)
-      }
-      const layer = floatingLayers.layers().find((row) => row.id === layerId)
-      const placement = layer?.placement
-      if (!placement) return null
-      const rootRect = floatingRoot.getBoundingClientRect()
-      if (rootRect.width <= 0 || rootRect.height <= 0) return null
-      const rect = el.getBoundingClientRect()
-      const leftRatio = (rect.left - rootRect.left) / rootRect.width
-      const topRatio = (rect.top - rootRect.top) / rootRect.height
-      const rightRatio = (rect.right - rootRect.left) / rootRect.width
-      const bottomRatio = (rect.bottom - rootRect.top) / rootRect.height
-      const globalLeft = Math.round(placement.gx + leftRatio * placement.gw)
-      const globalTop = Math.round(placement.gy + topRatio * placement.gh)
-      const globalRight = Math.round(placement.gx + rightRatio * placement.gw)
-      const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
-      const ox = origin?.x ?? 0
-      const oy = origin?.y ?? 0
-      return {
-        x: globalLeft - ox,
-        y: globalTop - oy,
-        width: Math.max(1, globalRight - globalLeft),
-        height: Math.max(1, globalBottom - globalTop),
-        global_x: globalLeft,
-        global_y: globalTop,
-      }
-    }
-    const volumeMenuRect = (selector: string) =>
-      projectFloatingElementRect(selector) ??
-      e2eQueryRect(selector, main, canvas, origin)
-    const stackOrderedWindows = [...windowsList()].sort(
-      (a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id,
-    )
-    const taskbarButtons = Array.from(document.querySelectorAll('[data-shell-taskbar-monitor]')).map((el) => {
-      const taskbarEl = el as HTMLElement
-      return {
-        monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',
-        rect: e2eSnapshotRect(taskbarEl, main, canvas, origin),
-      }
-    })
-    const taskbarGroupRows = buildTaskbarGroupRows(workspaceGroups())
-    const taskbarWindowButtons = taskbarGroupRows.map((row) => ({
-      group_id: row.group_id,
-      window_id: row.window_id,
-      tab_count: row.tab_count,
-      activate: e2eQueryRect(
-        `[data-shell-taskbar-window-activate="${row.window_id}"]`,
-        main,
-        canvas,
-        origin,
-      ),
-      close: e2eQueryRect(
-        `[data-shell-taskbar-window-close="${row.window_id}"]`,
-        main,
-        canvas,
-        origin,
-      ),
-    }))
-    const windowControls = windowsList().map((w) => ({
-      window_id: w.window_id,
-      titlebar: e2eQueryRect(`[data-shell-titlebar="${w.window_id}"]`, main, canvas, origin),
-      maximize: e2eQueryRect(`[data-shell-maximize-trigger="${w.window_id}"]`, main, canvas, origin),
-      snap_picker: e2eQueryRect(`[data-shell-snap-picker-trigger="${w.window_id}"]`, main, canvas, origin),
-    }))
-    const tabGroups = workspaceGroups().map((group) => ({
-      group_id: group.id,
-      visible_window_id: group.visibleWindowId,
-      hidden_window_ids: [...group.hiddenWindowIds],
-      member_window_ids: group.members.map((member) => member.window_id),
-      tabs: group.members.map((member) => ({
-        window_id: member.window_id,
-        rect: e2eQueryRect(`[data-workspace-tab="${member.window_id}"]`, main, canvas, origin),
-        close: e2eQueryRect(`[data-workspace-tab-close="${member.window_id}"]`, main, canvas, origin),
-        active: member.window_id === group.visibleWindowId,
-        pinned: isWorkspaceWindowPinned(workspaceState(), member.window_id),
-      })),
-    }))
-    const snapPreviewRect =
-      main && canvas && activeSnapPreviewCanvas
-        ? (() => {
-            const { ox, oy } = canvasOriginXY(origin)
-            const css = canvasRectToClientCss(
-              activeSnapPreviewCanvas.x,
-              activeSnapPreviewCanvas.y,
-              activeSnapPreviewCanvas.w,
-              activeSnapPreviewCanvas.h,
-              main.getBoundingClientRect(),
-              canvas.w,
-              canvas.h,
-            )
-            return {
-              x: Math.round(css.left),
-              y: Math.round(css.top),
-              width: Math.round(css.width),
-              height: Math.round(css.height),
-              global_x: Math.round(ox + css.left),
-              global_y: Math.round(oy + css.top),
-            }
-          })()
-        : null
-    const fileBrowserWindows = Array.from(document.querySelectorAll('[data-file-browser-active-path]'))
-      .map((el) => {
-        const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
-        if (!frameEl) return null
-        const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
-        if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
-        return {
-          window_id: rawWindowId,
-          ...buildFileBrowserSnapshot(frameEl),
-        }
-      })
-      .filter((entry): entry is { window_id: number } & ReturnType<typeof buildFileBrowserSnapshot> => entry !== null)
-    const globalFileBrowserWindow =
-      fileBrowserWindows.find((entry) => entry.window_id === focusedWindowId()) ?? fileBrowserWindows[0] ?? null
+    const currentWindows = windowsList()
+    const currentWorkspaceGroups = workspaceGroups()
     let sessionSnapshot: SessionSnapshot | null = null
     let sessionSnapshotError: string | null = null
     try {
@@ -1649,181 +1423,47 @@ function App() {
     } catch (error) {
       sessionSnapshotError = error instanceof Error ? error.stack || error.message : String(error)
     }
-    return {
-      captured_at_ms: Date.now(),
-      viewport: viewportCss(),
-      canvas_origin: origin ? { x: origin.x, y: origin.y } : null,
-      focused_window_id: focusedWindowId(),
-      shell_keyboard_layout: keyboardLayoutLabel(),
-      screenshot_mode: screenshotMode(),
-      crosshair_cursor: crosshairCursor(),
-      programs_menu_open: shellContextMenus.programsMenuOpen(),
-      power_menu_open: shellContextMenus.powerMenuOpen(),
-      volume_menu_open: shellContextMenus.volumeMenuOpen(),
-      debug_window_visible: debugHudFrameVisible(),
-      settings_window_visible: settingsHudFrameVisible(),
-      snap_picker_open: snapAssistPicker() !== null,
-      snap_picker_window_id: snapAssistPicker()?.windowId ?? null,
-      snap_picker_source: snapAssistPicker()?.source ?? null,
-      snap_picker_monitor: snapAssistPicker()?.monitorName ?? null,
-      snap_preview_visible: activeSnapPreviewCanvas !== null,
-      snap_preview_rect: snapPreviewRect,
-      snap_hover_span: assistOverlay()?.hoverSpan ?? null,
-      file_browser: globalFileBrowserWindow,
-      file_browser_windows: fileBrowserWindows,
-      programs_menu_query: shellContextMenus.programsMenuProps.query(),
-      session_snapshot: sessionSnapshot,
-      session_snapshot_error: sessionSnapshotError,
-      session_restore_active: sessionRestoreSnapshot() !== null,
-      programs_menu_list_scroll: (() => {
-        if (!shellContextMenus.programsMenuOpen()) return null
-        const el = document.querySelector('[data-programs-menu-scroll]')
-        if (!(el instanceof HTMLElement)) return null
-        return {
-          scroll_top: el.scrollTop,
-          scroll_height: el.scrollHeight,
-          client_height: el.clientHeight,
-        }
-      })(),
-      window_stack_order: stackOrderedWindows.map((w) => w.window_id),
-      tab_groups: tabGroups,
-      windows: windowsList().map((w) => ({
-        window_id: w.window_id,
-        title: w.title,
-        app_id: w.app_id,
-        output_name: w.output_name,
-        stack_z: w.stack_z,
-        x: w.x,
-        y: w.y,
-        width: w.width,
-        height: w.height,
-        minimized: w.minimized,
-        maximized: w.maximized,
-        fullscreen: w.fullscreen,
-        shell_hosted: !!(w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED),
-      })),
-      controls: {
-        taskbar_programs_toggle: e2eQueryRect(
-          '[data-shell-programs-toggle]',
-          main,
-          canvas,
+    send(
+      'e2e_snapshot_response',
+      requestId,
+      JSON.stringify(
+        buildE2eShellSnapshot({
+          document,
+          viewport: viewportCss(),
+          main: mainRef ?? null,
           origin,
-        ),
-        taskbar_settings_toggle: e2eQueryRect(
-          '[data-shell-settings-toggle]',
-          main,
           canvas,
-          origin,
-        ),
-        taskbar_debug_toggle: e2eQueryRect('[data-shell-debug-toggle]', main, canvas, origin),
-        taskbar_volume_toggle: e2eQueryRect('[data-shell-volume-toggle]', main, canvas, origin),
-        taskbar_power_toggle: e2eQueryRect('[data-shell-power-toggle]', main, canvas, origin),
-        volume_menu_panel: volumeMenuRect('[data-shell-volume-menu-panel]'),
-        volume_output_select: volumeMenuRect('[data-shell-volume-output-select] button'),
-        volume_output_option_0: volumeMenuRect('[data-select-panel="volume-output"] [data-select-option-idx="0"]'),
-        volume_output_option_1: volumeMenuRect('[data-select-panel="volume-output"] [data-select-option-idx="1"]'),
-        volume_input_select: volumeMenuRect('[data-shell-volume-input-select] button'),
-        volume_input_option_0: volumeMenuRect('[data-select-panel="volume-input"] [data-select-option-idx="0"]'),
-        volume_input_option_1: volumeMenuRect('[data-select-panel="volume-input"] [data-select-option-idx="1"]'),
-        volume_output_slider: volumeMenuRect('[data-shell-volume-output-default] input[type="range"]'),
-        volume_playback_first_slider: volumeMenuRect('[data-shell-volume-playback-row="first"] input[type="range"]'),
-        programs_menu_search: e2eQueryRect(
-          'input[aria-label="Search applications"]',
-          main,
-          canvas,
-          origin,
-        ),
-        programs_menu_first_item: e2eQueryRect('[data-programs-menu-idx="0"]', main, canvas, origin),
-        programs_menu_panel: e2eQueryRect('[data-shell-programs-menu-panel]', main, canvas, origin),
-        programs_menu_list: e2eQueryRect('[data-programs-menu-scroll]', main, canvas, origin),
-        tab_menu_pin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
-        tab_menu_unpin: e2eQueryRect('[data-tab-menu-idx="0"]', main, canvas, origin),
-        settings_tab_user: e2eQueryRect('[data-settings-tab="user"]', main, canvas, origin),
-        settings_tab_displays: e2eQueryRect('[data-settings-tab="displays"]', main, canvas, origin),
-        settings_tab_tiling: e2eQueryRect('[data-settings-tab="tiling"]', main, canvas, origin),
-        settings_tab_keyboard: e2eQueryRect('[data-settings-tab="keyboard"]', main, canvas, origin),
-        settings_session_autosave_enable: e2eQueryRect(
-          '[data-settings-session-autosave-enable]',
-          main,
-          canvas,
-          origin,
-        ),
-        settings_session_autosave_disable: e2eQueryRect(
-          '[data-settings-session-autosave-disable]',
-          main,
-          canvas,
-          origin,
-        ),
-        power_menu_save_session: e2eQueryRect('[data-power-menu-action="save-session"]', main, canvas, origin),
-        power_menu_restore_session: e2eQueryRect('[data-power-menu-action="restore-session"]', main, canvas, origin),
-        debug_reload_button: e2eQueryRect('[data-shell-debug-reload]', main, canvas, origin),
-        debug_copy_snapshot_button: e2eQueryRect(
-          '[data-shell-debug-copy-snapshot]',
-          main,
-          canvas,
-          origin,
-        ),
-        debug_crosshair_toggle: e2eQueryRect(
-          '[data-shell-debug-crosshair-toggle]',
-          main,
-          canvas,
-          origin,
-        ),
-        snap_strip_trigger: e2eQueryRect('[data-shell-snap-strip-trigger]', main, canvas, origin),
-        snap_picker_root: e2eQueryRect('[data-shell-snap-picker]', main, canvas, origin),
-        snap_picker_first_cell: e2eQueryLargestRect(
-          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-testid="snap-assist-master-cell"]',
-          main,
-          canvas,
-          origin,
-        ),
-        snap_picker_top_center_cell: e2eQueryLargestRect(
-          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="1"][data-gc1="1"][data-gr0="0"][data-gr1="0"]',
-          main,
-          canvas,
-          origin,
-        ),
-        snap_picker_hgutter_col0: e2eQueryLargestRect(
-          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-testid="snap-assist-hgutter-col0"]',
-          main,
-          canvas,
-          origin,
-        ),
-        snap_picker_right_two_thirds: e2eQueryLargestRect(
-          '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="1"][data-gc1="2"][data-gr0="0"][data-gr1="1"]',
-          main,
-          canvas,
-          origin,
-        ),
-        snap_picker_top_two_thirds_left: e2eQueryLargestRect(
-          '[data-shell-snap-picker] [data-assist-mini-grid="3x3"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="0"][data-gc1="0"][data-gr0="0"][data-gr1="1"]',
-          main,
-          canvas,
-          origin,
-        ),
-      },
-      taskbars: taskbarButtons,
-      taskbar_windows: taskbarWindowButtons,
-      window_controls: windowControls,
-    }
-  }
-
-  function publishE2eShellSnapshot(requestId: number) {
-    const send = window.__derpShellWireSend
-    if (!send) return
-    send('e2e_snapshot_response', requestId, JSON.stringify(buildE2eShellSnapshot()))
+          windows: currentWindows,
+          taskbarGroupRows: buildTaskbarGroupRows(currentWorkspaceGroups),
+          workspaceGroups: currentWorkspaceGroups,
+          focusedWindowId: focusedWindowId(),
+          keyboardLayoutLabel: keyboardLayoutLabel(),
+          screenshotMode: screenshotMode(),
+          crosshairCursor: crosshairCursor(),
+          programsMenuOpen: shellContextMenus.programsMenuOpen(),
+          powerMenuOpen: shellContextMenus.powerMenuOpen(),
+          volumeMenuOpen: shellContextMenus.volumeMenuOpen(),
+          debugWindowVisible: debugHudFrameVisible(),
+          settingsWindowVisible: settingsHudFrameVisible(),
+          snapAssistPicker: snapAssistPicker(),
+          activeSnapPreviewCanvas,
+          assistOverlayHoverSpan: assistOverlay()?.hoverSpan ?? null,
+          programsMenuQuery: shellContextMenus.programsMenuProps.query(),
+          sessionSnapshot,
+          sessionSnapshotError,
+          sessionRestoreActive: sessionRestoreSnapshot() !== null,
+          floatingLayers: floatingLayers.layers(),
+          projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
+          isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceState(), windowId),
+        }),
+      ),
+    )
   }
 
   function publishE2eShellHtml(requestId: number, selector?: string | null) {
     const send = window.__derpShellWireSend
     if (!send) return
-    let html = ''
-    if (selector && selector.trim().length > 0) {
-      html = (document.querySelector(selector)?.outerHTML ?? '').toString()
-    } else {
-      html = document.documentElement.outerHTML
-    }
-    send('e2e_html_response', requestId, html)
+    send('e2e_html_response', requestId, buildE2eShellHtml(document, selector))
   }
 
   const stackedWindowsList = createMemo(() => {
