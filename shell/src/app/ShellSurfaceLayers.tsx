@@ -16,12 +16,6 @@ type ShellSurfaceLayersProps = {
   taskbarHeight: number
   screenTaskbarHiddenForFullscreen: (screen: LayoutScreen) => boolean
   isPrimaryTaskbarScreen: (screen: LayoutScreen) => boolean
-  programsMenuOpen: Accessor<boolean>
-  onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
-  powerMenuOpen: Accessor<boolean>
-  onPowerMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
-  volumeMenuOpen: Accessor<boolean>
-  onVolumeMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   volumeMuted: Accessor<boolean>
   volumePercent: Accessor<number | null>
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
@@ -141,12 +135,6 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                   }
                   onSniTrayActivate={props.onSniTrayActivate}
                   onSniTrayContextMenu={props.onSniTrayContextMenu}
-                  programsMenuOpen={props.programsMenuOpen()}
-                  onProgramsMenuClick={props.onProgramsMenuClick}
-                  powerMenuOpen={props.powerMenuOpen()}
-                  onPowerMenuClick={props.onPowerMenuClick}
-                  volumeMenuOpen={props.volumeMenuOpen()}
-                  onVolumeMenuClick={props.onVolumeMenuClick}
                   volumeMuted={props.volumeMuted()}
                   volumePercent={props.volumePercent()}
                   windows={props.taskbarRowsForScreen(screen)}

@@ -1,19 +1,8 @@
-import { For, Show, onCleanup, onMount, type Accessor, type JSX } from 'solid-js'
-import type { ShellContextMenuItem } from '../contextMenu'
+import { For, Show, onCleanup, onMount } from 'solid-js'
+import { useShellContextMenus } from './ShellContextMenusContext'
 
-type ProgramsContextMenuProps = {
-  placement: Accessor<JSX.CSSProperties | null>
-  query: Accessor<string>
-  setQuery: (value: string) => void
-  highlightIdx: Accessor<number>
-  items: Accessor<ShellContextMenuItem[]>
-  setSearchRef: (el: HTMLInputElement) => void
-  setPanelRef: (el: HTMLDivElement) => void
-  activateSelection: () => void
-  closeContextMenu: () => void
-}
-
-export function ProgramsContextMenu(props: ProgramsContextMenuProps) {
+export function ProgramsContextMenu() {
+  const props = useShellContextMenus().programsMenuProps
   let searchRef: HTMLInputElement | undefined
 
   const syncSearchFocus = () => {

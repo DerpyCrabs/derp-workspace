@@ -88,7 +88,8 @@ import {
   type Rect as TileRect,
 } from './tileZones'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
-import { hideShellFloatingWire } from './shellFloatingWire'
+import { createFloatingLayerStore } from './floatingLayers'
+import { hideShellFloatingWire, shellFloatingLayersWire } from './shellFloatingWire'
 import { pushShellFloatingWireFromDom } from './shellFloatingPlacement'
 import { getMonitorLayout } from './tilingConfig'
 import {
@@ -100,6 +101,7 @@ import {
 import { shellHttpBase } from './shellHttp'
 import { startThemeDomSync } from './themeDom'
 import { refreshThemeSettingsFromRemote } from './themeStore'
+import { ShellContextMenusProvider } from './app/ShellContextMenusContext'
 import { createShellContextMenus, type TraySniMenuEntry } from './app/createShellContextMenus'
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
@@ -177,6 +179,7 @@ declare global {
         | 'set_output_layout'
         | 'set_exclusion_zones'
         | 'set_shell_ui_windows'
+        | 'floating_layers'
         | 'set_shell_primary'
         | 'set_ui_scale'
         | 'set_tile_preview'
@@ -712,6 +715,7 @@ function shellWireSend(
     | 'set_output_layout'
     | 'set_exclusion_zones'
     | 'set_shell_ui_windows'
+    | 'floating_layers'
     | 'set_shell_primary'
     | 'set_ui_scale'
     | 'set_tile_preview'
@@ -943,7 +947,7 @@ function App() {
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
-  const atlasSelectClosers = new Set<() => boolean>()
+  const floatingLayers = createFloatingLayerStore()
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const pendingGroupCloseActivations = new Map<
     number,
@@ -962,11 +966,7 @@ function App() {
   let compositorFollowupResetScroll = false
   const compositorFollowupRelayoutMonitors = new Set<string>()
   function closeAllAtlasSelects(): boolean {
-    let any = false
-    for (const f of atlasSelectClosers) {
-      if (f()) any = true
-    }
-    return any
+    return floatingLayers.closeByKind('select')
   }
   function acquireAtlasOverlayPointer() {
     setAtlasOverlayPointerUsers((n) => n + 1)
@@ -1132,6 +1132,7 @@ function App() {
   })
 
   const shellContextMenus = createShellContextMenus({
+    floatingLayers,
     mainEl: () => mainRef,
     outputGeom,
     outputPhysical,
@@ -1160,7 +1161,6 @@ function App() {
     clearShellActionIssue,
     reportShellActionIssue,
     describeError,
-    dismissFloatingWire: hideShellFloatingWire,
     tabMenuItems: (windowId: number) => {
       const pinned = isWorkspaceWindowPinned(workspaceState(), windowId)
       return [
@@ -1178,6 +1178,21 @@ function App() {
     onTraySniMenuPick: (notifierId, menuPath, dbusmenuId) => {
       shellWireSend('sni_tray_menu_event', notifierId, menuPath, dbusmenuId)
     },
+  })
+
+  createEffect(() => {
+    const layers = floatingLayers.layers()
+      .filter((layer) => layer.placement)
+      .map((layer) => ({
+        id: layer.order >>> 0,
+        z: layer.order,
+        ...layer.placement!,
+      }))
+    if (layers.length === 0) {
+      if (!portalPickerVisible()) hideShellFloatingWire()
+      return
+    }
+    shellFloatingLayersWire(layers)
   })
 
   createEffect(() => {
@@ -1397,8 +1412,41 @@ function App() {
     const logicalCanvas = layoutUnionBbox()
     const canvas = logicalCanvas ? { w: logicalCanvas.w, h: logicalCanvas.h } : outputGeom()
     const main = mainRef ?? null
+    const projectFloatingElementRect = (selector: string) => {
+      const el = document.querySelector(selector)
+      if (!(el instanceof HTMLElement)) return null
+      const floatingRoot = el.closest('[data-floating-layer-id]') as HTMLElement | null
+      const layerId = floatingRoot?.getAttribute('data-floating-layer-id')
+      if (!layerId || !floatingRoot?.contains(el)) {
+        return shellContextMenus.projectCurrentMenuElementRect(el)
+      }
+      const layer = floatingLayers.layers().find((row) => row.id === layerId)
+      const placement = layer?.placement
+      if (!placement) return null
+      const rootRect = floatingRoot.getBoundingClientRect()
+      if (rootRect.width <= 0 || rootRect.height <= 0) return null
+      const rect = el.getBoundingClientRect()
+      const leftRatio = (rect.left - rootRect.left) / rootRect.width
+      const topRatio = (rect.top - rootRect.top) / rootRect.height
+      const rightRatio = (rect.right - rootRect.left) / rootRect.width
+      const bottomRatio = (rect.bottom - rootRect.top) / rootRect.height
+      const globalLeft = Math.round(placement.gx + leftRatio * placement.gw)
+      const globalTop = Math.round(placement.gy + topRatio * placement.gh)
+      const globalRight = Math.round(placement.gx + rightRatio * placement.gw)
+      const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
+      const ox = origin?.x ?? 0
+      const oy = origin?.y ?? 0
+      return {
+        x: globalLeft - ox,
+        y: globalTop - oy,
+        width: Math.max(1, globalRight - globalLeft),
+        height: Math.max(1, globalBottom - globalTop),
+        global_x: globalLeft,
+        global_y: globalTop,
+      }
+    }
     const volumeMenuRect = (selector: string) =>
-      shellContextMenus.projectCurrentMenuElementRect(document.querySelector(selector)) ??
+      projectFloatingElementRect(selector) ??
       e2eQueryRect(selector, main, canvas, origin)
     const stackOrderedWindows = [...windowsList()].sort(
       (a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id,
@@ -1583,11 +1631,11 @@ function App() {
         taskbar_power_toggle: e2eQueryRect('[data-shell-power-toggle]', main, canvas, origin),
         volume_menu_panel: volumeMenuRect('[data-shell-volume-menu-panel]'),
         volume_output_select: volumeMenuRect('[data-shell-volume-output-select] button'),
-        volume_output_option_0: volumeMenuRect('[data-shell-volume-output-select] [data-select-option-idx="0"]'),
-        volume_output_option_1: volumeMenuRect('[data-shell-volume-output-select] [data-select-option-idx="1"]'),
+        volume_output_option_0: volumeMenuRect('[data-select-panel="volume-output"] [data-select-option-idx="0"]'),
+        volume_output_option_1: volumeMenuRect('[data-select-panel="volume-output"] [data-select-option-idx="1"]'),
         volume_input_select: volumeMenuRect('[data-shell-volume-input-select] button'),
-        volume_input_option_0: volumeMenuRect('[data-shell-volume-input-select] [data-select-option-idx="0"]'),
-        volume_input_option_1: volumeMenuRect('[data-shell-volume-input-select] [data-select-option-idx="1"]'),
+        volume_input_option_0: volumeMenuRect('[data-select-panel="volume-input"] [data-select-option-idx="0"]'),
+        volume_input_option_1: volumeMenuRect('[data-select-panel="volume-input"] [data-select-option-idx="1"]'),
         volume_output_slider: volumeMenuRect('[data-shell-volume-output-default] input[type="range"]'),
         volume_playback_first_slider: volumeMenuRect('[data-shell-volume-playback-row="first"] input[type="range"]'),
         programs_menu_search: e2eQueryRect(
@@ -4549,18 +4597,23 @@ function App() {
   }
 
   const shellFloatingRegistry: ShellFloatingRegistry = {
-    registerAtlasSelectCloser(fn) {
-      atlasSelectClosers.add(fn)
-    },
-    unregisterAtlasSelectCloser(fn) {
-      atlasSelectClosers.delete(fn)
-    },
+    openLayer: floatingLayers.openLayer,
+    closeBranch: floatingLayers.closeBranch,
+    closeAll: floatingLayers.closeAll,
+    closeByKind: floatingLayers.closeByKind,
+    closeTopmostEscapable: floatingLayers.closeTopmostEscapable,
+    registerLayerSurface: floatingLayers.registerSurface,
+    unregisterLayerSurface: floatingLayers.unregisterSurface,
+    dismissPointerDown: floatingLayers.dismissPointerDown,
+    setLayerPlacement: floatingLayers.setLayerPlacement,
+    clearLayerPlacement: floatingLayers.clearLayerPlacement,
+    hasLayer: floatingLayers.hasLayer,
+    hasOpenKind: floatingLayers.hasOpenKind,
+    anyOpen: floatingLayers.anyOpen,
+    topmostLayerKind: floatingLayers.topmostLayerKind,
+    layers: floatingLayers.layers,
     closeAllAtlasSelects,
     dismissContextMenus: shellContextMenus.hideContextMenu,
-    acquireNestedContextMenuFocus: shellContextMenus.acquireNestedContextMenuFocus,
-    releaseNestedContextMenuFocus: shellContextMenus.releaseNestedContextMenuFocus,
-    registerNestedContextMenuSurface: shellContextMenus.registerNestedContextMenuSurface,
-    unregisterNestedContextMenuSurface: shellContextMenus.unregisterNestedContextMenuSurface,
     acquireAtlasOverlayPointer,
     releaseAtlasOverlayPointer,
     mainEl: () => mainRef,
@@ -4575,6 +4628,7 @@ function App() {
 
   return (
     <ShellFloatingProvider value={shellFloatingRegistry}>
+    <ShellContextMenusProvider value={shellContextMenus}>
     <main
       data-shell-main
       classList={{
@@ -4679,12 +4733,6 @@ function App() {
         taskbarHeight={TASKBAR_HEIGHT}
         screenTaskbarHiddenForFullscreen={screenTaskbarHiddenForFullscreen}
         isPrimaryTaskbarScreen={(screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary)}
-        programsMenuOpen={shellContextMenus.programsMenuOpen}
-        onProgramsMenuClick={shellContextMenus.onProgramsMenuClick}
-        powerMenuOpen={shellContextMenus.powerMenuOpen}
-        onPowerMenuClick={shellContextMenus.onPowerMenuClick}
-        volumeMenuOpen={shellContextMenus.volumeMenuOpen}
-        onVolumeMenuClick={shellContextMenus.onVolumeMenuClick}
         volumeMuted={() => trayVolumeState().muted}
         volumePercent={() => trayVolumeState().volumePercent}
         taskbarRowsForScreen={taskbarRowsForScreen}
@@ -4739,14 +4787,9 @@ function App() {
         atlasOverlayPointerUsers={atlasOverlayPointerUsers}
         setMenuAtlasHostRef={shellContextMenus.setMenuAtlasHostRef}
         shellMenuAtlasTop={shellContextMenus.shellMenuAtlasTop}
-        programsMenuOpen={shellContextMenus.programsMenuOpen}
-        powerMenuOpen={shellContextMenus.powerMenuOpen}
         volumeMenuOpen={shellContextMenus.volumeMenuOpen}
         tabMenuOpen={shellContextMenus.tabMenuOpen}
         traySniMenuOpen={shellContextMenus.traySniMenuOpen}
-        programsMenuProps={shellContextMenus.programsMenuProps}
-        powerMenuProps={shellContextMenus.powerMenuProps}
-        volumeMenuProps={shellContextMenus.volumeMenuProps}
         tabMenuProps={shellContextMenus.tabMenuProps}
         traySniMenuProps={shellContextMenus.traySniMenuProps}
       />
@@ -4755,6 +4798,7 @@ function App() {
         {crosshairDebugOverlay()}
       </div>
     </main>
+    </ShellContextMenusProvider>
     </ShellFloatingProvider>
   )
 }

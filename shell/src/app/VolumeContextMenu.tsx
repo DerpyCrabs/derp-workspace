@@ -1,28 +1,12 @@
 import Volume2 from 'lucide-solid/icons/volume-2'
 import VolumeX from 'lucide-solid/icons/volume-x'
 import { For, Show } from 'solid-js'
-import { createMemo, type Accessor } from 'solid-js'
+import { createMemo } from 'solid-js'
 import { Select } from '../Select'
 import { ShellAudioRow } from '../settings/ShellAudioControls'
 import type { ShellAudioDevice } from '../settings/audioState'
 import { defaultAudioDevice, sliderMax, useShellAudioState } from '../settings/useShellAudioState'
-
-type VolumeContextMenuProps = {
-  anchor: Accessor<{
-    x: number
-    y: number
-    alignAboveY?: number
-  }>
-  atlasTop: Accessor<number>
-  bounds: Accessor<{
-    x: number
-    y: number
-    w: number
-    h: number
-  }>
-  setPanelRef: (el: HTMLDivElement) => void
-  closeContextMenu: () => void
-}
+import { useShellContextMenus } from './ShellContextMenusContext'
 
 function audioDeviceSelectLabel(row: ShellAudioDevice | null, emptyLabel: string) {
   if (!row) return emptyLabel
@@ -65,7 +49,8 @@ function AudioDeviceControl(props: {
   )
 }
 
-export function VolumeContextMenu(props: VolumeContextMenuProps) {
+export function VolumeContextMenu() {
+  const props = useShellContextMenus().volumeMenuProps
   const audio = useShellAudioState()
   const defaultSink = () => defaultAudioDevice(audio.state()?.sinks ?? [])
   const defaultSource = () => defaultAudioDevice(audio.state()?.sources ?? [])
@@ -74,7 +59,7 @@ export function VolumeContextMenu(props: VolumeContextMenuProps) {
     const bounds = props.bounds()
     const width = Math.min(480, Math.max(320, bounds.w - 16))
     return {
-      left: '8px',
+      right: `calc(100% - ${Math.round(props.anchor().x)}px)`,
       top: '8px',
       width: `${Math.round(width)}px`,
       'max-height': `${Math.max(240, bounds.h - 16)}px`,
@@ -117,10 +102,11 @@ export function VolumeContextMenu(props: VolumeContextMenuProps) {
                       onChange={(row) => audio.makeDefault(row as ShellAudioDevice)}
                       itemLabel={(row) => audioDeviceSelectLabel(row as ShellAudioDevice | null, 'No output devices')}
                       equals={(a, b) => (a as ShellAudioDevice).id === (b as ShellAudioDevice).id}
-                      placement="inline"
+                      panelDataId="volume-output"
+                      placement="floating"
                       contextMenuPolicy="preserve"
                       triggerClass="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) w-full cursor-pointer rounded px-[0.55rem] py-[0.45rem] text-left font-inherit text-[0.76rem]"
-                      listClass="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) mt-1 flex max-h-52 min-w-48 flex-col overflow-y-auto rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
+                      listClass="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) absolute top-2 left-2 z-90000 flex max-h-52 min-w-48 flex-col overflow-y-auto rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
                     />
                   </div>
                   <Show when={defaultSink()}>
@@ -155,10 +141,11 @@ export function VolumeContextMenu(props: VolumeContextMenuProps) {
                       onChange={(row) => audio.makeDefault(row as ShellAudioDevice)}
                       itemLabel={(row) => audioDeviceSelectLabel(row as ShellAudioDevice | null, 'No microphones')}
                       equals={(a, b) => (a as ShellAudioDevice).id === (b as ShellAudioDevice).id}
-                      placement="inline"
+                      panelDataId="volume-input"
+                      placement="floating"
                       contextMenuPolicy="preserve"
                       triggerClass="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) w-full cursor-pointer rounded px-[0.55rem] py-[0.45rem] text-left font-inherit text-[0.76rem]"
-                      listClass="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) mt-1 flex max-h-52 min-w-48 flex-col overflow-y-auto rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
+                      listClass="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) absolute top-2 left-2 z-90000 flex max-h-52 min-w-48 flex-col overflow-y-auto rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
                     />
                   </div>
                   <Show when={defaultSource()}>

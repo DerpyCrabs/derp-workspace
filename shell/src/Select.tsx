@@ -2,9 +2,9 @@ import {
   For,
   Show,
   createEffect,
+  createUniqueId,
   createSignal,
   onCleanup,
-  onMount,
   type Accessor,
   type Component,
 } from 'solid-js'
@@ -12,8 +12,7 @@ import { Portal } from 'solid-js/web'
 import { useShellFloating } from './ShellFloatingContext'
 import { resolveSelectBehavior } from './selectBehavior'
 import {
-  hideFloatingPlacementWire,
-  pushShellFloatingWireFromDom,
+  measureShellFloatingPlacementFromDom,
   type ShellFloatingAnchor,
 } from './shellFloatingPlacement'
 
@@ -26,6 +25,7 @@ export type SelectProps<T> = {
   triggerClass?: string
   listClass?: string
   minMenuWidthPx?: number
+  panelDataId?: string
   open?: Accessor<boolean>
   setOpen?: (v: boolean) => void
   placement?: 'floating' | 'inline'
@@ -62,20 +62,12 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   let triggerBtn: HTMLButtonElement | undefined
   let panelEl: HTMLDivElement | undefined
   let suppressTriggerClick = false
+  const layerId = `select:${createUniqueId()}`
 
   const [anchorPt, setAnchorPt] = createSignal<ShellFloatingAnchor>({ x: 0, y: 0 })
+  const [parentLayerId, setParentLayerId] = createSignal<string | null>(null)
 
   const eq = () => props.equals ?? ((a: unknown, b: unknown) => a === b)
-
-  onMount(() => {
-    const closer = () => {
-      if (!isOpen()) return false
-      setIsOpen(false)
-      return true
-    }
-    shellFloat.registerAtlasSelectCloser(closer)
-    onCleanup(() => shellFloat.unregisterAtlasSelectCloser(closer))
-  })
 
   createEffect(() => {
     if (!isOpen() || !floatingPlacement()) return
@@ -102,7 +94,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   createEffect(() => {
-    if (!isOpen()) return
+    if (!isOpen() || floatingPlacement()) return
     const onPtr = (e: PointerEvent) => {
       const t = e.target as Node | null
       if (!t) return
@@ -115,22 +107,42 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   createEffect(() => {
-    if (!preserveContextMenu() || !isOpen()) return
-    shellFloat.acquireNestedContextMenuFocus()
-    onCleanup(() => shellFloat.releaseNestedContextMenuFocus())
+    if (!isOpen() || !floatingPlacement()) {
+      shellFloat.clearLayerPlacement(layerId)
+      shellFloat.closeBranch(layerId)
+      return
+    }
+    if (!shellFloat.hasLayer(layerId)) {
+      shellFloat.openLayer({
+        id: layerId,
+        parentId:
+          preserveContextMenu()
+            ? (parentLayerId() ??
+              [...shellFloat.layers()]
+                .reverse()
+                .find((layer) => layer.kind === 'context_menu')?.id ??
+              null)
+            : null,
+        kind: 'select',
+        onClose: () => setIsOpen(false),
+      })
+    }
   })
 
   createEffect(() => {
-    if (!preserveContextMenu() || !isOpen() || !behavior().registerNestedSurface) return
-    const hitTarget = (target: Node) => panelEl?.contains(target) === true
-    shellFloat.registerNestedContextMenuSurface(hitTarget)
-    onCleanup(() => shellFloat.unregisterNestedContextMenuSurface(hitTarget))
+    if (!isOpen() || !floatingPlacement()) return
+    const hit = (target: Node) => anchorWrap?.contains(target) === true || panelEl?.contains(target) === true
+    shellFloat.registerLayerSurface(layerId, hit)
+    onCleanup(() => shellFloat.unregisterLayerSurface(layerId, hit))
   })
 
   createEffect(() => {
-    if (!floatingPlacement()) return
+    if (!floatingPlacement()) {
+      shellFloat.clearLayerPlacement(layerId)
+      return
+    }
     if (!isOpen()) {
-      hideFloatingPlacementWire()
+      shellFloat.clearLayerPlacement(layerId)
       return
     }
     void props.options.length
@@ -144,7 +156,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
       const panel = panelEl
       const bufH = shellFloat.atlasBufferH()
       if (!main || !atlas || !panel || !og || !ph) return
-      pushShellFloatingWireFromDom({
+      const { placement } = measureShellFloatingPlacementFromDom({
         main,
         atlasHost: atlas,
         panel,
@@ -157,6 +169,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
         screens: shellFloat.screenDraftRows(),
         layoutOrigin: shellFloat.layoutCanvasOrigin(),
       })
+      shellFloat.setLayerPlacement(layerId, placement)
     })
     onCleanup(() => cancelAnimationFrame(rid))
   })
@@ -204,6 +217,9 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
     if (floatingPlacement()) {
       const b = triggerBtn?.getBoundingClientRect()
       if (b) setAnchorPt({ x: b.left, y: b.bottom, alignAboveY: b.top })
+      setParentLayerId(
+        preserveContextMenu() ? [...shellFloat.layers()].reverse().find((layer) => layer.kind === 'context_menu')?.id ?? null : null,
+      )
     }
     setIsOpen(true)
   }
@@ -250,6 +266,8 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
               style={{ 'min-width': `${minW()}px` }}
               role="listbox"
               data-select-list
+              data-select-panel={props.panelDataId}
+              data-floating-layer-id={floatingPlacement() ? layerId : undefined}
             >
               <For each={props.options as unknown[]}>
                 {(opt, idx) => (

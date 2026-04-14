@@ -172,6 +172,19 @@ impl DrmHead {
                 output,
                 &mut render_elements,
             );
+            let shell_floating = match crate::shell_render::compositor_shell_floating_elements(
+                state, renderer, output,
+            ) {
+                Ok(layers) => layers,
+                Err(e) => {
+                    warn!(
+                        target: "derp_shell_dmabuf",
+                        ?e,
+                        "DRM render path: shell floating dma-buf layers skipped"
+                    );
+                    Vec::new()
+                }
+            };
             let shell_menu = match crate::shell_render::compositor_shell_context_menu_element(
                 state, renderer, output,
             ) {
@@ -206,6 +219,9 @@ impl DrmHead {
             {
                 match space_render_elements(renderer, [&state.space], output, 1.0) {
                     Ok(space_els) => {
+                        for el in &shell_floating {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
                         if let Some(ref el) = shell_menu {
                             render_elements.push(DesktopStack::ShellDma(el));
                         }
@@ -270,6 +286,9 @@ impl DrmHead {
                     output,
                     1.0,
                 );
+                for el in &shell_floating {
+                    render_elements.push(DesktopStack::ShellDma(el));
+                }
                 if let Some(ref el) = shell_menu {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }

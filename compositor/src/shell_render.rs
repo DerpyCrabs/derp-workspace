@@ -3,6 +3,7 @@
 use smithay::{
     backend::allocator::Buffer,
     backend::renderer::{
+        element::Id,
         gles::{GlesError, GlesRenderer},
         ImportDma,
     },
@@ -258,14 +259,14 @@ pub fn compositor_shell_dmabuf_element(
     }
 }
 
-pub fn compositor_shell_context_menu_element(
+fn shell_overlay_element_for_placement(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
     output: &Output,
+    placement: &crate::state::ShellContextMenuPlacement,
+    overlay_id: &Id,
+    error_label: &'static str,
 ) -> Result<Option<ShellDmaElement>, GlesError> {
-    if state.shell_context_menu.is_none() {
-        return Ok(None);
-    }
     if !state.shell_has_frame || !state.shell_frame_is_dmabuf {
         return Ok(None);
     }
@@ -275,10 +276,6 @@ pub fn compositor_shell_context_menu_element(
     let Some(output_geo) = state.space.output_geometry(output) else {
         return Ok(None);
     };
-    let Some(placement) = state.shell_context_menu.as_ref() else {
-        return Ok(None);
-    };
-
     let menu_g = placement.global_rect;
     let Some(inter) = menu_g.intersection(Rectangle::new(output_geo.loc, output_geo.size)) else {
         return Ok(None);
@@ -348,7 +345,7 @@ pub fn compositor_shell_context_menu_element(
     match crate::desktop_stack::shell_dmabuf_overlay_element(
         renderer,
         dmabuf,
-        state.shell_context_menu_overlay_id.clone(),
+        overlay_id.clone(),
         shell_loc_phys,
         shell_size_logical,
         buffer_src,
@@ -360,9 +357,53 @@ pub fn compositor_shell_context_menu_element(
             tracing::warn!(
                 target: "derp_shell_dmabuf",
                 ?e,
-                "context menu dma-buf layer import failed"
+                %error_label,
+                "shell floating dma-buf layer import failed"
             );
             Ok(None)
         }
     }
+}
+
+pub fn compositor_shell_context_menu_element(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<Option<ShellDmaElement>, GlesError> {
+    let Some(placement) = state.shell_context_menu.as_ref() else {
+        return Ok(None);
+    };
+    shell_overlay_element_for_placement(
+        state,
+        renderer,
+        output,
+        placement,
+        &state.shell_context_menu_overlay_id,
+        "context menu dma-buf layer import failed",
+    )
+}
+
+pub fn compositor_shell_floating_elements(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Result<Vec<ShellDmaElement>, GlesError> {
+    let mut out = Vec::new();
+    for layer in &state.shell_floating_layers {
+        let placement = crate::state::ShellContextMenuPlacement {
+            buffer_rect: layer.buffer_rect,
+            global_rect: layer.global_rect,
+        };
+        if let Some(el) = shell_overlay_element_for_placement(
+            state,
+            renderer,
+            output,
+            &placement,
+            &layer.overlay_id,
+            "floating layer dma-buf import failed",
+        )? {
+            out.push(el);
+        }
+    }
+    Ok(out)
 }

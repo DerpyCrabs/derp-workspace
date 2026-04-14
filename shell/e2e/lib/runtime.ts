@@ -109,6 +109,12 @@ export interface CompositorWorkspaceRect {
   height: number
 }
 
+export interface CompositorFloatingLayerSnapshot {
+  id: number
+  z: number
+  global: CompositorWorkspaceRect
+}
+
 export interface CompositorSnapshot {
   windows: WindowSnapshot[]
   outputs: OutputSnapshot[]
@@ -118,6 +124,7 @@ export interface CompositorSnapshot {
   pointer?: { x: number; y: number }
   workspace?: CompositorWorkspaceRect | null
   shell_context_menu_global?: CompositorWorkspaceRect | null
+  shell_floating_layers?: CompositorFloatingLayerSnapshot[]
   [key: string]: unknown
 }
 

@@ -13,6 +13,16 @@ import Volume2 from 'lucide-solid/icons/volume-2'
 import VolumeX from 'lucide-solid/icons/volume-x'
 import X from 'lucide-solid/icons/x'
 import { For, Show, createSignal, onCleanup, type Component } from 'solid-js'
+import { PowerContextMenu } from './app/PowerContextMenu'
+import { ProgramsContextMenu } from './app/ProgramsContextMenu'
+import {
+  PowerTaskbarMenu,
+  ProgramsTaskbarMenu,
+  TaskbarContextMenuContent,
+  TaskbarContextMenuTrigger,
+  VolumeTaskbarMenu,
+} from './app/TaskbarContextMenu'
+import { VolumeContextMenu } from './app/VolumeContextMenu'
 
 export type TaskbarWindowRow = {
   group_id: string
@@ -38,12 +48,6 @@ export type TaskbarProps = {
   trayIconSlotPx: number
   onSniTrayActivate: (id: string) => void
   onSniTrayContextMenu: (id: string, clientX: number, clientY: number) => void
-  programsMenuOpen: boolean
-  onProgramsMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
-  powerMenuOpen: boolean
-  onPowerMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
-  volumeMenuOpen: boolean
-  onVolumeMenuClick: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void
   volumeMuted: boolean
   volumePercent: number | null
   windows: TaskbarWindowRow[]
@@ -182,7 +186,6 @@ function TaskbarWindowRows(props: {
 
 export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
-  let suppressVolumeClick = false
   const volumeIcon = () => {
     const Icon = props.volumeMuted ? VolumeX : (props.volumePercent ?? 0) <= 33 ? Volume1 : Volume2
     return <Icon class="h-4 w-4" stroke-width={2} />
@@ -222,18 +225,27 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-monitor={props.monitorName}
           class="mr-1 flex h-full shrink-0 items-stretch"
         >
-          <button
-            type="button"
-            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
-            data-shell-programs-toggle
-            aria-expanded={props.programsMenuOpen}
-            aria-haspopup="menu"
-            aria-label="Search apps"
-            title="Search apps"
-            onClick={(e) => props.onProgramsMenuClick(e)}
-          >
-            <LayoutGrid class="h-4 w-4" stroke-width={2} />
-          </button>
+          <ProgramsTaskbarMenu>
+            <TaskbarContextMenuTrigger>
+              {(menu) => (
+                <button
+                  type="button"
+                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
+                  data-shell-programs-toggle
+                  aria-expanded={menu.open()}
+                  aria-haspopup="menu"
+                  aria-label="Search apps"
+                  title="Search apps"
+                  onClick={menu.onClick}
+                >
+                  <LayoutGrid class="h-4 w-4" stroke-width={2} />
+                </button>
+              )}
+            </TaskbarContextMenuTrigger>
+            <TaskbarContextMenuContent>
+              <ProgramsContextMenu />
+            </TaskbarContextMenuContent>
+          </ProgramsTaskbarMenu>
         </div>
         <div
           data-shell-taskbar-exclude
@@ -298,31 +310,30 @@ export function Taskbar(props: TaskbarProps) {
               }}
             </For>
           </div>
-          <button
-            type="button"
-            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-            classList={{
-              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.volumeMenuOpen,
-            }}
-            data-shell-volume-toggle
-            aria-expanded={props.volumeMenuOpen}
-            aria-haspopup="dialog"
-            title={props.volumeMuted ? 'Volume muted' : props.volumePercent !== null ? `Volume ${props.volumePercent}%` : 'Volume'}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              suppressVolumeClick = true
-              props.onVolumeMenuClick(e)
-            }}
-            onClick={(e) => {
-              if (suppressVolumeClick) {
-                suppressVolumeClick = false
-                return
-              }
-              props.onVolumeMenuClick(e)
-            }}
-          >
-            {volumeIcon()}
-          </button>
+          <VolumeTaskbarMenu>
+            <TaskbarContextMenuTrigger>
+              {(menu) => (
+                <button
+                  type="button"
+                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                  classList={{
+                    'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
+                  }}
+                  data-shell-volume-toggle
+                  aria-expanded={menu.open()}
+                  aria-haspopup="dialog"
+                  title={props.volumeMuted ? 'Volume muted' : props.volumePercent !== null ? `Volume ${props.volumePercent}%` : 'Volume'}
+                  onPointerDown={menu.onPointerDown}
+                  onClick={menu.onClick}
+                >
+                  {volumeIcon()}
+                </button>
+              )}
+            </TaskbarContextMenuTrigger>
+            <TaskbarContextMenuContent>
+              <VolumeContextMenu />
+            </TaskbarContextMenuContent>
+          </VolumeTaskbarMenu>
           <button
             type="button"
             class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
@@ -349,20 +360,29 @@ export function Taskbar(props: TaskbarProps) {
           >
             <Bug class="h-4 w-4" stroke-width={2} />
           </button>
-          <button
-            type="button"
-            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
-            classList={{
-              'bg-(--shell-control-muted-hover) text-(--shell-text)': props.powerMenuOpen,
-            }}
-            data-shell-power-toggle
-            aria-expanded={props.powerMenuOpen}
-            aria-haspopup="menu"
-            title="Power"
-            onClick={(e) => props.onPowerMenuClick(e)}
-          >
-            <Power class="h-4 w-4" stroke-width={2} />
-          </button>
+          <PowerTaskbarMenu>
+            <TaskbarContextMenuTrigger>
+              {(menu) => (
+                <button
+                  type="button"
+                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                  classList={{
+                    'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
+                  }}
+                  data-shell-power-toggle
+                  aria-expanded={menu.open()}
+                  aria-haspopup="menu"
+                  title="Power"
+                  onClick={menu.onClick}
+                >
+                  <Power class="h-4 w-4" stroke-width={2} />
+                </button>
+              )}
+            </TaskbarContextMenuTrigger>
+            <TaskbarContextMenuContent>
+              <PowerContextMenu />
+            </TaskbarContextMenuContent>
+          </PowerTaskbarMenu>
           <div class="flex min-w-18 shrink-0 flex-col items-end justify-center border-l border-(--shell-border) px-2 text-[10px] leading-tight text-(--shell-text-dim)">
             <span class="text-[0.76rem] font-semibold text-(--shell-text)">
               {clockTimeFormatter.format(now())}

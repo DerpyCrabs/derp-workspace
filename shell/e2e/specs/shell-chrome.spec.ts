@@ -385,15 +385,43 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const outputExpanded = await waitFor(
       'wait for volume output selector options',
       async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        if (!shell.volume_menu_open) return null
-        return shell.controls.volume_output_option_0 ? shell : null
+        const snapshots = await getSnapshots(base)
+        if (!snapshots.shell.volume_menu_open) return null
+        if (!snapshots.shell.controls.volume_output_option_0) return null
+        return (snapshots.compositor.shell_floating_layers?.length ?? 0) >= 2 ? snapshots : null
       },
       5000,
       100,
     )
-    assertTopWindow(outputExpanded, SHELL_UI_SETTINGS_WINDOW_ID, 'output selector should not disturb shell focus')
-    await clickRect(base, outputExpanded.controls.volume_output_option_1 ?? outputExpanded.controls.volume_output_option_0!)
+    const floatingLayers = [...(outputExpanded.compositor.shell_floating_layers ?? [])].sort((a, b) => a.z - b.z)
+    assert(floatingLayers.length >= 2, `expected nested floating layers for volume selector, got ${floatingLayers.length}`)
+    assert(floatingLayers.at(-1)!.z > floatingLayers[0]!.z, 'nested selector should render above the parent volume menu')
+    const topLayer = floatingLayers.at(-1)!
+    const outputOptionRect =
+      outputExpanded.shell.controls.volume_output_option_0 ?? outputExpanded.shell.controls.volume_output_option_1
+    assert(outputOptionRect, 'missing projected output option rect')
+    assert(
+      pointInRect(
+        {
+          x: 0,
+          y: 0,
+          global_x: topLayer.global.x,
+          global_y: topLayer.global.y,
+          width: topLayer.global.width,
+          height: topLayer.global.height,
+        },
+        {
+          x: outputOptionRect.global_x + outputOptionRect.width / 2,
+          y: outputOptionRect.global_y + outputOptionRect.height / 2,
+        },
+      ),
+      'topmost floating layer should contain the expanded output selector options',
+    )
+    assertTopWindow(outputExpanded.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'output selector should not disturb shell focus')
+    await clickRect(
+      base,
+      outputExpanded.shell.controls.volume_output_option_1 ?? outputExpanded.shell.controls.volume_output_option_0!,
+    )
     const afterOutputPick = await waitFor(
       'wait for output picker settle',
       async () => {
@@ -404,6 +432,42 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(afterOutputPick.controls.volume_menu_panel, 'volume panel should stay open after output selection')
+    assert(afterOutputPick.controls.volume_input_select, 'missing input selector after output selection')
+    await clickRect(base, afterOutputPick.controls.volume_input_select)
+    const inputExpanded = await waitFor(
+      'wait for input selector options',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (!snapshots.shell.volume_menu_open) return null
+        if (!snapshots.shell.controls.volume_input_option_0) return null
+        const layers = snapshots.compositor.shell_floating_layers ?? []
+        return layers.length >= 2 ? snapshots : null
+      },
+      5000,
+      100,
+    )
+    const inputLayers = [...(inputExpanded.compositor.shell_floating_layers ?? [])].sort((a, b) => a.z - b.z)
+    assert(inputLayers.length >= 2, 'input selector should keep parent menu plus one nested layer')
+    const inputTopLayer = inputLayers.at(-1)!
+    const inputOptionRect = inputExpanded.shell.controls.volume_input_option_0 ?? inputExpanded.shell.controls.volume_input_option_1
+    assert(inputOptionRect, 'missing projected input option rect')
+    assert(
+      pointInRect(
+        {
+          x: 0,
+          y: 0,
+          global_x: inputTopLayer.global.x,
+          global_y: inputTopLayer.global.y,
+          width: inputTopLayer.global.width,
+          height: inputTopLayer.global.height,
+        },
+        {
+          x: inputOptionRect.global_x + inputOptionRect.width / 2,
+          y: inputOptionRect.global_y + inputOptionRect.height / 2,
+        },
+      ),
+      'topmost floating layer should switch to the input selector after opening it',
+    )
 
     const outputSlider = afterOutputPick.controls.volume_output_slider
     assert(outputSlider, 'missing default output volume slider')
@@ -436,6 +500,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const closed = await waitForVolumeMenuClosed(base)
     assertTopWindow(closed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after volume menu dismiss')
+    const dismissedLayers = await waitFor(
+      'wait for all floating layers dismissed after outside click',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        return (snapshots.compositor.shell_floating_layers?.length ?? 0) === 0 ? snapshots : null
+      },
+      5000,
+      100,
+    )
+    assert((dismissedLayers.compositor.shell_floating_layers?.length ?? 0) === 0, 'outside click should dismiss all nested floating layers')
 
     await writeTextArtifact('tray-volume-menu.html', volumeHtml)
     await writeJsonArtifact('tray-volume-audio-state.json', audioAfterOutputSlide)

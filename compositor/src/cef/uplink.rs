@@ -258,6 +258,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_floating_layers_json(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_floating_layers_json(&json);
+        });
+    }
+
     pub fn shell_tile_preview_canvas(&self, visible: bool, lx: i32, ly: i32, lw: i32, lh: i32) {
         self.run(move |s| {
             s.apply_shell_tile_preview_canvas(visible, lx, ly, lw, lh);

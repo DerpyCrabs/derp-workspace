@@ -160,6 +160,7 @@ struct E2eCompositorSnapshot {
     screenshot_selection_active: bool,
     shell_context_menu_visible: bool,
     shell_context_menu_global: Option<E2eRectSnapshot>,
+    shell_floating_layers: Vec<E2eFloatingLayerSnapshot>,
     shell_pointer_grab_window_id: Option<u32>,
     shell_move_window_id: Option<u32>,
     shell_resize_window_id: Option<u32>,
@@ -171,6 +172,13 @@ struct E2eCompositorSnapshot {
     outputs: Vec<E2eOutputSnapshot>,
     windows: Vec<E2eWindowSnapshot>,
     orphaned_wayland_surface_protocol_ids: Vec<u32>,
+}
+
+#[derive(Serialize)]
+struct E2eFloatingLayerSnapshot {
+    id: u32,
+    z: u32,
+    global: E2eRectSnapshot,
 }
 
 impl CompositorState {
@@ -459,6 +467,50 @@ impl CompositorState {
             .collect();
         orphaned_wayland_surface_protocol_ids.sort_unstable();
         orphaned_wayland_surface_protocol_ids.dedup();
+        let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self
+            .shell_floating_layers
+            .iter()
+            .map(|layer| E2eFloatingLayerSnapshot {
+                id: layer.id,
+                z: layer.z,
+                global: E2eRectSnapshot {
+                    x: layer.global_rect.loc.x,
+                    y: layer.global_rect.loc.y,
+                    width: layer.global_rect.size.w,
+                    height: layer.global_rect.size.h,
+                },
+            })
+            .collect();
+        let shell_context_menu_global = if shell_floating_layers.is_empty() {
+            self.shell_context_menu.as_ref().map(|m| {
+                let g = &m.global_rect;
+                E2eRectSnapshot {
+                    x: g.loc.x,
+                    y: g.loc.y,
+                    width: g.size.w,
+                    height: g.size.h,
+                }
+            })
+        } else {
+            let min_x = shell_floating_layers.iter().map(|layer| layer.global.x).min().unwrap_or(0);
+            let min_y = shell_floating_layers.iter().map(|layer| layer.global.y).min().unwrap_or(0);
+            let max_x = shell_floating_layers
+                .iter()
+                .map(|layer| layer.global.x + layer.global.width)
+                .max()
+                .unwrap_or(min_x);
+            let max_y = shell_floating_layers
+                .iter()
+                .map(|layer| layer.global.y + layer.global.height)
+                .max()
+                .unwrap_or(min_y);
+            Some(E2eRectSnapshot {
+                x: min_x,
+                y: min_y,
+                width: max_x - min_x,
+                height: max_y - min_y,
+            })
+        };
         serde_json::to_string(&E2eCompositorSnapshot {
             captured_at_ms: self.e2e_now_ms(),
             pointer: E2ePointSnapshot {
@@ -469,16 +521,9 @@ impl CompositorState {
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
             shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
             screenshot_selection_active: self.screenshot_selection_active,
-            shell_context_menu_visible: self.shell_context_menu.is_some(),
-            shell_context_menu_global: self.shell_context_menu.as_ref().map(|m| {
-                let g = &m.global_rect;
-                E2eRectSnapshot {
-                    x: g.loc.x,
-                    y: g.loc.y,
-                    width: g.size.w,
-                    height: g.size.h,
-                }
-            }),
+            shell_context_menu_visible: self.shell_context_menu.is_some() || !shell_floating_layers.is_empty(),
+            shell_context_menu_global,
+            shell_floating_layers,
             shell_pointer_grab_window_id: self.shell_ui_pointer_grab,
             shell_move_window_id: self.shell_move_window_id,
             shell_resize_window_id: self.shell_resize_window_id,

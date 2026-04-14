@@ -304,7 +304,7 @@ impl CompositorState {
         let pos = pointer.current_location();
         let mut route_cef = self.shell_pointer_route_to_cef(pos);
         if button_state == ButtonState::Pressed
-            && self.shell_context_menu.is_some()
+            && (self.shell_context_menu.is_some() || !self.shell_floating_layers.is_empty())
             && !self.shell_point_in_context_menu_global(pos)
             && !route_cef
         {
@@ -776,7 +776,7 @@ impl CompositorState {
                 };
                 self.touch_emulation_slot = Some(event.slot());
                 let pos = self.touch_global_point(&event, ws);
-                if self.shell_context_menu.is_some()
+                if (self.shell_context_menu.is_some() || !self.shell_floating_layers.is_empty())
                     && !self.shell_point_in_context_menu_global(pos)
                     && !self.shell_pointer_route_to_cef(pos)
                 {

@@ -1,22 +1,21 @@
-import { For, Show, type Accessor } from 'solid-js'
-import type { ShellContextMenuItem } from '../contextMenu'
+import { For, Show, createMemo } from 'solid-js'
+import { useShellContextMenus } from './ShellContextMenusContext'
 
-type PowerContextMenuProps = {
-  items: Accessor<ShellContextMenuItem[]>
-  highlightIdx: Accessor<number>
-  setPanelRef: (el: HTMLDivElement) => void
-  closeContextMenu: () => void
-}
-
-export function PowerContextMenu(props: PowerContextMenuProps) {
+export function PowerContextMenu() {
+  const props = useShellContextMenus().powerMenuProps
+  const panelStyle = createMemo(() => ({
+    right: `calc(100% - ${Math.round(props.anchor().x)}px)`,
+    top: '8px',
+  }))
   return (
     <div
-      class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute top-2 left-2 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
+      class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
       role="menu"
       aria-label="Power"
       ref={(el) => {
         props.setPanelRef(el)
       }}
+      style={panelStyle()}
     >
       <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
         <For each={props.items()}>

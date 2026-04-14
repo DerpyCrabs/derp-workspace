@@ -487,6 +487,7 @@ pub struct CompositorState {
     pub(crate) shell_context_menu_atlas_buffer_h: u32,
     pub(crate) shell_context_menu_overlay_id: Id,
     pub(crate) shell_context_menu: Option<ShellContextMenuPlacement>,
+    pub(crate) shell_floating_layers: Vec<ShellFloatingPlacement>,
     pub(crate) shell_ui_windows: Vec<ShellUiWindowPlacement>,
     pub(crate) shell_ui_windows_generation: u32,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
@@ -517,6 +518,15 @@ pub struct CompositorState {
 pub struct ShellContextMenuPlacement {
     pub buffer_rect: Rectangle<i32, Buffer>,
     pub global_rect: Rectangle<i32, Logical>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShellFloatingPlacement {
+    pub id: u32,
+    pub z: u32,
+    pub buffer_rect: Rectangle<i32, Buffer>,
+    pub global_rect: Rectangle<i32, Logical>,
+    pub overlay_id: Id,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +856,7 @@ impl CompositorState {
             shell_context_menu_atlas_buffer_h: 0,
             shell_context_menu_overlay_id: Id::new(),
             shell_context_menu: None,
+            shell_floating_layers: Vec::new(),
             shell_ui_windows: Vec::new(),
             shell_ui_windows_generation: 0,
             shell_focused_ui_window_id: None,
@@ -4708,6 +4719,14 @@ impl CompositorState {
         }
         let px = pos.x;
         let py = pos.y;
+        for layer in self.shell_floating_layers.iter().rev() {
+            let g = &layer.global_rect;
+            let x2 = g.loc.x.saturating_add(g.size.w) as f64;
+            let y2 = g.loc.y.saturating_add(g.size.h) as f64;
+            if px >= g.loc.x as f64 && px < x2 && py >= g.loc.y as f64 && py < y2 {
+                return true;
+            }
+        }
         if let Some(ref menu) = self.shell_context_menu {
             let g = &menu.global_rect;
             let x2 = g.loc.x.saturating_add(g.size.w) as f64;
@@ -4730,6 +4749,17 @@ impl CompositorState {
     }
 
     pub fn shell_point_in_context_menu_global(&self, pos: Point<f64, Logical>) -> bool {
+        for layer in self.shell_floating_layers.iter().rev() {
+            let g = &layer.global_rect;
+            let px = pos.x;
+            let py = pos.y;
+            let x2 = g.loc.x.saturating_add(g.size.w) as f64;
+            let y2 = g.loc.y.saturating_add(g.size.h) as f64;
+            const EPS: f64 = 1.0e-6;
+            if px >= g.loc.x as f64 - EPS && px < x2 + EPS && py >= g.loc.y as f64 - EPS && py < y2 + EPS {
+                return true;
+            }
+        }
         let Some(ref menu) = self.shell_context_menu else {
             return false;
         };
@@ -4743,11 +4773,12 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_dismiss_context_menu_from_compositor(&mut self) {
-        if self.shell_context_menu.is_none() {
+        if self.shell_context_menu.is_none() && self.shell_floating_layers.is_empty() {
             return;
         }
         self.shell_context_menu = None;
         self.shell_context_menu_overlay_id = Id::new();
+        self.shell_floating_layers.clear();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss);
     }
 
@@ -4774,6 +4805,31 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(i32, i32)> {
+        for layer in self.shell_floating_layers.iter().rev() {
+            let g = &layer.global_rect;
+            let gw = g.size.w.max(1) as f64;
+            let gh = g.size.h.max(1) as f64;
+            let px = pos.x - g.loc.x as f64;
+            let py = pos.y - g.loc.y as f64;
+            if px < 0.0 || py < 0.0 || px >= gw || py >= gh {
+                continue;
+            }
+            let br = &layer.buffer_rect;
+            let bw = br.size.w.max(1) as f64;
+            let bh = br.size.h.max(1) as f64;
+            let bx = br.loc.x as f64 + (px / gw) * bw;
+            let by = br.loc.y as f64 + (py / gh) * bh;
+            let (buf_w, buf_h) = self.shell_view_px?;
+            if buf_w == 0 || buf_h == 0 {
+                return None;
+            }
+            let (clw, clh) = self.shell_canvas_logical_size;
+            let vlx = ((bx / buf_w as f64) * clw as f64).round() as i32;
+            let vly = ((by / buf_h as f64) * clh as f64).round() as i32;
+            let xmax = clw.saturating_sub(1) as i32;
+            let ymax = clh.saturating_sub(1) as i32;
+            return Some((vlx.clamp(0, xmax), vly.clamp(0, ymax)));
+        }
         if let Some(ref menu) = self.shell_context_menu {
             let g = &menu.global_rect;
             let gw = g.size.w.max(1) as f64;
@@ -6968,11 +7024,11 @@ impl CompositorState {
         self.touch_routes_to_cef = false;
         self.shell_context_menu = None;
         self.shell_context_menu_overlay_id = Id::new();
+        self.shell_floating_layers.clear();
     }
 
-    pub fn apply_shell_context_menu(
-        &mut self,
-        visible: bool,
+    fn shell_validate_floating_rect(
+        &self,
         bx: i32,
         by: i32,
         bw: u32,
@@ -6981,28 +7037,21 @@ impl CompositorState {
         gy: i32,
         gw: u32,
         gh: u32,
-    ) {
+    ) -> Option<ShellContextMenuPlacement> {
         const MAX_MENU: u32 = 4096;
-        if !visible {
-            self.shell_context_menu = None;
-            self.shell_context_menu_overlay_id = Id::new();
-            return;
-        }
         if bw == 0 || bh == 0 || gw == 0 || gh == 0 {
-            self.shell_context_menu = None;
-            self.shell_context_menu_overlay_id = Id::new();
-            return;
+            return None;
         }
         if bw > MAX_MENU || bh > MAX_MENU || gw > MAX_MENU || gh > MAX_MENU {
             tracing::warn!(target: "derp_shell_menu", bw, bh, gw, gh, "context menu rect too large");
-            return;
+            return None;
         }
         let Some((buf_w, buf_h)) = self.shell_view_px else {
-            return;
+            return None;
         };
         let atlas = self.shell_context_menu_atlas_buffer_h;
         if atlas == 0 || buf_h <= atlas {
-            return;
+            return None;
         }
         let atlas_y0 = buf_h.saturating_sub(atlas);
         if by < atlas_y0 as i32
@@ -7021,10 +7070,10 @@ impl CompositorState {
                 buf_h,
                 "context menu buffer rect outside atlas"
             );
-            return;
+            return None;
         }
         let Some(ws) = self.workspace_logical_bounds() else {
-            return;
+            return None;
         };
         let (clw_u, clh_u) = self.shell_canvas_logical_size;
         let ch_work = ws.size.h.max(1) as u32;
@@ -7044,19 +7093,96 @@ impl CompositorState {
                 ws_h,
                 "context menu logical size exceeds workspace (ignored)"
             );
-            return;
+            return None;
         }
         let gr = Rectangle::new(Point::new(gx, gy), Size::new(gw_adj as i32, gh_adj as i32));
         let bounds = Rectangle::new(ws.loc, ws.size);
         if gr.intersection(bounds).is_none() {
             tracing::warn!(target: "derp_shell_menu", gx, gy, gw_adj, gh_adj, "context menu global rect off workspace");
-            return;
+            return None;
         }
-        self.shell_context_menu = Some(ShellContextMenuPlacement {
+        Some(ShellContextMenuPlacement {
             buffer_rect: Rectangle::new(Point::new(bx, by), Size::new(bw as i32, bh as i32)),
             global_rect: gr,
-        });
+        })
+    }
+
+    pub fn apply_shell_context_menu(
+        &mut self,
+        visible: bool,
+        bx: i32,
+        by: i32,
+        bw: u32,
+        bh: u32,
+        gx: i32,
+        gy: i32,
+        gw: u32,
+        gh: u32,
+    ) {
+        if !visible {
+            self.shell_context_menu = None;
+            self.shell_context_menu_overlay_id = Id::new();
+            return;
+        }
+        let Some(placement) = self.shell_validate_floating_rect(bx, by, bw, bh, gx, gy, gw, gh) else {
+            self.shell_context_menu = None;
+            self.shell_context_menu_overlay_id = Id::new();
+            return;
+        };
+        self.shell_context_menu = Some(placement);
         self.shell_context_menu_overlay_id = Id::new();
+    }
+
+    pub fn apply_shell_floating_layers_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            id: u32,
+            bx: i32,
+            by: i32,
+            bw: u32,
+            bh: u32,
+            gx: i32,
+            gy: i32,
+            gw: u32,
+            gh: u32,
+            z: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Root {
+            layers: Vec<Row>,
+        }
+        let Ok(root) = serde_json::from_str::<Root>(json) else {
+            return;
+        };
+        if root.layers.is_empty() {
+            self.shell_floating_layers.clear();
+            return;
+        }
+        let existing_ids: HashMap<u32, Id> = self
+            .shell_floating_layers
+            .iter()
+            .map(|layer| (layer.id, layer.overlay_id.clone()))
+            .collect();
+        let mut next = Vec::new();
+        for row in root.layers {
+            if row.id == 0 {
+                continue;
+            }
+            let Some(placement) =
+                self.shell_validate_floating_rect(row.bx, row.by, row.bw, row.bh, row.gx, row.gy, row.gw, row.gh)
+            else {
+                continue;
+            };
+            next.push(ShellFloatingPlacement {
+                id: row.id,
+                z: row.z,
+                buffer_rect: placement.buffer_rect,
+                global_rect: placement.global_rect,
+                overlay_id: existing_ids.get(&row.id).cloned().unwrap_or_else(Id::new),
+            });
+        }
+        next.sort_by_key(|layer| (layer.z, layer.id));
+        self.shell_floating_layers = next;
     }
 
     /// Current keyboard → `cef_event_flags_t` (shift/control/alt/meta/caps/AltGr).
