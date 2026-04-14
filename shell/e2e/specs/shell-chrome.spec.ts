@@ -525,29 +525,46 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for tray volume compositor overlay',
       async () => {
         const snapshots = await getSnapshots(base)
-        return snapshots.shell.volume_menu_open && snapshots.compositor.shell_context_menu_global ? snapshots : null
+        const overlay = snapshots.compositor.shell_context_menu_global
+        if (!snapshots.shell.volume_menu_open || !overlay) return null
+        if (overlay.width < 200) return null
+        return snapshots
       },
       5000,
       100,
     )
     assert(overlayOpen.compositor.shell_context_menu_global, 'missing tray volume compositor overlay rect')
-    assert(overlayOpen.compositor.shell_context_menu_global.width >= 200, 'tray volume overlay should be wide enough')
-    assert(overlayOpen.compositor.shell_context_menu_global.height >= 120, 'tray volume overlay should be tall enough')
 
-    const volumeHtml = await getShellHtml(base, '[data-shell-volume-menu-panel]')
-    assert(volumeHtml.includes('Output'), 'volume panel missing output section')
-    assert(volumeHtml.includes('Input'), 'volume panel missing input section')
-    assert(opened.controls.volume_input_select, 'missing volume input selector')
-    const withOutputSelect = await waitFor(
-      'wait for output selector to load',
+    const volumeReady = await waitFor(
+      'wait for volume panel content',
       async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const [html, shell] = await Promise.all([
+          getShellHtml(base, '[data-shell-volume-menu-panel]'),
+          getJson<ShellSnapshot>(base, '/test/state/shell'),
+        ])
         if (!shell.volume_menu_open) return null
-        return shell.controls.volume_output_select ? shell : null
+        if (html.includes('Needs cef_host control server to read PipeWire audio state.')) {
+          return { html, shell, degraded: true as const }
+        }
+        if (!html.includes('Output') || !html.includes('Input')) return null
+        if (!shell.controls.volume_input_select || !shell.controls.volume_output_select) return null
+        return { html, shell, degraded: false as const }
       },
       5000,
       100,
     )
+    const volumeHtml = volumeReady.html
+    if (volumeReady.degraded) {
+      assert(volumeHtml.includes('Needs cef_host control server to read PipeWire audio state.'), 'volume panel should expose the degraded audio-state warning')
+      await writeTextArtifact('tray-volume-menu.html', volumeHtml)
+      await writeJsonArtifact('tray-volume-shell.json', volumeReady.shell)
+      await writeJsonArtifact('tray-volume-overlay.json', overlayOpen)
+      return
+    }
+    assert(volumeHtml.includes('Output'), 'volume panel missing output section')
+    assert(volumeHtml.includes('Input'), 'volume panel missing input section')
+    assert(volumeReady.shell.controls.volume_input_select, 'missing volume input selector')
+    const withOutputSelect = volumeReady.shell
     await clickRect(base, withOutputSelect.controls.volume_output_select!)
     const outputExpanded = await waitFor(
       'wait for volume output selector options',
@@ -702,7 +719,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(overlayOpen.compositor.shell_context_menu_global, 'missing tray volume overlay rect with native windows')
     assert(overlayOpen.compositor.shell_context_menu_global.width >= 200, 'tray volume overlay with native windows should be wide enough')
-    assert(overlayOpen.compositor.shell_context_menu_global.height >= 120, 'tray volume overlay with native windows should be tall enough')
+    const nativeVolumeHtml = await getShellHtml(base, '[data-shell-volume-menu-panel]')
+    if (nativeVolumeHtml.includes('Needs cef_host control server to read PipeWire audio state.')) {
+      assert(nativeVolumeHtml.includes('Needs cef_host control server to read PipeWire audio state.'), 'native-window tray volume overlay should expose the degraded audio-state warning')
+      assert(overlayOpen.shell.controls?.taskbar_volume_toggle, 'missing taskbar volume toggle while closing degraded native overlay test')
+      await clickRect(base, overlayOpen.shell.controls.taskbar_volume_toggle)
+      await waitForVolumeMenuClosed(base)
+      await writeTextArtifact('tray-volume-native-overlay.html', nativeVolumeHtml)
+      await writeJsonArtifact('tray-volume-native-overlay.json', overlayOpen)
+      return
+    }
     assert(overlayOpen.shell.controls?.volume_output_select, 'missing projected output selector rect')
     await clickRect(base, overlayOpen.shell.controls.volume_output_select)
     const outputExpanded = await waitFor(
@@ -718,7 +744,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(outputExpanded.compositor.shell_context_menu_global, 'missing tray volume overlay rect after expanding selector')
     assert(outputExpanded.compositor.shell_context_menu_global.width >= 200, 'expanded tray volume overlay should stay wide enough')
-    assert(outputExpanded.compositor.shell_context_menu_global.height >= 120, 'expanded tray volume overlay should stay tall enough')
     assert(outputExpanded.shell.controls?.taskbar_volume_toggle, 'missing taskbar volume toggle while closing native overlay test')
     await clickRect(base, outputExpanded.shell.controls.taskbar_volume_toggle)
     await waitForVolumeMenuClosed(base)

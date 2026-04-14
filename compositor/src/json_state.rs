@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -48,10 +49,28 @@ pub fn read_json_file<T: DeserializeOwned + Default>(path: &Path, action: &str) 
 pub fn write_json_file<T: Serialize>(path: &Path, value: &T, action: &str) -> Result<(), String> {
     ensure_parent_dir(path)?;
     let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    std::fs::write(path, format!("{json}\n")).map_err(|e| {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("missing parent for {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("missing file name for {}", path.display()))?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let temp_path = parent.join(format!(".{file_name}.tmp-{}-{stamp}", std::process::id()));
+    std::fs::write(&temp_path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(target: "derp_json_state", ?e, path = %path.display(), action, "write json state");
         e.to_string()
-    })
+    })?;
+    std::fs::rename(&temp_path, path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            tracing::warn!(target: "derp_json_state", ?e, path = %path.display(), action, "rename json state");
+            e.to_string()
+        })
 }
 
 #[cfg(test)]

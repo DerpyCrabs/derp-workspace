@@ -46,7 +46,9 @@ const [sharedBusyIds, setSharedBusyIds] = createSignal<number[]>([])
 
 const pendingVolumeTimers = new Map<number, number>()
 let backgroundRefreshTimer: number | undefined
+let backgroundPollTimer: number | undefined
 let started = false
+let inflightRefresh: Promise<void> | null = null
 
 function isBusyId(id: number) {
   return sharedBusyIds().includes(id)
@@ -77,22 +79,43 @@ function updateLocalRow(id: number, apply: (row: AudioRow) => AudioRow) {
 }
 
 async function refresh() {
-  const base = shellHttpBase()
-  if (!base) {
-    setSharedErr('Needs cef_host control server to read PipeWire audio state.')
-    setSharedState(null)
-    return
-  }
-  setSharedBusy(true)
-  setSharedErr(null)
-  try {
-    setSharedState(await loadShellAudioState(base))
-  } catch (error) {
-    setSharedState(null)
-    setSharedErr(error instanceof Error ? error.message : String(error))
-  } finally {
-    setSharedBusy(false)
-  }
+  if (inflightRefresh) return inflightRefresh
+  inflightRefresh = (async () => {
+    const base = shellHttpBase()
+    if (!base) {
+      setSharedErr('Needs cef_host control server to read PipeWire audio state.')
+      setSharedState(null)
+      return
+    }
+    setSharedBusy(true)
+    setSharedErr(null)
+    try {
+      setSharedState(await loadShellAudioState(base))
+    } catch (error) {
+      setSharedState(null)
+      setSharedErr(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSharedBusy(false)
+      inflightRefresh = null
+    }
+  })()
+  return inflightRefresh
+}
+
+function backgroundPollDelay(): number {
+  if (shellHttpBase() === null) return 400
+  if (sharedState() === null) return 800
+  if (typeof document === 'undefined') return 2500
+  return document.visibilityState === 'visible' ? 2500 : 12000
+}
+
+function scheduleBackgroundPoll() {
+  if (backgroundPollTimer !== undefined) window.clearTimeout(backgroundPollTimer)
+  backgroundPollTimer = window.setTimeout(() => {
+    backgroundPollTimer = undefined
+    if (shellHttpBase() !== null) void refresh()
+    scheduleBackgroundPoll()
+  }, backgroundPollDelay())
 }
 
 function scheduleRefresh(delayMs: number) {
@@ -154,10 +177,11 @@ function ensureStarted() {
   started = true
   void refresh()
   window.addEventListener(DERP_AUDIO_STATE_CHANGED_EVENT, () => scheduleRefresh(120))
-  window.setInterval(() => {
-    if (shellHttpBase() === null) return
-    void refresh()
-  }, 2500)
+  document.addEventListener('visibilitychange', () => {
+    scheduleRefresh(100)
+    scheduleBackgroundPoll()
+  })
+  scheduleBackgroundPoll()
 }
 
 const controller: ShellAudioController = {

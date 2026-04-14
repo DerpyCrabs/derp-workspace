@@ -11,7 +11,6 @@ import {
 import { createStore } from 'solid-js/store'
 import {
   CHROME_BORDER_PX,
-  CHROME_TASKBAR_RESERVE_PX,
   CHROME_TITLEBAR_PX,
   SHELL_LAYOUT_FLOATING,
   SHELL_LAYOUT_MAXIMIZED,
@@ -107,6 +106,27 @@ import { createShellContextMenus, type TraySniMenuEntry } from './app/createShel
 import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
 import { ShellDebugHudContent } from './app/ShellDebugHudContent'
 import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
+import {
+  formatMonitorPixels,
+  layoutScreenCssRect,
+  monitorRefreshLabel,
+  physicalPixelsForScreen,
+  screensListForLayout,
+  shellBuildLabelText,
+  shellMaximizedWorkAreaGlobalRect,
+  unionBBoxFromScreens,
+} from './app/appLayout'
+import {
+  applyDetail,
+  buildWindowsMapFromList,
+  coerceShellWindowId,
+  type DerpShellDetail,
+  type DerpWindow,
+  windowIsShellHosted,
+  windowOnMonitor,
+  workspaceGroupWindowIds,
+} from './app/appWindowState'
+import { matchDesktopApplication, useDesktopApplicationsState } from './desktopApplicationsState'
 import type { TaskbarSniItem } from './Taskbar'
 import { FileBrowserWindow } from './FileBrowserWindow'
 import { primeFileBrowserWindowPath } from './fileBrowserState'
@@ -301,210 +321,6 @@ function e2eQueryLargestRect(
   return best
 }
 
-function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
-  const th = CHROME_TITLEBAR_PX
-  const tb = reserveTaskbar ? CHROME_TASKBAR_RESERVE_PX : 0
-  return {
-    x: mon.x,
-    y: mon.y + th,
-    w: Math.max(1, mon.width),
-    h: Math.max(1, mon.height - th - tb),
-  }
-}
-
-function screensListForLayout(
-  rows: LayoutScreen[],
-  canvas: { w: number; h: number } | null,
-  origin: { x: number; y: number } | null,
-): LayoutScreen[] {
-  if (rows.length > 0) return rows
-  if (canvas && canvas.w > 0 && canvas.h > 0) {
-    const { ox, oy } = canvasOriginXY(origin)
-    return [
-      {
-        name: '',
-        x: ox,
-        y: oy,
-        refresh_milli_hz: 0,
-        width: canvas.w,
-        height: canvas.h,
-        transform: 0,
-      },
-    ]
-  }
-  return []
-}
-
-function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): LayoutScreen {
-  const loc = rectGlobalToCanvasLocal(s.x, s.y, s.width, s.height, origin)
-  return {
-    name: s.name,
-    x: loc.x,
-    y: loc.y,
-    width: loc.w,
-    height: loc.h,
-    transform: s.transform,
-    refresh_milli_hz: s.refresh_milli_hz,
-  }
-}
-
-function monitorRefreshLabel(milli: number): string {
-  if (!milli || milli <= 0) return '—'
-  const hz = milli / 1000
-  const t = hz.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
-  return `${t} Hz`
-}
-
-function formatMonitorPixels(width: number, height: number): string {
-  return `${Math.max(1, Math.round(width))}x${Math.max(1, Math.round(height))}`
-}
-
-function physicalPixelsForScreen(
-  screen: Pick<LayoutScreen, 'width' | 'height'>,
-  outputGeom: { w: number; h: number } | null,
-  outputPhysical: { w: number; h: number } | null,
-) {
-  if (!outputGeom || !outputPhysical) return { width: screen.width, height: screen.height }
-  const sx = outputPhysical.w / Math.max(1, outputGeom.w)
-  const sy = outputPhysical.h / Math.max(1, outputGeom.h)
-  return {
-    width: Math.max(1, Math.round(screen.width * sx)),
-    height: Math.max(1, Math.round(screen.height * sy)),
-  }
-}
-
-function shellBuildLabelText(): string {
-  const m = import.meta as ImportMeta & { env?: Record<string, string | undefined> }
-  const mode = m.env?.MODE
-  const ver = m.env?.VITE_APP_VERSION
-  const parts = [mode, ver].filter((x): x is string => typeof x === 'string' && x.length > 0)
-  return parts.length > 0 ? parts.join(' · ') : '—'
-}
-
-function unionBBoxFromScreens(rows: LayoutScreen[]): { x: number; y: number; w: number; h: number } | null {
-  if (rows.length === 0) return null
-  let minX = Infinity
-  let minY = Infinity
-  let maxR = -Infinity
-  let maxB = -Infinity
-  for (const r of rows) {
-    minX = Math.min(minX, r.x)
-    minY = Math.min(minY, r.y)
-    maxR = Math.max(maxR, r.x + r.width)
-    maxB = Math.max(maxB, r.y + r.height)
-  }
-  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
-  return {
-    x: minX,
-    y: minY,
-    w: Math.max(1, Math.round(maxR - minX)),
-    h: Math.max(1, Math.round(maxB - minY)),
-  }
-}
-
-type DerpShellDetail =
-  | { type: 'output_geometry'; logical_width: number; logical_height: number }
-  | {
-      type: 'output_layout'
-      canvas_logical_width: number
-      canvas_logical_height: number
-      canvas_logical_origin_x?: number
-      canvas_logical_origin_y?: number
-      canvas_physical_width: number
-      canvas_physical_height: number
-      screens: Array<{
-        name: string
-        x: number
-        y: number
-        width: number
-        height: number
-        transform: number
-        refresh_milli_hz?: number
-      }>
-      shell_chrome_primary?: string | null
-      context_menu_atlas_buffer_h?: number
-    }
-  | {
-      type: 'window_mapped'
-      window_id: number
-      surface_id: number
-      x: number
-      y: number
-      width: number
-      height: number
-      title: string
-      app_id: string
-      output_name?: string
-    }
-  | { type: 'window_unmapped'; window_id: number }
-  | {
-      type: 'window_geometry'
-      window_id: number
-      surface_id: number
-      x: number
-      y: number
-      width: number
-      height: number
-      output_name?: string
-      maximized?: boolean
-      fullscreen?: boolean
-    }
-  | {
-      type: 'window_metadata'
-      window_id: number
-      surface_id: number
-      title: string
-      app_id: string
-    }
-  | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
-  | { type: 'window_state'; window_id: number; minimized: boolean }
-  | { type: 'window_list'; windows: unknown[] }
-  | { type: 'context_menu_dismiss' }
-  | { type: 'programs_menu_toggle'; output_name?: string }
-  | { type: 'compositor_ping' }
-  | { type: 'keybind'; action: string; target_window_id?: number; output_name?: string }
-  | { type: 'keyboard_layout'; label: string }
-  | {
-      type: 'volume_overlay'
-      volume_linear_percent_x100: number
-      muted: boolean
-      state_known: boolean
-    }
-  | { type: 'tray_hints'; slot_count: number; slot_w: number; reserved_w: number }
-  | {
-      type: 'tray_sni'
-      items: { id: string; title: string; icon_base64: string }[]
-    }
-  | {
-      type: 'tray_sni_menu'
-      request_serial: number
-      notifier_id: string
-      menu_path: string
-      entries: {
-        dbusmenu_id: number
-        label: string
-        separator: boolean
-        enabled: boolean
-      }[]
-    }
-type DerpWindow = {
-  window_id: number
-  surface_id: number
-  stack_z: number
-  x: number
-  y: number
-  width: number
-  height: number
-  title: string
-  app_id: string
-  output_name: string
-  minimized: boolean
-  maximized: boolean
-  fullscreen: boolean
-  shell_flags: number
-  capture_identifier: string
-}
-
 type WorkspaceGroupModel = {
   id: string
   members: DerpWindow[]
@@ -526,18 +342,6 @@ type TabDragState = {
   target: TabMergeTarget | null
 }
 
-function workspaceGroupWindowIds(state: WorkspaceState, windowId: number): number[] {
-  const groupId = groupIdForWindow(state, windowId)
-  return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
-}
-
-function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
-  return (
-    (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
-    backedShellWindowKind(window.window_id, window.app_id) !== null
-  )
-}
-
 function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>): SavedRect {
   return {
     x: window.x,
@@ -545,149 +349,6 @@ function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>
     width: Math.max(1, window.width),
     height: Math.max(1, window.height),
   }
-}
-
-function windowOnMonitor(w: DerpWindow, mon: LayoutScreen, list: LayoutScreen[], co: CanvasOrigin): boolean {
-  if (w.output_name && w.output_name === mon.name) return true
-  const p = pickScreenForWindow(w, list, co)
-  return p !== null && p.name === mon.name
-}
-
-/** IPC JSON can surface ids as number or string; Map keys must stay numeric for a single row per window. */
-function coerceShellWindowId(raw: unknown): number | null {
-  if (raw == null || raw === '') return null
-  const n = typeof raw === 'number' ? raw : Number(raw)
-  if (!Number.isFinite(n)) return null
-  const t = Math.trunc(n)
-  // Wire/protocol uses 0 as “none” (e.g. focus_cleared); compositor window_id starts at 1.
-  return t > 0 ? t : null
-}
-
-function buildWindowsMapFromList(
-  raw: unknown,
-  prev?: Map<number, DerpWindow>,
-): Map<number, DerpWindow> {
-  const next = new Map<number, DerpWindow>()
-  if (!Array.isArray(raw)) return next
-  for (const row of raw) {
-    if (!row || typeof row !== 'object') continue
-    const r = row as Record<string, unknown>
-    const wid = coerceShellWindowId(r.window_id)
-    const sid = coerceShellWindowId(r.surface_id)
-    if (wid === null || sid === null) continue
-    const outputName =
-      typeof r.output_name === 'string' ? r.output_name : ''
-    const sfRaw = r.shell_flags
-    const shell_flags =
-      typeof sfRaw === 'number' && Number.isFinite(sfRaw)
-        ? Math.trunc(sfRaw)
-        : (prev?.get(wid)?.shell_flags ?? 0)
-    const szRaw = r.stack_z
-    const stack_z =
-      typeof szRaw === 'number' && Number.isFinite(szRaw)
-        ? Math.trunc(szRaw)
-        : (prev?.get(wid)?.stack_z ?? wid)
-    next.set(wid, {
-      window_id: wid,
-      surface_id: sid,
-      stack_z,
-      x: Number(r.x) || 0,
-      y: Number(r.y) || 0,
-      width: Number(r.width) || 0,
-      height: Number(r.height) || 0,
-      title: typeof r.title === 'string' ? r.title : '',
-      app_id: typeof r.app_id === 'string' ? r.app_id : '',
-      output_name: outputName,
-      minimized: !!r.minimized,
-      maximized: !!r.maximized,
-      fullscreen: !!r.fullscreen,
-      shell_flags,
-      capture_identifier:
-        typeof r.capture_identifier === 'string'
-          ? r.capture_identifier
-          : (prev?.get(wid)?.capture_identifier ?? ''),
-    })
-  }
-  return next
-}
-
-function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
-  const next = new Map(map)
-  switch (detail.type) {
-    case 'window_mapped': {
-      const wid = coerceShellWindowId(detail.window_id)
-      const sid = coerceShellWindowId(detail.surface_id)
-      if (wid === null || sid === null) break
-      next.set(wid, {
-        window_id: wid,
-        surface_id: sid,
-        stack_z: next.get(wid)?.stack_z ?? wid,
-        x: detail.x,
-        y: detail.y,
-        width: detail.width,
-        height: detail.height,
-        title: detail.title,
-        app_id: detail.app_id,
-        output_name:
-          typeof detail.output_name === 'string' ? detail.output_name : '',
-        minimized: false,
-        maximized: false,
-        fullscreen: false,
-        shell_flags: next.get(wid)?.shell_flags ?? 0,
-        capture_identifier: next.get(wid)?.capture_identifier ?? '',
-      })
-      break
-    }
-    case 'window_unmapped': {
-      const wid = coerceShellWindowId(detail.window_id)
-      if (wid !== null) next.delete(wid)
-      break
-    }
-    case 'window_geometry': {
-      const wid = coerceShellWindowId(detail.window_id)
-      if (wid === null) break
-      const w = next.get(wid)
-      if (w) {
-        next.set(wid, {
-          ...w,
-          x: detail.x,
-          y: detail.y,
-          width: detail.width,
-          height: detail.height,
-          output_name:
-            detail.output_name !== undefined
-              ? typeof detail.output_name === 'string'
-                ? detail.output_name
-                : ''
-              : w.output_name,
-          maximized: detail.maximized ?? w.maximized,
-          fullscreen: detail.fullscreen ?? w.fullscreen,
-        })
-      }
-      break
-    }
-    case 'window_state': {
-      const wid = coerceShellWindowId(detail.window_id)
-      if (wid === null) break
-      const w = next.get(wid)
-      if (w) {
-        next.set(wid, { ...w, minimized: detail.minimized })
-      }
-      break
-    }
-    case 'window_metadata': {
-      const wid = coerceShellWindowId(detail.window_id)
-      if (wid === null) break
-      const w = next.get(wid)
-      if (w) {
-        next.set(wid, { ...w, title: detail.title, app_id: detail.app_id })
-      }
-      break
-    }
-    default:
-      break
-  }
-  return next
 }
 
 const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
@@ -868,6 +529,7 @@ function canSessionControl(): boolean {
 function App() {
   const shellBuildLabel = shellBuildLabelText()
   let traySniMenuNextSerial = 0
+  const desktopApps = useDesktopApplicationsState()
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -1564,24 +1226,33 @@ function App() {
   createEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let failureCount = 0
+    const nextDelay = (pending: boolean) => {
+      if (pending) return 150
+      if (failureCount <= 0) return 500
+      return Math.min(3000, 500 * 2 ** Math.min(3, failureCount - 1))
+    }
     const poll = async () => {
       const base = shellHttpBase()
       if (!base) {
-        if (!cancelled) timer = setTimeout(() => void poll(), 400)
+        failureCount = Math.min(4, failureCount + 1)
+        if (!cancelled) timer = setTimeout(() => void poll(), nextDelay(false))
         return
       }
       try {
         const state = await fetchPortalScreencastRequestState(base)
         if (cancelled) return
+        failureCount = 0
         if (state.pending) beginPortalPicker(state.request_id, state.types)
         else closePortalPickerUi()
       } catch (error) {
+        failureCount = Math.min(4, failureCount + 1)
         if (!cancelled && portalPickerVisible()) {
           closePortalPickerUi()
           reportShellActionIssue(`Screen share picker failed: ${describeError(error)}`)
         }
       } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), portalPickerVisible() ? 150 : 400)
+        if (!cancelled) timer = setTimeout(() => void poll(), nextDelay(portalPickerVisible()))
       }
     }
     void poll()
@@ -3256,8 +2927,31 @@ function App() {
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
+  const taskbarDesktopAppsByWindowId = createMemo(() => {
+    const apps = desktopApps.items()
+    const matches = new Map<number, { desktop_id: string | null; desktop_icon: string | null }>()
+    for (const group of workspaceGroups()) {
+      const match = matchDesktopApplication(apps, {
+        title: group.visibleWindow.title,
+        app_id: group.visibleWindow.app_id,
+      })
+      if (!match) continue
+      matches.set(group.visibleWindow.window_id, {
+        desktop_id: match.desktop_id,
+        desktop_icon: match.icon ?? null,
+      })
+    }
+    return matches
+  })
+
   function taskbarRowsForScreen(s: LayoutScreen) {
-    return buildTaskbarGroupRows(taskbarGroupsByMonitor().get(s.name) ?? [])
+    const rows = buildTaskbarGroupRows(taskbarGroupsByMonitor().get(s.name) ?? [])
+    const desktopMatches = taskbarDesktopAppsByWindowId()
+    return rows.map((row) => ({
+      ...row,
+      desktop_id: desktopMatches.get(row.window_id)?.desktop_id ?? null,
+      desktop_icon: desktopMatches.get(row.window_id)?.desktop_icon ?? null,
+    }))
   }
 
   function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
@@ -4516,6 +4210,7 @@ function App() {
     })
     onCleanup(stopShellWindowStateSync)
     void refreshThemeSettingsFromRemote()
+    void desktopApps.warm()
     void shellContextMenus.warmProgramsMenuItems()
     void loadSessionSnapshot()
       .then((snapshot) => {

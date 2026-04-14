@@ -1450,7 +1450,12 @@ export async function spawnNativeWindow(
 export async function waitForSpawnedWindow(
   base: string,
   knownWindowIds: Set<number>,
-  { title, appId, command }: { title: string; appId: string; command: string },
+  {
+    title,
+    appId,
+    command,
+    timeoutMs = 10000,
+  }: { title: string; appId: string; command: string; timeoutMs?: number },
 ): Promise<NativeSpawnResult> {
   const result = await waitFor(
     `wait for ${title}`,
@@ -1467,7 +1472,7 @@ export async function waitForSpawnedWindow(
       if (!window) return null
       return { snapshot, window, command }
     },
-    10000,
+    timeoutMs,
     125,
   )
   knownWindowIds.add(result.window.window_id)

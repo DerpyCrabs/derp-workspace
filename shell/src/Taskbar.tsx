@@ -1,18 +1,13 @@
 import AppWindow from 'lucide-solid/icons/app-window'
 import Bug from 'lucide-solid/icons/bug'
-import FileText from 'lucide-solid/icons/file-text'
-import FolderOpen from 'lucide-solid/icons/folder-open'
-import Globe from 'lucide-solid/icons/globe'
 import LayoutGrid from 'lucide-solid/icons/layout-grid'
-import Monitor from 'lucide-solid/icons/monitor'
 import Power from 'lucide-solid/icons/power'
-import Settings from 'lucide-solid/icons/settings'
-import SquareTerminal from 'lucide-solid/icons/square-terminal'
 import Volume1 from 'lucide-solid/icons/volume-1'
 import Volume2 from 'lucide-solid/icons/volume-2'
 import VolumeX from 'lucide-solid/icons/volume-x'
 import X from 'lucide-solid/icons/x'
-import { For, Show, createSignal, onCleanup, type Component } from 'solid-js'
+import Settings from 'lucide-solid/icons/settings'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
 import { PowerContextMenu } from './app/PowerContextMenu'
 import { ProgramsContextMenu } from './app/ProgramsContextMenu'
 import {
@@ -23,12 +18,15 @@ import {
   VolumeTaskbarMenu,
 } from './app/TaskbarContextMenu'
 import { VolumeContextMenu } from './app/VolumeContextMenu'
+import { TaskbarWindowIcon } from './taskbarIcons'
 
 export type TaskbarWindowRow = {
   group_id: string
   window_id: number
   title: string
   app_id: string
+  desktop_id?: string | null
+  desktop_icon?: string | null
   minimized: boolean
   output_name: string
   tab_count: number
@@ -81,53 +79,10 @@ function keyboardIndicator(label: string) {
   return compact.slice(0, 3) || label.trim().toUpperCase().slice(0, 3)
 }
 
-function windowIconFor(w: TaskbarWindowRow): Component<{ class?: string; 'stroke-width'?: number }> {
-  const key = `${w.app_id} ${w.title}`.toLowerCase()
-  if (
-    key.includes('firefox') ||
-    key.includes('chrome') ||
-    key.includes('chromium') ||
-    key.includes('zen') ||
-    key.includes('browser')
-  ) {
-    return Globe
-  }
-  if (
-    key.includes('kitty') ||
-    key.includes('wezterm') ||
-    key.includes('alacritty') ||
-    key.includes('gnome-terminal') ||
-    key.includes('terminal')
-  ) {
-    return SquareTerminal
-  }
-  if (
-    key.includes('thunar') ||
-    key.includes('nautilus') ||
-    key.includes('dolphin') ||
-    key.includes('pcmanfm') ||
-    key.includes('files')
-  ) {
-    return FolderOpen
-  }
-  if (key.includes('settings') || key.includes('control center')) {
-    return Settings
-  }
-  if (key.includes('.md') || key.includes('.txt') || key.includes('notes')) {
-    return FileText
-  }
-  if (key.includes('display') || key.includes('monitor')) {
-    return Monitor
-  }
-  if (key.includes('window') || key.includes('app')) {
-    return AppWindow
-  }
-  return AppWindow
-}
-
 function TaskbarWindowRows(props: {
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
+  compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
 }) {
@@ -135,48 +90,62 @@ function TaskbarWindowRows(props: {
     <For each={props.windows}>
       {(w) => {
         const active = () => props.focusedWindowId === w.window_id && !w.minimized
-        const Icon = windowIconFor(w)
         return (
           <div
             role="listitem"
-            class="relative border-r border-(--shell-border) bg-(--shell-control-muted-bg) text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) flex h-full min-w-[132px] flex-[0_1_220px] items-center gap-1 px-2"
+            class="relative flex h-full items-center gap-1 border-r border-(--shell-border) bg-(--shell-control-muted-bg) px-1.5 text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                 active(),
               'text-(--shell-text-dim)': w.minimized && !active(),
+              'min-w-[132px] flex-[0_1_220px] px-2': props.compactMode === 'normal',
+              'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
+              'min-w-[52px] flex-[1_1_64px] justify-center px-1': props.compactMode === 'tight',
             }}
             title={[windowLabel(w), w.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
           >
             <button
               type="button"
-              class="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left text-xs touch-manipulation"
+              class="flex min-w-0 flex-1 items-center overflow-hidden text-left text-xs touch-manipulation"
+              classList={{
+                'gap-1.5': props.compactMode !== 'tight',
+                'justify-center gap-0': props.compactMode === 'tight',
+              }}
               data-shell-taskbar-group={w.group_id}
               data-shell-taskbar-window-activate={w.window_id}
               aria-current={active() ? 'true' : undefined}
               onClick={() => props.onTaskbarActivate(w.window_id)}
             >
-              <span class="inline-flex shrink-0 text-(--shell-text-dim)">
-                <Icon
-                  class={active() ? 'h-4 w-4 text-(--shell-text)' : 'h-4 w-4'}
-                  stroke-width={2}
-                />
-              </span>
-              <span class="min-w-0 truncate">{windowLabel(w)}</span>
+              <TaskbarWindowIcon
+                meta={{
+                  title: w.title,
+                  appId: w.app_id,
+                  desktopId: w.desktop_id ?? null,
+                  desktopIcon: w.desktop_icon ?? null,
+                }}
+                active={active()}
+                compact={props.compactMode !== 'normal'}
+              />
+              <Show when={props.compactMode !== 'tight'}>
+                <span class="min-w-0 truncate">{windowLabel(w)}</span>
+              </Show>
             </button>
-            <button
-              type="button"
-              class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
-              data-shell-taskbar-window-close={w.window_id}
-              aria-label={`Close ${windowLabel(w)}`}
-              title={`Close ${windowLabel(w)}`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation()
-                props.onTaskbarClose(w.window_id)
-              }}
-            >
-              <X class="h-4 w-4" stroke-width={2} />
-            </button>
+            <Show when={props.compactMode !== 'tight'}>
+              <button
+                type="button"
+                class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+                data-shell-taskbar-window-close={w.window_id}
+                aria-label={`Close ${windowLabel(w)}`}
+                title={`Close ${windowLabel(w)}`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  props.onTaskbarClose(w.window_id)
+                }}
+              >
+                <X class="h-4 w-4" stroke-width={2} />
+              </button>
+            </Show>
           </div>
         )
       }}
@@ -186,15 +155,37 @@ function TaskbarWindowRows(props: {
 
 export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
+  const [windowRailWidth, setWindowRailWidth] = createSignal(0)
+  let windowRailRef: HTMLDivElement | undefined
   const volumeIcon = () => {
     const Icon = props.volumeMuted ? VolumeX : (props.volumePercent ?? 0) <= 33 ? Volume1 : Volume2
     return <Icon class="h-4 w-4" stroke-width={2} />
   }
+  const compactMode = createMemo<'normal' | 'compact' | 'tight'>(() => {
+    if (props.windows.length === 0) return 'normal'
+    const width = windowRailWidth()
+    if (width <= 0) return 'normal'
+    const perWindow = width / props.windows.length
+    if (perWindow < 82) return 'tight'
+    if (perWindow < 132) return 'compact'
+    return 'normal'
+  })
 
   if (props.isPrimary) {
     const interval = window.setInterval(() => setNow(new Date()), 15000)
     onCleanup(() => window.clearInterval(interval))
   }
+
+  createEffect(() => {
+    const rail = windowRailRef
+    if (!rail) return
+    setWindowRailWidth(rail.clientWidth)
+    const observer = new ResizeObserver(() => {
+      setWindowRailWidth(rail.clientWidth)
+    })
+    observer.observe(rail)
+    onCleanup(() => observer.disconnect())
+  })
 
   return (
     <div
@@ -210,10 +201,12 @@ export function Taskbar(props: TaskbarProps) {
             class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
             role="list"
             aria-label="Windows"
+            ref={windowRailRef}
           >
             <TaskbarWindowRows
               windows={props.windows}
               focusedWindowId={props.focusedWindowId}
+              compactMode={compactMode()}
               onTaskbarActivate={props.onTaskbarActivate}
               onTaskbarClose={props.onTaskbarClose}
             />
@@ -253,10 +246,12 @@ export function Taskbar(props: TaskbarProps) {
           class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
           role="list"
           aria-label="Windows"
+          ref={windowRailRef}
         >
           <TaskbarWindowRows
             windows={props.windows}
             focusedWindowId={props.focusedWindowId}
+            compactMode={compactMode()}
             onTaskbarActivate={props.onTaskbarActivate}
             onTaskbarClose={props.onTaskbarClose}
           />

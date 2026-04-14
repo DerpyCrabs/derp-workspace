@@ -11,14 +11,13 @@ import {
   type Accessor,
   type JSX,
 } from 'solid-js'
-import { createStore } from 'solid-js/store'
 import { atlasTopFromLayout, type ShellContextMenuItem } from '../contextMenu'
+import { useDesktopApplicationsState } from '../desktopApplicationsState'
 import { searchDesktopApplications } from '../desktopAppSearch'
 import type { createFloatingLayerStore } from '../floatingLayers'
 import { measureShellFloatingPlacementFromDom } from '../shellFloatingPlacement'
 import { shellHttpBase } from '../shellHttp'
 import { canvasRectToClientCss } from '../shellCoords'
-import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '../shellBridge'
 import type { LayoutScreen } from './types'
 
 const ROOT_CONTEXT_MENU_LAYER_ID = 'shell-context-menu-root'
@@ -144,18 +143,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [traySniEntries, setTraySniEntries] = createSignal<TraySniMenuEntry[]>([])
   const [programsMenuOutputName, setProgramsMenuOutputName] = createSignal<string | null>(null)
   const [tabMenuWindowId, setTabMenuWindowId] = createSignal<number | null>(null)
-  const [programsMenuBusy, setProgramsMenuBusy] = createSignal(false)
-  const [programsMenuErr, setProgramsMenuErr] = createSignal<string | null>(null)
   const [programsUsageCounts, setProgramsUsageCounts] = createSignal(getDesktopAppUsageCounts())
-  const [programsCatalog, setProgramsCatalog] = createStore<{
-    items: DesktopAppEntry[]
-    loaded: boolean
-  }>({
-    items: [],
-    loaded: false,
-  })
+  const desktopApps = useDesktopApplicationsState()
 
-  let programsMenuRefreshPromise: Promise<void> | null = null
   let menuAtlasHostRef: HTMLElement | undefined
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
@@ -315,51 +305,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     } as const satisfies JSX.CSSProperties
   })
 
-  async function refreshProgramsMenuItems() {
-    if (programsMenuRefreshPromise) return programsMenuRefreshPromise
-    const run = (async () => {
-      setProgramsMenuBusy(true)
-      const base = shellHttpBase()
-      if (!base) {
-        if (!programsCatalog.loaded) setProgramsMenuErr('Programs list needs cef_host (no shell HTTP).')
-        return
-      }
-      setProgramsMenuErr(null)
-      try {
-        const res = await fetch(`${base}/desktop_applications`)
-        const text = await res.text()
-        if (!res.ok) {
-          if (!programsCatalog.loaded) {
-            setProgramsMenuErr(
-              `Failed to load (${res.status}): ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
-            )
-          }
-          return
-        }
-        const list = parseDesktopApplicationsResponse(text)
-        setProgramsCatalog('items', list)
-        setProgramsCatalog('loaded', true)
-        setProgramsMenuErr(null)
-      } catch (error) {
-        if (!programsCatalog.loaded) setProgramsMenuErr(`Network error: ${error}`)
-      } finally {
-        setProgramsMenuBusy(false)
-        programsMenuRefreshPromise = null
-      }
-    })()
-    programsMenuRefreshPromise = run
-    return run
-  }
-
   async function warmProgramsMenuItems() {
-    const startedAt = Date.now()
-    let base = shellHttpBase()
-    while (!base && Date.now() - startedAt < 4000) {
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-      base = shellHttpBase()
-    }
-    if (!base) return
-    await refreshProgramsMenuItems()
+    await desktopApps.warm()
     setProgramsUsageCounts(await refreshDesktopAppUsageFromRemote())
   }
 
@@ -393,14 +340,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   function openProgramsMenu(outputName?: string | null) {
     args.closeAllAtlasSelects()
     anchorProgramsMenuToCenter(outputName)
-    setProgramsMenuBusy(!programsCatalog.loaded)
-    setProgramsMenuErr(null)
     openRootContextMenu(programsMenuTrigger)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
     setProgramsMenuOutputName(outputName ?? null)
     queueMicrotask(() => programsMenuSearchRef?.focus())
-    void refreshProgramsMenuItems()
+    void desktopApps.refresh()
     void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
   }
 
@@ -599,16 +544,16 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
             },
           ]
         : []
-    if (programsMenuBusy() && !programsCatalog.loaded) {
+    if (desktopApps.busy() && !desktopApps.loaded()) {
       return builtins.length > 0 ? [...builtins, { label: 'Loading…', action: () => {} }] : [{ label: 'Loading…', action: () => {} }]
     }
-    const err = programsMenuErr()
-    if (err && !programsCatalog.loaded) {
+    const err = desktopApps.err()
+    if (err && !desktopApps.loaded()) {
       return builtins.length > 0 ? [...builtins, { label: err, action: () => {} }] : [{ label: err, action: () => {} }]
     }
     const q = programsMenuQuery().trim()
-    const raw = programsCatalog.items
-    if (programsCatalog.loaded && raw.length === 0) {
+    const raw = desktopApps.items()
+    if (desktopApps.loaded() && raw.length === 0) {
       return builtins.length > 0 ? builtins : [{ label: 'No applications found.', action: () => {} }]
     }
     if (raw.length === 0) return builtins.length > 0 ? builtins : [{ label: 'Loading…', action: () => {} }]

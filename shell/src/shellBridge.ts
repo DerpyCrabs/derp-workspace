@@ -5,6 +5,7 @@ export type DesktopAppEntry = {
   generic_name?: string
   full_name?: string
   keywords?: string[]
+  icon?: string
   terminal: boolean
   desktop_id: string
 }
@@ -60,6 +61,7 @@ function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
     generic_name: typeof row.generic_name === 'string' ? row.generic_name : undefined,
     full_name: typeof row.full_name === 'string' ? row.full_name : undefined,
     keywords,
+    icon: typeof row.icon === 'string' ? row.icon : undefined,
     terminal: row.terminal === true,
     desktop_id: typeof row.desktop_id === 'string' ? row.desktop_id : '',
   }

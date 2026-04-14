@@ -201,12 +201,12 @@ pub(crate) struct PendingDeferredToplevel {
 
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     smithay::wayland::compositor::with_states(wl, |states| {
-        let data = states
-            .data_map
-            .get::<XdgToplevelSurfaceData>()
-            .unwrap()
-            .lock()
-            .unwrap();
+        let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
+            return (false, false);
+        };
+        let Ok(data) = data.lock() else {
+            return (false, false);
+        };
         let st = data.current_server_state();
         (
             st.states.contains(xdg_toplevel::State::Maximized),
@@ -660,7 +660,8 @@ impl CompositorState {
             crate::cursor_fallback::load_cursor_fallback();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, &options.seat_name);
-        seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        seat.add_keyboard(Default::default(), 200, 25)
+            .map_err(|e| format!("seat add keyboard: {e:?}"))?;
         seat.add_pointer();
 
         let space = Space::default();
@@ -1478,13 +1479,15 @@ impl CompositorState {
         self.space.elements().for_each(|e| {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
-                w.toplevel().unwrap().send_pending_configure();
+                if let Some(toplevel) = w.toplevel() {
+                    toplevel.send_pending_configure();
+                }
             }
         });
-        self.seat
-            .get_keyboard()
-            .unwrap()
-            .set_focus(self, Option::<WlSurface>::None, k_serial);
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        keyboard.set_focus(self, Option::<WlSurface>::None, k_serial);
         self.keyboard_on_focus_surface_changed(None);
         self.shell_pending_native_focus_window_id = None;
         self.shell_ipc_keyboard_to_cef = true;
@@ -2781,10 +2784,14 @@ impl CompositorState {
     }
 
     pub(crate) fn keyboard_layout_index_current(&mut self) -> u32 {
-        let kbd = self.seat.get_keyboard().unwrap();
+        let Some(kbd) = self.seat.get_keyboard() else {
+            return 0;
+        };
         kbd.with_xkb_state(self, |ctx| {
-            let xkb = ctx.xkb().lock().unwrap();
-            xkb.active_layout().0
+            match ctx.xkb().lock() {
+                Ok(xkb) => xkb.active_layout().0,
+                Err(_) => 0,
+            }
         })
     }
 
@@ -5138,15 +5145,20 @@ impl CompositorState {
         if let Some(window) = self.find_window_by_surface_id(sid) {
             self.space
                 .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
-            let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+            let Some(toplevel) = window.toplevel() else {
+                return;
+            };
+            let wl_surface = toplevel.wl_surface().clone();
             let k_serial = SERIAL_COUNTER.next_serial();
-            self.seat
-                .get_keyboard()
-                .unwrap()
-                .set_focus(self, Some(wl_surface.clone()), k_serial);
+            let Some(keyboard) = self.seat.get_keyboard() else {
+                return;
+            };
+            keyboard.set_focus(self, Some(wl_surface.clone()), k_serial);
             self.space.elements().for_each(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
-                    w.toplevel().unwrap().send_pending_configure();
+                    if let Some(toplevel) = w.toplevel() {
+                        toplevel.send_pending_configure();
+                    }
                 }
             });
 
@@ -7454,7 +7466,9 @@ impl CompositorState {
         if delta_x == 0 && delta_y == 0 {
             return;
         }
-        let pointer = self.seat.get_pointer().unwrap();
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
         let pos = pointer.current_location();
         let route = self.shell_pointer_route_to_cef(pos);
         if !route

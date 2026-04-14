@@ -30,7 +30,31 @@ let nextRegistryToken = 1
 let generation = 0
 let raf = 0
 let microtaskQueued = false
-let lastWindowsJson: string | null = null
+let lastWindows:
+  | Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>
+  | null = null
+
+function sameWindows(
+  left: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>,
+  right: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> | null,
+) {
+  if (right === null || left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index]!
+    const b = right[index]!
+    if (
+      a.id !== b.id ||
+      a.z !== b.z ||
+      a.gx !== b.gx ||
+      a.gy !== b.gy ||
+      a.gw !== b.gw ||
+      a.gh !== b.gh
+    ) {
+      return false
+    }
+  }
+  return true
+}
 
 function flush() {
   raf = 0
@@ -43,10 +67,9 @@ function flush() {
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
   const fn = window.__derpShellWireSend
   if (typeof fn === 'function') {
-    const windowsJson = JSON.stringify(windows)
-    if (windowsJson === lastWindowsJson) return
+    if (sameWindows(windows, lastWindows)) return
     generation += 1
-    lastWindowsJson = windowsJson
+    lastWindows = windows.map((window) => ({ ...window }))
     const payload = { generation, windows }
     fn('set_shell_ui_windows', JSON.stringify(payload))
   }

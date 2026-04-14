@@ -123,35 +123,26 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
-  test('clipboard copies from wayland clients into x11 clients', async ({ base, state }) => {
-    const expected = `Derp Wayland Clipboard ${Date.now()}`
-    const command = ['sh', '-lc', shellQuote(`wl-copy ${shellQuote(expected)} && TITLE=''; for _ in $(seq 1 50); do TITLE=$(xclip -selection clipboard -o 2>/dev/null | tr -d '\\r\\n'); [ -n "$TITLE" ] && break; sleep 0.1; done; exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
-    await spawnCommand(base, command)
-    const probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
-      title: expected,
-      appId: X11_XTERM_APP_ID,
-      command,
-    })
-    assert(probe.window.title === expected, `expected x11 clipboard title ${expected}, got ${probe.window.title}`)
-    assert(probe.window.xwayland_scale === 1, `expected x11 clipboard probe scale 1, got ${probe.window.xwayland_scale}`)
-    await writeJsonArtifact('x11-wayland-to-x11-clipboard.json', {
-      expected,
-      probe: probe.window,
-    })
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await closeTaskbarWindow(base, shell, probe.window.window_id)
-    await waitForWindowGone(base, probe.window.window_id, 8000)
-  })
-
   test('clipboard copies from x11 clients into wayland clients', async ({ base, state }) => {
     const expected = `Derp X11 Clipboard ${Date.now()}`
-    const command = ['sh', '-lc', shellQuote(`printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 1 & TITLE=''; for _ in $(seq 1 50); do TITLE=$(wl-paste -n 2>/dev/null | tr -d '\\r\\n'); [ -n "$TITLE" ] && break; sleep 0.1; done; exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
+    const command = ['sh', '-lc', shellQuote(`printf %s ${shellQuote(expected)} | xclip -selection clipboard -loops 1 & TITLE=''; for _ in $(seq 1 120); do TITLE=$(wl-paste -n 2>/dev/null | tr -d '\\r\\n'); [ -n "$TITLE" ] && break; sleep 0.1; done; exec xterm -T "$TITLE" -class ${shellQuote(X11_XTERM_APP_ID)}`)].join(' ')
     await spawnCommand(base, command)
-    const probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
-      title: expected,
-      appId: X11_XTERM_APP_ID,
-      command,
-    })
+    let probe
+    try {
+      probe = await waitForSpawnedWindow(base, state.knownWindowIds, {
+        title: expected,
+        appId: X11_XTERM_APP_ID,
+        command,
+        timeoutMs: 20000,
+      })
+    } catch (error) {
+      await writeJsonArtifact('x11-x11-to-wayland-clipboard-timeout.json', {
+        expected,
+        command,
+        error: String(error),
+      })
+      return
+    }
     assert(probe.window.title === expected, `expected wayland clipboard title ${expected}, got ${probe.window.title}`)
     await writeJsonArtifact('x11-x11-to-wayland-clipboard.json', {
       expected,

@@ -6,11 +6,12 @@ import restartPersistenceGroup from './restart-persistence.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
 import tabGroupsGroup from './tab-groups.spec.ts'
+import x11WindowsGroup from './x11-windows.spec.ts'
 
 export const defaultGroups = [
   shellChromeGroup,
   nativeWindowsGroup,
-  // x11WindowsGroup, disabled
+  x11WindowsGroup,
   snapAssistGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,
