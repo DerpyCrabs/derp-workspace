@@ -409,19 +409,16 @@ pub(crate) fn desktop_backdrop_layers(
     let output_name = output.name();
     let cfg = state.desktop_background_for_output(output).clone();
     let wallpaper = wallpaper_path_for_cfg(&cfg).and_then(|path| {
-        state
-            .desktop_wallpaper_gpu_by_path
-            .get(&path)
-            .map(|entry| {
-                (
-                    path,
-                    entry.commit,
-                    entry.gpu.texture.clone(),
-                    entry.gpu.context_id.clone(),
-                    entry.gpu.tex_w,
-                    entry.gpu.tex_h,
-                )
-            })
+        state.desktop_wallpaper_gpu_by_path.get(&path).map(|entry| {
+            (
+                path,
+                entry.commit,
+                entry.gpu.texture.clone(),
+                entry.gpu.context_id.clone(),
+                entry.gpu.tex_w,
+                entry.gpu.tex_h,
+            )
+        })
     });
     let key = BackdropCacheKey {
         output_geo,
@@ -443,14 +440,21 @@ pub(crate) fn desktop_backdrop_layers(
         }
     }
     let force_full_damage = state.backdrop_layers_by_output.contains_key(&output_name);
-    let layers =
-        build_desktop_backdrop_layers_uncached(state, &output_name, output_geo, scale_f, &cfg, wallpaper);
-    state
-        .backdrop_layers_by_output
-        .insert(output_name, crate::state::CachedBackdropLayers {
+    let layers = build_desktop_backdrop_layers_uncached(
+        state,
+        &output_name,
+        output_geo,
+        scale_f,
+        &cfg,
+        wallpaper,
+    );
+    state.backdrop_layers_by_output.insert(
+        output_name,
+        crate::state::CachedBackdropLayers {
             key,
             layers: layers.clone(),
-        });
+        },
+    );
     note_backdrop_cache_result(false, force_full_damage);
     (layers, force_full_damage)
 }

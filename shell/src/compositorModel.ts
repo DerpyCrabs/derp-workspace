@@ -87,9 +87,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const windowId = coerceShellWindowId(detail.window_id)
       if (windowId !== null) {
         if (!windows().has(windowId)) {
-          applyOptions.requestWindowSyncRecovery()
           return {
-            kind: 'recovery_requested',
+            kind: 'ignored',
             detailType: detail.type,
             windowId,
           }
@@ -129,9 +128,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       let relayoutMonitor: string | null = null
       if (windowId !== null) {
         if (!previousWindow) {
-          applyOptions.requestWindowSyncRecovery()
           return {
-            kind: 'recovery_requested',
+            kind: 'ignored',
             detailType: detail.type,
             windowId,
           }
@@ -173,9 +171,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const windowId = coerceShellWindowId(detail.window_id)
       const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
       if (windowId !== null && !previousWindow) {
-        applyOptions.requestWindowSyncRecovery()
         return {
-          kind: 'recovery_requested',
+          kind: 'ignored',
           detailType: detail.type,
           windowId,
         }
@@ -206,9 +203,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (detail.type === 'window_metadata') {
       const windowId = coerceShellWindowId(detail.window_id)
       if (windowId !== null && !windows().has(windowId)) {
-        applyOptions.requestWindowSyncRecovery()
         return {
-          kind: 'recovery_requested',
+          kind: 'ignored',
           detailType: detail.type,
           windowId,
         }

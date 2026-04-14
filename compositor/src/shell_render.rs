@@ -384,10 +384,8 @@ fn shell_overlay_element_for_placement(
 
     let output_scale = Scale::from(output_scale);
     let d = inter.loc - output_geo.loc;
-    let shell_loc_phys = Point::<f64, Physical>::from((
-        d.x as f64 * output_scale.x,
-        d.y as f64 * output_scale.x,
-    ));
+    let shell_loc_phys =
+        Point::<f64, Physical>::from((d.x as f64 * output_scale.x, d.y as f64 * output_scale.x));
     let shell_size_logical = inter.size;
 
     let damage_phys = if state.shell_dmabuf_dirty_force_full {
@@ -479,21 +477,29 @@ pub fn compositor_shell_render_elements(
                 canvas_size: state.shell_canvas_logical_size,
                 view_px: (buf_w, buf_h),
             };
-            let (element, force_full_damage) = cache_shell_element(
-                &mut cache.main,
-                key,
-                state.shell_dmabuf_commit,
-                || build_main_shell_dmabuf_element(state, renderer, output_geo, output, buf_w, buf_h),
-            )?;
+            let (element, force_full_damage) =
+                cache_shell_element(&mut cache.main, key, state.shell_dmabuf_commit, || {
+                    build_main_shell_dmabuf_element(
+                        state, renderer, output_geo, output, buf_w, buf_h,
+                    )
+                })?;
             render.dmabuf = element;
             render.force_full_damage |= force_full_damage;
-        } else if cache.main.as_ref().is_some_and(|cached| cached.element.is_some()) {
+        } else if cache
+            .main
+            .as_ref()
+            .is_some_and(|cached| cached.element.is_some())
+        {
             render.force_full_damage = true;
             cache.main = None;
         } else {
             cache.main = None;
         }
-    } else if cache.main.as_ref().is_some_and(|cached| cached.element.is_some()) {
+    } else if cache
+        .main
+        .as_ref()
+        .is_some_and(|cached| cached.element.is_some())
+    {
         render.force_full_damage = true;
         cache.main = None;
     } else {
@@ -539,7 +545,10 @@ pub fn compositor_shell_render_elements(
     let current_floating = state.shell_floating_layers.clone();
     let current_ids: Vec<u32> = current_floating.iter().map(|layer| layer.id).collect();
     if cache.floating_order != current_ids
-        && (cache.floating.iter().any(|(_, cached)| cached.element.is_some())
+        && (cache
+            .floating
+            .iter()
+            .any(|(_, cached)| cached.element.is_some())
             || !current_ids.is_empty())
     {
         render.force_full_damage = true;
@@ -562,11 +571,8 @@ pub fn compositor_shell_render_elements(
                 buffer_rect: placement.buffer_rect,
             };
             let mut slot = cache.floating.remove(&layer.id);
-            let (element, force_full_damage) = cache_shell_element(
-                &mut slot,
-                key,
-                state.shell_dmabuf_commit,
-                || {
+            let (element, force_full_damage) =
+                cache_shell_element(&mut slot, key, state.shell_dmabuf_commit, || {
                     shell_overlay_element_for_placement(
                         state,
                         renderer,
@@ -576,8 +582,7 @@ pub fn compositor_shell_render_elements(
                         &layer.overlay_id,
                         "floating layer dma-buf import failed",
                     )
-                },
-            )?;
+                })?;
             if let Some(slot) = slot {
                 cache.floating.insert(layer.id, slot);
             }
@@ -586,7 +591,11 @@ pub fn compositor_shell_render_elements(
             }
             render.force_full_damage |= force_full_damage;
         }
-    } else if cache.floating.values().any(|cached| cached.element.is_some()) {
+    } else if cache
+        .floating
+        .values()
+        .any(|cached| cached.element.is_some())
+    {
         render.force_full_damage = true;
         cache.floating.clear();
         cache.floating_order.clear();
@@ -595,6 +604,8 @@ pub fn compositor_shell_render_elements(
         cache.floating_order.clear();
     }
 
-    state.shell_render_cache_by_output.insert(output_name, cache);
+    state
+        .shell_render_cache_by_output
+        .insert(output_name, cache);
     Ok(render)
 }

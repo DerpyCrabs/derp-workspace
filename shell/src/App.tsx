@@ -586,7 +586,8 @@ function App() {
   const [savedSessionAvailable, setSavedSessionAvailable] = createSignal(false)
   const [sessionPersistenceReady, setSessionPersistenceReady] = createSignal(false)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
-  let windowSyncRecoveryAllowedAt = 0
+  let windowSyncRecoveryPending = false
+  let windowSyncRecoveryRequestedAt = 0
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
   const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
@@ -1521,9 +1522,10 @@ function App() {
 
   function requestWindowSyncRecovery() {
     const now = Date.now()
-    if (now < windowSyncRecoveryAllowedAt) return
-    windowSyncRecoveryAllowedAt = now + 250
-    shellWireSend('request_compositor_sync')
+    if (windowSyncRecoveryPending && now - windowSyncRecoveryRequestedAt < 1000) return
+    if (!shellWireSend('request_compositor_sync')) return
+    windowSyncRecoveryPending = true
+    windowSyncRecoveryRequestedAt = now
   }
 
   function focusWindowLocally(windowId: number) {
@@ -3671,33 +3673,35 @@ function App() {
     )
     let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
     let compositorSyncAttempts = 0
+    let compositorSyncRaf = 0
     let nativeWireHadBeenReady = false
     onCleanup(() => {
       if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
       if (sessionRestoreStopTimer !== undefined) clearTimeout(sessionRestoreStopTimer)
       if (sessionPersistPoll !== undefined) clearInterval(sessionPersistPoll)
+      if (compositorSyncRaf !== 0) cancelAnimationFrame(compositorSyncRaf)
     })
     sessionPersistPoll = setInterval(() => {
       if (!sessionAutoSaveEnabled() || !sessionPersistenceReady() || sessionRestoreSnapshot()) return
       void persistLiveSessionSnapshotSoon()
     }, 1000)
-    const tryRequestCompositorSync = () => {
+    const requestCompositorSync = () => {
       if (shellWireSend('request_compositor_sync')) {
-        if (typeof window.__derpShellWireSend === 'function') {
-          nativeWireHadBeenReady = true
-          clearShellWireIssue()
-          shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
-        }
+        compositorSyncAttempts = 0
+        nativeWireHadBeenReady = true
+        clearShellWireIssue()
+        shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
         return
       }
       compositorSyncAttempts += 1
-      if (compositorSyncAttempts < 80) {
-        setTimeout(tryRequestCompositorSync, 100)
-      } else {
-        reportShellWireIssue(shellWireIssueMessage())
-      }
+      reportShellWireIssue(shellWireIssueMessage())
+      if (compositorSyncAttempts >= 120) return
+      compositorSyncRaf = requestAnimationFrame(() => {
+        compositorSyncRaf = 0
+        requestCompositorSync()
+      })
     }
-    queueMicrotask(tryRequestCompositorSync)
+    queueMicrotask(requestCompositorSync)
     queueMicrotask(() => {
       shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
     })
@@ -3717,7 +3721,7 @@ function App() {
       }
       reportShellWireIssue(shellWireIssueMessage())
       compositorSyncAttempts = 0
-      tryRequestCompositorSync()
+      requestCompositorSync()
     }, 750)
 
     const applyCompositorDetail = (d: DerpShellDetail) => {
@@ -4147,6 +4151,7 @@ function App() {
         return
       }
       if (d.type === 'window_list') {
+        windowSyncRecoveryPending = false
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,

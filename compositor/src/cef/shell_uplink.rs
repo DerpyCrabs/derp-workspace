@@ -902,7 +902,7 @@ wrap_render_process_handler! {
             let Some(context) = context else {
                 return;
             };
-            let Some(global) = context.global() else {
+            let Some(mut global) = context.global() else {
                 return;
             };
             let is_main = frame.is_main();
@@ -911,6 +911,12 @@ wrap_render_process_handler! {
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
+            tracing::warn!(
+                target: "derp_shell_boot",
+                is_main,
+                frame_url = %cef_string_userfree_to_string(&frame.url()),
+                "render context created"
+            );
             tracing::debug!(
                 target: "derp_shell_osr",
                 is_main,

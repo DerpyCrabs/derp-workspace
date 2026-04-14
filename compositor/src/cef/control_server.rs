@@ -9,6 +9,10 @@ use cef::{Browser, CefString, ImplBrowser, ImplFrame};
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
 
+fn cef_userfree_string_to_string(s: &cef::CefStringUserfreeUtf16) -> String {
+    cef::CefStringUtf8::from(&cef::CefStringUtf16::from(s)).to_string()
+}
+
 struct PortalScreencastRequest {
     request_id: u64,
     types: Option<u32>,
@@ -75,6 +79,11 @@ fn run(
         }
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    tracing::warn!(
+        target: "derp_shell_boot",
+        port,
+        "control server listening"
+    );
     let _ = port_tx.send(Ok(port));
     std::thread::spawn(crate::cef::desktop_apps::warm_applications_cache);
 
@@ -225,19 +234,46 @@ fn execute_shell_bridge_js(
     let frame = browser
         .main_frame()
         .ok_or_else(|| "shell main frame is unavailable".to_string())?;
+    tracing::warn!(
+        target: "derp_shell_boot",
+        browser_id = browser.identifier(),
+        frame_url = %cef_userfree_string_to_string(&frame.url()),
+        script_len = script.len(),
+        "execute_shell_bridge_js"
+    );
     frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 0);
     Ok(())
 }
 
 fn request_shell_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
     let request_id = e2e_bridge::next_request_id();
+    tracing::warn!(
+        target: "derp_shell_boot",
+        request_id,
+        "request_shell_snapshot_json start"
+    );
     execute_shell_bridge_js(
         browser,
         format!(
             "window.__DERP_E2E_REQUEST_SNAPSHOT&&window.__DERP_E2E_REQUEST_SNAPSHOT({request_id});"
         ),
     )?;
-    e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3))
+    let result = e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3));
+    match &result {
+        Ok(json) => tracing::warn!(
+            target: "derp_shell_boot",
+            request_id,
+            bytes = json.len(),
+            "request_shell_snapshot_json ok"
+        ),
+        Err(error) => tracing::warn!(
+            target: "derp_shell_boot",
+            request_id,
+            %error,
+            "request_shell_snapshot_json failed"
+        ),
+    }
+    result
 }
 
 fn request_shell_html(

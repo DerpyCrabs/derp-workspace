@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use cef::{
     post_task, rc::Rc, wrap_task, Browser, ImplBrowser, ImplBrowserHost, ImplTask, Task, ThreadId,
@@ -13,20 +16,71 @@ struct PendingCompositorMessages {
     messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
 }
 
+fn is_window_delta(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
+    matches!(
+        msg,
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+    )
+}
+
 fn push_pending_message(
     messages: &mut Vec<shell_wire::DecodedCompositorToShellMessage>,
     msg: shell_wire::DecodedCompositorToShellMessage,
 ) {
-    if let shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } = &msg {
-        messages.retain(|pending| {
-            !matches!(
-                pending,
-                shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                    window_id: pending_window_id,
-                    ..
-                } if pending_window_id == window_id
-            )
-        });
+    match &msg {
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+        | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+        | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+        | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+        | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
+        | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+        | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+            let keep = std::mem::discriminant(&msg);
+            messages.retain(|pending| std::mem::discriminant(pending) != keep);
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } => {
+            messages.retain(|pending| {
+                !matches!(
+                    pending,
+                    shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                        window_id: pending_window_id,
+                        ..
+                    } if pending_window_id == window_id
+                )
+            });
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowMetadata { window_id, .. } => {
+            messages.retain(|pending| {
+                !matches!(
+                    pending,
+                    shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                        window_id: pending_window_id,
+                        ..
+                    } if pending_window_id == window_id
+                )
+            });
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowState { window_id, .. } => {
+            messages.retain(|pending| {
+                !matches!(
+                    pending,
+                    shell_wire::DecodedCompositorToShellMessage::WindowState {
+                        window_id: pending_window_id,
+                        ..
+                    } if pending_window_id == window_id
+                )
+            });
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
+            messages.retain(|pending| !is_window_delta(pending));
+        }
+        _ => {}
     }
     messages.push(msg);
 }
@@ -82,6 +136,7 @@ pub struct ShellToCefLink {
     browser_holder: Arc<Mutex<Option<Browser>>>,
     view_state: Arc<Mutex<OsrViewState>>,
     pending_messages: Arc<Mutex<PendingCompositorMessages>>,
+    delivery_ready: Arc<AtomicBool>,
 }
 
 impl ShellToCefLink {
@@ -96,6 +151,7 @@ impl ShellToCefLink {
                 scheduled: false,
                 messages: Vec::new(),
             })),
+            delivery_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -120,9 +176,31 @@ impl ShellToCefLink {
                 true
             }
         };
-        if !should_post {
+        if !should_post || !self.delivery_ready.load(Ordering::Relaxed) {
             return;
         }
+        self.post_pending_messages();
+    }
+
+    pub(crate) fn schedule_external_begin_frame(
+        &self,
+        kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
+    ) {
+        crate::cef::begin_frame_diag::note_schedule_from_compositor(kind);
+        let mut task = ExternalBeginFrameTask::new(self.browser_holder.clone());
+        let _ = post_task(ThreadId::UI, Some(&mut task));
+    }
+
+    pub fn set_delivery_ready(&self, ready: bool) {
+        self.delivery_ready.store(ready, Ordering::Relaxed);
+        if ready {
+            self.post_pending_messages();
+        } else if let Ok(mut guard) = self.pending_messages.lock() {
+            guard.scheduled = false;
+        }
+    }
+
+    fn post_pending_messages(&self) {
         let mut task = ApplyCompositorToShellTask::new(
             self.browser_holder.clone(),
             self.view_state.clone(),
@@ -133,14 +211,5 @@ impl ShellToCefLink {
                 guard.scheduled = false;
             }
         }
-    }
-
-    pub(crate) fn schedule_external_begin_frame(
-        &self,
-        kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
-    ) {
-        crate::cef::begin_frame_diag::note_schedule_from_compositor(kind);
-        let mut task = ExternalBeginFrameTask::new(self.browser_holder.clone());
-        let _ = post_task(ThreadId::UI, Some(&mut task));
     }
 }

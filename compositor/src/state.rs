@@ -4618,7 +4618,6 @@ impl CompositorState {
             return;
         }
         self.shell_embedded_initial_handshake_done = true;
-        self.shell_on_shell_client_connected();
     }
 
     /// After shell Unix `SO_PEERCRED` is set: snap host toplevel(s) to the output origin and drop any HUD row
@@ -4651,6 +4650,12 @@ impl CompositorState {
 
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
+        self.shell_embedded_initial_handshake_done = true;
+        if let Ok(g) = self.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.set_delivery_ready(true);
+            }
+        }
         self.shell_note_shell_ipc_rx();
         self.shell_ipc_last_compositor_ping = None;
         self.shell_ipc_last_pong = None;
@@ -4658,32 +4663,7 @@ impl CompositorState {
         self.shell_ipc_ping_late_warned_for = None;
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
-        for info in self.window_registry.all_infos() {
-            if self.window_info_is_solid_shell_host(&info) {
-                continue;
-            }
-            if self.wayland_window_id_is_pending_deferred_toplevel(info.window_id) {
-                continue;
-            }
-            if !shell_window_row_should_show(&info) {
-                continue;
-            }
-            let ipc_info = self
-                .shell_window_info_to_output_local_layout(&info)
-                .unwrap_or_else(|| info.clone());
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-                window_id: ipc_info.window_id,
-                surface_id: ipc_info.surface_id,
-                x: ipc_info.x,
-                y: ipc_info.y,
-                w: ipc_info.width,
-                h: ipc_info.height,
-                title: ipc_info.title.clone(),
-                app_id: ipc_info.app_id.clone(),
-                client_side_decoration: ipc_info.client_side_decoration,
-                output_name: ipc_info.output_name.clone(),
-            });
-        }
+        self.shell_reply_window_list();
         let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus())
         {
             Some(surf) => {
@@ -4705,7 +4685,6 @@ impl CompositorState {
             surface_id,
             window_id,
         });
-        self.shell_reply_window_list();
         self.sync_tray_hints_to_shell();
     }
 

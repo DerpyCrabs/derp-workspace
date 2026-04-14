@@ -19,6 +19,10 @@ use crate::cef::osr_view_state::{
 use crate::cef::shell_uplink;
 use crate::cef::uplink::UplinkToCompositor;
 
+fn cef_userfree_string_to_string(s: &CefStringUserfreeUtf16) -> String {
+    CefStringUtf8::from(&CefStringUtf16::from(s)).to_string()
+}
+
 #[cfg(unix)]
 static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
 
@@ -172,6 +176,12 @@ wrap_load_handler! {
             if frame.is_main() != 1 {
                 return;
             }
+            tracing::warn!(
+                target: "derp_shell_boot",
+                url = %cef_userfree_string_to_string(&frame.url()),
+                has_inject_js = self.spawn_inject_js.is_some(),
+                "cef main frame load end"
+            );
             if let Some(ref js) = self.spawn_inject_js {
                 frame.execute_java_script(
                     Some(&CefString::from(js.as_str())),
@@ -189,8 +199,12 @@ wrap_load_handler! {
             host.set_focus(1);
             host.invalidate(PaintElementType::VIEW);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
+                if let Ok(g) = state.shell_to_cef.lock() {
+                    if let Some(link) = g.as_ref() {
+                        link.set_delivery_ready(false);
+                    }
+                }
                 state.shell_ipc_on_shell_load_success();
-                state.send_shell_output_layout();
             })));
         }
     }
@@ -200,11 +214,18 @@ wrap_life_span_handler! {
     struct CaptureBrowser {
         browser_holder: Arc<Mutex<Option<Browser>>>,
         cef_tx: Sender<CefToCompositor>,
+        handshake: Arc<AtomicBool>,
     }
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(b) = browser {
+                tracing::warn!(
+                    target: "derp_shell_boot",
+                    browser_id = b.identifier(),
+                    is_popup = b.is_popup(),
+                    "cef browser created"
+                );
                 if let Some(host) = b.host() {
                     host.set_focus(1);
                 }
@@ -212,8 +233,13 @@ wrap_life_span_handler! {
                     *g = Some(b.clone());
                 }
             }
+            self.handshake.store(true, Ordering::SeqCst);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
-                state.send_shell_output_layout();
+                if let Ok(g) = state.shell_to_cef.lock() {
+                    if let Some(link) = g.as_ref() {
+                        link.set_delivery_ready(false);
+                    }
+                }
             })));
         }
     }
@@ -562,7 +588,29 @@ fn run_cef(
     let inject_js = match control_rx.recv() {
         Ok(Ok(port)) => {
             let base = format!("http://127.0.0.1:{port}");
-            let _ = std::fs::write(crate::cef::runtime_dir().join("derp-shell-http-url"), &base);
+            let url_path = crate::cef::runtime_dir().join("derp-shell-http-url");
+            tracing::warn!(
+                target: "derp_shell_boot",
+                port,
+                base = %base,
+                url_path = %url_path.display(),
+                "cef control server bound"
+            );
+            match std::fs::write(&url_path, &base) {
+                Ok(()) => tracing::warn!(
+                    target: "derp_shell_boot",
+                    base = %base,
+                    url_path = %url_path.display(),
+                    "wrote derp-shell-http-url"
+                ),
+                Err(error) => tracing::warn!(
+                    target: "derp_shell_boot",
+                    %error,
+                    base = %base,
+                    url_path = %url_path.display(),
+                    "failed to write derp-shell-http-url"
+                ),
+            }
             Some(format!(
                 r#"window.__DERP_SPAWN_URL="{base}/spawn";window.__DERP_SHELL_HTTP="{base}";"#,
             ))
@@ -576,7 +624,7 @@ fn run_cef(
             None
         }
     };
-    let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone());
+    let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone(), handshake.clone());
 
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(cef_tx.clone())));
@@ -588,13 +636,6 @@ fn run_cef(
         let mut g = shell_slot.lock().expect("shell_slot");
         *g = Some(link.clone());
     }
-    let handshake_cl = handshake.clone();
-    let lh2 = cef_tx.clone();
-    let _ = lh2.send(CefToCompositor::Run(Box::new(move |state| {
-        state.shell_on_shell_client_connected();
-        handshake_cl.store(true, Ordering::SeqCst);
-    })));
-
     let deadline = Instant::now() + Duration::from_millis(800);
     while !handshake.load(Ordering::SeqCst) && Instant::now() < deadline {
         do_message_loop_work();
@@ -627,6 +668,13 @@ fn run_cef(
     browser_settings.windowless_frame_rate = 60;
     browser_settings.background_color = 0x0000_0000;
 
+    tracing::warn!(
+        target: "derp_shell_boot",
+        url = %url,
+        init_w,
+        init_h,
+        "creating CEF browser"
+    );
     browser_host_create_browser(
         Some(&window_info),
         Some(&mut client),

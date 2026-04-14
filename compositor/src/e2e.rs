@@ -529,10 +529,10 @@ impl CompositorState {
             .pending_deferred_toplevels
             .values()
             .filter_map(|pending| {
-                pending
-                    .window
-                    .toplevel()
-                    .and_then(|toplevel| self.window_registry.window_id_for_wl_surface(toplevel.wl_surface()))
+                pending.window.toplevel().and_then(|toplevel| {
+                    self.window_registry
+                        .window_id_for_wl_surface(toplevel.wl_surface())
+                })
             })
             .collect();
         pending_deferred_window_ids.sort_unstable();
