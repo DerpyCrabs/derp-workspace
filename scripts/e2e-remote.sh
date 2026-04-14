@@ -95,13 +95,13 @@ else
 fi
 
 if [[ "$SKIP_BUILD" -eq 1 ]]; then
-  echo "=== skip remote cargo build --release -p derp-test-client ==="
+  echo "=== skip remote cargo build --release -p compositor -p derp-test-client ==="
 else
-  echo "=== remote cargo build --release -p derp-test-client ==="
+  echo "=== remote cargo build --release -p compositor -p derp-test-client ==="
   ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
-exec cargo build --release -p derp-test-client
+exec cargo build --release -p compositor -p derp-test-client
 EOF
 fi
 

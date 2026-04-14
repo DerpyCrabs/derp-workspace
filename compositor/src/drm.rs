@@ -212,10 +212,10 @@ impl DrmHead {
                         }));
                         let (backdrop, backdrop_force_full_damage) =
                             crate::backdrop_render::desktop_backdrop_layers(
-                            state,
-                            output,
-                            output_scale,
-                        );
+                                state,
+                                output,
+                                output_scale,
+                            );
                         for s in backdrop.solids {
                             render_elements.push(DesktopStack::BackdropSolid(s));
                         }
@@ -269,9 +269,14 @@ impl DrmHead {
                 if let Some(ref el) = shell_render.context_menu {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
+                let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
                 for (el, wid, include_self_decor) in tagged {
-                    let excl_ctx =
-                        state.shell_exclusion_clip_ctx_for_draw(output, wid, include_self_decor);
+                    let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
+                        output,
+                        wid,
+                        include_self_decor,
+                        Some(&ordered_window_ids_on_output),
+                    );
                     match excl_ctx {
                         None => render_elements.push(DesktopStack::Space(
                             crate::desktop_stack::FractionalDamageSpaceElements::new(
@@ -288,11 +293,7 @@ impl DrmHead {
                     render_elements.push(DesktopStack::ShellDma(el));
                 }
                 let (backdrop, backdrop_force_full_damage) =
-                    crate::backdrop_render::desktop_backdrop_layers(
-                    state,
-                    output,
-                    output_scale,
-                );
+                    crate::backdrop_render::desktop_backdrop_layers(state, output, output_scale);
                 for s in backdrop.solids {
                     render_elements.push(DesktopStack::BackdropSolid(s));
                 }

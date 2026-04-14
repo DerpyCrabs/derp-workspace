@@ -19,17 +19,12 @@ import {
   SHELL_RESIZE_RIGHT,
   SHELL_RESIZE_TOP,
 } from './chromeConstants'
-import {
-  mergeExclusionRects,
-  ssdDecorationExclusionRects,
-} from './exclusionRects'
 import { ShellWindowFrame, type ShellWindowModel } from './ShellWindowFrame'
 import {
   canvasRectToClientCss,
   clientPointToCanvasLocal,
   clientPointerDeltaToCanvasLogical,
   clientPointToGlobalLogical,
-  clientRectToGlobalLogical,
   findAdjacentMonitor,
   pickScreenForPointerSnap,
   pickScreenForWindow,
@@ -167,6 +162,7 @@ import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
 import { DERP_SHELL_EVENT, installCompositorBatchHandler } from './compositorEvents'
 import { createCompositorModel } from './compositorModel'
+import { createShellExclusionSync } from './shellExclusionSync'
 import { createWorkspaceActions } from './workspaceActions'
 import {
   findMergeTarget,
@@ -605,8 +601,6 @@ function App() {
   const portalPickerVisible = createMemo(() => portalPickerRequestId() !== null)
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
   let mainRef: HTMLElement | undefined
-  let exclusionZonesRaf = 0
-  let lastExclusionZonesJson: string | null = null
   let compositorFollowupQueued = false
   let compositorFollowupFlushWindows = false
   let compositorFollowupSyncExclusion = false
@@ -1465,12 +1459,6 @@ function App() {
     if (!send) return
     send('e2e_html_response', requestId, buildE2eShellHtml(document, selector))
   }
-
-  const stackedWindowsList = createMemo(() => {
-    return [...windowsList()].sort((a, b) => {
-      return b.stack_z - a.stack_z || b.window_id - a.window_id
-    })
-  })
 
   function syncWindowGeometry(targetWindowId: number, fromWindow: DerpWindow) {
     const layoutFlag = fromWindow.maximized ? SHELL_LAYOUT_MAXIMIZED : SHELL_LAYOUT_FLOATING
@@ -2407,6 +2395,16 @@ function App() {
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
+  const { scheduleExclusionZonesSync, syncExclusionZonesNow } = createShellExclusionSync({
+    mainEl: () => mainRef,
+    outputGeom,
+    layoutCanvasOrigin,
+    taskbarScreens,
+    windows: windowsList,
+    isWindowTiled: (windowId) => perMonitorTiles.isTiled(windowId),
+    onHudChange: setExclusionZonesHud,
+  })
+
   function taskbarRowsForScreen(s: LayoutScreen) {
     return taskbarRowsByMonitor().get(s.name) ?? []
   }
@@ -2557,17 +2555,6 @@ function App() {
     })
   }
 
-  const fullscreenTaskbarExclusionSig = createMemo(() => {
-    const byMon = windowsByMonitor()
-    return taskbarScreens()
-      .map((scr) => {
-        const list = byMon.get(scr.name) ?? []
-        const hide = list.some((w) => w.fullscreen && !w.minimized)
-        return `${scr.name}:${hide ? 1 : 0}`
-      })
-      .join('|')
-  })
-
   /** Memo so pointer/viewport updates re-run (nested `Show` + FC did not track `pointerClient`). */
   const crosshairDebugOverlay = createMemo(() => {
     if (!crosshairCursor()) return null
@@ -2596,88 +2583,6 @@ function App() {
         </div>
       </>
     )
-  })
-
-  function syncExclusionZonesNow() {
-    const main = mainRef
-    if (!main) {
-      setExclusionZonesHud([])
-      return
-    }
-    const og = outputGeom()
-    if (!og) {
-      setExclusionZonesHud([])
-      return
-    }
-    const co = layoutCanvasOrigin()
-    const mainRect = main.getBoundingClientRect()
-    const rects: Array<{
-      x: number
-      y: number
-      w: number
-      h: number
-      window_id?: number
-    }> = []
-    const hud: ExclusionHudZone[] = []
-    const addEl = (el: Element | null | undefined, label: string) => {
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      if (r.width < 1 || r.height < 1) return
-      const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
-      rects.push({ x: z.x, y: z.y, w: z.w, h: z.h })
-      hud.push({ label, ...z })
-    }
-    addEl(main.querySelector('[data-shell-panel]'), 'panel')
-    for (const el of main.querySelectorAll('[data-shell-taskbar-exclude]')) {
-      const mon = el.getAttribute('data-shell-taskbar-monitor') ?? ''
-      addEl(el, mon.length > 0 ? `taskbar:${mon}` : 'taskbar')
-    }
-    addEl(main.querySelector('[data-shell-snap-picker]'), 'snap-picker')
-    addEl(main.querySelector('[data-shell-snap-strip-trigger]'), 'snap-strip')
-    const stripLabels = ['t', 'l', 'r', 'b'] as const
-    for (const decoWin of stackedWindowsList()) {
-      if (decoWin.minimized) continue
-      const deco = ssdDecorationExclusionRects({
-        ...decoWin,
-        snap_tiled: perMonitorTiles.isTiled(decoWin.window_id),
-      })
-      for (let i = 0; i < deco.length; i++) {
-        const r = deco[i]
-        const tag = stripLabels[i] ?? `${i}`
-        const z = rectCanvasLocalToGlobal(r.x, r.y, r.w, r.h, co)
-        hud.push({ label: `w${decoWin.window_id}-deco-${tag}`, x: z.x, y: z.y, w: z.w, h: z.h })
-        rects.push({ x: z.x, y: z.y, w: z.w, h: z.h, window_id: decoWin.window_id })
-      }
-    }
-    setExclusionZonesHud(hud)
-    const sentRects = mergeExclusionRects(rects)
-    let tray_strip: { x: number; y: number; w: number; h: number } | null = null
-    const trayStripEl = main.querySelector('[data-shell-tray-strip]')
-    if (trayStripEl) {
-      const r = trayStripEl.getBoundingClientRect()
-      if (r.width >= 1 && r.height >= 1) {
-        const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
-        tray_strip = { x: z.x, y: z.y, w: z.w, h: z.h }
-      }
-    }
-    const payload = JSON.stringify({ rects: sentRects, tray_strip })
-    if (typeof window.__derpShellWireSend === 'function' && payload !== lastExclusionZonesJson) {
-      lastExclusionZonesJson = payload
-      window.__derpShellWireSend('set_exclusion_zones', payload)
-    }
-  }
-
-  function scheduleExclusionZonesSync() {
-    if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
-    exclusionZonesRaf = requestAnimationFrame(() => {
-      exclusionZonesRaf = 0
-      syncExclusionZonesNow()
-    })
-  }
-
-  createEffect(() => {
-    fullscreenTaskbarExclusionSig()
-    queueMicrotask(() => scheduleExclusionZonesSync())
   })
 
   createEffect(() => {
@@ -4298,15 +4203,6 @@ function App() {
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
     syncViewport()
 
-    let exclusionResizeObserver: ResizeObserver | null = null
-    queueMicrotask(() => {
-      const main = mainRef
-      if (!main) return
-      exclusionResizeObserver = new ResizeObserver(() => scheduleExclusionZonesSync())
-      exclusionResizeObserver.observe(main, { box: 'border-box' })
-      scheduleExclusionZonesSync()
-    })
-
     const onPointerMove = (e: PointerEvent) => {
       applyShellWindowMove(e.clientX, e.clientY)
       applyShellWindowResize(e.clientX, e.clientY)
@@ -4431,7 +4327,6 @@ function App() {
       window.removeEventListener('touchcancel', onWindowTouchEnd)
       window.removeEventListener('touchmove', onWindowTouchMove)
       window.removeEventListener('resize', onWindowResize)
-      exclusionResizeObserver?.disconnect()
       document.removeEventListener('fullscreenchange', onFullscreenChange)
       delete window.__DERP_E2E_REQUEST_SNAPSHOT
       delete window.__DERP_E2E_REQUEST_HTML
@@ -4440,13 +4335,6 @@ function App() {
   })
   onCleanup(() => {
     if (wireWatchPoll !== undefined) clearInterval(wireWatchPoll)
-  })
-
-  createEffect(() => {
-    windowsList()
-    workspacePartition()
-    windowsByMonitor()
-    scheduleExclusionZonesSync()
   })
 
   function copyDebugHudSnapshot() {

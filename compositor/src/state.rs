@@ -183,11 +183,14 @@ pub(crate) struct CachedBackdropLayers {
 
 #[derive(Default)]
 pub(crate) struct CachedShellRenderOutput {
-    pub main: Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellMainCacheKey>>,
+    pub main:
+        Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellMainCacheKey>>,
     pub context_menu:
         Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>>,
-    pub floating:
-        HashMap<u32, crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>>,
+    pub floating: HashMap<
+        u32,
+        crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>,
+    >,
     pub floating_order: Vec<u32>,
 }
 
@@ -1612,7 +1615,7 @@ impl CompositorState {
         }
     }
 
-    fn window_ids_strictly_above_on_output(&self, output: &Output, self_id: u32) -> Vec<u32> {
+    pub(crate) fn ordered_window_ids_on_output(&self, output: &Output) -> Vec<u32> {
         let mut stack: Vec<(u32, u32)> = self
             .space
             .elements_for_output(output)
@@ -1621,10 +1624,18 @@ impl CompositorState {
             .collect();
         stack.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         stack.dedup_by(|a, b| a.0 == b.0);
-        let Some(idx) = stack.iter().position(|(id, _)| *id == self_id) else {
-            return Vec::new();
+        stack.into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn window_ids_strictly_above_in_stack<'a>(
+        &self,
+        ordered_window_ids: &'a [u32],
+        self_id: u32,
+    ) -> &'a [u32] {
+        let Some(idx) = ordered_window_ids.iter().position(|id| *id == self_id) else {
+            return &[];
         };
-        stack[(idx + 1)..].iter().map(|(id, _)| *id).collect()
+        &ordered_window_ids[(idx + 1)..]
     }
 
     pub(crate) fn shell_exclusion_clip_rects_logical(
@@ -1632,6 +1643,7 @@ impl CompositorState {
         output: &Output,
         elem_window: Option<u32>,
         include_self_decor: bool,
+        ordered_window_ids_on_output: Option<&[u32]>,
     ) -> Vec<Rectangle<i32, Logical>> {
         let Some(ws) = self.workspace_logical_bounds() else {
             return Vec::new();
@@ -1659,7 +1671,18 @@ impl CompositorState {
                 }
             }
             Some(self_id) => {
-                for ow in self.window_ids_strictly_above_on_output(output, self_id) {
+                let ordered_window_ids_on_output_owned;
+                let ordered_window_ids_on_output = if let Some(ordered) =
+                    ordered_window_ids_on_output
+                {
+                    ordered
+                } else {
+                    ordered_window_ids_on_output_owned = self.ordered_window_ids_on_output(output);
+                    &ordered_window_ids_on_output_owned
+                };
+                for &ow in
+                    self.window_ids_strictly_above_in_stack(ordered_window_ids_on_output, self_id)
+                {
                     if let Some(rs) = self.shell_exclusion_decor.get(&ow) {
                         for r in rs {
                             if let Some(i) = r.intersection(visible) {
@@ -1692,9 +1715,14 @@ impl CompositorState {
         output: &Output,
         elem_window: Option<u32>,
         include_self_decor: bool,
+        ordered_window_ids_on_output: Option<&[u32]>,
     ) -> Option<Arc<exclusion_clip::ShellExclusionClipCtx>> {
-        let zones =
-            self.shell_exclusion_clip_rects_logical(output, elem_window, include_self_decor);
+        let zones = self.shell_exclusion_clip_rects_logical(
+            output,
+            elem_window,
+            include_self_decor,
+            ordered_window_ids_on_output,
+        );
         if zones.is_empty() {
             return None;
         }
