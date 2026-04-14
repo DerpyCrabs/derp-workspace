@@ -139,8 +139,11 @@ impl ShellToCefLink {
         }
     }
 
-    pub fn schedule_external_begin_frame(&self) {
-        crate::cef::begin_frame_diag::note_schedule_from_compositor();
+    pub(crate) fn schedule_external_begin_frame(
+        &self,
+        kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
+    ) {
+        crate::cef::begin_frame_diag::note_schedule_from_compositor(kind);
         let mut task = ExternalBeginFrameTask::new(self.browser_holder.clone());
         let _ = post_task(ThreadId::UI, Some(&mut task));
     }

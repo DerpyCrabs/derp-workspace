@@ -721,20 +721,31 @@ impl DrmSession {
             any_advanced |= advanced;
         }
 
-        const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(16);
+        const SHELL_BEGIN_MIN_WHEN_ACTIVE: Duration = Duration::from_millis(16);
+        const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(250);
         let now = Instant::now();
-        let shell_send = if any_advanced {
-            true
+        let schedule_kind = if any_advanced || state.shell_begin_frame_interaction_active(now) {
+            crate::cef::begin_frame_diag::CompositorScheduleKind::Active
         } else {
-            match state.shell_begin_frame_last {
-                None => true,
-                Some(t) => now.duration_since(t) >= SHELL_BEGIN_MIN_WHEN_IDLE,
+            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle
+        };
+        let min_gap = match schedule_kind {
+            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle => {
+                SHELL_BEGIN_MIN_WHEN_IDLE
             }
+            crate::cef::begin_frame_diag::CompositorScheduleKind::Active
+            | crate::cef::begin_frame_diag::CompositorScheduleKind::Forced => {
+                SHELL_BEGIN_MIN_WHEN_ACTIVE
+            }
+        };
+        let shell_send = match state.shell_begin_frame_last {
+            None => true,
+            Some(t) => now.duration_since(t) >= min_gap,
         };
         if shell_send {
             if let Ok(g) = state.shell_to_cef.lock() {
                 if let Some(link) = g.as_ref() {
-                    link.schedule_external_begin_frame();
+                    link.schedule_external_begin_frame(schedule_kind);
                 }
             }
             state.shell_begin_frame_last = Some(now);

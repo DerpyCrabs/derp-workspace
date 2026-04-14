@@ -3,11 +3,9 @@
 These tasks are based on a static read of the current code. Each item is scoped to be realistic for one AI session and precise enough to implement, verify, and land independently.
 
 For each task:
-
-1. Run `bash scripts/verify.sh`
-2. Run `bash scripts/remote-update-and-restart.sh`
-3. Run `bash scripts/remote-verify.sh`
-4. If compositor rendering, shell OSR, window lifecycle, or e2e behavior changed, add or update a remote e2e test and run `bash scripts/e2e-remote.sh`
+1. Run `bash scripts/remote-update-and-restart.sh`
+2. Run `bash scripts/remote-verify.sh`
+3. Run `bash scripts/e2e-remote.sh`
 
 ## Task 1: Reduce Idle CEF BeginFrame Traffic
 

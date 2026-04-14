@@ -281,6 +281,44 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('settings-shell.json', settingsFocused.shell)
   })
 
+  test('taskbar settings wakes cleanly after idle pointer move', async ({ base }) => {
+    await waitForSessionRestoreIdle(base)
+    const initialShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (initialShell.settings_window_visible) {
+      await closeTaskbarWindow(base, initialShell, SHELL_UI_SETTINGS_WINDOW_ID)
+      await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    }
+    const idleShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const toggle = idleShell.controls?.taskbar_settings_toggle
+    assert(toggle, 'missing taskbar settings toggle before idle wake test')
+    const target = {
+      x: toggle.global_x + toggle.width / 2,
+      y: toggle.global_y + toggle.height / 2,
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await movePoint(base, target.x, target.y)
+    const awake = await waitFor(
+      'pointer reaches taskbar settings after idle move',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const currentToggle = shell.controls?.taskbar_settings_toggle
+        const pointer = compositor.pointer
+        if (!currentToggle || !pointer || !pointInRect(currentToggle, pointer)) return null
+        return { compositor, shell }
+      },
+      1500,
+      50,
+    )
+    await clickRect(base, awake.shell.controls!.taskbar_settings_toggle!)
+    const focused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 1500)
+    await writeJsonArtifact('settings-idle-pointer-wake.json', {
+      compositor: focused.compositor,
+      shell: focused.shell,
+    })
+    await closeTaskbarWindow(base, focused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+  })
+
   test('session autosave toggle and power menu save restore actions work', async ({ base, state }) => {
     await waitForSessionRestoreIdle(base)
     const bootstrap = await getSnapshots(base)

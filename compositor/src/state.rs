@@ -512,6 +512,7 @@ pub struct CompositorState {
     pub(crate) desktop_backdrop_solid: SolidColorBuffer,
     pub(crate) backdrop_wallpaper_id_cache: HashMap<String, BackdropWallpaperIdCache>,
     pub(crate) shell_begin_frame_last: Option<Instant>,
+    pub(crate) shell_begin_frame_fast_until: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -880,6 +881,7 @@ impl CompositorState {
             ),
             backdrop_wallpaper_id_cache: HashMap::new(),
             shell_begin_frame_last: None,
+            shell_begin_frame_fast_until: None,
         };
         crate::display_config::apply_keyboard_from_display_file(&mut s);
         let keyboard_settings = crate::settings_config::read_keyboard_settings();
@@ -1719,14 +1721,45 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn shell_nudge_cef_repaint(&self) {
+    const SHELL_BEGIN_FRAME_INTERACTION_HOLD: Duration = Duration::from_millis(160);
+    const SHELL_BEGIN_FRAME_FORCED_REPAINT_HOLD: Duration = Duration::from_millis(450);
+
+    fn shell_begin_frame_fast_track_for(&mut self, hold: Duration) {
+        let until = Instant::now() + hold;
+        match self.shell_begin_frame_fast_until {
+            Some(prev) if prev >= until => {}
+            _ => self.shell_begin_frame_fast_until = Some(until),
+        }
+    }
+
+    pub(crate) fn shell_begin_frame_note_shell_input(&mut self) {
+        self.shell_begin_frame_fast_track_for(Self::SHELL_BEGIN_FRAME_INTERACTION_HOLD);
+    }
+
+    pub(crate) fn shell_begin_frame_note_forced_repaint(&mut self) {
+        self.shell_begin_frame_fast_track_for(Self::SHELL_BEGIN_FRAME_FORCED_REPAINT_HOLD);
+    }
+
+    pub(crate) fn shell_begin_frame_interaction_active(&self, now: Instant) -> bool {
+        self.shell_move_is_active()
+            || self.shell_resize_is_active()
+            || self.shell_ui_pointer_grab_active()
+            || self.screenshot_selection_active()
+            || self.touch_routes_to_cef
+            || self
+                .shell_begin_frame_fast_until
+                .is_some_and(|until| now < until)
+    }
+
+    pub(crate) fn shell_nudge_cef_repaint(&mut self) {
+        self.shell_begin_frame_note_forced_repaint();
         let Ok(g) = self.shell_to_cef.lock() else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint shell_to_cef lock poisoned");
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.schedule_external_begin_frame();
-            link.schedule_external_begin_frame();
+            link.schedule_external_begin_frame(crate::cef::begin_frame_diag::CompositorScheduleKind::Forced);
+            link.schedule_external_begin_frame(crate::cef::begin_frame_diag::CompositorScheduleKind::Forced);
         } else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
         }
@@ -7342,6 +7375,7 @@ impl CompositorState {
         if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
+        self.shell_begin_frame_note_shell_input();
         let sym = keysym.modified_sym();
         let mut mods_u = Self::cef_flags_from_modifiers(mods);
         if key_state == KeyState::Pressed && is_autorepeat {
@@ -7450,6 +7484,7 @@ impl CompositorState {
         if self.shell_last_pointer_ipc_px == Some((bx, by)) {
             return;
         }
+        self.shell_begin_frame_note_shell_input();
         self.shell_last_pointer_ipc_px = Some((bx, by));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
             x: bx,
@@ -7481,6 +7516,7 @@ impl CompositorState {
         let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) else {
             return;
         };
+        self.shell_begin_frame_note_shell_input();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerAxis {
             x: bx,
             y: by,
