@@ -117,8 +117,6 @@ import {
   unionBBoxFromScreens,
 } from './app/appLayout'
 import {
-  applyDetail,
-  buildWindowsMapFromList,
   coerceShellWindowId,
   type DerpShellDetail,
   type DerpWindow,
@@ -127,7 +125,7 @@ import {
   windowOnMonitor,
   workspaceGroupWindowIds,
 } from './app/appWindowState'
-import { matchDesktopApplication, useDesktopApplicationsState } from './desktopApplicationsState'
+import { useDesktopApplicationsState } from './desktopApplicationsState'
 import type { TaskbarSniItem } from './Taskbar'
 import { FileBrowserWindow } from './FileBrowserWindow'
 import { primeFileBrowserWindowPath } from './fileBrowserState'
@@ -169,28 +167,23 @@ import type {
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
 import { DERP_SHELL_EVENT, installCompositorBatchHandler } from './compositorEvents'
+import { createCompositorModel } from './compositorModel'
+import { createWorkspaceActions } from './workspaceActions'
 import {
   findMergeTarget,
-  nextActiveWindowAfterRemoval,
-  resolveGroupVisibleWindowId,
   windowLabel as groupedWindowLabel,
   type TabMergeTarget,
 } from './tabGroupOps'
 import { buildTaskbarGroupRows } from './taskbarGroups'
 import {
-  cycleWorkspaceTab,
-  groupIdForWindow,
   isWorkspaceWindowPinned,
-  loadWorkspaceState,
-  moveWorkspaceWindowToGroup,
-  persistWorkspaceState,
   reconcileWorkspaceState,
   setWorkspaceActiveTab,
   setWorkspaceWindowPinned,
-  splitWorkspaceWindowToOwnGroup,
   workspaceStatesEqual,
   type WorkspaceState,
 } from './workspaceState'
+import { createWorkspaceSelectors } from './workspaceSelectors'
 
 declare global {
   interface Window {
@@ -321,14 +314,6 @@ function e2eQueryLargestRect(
     }
   }
   return best
-}
-
-type WorkspaceGroupModel = {
-  id: string
-  members: DerpWindow[]
-  visibleWindowId: number
-  visibleWindow: DerpWindow
-  hiddenWindowIds: number[]
 }
 
 type TabDragState = {
@@ -532,6 +517,18 @@ function App() {
   const shellBuildLabel = shellBuildLabelText()
   let traySniMenuNextSerial = 0
   const desktopApps = useDesktopApplicationsState()
+  const {
+    windows,
+    setWindows,
+    allWindowsMap,
+    windowsListIds,
+    windowsList,
+    workspaceState,
+    setWorkspaceState,
+    focusedWindowId,
+    setFocusedWindowId,
+    applyCompositorDetail: applyModelCompositorDetail,
+  } = createCompositorModel()
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -540,9 +537,6 @@ function App() {
     w: typeof window !== 'undefined' ? window.innerWidth : 800,
     h: typeof window !== 'undefined' ? window.innerHeight : 600,
   })
-  const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
-  const [workspaceState, setWorkspaceState] = createSignal<WorkspaceState>(loadWorkspaceState())
-  const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [keyboardLayoutLabel, setKeyboardLayoutLabel] = createSignal<string | null>(null)
   const [volumeOverlay, setVolumeOverlay] = createSignal<{
     linear: number
@@ -1204,7 +1198,7 @@ function App() {
       ]
     },
     tabMenuWindowAvailable: (windowId: number) => {
-      return allWindowsMap().has(windowId) && groupIdForWindow(workspaceState(), windowId) !== null
+      return allWindowsMap().has(windowId) && workspaceGroupIdForWindow(windowId) !== null
     },
     onTraySniMenuPick: (notifierId, menuPath, dbusmenuId) => {
       shellWireSend('sni_tray_menu_event', notifierId, menuPath, dbusmenuId)
@@ -1322,8 +1316,6 @@ function App() {
     return workspacePartition().primary
   })
 
-  const allWindowsMap = createMemo(() => windows())
-
   const debugHudFrameVisible = createMemo(() => {
     const w = windows().get(SHELL_UI_DEBUG_WINDOW_ID)
     return !!w && !w.minimized
@@ -1356,27 +1348,9 @@ function App() {
     onCleanup(() => cancelAnimationFrame(hudFpsRaf))
   })
 
-  const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
-
-  const windowsList = createMemo(() => {
-    const out: DerpWindow[] = []
-    for (const id of windowsListIds()) {
-      const w = allWindowsMap().get(id)
-      if (w) out.push(w)
-    }
-    return out
-  })
-
-  createEffect(() => {
-    const liveWindowIds = windowsListIds()
-    setWorkspaceState((prev) => {
-      const next = reconcileWorkspaceState(prev, liveWindowIds)
-      return workspaceStatesEqual(prev, next) ? prev : next
-    })
-  })
-
-  createEffect(() => {
-    persistWorkspaceState(workspaceState())
+  const fallbackMonitorName = createMemo(() => {
+    const part = workspacePartition()
+    return part.primary.name || screenDraft.rows.find((row) => row.name)?.name || ''
   })
 
   createEffect(() => {
@@ -1453,49 +1427,22 @@ function App() {
       void persistLiveSessionSnapshotSoon()
     }, 150)
   })
-
-  const workspaceGroups = createMemo<WorkspaceGroupModel[]>(() => {
-    const state = workspaceState()
-    const windowsById = allWindowsMap()
-    const groups: WorkspaceGroupModel[] = []
-    for (const group of state.groups) {
-      const members = group.windowIds
-        .map((windowId) => windowsById.get(windowId))
-        .filter((window): window is DerpWindow => !!window)
-      if (members.length === 0) continue
-      const visibleWindowId = resolveGroupVisibleWindowId(state, group.id, members)
-      const visibleWindow =
-        members.find((window) => window.window_id === visibleWindowId) ??
-        members.find((window) => !window.minimized) ??
-        members[0]
-      if (!visibleWindow) continue
-      groups.push({
-        id: group.id,
-        members,
-        visibleWindowId: visibleWindow.window_id,
-        visibleWindow,
-        hiddenWindowIds: members
-          .map((window) => window.window_id)
-          .filter((windowId) => windowId !== visibleWindow.window_id),
-      })
-    }
-    groups.sort(
-      (a, b) =>
-        b.visibleWindow.stack_z - a.visibleWindow.stack_z ||
-        b.visibleWindow.window_id - a.visibleWindow.window_id,
-    )
-    return groups
-  })
-
-  const activeWorkspaceGroupId = createMemo(() => {
-    const focused = focusedWindowId()
-    return focused == null ? null : groupIdForWindow(workspaceState(), focused)
-  })
-
-  const focusedTaskbarWindowId = createMemo(() => {
-    const groupId = activeWorkspaceGroupId()
-    if (!groupId) return focusedWindowId()
-    return workspaceGroups().find((group) => group.id === groupId)?.visibleWindow.window_id ?? focusedWindowId()
+  const {
+    workspaceGroups,
+    workspaceGroupsById,
+    groupIdForWindow: workspaceGroupIdForWindow,
+    groupForWindow: workspaceGroupForWindow,
+    activeWorkspaceGroupId,
+    focusedTaskbarWindowId,
+    windowsByMonitor,
+    taskbarRowsByMonitor,
+  } = createWorkspaceSelectors({
+    workspaceState,
+    windowsById: allWindowsMap,
+    windowsList,
+    focusedWindowId,
+    fallbackMonitorKey: fallbackMonitorName,
+    desktopApps: desktopApps.items,
   })
 
   const dragSnapAssistContext = createMemo(() => {
@@ -1991,85 +1938,33 @@ function App() {
     return true
   }
 
-  function syncHiddenGroupWindowGeometry(visibleWindowId: number) {
-    const groupId = groupIdForWindow(workspaceState(), visibleWindowId)
-    const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
-    const visibleWindow = allWindowsMap().get(visibleWindowId)
-    if (!group || group.visibleWindowId !== visibleWindowId || !visibleWindow) return
-    for (const hiddenWindowId of group.hiddenWindowIds) {
-      const hiddenWindow = allWindowsMap().get(hiddenWindowId)
-      if (
-        hiddenWindow &&
-        hiddenWindow.x === visibleWindow.x &&
-        hiddenWindow.y === visibleWindow.y &&
-        hiddenWindow.width === visibleWindow.width &&
-        hiddenWindow.height === visibleWindow.height &&
-        hiddenWindow.output_name === visibleWindow.output_name &&
-        hiddenWindow.maximized === visibleWindow.maximized
-      ) {
-        continue
-      }
-      syncWindowGeometry(hiddenWindowId, visibleWindow)
-    }
-  }
-
-  function focusWindowViaShell(windowId: number) {
-    const window = allWindowsMap().get(windowId)
-    if (!window) return false
-    if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-      focusShellUiWindow(windowId)
-      return true
-    }
-    activateTaskbarWindowViaShell(windowId)
-    return true
-  }
-
-  function applyTabDrop(sourceWindowId: number, target: TabMergeTarget) {
-    const prevState = workspaceState()
-    const sourceGroupId = groupIdForWindow(prevState, sourceWindowId)
-    const targetGroup = workspaceGroups().find((entry) => entry.id === target.groupId)
-    const sourceWindow = allWindowsMap().get(sourceWindowId)
-    if (!sourceGroupId || !targetGroup || !sourceWindow) return false
-    const sameGroup = sourceGroupId === target.groupId
-    const nextState = moveWorkspaceWindowToGroup(prevState, sourceWindowId, target.groupId, target.insertIndex)
-    if (workspaceStatesEqual(nextState, prevState)) return false
-    setWorkspaceState(nextState)
-    if (!sameGroup) {
-      syncWindowGeometry(sourceWindowId, targetGroup.visibleWindow)
-      queueMicrotask(() => {
-        if (!sourceWindow.minimized) shellWireSend('minimize', sourceWindowId)
-      })
-    }
-    return true
-  }
-
-  function detachGroupWindow(windowId: number, clientX: number, clientY: number) {
-    const prevState = workspaceState()
-    const sourceGroupId = groupIdForWindow(prevState, windowId)
-    const sourceGroup = sourceGroupId
-      ? workspaceGroups().find((entry) => entry.id === sourceGroupId)
-      : null
-    const sourceWindow = allWindowsMap().get(windowId)
-    if (!sourceGroupId || !sourceGroup || !sourceWindow || sourceGroup.members.length < 2) return false
-    const nextState = splitWorkspaceWindowToOwnGroup(prevState, windowId)
-    if (workspaceStatesEqual(nextState, prevState)) return false
-    const nextVisibleId =
-      sourceGroup.visibleWindowId === windowId
-        ? nextActiveWindowAfterRemoval(prevState, sourceGroupId, windowId)
-        : null
-    setWorkspaceState(nextState)
-    if (nextVisibleId !== null) {
-      syncWindowGeometry(nextVisibleId, sourceGroup.visibleWindow)
-      queueMicrotask(() => {
-        activateTaskbarWindowViaShell(nextVisibleId)
-      })
-    }
-    moveWindowUnderPointer(windowId, clientX, clientY)
-    queueMicrotask(() => {
-      activateTaskbarWindowViaShell(windowId)
-    })
-    return true
-  }
+  const {
+    syncHiddenGroupWindowGeometry,
+    focusWindowViaShell,
+    applyTabDrop,
+    detachGroupWindow,
+    selectGroupWindow,
+    closeGroupWindow,
+    cycleFocusedWorkspaceGroup,
+    activateTaskbarGroup,
+  } = createWorkspaceActions({
+    workspaceState,
+    setWorkspaceState,
+    allWindowsMap,
+    workspaceGroups,
+    workspaceGroupsById,
+    activeWorkspaceGroupId,
+    focusedWindowId,
+    focusedTaskbarWindowId,
+    groupIdForWindow: workspaceGroupIdForWindow,
+    groupForWindow: workspaceGroupForWindow,
+    syncWindowGeometry,
+    focusShellUiWindow,
+    activateTaskbarWindowViaShell,
+    moveWindowUnderPointer,
+    shellWireSend,
+    pendingGroupCloseActivations,
+  })
 
   function startTabPointerGesture(
     windowId: number,
@@ -2079,7 +1974,7 @@ function App() {
     button: number,
   ) {
     if (button !== 0) return
-    const sourceGroupId = groupIdForWindow(workspaceState(), windowId)
+    const sourceGroupId = workspaceGroupIdForWindow(windowId)
     if (!sourceGroupId) return
     shellContextMenus.hideContextMenu()
     setSuppressTabClickWindowId(null)
@@ -2107,70 +2002,6 @@ function App() {
     const changed = merged || drag.detached
     setTabDragState(null)
     if (changed) setSuppressTabClickWindowId(drag.windowId)
-  }
-
-  function selectGroupWindow(windowId: number) {
-    const groupId = groupIdForWindow(workspaceState(), windowId)
-    if (!groupId) return false
-    const group = workspaceGroups().find((entry) => entry.id === groupId)
-    if (!group) return false
-    if (group.visibleWindowId === windowId) {
-      const window = allWindowsMap().get(windowId)
-      if (
-        window &&
-        !window.minimized &&
-        activeWorkspaceGroupId() === groupId &&
-        focusedWindowId() === windowId
-      ) {
-        return true
-      }
-      if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-        focusShellUiWindow(windowId)
-        return true
-      }
-      return focusWindowViaShell(windowId)
-    }
-    const targetWindow = allWindowsMap().get(windowId)
-    if (targetWindow) syncWindowGeometry(windowId, group.visibleWindow)
-    setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, windowId))
-    queueMicrotask(() => {
-      activateTaskbarWindowViaShell(windowId)
-      if (!group.visibleWindow.minimized) shellWireSend('minimize', group.visibleWindow.window_id)
-    })
-    return true
-  }
-
-  function closeGroupWindow(windowId: number) {
-    const groupId = groupIdForWindow(workspaceState(), windowId)
-    const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
-    const closingWindow = allWindowsMap().get(windowId)
-    if (groupId && group && closingWindow) {
-      const nextVisibleId = nextActiveWindowAfterRemoval(workspaceState(), groupId, windowId)
-      if (nextVisibleId !== null && group.visibleWindowId === windowId) {
-        pendingGroupCloseActivations.set(windowId, {
-          groupId,
-          nextVisibleId,
-          closingWindow: { ...closingWindow },
-        })
-      } else {
-        pendingGroupCloseActivations.delete(windowId)
-      }
-    } else {
-      pendingGroupCloseActivations.delete(windowId)
-    }
-    shellWireSend('close', windowId)
-  }
-
-  function cycleFocusedWorkspaceGroup(delta: 1 | -1) {
-    const fallbackWindowId = focusedTaskbarWindowId() ?? workspaceGroups()[0]?.visibleWindowId ?? null
-    const groupId =
-      activeWorkspaceGroupId() ??
-      (fallbackWindowId !== null ? groupIdForWindow(workspaceState(), fallbackWindowId) : null)
-    if (!groupId) return false
-    const next = cycleWorkspaceTab(workspaceState(), groupId, delta)
-    if (workspaceStatesEqual(next, workspaceState())) return false
-    const nextWindowId = next.activeTabByGroupId[groupId]
-    return selectGroupWindow(nextWindowId)
   }
 
   function renderShellWindowContent(windowId: number) {
@@ -2302,7 +2133,7 @@ function App() {
   })
 
   function WorkspaceGroupFrame(props: { groupId: string }) {
-    const group = createMemo(() => workspaceGroups().find((entry) => entry.id === props.groupId) ?? null)
+      const group = createMemo(() => workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
     const winModel = createMemo((): ShellWindowModel | undefined => {
       const currentVisibleWindowId = visibleWindowId()
@@ -2931,64 +2762,12 @@ function App() {
     )
   }
 
-  const windowsByMonitor = createMemo(() => {
-    const list = windowsList()
-    const part = workspacePartition()
-    const fallback =
-      part.primary.name || screenDraft.rows.find((r) => r.name)?.name || ''
-    const map = new Map<string, DerpWindow[]>()
-    for (const w of list) {
-      const key = w.output_name || fallback
-      const bucket = map.get(key)
-      if (bucket) bucket.push(w)
-      else map.set(key, [w])
-    }
-    return map
-  })
-
-  const taskbarGroupsByMonitor = createMemo(() => {
-    const part = workspacePartition()
-    const fallback =
-      part.primary.name || screenDraft.rows.find((row) => row.name)?.name || ''
-    const map = new Map<string, WorkspaceGroupModel[]>()
-    for (const group of workspaceGroups()) {
-      const key = group.visibleWindow.output_name || fallback
-      const bucket = map.get(key)
-      if (bucket) bucket.push(group)
-      else map.set(key, [group])
-    }
-    return map
-  })
-
   const taskbarScreens = createMemo(() =>
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
-  const taskbarDesktopAppsByWindowId = createMemo(() => {
-    const apps = desktopApps.items()
-    const matches = new Map<number, { desktop_id: string | null; desktop_icon: string | null }>()
-    for (const group of workspaceGroups()) {
-      const match = matchDesktopApplication(apps, {
-        title: group.visibleWindow.title,
-        app_id: group.visibleWindow.app_id,
-      })
-      if (!match) continue
-      matches.set(group.visibleWindow.window_id, {
-        desktop_id: match.desktop_id,
-        desktop_icon: match.icon ?? null,
-      })
-    }
-    return matches
-  })
-
   function taskbarRowsForScreen(s: LayoutScreen) {
-    const rows = buildTaskbarGroupRows(taskbarGroupsByMonitor().get(s.name) ?? [])
-    const desktopMatches = taskbarDesktopAppsByWindowId()
-    return rows.map((row) => ({
-      ...row,
-      desktop_id: desktopMatches.get(row.window_id)?.desktop_id ?? null,
-      desktop_icon: desktopMatches.get(row.window_id)?.desktop_icon ?? null,
-    }))
+    return taskbarRowsByMonitor().get(s.name) ?? []
   }
 
   function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
@@ -3030,8 +2809,7 @@ function App() {
   }
 
   function fallbackMonitorKey(): string {
-    const part = workspacePartition()
-    return part.primary.name || screenDraft.rows.find((r) => r.name)?.name || ''
+    return fallbackMonitorName()
   }
 
   function applyAutoLayout(monitorName: string) {
@@ -4680,25 +4458,11 @@ function App() {
         return
       }
       if (d.type === 'focus_changed') {
-        const fw = coerceShellWindowId(d.window_id)
-        if (fw != null) {
-          if (!windows().has(fw)) {
-            requestWindowSyncRecovery()
-            return
-          }
-          setFocusedWindowId((prev) => (prev === fw ? prev : fw))
-          setWindows((m) => applyDetail(m, d))
-        } else {
-          setFocusedWindowId((prev) => {
-            if (prev == null) return null
-            const prow = windows().get(prev)
-            if (prow && (prow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-              return prev
-            }
-            return null
-          })
-        }
-        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'output_geometry') {
@@ -4777,44 +4541,34 @@ function App() {
         return
       }
       if (d.type === 'window_list') {
-        setWindows((prev) => buildWindowsMapFromList(d.windows, prev))
-        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'window_state') {
-        const wid = coerceShellWindowId(d.window_id)
-        let relayoutMon: string | null = null
-        if (wid !== null) {
-          const w = windows().get(wid)
-          if (!w) {
-            requestWindowSyncRecovery()
-            return
-          }
-          if (w) relayoutMon = w.output_name || fallbackMonitorKey()
-        }
-        if (d.minimized) {
-          if (wid !== null) {
-            setFocusedWindowId((prev) => (prev === wid ? null : prev))
-          }
-        }
-        setWindows((m) => applyDetail(m, d))
-        scheduleCompositorFollowup({ flushWindows: true, relayoutMonitor: relayoutMon })
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'window_unmapped') {
-        const wid = coerceShellWindowId(d.window_id)
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        const wid = result.windowId ?? null
         const pendingCloseActivation =
           wid !== null ? pendingGroupCloseActivations.get(wid) ?? null : null
-        let relayoutMon: string | null = null
         if (wid !== null) {
           pendingGroupCloseActivations.delete(wid)
-          setFocusedWindowId((prev) => (prev === wid ? null : prev))
-          const w = windows().get(wid)
-          if (w) relayoutMon = w.output_name || fallbackMonitorKey()
           perMonitorTiles.untileWindowEverywhere(wid)
           perMonitorTiles.preTileGeometry.delete(wid)
         }
-        setWindows((m) => applyDetail(m, d))
         if (pendingCloseActivation) {
           queueMicrotask(() => {
             syncWindowGeometry(
@@ -4831,28 +4585,24 @@ function App() {
             activateTaskbarWindowViaShell(pendingCloseActivation.nextVisibleId)
           })
         }
-        scheduleCompositorFollowup({ flushWindows: true, relayoutMonitor: relayoutMon })
+        if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'window_geometry') {
-        const wid = coerceShellWindowId(d.window_id)
-        let prevMon: string | null = null
-        if (wid !== null) {
-          const w = windows().get(wid)
-          if (!w) {
-            requestWindowSyncRecovery()
-            return
-          }
-          if (w) prevMon = w.output_name || fallbackMonitorKey()
-        }
-        setWindows((m) => applyDetail(m, d))
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        if (result.kind === 'recovery_requested') return
+        const wid = result.windowId ?? null
         if (wid !== null) {
           queueMicrotask(() => {
             syncHiddenGroupWindowGeometry(wid)
-            const w2 = windows().get(wid!)
+            const w2 = windows().get(wid)
             const fb = fallbackMonitorKey()
             const newMon = w2 ? w2.output_name || fb : null
-            if (prevMon !== null && newMon !== null && prevMon !== newMon) {
+            const prevMon = result.previousWindow?.output_name || fb
+            if (newMon !== null && prevMon !== newMon) {
               applyAutoLayout(prevMon)
               applyAutoLayout(newMon)
             }
@@ -4861,20 +4611,18 @@ function App() {
         return
       }
       if (d.type === 'window_mapped') {
-        setWindows((m) => applyDetail(m, d))
-        const fb = fallbackMonitorKey()
-        const mon =
-          typeof d.output_name === 'string' && d.output_name.length > 0 ? d.output_name : fb
-        scheduleCompositorFollowup({ relayoutMonitor: mon })
+        const result = applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'window_metadata') {
-        const wid = coerceShellWindowId(d.window_id)
-        if (wid !== null && !windows().has(wid)) {
-          requestWindowSyncRecovery()
-          return
-        }
-        setWindows((m) => applyDetail(m, d))
+        applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
         return
       }
     }
@@ -5220,24 +4968,7 @@ function App() {
           if (!w || w.minimized) openDebugShellWindow()
           else minimizeDebugShellWindow()
         }}
-        onTaskbarActivate={(id) => {
-          const groupId = groupIdForWindow(workspaceState(), id)
-          const group = groupId ? workspaceGroups().find((entry) => entry.id === groupId) : null
-          if (!group) {
-            activateTaskbarWindowViaShell(id)
-            return
-          }
-          const visibleWindow = group.visibleWindow
-          if (visibleWindow.minimized) {
-            activateTaskbarWindowViaShell(visibleWindow.window_id)
-            return
-          }
-          if (activeWorkspaceGroupId() === group.id) {
-            shellWireSend('minimize', visibleWindow.window_id)
-            return
-          }
-          activateTaskbarWindowViaShell(visibleWindow.window_id)
-        }}
+        onTaskbarActivate={activateTaskbarGroup}
         onTaskbarClose={(id) => {
           closeGroupWindow(id)
         }}

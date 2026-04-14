@@ -114,11 +114,7 @@ set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 if [[ -f shell/package.json ]]; then
   cd shell
-  if [[ -f package-lock.json ]]; then
-    npm ci || npm install
-  else
-    npm install
-  fi
+  bash ../scripts/ensure-shell-node-modules.sh .
   exec npm run build
 fi
 EOF

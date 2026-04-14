@@ -23,9 +23,7 @@ echo "=== remote scripts/verify.sh ==="
 ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
-cd shell
-npm ci
-cd ..
+bash scripts/ensure-shell-node-modules.sh shell
 exec bash scripts/verify.sh ${verify_args}
 EOF
 

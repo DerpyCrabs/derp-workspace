@@ -86,11 +86,7 @@ if [[ -f shell/package.json ]]; then
     exit 1
   fi
   (cd shell && {
-    if [[ -f package-lock.json ]]; then
-      npm ci || npm install
-    else
-      npm install
-    fi
+    bash ../scripts/ensure-shell-node-modules.sh .
     npm run build
   })
   if [[ ! -f "$SHELL_INDEX" ]]; then
