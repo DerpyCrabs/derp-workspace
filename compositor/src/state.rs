@@ -602,7 +602,7 @@ impl CompositorState {
         self.shell_exclusion_zones_need_full_damage = true;
     }
 
-    pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
+    pub(crate) fn shell_window_stack_ids(&self) -> Vec<u32> {
         let mut ordered: Vec<u32> = self
             .shell_window_stack_order
             .iter()
@@ -620,6 +620,10 @@ impl CompositorState {
         missing.sort_unstable();
         ordered.extend(missing);
         ordered
+    }
+
+    pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
+        self.shell_window_stack_ids()
             .iter()
             .position(|wid| *wid == window_id)
             .map(|idx| idx as u32 + 1)
@@ -1414,6 +1418,7 @@ impl CompositorState {
                 target: "derp_shell_clip",
                 generation = root.generation,
                 focused = ?self.shell_focused_ui_window_id,
+                stack_order = ?self.shell_window_stack_ids(),
                 placements = ?placements,
                 "shell_ui_windows updated"
             );
@@ -1470,6 +1475,9 @@ impl CompositorState {
         let id = self
             .shell_ui_placement_topmost_for_input_at(pos)
             .map(|w| w.id);
+        if let Some(window_id) = id {
+            self.shell_window_stack_touch(window_id);
+        }
         self.shell_emit_shell_ui_focus_if_changed(id);
     }
 
@@ -1597,6 +1605,20 @@ impl CompositorState {
         self.shell_exclusion_decor = next_decor;
         self.shell_tray_strip_global = next_tray_strip;
         if changed || tray_changed {
+            let mut decor_counts: Vec<_> = self
+                .shell_exclusion_decor
+                .iter()
+                .map(|(window_id, rects)| (*window_id, rects.len()))
+                .collect();
+            decor_counts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            tracing::warn!(
+                target: "derp_shell_clip",
+                stack_order = ?self.shell_window_stack_ids(),
+                global_count = self.shell_exclusion_global.len(),
+                decor_counts = ?decor_counts,
+                tray_strip = ?self.shell_tray_strip_global,
+                "shell exclusion zones updated"
+            );
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }
@@ -1616,15 +1638,18 @@ impl CompositorState {
     }
 
     pub(crate) fn ordered_window_ids_on_output(&self, output: &Output) -> Vec<u32> {
-        let mut stack: Vec<(u32, u32)> = self
+        let mut seen = HashSet::new();
+        let mut stack = Vec::new();
+        for id in self
             .space
             .elements_for_output(output)
             .filter_map(|e| self.derp_elem_window_id(e))
-            .map(|id| (id, self.shell_window_stack_z(id)))
-            .collect();
-        stack.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        stack.dedup_by(|a, b| a.0 == b.0);
-        stack.into_iter().map(|(id, _)| id).collect()
+        {
+            if seen.insert(id) {
+                stack.push(id);
+            }
+        }
+        stack
     }
 
     fn window_ids_strictly_above_in_stack<'a>(
@@ -5012,7 +5037,7 @@ impl CompositorState {
         self.window_registry.window_id_for_wl_surface(&wl)
     }
 
-    fn find_x11_window_by_surface_id(&self, surface_id: u32) -> Option<X11Surface> {
+    pub(crate) fn find_x11_window_by_surface_id(&self, surface_id: u32) -> Option<X11Surface> {
         let window_id = self
             .window_registry
             .window_id_for_shell_surface(surface_id)?;

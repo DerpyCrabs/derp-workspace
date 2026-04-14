@@ -115,11 +115,35 @@ export interface CompositorFloatingLayerSnapshot {
   global: CompositorWorkspaceRect
 }
 
+export interface CompositorShellUiWindowSnapshot {
+  id: number
+  z: number
+  global: CompositorWorkspaceRect
+  buffer: CompositorWorkspaceRect
+}
+
+export interface CompositorWindowRectsSnapshot {
+  window_id: number
+  rects: CompositorWorkspaceRect[]
+}
+
+export interface CompositorOutputWindowStackSnapshot {
+  output_name: string
+  window_ids: number[]
+}
+
 export interface CompositorSnapshot {
   windows: WindowSnapshot[]
   outputs: OutputSnapshot[]
   focused_window_id: number | null
   focused_shell_ui_window_id: number | null
+  window_stack_order?: number[]
+  ordered_window_ids_by_output?: CompositorOutputWindowStackSnapshot[]
+  shell_ui_windows_generation?: number
+  shell_ui_windows?: CompositorShellUiWindowSnapshot[]
+  shell_exclusion_global?: CompositorWorkspaceRect[]
+  shell_exclusion_decor?: CompositorWindowRectsSnapshot[]
+  pending_deferred_window_ids?: number[]
   orphaned_wayland_surface_protocol_ids?: number[]
   pointer?: { x: number; y: number }
   workspace?: CompositorWorkspaceRect | null
@@ -1109,6 +1133,15 @@ export function shellWindowStack(shellSnapshot: ShellSnapshot): number[] {
     return shellSnapshot.window_stack_order
   }
   return [...shellSnapshot.windows]
+    .sort((a, b) => (b.stack_z || 0) - (a.stack_z || 0) || b.window_id - a.window_id)
+    .map((window) => window.window_id)
+}
+
+export function compositorWindowStack(compositorSnapshot: CompositorSnapshot): number[] {
+  if (Array.isArray(compositorSnapshot.window_stack_order) && compositorSnapshot.window_stack_order.length > 0) {
+    return compositorSnapshot.window_stack_order
+  }
+  return [...compositorSnapshot.windows]
     .sort((a, b) => (b.stack_z || 0) - (a.stack_z || 0) || b.window_id - a.window_id)
     .map((window) => window.window_id)
 }

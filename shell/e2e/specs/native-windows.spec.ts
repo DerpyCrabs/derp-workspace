@@ -1,4 +1,5 @@
 import {
+  compositorWindowStack,
   GREEN_NATIVE_TITLE,
   NATIVE_APP_ID,
   RED_NATIVE_TITLE,
@@ -29,12 +30,18 @@ import {
   waitForWindowGone,
   waitForWindowMinimized,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
 function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
   const tracked = new Set(windowIds)
   return shellWindowStack(shell).filter((windowId) => tracked.has(windowId))
+}
+
+function trackedCompositorStack(compositor: CompositorSnapshot, windowIds: number[]) {
+  const tracked = new Set(windowIds)
+  return compositorWindowStack(compositor).filter((windowId) => tracked.has(windowId))
 }
 
 function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnapshot, focusedWindowId: number, windowIds: number[], label: string) {
@@ -46,6 +53,36 @@ function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnaps
     `${label}: expected ${expected.length} tracked windows, got ${after.length} (${after.join(', ')})`,
   )
   assert(after.join(',') === expected.join(','), `${label}: expected ${expected.join(', ')}, got ${after.join(', ')}`)
+}
+
+function assertStackParity(
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+  windowIds: number[],
+  label: string,
+) {
+  const shellTracked = trackedStack(shell, windowIds)
+  const compositorTracked = trackedCompositorStack(compositor, windowIds)
+  assert(
+    compositorTracked.length === shellTracked.length,
+    `${label}: expected ${shellTracked.length} tracked compositor windows, got ${compositorTracked.length} (${compositorTracked.join(', ')})`,
+  )
+  assert(
+    compositorTracked.join(',') === shellTracked.join(','),
+    `${label}: compositor stack ${compositorTracked.join(', ')} != shell stack ${shellTracked.join(', ')}`,
+  )
+}
+
+function assertOutputOrderMatchesGlobalTop(
+  compositor: CompositorSnapshot,
+  outputName: string,
+  expectedTopWindowId: number,
+  label: string,
+) {
+  const row = compositor.ordered_window_ids_by_output?.find((entry) => entry.output_name === outputName)
+  assert(row, `${label}: missing ordered stack for output ${outputName}`)
+  const top = row.window_ids[row.window_ids.length - 1] ?? null
+  assert(top === expectedTopWindowId, `${label}: expected top output window ${expectedTopWindowId}, got ${top}`)
 }
 
 function windowContainsPoint(
@@ -108,6 +145,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     state.spawnedNativeWindowIds.add(dropped.window.window_id)
     const gone = await waitForWindowGone(base, dropped.window.window_id, 5000)
+    assert(
+      !(gone.compositor.pending_deferred_window_ids ?? []).includes(dropped.window.window_id),
+      'dropped native window should not remain pending deferred',
+    )
+    assert(
+      !compositorWindowStack(gone.compositor).includes(dropped.window.window_id),
+      'dropped native window should be removed from compositor stack order',
+    )
     await writeJsonArtifact('native-buffer-drop-pruned-compositor.json', gone.compositor)
     await writeJsonArtifact('native-buffer-drop-pruned-shell.json', gone.shell)
   })
@@ -278,14 +323,27 @@ export default defineGroup(import.meta.url, ({ test }) => {
       debugCompositor.x + Math.min(48, Math.max(16, Math.floor(debugCompositor.width / 8))),
       debugCompositor.y + Math.min(48, Math.max(16, Math.floor(debugCompositor.height / 8))),
     )
-    await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    assertStackParity(
+      debugFocused.compositor,
+      debugFocused.shell,
+      [redId, SHELL_UI_SETTINGS_WINDOW_ID, SHELL_UI_DEBUG_WINDOW_ID],
+      'debug click focus parity',
+    )
     const shellAfterClicks = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assertTopWindow(shellAfterClicks, SHELL_UI_DEBUG_WINDOW_ID, 'debug should be frontmost after direct click')
     const shellWithSettings = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellWithSettings, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should be frontmost after taskbar activate')
+    assertStackParity(
+      settingsFocused.compositor,
+      settingsFocused.shell,
+      [redId, SHELL_UI_SETTINGS_WINDOW_ID, SHELL_UI_DEBUG_WINDOW_ID],
+      'settings taskbar focus parity',
+    )
     await writeJsonArtifact('native-js-parity-shell.json', settingsFocused.shell)
+    await writeJsonArtifact('native-js-parity-compositor.json', settingsFocused.compositor)
   })
 
   test('js and native windows preserve restack order across focus changes', async ({ base, state }) => {
@@ -303,10 +361,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await clickPoint(base, redClickPoint.x, redClickPoint.y)
     const redFocused = await waitForNativeFocus(base, redId)
     assertRestackToFront(debugOpen.shell, redFocused.shell, redId, trackedWindowIds, 'red focus restack order')
+    assertStackParity(redFocused.compositor, redFocused.shell, trackedWindowIds, 'red focus stack parity')
+    assertOutputOrderMatchesGlobalTop(
+      redFocused.compositor,
+      redFocused.compositor.windows.find((window) => window.window_id === redId)?.output_name ?? '',
+      redId,
+      'red focus output order',
+    )
 
     await activateTaskbarWindow(base, redFocused.shell, greenId)
     const greenFocused = await waitForNativeFocus(base, greenId)
     assertRestackToFront(redFocused.shell, greenFocused.shell, greenId, trackedWindowIds, 'green focus restack order')
+    assertStackParity(greenFocused.compositor, greenFocused.shell, trackedWindowIds, 'green focus stack parity')
+    assertOutputOrderMatchesGlobalTop(
+      greenFocused.compositor,
+      greenFocused.compositor.windows.find((window) => window.window_id === greenId)?.output_name ?? '',
+      greenId,
+      'green focus output order',
+    )
 
     await activateTaskbarWindow(base, greenFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -317,6 +389,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'settings focus restack order',
     )
+    assertStackParity(settingsFocused.compositor, settingsFocused.shell, trackedWindowIds, 'settings focus stack parity')
 
     await activateTaskbarWindow(base, settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsMinimized = await waitForWindowMinimized(base, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -328,6 +401,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await activateTaskbarWindow(base, settingsMinimized.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsRestored = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assertTopWindow(settingsRestored.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should return to the front after restore')
+    assertStackParity(settingsRestored.compositor, settingsRestored.shell, trackedWindowIds, 'settings restore stack parity')
 
     await activateTaskbarWindow(base, settingsRestored.shell, SHELL_UI_DEBUG_WINDOW_ID)
     const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
@@ -338,6 +412,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'debug focus restack order',
     )
+    assertStackParity(debugFocused.compositor, debugFocused.shell, trackedWindowIds, 'debug focus stack parity')
 
     await activateTaskbarWindow(base, debugFocused.shell, redId)
     const redRefocused = await waitForNativeFocus(base, redId)
@@ -348,6 +423,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'red refocus restack order',
     )
+    assertStackParity(redRefocused.compositor, redRefocused.shell, trackedWindowIds, 'red refocus stack parity')
 
     await writeJsonArtifact('native-js-restack-red.json', redFocused.shell)
     await writeJsonArtifact('native-js-restack-green.json', greenFocused.shell)
@@ -355,5 +431,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('native-js-restack-settings-restored.json', settingsRestored.shell)
     await writeJsonArtifact('native-js-restack-debug.json', debugFocused.shell)
     await writeJsonArtifact('native-js-restack-red-refocused.json', redRefocused.shell)
+    await writeJsonArtifact('native-js-restack-red-compositor.json', redFocused.compositor)
+    await writeJsonArtifact('native-js-restack-green-compositor.json', greenFocused.compositor)
+    await writeJsonArtifact('native-js-restack-settings-compositor.json', settingsFocused.compositor)
+    await writeJsonArtifact('native-js-restack-settings-restored-compositor.json', settingsRestored.compositor)
+    await writeJsonArtifact('native-js-restack-debug-compositor.json', debugFocused.compositor)
+    await writeJsonArtifact('native-js-restack-red-refocused-compositor.json', redRefocused.compositor)
   })
 })

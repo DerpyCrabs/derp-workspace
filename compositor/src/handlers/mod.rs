@@ -45,6 +45,15 @@ impl SeatHandler for CompositorState {
 
         let window_id = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
         if let Some(wid) = window_id {
+            if let Some(sid) = self.window_registry.surface_id_for_window(wid) {
+                if let Some(window) = self.find_window_by_surface_id(sid) {
+                    self.space
+                        .raise_element(&crate::derp_space::DerpSpaceElem::Wayland(window), true);
+                } else if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
+                    self.space
+                        .raise_element(&crate::derp_space::DerpSpaceElem::X11(x11), true);
+                }
+            }
             self.shell_window_stack_touch(wid);
             if let Some(info) = self.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {

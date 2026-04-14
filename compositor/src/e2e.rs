@@ -136,6 +136,7 @@ struct E2eOutputSnapshot {
 struct E2eWindowSnapshot {
     window_id: u32,
     surface_id: u32,
+    stack_z: u32,
     title: String,
     app_id: String,
     xwayland_scale: Option<f64>,
@@ -150,6 +151,26 @@ struct E2eWindowSnapshot {
     client_side_decoration: bool,
     shell_hosted: bool,
     wayland_client_pid: Option<i32>,
+}
+
+#[derive(Serialize)]
+struct E2eShellUiWindowSnapshot {
+    id: u32,
+    z: u32,
+    global: E2eRectSnapshot,
+    buffer: E2eRectSnapshot,
+}
+
+#[derive(Serialize)]
+struct E2eWindowRectsSnapshot {
+    window_id: u32,
+    rects: Vec<E2eRectSnapshot>,
+}
+
+#[derive(Serialize)]
+struct E2eOutputWindowStackSnapshot {
+    output_name: String,
+    window_ids: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -173,6 +194,13 @@ struct E2eCompositorSnapshot {
     workspace: Option<E2eRectSnapshot>,
     outputs: Vec<E2eOutputSnapshot>,
     windows: Vec<E2eWindowSnapshot>,
+    window_stack_order: Vec<u32>,
+    ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot>,
+    shell_ui_windows_generation: u32,
+    shell_ui_windows: Vec<E2eShellUiWindowSnapshot>,
+    shell_exclusion_global: Vec<E2eRectSnapshot>,
+    shell_exclusion_decor: Vec<E2eWindowRectsSnapshot>,
+    pending_deferred_window_ids: Vec<u32>,
     orphaned_wayland_surface_protocol_ids: Vec<u32>,
 }
 
@@ -184,6 +212,15 @@ struct E2eFloatingLayerSnapshot {
 }
 
 impl CompositorState {
+    fn e2e_rect_snapshot<N>(rect: Rectangle<i32, N>) -> E2eRectSnapshot {
+        E2eRectSnapshot {
+            x: rect.loc.x,
+            y: rect.loc.y,
+            width: rect.size.w,
+            height: rect.size.h,
+        }
+    }
+
     fn e2e_now_ms(&self) -> u128 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -436,6 +473,7 @@ impl CompositorState {
             .map(|record| E2eWindowSnapshot {
                 window_id: record.info.window_id,
                 surface_id: record.info.surface_id,
+                stack_z: self.shell_window_stack_z(record.info.window_id),
                 title: record.info.title,
                 app_id: record.info.app_id,
                 xwayland_scale: self.xwayland_scale_for_window_id(record.info.window_id),
@@ -453,6 +491,52 @@ impl CompositorState {
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+        let mut ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot> = self
+            .space
+            .outputs()
+            .map(|output| E2eOutputWindowStackSnapshot {
+                output_name: output.name(),
+                window_ids: self.ordered_window_ids_on_output(&output),
+            })
+            .collect();
+        ordered_window_ids_by_output.sort_by(|a, b| a.output_name.cmp(&b.output_name));
+        let shell_ui_windows = self
+            .shell_ui_windows
+            .iter()
+            .map(|window| E2eShellUiWindowSnapshot {
+                id: window.id,
+                z: window.z,
+                global: Self::e2e_rect_snapshot(window.global_rect),
+                buffer: Self::e2e_rect_snapshot(window.buffer_rect),
+            })
+            .collect();
+        let shell_exclusion_global = self
+            .shell_exclusion_global
+            .iter()
+            .copied()
+            .map(Self::e2e_rect_snapshot)
+            .collect();
+        let mut shell_exclusion_decor: Vec<E2eWindowRectsSnapshot> = self
+            .shell_exclusion_decor
+            .iter()
+            .map(|(window_id, rects)| E2eWindowRectsSnapshot {
+                window_id: *window_id,
+                rects: rects.iter().copied().map(Self::e2e_rect_snapshot).collect(),
+            })
+            .collect();
+        shell_exclusion_decor.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+        let mut pending_deferred_window_ids: Vec<u32> = self
+            .pending_deferred_toplevels
+            .values()
+            .filter_map(|pending| {
+                pending
+                    .window
+                    .toplevel()
+                    .and_then(|toplevel| self.window_registry.window_id_for_wl_surface(toplevel.wl_surface()))
+            })
+            .collect();
+        pending_deferred_window_ids.sort_unstable();
+        pending_deferred_window_ids.dedup();
         let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self
             .space
             .elements()
@@ -546,6 +630,13 @@ impl CompositorState {
             workspace,
             outputs,
             windows,
+            window_stack_order: self.shell_window_stack_ids().into_iter().rev().collect(),
+            ordered_window_ids_by_output,
+            shell_ui_windows_generation: self.shell_ui_windows_generation,
+            shell_ui_windows,
+            shell_exclusion_global,
+            shell_exclusion_decor,
+            pending_deferred_window_ids,
             orphaned_wayland_surface_protocol_ids,
         })
         .map_err(|e| format!("serialize compositor snapshot: {e}"))

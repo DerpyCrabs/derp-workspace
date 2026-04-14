@@ -1002,6 +1002,29 @@ function App() {
     )
   }
 
+  function shellPointerGlobalLogical(clientX: number, clientY: number) {
+    const main = mainRef
+    const og = outputGeom()
+    if (!main || !og) return null
+    const mainRect = main.getBoundingClientRect()
+    if (
+      clientX < mainRect.left ||
+      clientX > mainRect.right ||
+      clientY < mainRect.top ||
+      clientY > mainRect.bottom
+    ) {
+      return { x: Math.round(clientX), y: Math.round(clientY) }
+    }
+    return clientPointToGlobalLogical(
+      clientX,
+      clientY,
+      mainRect,
+      og.w,
+      og.h,
+      layoutCanvasOrigin(),
+    )
+  }
+
   function stopScreenshotMode() {
     setScreenshotSelection(null)
     setScreenshotMode(false)
@@ -1522,19 +1545,11 @@ function App() {
   }
 
   function moveWindowUnderPointer(windowId: number, clientX: number, clientY: number) {
-    const main = mainRef
-    const canvas = outputGeom()
     const window = allWindowsMap().get(windowId)
-    if (!main || !canvas || !window) return false
-    const local = clientPointToCanvasLocal(
-      clientX,
-      clientY,
-      main.getBoundingClientRect(),
-      canvas.w,
-      canvas.h,
-    )
-    const nextX = Math.round(local.x - window.width / 2)
-    const nextY = Math.round(local.y + CHROME_TITLEBAR_PX / 2)
+    const global = shellPointerGlobalLogical(clientX, clientY)
+    if (!window || !global) return false
+    const nextX = Math.round(global.x - window.width / 2)
+    const nextY = Math.round(global.y + CHROME_TITLEBAR_PX / 2)
     shellWireSend(
       'set_geometry',
       windowId,
@@ -1565,6 +1580,35 @@ function App() {
       return changed ? next : map
     })
     return true
+  }
+
+  function findTabMergeTargetFromPointer(
+    windowId: number,
+    clientX: number,
+    clientY: number,
+    ignoreDraggedWindowFrame: boolean,
+  ) {
+    const state = workspaceState()
+    const direct = findMergeTarget(state, windowId, clientX, clientY, ignoreDraggedWindowFrame)
+    if (direct) return direct
+    const main = mainRef
+    const og = outputGeom()
+    if (!main || !og) return null
+    const { x: globalX, y: globalY } = shellPointerGlobalLogical(clientX, clientY) ?? {
+      x: Math.round(clientX),
+      y: Math.round(clientY),
+    }
+    const origin = layoutCanvasOrigin()
+    const client = canvasRectToClientCss(
+      globalX - (origin?.x ?? 0),
+      globalY - (origin?.y ?? 0),
+      0,
+      0,
+      main.getBoundingClientRect(),
+      og.w,
+      og.h,
+    )
+    return findMergeTarget(state, windowId, client.left, client.top, ignoreDraggedWindowFrame)
   }
 
   const {
@@ -1624,8 +1668,10 @@ function App() {
   function finishTabPointerGesture(pointerId: number, clientX: number, clientY: number) {
     const drag = tabDragState()
     if (!drag || drag.pointerId !== pointerId) return
+    const ignoreDraggedWindowFrame =
+      drag.detached || (workspaceGroupsById().get(drag.sourceGroupId)?.members.length ?? 0) <= 1
     const nextTarget = drag.dragging
-      ? findMergeTarget(workspaceState(), drag.windowId, clientX, clientY, drag.detached) ?? drag.target
+      ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame) ?? drag.target
       : drag.target
     const merged = drag.dragging && nextTarget ? applyTabDrop(drag.windowId, nextTarget) : false
     const changed = merged || drag.detached
@@ -1726,8 +1772,10 @@ function App() {
     const dx = event.clientX - prev.startClientX
     const dy = event.clientY - prev.startClientY
     const dragging = prev.dragging || Math.hypot(dx, dy) >= 40
+    const ignoreDraggedWindowFrame =
+      prev.detached || (workspaceGroupsById().get(prev.sourceGroupId)?.members.length ?? 0) <= 1
     const target = dragging
-      ? findMergeTarget(workspaceState(), prev.windowId, event.clientX, event.clientY, prev.detached)
+      ? findTabMergeTargetFromPointer(prev.windowId, event.clientX, event.clientY, ignoreDraggedWindowFrame)
       : null
     let detached = prev.detached
     if (dragging && !detached && (target === null || Math.abs(dy) >= 80)) {
@@ -2540,8 +2588,14 @@ function App() {
             applyAutoLayout(monitorName)
           }
         }
-        if (syncExclusion) scheduleExclusionZonesSync()
         if (flushWindows) flushShellUiWindowsSyncNow()
+        if (syncExclusion) {
+          if (flushWindows) {
+            syncExclusionZonesNow()
+          } else {
+            scheduleExclusionZonesSync()
+          }
+        }
         if (resetScroll) {
           window.scrollTo(0, 0)
           document.documentElement.scrollTop = 0
