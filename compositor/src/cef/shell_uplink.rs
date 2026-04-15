@@ -5,6 +5,7 @@ use cef::{sys, *};
 
 use crate::cef::e2e_bridge;
 use crate::cef::osr_view_state::OsrViewState;
+use crate::cef::shell_snapshot;
 use crate::cef::uplink::UplinkToCompositor;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_uplink";
@@ -859,7 +860,118 @@ wrap_v8_handler! {
 
             self.frame
                 .send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            0
+            1
+        }
+    }
+}
+
+wrap_v8_handler! {
+    pub struct SharedSnapshotVersionV8Handler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            macro_rules! return_exception {
+                ($message:expr) => {{
+                    if let Some(ex) = exception {
+                        *ex = CefString::from($message);
+                    }
+                    return 1;
+                }};
+            }
+
+            let Some(args) = arguments else {
+                return_exception!("expected snapshot path");
+            };
+            let Some(path_v) = args.first().and_then(|a| a.as_ref()) else {
+                return_exception!("expected snapshot path");
+            };
+            if path_v.is_string() == 0 {
+                return_exception!("snapshot path must be a string");
+            }
+            let path = cef_string_userfree_to_string(&path_v.string_value());
+            if path.is_empty() {
+                return_exception!("snapshot path must not be empty");
+            }
+            let abi = match args.get(1).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_uint() != 0 => v.uint_value(),
+                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
+                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
+                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
+                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
+            };
+            let value = match shell_snapshot::snapshot_version(std::path::Path::new(&path), abi) {
+                Ok(Some(sequence)) => v8_value_create_double(sequence as f64),
+                Ok(None) => v8_value_create_null(),
+                Err(_) => v8_value_create_null(),
+            };
+            if let Some(retval) = retval {
+                *retval = value;
+            }
+            1
+        }
+    }
+}
+
+wrap_v8_handler! {
+    pub struct SharedSnapshotReadV8Handler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            macro_rules! return_exception {
+                ($message:expr) => {{
+                    if let Some(ex) = exception {
+                        *ex = CefString::from($message);
+                    }
+                    return 1;
+                }};
+            }
+
+            let Some(args) = arguments else {
+                return_exception!("expected snapshot path");
+            };
+            let Some(path_v) = args.first().and_then(|a| a.as_ref()) else {
+                return_exception!("expected snapshot path");
+            };
+            if path_v.is_string() == 0 {
+                return_exception!("snapshot path must be a string");
+            }
+            let path = cef_string_userfree_to_string(&path_v.string_value());
+            if path.is_empty() {
+                return_exception!("snapshot path must not be empty");
+            }
+            let abi = match args.get(1).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_uint() != 0 => v.uint_value(),
+                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
+                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
+                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
+                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
+            };
+            let value = match shell_snapshot::snapshot_read(std::path::Path::new(&path), abi) {
+                Ok(Some(bytes)) => {
+                    crate::cef::begin_frame_diag::note_shell_snapshot_read();
+                    v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
+                }
+                Ok(None) => v8_value_create_null(),
+                Err(_) => v8_value_create_null(),
+            };
+            if let Some(retval) = retval {
+                *retval = value;
+            }
+            1
         }
     }
 }
@@ -902,15 +1014,33 @@ wrap_render_process_handler! {
             let Some(context) = context else {
                 return;
             };
-            let Some(mut global) = context.global() else {
+            let Some(global) = context.global() else {
                 return;
             };
             let is_main = frame.is_main();
             let mut handler = ShellWireV8Handler::new(frame.clone());
             let fname = CefString::from("__derpShellWireSend");
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
+            let snapshot_version_name = CefString::from("__derpCompositorSnapshotVersion");
+            let mut snapshot_version_handler = SharedSnapshotVersionV8Handler::new();
+            let mut snapshot_version_func =
+                v8_value_create_function(Some(&snapshot_version_name), Some(&mut snapshot_version_handler));
+            let snapshot_read_name = CefString::from("__derpCompositorSnapshotRead");
+            let mut snapshot_read_handler = SharedSnapshotReadV8Handler::new();
+            let mut snapshot_read_func =
+                v8_value_create_function(Some(&snapshot_read_name), Some(&mut snapshot_read_handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
+            let _ = global.set_value_bykey(
+                Some(&snapshot_version_name),
+                snapshot_version_func.as_mut(),
+                attrs.into(),
+            );
+            let _ = global.set_value_bykey(
+                Some(&snapshot_read_name),
+                snapshot_read_func.as_mut(),
+                attrs.into(),
+            );
             tracing::warn!(
                 target: "derp_shell_boot",
                 is_main,

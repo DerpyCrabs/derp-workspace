@@ -34,6 +34,7 @@ import {
 import { SettingsPanel } from './SettingsPanel'
 import { defaultAudioDevice, useShellAudioState } from './settings/useShellAudioState'
 import {
+  type BackedWindowOpenPayload,
   backedShellWindowKind,
   buildBackedWindowOpenPayload,
   buildFileBrowserWindowOpenPayload,
@@ -160,7 +161,12 @@ import type {
 } from './app/types'
 import { Portal } from 'solid-js/web'
 import { dispatchAudioStateChanged } from './audioEvents'
-import { DERP_SHELL_EVENT, installCompositorBatchHandler } from './compositorEvents'
+import {
+  DERP_SHELL_EVENT,
+  DERP_SHELL_SNAPSHOT_EVENT,
+  installCompositorBatchHandler,
+} from './compositorEvents'
+import { compositorSnapshotAbi, decodeCompositorSnapshot } from './compositorSnapshot'
 import { createCompositorModel } from './compositorModel'
 import { createShellExclusionSync } from './shellExclusionSync'
 import { createWorkspaceActions } from './workspaceActions'
@@ -186,6 +192,8 @@ declare global {
     /** Injected by `cef_host` after load (`http://127.0.0.1:…/spawn`). */
     __DERP_SPAWN_URL?: string
     __DERP_SHELL_HTTP?: string
+    __DERP_COMPOSITOR_SNAPSHOT_PATH?: string | null
+    __DERP_COMPOSITOR_SNAPSHOT_ABI?: number
     /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
     __derpShellWireSend?: (
       op:
@@ -235,6 +243,8 @@ declare global {
       arg5?: number | string,
       arg6?: number | string,
     ) => void
+    __derpCompositorSnapshotVersion?: (path: string, abi?: number) => number | null
+    __derpCompositorSnapshotRead?: (path: string, abi?: number) => ArrayBuffer | null
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_OPEN_TEST_WINDOW?: () => boolean
@@ -581,6 +591,7 @@ function App() {
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
+  const [shellWireReadyRev, setShellWireReadyRev] = createSignal(0)
   const [shellWindowStateRev, setShellWindowStateRev] = createSignal(0)
   const [sessionAutoSaveEnabled, setSessionAutoSaveEnabled] = createSignal(loadSessionPersistenceSettings().autoSave)
   const [savedSessionAvailable, setSavedSessionAvailable] = createSignal(false)
@@ -594,6 +605,8 @@ function App() {
   const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
   const nativeLaunchMetadataByRef = new Map<SessionWindowRef, NativeLaunchMetadata>()
   const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
+  const pendingBackedWindowOpens = new Map<number, BackedWindowOpenPayload>()
+  let backedWindowOpenRaf = 0
   const pendingGroupCloseActivations = new Map<
     number,
     { groupId: string; nextVisibleId: number; closingWindow: DerpWindow }
@@ -1163,6 +1176,7 @@ function App() {
   })
 
   createEffect(() => {
+    void shellWireReadyRev()
     const layers = floatingLayers.layers()
       .filter((layer) => layer.placement)
       .map((layer) => ({
@@ -2218,6 +2232,7 @@ function App() {
     })
 
     createEffect(() => {
+      void shellWireReadyRev()
       if (!portalPickerVisible()) {
         hideFloatingPlacementWire()
         return
@@ -2718,7 +2733,7 @@ function App() {
         (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
     ).length
     const payload = buildBackedWindowOpenPayload(mon.name, work, kind, co, staggerIndex)
-    shellWireSend('backed_window_open', JSON.stringify(payload))
+    sendBackedWindowOpen(payload)
   }
 
   function openDebugShellWindow() {
@@ -2759,7 +2774,7 @@ function App() {
         (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
     ).length
     const payload = buildShellTestWindowOpenPayload(mon.name, work, windowId, title, co, staggerIndex)
-    shellWireSend('backed_window_open', JSON.stringify(payload))
+    sendBackedWindowOpen(payload)
     return true
   }
 
@@ -2794,8 +2809,29 @@ function App() {
     ).length
     primeFileBrowserWindowPath(windowId, path)
     const payload = buildFileBrowserWindowOpenPayload(mon.name, work, windowId, title, co, staggerIndex)
-    shellWireSend('backed_window_open', JSON.stringify(payload))
+    sendBackedWindowOpen(payload)
     return true
+  }
+
+  function flushPendingBackedWindowOpens() {
+    if (backedWindowOpenRaf !== 0) return
+    const trySend = () => {
+      backedWindowOpenRaf = 0
+      for (const [windowId, payload] of pendingBackedWindowOpens) {
+        if (shellWireSend('backed_window_open', JSON.stringify(payload))) {
+          pendingBackedWindowOpens.delete(windowId)
+        }
+      }
+      if (pendingBackedWindowOpens.size > 0) {
+        backedWindowOpenRaf = requestAnimationFrame(trySend)
+      }
+    }
+    trySend()
+  }
+
+  function sendBackedWindowOpen(payload: BackedWindowOpenPayload) {
+    pendingBackedWindowOpens.set(payload.window_id, payload)
+    flushPendingBackedWindowOpens()
   }
 
   function buildSessionSnapshot(): SessionSnapshot {
@@ -3676,6 +3712,7 @@ function App() {
     let compositorSyncRaf = 0
     let nativeWireHadBeenReady = false
     onCleanup(() => {
+      if (backedWindowOpenRaf !== 0) cancelAnimationFrame(backedWindowOpenRaf)
       if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
       if (sessionRestoreStopTimer !== undefined) clearTimeout(sessionRestoreStopTimer)
       if (sessionPersistPoll !== undefined) clearInterval(sessionPersistPoll)
@@ -3688,6 +3725,7 @@ function App() {
     const requestCompositorSync = () => {
       if (shellWireSend('request_compositor_sync')) {
         compositorSyncAttempts = 0
+        if (!nativeWireHadBeenReady) setShellWireReadyRev((value) => value + 1)
         nativeWireHadBeenReady = true
         clearShellWireIssue()
         shellWireSend('set_chrome_metrics', CHROME_TITLEBAR_PX, CHROME_BORDER_PX)
@@ -3720,6 +3758,7 @@ function App() {
         return
       }
       reportShellWireIssue(shellWireIssueMessage())
+      nativeWireHadBeenReady = false
       compositorSyncAttempts = 0
       requestCompositorSync()
     }, 750)
@@ -4245,6 +4284,31 @@ function App() {
       }
     }
 
+    let lastSnapshotSequence = 0
+    const syncCompositorSnapshot = (force = false) => {
+      const path = window.__DERP_COMPOSITOR_SNAPSHOT_PATH
+      if (typeof path !== 'string' || path.length === 0) return false
+      const readSnapshot = window.__derpCompositorSnapshotRead
+      if (typeof readSnapshot !== 'function') return false
+      const abi = window.__DERP_COMPOSITOR_SNAPSHOT_ABI ?? compositorSnapshotAbi()
+      if (!force) {
+        const snapshotVersion = window.__derpCompositorSnapshotVersion
+        if (typeof snapshotVersion === 'function') {
+          const version = snapshotVersion(path, abi)
+          if (typeof version === 'number' && Number.isFinite(version) && version === lastSnapshotSequence) {
+            return false
+          }
+        }
+      }
+      const raw = readSnapshot(path, abi)
+      if (!(raw instanceof ArrayBuffer)) return false
+      const decoded = decodeCompositorSnapshot(raw)
+      if (!decoded || decoded.details.length === 0) return false
+      lastSnapshotSequence = decoded.sequence
+      applyCompositorBatch(decoded.details)
+      return true
+    }
+
     const onDerpShell = (ev: Event) => {
       const ce = ev as CustomEvent<DerpShellDetail>
       const d = ce.detail
@@ -4252,11 +4316,31 @@ function App() {
       applyCompositorBatch([d])
     }
 
+    const onCompositorSnapshot = () => {
+      syncCompositorSnapshot()
+    }
+
     const removeCompositorBatchHandler = installCompositorBatchHandler((details) => {
       applyCompositorBatch(details)
     })
 
     window.addEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
+    window.addEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
+    let bootstrapSnapshotRetry = 0
+    let bootstrapSnapshotTimer: number | undefined
+    const retryBootstrapSnapshot = () => {
+      if (syncCompositorSnapshot(true)) {
+        bootstrapSnapshotTimer = undefined
+        return
+      }
+      bootstrapSnapshotRetry += 1
+      if (bootstrapSnapshotRetry >= 40) {
+        bootstrapSnapshotTimer = undefined
+        return
+      }
+      bootstrapSnapshotTimer = window.setTimeout(retryBootstrapSnapshot, 100)
+    }
+    retryBootstrapSnapshot()
 
     const syncViewport = () =>
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
@@ -4374,8 +4458,10 @@ function App() {
 
     onCleanup(() => {
       if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
+      if (bootstrapSnapshotTimer !== undefined) clearTimeout(bootstrapSnapshotTimer)
       removeCompositorBatchHandler()
       window.removeEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
+      window.removeEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('pointerup', onWindowPointerUp)

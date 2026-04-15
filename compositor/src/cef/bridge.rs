@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -10,6 +11,7 @@ use cef::{
 
 use crate::cef::compositor_downlink;
 use crate::cef::osr_view_state::OsrViewState;
+use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 
 struct PendingCompositorMessages {
     scheduled: bool,
@@ -137,6 +139,7 @@ pub struct ShellToCefLink {
     view_state: Arc<Mutex<OsrViewState>>,
     pending_messages: Arc<Mutex<PendingCompositorMessages>>,
     delivery_ready: Arc<AtomicBool>,
+    shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
 }
 
 impl ShellToCefLink {
@@ -152,6 +155,9 @@ impl ShellToCefLink {
                 messages: Vec::new(),
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
+            shared_snapshot: Arc::new(Mutex::new(
+                SharedShellSnapshotWriter::new(crate::cef::runtime_dir()).ok(),
+            )),
         }
     }
 
@@ -164,6 +170,11 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        if let Ok(mut snapshot) = self.shared_snapshot.lock() {
+            if let Some(snapshot) = snapshot.as_mut() {
+                let _ = snapshot.apply_message(&msg);
+            }
+        }
         let should_post = {
             let Ok(mut guard) = self.pending_messages.lock() else {
                 return;
@@ -180,6 +191,15 @@ impl ShellToCefLink {
             return;
         }
         self.post_pending_messages();
+    }
+
+    pub fn shared_snapshot_path(&self) -> Option<PathBuf> {
+        let Ok(snapshot) = self.shared_snapshot.lock() else {
+            return None;
+        };
+        snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.path().to_path_buf())
     }
 
     pub(crate) fn schedule_external_begin_frame(

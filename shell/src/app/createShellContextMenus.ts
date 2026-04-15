@@ -16,6 +16,7 @@ import { useDesktopApplicationsState } from '../desktopApplicationsState'
 import { searchDesktopApplications } from '../desktopAppSearch'
 import type { createFloatingLayerStore } from '../floatingLayers'
 import { measureShellFloatingPlacementFromDom } from '../shellFloatingPlacement'
+import { shellContextMenuWire } from '../shellFloatingWire'
 import { shellHttpBase } from '../shellHttp'
 import { canvasRectToClientCss } from '../shellCoords'
 import type { LayoutScreen } from './types'
@@ -149,6 +150,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   let menuAtlasHostRef: HTMLElement | undefined
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
+  const [menuAtlasHostRevision, setMenuAtlasHostRevision] = createSignal(0)
   const [menuPanelRevision, setMenuPanelRevision] = createSignal(0)
   const [menuPanelLayoutRevision, setMenuPanelLayoutRevision] = createSignal(0)
   function setMenuPanelRef(el: HTMLDivElement) {
@@ -199,6 +201,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function hideContextMenu(skipStore = false) {
     resetContextMenuState()
+    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
     args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
     if (!skipStore) {
       args.floatingLayers.closeBranch(ROOT_CONTEXT_MENU_LAYER_ID)
@@ -760,6 +763,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
       return
     }
+    void menuAtlasHostRevision()
     void menuListItems().length
     void menuPanelRevision()
     void menuPanelLayoutRevision()
@@ -785,6 +789,17 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         screens: args.screenDraftRows(),
         layoutOrigin: args.layoutCanvasOrigin(),
       })
+      shellContextMenuWire(
+        true,
+        placement.bx,
+        placement.by,
+        placement.bw,
+        placement.bh,
+        placement.gx,
+        placement.gy,
+        placement.gw,
+        placement.gh,
+      )
       args.floatingLayers.setLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID, placement)
     })
     onCleanup(() => cancelAnimationFrame(rid))
@@ -1056,6 +1071,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     warmProgramsMenuItems,
     setMenuAtlasHostRef(el: HTMLDivElement) {
       menuAtlasHostRef = el
+      setMenuAtlasHostRevision((value) => value + 1)
     },
     atlasHostEl: () => menuAtlasHostRef,
     projectCurrentMenuElementRect,

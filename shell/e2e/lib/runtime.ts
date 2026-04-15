@@ -327,6 +327,8 @@ export interface PerfShellUpdateSnapshot {
 
 export interface PerfShellSyncSnapshot {
   full_window_list_replies: number
+  snapshot_notifies: number
+  snapshot_reads: number
 }
 
 export interface PerfCounterSnapshot {
@@ -674,28 +676,43 @@ function syncTrackedNativeWindow(
 }
 
 export async function normalizeTransientShellState(base: string): Promise<ShellSnapshot> {
-  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (!shell.programs_menu_open && !shell.power_menu_open && !shell.snap_picker_open) {
+  let { shell, compositor } = await getSnapshots(base)
+  const transientShellStateCleared = (shellSnapshot: ShellSnapshot, compositorSnapshot: CompositorSnapshot) =>
+    !shellSnapshot.programs_menu_open &&
+    !shellSnapshot.power_menu_open &&
+    !shellSnapshot.snap_picker_open &&
+    compositorSnapshot.shell_pointer_grab_window_id == null &&
+    compositorSnapshot.shell_move_window_id == null &&
+    compositorSnapshot.shell_resize_window_id == null
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (transientShellStateCleared(shell, compositor)) {
       return shell
     }
     await tapKey(base, KEY.escape)
     try {
-      shell = await waitFor(
-        'wait for transient shell overlays to close',
+      await pointerButton(base, BTN_LEFT, 'release')
+    } catch {}
+    try {
+      await pointerButton(base, BTN_RIGHT, 'release')
+    } catch {}
+    try {
+      const cleared = await waitFor(
+        'wait for transient shell state to clear',
         async () => {
-          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          return !next.programs_menu_open && !next.power_menu_open && !next.snap_picker_open ? next : null
+          const next = await getSnapshots(base)
+          return transientShellStateCleared(next.shell, next.compositor) ? next : null
         },
         1500,
         50,
       )
+      shell = cleared.shell
+      compositor = cleared.compositor
     } catch {
-      shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      ;({ shell, compositor } = await getSnapshots(base))
     }
   }
-  if (shell.programs_menu_open || shell.power_menu_open || shell.snap_picker_open) {
-    throw new Error('failed to close transient shell overlays')
+  if (!transientShellStateCleared(shell, compositor)) {
+    throw new Error('failed to clear transient shell state')
   }
   return shell
 }
@@ -735,12 +752,25 @@ function syncTrackedWindows(state: E2eState, compositor: CompositorSnapshot): vo
 }
 
 export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
   await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
   state.spawnedShellWindowIds.clear()
   await normalizeTransientShellState(base)
-  const shell = await normalizePersistentShellState(base)
+  let shell = await normalizePersistentShellState(base)
+  if (shell.windows.length === 0 && shell.focused_window_id == null && !shell.shell_keyboard_layout) {
+    try {
+      await openSettings(base, 'click')
+      await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
+      shell = await normalizePersistentShellState(base)
+    } catch {}
+  }
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
   syncTrackedWindows(state, compositor)
+  for (const windowId of [...state.nativeLaunchByWindowId.keys()]) {
+    if (!state.knownWindowIds.has(windowId)) {
+      state.nativeLaunchByWindowId.delete(windowId)
+    }
+  }
   await ensureDesktopApps(base, state)
   return { compositor, shell }
 }
@@ -1202,9 +1232,17 @@ export async function activateTaskbarWindow(base: string, shellSnapshot: ShellSn
 }
 
 export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
-  const row = taskbarEntry(shellSnapshot, windowId)
-  assert(row?.close, `missing taskbar close control for window ${windowId}`)
-  await clickRect(base, row.close)
+  let shell = shellSnapshot
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = taskbarEntry(shell, windowId)
+    assert(row?.close, `missing taskbar close control for window ${windowId}`)
+    await clickRect(base, row.close)
+    try {
+      await waitForWindowGone(base, windowId, 600)
+      return
+    } catch {}
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
 }
 
 export async function closeWindow(base: string, windowId: number): Promise<void> {
@@ -1241,6 +1279,30 @@ export async function waitForWindowMinimized(base: string, windowId: number, tim
     },
     timeoutMs,
     125,
+  )
+}
+
+export async function waitForWindowRaised(
+  base: string,
+  windowId: number,
+  timeoutMs = 5000,
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  return waitFor(
+    `wait for window ${windowId} raised`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const compositorWindow = compositorWindowById(compositor, windowId)
+      const shellWindow = shellWindowById(shell, windowId)
+      if (!compositorWindow || !shellWindow || shellWindow.minimized || compositorWindow.minimized) return null
+      try {
+        assertTopWindow(shell, windowId, `window ${windowId} raised`)
+      } catch {
+        return null
+      }
+      return { compositor, shell, window: shellWindow }
+    },
+    timeoutMs,
+    100,
   )
 }
 
@@ -1379,7 +1441,7 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
       await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 150)
     } catch {
       await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
-      await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+      return waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID)
     }
     return waitForSettingsVisible(base)
   }
@@ -1389,7 +1451,7 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
     assert(shell.controls?.taskbar_settings_toggle, 'missing taskbar settings toggle')
     await clickRect(base, shell.controls.taskbar_settings_toggle)
   }
-  return waitForSettingsVisible(base)
+  return waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
 export async function openDebug(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
@@ -1399,13 +1461,13 @@ export async function openDebug(base: string): Promise<{ compositor: CompositorS
       await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID, 150)
     } catch {
       await activateTaskbarWindow(base, shell, SHELL_UI_DEBUG_WINDOW_ID)
-      await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+      return waitForWindowRaised(base, SHELL_UI_DEBUG_WINDOW_ID)
     }
     return waitForDebugVisible(base)
   }
   assert(shell.controls?.taskbar_debug_toggle, 'missing taskbar debug toggle')
   await clickRect(base, shell.controls.taskbar_debug_toggle)
-  return waitForDebugVisible(base)
+  return waitForWindowRaised(base, SHELL_UI_DEBUG_WINDOW_ID)
 }
 
 export async function openShellTestWindow(
@@ -1413,9 +1475,9 @@ export async function openShellTestWindow(
   state: E2eState,
 ): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
   const before = await getSnapshots(base)
-  const liveShellTestWindowIds = new Set(
+  const visibleShellTestWindowIds = new Set(
     before.shell.windows
-      .filter((entry) => entry.shell_hosted && entry.app_id === SHELL_TEST_APP_ID)
+      .filter((entry) => entry.shell_hosted && entry.app_id === SHELL_TEST_APP_ID && !entry.minimized)
       .map((entry) => entry.window_id),
   )
   await postJson(base, '/test/shell_window/open', {})
@@ -1427,7 +1489,8 @@ export async function openShellTestWindow(
         (entry) =>
           entry.shell_hosted &&
           entry.app_id === SHELL_TEST_APP_ID &&
-          !liveShellTestWindowIds.has(entry.window_id),
+          !entry.minimized &&
+          !visibleShellTestWindowIds.has(entry.window_id),
       )
       return window ? { compositor, shell, window } : null
     },
@@ -1448,15 +1511,35 @@ export async function resetFileBrowserFixtures(base: string): Promise<FileBrowse
 }
 
 export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  if (shell.programs_menu_open) return waitForProgramsMenuOpen(base)
-  if (method === 'keybind') {
-    await runKeybind(base, 'toggle_programs_menu')
-  } else {
-    assert(shell.controls?.taskbar_programs_toggle, 'missing taskbar programs toggle')
-    await clickRect(base, shell.controls.taskbar_programs_toggle)
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (shell.programs_menu_open) return waitForProgramsMenuOpen(base)
+    const useKeybind = method === 'keybind' || attempt > 0
+    if (useKeybind) {
+      await runKeybind(base, 'toggle_programs_menu')
+    } else {
+      assert(shell.controls?.taskbar_programs_toggle, 'missing taskbar programs toggle')
+      if (!shell.shell_keyboard_layout) {
+        const center = rectCenter(shell.controls.taskbar_programs_toggle)
+        await movePoint(base, center.x, center.y)
+      }
+      await clickRect(base, shell.controls.taskbar_programs_toggle)
+    }
+    try {
+      return await waitForProgramsMenuOpen(base, 3000)
+    } catch (error) {
+      lastError = error
+      if (attempt === 1) {
+        try {
+          await openSettings(base, 'click')
+          await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
+        } catch {}
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
   }
-  return waitForProgramsMenuOpen(base)
+  throw lastError
 }
 
 export async function openPowerMenu(base: string): Promise<ShellSnapshot> {
@@ -1616,16 +1699,18 @@ export async function waitForTaskbarEntry(base: string, windowId: number, timeou
 }
 
 async function closeWindowBestEffort(base: string, windowId: number): Promise<boolean> {
-  try {
-    await closeWindow(base, windowId)
-    await waitForWindowGone(base, windowId, 250)
-    return true
-  } catch {}
-  try {
-    await crashWindow(base, windowId)
-    await waitForWindowGone(base, windowId, 2000)
-    return true
-  } catch {}
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await closeWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 1200)
+      return true
+    } catch {}
+    try {
+      await crashWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 4000)
+      return true
+    } catch {}
+  }
   return false
 }
 
@@ -1728,6 +1813,12 @@ export async function cleanupNativeWindows(base: string, windowIds: Set<number>)
         windowIds.delete(windowId)
         continue
       }
+    } catch {}
+    try {
+      await crashWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 4000)
+      windowIds.delete(windowId)
+      continue
     } catch {}
     try {
       if (await closeWindowBestEffort(base, windowId)) {

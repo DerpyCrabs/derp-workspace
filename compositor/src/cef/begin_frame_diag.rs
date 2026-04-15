@@ -17,6 +17,8 @@ static SHELL_DETAIL_WINDOW_METADATA_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_DETAIL_WINDOW_STATE_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_DETAIL_FOCUS_CHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_REPLY_WINDOW_LIST_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_NOTIFY_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
 pub(crate) enum CompositorScheduleKind {
@@ -69,6 +71,8 @@ struct ShellUpdateSnapshot {
 #[derive(serde::Serialize)]
 struct ShellSyncSnapshot {
     full_window_list_replies: u64,
+    snapshot_notifies: u64,
+    snapshot_reads: u64,
 }
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
@@ -127,6 +131,14 @@ pub(crate) fn note_shell_reply_window_list() {
     SHELL_REPLY_WINDOW_LIST_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+pub(crate) fn note_shell_snapshot_notify() {
+    SHELL_SNAPSHOT_NOTIFY_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_snapshot_read() {
+    SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
     PerfCounterSnapshot {
         begin_frame: BeginFrameSnapshot {
@@ -149,6 +161,8 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
         },
         shell_sync: ShellSyncSnapshot {
             full_window_list_replies: SHELL_REPLY_WINDOW_LIST_COUNT.load(Ordering::Relaxed),
+            snapshot_notifies: SHELL_SNAPSHOT_NOTIFY_COUNT.load(Ordering::Relaxed),
+            snapshot_reads: SHELL_SNAPSHOT_READ_COUNT.load(Ordering::Relaxed),
         },
     }
 }
@@ -174,6 +188,8 @@ pub(crate) fn reset_perf_counters() {
     SHELL_DETAIL_WINDOW_STATE_COUNT.store(0, Ordering::Relaxed);
     SHELL_DETAIL_FOCUS_CHANGED_COUNT.store(0, Ordering::Relaxed);
     SHELL_REPLY_WINDOW_LIST_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_NOTIFY_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_READ_COUNT.store(0, Ordering::Relaxed);
     if let Ok(mut pacing) = PACING.lock() {
         *pacing = None;
     }

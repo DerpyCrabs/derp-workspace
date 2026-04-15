@@ -1,6 +1,5 @@
 use std::sync::Mutex;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cef::{
     Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
     MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
@@ -26,16 +25,41 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
 }
 
-fn flush_shell_details(browser: Option<&Browser>, details: &mut Vec<Value>) {
-    if details.is_empty() {
+fn dispatch_shell_snapshot_notify(browser: &Browser) {
+    crate::cef::begin_frame_diag::note_shell_snapshot_notify();
+    let Some(frame) = browser.main_frame() else {
+        return;
+    };
+    frame.execute_java_script(
+        Some(&CefString::from(
+            "window.dispatchEvent(new Event('derp-shell-snapshot'));",
+        )),
+        None,
+        0,
+    );
+}
+
+fn flush_shell_updates(
+    browser: Option<&Browser>,
+    details: &mut Vec<Value>,
+    snapshot_dirty: &mut bool,
+) {
+    if !*snapshot_dirty && details.is_empty() {
         return;
     }
     let Some(browser) = browser else {
         details.clear();
+        *snapshot_dirty = false;
         return;
     };
-    dispatch_shell_detail_batch(browser, details);
-    details.clear();
+    if *snapshot_dirty {
+        dispatch_shell_snapshot_notify(browser);
+        *snapshot_dirty = false;
+    }
+    if !details.is_empty() {
+        dispatch_shell_detail_batch(browser, details);
+        details.clear();
+    }
 }
 
 pub fn apply_messages(
@@ -48,10 +72,17 @@ pub fn apply_messages(
     };
     let browser = guard.as_ref();
     let mut pending_details = Vec::new();
+    let mut snapshot_dirty = false;
     for msg in messages {
-        apply_message(msg, browser, view_state, &mut pending_details);
+        apply_message(
+            msg,
+            browser,
+            view_state,
+            &mut pending_details,
+            &mut snapshot_dirty,
+        );
     }
-    flush_shell_details(browser, &mut pending_details);
+    flush_shell_updates(browser, &mut pending_details, &mut snapshot_dirty);
 }
 
 fn apply_message(
@@ -59,6 +90,7 @@ fn apply_message(
     browser: Option<&Browser>,
     view_state: &Mutex<OsrViewState>,
     pending_details: &mut Vec<Value>,
+    snapshot_dirty: &mut bool,
 ) {
     match msg {
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
@@ -81,18 +113,14 @@ fn apply_message(
                     host.invalidate(cef::PaintElementType::VIEW);
                 }
             }
-            pending_details.push(json!({
-                "type": "output_geometry",
-                "logical_width": logical_w,
-                "logical_height": logical_h,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
-            context_menu_atlas_buffer_h,
+            context_menu_atlas_buffer_h: _,
             screens,
             shell_chrome_primary,
         } => {
@@ -126,169 +154,71 @@ fn apply_message(
                 tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout missing browser");
                 return;
             }
-            let screens_j: Vec<Value> = screens
-                .iter()
-                .map(|s| {
-                    json!({
-                        "name": &s.name,
-                        "x": s.x,
-                        "y": s.y,
-                        "width": s.w,
-                        "height": s.h,
-                        "transform": s.transform,
-                        "refresh_milli_hz": s.refresh_milli_hz,
-                    })
-                })
-                .collect();
-            let (mut cox, mut coy) = (0i32, 0i32);
-            if !screens.is_empty() {
-                cox = screens[0].x;
-                coy = screens[0].y;
-                for s in screens.iter().skip(1) {
-                    cox = cox.min(s.x);
-                    coy = coy.min(s.y);
-                }
-            }
-            pending_details.push(json!({
-                "type": "output_layout",
-                "canvas_logical_width": canvas_logical_w,
-                "canvas_logical_height": canvas_logical_h,
-                "canvas_logical_origin_x": cox,
-                "canvas_logical_origin_y": coy,
-                "canvas_physical_width": canvas_physical_w,
-                "canvas_physical_height": canvas_physical_h,
-                "context_menu_atlas_buffer_h": context_menu_atlas_buffer_h,
-                "screens": screens_j,
-                "shell_chrome_primary": shell_chrome_primary,
-            }));
+            *snapshot_dirty = true;
             tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout dispatch_shell_detail done");
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-            window_id,
-            surface_id,
-            x,
-            y,
-            w,
-            h,
-            title,
-            app_id,
-            client_side_decoration,
-            output_name,
+            window_id: _,
+            surface_id: _,
+            x: _,
+            y: _,
+            w: _,
+            h: _,
+            title: _,
+            app_id: _,
+            client_side_decoration: _,
+            output_name: _,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
-            pending_details.push(json!({
-                "type": "window_mapped",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h,
-                "title": title,
-                "app_id": app_id,
-                "client_side_decoration": client_side_decoration,
-                "output_name": output_name,
-            }));
+            *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
-            pending_details.push(json!({ "type": "window_unmapped", "window_id": window_id }));
+        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id: _ } => {
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-            window_id,
-            surface_id,
-            x,
-            y,
-            w,
-            h,
-            maximized,
-            fullscreen,
-            client_side_decoration,
-            output_name,
+            window_id: _,
+            surface_id: _,
+            x: _,
+            y: _,
+            w: _,
+            h: _,
+            maximized: _,
+            fullscreen: _,
+            client_side_decoration: _,
+            output_name: _,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
-            pending_details.push(json!({
-                "type": "window_geometry",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h,
-                "maximized": maximized,
-                "fullscreen": fullscreen,
-                "client_side_decoration": client_side_decoration,
-                "output_name": output_name,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-            window_id,
-            surface_id,
-            title,
-            app_id,
+            window_id: _,
+            surface_id: _,
+            title: _,
+            app_id: _,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
-            pending_details.push(json!({
-                "type": "window_metadata",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "title": title,
-                "app_id": app_id,
-            }));
+            *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowList { windows: _ } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_list();
-            let list: Vec<_> = windows
-                .iter()
-                .map(|w| {
-                    json!({
-                        "window_id": w.window_id,
-                        "surface_id": w.surface_id,
-                        "stack_z": w.stack_z,
-                        "x": w.x,
-                        "y": w.y,
-                        "width": w.w,
-                        "height": w.h,
-                        "minimized": w.minimized != 0,
-                        "maximized": w.maximized != 0,
-                        "fullscreen": w.fullscreen != 0,
-                        "client_side_decoration": w.client_side_decoration != 0,
-                        "shell_flags": w.shell_flags,
-                        "title": &w.title,
-                        "app_id": &w.app_id,
-                        "output_name": &w.output_name,
-                        "capture_identifier": &w.capture_identifier,
-                    })
-                })
-                .collect();
-            pending_details.push(json!({
-                "type": "window_list",
-                "windows": list,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::WindowState {
-            window_id,
-            minimized,
+            window_id: _,
+            minimized: _,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_state();
-            pending_details.push(json!({
-                "type": "window_state",
-                "window_id": window_id,
-                "minimized": minimized,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
-            surface_id,
-            window_id,
+            surface_id: _,
+            window_id: _,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
-            pending_details.push(json!({
-                "type": "focus_changed",
-                "surface_id": surface_id,
-                "window_id": window_id,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
-            flush_shell_details(browser, pending_details);
+            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -306,7 +236,7 @@ fn apply_message(
             titlebar_drag_window_id: _,
             modifiers,
         } => {
-            flush_shell_details(browser, pending_details);
+            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -329,7 +259,7 @@ fn apply_message(
             delta_y,
             modifiers,
         } => {
-            flush_shell_details(browser, pending_details);
+            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -348,7 +278,7 @@ fn apply_message(
             character,
             unmodified_character,
         } => {
-            flush_shell_details(browser, pending_details);
+            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -379,7 +309,7 @@ fn apply_message(
             x,
             y,
         } => {
-            flush_shell_details(browser, pending_details);
+            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -429,56 +359,25 @@ fn apply_message(
                 "output_name": output_name,
             }));
         }
-        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
-            pending_details.push(json!({
-                "type": "keyboard_layout",
-                "label": label,
-            }));
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label: _ } => {
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
-            volume_linear_percent_x100,
-            muted,
-            state_known,
+            volume_linear_percent_x100: _,
+            muted: _,
+            state_known: _,
         } => {
-            pending_details.push(json!({
-                "type": "volume_overlay",
-                "volume_linear_percent_x100": volume_linear_percent_x100,
-                "muted": muted,
-                "state_known": state_known,
-            }));
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::TrayHints {
-            slot_count,
-            slot_w,
-            reserved_w,
+            slot_count: _,
+            slot_w: _,
+            reserved_w: _,
         } => {
-            pending_details.push(json!({
-                "type": "tray_hints",
-                "slot_count": slot_count,
-                "slot_w": slot_w,
-                "reserved_w": reserved_w,
-            }));
+            *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
-            let rows: Vec<Value> = items
-                .into_iter()
-                .map(|it| {
-                    let b64 = if it.icon_png.is_empty() {
-                        String::new()
-                    } else {
-                        B64.encode(&it.icon_png)
-                    };
-                    json!({
-                        "id": it.id,
-                        "title": it.title,
-                        "icon_base64": b64,
-                    })
-                })
-                .collect();
-            pending_details.push(json!({
-                "type": "tray_sni",
-                "items": rows,
-            }));
+        shell_wire::DecodedCompositorToShellMessage::TraySni { items: _ } => {
+            *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::TraySniMenu { menu } => {
             let rows: Vec<Value> = menu

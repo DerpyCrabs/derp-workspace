@@ -99,6 +99,7 @@ pub const MSG_COMPOSITOR_VOLUME_OVERLAY: u32 = 53;
 /// Shell → compositor: replace registered **shell UI windows** (global layout + z); compositor derives buffer rects.
 pub const MSG_SHELL_WINDOWS_SYNC: u32 = 54;
 pub const MSG_COMPOSITOR_TRAY_HINTS: u32 = 55;
+pub const MSG_COMPOSITOR_TRAY_SNI: u32 = 56;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -129,9 +130,52 @@ pub const MAX_KEYBOARD_LAYOUT_LABEL_BYTES: u32 = 32;
 pub const MAX_DMABUF_PLANES: u32 = 4;
 /// Max rows in [`MSG_SHELL_WINDOWS_SYNC`].
 pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
+pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 1;
+pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
 pub const DMABUF_FLAG_Y_INVERT: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedSnapshotHeader {
+    pub magic: u32,
+    pub abi_version: u32,
+    pub payload_len: u32,
+    pub flags: u32,
+    pub sequence: u64,
+}
+
+pub fn write_shared_snapshot_header(
+    dst: &mut [u8],
+    sequence: u64,
+    payload_len: u32,
+    flags: u32,
+) -> Result<(), String> {
+    if dst.len() < SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize {
+        return Err("shared snapshot header slice too small".to_string());
+    }
+    dst[..SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize].fill(0);
+    dst[0..4].copy_from_slice(&SHELL_SHARED_SNAPSHOT_MAGIC.to_le_bytes());
+    dst[4..8].copy_from_slice(&SHELL_SHARED_SNAPSHOT_ABI_VERSION.to_le_bytes());
+    dst[8..12].copy_from_slice(&payload_len.to_le_bytes());
+    dst[12..16].copy_from_slice(&flags.to_le_bytes());
+    dst[16..24].copy_from_slice(&sequence.to_le_bytes());
+    Ok(())
+}
+
+pub fn read_shared_snapshot_header(src: &[u8]) -> Result<SharedSnapshotHeader, String> {
+    if src.len() < SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize {
+        return Err("shared snapshot header slice too small".to_string());
+    }
+    Ok(SharedSnapshotHeader {
+        magic: u32::from_le_bytes(src[0..4].try_into().unwrap()),
+        abi_version: u32::from_le_bytes(src[4..8].try_into().unwrap()),
+        payload_len: u32::from_le_bytes(src[8..12].try_into().unwrap()),
+        flags: u32::from_le_bytes(src[12..16].try_into().unwrap()),
+        sequence: u64::from_le_bytes(src[16..24].try_into().unwrap()),
+    })
+}
 
 /// One plane in [`MSG_FRAME_DMABUF_COMMIT`] (fds are out-of-band via `SCM_RIGHTS`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1210,6 +1254,41 @@ pub fn encode_compositor_tray_hints(slot_count: u32, slot_w: i32, reserved_w: u3
     v
 }
 
+pub fn encode_compositor_tray_sni(items: &[TraySniItemWire]) -> Option<Vec<u8>> {
+    let count = u32::try_from(items.len()).ok()?;
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(&MSG_COMPOSITOR_TRAY_SNI.to_le_bytes());
+    body.extend_from_slice(&count.to_le_bytes());
+    for item in items {
+        let id = item.id.as_bytes();
+        let title = item.title.as_bytes();
+        let icon = item.icon_png.as_slice();
+        if id.len() > MAX_WINDOW_STRING_BYTES as usize
+            || title.len() > MAX_WINDOW_STRING_BYTES as usize
+            || icon.len() > MAX_BODY_BYTES as usize
+        {
+            return None;
+        }
+        let id_len = u32::try_from(id.len()).ok()?;
+        let title_len = u32::try_from(title.len()).ok()?;
+        let icon_len = u32::try_from(icon.len()).ok()?;
+        body.extend_from_slice(&id_len.to_le_bytes());
+        body.extend_from_slice(id);
+        body.extend_from_slice(&title_len.to_le_bytes());
+        body.extend_from_slice(title);
+        body.extend_from_slice(&icon_len.to_le_bytes());
+        body.extend_from_slice(icon);
+    }
+    let body_len = u32::try_from(body.len()).ok()?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body.len());
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&body);
+    Some(v)
+}
+
 pub fn encode_compositor_volume_overlay(
     volume_linear_percent_x100: u16,
     muted: bool,
@@ -1849,6 +1928,59 @@ fn decode_compositor_to_shell_body(
                 slot_w,
                 reserved_w,
             })
+        }
+        MSG_COMPOSITOR_TRAY_SNI => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            let mut off = 8usize;
+            let mut items = Vec::with_capacity(count);
+            for _ in 0..count {
+                if off + 4 > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let id_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                if id_len > MAX_WINDOW_STRING_BYTES as usize || off + id_len > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let id = std::str::from_utf8(&body[off..off + id_len])
+                    .map_err(|_| DecodeError::BadUtf8Command)?
+                    .to_string();
+                off += id_len;
+                if off + 4 > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let title_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                if title_len > MAX_WINDOW_STRING_BYTES as usize || off + title_len > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let title = std::str::from_utf8(&body[off..off + title_len])
+                    .map_err(|_| DecodeError::BadUtf8Command)?
+                    .to_string();
+                off += title_len;
+                if off + 4 > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let icon_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+                off += 4;
+                if off + icon_len > body.len() {
+                    return Err(DecodeError::BadCompositorToShellPayload);
+                }
+                let icon_png = body[off..off + icon_len].to_vec();
+                off += icon_len;
+                items.push(TraySniItemWire {
+                    id,
+                    title,
+                    icon_png,
+                });
+            }
+            if off != body.len() {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            Ok(DecodedCompositorToShellMessage::TraySni { items })
         }
         MSG_SPAWN_WAYLAND_CLIENT
         | MSG_SHELL_MOVE_BEGIN

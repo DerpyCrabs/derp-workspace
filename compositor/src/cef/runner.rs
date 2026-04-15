@@ -583,6 +583,19 @@ fn run_cef(
     }
 
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
+    let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
+    let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(cef_tx.clone())));
+    let link = Arc::new(ShellToCefLink::new(
+        browser_holder.clone(),
+        view_state.clone(),
+    ));
+    let snapshot_path = link
+        .shared_snapshot_path()
+        .and_then(|path| path.to_str().map(|s| s.to_string()));
+    {
+        let mut g = shell_slot.lock().expect("shell_slot");
+        *g = Some(link.clone());
+    }
     let uplink = UplinkToCompositor::new(cef_tx.clone());
     let control_rx = crate::cef::control_server::start(uplink.clone(), browser_holder.clone());
     let inject_js = match control_rx.recv() {
@@ -611,8 +624,14 @@ fn run_cef(
                     "failed to write derp-shell-http-url"
                 ),
             }
+            let base_js = serde_json::to_string(&base).unwrap_or_else(|_| "\"\"".to_string());
+            let spawn_js = serde_json::to_string(&format!("{base}/spawn"))
+                .unwrap_or_else(|_| "\"\"".to_string());
+            let snapshot_path_js =
+                serde_json::to_string(&snapshot_path).unwrap_or_else(|_| "null".to_string());
             Some(format!(
-                r#"window.__DERP_SPAWN_URL="{base}/spawn";window.__DERP_SHELL_HTTP="{base}";"#,
+                "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_COMPOSITOR_SNAPSHOT_ABI={};",
+                shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
             ))
         }
         Ok(Err(error)) => {
@@ -625,17 +644,6 @@ fn run_cef(
         }
     };
     let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone(), handshake.clone());
-
-    let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
-    let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(cef_tx.clone())));
-    let link = Arc::new(ShellToCefLink::new(
-        browser_holder.clone(),
-        view_state.clone(),
-    ));
-    {
-        let mut g = shell_slot.lock().expect("shell_slot");
-        *g = Some(link.clone());
-    }
     let deadline = Instant::now() + Duration::from_millis(800);
     while !handshake.load(Ordering::SeqCst) && Instant::now() < deadline {
         do_message_loop_work();

@@ -12,6 +12,7 @@ mod gnome_background;
 mod gnome_wallpaper_list;
 mod osr_view_state;
 mod runner;
+mod shell_snapshot;
 mod shell_uplink;
 mod uplink;
 

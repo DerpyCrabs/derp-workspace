@@ -1,6 +1,7 @@
 import type { DerpShellDetail } from './app/appWindowState'
 
 export const DERP_SHELL_EVENT = 'derp-shell'
+export const DERP_SHELL_SNAPSHOT_EVENT = 'derp-shell-snapshot'
 
 declare global {
   interface Window {

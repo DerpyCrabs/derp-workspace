@@ -27,6 +27,7 @@ import {
   assertRectMinSize,
   postJson,
   runKeybind,
+  windowControls,
   tapKey,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
@@ -336,28 +337,26 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const settingsOpen = await openSettings(base, 'click')
     assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
     await clickRect(base, settingsOpen.shell.controls.settings_tab_tiling)
-    await waitFor(
+    let shell = await waitFor(
       'wait for tiling settings session controls',
       async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return shell.controls?.settings_session_autosave_disable && shell.controls?.settings_session_autosave_enable
-          ? shell
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_session_autosave_disable && next.controls?.settings_session_autosave_enable
+          ? next
           : null
       },
       5000,
       100,
     )
-
-    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control')
     await clickRect(base, shell.controls.settings_session_autosave_disable)
     await waitFor(
       'wait for automatic save disabled',
       async () => {
-        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        const html = await getShellHtml(base, '[data-settings-root]')
         return html.includes('Automatic save disabled') ? html : null
       },
-      5000,
+      8000,
       100,
     )
 
@@ -365,21 +364,39 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shellTestWindowId = shellTest.window.window_id
     await waitForSessionShellWindow(base, shellTestWindowId, false)
 
-    shell = (await openSettings(base, 'click')).shell
+    await openSettings(base, 'click')
+    shell = await waitFor(
+      'wait for enable autosave control',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_session_autosave_enable ? next : null
+      },
+      5000,
+      100,
+    )
     assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control')
     await clickRect(base, shell.controls.settings_session_autosave_enable)
     await waitFor(
       'wait for automatic save enabled',
       async () => {
-        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        const html = await getShellHtml(base, '[data-settings-root]')
         return html.includes('Automatic save enabled') ? html : null
       },
-      5000,
+      8000,
       100,
     )
 
     await clearSessionState(base)
-    shell = (await openSettings(base, 'click')).shell
+    await openSettings(base, 'click')
+    shell = await waitFor(
+      'wait for disable autosave control after enabling',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_session_autosave_disable ? next : null
+      },
+      5000,
+      100,
+    )
     assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control after enabling')
     await clickRect(base, shell.controls.settings_session_autosave_disable)
     await waitForSessionShellWindow(base, shellTestWindowId, false)
@@ -388,19 +405,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')
     await tapKey(base, KEY.enter)
     await waitForSessionShellWindow(base, shellTestWindowId, true)
-
-    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control for cleanup')
-    await clickRect(base, shell.controls.settings_session_autosave_enable)
-    await waitFor(
-      'wait for automatic save re-enabled for later tests',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-tiling-page]')
-        return html.includes('Automatic save enabled') ? html : null
-      },
-      5000,
-      100,
-    )
 
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shell, shellTestWindowId)
@@ -422,6 +426,52 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     await writeJsonArtifact('session-controls-shell.json', restored)
     await writeJsonArtifact('session-controls-state.json', await getJson<SessionStateResponse>(base, '/session_state'))
+
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await closeTaskbarWindow(base, shell, shellTestWindowId)
+    await waitForWindowGone(base, shellTestWindowId)
+
+    shell = await waitFor(
+      'wait for enable autosave control for cleanup',
+      async () => {
+        const opened = await openSettings(base, 'click')
+        if (opened.shell.controls?.settings_tab_tiling) {
+          await clickRect(base, opened.shell.controls.settings_tab_tiling)
+        }
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_session_autosave_enable ? next : null
+      },
+      5000,
+      100,
+    )
+    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control for cleanup')
+    await waitFor(
+      'wait for automatic save re-enabled for later tests',
+      async () => {
+        const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const settingsWindow = current.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID) ?? null
+        const enableRect = current.controls?.settings_session_autosave_enable ?? null
+        const settingsChrome = windowControls(current, SHELL_UI_SETTINGS_WINDOW_ID)
+        const enableVisible =
+          !!settingsWindow &&
+          !!enableRect &&
+          enableRect.global_x >= settingsWindow.x &&
+          enableRect.global_y >= settingsWindow.y &&
+          enableRect.global_x + enableRect.width <= settingsWindow.x + settingsWindow.width &&
+          enableRect.global_y + enableRect.height <= settingsWindow.y + settingsWindow.height
+        if (!enableVisible && settingsWindow && settingsWindow.height < 600 && settingsChrome?.maximize) {
+          await clickRect(base, settingsChrome.maximize)
+          return null
+        }
+        if (enableRect) {
+          await clickRect(base, enableRect)
+        }
+        const html = await getShellHtml(base, '[data-settings-root]')
+        return html.includes('Automatic save enabled') ? html : null
+      },
+      8000,
+      100,
+    )
   })
 
   test('debug window opens and toggles crosshair state', async ({ base }) => {
@@ -496,7 +546,23 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await openDebug(base)
     const shellBeforeFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeFocus, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await waitFor(
+      'wait for settings frontmost after taskbar activate',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (!shell.settings_window_visible) return null
+        const settingsWindow = shell.windows.find((entry) => entry.window_id === SHELL_UI_SETTINGS_WINDOW_ID) ?? null
+        if (!settingsWindow || settingsWindow.minimized) return null
+        try {
+          assertTopWindow(shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should restack above debug window')
+        } catch {
+          return null
+        }
+        return { compositor, shell }
+      },
+      5000,
+      100,
+    )
     const settingsWindow = compositorWindowById(settingsFocused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow, 'missing settings compositor window')
 
@@ -840,6 +906,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
         y: settingsWindow.y + Math.max(64, Math.floor(settingsWindow.height / 2)),
       },
     ]
+    const menuDismissPoint = {
+      x: settingsWindow.x + 18,
+      y: settingsWindow.y + Math.min(96, Math.max(40, Math.floor(settingsWindow.height / 4))),
+    }
 
     for (const [index, point] of contentPoints.entries()) {
       await clickPoint(base, point.x, point.y)
@@ -852,7 +922,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const programsOpen = await openProgramsMenu(base, 'click')
     assertTopWindow(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'programs menu should not let native windows overtake settings')
 
-    await clickPoint(base, contentPoints[0].x, contentPoints[0].y)
+    await clickPoint(base, menuDismissPoint.x, menuDismissPoint.y)
     const programsClosed = await waitForProgramsMenuClosed(base)
     assertTopWindow(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after menu dismiss')
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)

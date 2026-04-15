@@ -48,6 +48,29 @@ fn default_wayland_socket_name() -> String {
     format!("wayland-d{}", unsafe { libc::getuid() })
 }
 
+fn shell_ipc_stall_timeout_from_env() -> Option<std::time::Duration> {
+    match std::env::var("DERP_SHELL_WATCHDOG_SEC") {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty()
+                || trimmed == "0"
+                || trimmed.eq_ignore_ascii_case("off")
+                || trimmed.eq_ignore_ascii_case("false")
+                || trimmed.eq_ignore_ascii_case("disabled")
+            {
+                None
+            } else {
+                trimmed
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|secs| *secs > 0)
+                    .map(std::time::Duration::from_secs)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(code) = cef::maybe_run_cef_subprocess_only() {
         std::process::exit(code);
@@ -85,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         chrome_bridge: Arc::new(NoOpChromeBridge),
         shell_to_cef: shell_to_cef.clone(),
         shell_cef_handshake: Some(cef_handshake.clone()),
-        shell_ipc_stall_timeout: Some(std::time::Duration::from_secs(5)),
+        shell_ipc_stall_timeout: shell_ipc_stall_timeout_from_env(),
     };
 
     let state =

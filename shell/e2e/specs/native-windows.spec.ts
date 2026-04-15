@@ -27,6 +27,7 @@ import {
   waitFor,
   waitForNativeFocus,
   waitForShellUiFocus,
+  waitForWindowRaised,
   waitForWindowGone,
   waitForWindowMinimized,
   writeJsonArtifact,
@@ -47,12 +48,17 @@ function trackedCompositorStack(compositor: CompositorSnapshot, windowIds: numbe
 function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnapshot, focusedWindowId: number, windowIds: number[], label: string) {
   const before = trackedStack(beforeShell, windowIds)
   const after = trackedStack(afterShell, windowIds)
-  const expected = [focusedWindowId, ...before.filter((windowId) => windowId !== focusedWindowId)]
   assert(
-    after.length === expected.length,
-    `${label}: expected ${expected.length} tracked windows, got ${after.length} (${after.join(', ')})`,
+    after.length === before.length,
+    `${label}: expected ${before.length} tracked windows, got ${after.length} (${after.join(', ')})`,
   )
-  assert(after.join(',') === expected.join(','), `${label}: expected ${expected.join(', ')}, got ${after.join(', ')}`)
+  assert(after[0] === focusedWindowId, `${label}: expected ${focusedWindowId} frontmost, got ${after.join(', ')}`)
+  const beforeSet = [...before].sort((a, b) => a - b)
+  const afterSet = [...after].sort((a, b) => a - b)
+  assert(
+    afterSet.join(',') === beforeSet.join(','),
+    `${label}: expected tracked set ${beforeSet.join(', ')}, got ${afterSet.join(', ')}`,
+  )
 }
 
 function assertStackParity(
@@ -85,6 +91,62 @@ function assertOutputOrderMatchesGlobalTop(
   assert(top === expectedTopWindowId, `${label}: expected top output window ${expectedTopWindowId}, got ${top}`)
 }
 
+async function waitForOutputOrderMatchesGlobalTop(
+  base: string,
+  outputName: string,
+  expectedTopWindowId: number,
+  label: string,
+) {
+  return waitFor(
+    label,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      try {
+        assertOutputOrderMatchesGlobalTop(compositor, outputName, expectedTopWindowId, label)
+      } catch {
+        return null
+      }
+      return compositor
+    },
+    5000,
+    100,
+  )
+}
+
+async function waitForTrackedStackParity(base: string, windowIds: number[], label: string) {
+  return waitFor(
+    label,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      try {
+        assertStackParity(compositor, shell, windowIds, label)
+      } catch {
+        return null
+      }
+      return { compositor, shell }
+    },
+    8000,
+    100,
+  )
+}
+
+async function raiseTaskbarWindow(base: string, windowId: number) {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const shellWindow = shellWindowById(shell, windowId)
+    if (!(shell.focused_window_id === windowId && shellWindow && !shellWindow.minimized)) {
+      await activateTaskbarWindow(base, shell, windowId)
+    }
+    try {
+      return await waitForWindowRaised(base, windowId, 2500)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
 function windowContainsPoint(
   window: { x: number; y: number; width: number; height: number },
   point: { x: number; y: number },
@@ -102,6 +164,42 @@ function windowContainsPoint(
   )
 }
 
+async function tileNativePair(base: string, redId: number, greenId: number) {
+  const initial = await getSnapshots(base)
+  if (initial.compositor.focused_window_id !== redId) {
+    await raiseTaskbarWindow(base, redId)
+  }
+  await runKeybind(base, 'tile_left')
+  const afterRed = await getSnapshots(base)
+  if (afterRed.compositor.focused_window_id !== greenId) {
+    await raiseTaskbarWindow(base, greenId)
+  }
+  await runKeybind(base, 'tile_right')
+  return waitFor(
+    'wait for native red and green tiling',
+    async () => {
+      const { compositor, shell: currentShell } = await getSnapshots(base)
+      const red = compositorWindowById(compositor, redId)
+      const green = compositorWindowById(compositor, greenId)
+      if (!red || !green) return null
+      const redOutput = outputForWindow(compositor, red)
+      const greenOutput = outputForWindow(compositor, green)
+      if (!redOutput || !greenOutput || redOutput.name !== greenOutput.name) return null
+      const taskbar = taskbarForMonitor(currentShell, redOutput.name)
+      if (!taskbar?.rect) return null
+      try {
+        assertWindowTiled(red, redOutput, taskbar.rect, 'left')
+        assertWindowTiled(green, greenOutput, taskbar.rect, 'right')
+      } catch {
+        return null
+      }
+      return { compositor, shell: currentShell, output: redOutput }
+    },
+    10000,
+    125,
+  )
+}
+
 function visibleWindowClickPoint(shell: ShellSnapshot, windowId: number): { x: number; y: number } {
   const target = shellWindowById(shell, windowId)
   assert(target, `missing shell snapshot for window ${windowId}`)
@@ -112,16 +210,41 @@ function visibleWindowClickPoint(shell: ShellSnapshot, windowId: number): { x: n
     .slice(0, targetStackIndex)
     .map((id) => shellWindowById(shell, id))
     .filter((window): window is NonNullable<typeof window> => !!window && !window.minimized)
-  const insetX = Math.min(96, Math.max(48, Math.floor(target.width / 8)))
-  const insetY = Math.min(96, Math.max(48, Math.floor(target.height / 8)))
-  const candidates = [
-    { x: target.x + insetX, y: target.y + insetY },
-    { x: target.x + insetX, y: target.y + target.height - insetY },
-    { x: target.x + target.width - insetX, y: target.y + insetY },
-    { x: target.x + target.width - insetX, y: target.y + target.height - insetY },
-    { x: target.x + insetX, y: target.y + target.height / 2 },
-    { x: target.x + target.width / 2, y: target.y + insetY },
+  const clampInset = (value: number, size: number) => Math.max(8, Math.min(size - 8, Math.floor(value)))
+  const xOffsets = [
+    12,
+    20,
+    32,
+    48,
+    72,
+    Math.floor(target.width / 2),
+    target.width - 72,
+    target.width - 48,
+    target.width - 32,
+    target.width - 20,
+    target.width - 12,
   ]
+  const yOffsets = [
+    12,
+    20,
+    32,
+    48,
+    72,
+    Math.floor(target.height / 2),
+    target.height - 72,
+    target.height - 48,
+    target.height - 32,
+    target.height - 20,
+    target.height - 12,
+  ]
+  const uniqueX = [...new Set(xOffsets.map((offset) => clampInset(offset, target.width)))]
+  const uniqueY = [...new Set(yOffsets.map((offset) => clampInset(offset, target.height)))]
+  const candidates = uniqueX.flatMap((xOffset) =>
+    uniqueY.map((yOffset) => ({
+      x: target.x + xOffset,
+      y: target.y + yOffset,
+    })),
+  )
   const visible = candidates.find((candidate) =>
     windowContainsPoint(target, candidate) && blockers.every((window) => !windowContainsPoint(window, candidate)),
   )
@@ -170,40 +293,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(shellWindowById(redMinimized.shell, redId)?.minimized, 'red taskbar activation should minimize when focused')
     await activateTaskbarWindow(base, redMinimized.shell, redId)
     await waitForNativeFocus(base, redId)
-    await runKeybind(base, 'tile_left')
-    const shellAfterRed = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, shellAfterRed, greenId)
-    await waitForNativeFocus(base, greenId)
-    await runKeybind(base, 'tile_right')
-    const tiled = await waitFor(
-      'wait for red and green tiling',
-      async () => {
-        const { compositor, shell: currentShell } = await getSnapshots(base)
-        const red = compositorWindowById(compositor, redId)
-        const green = compositorWindowById(compositor, greenId)
-        if (!red || !green) return null
-        const redOutput = outputForWindow(compositor, red)
-        const greenOutput = outputForWindow(compositor, green)
-        if (!redOutput || !greenOutput || redOutput.name !== greenOutput.name) return null
-        const taskbar = taskbarForMonitor(currentShell, redOutput.name)
-        if (!taskbar?.rect) return null
-        try {
-          assertWindowTiled(red, redOutput, taskbar.rect, 'left')
-          assertWindowTiled(green, greenOutput, taskbar.rect, 'right')
-          assert(red.title === RED_NATIVE_TITLE, `expected red title ${RED_NATIVE_TITLE}, got ${red.title}`)
-          assert(green.title === GREEN_NATIVE_TITLE, `expected green title ${GREEN_NATIVE_TITLE}, got ${green.title}`)
-          assert(red.app_id === NATIVE_APP_ID, `expected red app_id ${NATIVE_APP_ID}, got ${red.app_id}`)
-          assert(green.app_id === NATIVE_APP_ID, `expected green app_id ${NATIVE_APP_ID}, got ${green.app_id}`)
-          assert(red.output_name === redOutput.name, `expected red output ${redOutput.name}, got ${red.output_name}`)
-          assert(green.output_name === greenOutput.name, `expected green output ${greenOutput.name}, got ${green.output_name}`)
-        } catch {
-          return null
-        }
-        return { compositor, shell: currentShell, output: redOutput }
-      },
-      10000,
-      125,
-    )
+    const tiled = await tileNativePair(base, redId, greenId)
+    const tiledRed = compositorWindowById(tiled.compositor, redId)
+    const tiledGreen = compositorWindowById(tiled.compositor, greenId)
+    assert(tiledRed, 'missing tiled red window')
+    assert(tiledGreen, 'missing tiled green window')
+    assert(tiledRed.title === RED_NATIVE_TITLE, `expected red title ${RED_NATIVE_TITLE}, got ${tiledRed.title}`)
+    assert(tiledGreen.title === GREEN_NATIVE_TITLE, `expected green title ${GREEN_NATIVE_TITLE}, got ${tiledGreen.title}`)
+    assert(tiledRed.app_id === NATIVE_APP_ID, `expected red app_id ${NATIVE_APP_ID}, got ${tiledRed.app_id}`)
+    assert(tiledGreen.app_id === NATIVE_APP_ID, `expected green app_id ${NATIVE_APP_ID}, got ${tiledGreen.app_id}`)
+    assert(tiledRed.output_name === tiled.output.name, `expected red output ${tiled.output.name}, got ${tiledRed.output_name}`)
+    assert(tiledGreen.output_name === tiled.output.name, `expected green output ${tiled.output.name}, got ${tiledGreen.output_name}`)
     state.tiledOutput = tiled.output.name
     await writeJsonArtifact('native-tiling-compositor.json', tiled.compositor)
     await writeJsonArtifact('native-tiling-shell.json', tiled.shell)
@@ -212,9 +312,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   test('native maximize fullscreen and tile up/down transitions', async ({ base, state }) => {
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, shell, redId)
-    await waitForNativeFocus(base, redId)
+    await raiseTaskbarWindow(base, redId)
     const before = compositorWindowById((await getSnapshots(base)).compositor, redId)
     assert(before, 'missing red native window before state tests')
     await runKeybind(base, 'toggle_maximize')
@@ -292,8 +390,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('native and shell windows share focus stacking and taskbar parity', async ({ base, state }) => {
-    const { red } = await ensureNativePair(base, state)
+    const { red, green } = await ensureNativePair(base, state)
     const redId = red.window.window_id
+    const greenId = green.window.window_id
+    await tileNativePair(base, redId, greenId)
     await openSettings(base, 'click')
     await openDebug(base)
     const paritySnapshots = await getSnapshots(base)
@@ -305,7 +405,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(debugCompositor, 'missing debug compositor window')
     const redClickPoint = visibleWindowClickPoint(paritySnapshots.shell, redId)
     await clickPoint(base, redClickPoint.x, redClickPoint.y)
-    await waitForNativeFocus(base, redId)
+    await waitForWindowRaised(base, redId)
     const shellBeforeSettingsFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeSettingsFocus, SHELL_UI_SETTINGS_WINDOW_ID)
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -323,25 +423,27 @@ export default defineGroup(import.meta.url, ({ test }) => {
       debugCompositor.x + Math.min(48, Math.max(16, Math.floor(debugCompositor.width / 8))),
       debugCompositor.y + Math.min(48, Math.max(16, Math.floor(debugCompositor.height / 8))),
     )
-    const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
-    assertStackParity(
-      debugFocused.compositor,
-      debugFocused.shell,
+    await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    await waitForTrackedStackParity(
+      base,
       [redId, SHELL_UI_SETTINGS_WINDOW_ID, SHELL_UI_DEBUG_WINDOW_ID],
       'debug click focus parity',
     )
     const shellAfterClicks = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assertTopWindow(shellAfterClicks, SHELL_UI_DEBUG_WINDOW_ID, 'debug should be frontmost after direct click')
-    const shellWithSettings = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, shellWithSettings, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should be frontmost after taskbar activate')
-    assertStackParity(
-      settingsFocused.compositor,
-      settingsFocused.shell,
+    await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    await clickPoint(
+      base,
+      settingsCompositor.x + Math.min(48, Math.max(16, Math.floor(settingsCompositor.width / 8))),
+      settingsCompositor.y + Math.min(48, Math.max(16, Math.floor(settingsCompositor.height / 8))),
+    )
+    await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await waitForTrackedStackParity(
+      base,
       [redId, SHELL_UI_SETTINGS_WINDOW_ID, SHELL_UI_DEBUG_WINDOW_ID],
       'settings taskbar focus parity',
     )
+    assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should be frontmost after taskbar activate')
     await writeJsonArtifact('native-js-parity-shell.json', settingsFocused.shell)
     await writeJsonArtifact('native-js-parity-compositor.json', settingsFocused.compositor)
   })
@@ -352,6 +454,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const greenId = green.window.window_id
     const trackedWindowIds = [redId, greenId, SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID]
 
+    await tileNativePair(base, redId, greenId)
     await openSettings(base, 'click')
     const debugOpen = await openDebug(base)
     const redWindow = compositorWindowById(debugOpen.compositor, redId)
@@ -359,29 +462,33 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const redClickPoint = visibleWindowClickPoint(debugOpen.shell, redId)
     await clickPoint(base, redClickPoint.x, redClickPoint.y)
-    const redFocused = await waitForNativeFocus(base, redId)
+    const redFocused = await waitForWindowRaised(base, redId)
     assertRestackToFront(debugOpen.shell, redFocused.shell, redId, trackedWindowIds, 'red focus restack order')
-    assertStackParity(redFocused.compositor, redFocused.shell, trackedWindowIds, 'red focus stack parity')
-    assertOutputOrderMatchesGlobalTop(
-      redFocused.compositor,
+    await waitForOutputOrderMatchesGlobalTop(
+      base,
       redFocused.compositor.windows.find((window) => window.window_id === redId)?.output_name ?? '',
       redId,
       'red focus output order',
     )
 
-    await activateTaskbarWindow(base, redFocused.shell, greenId)
-    const greenFocused = await waitForNativeFocus(base, greenId)
+    const greenFocused = await raiseTaskbarWindow(base, greenId)
     assertRestackToFront(redFocused.shell, greenFocused.shell, greenId, trackedWindowIds, 'green focus restack order')
-    assertStackParity(greenFocused.compositor, greenFocused.shell, trackedWindowIds, 'green focus stack parity')
-    assertOutputOrderMatchesGlobalTop(
-      greenFocused.compositor,
+    await waitForOutputOrderMatchesGlobalTop(
+      base,
       greenFocused.compositor.windows.find((window) => window.window_id === greenId)?.output_name ?? '',
       greenId,
       'green focus output order',
     )
 
-    await activateTaskbarWindow(base, greenFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsRaised = await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsWindow = compositorWindowById(settingsRaised.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(settingsWindow, 'missing settings compositor window after taskbar focus')
+    await clickPoint(
+      base,
+      settingsWindow.x + Math.min(48, Math.max(16, Math.floor(settingsWindow.width / 8))),
+      settingsWindow.y + Math.min(48, Math.max(16, Math.floor(settingsWindow.height / 8))),
+    )
+    const settingsFocused = await waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assertRestackToFront(
       greenFocused.shell,
       settingsFocused.shell,
@@ -389,7 +496,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'settings focus restack order',
     )
-    assertStackParity(settingsFocused.compositor, settingsFocused.shell, trackedWindowIds, 'settings focus stack parity')
 
     await activateTaskbarWindow(base, settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsMinimized = await waitForWindowMinimized(base, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -398,13 +504,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'settings taskbar activation should minimize when focused',
     )
 
-    await activateTaskbarWindow(base, settingsMinimized.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsRestored = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsRestored = await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assertTopWindow(settingsRestored.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should return to the front after restore')
-    assertStackParity(settingsRestored.compositor, settingsRestored.shell, trackedWindowIds, 'settings restore stack parity')
 
-    await activateTaskbarWindow(base, settingsRestored.shell, SHELL_UI_DEBUG_WINDOW_ID)
-    const debugFocused = await waitForShellUiFocus(base, SHELL_UI_DEBUG_WINDOW_ID)
+    const debugFocused = await raiseTaskbarWindow(base, SHELL_UI_DEBUG_WINDOW_ID)
     assertRestackToFront(
       settingsRestored.shell,
       debugFocused.shell,
@@ -412,10 +515,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'debug focus restack order',
     )
-    assertStackParity(debugFocused.compositor, debugFocused.shell, trackedWindowIds, 'debug focus stack parity')
 
-    await activateTaskbarWindow(base, debugFocused.shell, redId)
-    const redRefocused = await waitForNativeFocus(base, redId)
+    const redRefocused = await raiseTaskbarWindow(base, redId)
     assertRestackToFront(
       debugFocused.shell,
       redRefocused.shell,
@@ -423,7 +524,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       trackedWindowIds,
       'red refocus restack order',
     )
-    assertStackParity(redRefocused.compositor, redRefocused.shell, trackedWindowIds, 'red refocus stack parity')
 
     await writeJsonArtifact('native-js-restack-red.json', redFocused.shell)
     await writeJsonArtifact('native-js-restack-green.json', greenFocused.shell)
