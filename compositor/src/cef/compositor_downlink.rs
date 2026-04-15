@@ -369,6 +369,10 @@ fn apply_message(
         } => {
             *snapshot_dirty = true;
         }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+            let _ = state_json;
+            *snapshot_dirty = true;
+        }
         shell_wire::DecodedCompositorToShellMessage::TrayHints {
             slot_count: _,
             slot_w: _,

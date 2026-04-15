@@ -282,6 +282,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_workspace_mutation(&self, json: String) {
+        self.run(move |s| {
+            s.apply_workspace_mutation_json(&json);
+        });
+    }
+
     pub fn sni_tray_activate(&self, id: String) {
         self.run(move |s| {
             s.sni_tray_activate_clicked(id);

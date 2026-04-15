@@ -100,6 +100,8 @@ pub const MSG_COMPOSITOR_VOLUME_OVERLAY: u32 = 53;
 pub const MSG_SHELL_WINDOWS_SYNC: u32 = 54;
 pub const MSG_COMPOSITOR_TRAY_HINTS: u32 = 55;
 pub const MSG_COMPOSITOR_TRAY_SNI: u32 = 56;
+pub const MSG_COMPOSITOR_WORKSPACE_STATE: u32 = 57;
+pub const MSG_SHELL_WORKSPACE_MUTATION: u32 = 58;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -130,6 +132,7 @@ pub const MAX_KEYBOARD_LAYOUT_LABEL_BYTES: u32 = 32;
 pub const MAX_DMABUF_PLANES: u32 = 4;
 /// Max rows in [`MSG_SHELL_WINDOWS_SYNC`].
 pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
+pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
 pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 1;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
@@ -998,6 +1001,9 @@ pub enum DecodedMessage {
         generation: u32,
         windows: Vec<ShellUiWindowWireRow>,
     },
+    ShellWorkspaceMutation {
+        mutation_json: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1144,6 +1150,9 @@ pub enum DecodedCompositorToShellMessage {
         volume_linear_percent_x100: u16,
         muted: bool,
         state_known: bool,
+    },
+    WorkspaceState {
+        state_json: String,
     },
     TrayHints {
         slot_count: u32,
@@ -1360,6 +1369,48 @@ pub fn encode_compositor_keyboard_layout(label: &str) -> Option<Vec<u8>> {
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_KEYBOARD_LAYOUT.to_le_bytes());
     v.extend_from_slice(&ll.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
+pub fn encode_compositor_workspace_state(state_json: &str) -> Option<Vec<u8>> {
+    let b = state_json.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let len = u32::try_from(b.len()).ok()?;
+    if len > MAX_WORKSPACE_JSON_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_WORKSPACE_STATE.to_le_bytes());
+    v.extend_from_slice(&len.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
+pub fn encode_shell_workspace_mutation(mutation_json: &str) -> Option<Vec<u8>> {
+    let b = mutation_json.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let len = u32::try_from(b.len()).ok()?;
+    if len > MAX_WORKSPACE_JSON_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_SHELL_WORKSPACE_MUTATION.to_le_bytes());
+    v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
     Some(v)
 }
@@ -1916,6 +1967,25 @@ fn decode_compositor_to_shell_body(
                 state_known: flags & 2 != 0,
             })
         }
+        MSG_COMPOSITOR_WORKSPACE_STATE => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            if len == 0 || len > MAX_WORKSPACE_JSON_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 8usize
+                .checked_add(len)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let state_json = std::str::from_utf8(&body[8..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedCompositorToShellMessage::WorkspaceState { state_json })
+        }
         MSG_COMPOSITOR_TRAY_HINTS => {
             if body.len() != 16 {
                 return Err(DecodeError::BadCompositorToShellPayload);
@@ -2002,7 +2072,8 @@ fn decode_compositor_to_shell_body(
         | MSG_SHELL_PONG
         | MSG_SHELL_TILE_PREVIEW
         | MSG_SHELL_CHROME_METRICS
-        | MSG_SHELL_WINDOWS_SYNC => Err(DecodeError::UnknownMsgType),
+        | MSG_SHELL_WINDOWS_SYNC
+        | MSG_SHELL_WORKSPACE_MUTATION => Err(DecodeError::UnknownMsgType),
         _ => Err(DecodeError::UnknownMsgType),
     }
 }
@@ -2477,6 +2548,25 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 generation,
                 windows,
             })
+        }
+        MSG_SHELL_WORKSPACE_MUTATION => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            if len == 0 || len > MAX_WORKSPACE_JSON_BYTES as usize {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let end = 8usize
+                .checked_add(len)
+                .ok_or(DecodeError::BadWindowPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadWindowPayload);
+            }
+            let mutation_json = std::str::from_utf8(&body[8..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedMessage::ShellWorkspaceMutation { mutation_json })
         }
         MSG_SHELL_CONTEXT_MENU => {
             if body.len() != 40 {

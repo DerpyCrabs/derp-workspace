@@ -16,6 +16,7 @@ struct SnapshotState {
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     windows: BTreeMap<u32, shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
+    workspace_state_json: Option<String>,
     keyboard_layout: Option<String>,
     volume_overlay: Option<(u16, bool, bool)>,
     tray_hints: Option<(u32, i32, u32)>,
@@ -125,19 +126,8 @@ pub struct SharedShellSnapshotWriter {
 }
 
 impl SharedShellSnapshotWriter {
-    fn inferred_shell_flags(
-        prev: Option<&shell_wire::ShellWindowSnapshot>,
-        window_id: u32,
-        surface_id: u32,
-        app_id: &str,
-    ) -> u32 {
-        prev.map(|row| row.shell_flags).unwrap_or_else(|| {
-            if surface_id == window_id && (window_id >= 9000 || app_id.starts_with("derp.")) {
-                shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
-            } else {
-                0
-            }
-        })
+    fn stable_shell_flags(prev: Option<&shell_wire::ShellWindowSnapshot>) -> u32 {
+        prev.map(|row| row.shell_flags).unwrap_or(0)
     }
 
     pub fn new(runtime_dir: PathBuf) -> Result<Self, String> {
@@ -198,12 +188,7 @@ impl SharedShellSnapshotWriter {
                         maximized: prev.map(|w| w.maximized).unwrap_or(0),
                         fullscreen: prev.map(|w| w.fullscreen).unwrap_or(0),
                         client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: Self::inferred_shell_flags(
-                            prev,
-                            *window_id,
-                            *surface_id,
-                            app_id.as_str(),
-                        ),
+                        shell_flags: Self::stable_shell_flags(prev),
                         title: title.clone(),
                         app_id: app_id.clone(),
                         output_name: output_name.clone(),
@@ -244,7 +229,7 @@ impl SharedShellSnapshotWriter {
                         maximized: if *maximized { 1 } else { 0 },
                         fullscreen: if *fullscreen { 1 } else { 0 },
                         client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: Self::inferred_shell_flags(prev, *window_id, *surface_id, ""),
+                        shell_flags: Self::stable_shell_flags(prev),
                         title: prev.map(|row| row.title.clone()).unwrap_or_default(),
                         app_id: prev.map(|row| row.app_id.clone()).unwrap_or_default(),
                         output_name: output_name.clone(),
@@ -278,12 +263,7 @@ impl SharedShellSnapshotWriter {
                         client_side_decoration: prev
                             .map(|row| row.client_side_decoration)
                             .unwrap_or(0),
-                        shell_flags: Self::inferred_shell_flags(
-                            prev,
-                            *window_id,
-                            *surface_id,
-                            app_id.as_str(),
-                        ),
+                        shell_flags: Self::stable_shell_flags(prev),
                         title: title.clone(),
                         app_id: app_id.clone(),
                         output_name: prev.map(|row| row.output_name.clone()).unwrap_or_default(),
@@ -296,6 +276,10 @@ impl SharedShellSnapshotWriter {
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
                 self.state.focus_changed = Some(msg.clone());
+                true
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+                self.state.workspace_state_json = Some(state_json.clone());
                 true
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
@@ -423,6 +407,11 @@ impl SharedShellSnapshotWriter {
         }) = &self.state.focus_changed
         {
             payload.extend_from_slice(&shell_wire::encode_focus_changed(*surface_id, *window_id));
+        }
+        if let Some(state_json) = &self.state.workspace_state_json {
+            if let Some(bytes) = shell_wire::encode_compositor_workspace_state(state_json) {
+                payload.extend_from_slice(&bytes);
+            }
         }
         if let Some(label) = &self.state.keyboard_layout {
             if let Some(bytes) = shell_wire::encode_compositor_keyboard_layout(label) {

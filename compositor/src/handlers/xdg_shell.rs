@@ -202,10 +202,6 @@ impl XdgShellHandler for CompositorState {
             self.capture_forget_window_source_cache(window_id);
             self.shell_close_pending_native_windows.remove(&window_id);
             self.shell_window_stack_forget(window_id);
-            self.focus_history_remove_window(window_id);
-            if self.shell_last_non_shell_focus_window_id == Some(window_id) {
-                self.shell_last_non_shell_focus_window_id = None;
-            }
             self.shell_minimized_windows.remove(&window_id);
             if let Some(ref meta) = removed {
                 tracing::warn!(
@@ -220,9 +216,7 @@ impl XdgShellHandler for CompositorState {
             if !had_pending_deferred {
                 self.shell_emit_chrome_window_unmapped(window_id, removed);
             }
-            if keyboard_had_focus_here {
-                self.try_refocus_after_closed_toplevel();
-            }
+            self.try_refocus_after_closed_window(window_id, keyboard_had_focus_here);
         }
     }
 

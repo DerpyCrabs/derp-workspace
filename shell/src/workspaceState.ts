@@ -16,7 +16,6 @@ export type WorkspaceState = {
   nextGroupSeq: number
 }
 
-export const WORKSPACE_STATE_STORAGE_KEY = 'derp-shell-workspace-state-v1'
 export const WORKSPACE_SPLIT_PANE_FRACTION_MIN = 0.3
 export const WORKSPACE_SPLIT_PANE_FRACTION_MAX = 0.7
 export const WORKSPACE_SPLIT_PANE_FRACTION_DEFAULT = 0.5
@@ -261,41 +260,6 @@ function inferNextGroupSeq(state: WorkspaceState): number {
     if (Number.isFinite(seq) && seq >= next) next = seq + 1
   }
   return next
-}
-
-function storageForRead(storage?: Pick<Storage, 'getItem'> | null) {
-  if (storage) return storage
-  if (typeof window === 'undefined') return null
-  return window.localStorage
-}
-
-function storageForWrite(storage?: Pick<Storage, 'setItem'> | null) {
-  if (storage) return storage
-  if (typeof window === 'undefined') return null
-  return window.localStorage
-}
-
-export function loadWorkspaceState(storage?: Pick<Storage, 'getItem'> | null): WorkspaceState {
-  const target = storageForRead(storage)
-  if (!target) return createEmptyWorkspaceState()
-  try {
-    const raw = target.getItem(WORKSPACE_STATE_STORAGE_KEY)
-    if (!raw) return createEmptyWorkspaceState()
-    return normalizeWorkspaceState(JSON.parse(raw) as unknown)
-  } catch {
-    return createEmptyWorkspaceState()
-  }
-}
-
-export function persistWorkspaceState(
-  state: WorkspaceState,
-  storage?: Pick<Storage, 'setItem'> | null,
-): void {
-  const target = storageForWrite(storage)
-  if (!target) return
-  try {
-    target.setItem(WORKSPACE_STATE_STORAGE_KEY, JSON.stringify(state))
-  } catch {}
 }
 
 export function allWorkspaceWindowIds(state: WorkspaceState): number[] {

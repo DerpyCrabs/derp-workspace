@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyDetail, buildWindowsMapFromList, type DerpWindow } from './appWindowState'
+import { applyDetail, buildWindowsMapFromList, switchVisibleWindowLocally, type DerpWindow } from './appWindowState'
 
 function makeWindow(window_id: number, patch: Partial<DerpWindow> = {}): DerpWindow {
   return {
@@ -180,5 +180,22 @@ describe('appWindowState', () => {
     expect(metadataNext.get(2)?.title).toBe('renamed')
     expect(stateNext.get(1)).toBe(left)
     expect(stateNext.get(2)?.minimized).toBe(true)
+  })
+
+  it('switches grouped visibility locally without churning unrelated windows', () => {
+    const left = makeWindow(1)
+    const hidden = makeWindow(2, { minimized: true })
+    const other = makeWindow(3)
+    const previous = new Map<number, DerpWindow>([
+      [left.window_id, left],
+      [hidden.window_id, hidden],
+      [other.window_id, other],
+    ])
+
+    const next = switchVisibleWindowLocally(previous, 2, 1)
+
+    expect(next.get(1)?.minimized).toBe(true)
+    expect(next.get(2)?.minimized).toBe(false)
+    expect(next.get(3)).toBe(other)
   })
 })

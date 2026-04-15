@@ -1,4 +1,3 @@
-import { backedShellWindowKind } from '../backedShellWindows'
 import { pickScreenForWindow, type CanvasOrigin } from '../shellCoords'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '../shellUiWindows'
 import { groupIdForWindow, type WorkspaceState } from '../workspaceState'
@@ -61,6 +60,7 @@ export type DerpShellDetail =
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; windows: unknown[] }
+  | { type: 'workspace_state'; state: WorkspaceState }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }
   | { type: 'compositor_ping' }
@@ -118,10 +118,7 @@ function coerceOutputName(nextValue: unknown, previousValue: string): string {
 }
 
 export function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
-  return (
-    (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
-    backedShellWindowKind(window.window_id, window.app_id) !== null
-  )
+  return (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
 }
 
 export function coerceShellWindowId(raw: unknown): number | null {
@@ -237,6 +234,26 @@ export function promoteWindowStack(map: Map<number, DerpWindow>, windowId: numbe
   return next
 }
 
+export function switchVisibleWindowLocally(
+  map: Map<number, DerpWindow>,
+  windowId: number,
+  previousVisibleWindowId: number,
+): Map<number, DerpWindow> {
+  if (windowId === previousVisibleWindowId) return map
+  const nextWindow = map.get(windowId)
+  const previousVisibleWindow = map.get(previousVisibleWindowId)
+  let next: Map<number, DerpWindow> | null = null
+  if (nextWindow && nextWindow.minimized) {
+    next = new Map(map)
+    next.set(windowId, { ...nextWindow, minimized: false })
+  }
+  if (previousVisibleWindow && !previousVisibleWindow.minimized) {
+    if (!next) next = new Map(map)
+    next.set(previousVisibleWindowId, { ...previousVisibleWindow, minimized: true })
+  }
+  return next ?? map
+}
+
 export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
   switch (detail.type) {
     case 'window_mapped': {
@@ -244,9 +261,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       const sid = coerceShellWindowId(detail.surface_id)
       if (wid === null || sid === null) break
       const current = map.get(wid)
-      const shell_flags =
-        current?.shell_flags ??
-        (backedShellWindowKind(wid, detail.app_id) !== null ? SHELL_WINDOW_FLAG_SHELL_HOSTED : 0)
+      const shell_flags = current?.shell_flags ?? 0
       const nextWindow: DerpWindow = {
         window_id: wid,
         surface_id: sid,
@@ -350,11 +365,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
           ...w,
           title: detail.title,
           app_id: detail.app_id,
-          shell_flags:
-            (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
-            backedShellWindowKind(wid, detail.app_id) !== null
-              ? w.shell_flags | SHELL_WINDOW_FLAG_SHELL_HOSTED
-              : w.shell_flags,
+          shell_flags: w.shell_flags,
         }
         if (
           nextWindow.title === w.title &&
@@ -370,10 +381,6 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       break
     }
     case 'focus_changed': {
-      const wid = coerceShellWindowId(detail.window_id)
-      if (wid !== null) {
-        return promoteWindowStack(map, wid)
-      }
       break
     }
     default:

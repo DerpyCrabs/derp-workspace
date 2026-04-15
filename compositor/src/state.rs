@@ -90,6 +90,10 @@ use crate::{
     derp_space::DerpSpaceElem,
     exclusion_clip, shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
+    workspace_model::{
+        group_id_for_window, next_active_window_after_removal, reconcile_workspace_state,
+        WorkspaceMutation, WorkspaceState,
+    },
     CalloopData,
 };
 use smithay::input::pointer::CursorImageStatus;
@@ -448,10 +452,6 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_buffer: MemoryRenderBuffer,
     /// Hotspot within [`Self::cursor_fallback_buffer`] (logical px).
     pub(crate) cursor_fallback_hotspot: (i32, i32),
-    /// Last Wayland client toplevel that had keyboard focus (non–solid-shell). Used for taskbar
-    /// minimize when real keyboard focus is on the shell/CEF layer.
-    pub(crate) shell_last_non_shell_focus_window_id: Option<u32>,
-    focus_history_non_shell: Vec<u32>,
     /// After [`Self::try_spawn_wayland_client_sh`]: focus the first new non-shell toplevel with a greater window id.
     shell_spawn_focus_above_window_id: Option<u32>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
@@ -459,6 +459,7 @@ pub struct CompositorState {
     pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_pending_native_focus_window_id: Option<u32>,
     pub(crate) shell_close_pending_native_windows: HashSet<u32>,
+    pub(crate) shell_close_refocus_targets: HashMap<u32, u32>,
     /// [`WindowRegistry`]-scoped id for shell-initiated move (`MSG_SHELL_MOVE_*`).
     pub(crate) shell_move_window_id: Option<u32>,
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
@@ -514,6 +515,7 @@ pub struct CompositorState {
     pub(crate) shell_ui_windows_shared_sequence: u64,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
+    pub(crate) workspace_state: WorkspaceState,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) shell_exclusion_shared_sequence: u64,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
@@ -572,6 +574,7 @@ impl CompositorState {
     fn shell_window_stack_seed_known_windows(&mut self) {
         self.shell_window_stack_order
             .retain(|wid| self.window_registry.window_info(*wid).is_some());
+        let current = self.shell_window_stack_order.clone();
         let mut ids: Vec<u32> = self
             .window_registry
             .all_records()
@@ -579,11 +582,13 @@ impl CompositorState {
             .map(|record| record.info.window_id)
             .collect();
         ids.sort_unstable();
-        for id in ids {
-            if !self.shell_window_stack_order.contains(&id) {
-                self.shell_window_stack_order.push(id);
-            }
-        }
+        let current_set: HashSet<u32> = current.iter().copied().collect();
+        let mut missing: Vec<u32> = ids
+            .into_iter()
+            .filter(|id| !current_set.contains(id))
+            .collect();
+        missing.extend(current);
+        self.shell_window_stack_order = missing;
     }
 
     pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) {
@@ -606,8 +611,70 @@ impl CompositorState {
         self.shell_exclusion_zones_need_full_damage = true;
     }
 
+    pub(crate) fn logical_focused_window_id(&self) -> Option<u32> {
+        if self.shell_ipc_keyboard_to_cef {
+            return self.shell_focused_ui_window_id;
+        }
+        self.keyboard_focused_window_id()
+    }
+
+    fn logical_focus_target_is_valid(&self, window_id: u32) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if info.minimized || self.window_info_is_solid_shell_host(&info) {
+            return false;
+        }
+        if self.window_registry.is_shell_hosted(window_id) {
+            return true;
+        }
+        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
+            return false;
+        };
+        self.find_window_by_surface_id(sid).is_some() || self.find_x11_window_by_surface_id(sid).is_some()
+    }
+
+    pub(crate) fn pick_next_logical_focus_target(
+        &self,
+        exclude_window_id: Option<u32>,
+        include_shell_hosted: bool,
+    ) -> Option<u32> {
+        for &wid in self.shell_window_stack_ids().iter().rev() {
+            if exclude_window_id == Some(wid) {
+                continue;
+            }
+            if !include_shell_hosted && self.window_registry.is_shell_hosted(wid) {
+                continue;
+            }
+            if self.logical_focus_target_is_valid(wid) {
+                return Some(wid);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn focus_logical_window(&mut self, window_id: u32) {
+        if self.window_registry.is_shell_hosted(window_id) {
+            self.shell_focus_shell_ui_window(window_id);
+        } else {
+            self.shell_raise_and_focus_window(window_id);
+        }
+    }
+
+    fn topmost_native_window_from_stack(&self) -> Option<u32> {
+        for &wid in self.shell_window_stack_ids().iter().rev() {
+            if self.window_registry.is_shell_hosted(wid) {
+                continue;
+            }
+            if self.logical_focus_target_is_valid(wid) {
+                return Some(wid);
+            }
+        }
+        None
+    }
+
     pub(crate) fn shell_window_stack_ids(&self) -> Vec<u32> {
-        let mut ordered: Vec<u32> = self
+        let ordered: Vec<u32> = self
             .shell_window_stack_order
             .iter()
             .copied()
@@ -622,8 +689,8 @@ impl CompositorState {
             .filter(|wid| !seen.contains(wid))
             .collect();
         missing.sort_unstable();
-        ordered.extend(missing);
-        ordered
+        missing.extend(ordered);
+        missing
     }
 
     pub(crate) fn shell_window_stack_z(&self, window_id: u32) -> u32 {
@@ -846,13 +913,12 @@ impl CompositorState {
             pointer_cursor_image: CursorImageStatus::default_named(),
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
-            shell_last_non_shell_focus_window_id: None,
-            focus_history_non_shell: Vec::new(),
             shell_spawn_focus_above_window_id: None,
             shell_minimized_windows: HashMap::new(),
             shell_minimized_x11_windows: HashMap::new(),
             shell_pending_native_focus_window_id: None,
             shell_close_pending_native_windows: HashSet::new(),
+            shell_close_refocus_targets: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
             shell_backed_move_candidate: None,
@@ -894,6 +960,7 @@ impl CompositorState {
             shell_ui_windows_shared_sequence: 0,
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
+            workspace_state: WorkspaceState::default(),
             shell_last_sent_ui_focus_id: None,
             shell_exclusion_shared_sequence: 0,
             tile_preview_rect_global: None,
@@ -1512,7 +1579,7 @@ impl CompositorState {
         tracing::warn!(
             target: "derp_shell_clip",
             focused = ?id,
-            last_non_shell = ?self.shell_last_non_shell_focus_window_id,
+            logical = ?self.logical_focused_window_id(),
             "shell ui focus changed"
         );
         self.shell_last_sent_ui_focus_id = id;
@@ -1529,16 +1596,17 @@ impl CompositorState {
 
     pub(crate) fn shell_emit_shell_ui_focus_from_point(&mut self, pos: Point<f64, Logical>) {
         if self.shell_point_in_context_menu_global(pos) {
-            self.shell_emit_shell_ui_focus_if_changed(None);
             return;
         }
         let id = self
             .shell_ui_placement_topmost_for_input_at(pos)
             .map(|w| w.id);
-        if let Some(window_id) = id {
-            self.shell_window_stack_touch(window_id);
-        }
-        self.shell_emit_shell_ui_focus_if_changed(id);
+        let Some(window_id) = id else {
+            return;
+        };
+        self.shell_window_stack_touch(window_id);
+        self.shell_emit_shell_ui_focus_if_changed(Some(window_id));
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_ui_pointer_grab_begin(&mut self, window_id: u32) {
@@ -1583,22 +1651,19 @@ impl CompositorState {
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_window_stack_touch(window_id);
         self.shell_emit_shell_ui_focus_if_changed(Some(window_id));
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_blur_shell_ui_focus(&mut self) {
         self.shell_ui_pointer_grab = None;
         self.shell_emit_shell_ui_focus_if_changed(None);
         self.shell_ipc_keyboard_to_cef = false;
-        if let Some(target) = self.pick_next_focus_target() {
-            self.shell_raise_and_focus_window(target);
-        } else {
-            let k_serial = SERIAL_COUNTER.next_serial();
-            self.seat
-                .get_keyboard()
-                .unwrap()
-                .set_focus(self, Option::<WlSurface>::None, k_serial);
-            self.keyboard_on_focus_surface_changed(None);
-        }
+        let k_serial = SERIAL_COUNTER.next_serial();
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Option::<WlSurface>::None, k_serial);
+        self.keyboard_on_focus_surface_changed(None);
     }
 
     pub fn apply_shell_exclusion_zones_payload(&mut self, payload: &[u8]) {
@@ -1852,12 +1917,23 @@ impl CompositorState {
             .unwrap_or(false)
     }
 
-    pub(crate) fn shell_send_to_cef(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
+    pub(crate) fn shell_send_to_cef(&mut self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        let workspace_dirty = matches!(
+            msg,
+            shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+                | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+                | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+        );
         let Ok(g) = self.shell_to_cef.lock() else {
             return;
         };
         if let Some(link) = g.as_ref() {
             link.send(msg);
+        }
+        drop(g);
+        if workspace_dirty {
+            self.workspace_sync_from_registry();
+            self.workspace_send_state();
         }
     }
 
@@ -2199,7 +2275,7 @@ impl CompositorState {
                 }
             }
         }
-        self.shell_last_non_shell_focus_window_id
+        self.topmost_native_window_from_stack()
     }
 
     pub(crate) fn shell_consider_focus_spawned_toplevel(&mut self, window_id: u32) {
@@ -2274,10 +2350,6 @@ impl CompositorState {
             self.shell_close_pending_native_windows
                 .remove(&info.window_id);
             self.shell_window_stack_forget(info.window_id);
-            self.focus_history_remove_window(info.window_id);
-            if self.shell_last_non_shell_focus_window_id == Some(info.window_id) {
-                self.shell_last_non_shell_focus_window_id = None;
-            }
             self.shell_minimized_windows.remove(&info.window_id);
             self.shell_minimized_x11_windows.remove(&info.window_id);
         }
@@ -2286,7 +2358,9 @@ impl CompositorState {
         self.idle_inhibit_surfaces
             .retain(|(cid, _)| cid != &client_id);
         let removed = self.window_registry.remove_by_client_id(&client_id);
+        let mut refocused_after_close = false;
         for info in removed {
+            let window_id = info.window_id;
             self.capture_forget_window_source_cache(info.window_id);
             tracing::warn!(
                 target: "derp_toplevel",
@@ -2297,8 +2371,11 @@ impl CompositorState {
                 "wayland client disconnected; pruning native window"
             );
             self.shell_emit_chrome_window_unmapped(info.window_id, Some(info));
+            if !refocused_after_close {
+                refocused_after_close = self.try_refocus_after_closed_window(window_id, false);
+            }
         }
-        if focused_removed {
+        if focused_removed && !refocused_after_close {
             self.try_refocus_after_closed_toplevel();
         }
     }
@@ -3664,6 +3741,7 @@ impl CompositorState {
         }
         let hint = removed_info.as_ref();
         self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
+        self.shell_reply_window_list();
     }
 
     /// When title/app_id becomes that of the Solid host after an earlier map with empty metadata, retract the phantom HUD entry.
@@ -4755,23 +4833,8 @@ impl CompositorState {
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
-        let (surface_id, window_id) = match self.seat.get_keyboard().and_then(|k| k.current_focus())
-        {
-            Some(surf) => {
-                let wid = self.window_registry.window_id_for_wl_surface(&surf);
-                let sid = wid.and_then(|w| self.window_registry.surface_id_for_window(w));
-                let focus_is_shell = wid
-                    .and_then(|w| self.window_registry.window_info(w))
-                    .map(|i| self.window_info_is_solid_shell_host(&i))
-                    .unwrap_or(false);
-                if focus_is_shell {
-                    (None, None)
-                } else {
-                    (sid, wid)
-                }
-            }
-            None => (None, None),
-        };
+        let window_id = self.logical_focused_window_id();
+        let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,
@@ -4875,7 +4938,7 @@ impl CompositorState {
         self.stop_event_loop();
     }
 
-    pub(crate) fn sync_tray_hints_to_shell(&self) {
+    pub(crate) fn sync_tray_hints_to_shell(&mut self) {
         let sni_n = self.sni_tray_slot_count;
         let slot_w: i32 = 40;
         if self.shell_effective_primary_output().is_none() {
@@ -5147,16 +5210,6 @@ impl CompositorState {
         Some(self.xwayland_scale_for_space_element(&DerpSpaceElem::X11(x11)))
     }
 
-    fn window_id_for_space_elem(&self, elem: &DerpSpaceElem) -> Option<u32> {
-        match elem {
-            DerpSpaceElem::Wayland(window) => window.toplevel().and_then(|toplevel| {
-                self.window_registry
-                    .window_id_for_wl_surface(toplevel.wl_surface())
-            }),
-            DerpSpaceElem::X11(x11) => self.x11_window_id_for_surface(x11),
-        }
-    }
-
     fn x11_window_title_app_id(window: &X11Surface) -> (String, String) {
         let title = window.title();
         let class = window.class();
@@ -5278,10 +5331,6 @@ impl CompositorState {
                 self.shell_pending_native_focus_window_id = None;
             }
             self.shell_window_stack_forget(window_id);
-            self.focus_history_remove_window(window_id);
-            if self.shell_last_non_shell_focus_window_id == Some(window_id) {
-                self.shell_last_non_shell_focus_window_id = None;
-            }
             self.shell_minimized_windows.remove(&window_id);
             self.shell_minimized_x11_windows.remove(&window_id);
         }
@@ -5291,9 +5340,7 @@ impl CompositorState {
             if emit_unmapped {
                 self.shell_emit_chrome_window_unmapped(window_id, removed);
             }
-        }
-        if keyboard_had_focus {
-            self.try_refocus_after_closed_toplevel();
+            self.try_refocus_after_closed_window(window_id, keyboard_had_focus);
         }
     }
 
@@ -6109,6 +6156,7 @@ impl CompositorState {
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
         crate::cef::begin_frame_diag::note_shell_reply_window_list();
+        self.workspace_sync_from_registry();
         self.shell_window_stack_seed_known_windows();
         self.capture_sync_toplevel_handles();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
@@ -6157,6 +6205,134 @@ impl CompositorState {
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowList { windows });
+        self.workspace_send_state();
+    }
+
+    fn workspace_live_window_ids(&self) -> Vec<u32> {
+        let mut window_ids: Vec<u32> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
+            .filter(|record| shell_window_row_should_show(&record.info))
+            .filter(|record| {
+                record.kind == WindowKind::ShellHosted
+                    || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+            })
+            .map(|record| record.info.window_id)
+            .collect();
+        window_ids.sort_unstable();
+        window_ids
+    }
+
+    fn workspace_sync_from_registry(&mut self) -> bool {
+        let next = reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
+        if next == self.workspace_state {
+            return false;
+        }
+        self.workspace_state = next;
+        true
+    }
+
+    fn workspace_send_state(&mut self) {
+        let Ok(state_json) = self.workspace_state.to_json() else {
+            return;
+        };
+        tracing::warn!(
+            target: "derp_workspace",
+            groups = self.workspace_state.groups.len(),
+            "workspace_send_state"
+        );
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+            state_json,
+        });
+    }
+
+    fn workspace_copy_window_geometry(&mut self, target_window_id: u32, source_window_id: u32) {
+        let Some(source_info) = self.window_registry.window_info(source_window_id) else {
+            return;
+        };
+        let Some(layout) = self.shell_window_info_to_output_local_layout(&source_info) else {
+            return;
+        };
+        self.shell_set_window_geometry(
+            target_window_id,
+            layout.x,
+            layout.y,
+            layout.width.max(1),
+            layout.height.max(1),
+            if layout.maximized { 1 } else { 0 },
+        );
+    }
+
+    pub(crate) fn apply_workspace_mutation_json(&mut self, mutation_json: &str) {
+        let Ok(mutation) = serde_json::from_str::<WorkspaceMutation>(mutation_json) else {
+            tracing::warn!(target: "derp_workspace", %mutation_json, "workspace mutation parse failed");
+            return;
+        };
+        tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation received");
+        self.workspace_sync_from_registry();
+        let previous_state = self.workspace_state.clone();
+        let Some(next_state) = previous_state.apply_mutation(&mutation) else {
+            tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation produced no change");
+            return;
+        };
+        let mut activation_window_id = None;
+        match &mutation {
+            WorkspaceMutation::SelectTab { group_id, .. } => {
+                let previous_visible = previous_state.visible_window_id_for_group(group_id);
+                let next_visible = next_state.visible_window_id_for_group(group_id);
+                if let (Some(previous_visible), Some(next_visible)) = (previous_visible, next_visible) {
+                    if previous_visible != next_visible {
+                        self.workspace_copy_window_geometry(next_visible, previous_visible);
+                        activation_window_id = Some(next_visible);
+                    }
+                }
+            }
+            WorkspaceMutation::MoveWindowToGroup {
+                window_id,
+                target_group_id,
+                ..
+            } => {
+                let source_group_id = group_id_for_window(&previous_state, *window_id).map(str::to_string);
+                if source_group_id.as_deref() != Some(target_group_id.as_str()) {
+                    if let Some(target_visible) = previous_state.visible_window_id_for_group(target_group_id) {
+                        self.workspace_copy_window_geometry(*window_id, target_visible);
+                        activation_window_id = Some(target_visible);
+                    }
+                }
+            }
+            WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
+                activation_window_id = Some(*window_id);
+            }
+            WorkspaceMutation::EnterSplit { group_id, .. }
+            | WorkspaceMutation::ExitSplit { group_id, .. } => {
+                activation_window_id = next_state.visible_window_id_for_group(group_id);
+            }
+            WorkspaceMutation::SetWindowPinned { .. }
+            | WorkspaceMutation::SetSplitFraction { .. } => {}
+        }
+        self.workspace_state = next_state;
+        self.workspace_send_state();
+        if let Some(window_id) = activation_window_id {
+            self.shell_activate_window(window_id);
+        }
+    }
+
+    fn workspace_apply_close_side_effects(&mut self, window_id: u32) {
+        let group_id = group_id_for_window(&self.workspace_state, window_id).map(str::to_string);
+        self.workspace_sync_from_registry();
+        let Some(group_id) = group_id else {
+            self.workspace_send_state();
+            return;
+        };
+        let next_visible = next_active_window_after_removal(&self.workspace_state, &group_id, window_id);
+        self.workspace_state =
+            reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
+        self.workspace_send_state();
+        if let Some(next_visible) = next_visible {
+            self.shell_activate_window(next_visible);
+        }
     }
 
     /// Output-local **layout** rect from the shell (same integers as HUD `fixed` CSS / CEF DIP) → global logical.
@@ -6333,7 +6509,13 @@ impl CompositorState {
 
     pub fn shell_close_window(&mut self, window_id: u32) {
         if self.shell_backed_close_if_any(window_id) {
+            self.workspace_apply_close_side_effects(window_id);
             return;
+        }
+        if let Some(target) = self.close_refocus_target_for_window(window_id) {
+            self.shell_close_refocus_targets.insert(window_id, target);
+        } else {
+            self.shell_close_refocus_targets.remove(&window_id);
         }
         let Some(info) = self.window_registry.window_info(window_id) else {
             tracing::warn!(
@@ -6425,6 +6607,7 @@ impl CompositorState {
                 "shell_close_window x11 close failed"
             );
             self.shell_close_pending_native_windows.remove(&window_id);
+            self.shell_close_refocus_targets.remove(&window_id);
         }
     }
 
@@ -6470,28 +6653,27 @@ impl CompositorState {
         self.clear_toplevel_layout_maps(window_id);
         self.pending_gnome_initial_toplevels.remove(&window_id);
         self.shell_close_pending_native_windows.remove(&window_id);
+        let keyboard_had_focus = self.keyboard_focused_window_id() == Some(window_id);
         if self.shell_pending_native_focus_window_id == Some(window_id) {
             self.shell_pending_native_focus_window_id = None;
         }
         self.shell_window_stack_forget(window_id);
-        self.focus_history_remove_window(window_id);
-        if self.shell_last_non_shell_focus_window_id == Some(window_id) {
-            self.shell_last_non_shell_focus_window_id = None;
-        }
         self.shell_minimized_windows.remove(&window_id);
-        if self.keyboard_focused_window_id() == Some(window_id) {
+        if keyboard_had_focus {
             let serial = SERIAL_COUNTER.next_serial();
             self.seat
                 .get_keyboard()
                 .unwrap()
                 .set_focus(self, Option::<WlSurface>::None, serial);
             self.keyboard_on_focus_surface_changed(None);
-            self.try_refocus_after_closed_toplevel();
         }
         let removed = self.window_registry.snapshot_for_wl_surface(root);
         if let Some(pruned_window_id) = self.window_registry.remove_by_wl_surface(root) {
             self.capture_forget_window_source_cache(pruned_window_id);
             self.shell_emit_chrome_window_unmapped(pruned_window_id, removed);
+            self.try_refocus_after_closed_window(pruned_window_id, keyboard_had_focus);
+        } else {
+            self.shell_close_refocus_targets.remove(&window_id);
         }
     }
 
@@ -6663,73 +6845,13 @@ impl CompositorState {
     }
 
     pub(crate) fn keyboard_focused_window_id(&self) -> Option<u32> {
-        if let Some(surf) = self.seat.get_keyboard()?.current_focus() {
-            return self.window_registry.window_id_for_wl_surface(&surf);
-        }
-        if self.shell_ipc_keyboard_to_cef {
-            return None;
-        }
-        let window_id = self.shell_last_non_shell_focus_window_id?;
-        let info = self.window_registry.window_info(window_id)?;
-        if info.minimized || self.window_info_is_solid_shell_host(&info) {
-            return None;
-        }
-        let sid = self.window_registry.surface_id_for_window(window_id)?;
-        if self.find_window_by_surface_id(sid).is_some()
-            || self.find_x11_window_by_surface_id(sid).is_some()
-        {
-            Some(window_id)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn push_non_shell_focus_history(&mut self, wid: u32) {
-        self.focus_history_non_shell.retain(|&x| x != wid);
-        self.focus_history_non_shell.push(wid);
-        const MAX: usize = 64;
-        while self.focus_history_non_shell.len() > MAX {
-            self.focus_history_non_shell.remove(0);
-        }
-    }
-
-    pub(crate) fn focus_history_remove_window(&mut self, wid: u32) {
-        self.focus_history_non_shell.retain(|&x| x != wid);
-    }
-
-    fn is_valid_user_focus_target(&self, window_id: u32) -> bool {
-        let Some(info) = self.window_registry.window_info(window_id) else {
-            return false;
-        };
-        if info.minimized || self.window_info_is_solid_shell_host(&info) {
-            return false;
-        }
-        let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
-            return false;
-        };
-        self.find_window_by_surface_id(sid).is_some()
-            || self.find_x11_window_by_surface_id(sid).is_some()
-    }
-
-    fn pick_next_focus_target(&self) -> Option<u32> {
-        for &wid in self.focus_history_non_shell.iter().rev() {
-            if self.is_valid_user_focus_target(wid) {
-                return Some(wid);
-            }
-        }
-        for e in self.space.elements().rev() {
-            let Some(wid) = self.window_id_for_space_elem(e) else {
-                continue;
-            };
-            if self.is_valid_user_focus_target(wid) {
-                return Some(wid);
-            }
-        }
-        None
+        let surf = self.seat.get_keyboard()?.current_focus()?;
+        let window_id = self.window_registry.window_id_for_wl_surface(&surf)?;
+        self.logical_focus_target_is_valid(window_id).then_some(window_id)
     }
 
     pub(crate) fn try_refocus_after_closed_toplevel(&mut self) {
-        let Some(target) = self.pick_next_focus_target() else {
+        let Some(target) = self.pick_next_logical_focus_target(None, true) else {
             let serial = SERIAL_COUNTER.next_serial();
             self.seat
                 .get_keyboard()
@@ -6738,7 +6860,35 @@ impl CompositorState {
             self.keyboard_on_focus_surface_changed(None);
             return;
         };
-        self.shell_raise_and_focus_window(target);
+        self.focus_logical_window(target);
+        self.shell_reply_window_list();
+    }
+
+    pub(crate) fn close_refocus_target_for_window(&self, window_id: u32) -> Option<u32> {
+        let topmost = self.pick_next_logical_focus_target(None, true)?;
+        if topmost == window_id {
+            return self.pick_next_logical_focus_target(Some(window_id), true);
+        }
+        Some(topmost)
+    }
+
+    pub(crate) fn try_refocus_after_closed_window(
+        &mut self,
+        closed_window_id: u32,
+        keyboard_had_focus: bool,
+    ) -> bool {
+        if let Some(target) = self.shell_close_refocus_targets.remove(&closed_window_id) {
+            if self.logical_focus_target_is_valid(target) {
+                self.focus_logical_window(target);
+                self.shell_reply_window_list();
+                return true;
+            }
+        }
+        if keyboard_had_focus {
+            self.try_refocus_after_closed_toplevel();
+            return true;
+        }
+        false
     }
 
     /// Raise a mapped Wayland toplevel to the top of the stack and give it keyboard focus.
@@ -6768,7 +6918,6 @@ impl CompositorState {
             self.space
                 .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
             self.shell_window_stack_touch(window_id);
-            self.shell_last_non_shell_focus_window_id = Some(window_id);
             let wl_surface = window.toplevel().unwrap().wl_surface().clone();
             let k_serial = SERIAL_COUNTER.next_serial();
             self.seat
@@ -6791,7 +6940,6 @@ impl CompositorState {
         self.space
             .raise_element(&DerpSpaceElem::X11(x11.clone()), true);
         self.shell_window_stack_touch(window_id);
-        self.shell_last_non_shell_focus_window_id = Some(window_id);
         if let Some(wl_surface) = x11.wl_surface() {
             self.shell_pending_native_focus_window_id = None;
             let k_serial = SERIAL_COUNTER.next_serial();
@@ -6842,9 +6990,6 @@ impl CompositorState {
                 .insert(window_id, window.clone());
             self.space.unmap_elem(&DerpSpaceElem::Wayland(window));
             self.window_registry.set_minimized(window_id, true);
-            if self.shell_last_non_shell_focus_window_id == Some(window_id) {
-                self.shell_last_non_shell_focus_window_id = None;
-            }
 
             if self.keyboard_focused_window_id() == Some(window_id) {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -6879,9 +7024,6 @@ impl CompositorState {
             .update_native(window_id, |window_info| {
                 window_info.minimized = true;
             });
-        if self.shell_last_non_shell_focus_window_id == Some(window_id) {
-            self.shell_last_non_shell_focus_window_id = None;
-        }
         if self.keyboard_focused_window_id() == Some(window_id) {
             let serial = SERIAL_COUNTER.next_serial();
             self.seat
@@ -7014,15 +7156,12 @@ impl CompositorState {
             return;
         }
 
-        let kb = self.keyboard_focused_window_id();
-        let should_minimize = kb == Some(window_id)
-            || (kb.is_none()
-                && self.shell_focused_ui_window_id.is_none()
-                && self.shell_last_non_shell_focus_window_id == Some(window_id));
+        let should_minimize = self.logical_focused_window_id() == Some(window_id);
         if should_minimize {
             self.shell_minimize_window(window_id);
         } else {
             self.shell_raise_and_focus_window(window_id);
+            self.shell_reply_window_list();
         }
     }
 
@@ -7047,6 +7186,7 @@ impl CompositorState {
             return;
         }
         self.shell_raise_and_focus_window(window_id);
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_pointer_ipc_for_cef(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {

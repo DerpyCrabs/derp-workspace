@@ -224,6 +224,10 @@ fn handle_uplink_list(
             let json = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_backed_window_open(json);
         }
+        "workspace_mutation" => {
+            let json = cef_string_userfree_to_string(&args.string(1));
+            uplink.shell_workspace_mutation(json);
+        }
         "shell_ipc_pong" => {
             uplink.shell_ipc_pong();
         }
@@ -350,12 +354,12 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                 }
                 "quit" => {}
-                "backed_window_open" => {
+                "backed_window_open" | "workspace_mutation" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("backed_window_open requires JSON string");
+                        return_exception!("backed_window_open/workspace_mutation requires JSON string");
                     };
                     if a1.is_string() == 0 {
-                        return_exception!("backed_window_open: second arg must be a string");
+                        return_exception!("backed_window_open/workspace_mutation: second arg must be a string");
                     }
                     let json = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
@@ -822,7 +826,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
+                        "unknown op (use close, quit, backed_window_open, workspace_mutation, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
                     );
                 }
             }

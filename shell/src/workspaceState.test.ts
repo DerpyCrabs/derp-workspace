@@ -5,10 +5,8 @@ import {
   enterWorkspaceSplitView,
   exitWorkspaceSplitView,
   groupIdForWindow,
-  loadWorkspaceState,
   mergeWorkspaceGroups,
   moveWorkspaceWindowToGroup,
-  persistWorkspaceState,
   reconcileWorkspaceState,
   reorderWorkspaceWindowInGroup,
   splitWorkspaceWindowToOwnGroup,
@@ -161,20 +159,4 @@ describe('workspaceState', () => {
     expect(next.splitByGroupId[groupId]).toBeUndefined()
   })
 
-  it('persists and reloads workspace state', () => {
-    const storage = new Map<string, string>()
-    const adapter = {
-      getItem(key: string) {
-        return storage.get(key) ?? null
-      },
-      setItem(key: string, value: string) {
-        storage.set(key, value)
-      },
-    }
-    let state = setWorkspaceActiveTab(reconcileWorkspaceState(createEmptyWorkspaceState(), [10, 11]), 'group-2', 11)
-    state = setWorkspaceWindowPinned(state, 11, true)
-    state = enterWorkspaceSplitView(state, 'group-2', 10)
-    persistWorkspaceState(state, adapter)
-    expect(loadWorkspaceState(adapter)).toEqual(state)
-  })
 })

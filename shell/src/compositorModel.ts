@@ -1,5 +1,4 @@
-import { createEffect, createMemo, createSignal } from 'solid-js'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from './shellUiWindows'
+import { createMemo, createSignal } from 'solid-js'
 import {
   applyDetail,
   buildWindowsMapFromList,
@@ -8,9 +7,8 @@ import {
   type DerpWindow,
 } from './app/appWindowState'
 import {
-  loadWorkspaceState,
-  persistWorkspaceState,
-  reconcileWorkspaceState,
+  normalizeWorkspaceState,
+  createEmptyWorkspaceState,
   workspaceStatesEqual,
   type WorkspaceState,
 } from './workspaceState'
@@ -27,6 +25,7 @@ export type CompositorApplyResult = {
   kind:
     | 'focus_changed'
     | 'window_list'
+    | 'workspace_state'
     | 'window_state'
     | 'window_unmapped'
     | 'window_geometry'
@@ -49,10 +48,34 @@ type ApplyCompositorDetailOptions = {
   requestWindowSyncRecovery: () => void
 }
 
+type SnapshotAuthoritativeState = {
+  focusedWindowId?: number | null
+  windows?: unknown[]
+  workspaceState?: WorkspaceState
+}
+
+function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]): SnapshotAuthoritativeState {
+  const next: SnapshotAuthoritativeState = {}
+  for (const detail of details) {
+    if (detail.type === 'window_list') {
+      next.windows = detail.windows
+      continue
+    }
+    if (detail.type === 'workspace_state') {
+      next.workspaceState = normalizeWorkspaceState(detail.state)
+      continue
+    }
+    if (detail.type === 'focus_changed') {
+      next.focusedWindowId = coerceShellWindowId(detail.window_id)
+    }
+  }
+  return next
+}
+
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [workspaceState, setWorkspaceState] = createSignal<WorkspaceState>(
-    options.initialWorkspaceState ?? loadWorkspaceState(),
+    options.initialWorkspaceState ?? createEmptyWorkspaceState(),
   )
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
 
@@ -67,17 +90,25 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     return out
   })
 
-  createEffect(() => {
-    const liveWindowIds = windowsListIds()
-    setWorkspaceState((prev) => {
-      const next = reconcileWorkspaceState(prev, liveWindowIds)
-      return workspaceStatesEqual(prev, next) ? prev : next
-    })
-  })
-
-  createEffect(() => {
-    persistWorkspaceState(workspaceState())
-  })
+  const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
+    const authoritative = collectSnapshotAuthoritativeState(details)
+    if (authoritative.windows !== undefined) {
+      const nextWindows = buildWindowsMapFromList(authoritative.windows, windows())
+      setWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+      if (authoritative.focusedWindowId === undefined) {
+        setFocusedWindowId((prev) => (prev != null && nextWindows.has(prev) ? prev : null))
+      }
+    }
+    if (authoritative.workspaceState !== undefined) {
+      setWorkspaceState((prev) =>
+        workspaceStatesEqual(prev, authoritative.workspaceState!) ? prev : authoritative.workspaceState!,
+      )
+    }
+    const nextFocusedWindowId = authoritative.focusedWindowId
+    if (nextFocusedWindowId !== undefined) {
+      setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
+    }
+  }
 
   const applyCompositorDetail = (
     detail: DerpShellDetail,
@@ -96,14 +127,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
         setWindows((map) => applyDetail(map, detail))
       } else {
-        setFocusedWindowId((prev) => {
-          if (prev == null) return null
-          const previousWindow = windows().get(prev)
-          if (previousWindow && (previousWindow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-            return prev
-          }
-          return null
-        })
+        setFocusedWindowId(null)
       }
       return {
         kind: 'focus_changed',
@@ -119,6 +143,15 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         kind: 'window_list',
         detailType: detail.type,
         followup: { syncExclusion: true, flushWindows: true },
+      }
+    }
+
+    if (detail.type === 'workspace_state') {
+      const nextState = normalizeWorkspaceState(detail.state)
+      setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
+      return {
+        kind: 'workspace_state',
+        detailType: detail.type,
       }
     }
 
@@ -233,6 +266,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     setWorkspaceState,
     focusedWindowId,
     setFocusedWindowId,
+    applyCompositorSnapshot,
     applyCompositorDetail,
   }
 }

@@ -499,6 +499,7 @@ impl CompositorState {
                         );
                         if let Some(window_id) = window_id {
                             self.shell_window_stack_touch(window_id);
+                            self.shell_reply_window_list();
                         }
                         self.space.elements().for_each(|e| {
                             if let DerpSpaceElem::Wayland(w) = e {
@@ -523,6 +524,7 @@ impl CompositorState {
                                 keyboard.set_focus(self, Some(surf), serial);
                                 if let Some(window_id) = window_id {
                                     self.shell_window_stack_touch(window_id);
+                                    self.shell_reply_window_list();
                                 }
                                 self.space.elements().for_each(|e| {
                                     if let DerpSpaceElem::Wayland(w) = e {

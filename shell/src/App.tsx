@@ -178,13 +178,17 @@ import {
 import { buildTaskbarGroupRows } from './taskbarGroups'
 import {
   clampWorkspaceSplitPaneFraction,
+  enterWorkspaceSplitView,
+  exitWorkspaceSplitView,
   getWorkspaceGroupSplit,
+  groupIdForWindow as workspaceStateGroupIdForWindow,
   isWorkspaceWindowPinned,
+  moveWorkspaceWindowToGroup,
   reconcileWorkspaceState,
+  setWorkspaceSplitFraction,
   setWorkspaceActiveTab,
   setWorkspaceWindowPinned,
-  workspaceStatesEqual,
-  type WorkspaceState,
+  splitWorkspaceWindowToOwnGroup,
 } from './workspaceState'
 import { createWorkspaceSelectors, type WorkspaceGroupModel } from './workspaceSelectors'
 import { buildE2eShellHtml, buildE2eShellSnapshot } from './e2eSnapshot'
@@ -233,6 +237,7 @@ declare global {
         | 'set_tile_preview'
         | 'set_chrome_metrics'
         | 'set_desktop_background'
+        | 'workspace_mutation'
         | 'context_menu'
         | 'backed_window_open'
         | 'e2e_snapshot_response'
@@ -391,6 +396,7 @@ function shellWireSend(
     | 'set_tile_preview'
     | 'set_chrome_metrics'
     | 'set_desktop_background'
+    | 'workspace_mutation'
     | 'backed_window_open'
     | 'sni_tray_activate'
     | 'sni_tray_open_menu'
@@ -452,6 +458,8 @@ function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_desktop_background' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'workspace_mutation' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
@@ -501,9 +509,8 @@ function App() {
     windowsListIds,
     windowsList,
     workspaceState,
-    setWorkspaceState,
     focusedWindowId,
-    setFocusedWindowId,
+    applyCompositorSnapshot: applyModelCompositorSnapshot,
     applyCompositorDetail: applyModelCompositorDetail,
   } = createCompositorModel()
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
@@ -642,10 +649,6 @@ function App() {
   const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
   const pendingBackedWindowOpens = new Map<number, BackedWindowOpenPayload>()
   let backedWindowOpenRaf = 0
-  const pendingGroupCloseActivations = new Map<
-    number,
-    { groupId: string; nextVisibleId: number; closingWindow: DerpWindow }
-  >()
   const shellBridgeIssue = createMemo(() => shellActionIssue() ?? shellWireIssue())
   const portalPickerVisible = createMemo(() => portalPickerRequestId() !== null)
   let wireWatchPoll: ReturnType<typeof setInterval> | undefined
@@ -659,6 +662,7 @@ function App() {
   let sessionPersistTimer: ReturnType<typeof setTimeout> | undefined
   let sessionRestoreStopTimer: ReturnType<typeof setTimeout> | undefined
   let sessionPersistPoll: ReturnType<typeof setInterval> | undefined
+  let sessionPersistGeneration = 0
   let lastPersistedSessionJson = ''
   let lastAppliedRestoreSignature = ''
   function setNativeWindowRef(windowId: number, windowRef: SessionWindowRef) {
@@ -836,29 +840,116 @@ function App() {
     const pinnedWindowIds = snapshot.workspace.pinnedWindowRefs
       .map((windowRef) => liveWindowIdForRef(windowRef))
       .filter((windowId): windowId is number => windowId !== null)
-    const next: WorkspaceState = {
-      groups: groups.map((group) => ({ id: group.id, windowIds: group.windowIds })),
-      activeTabByGroupId: Object.fromEntries(groups.map((group) => [group.id, group.activeWindowId])),
-      pinnedWindowIds,
-      splitByGroupId: Object.fromEntries(
-        groups.flatMap((group) =>
-          group.splitLeftWindowId !== null
-            ? [
-                [
-                  group.id,
-                  {
-                    leftWindowId: group.splitLeftWindowId,
-                    leftPaneFraction: group.leftPaneFraction ?? 0.5,
-                  },
-                ] as const,
-              ]
-            : [],
-        ),
-      ),
-      nextGroupSeq: snapshot.workspace.nextGroupSeq,
+    let planned = reconcileWorkspaceState(workspaceState(), windowsListIds())
+    const restoredWindowIds = new Set(groups.flatMap((group) => group.windowIds))
+    const desiredGroupByWindowId = new Map<number, string>()
+    for (const group of groups) {
+      for (const windowId of group.windowIds) desiredGroupByWindowId.set(windowId, group.id)
     }
-    const reconciled = reconcileWorkspaceState(next, windowsListIds())
-    setWorkspaceState((prev) => (workspaceStatesEqual(prev, reconciled) ? prev : reconciled))
+    const sendRestoreMutation = (mutation: Record<string, unknown>) =>
+      shellWireSend('workspace_mutation', JSON.stringify(mutation))
+
+    for (const windowId of [...planned.pinnedWindowIds]) {
+      if (!restoredWindowIds.has(windowId)) continue
+      if (!sendRestoreMutation({ type: 'set_window_pinned', windowId, pinned: false })) return
+      planned = setWorkspaceWindowPinned(planned, windowId, false)
+    }
+
+    for (const group of groups) {
+      const anchorWindowId = group.windowIds[0]
+      const sourceGroupId = workspaceStateGroupIdForWindow(planned, anchorWindowId)
+      const currentGroupId = sourceGroupId ?? null
+      const currentGroup = currentGroupId
+        ? planned.groups.find((entry) => entry.id === currentGroupId) ?? null
+        : null
+      const needsOwnGroup =
+        !currentGroup ||
+        currentGroup.windowIds.length !== 1 ||
+        currentGroup.windowIds[0] !== anchorWindowId ||
+        currentGroup.windowIds.some((windowId) => desiredGroupByWindowId.get(windowId) !== group.id)
+      if (needsOwnGroup) {
+        if (!sendRestoreMutation({ type: 'split_window_to_own_group', windowId: anchorWindowId })) return
+        planned = splitWorkspaceWindowToOwnGroup(planned, anchorWindowId)
+      }
+      let targetGroupId = planned.groups.find((entry) => entry.windowIds[0] === anchorWindowId)?.id ?? null
+      if (!targetGroupId) continue
+      for (let index = 1; index < group.windowIds.length; index += 1) {
+        const windowId = group.windowIds[index]
+        const targetGroup = planned.groups.find((entry) => entry.id === targetGroupId) ?? null
+        const sameGroup = workspaceStateGroupIdForWindow(planned, windowId) === targetGroupId
+        const sameIndex = targetGroup?.windowIds[index] === windowId
+        if (!sameGroup || !sameIndex) {
+          if (
+            !sendRestoreMutation({
+              type: 'move_window_to_group',
+              windowId,
+              targetGroupId,
+              insertIndex: index,
+            })
+          ) {
+            return
+          }
+          planned = moveWorkspaceWindowToGroup(planned, windowId, targetGroupId, index)
+          targetGroupId = planned.groups.find((entry) => entry.windowIds.includes(anchorWindowId))?.id ?? targetGroupId
+        }
+      }
+      const split = getWorkspaceGroupSplit(planned, targetGroupId)
+      if (group.splitLeftWindowId !== null) {
+        if (!split || split.leftWindowId !== group.splitLeftWindowId) {
+          const leftPaneFraction = group.leftPaneFraction ?? 0.5
+          if (
+            !sendRestoreMutation({
+              type: 'enter_split',
+              groupId: targetGroupId,
+              leftWindowId: group.splitLeftWindowId,
+              leftPaneFraction,
+            })
+          ) {
+            return
+          }
+          planned = enterWorkspaceSplitView(planned, targetGroupId, group.splitLeftWindowId, leftPaneFraction)
+        } else if (split.leftPaneFraction !== (group.leftPaneFraction ?? 0.5)) {
+          const leftPaneFraction = group.leftPaneFraction ?? 0.5
+          if (
+            !sendRestoreMutation({
+              type: 'set_split_fraction',
+              groupId: targetGroupId,
+              leftPaneFraction,
+            })
+          ) {
+            return
+          }
+          planned = setWorkspaceSplitFraction(planned, targetGroupId, leftPaneFraction)
+        }
+      } else if (split) {
+        if (!sendRestoreMutation({ type: 'exit_split', groupId: targetGroupId })) return
+        planned = exitWorkspaceSplitView(planned, targetGroupId)
+      }
+      const normalizedActiveWindowId =
+        planned.groups.find((entry) => entry.id === targetGroupId)?.windowIds.includes(group.activeWindowId)
+          ? setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId).activeTabByGroupId[targetGroupId]
+          : planned.activeTabByGroupId[targetGroupId]
+      if (normalizedActiveWindowId !== planned.activeTabByGroupId[targetGroupId]) {
+        if (
+          !sendRestoreMutation({
+            type: 'select_tab',
+            groupId: targetGroupId,
+            windowId: group.activeWindowId,
+          })
+        ) {
+          return
+        }
+        planned = setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId)
+      }
+    }
+
+    const desiredPinned = new Set(pinnedWindowIds)
+    for (const windowId of restoredWindowIds) {
+      const pinned = desiredPinned.has(windowId)
+      if (isWorkspaceWindowPinned(planned, windowId) === pinned) continue
+      if (!sendRestoreMutation({ type: 'set_window_pinned', windowId, pinned })) return
+      planned = setWorkspaceWindowPinned(planned, windowId, pinned)
+    }
   }
   function applyRestoredTiles(snapshot: SessionSnapshot) {
     const screens = taskbarScreens()
@@ -946,7 +1037,11 @@ function App() {
       snapshot.preTileGeometry.length > 0
     )
   }
-  async function persistLiveSessionSnapshotSoon() {
+  function sessionAutoSaveReady() {
+    return sessionAutoSaveEnabled() && sessionPersistenceReady() && !sessionRestoreSnapshot()
+  }
+  async function persistLiveSessionSnapshotSoon(mode: 'auto' | 'manual' = 'auto', generation = sessionPersistGeneration) {
+    if (mode === 'auto' && (!sessionAutoSaveReady() || generation !== sessionPersistGeneration)) return
     let snapshot: SessionSnapshot
     let json: string
     try {
@@ -959,8 +1054,10 @@ function App() {
       console.warn('[derp-shell-session] build failed', error)
       return
     }
+    if (mode === 'auto' && (!sessionAutoSaveReady() || generation !== sessionPersistGeneration)) return
     if (json === lastPersistedSessionJson) return
     try {
+      if (mode === 'auto' && (!sessionAutoSaveReady() || generation !== sessionPersistGeneration)) return
       await saveSessionSnapshot(snapshot)
       lastPersistedSessionJson = json
       setSavedSessionAvailable(sessionSnapshotHasData(snapshot))
@@ -1234,7 +1331,14 @@ function App() {
           label: pinned ? 'Unpin tab' : 'Pin tab',
           action: () => {
             setSuppressTabClickWindowId(null)
-            setWorkspaceState((prev) => setWorkspaceWindowPinned(prev, windowId, !pinned))
+            shellWireSend(
+              'workspace_mutation',
+              JSON.stringify({
+                type: 'set_window_pinned',
+                windowId,
+                pinned: !pinned,
+              }),
+            )
           },
         },
       ]
@@ -1484,16 +1588,18 @@ function App() {
     nativeWindowRefs()
     tilingCfgRev()
     shellWindowStateRev()
-    if (!sessionAutoSaveEnabled() || !sessionPersistenceReady() || sessionRestoreSnapshot()) {
+    if (!sessionAutoSaveReady()) {
       if (sessionPersistTimer !== undefined) {
         clearTimeout(sessionPersistTimer)
         sessionPersistTimer = undefined
       }
+      sessionPersistGeneration += 1
       return
     }
     if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
+    const generation = sessionPersistGeneration
     sessionPersistTimer = setTimeout(() => {
-      void persistLiveSessionSnapshotSoon()
+      void persistLiveSessionSnapshotSoon('auto', generation)
     }, 150)
   })
   const {
@@ -1679,70 +1785,11 @@ function App() {
         SHELL_LAYOUT_FLOATING,
       )
     }
-    setWindows((map) => {
-      const next = new Map(map)
-      for (const windowId of [layout.leftWindowId, ...layout.rightWindowIds]) {
-        const current = next.get(windowId)
-        if (!current) continue
-        const rect = windowId === layout.leftWindowId ? layout.left : layout.right
-        next.set(windowId, {
-          ...current,
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          maximized: false,
-          minimized: windowId === layout.leftWindowId || windowId === group.visibleWindowId ? false : current.minimized,
-        })
-      }
-      return next
-    })
     const leftWindow = allWindowsMap().get(layout.leftWindowId)
     const rightWindow = allWindowsMap().get(group.visibleWindowId)
     if (leftWindow?.minimized) shellWireSend('taskbar_activate', layout.leftWindowId)
     if (rightWindow?.minimized) queueMicrotask(() => activateTaskbarWindowViaShell(group.visibleWindowId))
     return layout
-  }
-
-  function syncWindowGeometry(targetWindowId: number, fromWindow: DerpWindow) {
-    const layoutFlag = fromWindow.maximized ? SHELL_LAYOUT_MAXIMIZED : SHELL_LAYOUT_FLOATING
-    const groupId = workspaceGroupIdForWindow(targetWindowId)
-    const split = groupId ? getWorkspaceGroupSplit(workspaceState(), groupId) : undefined
-    const groupWindowIds =
-      split && split.leftWindowId !== targetWindowId
-        ? workspaceGroupWindowIds(workspaceState(), targetWindowId).filter((windowId) => windowId !== split.leftWindowId)
-        : workspaceGroupWindowIds(workspaceState(), targetWindowId)
-    shellWireSend(
-      'set_geometry',
-      targetWindowId,
-      fromWindow.x,
-      fromWindow.y,
-      fromWindow.width,
-      fromWindow.height,
-      layoutFlag,
-    )
-    setWindows((map) => {
-      let next = map
-      let changed = false
-      for (const windowId of groupWindowIds) {
-        const current = next.get(windowId)
-        if (!current) continue
-        if (!changed) {
-          next = new Map(next)
-          changed = true
-        }
-        next.set(windowId, {
-          ...current,
-          x: fromWindow.x,
-          y: fromWindow.y,
-          width: fromWindow.width,
-          height: fromWindow.height,
-          output_name: fromWindow.output_name,
-          maximized: fromWindow.maximized,
-        })
-      }
-      return changed ? next : map
-    })
   }
 
   function requestWindowSyncRecovery() {
@@ -1753,28 +1800,15 @@ function App() {
     windowSyncRecoveryRequestedAt = now
   }
 
-  function focusWindowLocally(windowId: number) {
-    setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
-  }
-
   function focusShellUiWindow(windowId: number) {
-    focusWindowLocally(windowId)
     shellWireSend('shell_focus_ui_window', windowId)
   }
 
   function activateTaskbarWindowViaShell(windowId: number) {
-    const window = allWindowsMap().get(windowId)
-    if (window && windowIsShellHosted(window) && !window.minimized) {
-      focusWindowLocally(windowId)
-    }
     shellWireSend('taskbar_activate', windowId)
   }
 
   function activateWindowViaShell(windowId: number) {
-    const window = allWindowsMap().get(windowId)
-    if (window && windowIsShellHosted(window) && !window.minimized) {
-      focusWindowLocally(windowId)
-    }
     shellWireSend('activate_window', windowId)
   }
 
@@ -1870,7 +1904,6 @@ function App() {
   }
 
   const {
-    syncHiddenGroupWindowGeometry,
     focusWindowViaShell,
     applyTabDrop,
     detachGroupWindow,
@@ -1883,7 +1916,6 @@ function App() {
     setSplitGroupFraction,
   } = createWorkspaceActions({
     workspaceState,
-    setWorkspaceState,
     allWindowsMap,
     workspaceGroups,
     workspaceGroupsById,
@@ -1892,13 +1924,11 @@ function App() {
     focusedTaskbarWindowId,
     groupIdForWindow: workspaceGroupIdForWindow,
     groupForWindow: workspaceGroupForWindow,
-    syncWindowGeometry,
     focusShellUiWindow,
     activateWindowViaShell,
     activateTaskbarWindowViaShell,
     moveWindowUnderPointer,
     shellWireSend,
-    pendingGroupCloseActivations,
   })
 
   function startTabPointerGesture(
@@ -2041,16 +2071,6 @@ function App() {
     }
     return undefined
   }
-
-  createEffect(() => {
-    for (const group of workspaceGroups()) {
-      if (group.members.length < 2) continue
-      for (const hiddenWindowId of group.hiddenWindowIds) {
-        const window = allWindowsMap().get(hiddenWindowId)
-        if (window && !window.minimized) shellWireSend('minimize', hiddenWindowId)
-      }
-    }
-  })
 
   createEffect(() => {
     const activeSplitGesture = splitGroupGesture()
@@ -4270,8 +4290,8 @@ function App() {
       if (compositorSyncRaf !== 0) cancelAnimationFrame(compositorSyncRaf)
     })
     sessionPersistPoll = setInterval(() => {
-      if (!sessionAutoSaveEnabled() || !sessionPersistenceReady() || sessionRestoreSnapshot()) return
-      void persistLiveSessionSnapshotSoon()
+      if (!sessionAutoSaveReady()) return
+      void persistLiveSessionSnapshotSoon('auto', sessionPersistGeneration)
     }, 1000)
     const requestCompositorSync = () => {
       if (shellWireSend('request_compositor_sync')) {
@@ -4756,6 +4776,13 @@ function App() {
         if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
+      if (d.type === 'workspace_state') {
+        applyModelCompositorDetail(d, {
+          fallbackMonitorKey,
+          requestWindowSyncRecovery,
+        })
+        return
+      }
       if (d.type === 'window_state') {
         setHasSeenCompositorWindowSync(true)
         const result = applyModelCompositorDetail(d, {
@@ -4772,29 +4799,9 @@ function App() {
           requestWindowSyncRecovery,
         })
         const wid = result.windowId ?? null
-        const pendingCloseActivation =
-          wid !== null ? pendingGroupCloseActivations.get(wid) ?? null : null
         if (wid !== null) {
-          pendingGroupCloseActivations.delete(wid)
           perMonitorTiles.untileWindowEverywhere(wid)
           perMonitorTiles.preTileGeometry.delete(wid)
-        }
-        if (pendingCloseActivation) {
-          queueMicrotask(() => {
-            syncWindowGeometry(
-              pendingCloseActivation.nextVisibleId,
-              pendingCloseActivation.closingWindow,
-            )
-            setWorkspaceState((prev) =>
-              setWorkspaceActiveTab(
-                prev,
-                pendingCloseActivation.groupId,
-                pendingCloseActivation.nextVisibleId,
-              ),
-            )
-            activateTaskbarWindowViaShell(pendingCloseActivation.nextVisibleId)
-            applySplitGroupGeometry(pendingCloseActivation.groupId)
-          })
         }
         if (result.followup) scheduleCompositorFollowup(result.followup)
         return
@@ -4809,7 +4816,6 @@ function App() {
         const wid = result.windowId ?? null
         if (wid !== null) {
           queueMicrotask(() => {
-            syncHiddenGroupWindowGeometry(wid)
             const w2 = windows().get(wid)
             const fb = fallbackMonitorKey()
             const newMon = w2 ? w2.output_name || fb : null
@@ -4869,6 +4875,7 @@ function App() {
       const decoded = decodeCompositorSnapshot(raw)
       if (!decoded || decoded.details.length === 0) return false
       lastSnapshotSequence = decoded.sequence
+      applyModelCompositorSnapshot(decoded.details)
       applyCompositorBatch(decoded.details)
       return true
     }

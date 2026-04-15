@@ -200,6 +200,7 @@ impl CompositorState {
             if let Some(snap) = snap.as_ref() {
                 self.shell_backed_emit_geometry_messages(snap);
             }
+            self.shell_reply_window_list();
             self.shell_focus_shell_ui_window(id);
             return;
         }
@@ -219,6 +220,7 @@ impl CompositorState {
         let info = self.window_registry.window_info(id).expect("inserted");
         self.capture_refresh_window_source_cache(id);
         self.shell_backed_emit_mapped_metas(&info);
+        self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
         self.shell_focus_shell_ui_window(id);
     }
@@ -228,8 +230,15 @@ impl CompositorState {
             return false;
         }
         self.cancel_shell_move_resize_for_window(window_id);
+        let next_focus = if self.shell_focused_ui_window_id == Some(window_id) {
+            self.pick_next_logical_focus_target(Some(window_id), true)
+        } else {
+            None
+        };
         if self.shell_focused_ui_window_id == Some(window_id) {
-            self.shell_blur_shell_ui_focus();
+            self.shell_ui_pointer_grab = None;
+            self.shell_emit_shell_ui_focus_if_changed(None);
+            self.shell_ipc_keyboard_to_cef = false;
         }
         self.window_registry.remove_shell_hosted(window_id);
         self.capture_forget_window_source_cache(window_id);
@@ -238,6 +247,11 @@ impl CompositorState {
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },
         );
+        self.shell_reply_window_list();
+        if let Some(target) = next_focus {
+            self.focus_logical_window(target);
+            self.shell_reply_window_list();
+        }
         self.shell_exclusion_zones_need_full_damage = true;
         true
     }
@@ -267,6 +281,7 @@ impl CompositorState {
             window_id,
             minimized: true,
         });
+        self.shell_reply_window_list();
         true
     }
 
@@ -289,6 +304,7 @@ impl CompositorState {
             minimized: false,
         });
         self.shell_backed_emit_geometry_messages(&snap);
+        self.shell_reply_window_list();
         true
     }
 
@@ -305,11 +321,7 @@ impl CompositorState {
             self.shell_focus_shell_ui_window(window_id);
             return true;
         }
-        let ui = self.shell_focused_ui_window_id == Some(window_id)
-            || (self.shell_focused_ui_window_id.is_none()
-                && self.shell_ipc_keyboard_to_cef
-                && self.shell_last_sent_ui_focus_id == Some(window_id));
-        if ui {
+        if self.logical_focused_window_id() == Some(window_id) {
             let _ = self.shell_backed_minimize_if_any(window_id);
         } else {
             self.shell_focus_shell_ui_window(window_id);

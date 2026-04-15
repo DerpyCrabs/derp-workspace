@@ -86,10 +86,20 @@ function TaskbarWindowRows(props: {
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
 }) {
+  const windowsByGroupId = createMemo(() => {
+    const map = new Map<string, TaskbarWindowRow>()
+    for (const window of props.windows) map.set(window.group_id, window)
+    return map
+  })
+  const groupIds = createMemo(() => props.windows.map((window) => window.group_id))
   return (
-    <For each={props.windows}>
-      {(w) => {
-        const active = () => props.focusedWindowId === w.window_id && !w.minimized
+    <For each={groupIds()}>
+      {(groupId) => {
+        const w = () => windowsByGroupId().get(groupId)
+        const active = () => {
+          const window = w()
+          return !!window && props.focusedWindowId === window.window_id && !window.minimized
+        }
         return (
           <div
             role="listitem"
@@ -97,12 +107,12 @@ function TaskbarWindowRows(props: {
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                 active(),
-              'text-(--shell-text-dim)': w.minimized && !active(),
+              'text-(--shell-text-dim)': !!w()?.minimized && !active(),
               'min-w-[132px] flex-[0_1_220px] px-2': props.compactMode === 'normal',
               'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
               'min-w-[52px] flex-[1_1_64px] justify-center px-1': props.compactMode === 'tight',
             }}
-            title={[windowLabel(w), w.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
+            title={[windowLabel(w()!), w()?.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
           >
             <button
               type="button"
@@ -111,36 +121,36 @@ function TaskbarWindowRows(props: {
                 'gap-1.5': props.compactMode !== 'tight',
                 'justify-center gap-0': props.compactMode === 'tight',
               }}
-              data-shell-taskbar-group={w.group_id}
-              data-shell-taskbar-window-activate={w.window_id}
+              data-shell-taskbar-group={w()!.group_id}
+              data-shell-taskbar-window-activate={w()!.window_id}
               aria-current={active() ? 'true' : undefined}
-              onClick={() => props.onTaskbarActivate(w.window_id)}
+              onClick={() => props.onTaskbarActivate(w()!.window_id)}
             >
               <TaskbarWindowIcon
                 meta={{
-                  title: w.title,
-                  appId: w.app_id,
-                  desktopId: w.desktop_id ?? null,
-                  desktopIcon: w.desktop_icon ?? null,
+                  title: w()!.title,
+                  appId: w()!.app_id,
+                  desktopId: w()!.desktop_id ?? null,
+                  desktopIcon: w()!.desktop_icon ?? null,
                 }}
                 active={active()}
                 compact={props.compactMode !== 'normal'}
               />
               <Show when={props.compactMode !== 'tight'}>
-                <span class="min-w-0 truncate">{windowLabel(w)}</span>
+                <span class="min-w-0 truncate">{windowLabel(w()!)}</span>
               </Show>
             </button>
             <Show when={props.compactMode !== 'tight'}>
               <button
                 type="button"
                 class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
-                data-shell-taskbar-window-close={w.window_id}
-                aria-label={`Close ${windowLabel(w)}`}
-                title={`Close ${windowLabel(w)}`}
+                data-shell-taskbar-window-close={w()!.window_id}
+                aria-label={`Close ${windowLabel(w()!)}`}
+                title={`Close ${windowLabel(w()!)}`}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation()
-                  props.onTaskbarClose(w.window_id)
+                  props.onTaskbarClose(w()!.window_id)
                 }}
               >
                 <X class="h-4 w-4" stroke-width={2} />

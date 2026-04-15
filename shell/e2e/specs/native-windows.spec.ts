@@ -324,6 +324,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('native-tiling-shell.json', tiled.shell)
   })
 
+  test('closing a focused native window by keybind refocuses the previous window', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
+    await raiseTaskbarWindow(base, redId)
+    await raiseTaskbarWindow(base, greenId)
+    await runKeybind(base, 'close_focused')
+    const gone = await waitForWindowGone(base, greenId, 8000)
+    const refocused = await waitForNativeFocus(base, redId, 8000)
+    await writeJsonArtifact('native-close-refocus-gone.json', gone)
+    await writeJsonArtifact('native-close-refocus-refocused.json', refocused)
+  })
+
   test('native maximize fullscreen and tile up/down transitions', async ({ base, state }) => {
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id

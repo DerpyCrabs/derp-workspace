@@ -1,4 +1,5 @@
 import type { DerpShellDetail } from './app/appWindowState'
+import type { WorkspaceState } from './workspaceState'
 
 const MSG_OUTPUT_GEOMETRY = 5
 const MSG_FOCUS_CHANGED = 10
@@ -8,6 +9,7 @@ const MSG_COMPOSITOR_KEYBOARD_LAYOUT = 52
 const MSG_COMPOSITOR_VOLUME_OVERLAY = 53
 const MSG_COMPOSITOR_TRAY_HINTS = 55
 const MSG_COMPOSITOR_TRAY_SNI = 56
+const MSG_COMPOSITOR_WORKSPACE_STATE = 57
 
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_ABI = 1
@@ -263,6 +265,22 @@ function decodeTraySni(bytes: Uint8Array, view: DataView, offset: number): DerpS
   return { type: 'tray_sni', items }
 }
 
+function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 8 > view.byteLength) return null
+  const jsonLen = view.getUint32(offset + 4, true)
+  if (jsonLen === 0) return null
+  const json = readUtf8(bytes, offset + 8, jsonLen)
+  if (json == null) return null
+  try {
+    return {
+      type: 'workspace_state',
+      state: JSON.parse(json) as WorkspaceState,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecodeResult | null {
   const bytes = new Uint8Array(buffer)
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -317,6 +335,9 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
         break
       case MSG_COMPOSITOR_TRAY_SNI:
         detail = decodeTraySni(bodyBytes, bodyView, 0)
+        break
+      case MSG_COMPOSITOR_WORKSPACE_STATE:
+        detail = decodeWorkspaceState(bodyBytes, bodyView, 0)
         break
       default:
         break
