@@ -8,7 +8,10 @@ afterEach(() => {
 describe('shellUiWindows', () => {
   it('flushes shell-ui window payloads on the same turn', async () => {
     const send = vi.fn()
-    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
@@ -31,7 +34,10 @@ describe('shellUiWindows', () => {
 
   it('skips redundant shell-ui window payloads', async () => {
     const send = vi.fn()
-    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
@@ -56,7 +62,10 @@ describe('shellUiWindows', () => {
 
   it('flushes again when measured geometry changes', async () => {
     const send = vi.fn()
-    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
@@ -81,7 +90,10 @@ describe('shellUiWindows', () => {
 
   it('only remeasures invalidated shell-ui windows', async () => {
     const send = vi.fn()
-    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
@@ -119,7 +131,10 @@ describe('shellUiWindows', () => {
 
   it('flushes removals even without remeasuring survivors', async () => {
     const send = vi.fn()
-    vi.stubGlobal('window', { __derpShellWireSend: send })
+    vi.stubGlobal('window', {
+      __DERP_SHELL_UI_WINDOWS_STATE_PATH: '/tmp/ui-windows.bin',
+      __derpShellSharedStateWrite: send.mockReturnValue(true),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
 

@@ -229,15 +229,9 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn shell_set_exclusion_zones_json(&self, json: String) {
+    pub fn shell_shared_state_sync(&self, kind: u32) {
         self.run(move |s| {
-            s.apply_shell_exclusion_zones_json(&json);
-        });
-    }
-
-    pub fn shell_set_ui_windows_json(&self, json: String) {
-        self.run(move |s| {
-            s.apply_shell_ui_windows_json(&json);
+            s.sync_shell_shared_state(kind);
         });
     }
 
@@ -255,12 +249,6 @@ impl UplinkToCompositor {
     ) {
         self.run(move |s| {
             s.apply_shell_context_menu(visible, bx, by, bw, bh, gx, gy, gw, gh);
-        });
-    }
-
-    pub fn shell_floating_layers_json(&self, json: String) {
-        self.run(move |s| {
-            s.apply_shell_floating_layers_json(&json);
         });
     }
 

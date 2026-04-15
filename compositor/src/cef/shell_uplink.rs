@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -5,6 +6,7 @@ use cef::{sys, *};
 
 use crate::cef::e2e_bridge;
 use crate::cef::osr_view_state::OsrViewState;
+use crate::cef::shared_state;
 use crate::cef::shell_snapshot;
 use crate::cef::uplink::UplinkToCompositor;
 
@@ -174,14 +176,6 @@ fn handle_uplink_list(
             let json = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_apply_output_layout(json);
         }
-        "set_exclusion_zones" => {
-            let json = cef_string_userfree_to_string(&args.string(1));
-            uplink.shell_set_exclusion_zones_json(json);
-        }
-        "set_shell_ui_windows" => {
-            let json = cef_string_userfree_to_string(&args.string(1));
-            uplink.shell_set_ui_windows_json(json);
-        }
         "set_shell_primary" => {
             let name = cef_string_userfree_to_string(&args.string(1));
             uplink.shell_set_shell_primary(name);
@@ -208,10 +202,6 @@ fn handle_uplink_list(
             let gh = args.int(9) as u32;
             uplink.shell_context_menu(vis, bx, by, bw, bh, gx, gy, gw, gh);
         }
-        "floating_layers" => {
-            let json = cef_string_userfree_to_string(&args.string(1));
-            uplink.shell_floating_layers_json(json);
-        }
         "set_tile_preview" => {
             let vis = args.int(1) != 0;
             let x = args.int(2);
@@ -232,6 +222,10 @@ fn handle_uplink_list(
         }
         "shell_ipc_pong" => {
             uplink.shell_ipc_pong();
+        }
+        "shared_state_sync" => {
+            let kind = args.int(1) as u32;
+            uplink.shell_shared_state_sync(kind);
         }
         "sni_tray_activate" => {
             let id = cef_string_userfree_to_string(&args.string(1));
@@ -595,36 +589,6 @@ wrap_v8_handler! {
                     let json = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
                 }
-                "set_exclusion_zones" => {
-                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("set_exclusion_zones requires JSON string");
-                    };
-                    if a1.is_string() == 0 {
-                        return_exception!("set_exclusion_zones: second arg must be a string");
-                    }
-                    let json = cef_string_userfree_to_string(&a1.string_value());
-                    let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
-                }
-                "set_shell_ui_windows" => {
-                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("set_shell_ui_windows requires JSON string");
-                    };
-                    if a1.is_string() == 0 {
-                        return_exception!("set_shell_ui_windows: second arg must be a string");
-                    }
-                    let json = cef_string_userfree_to_string(&a1.string_value());
-                    let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
-                }
-                "floating_layers" => {
-                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("floating_layers requires JSON string");
-                    };
-                    if a1.is_string() == 0 {
-                        return_exception!("floating_layers: second arg must be a string");
-                    }
-                    let json = cef_string_userfree_to_string(&a1.string_value());
-                    let _ = list.set_string(1, Some(&CefString::from(json.as_str())));
-                }
                 "set_shell_primary" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("set_shell_primary requires output name string (empty = auto)");
@@ -853,13 +817,115 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_exclusion_zones, set_shell_ui_windows, floating_layers, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
+                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
                     );
                 }
             }
 
             self.frame
                 .send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            1
+        }
+    }
+}
+
+wrap_v8_handler! {
+    pub struct SharedStateWriteV8Handler {
+        frame: Frame,
+    }
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            macro_rules! return_exception {
+                ($message:expr) => {{
+                    if let Some(ex) = exception {
+                        *ex = CefString::from($message);
+                    }
+                    return 1;
+                }};
+            }
+
+            let Some(args) = arguments else {
+                return_exception!("expected (path, payload, kind, abi?)");
+            };
+            let Some(path_v) = args.first().and_then(|a| a.as_ref()) else {
+                return_exception!("expected shared state path");
+            };
+            if path_v.is_string() == 0 {
+                return_exception!("shared state path must be a string");
+            }
+            let path = cef_string_userfree_to_string(&path_v.string_value());
+            if path.is_empty() {
+                return_exception!("shared state path must not be empty");
+            }
+            let Some(payload_v) = args.get(1).and_then(|a| a.as_ref()) else {
+                return_exception!("expected shared state payload");
+            };
+            if payload_v.is_array_buffer() == 0 {
+                return_exception!("shared state payload must be an ArrayBuffer");
+            }
+            let Some(kind_v) = args.get(2).and_then(|a| a.as_ref()) else {
+                return_exception!("expected shared state kind");
+            };
+            let kind = if kind_v.is_uint() != 0 {
+                kind_v.uint_value()
+            } else if kind_v.is_int() != 0 && kind_v.int_value() >= 0 {
+                kind_v.int_value() as u32
+            } else if kind_v.is_double() != 0 && kind_v.double_value() >= 0.0 {
+                kind_v.double_value() as u32
+            } else {
+                return_exception!("shared state kind must be a non-negative number");
+            };
+            if kind != shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES
+                && kind != shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS
+                && kind != shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS
+            {
+                return_exception!("unknown shared state kind");
+            }
+            let abi = match args.get(3).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_uint() != 0 => v.uint_value(),
+                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
+                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
+                Some(_) => return_exception!("shared state abi must be a non-negative number"),
+                None => shared_state::SHELL_SHARED_STATE_ABI_VERSION,
+            };
+            let payload_len = payload_v.array_buffer_byte_length();
+            let payload_ptr = payload_v.array_buffer_data();
+            if payload_len > 0 && payload_ptr.is_null() {
+                return_exception!("shared state payload pointer missing");
+            }
+            let payload = if payload_len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(payload_ptr as *const u8, payload_len) }
+            };
+            if shared_state::write_payload(Path::new(&path), abi, payload).is_err() {
+                if let Some(retval) = retval {
+                    *retval = v8_value_create_bool(0);
+                }
+                return 1;
+            }
+            let mut msg = match process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) {
+                Some(m) => m,
+                None => return_exception!("process_message_create failed"),
+            };
+            let Some(list) = msg.argument_list() else {
+                return_exception!("no argument list");
+            };
+            let _ = list.set_string(0, Some(&CefString::from("shared_state_sync")));
+            let _ = list.set_int(1, kind as i32);
+            self.frame
+                .send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            if let Some(retval) = retval {
+                *retval = v8_value_create_bool(1);
+            }
             1
         }
     }
@@ -1021,6 +1087,10 @@ wrap_render_process_handler! {
             let mut handler = ShellWireV8Handler::new(frame.clone());
             let fname = CefString::from("__derpShellWireSend");
             let mut func = v8_value_create_function(Some(&fname), Some(&mut handler));
+            let shared_state_write_name = CefString::from("__derpShellSharedStateWrite");
+            let mut shared_state_write_handler = SharedStateWriteV8Handler::new(frame.clone());
+            let mut shared_state_write_func =
+                v8_value_create_function(Some(&shared_state_write_name), Some(&mut shared_state_write_handler));
             let snapshot_version_name = CefString::from("__derpCompositorSnapshotVersion");
             let mut snapshot_version_handler = SharedSnapshotVersionV8Handler::new();
             let mut snapshot_version_func =
@@ -1031,6 +1101,11 @@ wrap_render_process_handler! {
                 v8_value_create_function(Some(&snapshot_read_name), Some(&mut snapshot_read_handler));
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
+            let _ = global.set_value_bykey(
+                Some(&shared_state_write_name),
+                shared_state_write_func.as_mut(),
+                attrs.into(),
+            );
             let _ = global.set_value_bykey(
                 Some(&snapshot_version_name),
                 snapshot_version_func.as_mut(),

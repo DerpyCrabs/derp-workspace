@@ -1,4 +1,5 @@
 import { clientRectToGlobalLogical } from './shellCoords'
+import { writeShellUiWindowsState } from './sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_PORTAL_PICKER_WINDOW_ID,
@@ -85,14 +86,12 @@ function flush() {
     if (e.cached) windows.push(e.cached)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
-  const fn = window.__derpShellWireSend
-  if (typeof fn === 'function') {
-    if (sameWindows(windows, lastWindows)) return
-    generation += 1
-    lastWindows = windows.map((window) => ({ ...window }))
-    const payload = { generation, windows }
-    fn('set_shell_ui_windows', JSON.stringify(payload))
-  }
+  if (sameWindows(windows, lastWindows)) return
+  const nextGeneration = generation + 1
+  const sharedOk = writeShellUiWindowsState(nextGeneration, windows)
+  if (!sharedOk) return
+  generation = nextGeneration
+  lastWindows = windows.map((window) => ({ ...window }))
 }
 
 export function scheduleShellUiWindowsSync() {

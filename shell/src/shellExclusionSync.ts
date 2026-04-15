@@ -3,6 +3,7 @@ import type { DerpWindow } from './app/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from './app/types'
 import { mergeExclusionRects, ssdDecorationExclusionRects } from './exclusionRects'
 import { clientRectToGlobalLogical, rectCanvasLocalToGlobal } from './shellCoords'
+import { writeShellExclusionState } from './sharedShellState'
 
 type ExclusionWindow = Pick<
   DerpWindow,
@@ -143,10 +144,9 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       }
     }
     const payload = JSON.stringify({ rects: sentRects, tray_strip })
-    if (typeof window.__derpShellWireSend === 'function' && payload !== lastExclusionZonesJson) {
-      lastExclusionZonesJson = payload
-      window.__derpShellWireSend('set_exclusion_zones', payload)
-    }
+    if (payload === lastExclusionZonesJson) return
+    if (!writeShellExclusionState(sentRects, tray_strip)) return
+    lastExclusionZonesJson = payload
   }
 
   function scheduleExclusionZonesSync() {

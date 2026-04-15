@@ -157,6 +157,8 @@ export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
   const [windowRailWidth, setWindowRailWidth] = createSignal(0)
   let windowRailRef: HTMLDivElement | undefined
+  let suppressSettingsClick = false
+  let suppressDebugClick = false
   const volumeIcon = () => {
     const Icon = props.volumeMuted ? VolumeX : (props.volumePercent ?? 0) <= 33 ? Volume1 : Volume2
     return <Icon class="h-4 w-4" stroke-width={2} />
@@ -229,6 +231,7 @@ export function Taskbar(props: TaskbarProps) {
                   aria-haspopup="menu"
                   aria-label="Search apps"
                   title="Search apps"
+                  onPointerDown={menu.onPointerDown}
                   onClick={menu.onClick}
                 >
                   <LayoutGrid class="h-4 w-4" stroke-width={2} />
@@ -338,7 +341,18 @@ export function Taskbar(props: TaskbarProps) {
             data-shell-settings-toggle
             aria-pressed={props.settingsPanelOpen}
             title={props.settingsPanelOpen ? 'Hide settings' : 'Settings'}
-            onClick={() => props.onSettingsPanelToggle()}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              suppressSettingsClick = true
+              props.onSettingsPanelToggle()
+            }}
+            onClick={() => {
+              if (suppressSettingsClick) {
+                suppressSettingsClick = false
+                return
+              }
+              props.onSettingsPanelToggle()
+            }}
           >
             <Settings class="h-4 w-4" stroke-width={2} />
           </button>
@@ -351,7 +365,18 @@ export function Taskbar(props: TaskbarProps) {
             data-shell-debug-toggle
             aria-pressed={props.debugPanelOpen}
             title={props.debugPanelOpen ? 'Hide debug panel' : 'Show debug panel'}
-            onClick={() => props.onDebugPanelToggle()}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              suppressDebugClick = true
+              props.onDebugPanelToggle()
+            }}
+            onClick={() => {
+              if (suppressDebugClick) {
+                suppressDebugClick = false
+                return
+              }
+              props.onDebugPanelToggle()
+            }}
           >
             <Bug class="h-4 w-4" stroke-width={2} />
           </button>
@@ -368,6 +393,7 @@ export function Taskbar(props: TaskbarProps) {
                   aria-expanded={menu.open()}
                   aria-haspopup="menu"
                   title="Power"
+                  onPointerDown={menu.onPointerDown}
                   onClick={menu.onClick}
                 >
                   <Power class="h-4 w-4" stroke-width={2} />

@@ -194,6 +194,10 @@ declare global {
     __DERP_SHELL_HTTP?: string
     __DERP_COMPOSITOR_SNAPSHOT_PATH?: string | null
     __DERP_COMPOSITOR_SNAPSHOT_ABI?: number
+    __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null
+    __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
+    __DERP_SHELL_FLOATING_LAYERS_STATE_PATH?: string | null
+    __DERP_SHELL_SHARED_STATE_ABI?: number
     /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
     __derpShellWireSend?: (
       op:
@@ -221,9 +225,6 @@ declare global {
         | 'set_maximized'
         | 'presentation_fullscreen'
         | 'set_output_layout'
-        | 'set_exclusion_zones'
-        | 'set_shell_ui_windows'
-        | 'floating_layers'
         | 'set_shell_primary'
         | 'set_ui_scale'
         | 'set_tile_preview'
@@ -243,6 +244,12 @@ declare global {
       arg5?: number | string,
       arg6?: number | string,
     ) => void
+    __derpShellSharedStateWrite?: (
+      path: string,
+      payload: ArrayBuffer,
+      kind: number,
+      abi?: number,
+    ) => boolean
     __derpCompositorSnapshotVersion?: (path: string, abi?: number) => number | null
     __derpCompositorSnapshotRead?: (path: string, abi?: number) => ArrayBuffer | null
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
@@ -347,9 +354,6 @@ function shellWireSend(
     | 'set_maximized'
     | 'presentation_fullscreen'
     | 'set_output_layout'
-    | 'set_exclusion_zones'
-    | 'set_shell_ui_windows'
-    | 'floating_layers'
     | 'set_shell_primary'
     | 'set_ui_scale'
     | 'set_tile_preview'
@@ -415,10 +419,6 @@ function shellWireSend(
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_desktop_background' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_exclusion_zones' && typeof arg === 'string') {
-    fn(op, arg)
-  } else if (op === 'set_shell_ui_windows' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {
     fn(op, arg)
@@ -2468,6 +2468,14 @@ function App() {
     windows: windowsList,
     isWindowTiled: (windowId) => perMonitorTiles.isTiled(windowId),
     onHudChange: setExclusionZonesHud,
+  })
+
+  createEffect(() => {
+    void shellWireReadyRev()
+    queueMicrotask(() => {
+      flushShellUiWindowsSyncNow()
+      syncExclusionZonesNow()
+    })
   })
 
   function taskbarRowsForScreen(s: LayoutScreen) {

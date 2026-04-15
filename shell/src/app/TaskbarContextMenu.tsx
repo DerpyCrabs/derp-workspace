@@ -24,11 +24,23 @@ function TaskbarContextMenuRoot(props: { api: TaskbarContextMenuApi; children: J
 
 export const ProgramsTaskbarMenu: ParentComponent = (props) => {
   const shellContextMenus = useShellContextMenus()
+  let suppressClick = false
   return (
     <TaskbarContextMenuRoot
       api={{
         open: shellContextMenus.programsMenuOpen,
-        onClick: shellContextMenus.onProgramsMenuClick,
+        onPointerDown: (e) => {
+          e.preventDefault()
+          suppressClick = true
+          shellContextMenus.onProgramsMenuClick(e)
+        },
+        onClick: (e) => {
+          if (suppressClick) {
+            suppressClick = false
+            return
+          }
+          shellContextMenus.onProgramsMenuClick(e)
+        },
       }}
     >
       {props.children}
@@ -38,11 +50,23 @@ export const ProgramsTaskbarMenu: ParentComponent = (props) => {
 
 export const PowerTaskbarMenu: ParentComponent = (props) => {
   const shellContextMenus = useShellContextMenus()
+  let suppressClick = false
   return (
     <TaskbarContextMenuRoot
       api={{
         open: shellContextMenus.powerMenuOpen,
-        onClick: shellContextMenus.onPowerMenuClick,
+        onPointerDown: (e) => {
+          e.preventDefault()
+          suppressClick = true
+          shellContextMenus.onPowerMenuClick(e)
+        },
+        onClick: (e) => {
+          if (suppressClick) {
+            suppressClick = false
+            return
+          }
+          shellContextMenus.onPowerMenuClick(e)
+        },
       }}
     >
       {props.children}

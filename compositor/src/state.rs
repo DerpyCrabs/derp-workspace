@@ -507,11 +507,14 @@ pub struct CompositorState {
     pub(crate) shell_context_menu_overlay_id: Id,
     pub(crate) shell_context_menu: Option<ShellContextMenuPlacement>,
     pub(crate) shell_floating_layers: Vec<ShellFloatingPlacement>,
+    pub(crate) shell_floating_layers_shared_sequence: u64,
     pub(crate) shell_ui_windows: Vec<ShellUiWindowPlacement>,
     pub(crate) shell_ui_windows_generation: u32,
+    pub(crate) shell_ui_windows_shared_sequence: u64,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
+    pub(crate) shell_exclusion_shared_sequence: u64,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
     pub(crate) shell_chrome_titlebar_h: i32,
@@ -883,11 +886,14 @@ impl CompositorState {
             shell_context_menu_overlay_id: Id::new(),
             shell_context_menu: None,
             shell_floating_layers: Vec::new(),
+            shell_floating_layers_shared_sequence: 0,
             shell_ui_windows: Vec::new(),
             shell_ui_windows_generation: 0,
+            shell_ui_windows_shared_sequence: 0,
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
             shell_last_sent_ui_focus_id: None,
+            shell_exclusion_shared_sequence: 0,
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
@@ -1140,6 +1146,50 @@ impl CompositorState {
         self.shell_chrome_border_w = border_w.clamp(0, 64);
     }
 
+    pub fn sync_shell_shared_state(&mut self, kind: u32) {
+        let path = crate::cef::shared_state::path_for_kind(crate::cef::runtime_dir(), kind);
+        let min_sequence_exclusive = match kind {
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => {
+                Some(self.shell_exclusion_shared_sequence)
+            }
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS => {
+                Some(self.shell_ui_windows_shared_sequence)
+            }
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS => {
+                Some(self.shell_floating_layers_shared_sequence)
+            }
+            _ => None,
+        };
+        let Ok(Some((sequence, payload))) = crate::cef::shared_state::read_payload_if_newer(
+            &path,
+            crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
+            min_sequence_exclusive,
+        ) else {
+            return;
+        };
+        match kind {
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => {
+                self.shell_exclusion_shared_sequence = sequence;
+                self.apply_shell_exclusion_zones_payload(&payload);
+            }
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS => {
+                self.shell_ui_windows_shared_sequence = sequence;
+                self.apply_shell_ui_windows_payload(&payload);
+            }
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS => {
+                self.shell_floating_layers_shared_sequence = sequence;
+                self.apply_shell_floating_layers_payload(&payload);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn sync_shell_shared_state_for_input(&mut self) {
+        self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES);
+        self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS);
+        self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS);
+    }
+
     pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
         let px = pos.x;
         let py = pos.y;
@@ -1351,40 +1401,42 @@ impl CompositorState {
         ))
     }
 
-    pub fn apply_shell_ui_windows_json(&mut self, json: &str) {
+    pub fn apply_shell_ui_windows_payload(&mut self, payload: &[u8]) {
         const MAX: usize = shell_wire::MAX_SHELL_UI_WINDOWS as usize;
-        #[derive(serde::Deserialize)]
-        struct Row {
-            id: u32,
-            gx: i32,
-            gy: i32,
-            gw: i32,
-            gh: i32,
-            z: u32,
-        }
-        #[derive(serde::Deserialize)]
-        struct Root {
-            generation: u32,
-            windows: Vec<Row>,
-        }
-        let Ok(root) = serde_json::from_str::<Root>(json) else {
+        if payload.len() < 8 {
             return;
-        };
+        }
+        let generation = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+        let count = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+        let need = 8usize.checked_add(count.checked_mul(28).unwrap_or(usize::MAX));
+        if need != Some(payload.len()) {
+            return;
+        }
         let Some(ws) = self.workspace_logical_bounds() else {
             self.shell_ui_windows.clear();
             return;
         };
-        let mut rows: Vec<_> = root
-            .windows
-            .into_iter()
-            .filter(|r| r.id > 0 && r.gw > 0 && r.gh > 0)
-            .collect();
-        rows.sort_by(|a, b| a.z.cmp(&b.z).then_with(|| a.id.cmp(&b.id)));
+        let mut rows = Vec::new();
+        let mut offset = 8usize;
+        for _ in 0..count {
+            let id = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+            let gx = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
+            let gy = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
+            let gw = u32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
+            let gh = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
+            let z = u32::from_le_bytes(payload[offset + 20..offset + 24].try_into().unwrap());
+            offset += 28;
+            if id == 0 || gw == 0 || gh == 0 {
+                continue;
+            }
+            rows.push((id, gx, gy, gw as i32, gh as i32, z));
+        }
+        rows.sort_by(|a, b| a.5.cmp(&b.5).then_with(|| a.0.cmp(&b.0)));
         let mut out = Vec::new();
-        for e in rows.into_iter().take(MAX) {
+        for (id, gx, gy, gw, gh, z) in rows.into_iter().take(MAX) {
             let gr = Rectangle::new(
-                Point::<i32, Logical>::from((e.gx, e.gy)),
-                Size::<i32, Logical>::from((e.gw.max(1), e.gh.max(1))),
+                Point::<i32, Logical>::from((gx, gy)),
+                Size::<i32, Logical>::from((gw.max(1), gh.max(1))),
             );
             let Some(clamped) = gr.intersection(ws) else {
                 continue;
@@ -1393,8 +1445,8 @@ impl CompositorState {
                 continue;
             };
             out.push(ShellUiWindowPlacement {
-                id: e.id,
-                z: e.z,
+                id,
+                z,
                 global_rect: clamped,
                 buffer_rect: br,
             });
@@ -1416,7 +1468,7 @@ impl CompositorState {
                 .collect();
             tracing::warn!(
                 target: "derp_shell_clip",
-                generation = root.generation,
+                generation,
                 focused = ?self.shell_focused_ui_window_id,
                 stack_order = ?self.shell_window_stack_ids(),
                 placements = ?placements,
@@ -1424,7 +1476,7 @@ impl CompositorState {
             );
         }
         self.shell_ui_windows = out;
-        self.shell_ui_windows_generation = root.generation;
+        self.shell_ui_windows_generation = generation;
         if let Some(fid) = self.shell_focused_ui_window_id {
             if !self.shell_ui_windows.iter().any(|w| w.id == fid)
                 && !self.window_registry.is_shell_hosted(fid)
@@ -1541,26 +1593,26 @@ impl CompositorState {
         }
     }
 
-    pub fn apply_shell_exclusion_zones_json(&mut self, json: &str) {
-        #[derive(serde::Deserialize)]
-        struct EzRect {
-            x: i32,
-            y: i32,
-            w: i32,
-            h: i32,
-            #[serde(default)]
-            window_id: Option<u32>,
-        }
-        #[derive(serde::Deserialize)]
-        struct EzRoot {
-            #[serde(default)]
-            rects: Vec<EzRect>,
-            #[serde(default)]
-            tray_strip: Option<EzRect>,
-        }
-        let Ok(root) = serde_json::from_str::<EzRoot>(json) else {
+    pub fn apply_shell_exclusion_zones_payload(&mut self, payload: &[u8]) {
+        if payload.len() < 8 {
             return;
-        };
+        }
+        let rect_count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+        let has_tray_strip = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+        let need = 8usize
+            .checked_add(rect_count.checked_mul(20).unwrap_or(usize::MAX))
+            .and_then(|value| {
+                value.checked_add(if has_tray_strip == 0 {
+                    0
+                } else if has_tray_strip == 1 {
+                    16
+                } else {
+                    usize::MAX
+                })
+            });
+        if need != Some(payload.len()) {
+            return;
+        }
         let Some(ws) = self.workspace_logical_bounds() else {
             self.shell_exclusion_global.clear();
             self.shell_exclusion_decor.clear();
@@ -1571,33 +1623,44 @@ impl CompositorState {
         };
         let mut next_global: Vec<Rectangle<i32, Logical>> = Vec::new();
         let mut next_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>> = HashMap::new();
-        for e in root.rects {
-            let w = e.w.max(1);
-            let h = e.h.max(1);
+        let mut offset = 8usize;
+        for _ in 0..rect_count {
+            let x = i32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+            let y = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
+            let w = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
+            let h = i32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
+            let window_id = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
+            offset += 20;
             let r = Rectangle::new(
-                Point::<i32, Logical>::from((e.x, e.y)),
-                Size::<i32, Logical>::from((w, h)),
+                Point::<i32, Logical>::from((x, y)),
+                Size::<i32, Logical>::from((w.max(1), h.max(1))),
             );
             let Some(clamped) = r.intersection(ws) else {
                 continue;
             };
-            match e.window_id.filter(|&id| id > 0) {
-                None => next_global.push(clamped),
-                Some(id) => next_decor.entry(id).or_default().push(clamped),
+            if window_id == 0 {
+                next_global.push(clamped);
+            } else {
+                next_decor.entry(window_id).or_default().push(clamped);
             }
         }
-        let next_tray_strip = root.tray_strip.and_then(|e| {
-            if e.w < 1 || e.h < 1 {
-                return None;
+        let next_tray_strip = if has_tray_strip == 0 {
+            None
+        } else {
+            let x = i32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+            let y = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
+            let w = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
+            let h = i32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
+            if w < 1 || h < 1 {
+                None
+            } else {
+                Rectangle::new(
+                    Point::<i32, Logical>::from((x, y)),
+                    Size::<i32, Logical>::from((w.max(1), h.max(1))),
+                )
+                .intersection(ws)
             }
-            let w = e.w.max(1);
-            let h = e.h.max(1);
-            let r = Rectangle::new(
-                Point::<i32, Logical>::from((e.x, e.y)),
-                Size::<i32, Logical>::from((w, h)),
-            );
-            r.intersection(ws)
-        });
+        };
         let changed =
             next_global != self.shell_exclusion_global || next_decor != self.shell_exclusion_decor;
         let tray_changed = next_tray_strip != self.shell_tray_strip_global;
@@ -7269,28 +7332,16 @@ impl CompositorState {
         self.shell_context_menu_overlay_id = Id::new();
     }
 
-    pub fn apply_shell_floating_layers_json(&mut self, json: &str) {
-        #[derive(serde::Deserialize)]
-        struct Row {
-            id: u32,
-            bx: i32,
-            by: i32,
-            bw: u32,
-            bh: u32,
-            gx: i32,
-            gy: i32,
-            gw: u32,
-            gh: u32,
-            z: u32,
-        }
-        #[derive(serde::Deserialize)]
-        struct Root {
-            layers: Vec<Row>,
-        }
-        let Ok(root) = serde_json::from_str::<Root>(json) else {
+    pub fn apply_shell_floating_layers_payload(&mut self, payload: &[u8]) {
+        if payload.len() < 4 {
             return;
-        };
-        if root.layers.is_empty() {
+        }
+        let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+        let need = 4usize.checked_add(count.checked_mul(40).unwrap_or(usize::MAX));
+        if need != Some(payload.len()) {
+            return;
+        }
+        if count == 0 {
             self.shell_floating_layers.clear();
             return;
         }
@@ -7300,21 +7351,32 @@ impl CompositorState {
             .map(|layer| (layer.id, layer.overlay_id.clone()))
             .collect();
         let mut next = Vec::new();
-        for row in root.layers {
-            if row.id == 0 {
+        let mut offset = 4usize;
+        for _ in 0..count {
+            let id = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+            let bx = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
+            let by = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
+            let bw = u32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
+            let bh = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
+            let gx = i32::from_le_bytes(payload[offset + 20..offset + 24].try_into().unwrap());
+            let gy = i32::from_le_bytes(payload[offset + 24..offset + 28].try_into().unwrap());
+            let gw = u32::from_le_bytes(payload[offset + 28..offset + 32].try_into().unwrap());
+            let gh = u32::from_le_bytes(payload[offset + 32..offset + 36].try_into().unwrap());
+            let z = u32::from_le_bytes(payload[offset + 36..offset + 40].try_into().unwrap());
+            offset += 40;
+            if id == 0 {
                 continue;
             }
-            let Some(placement) = self.shell_validate_floating_rect(
-                row.bx, row.by, row.bw, row.bh, row.gx, row.gy, row.gw, row.gh,
-            ) else {
+            let Some(placement) = self.shell_validate_floating_rect(bx, by, bw, bh, gx, gy, gw, gh)
+            else {
                 continue;
             };
             next.push(ShellFloatingPlacement {
-                id: row.id,
-                z: row.z,
+                id,
+                z,
                 buffer_rect: placement.buffer_rect,
                 global_rect: placement.global_rect,
-                overlay_id: existing_ids.get(&row.id).cloned().unwrap_or_else(Id::new),
+                overlay_id: existing_ids.get(&id).cloned().unwrap_or_else(Id::new),
             });
         }
         next.sort_by_key(|layer| (layer.z, layer.id));
@@ -7561,6 +7623,7 @@ impl CompositorState {
         if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
+        self.sync_shell_shared_state_for_input();
         let route = self.shell_pointer_route_to_cef(pos);
         if !route
             && !self.shell_move_is_active()
@@ -7596,6 +7659,7 @@ impl CompositorState {
             return;
         };
         let pos = pointer.current_location();
+        self.sync_shell_shared_state_for_input();
         let route = self.shell_pointer_route_to_cef(pos);
         if !route
             && !self.shell_move_is_active()

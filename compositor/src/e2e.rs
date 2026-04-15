@@ -258,6 +258,7 @@ impl CompositorState {
             .output_geometry(&output)
             .ok_or_else(|| "missing output geometry for pointer move".to_string())?;
         let local = pos - output_geo.loc.to_f64();
+        self.sync_shell_shared_state_for_input();
         self.pointer_motion_output_local(output_geo, local, self.e2e_now_ms() as u32);
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
@@ -276,6 +277,7 @@ impl CompositorState {
         if self.workspace_logical_bounds().is_none() {
             return Err("no workspace bounds available".to_string());
         }
+        self.sync_shell_shared_state_for_input();
         self.process_pointer_button(
             button,
             if pressed {

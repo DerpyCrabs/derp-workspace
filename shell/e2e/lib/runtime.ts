@@ -759,7 +759,7 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
   let shell = await normalizePersistentShellState(base)
   if (shell.windows.length === 0 && shell.focused_window_id == null && !shell.shell_keyboard_layout) {
     try {
-      await openSettings(base, 'click')
+      await openSettings(base, 'keybind')
       await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
       shell = await normalizePersistentShellState(base)
     } catch {}

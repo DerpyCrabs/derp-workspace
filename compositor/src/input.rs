@@ -304,6 +304,7 @@ impl CompositorState {
         let serial = SERIAL_COUNTER.next_serial();
 
         let pos = pointer.current_location();
+        self.sync_shell_shared_state_for_input();
         let mut route_cef = self.shell_pointer_route_to_cef(pos);
         if button_state == ButtonState::Pressed
             && (self.shell_context_menu.is_some() || !self.shell_floating_layers.is_empty())
@@ -791,6 +792,7 @@ impl CompositorState {
                 let output_geo = self.space.output_geometry(&output).unwrap();
                 let local = pos - output_geo.loc.to_f64();
                 let time = Event::time_msec(&event);
+                self.sync_shell_shared_state_for_input();
                 let cef_touch = self.shell_pointer_route_to_cef(pos)
                     && self.shell_has_frame
                     && self.shell_cef_active()

@@ -1,3 +1,5 @@
+import { writeShellFloatingLayersState } from './sharedShellState'
+
 export type ShellFloatingWireLayer = {
   id: number
   bx: number
@@ -42,26 +44,7 @@ export function shellContextMenuWire(
 }
 
 export function shellFloatingLayersWire(layers: readonly ShellFloatingWireLayer[]): boolean {
-  const fn = window.__derpShellWireSend as ((op: 'floating_layers', json: string) => void) | undefined
-  if (typeof fn !== 'function') return false
-  fn(
-    'floating_layers',
-    JSON.stringify({
-      layers: layers.map((layer) => ({
-        id: layer.id,
-        bx: layer.bx,
-        by: layer.by,
-        bw: layer.bw,
-        bh: layer.bh,
-        gx: layer.gx,
-        gy: layer.gy,
-        gw: layer.gw,
-        gh: layer.gh,
-        z: layer.z,
-      })),
-    }),
-  )
-  return true
+  return writeShellFloatingLayersState(layers)
 }
 
 export function hideShellFloatingWire(): void {
