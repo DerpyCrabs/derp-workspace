@@ -140,7 +140,7 @@ describe('tabGroupOps', () => {
     }
   })
 
-  it('uses tab body hit testing to choose before or after the hovered tab', () => {
+  it('uses a 40/60 split when choosing before or after the hovered tab', () => {
     function ElementShim() {}
     ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
     globalThis.Element = ElementShim as unknown as typeof globalThis.Element
@@ -170,8 +170,8 @@ describe('tabGroupOps', () => {
           } as DOMRect
         },
       })
-      expect(mergeTargetFromElement(tab, state, 3, 120)).toEqual({ groupId: 'group-2', insertIndex: 0 })
-      expect(mergeTargetFromElement(tab, state, 3, 180)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+      expect(mergeTargetFromElement(tab, state, 3, 140)).toEqual({ groupId: 'group-2', insertIndex: 0 })
+      expect(mergeTargetFromElement(tab, state, 3, 141)).toEqual({ groupId: 'group-2', insertIndex: 1 })
     } finally {
       globalThis.Element = OrigElement
     }
@@ -201,6 +201,118 @@ describe('tabGroupOps', () => {
     } finally {
       if (orig) docAny.elementsFromPoint = orig
       else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      globalThis.Element = OrigElement
+    }
+  })
+
+  it('falls back to drop slot geometry when elementsFromPoint misses', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    const docHolder = globalThis as typeof globalThis & { document?: Document }
+    if (!docHolder.document) docHolder.document = {} as Document
+    const docAny = docHolder.document as Document & {
+      elementsFromPoint?: (x: number, y: number) => Element[]
+      querySelectorAll?: Document['querySelectorAll']
+    }
+    const origElementsFromPoint = docAny.elementsFromPoint
+    const origQuerySelectorAll = docAny.querySelectorAll
+    const overlay = asElem({
+      closest() {
+        return null
+      },
+    })
+    const slot = asElem({
+      closest(sel: string) {
+        if (sel === `[data-shell-window-frame="1"]`) return null
+        return null
+      },
+      getAttribute(name: string) {
+        return name === 'data-tab-drop-slot' ? 'group-2:1' : null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: 20,
+          right: 116,
+          bottom: 60,
+          width: 16,
+          height: 40,
+          x: 100,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    docAny.elementsFromPoint = () => [overlay]
+    docAny.querySelectorAll = (() => [slot] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+    try {
+      const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
+      expect(findMergeTarget(state, 1, 108, 40)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+    } finally {
+      if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
+      else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      if (origQuerySelectorAll) docAny.querySelectorAll = origQuerySelectorAll
+      else {
+        docAny.querySelectorAll = (() => [] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+      }
+      globalThis.Element = OrigElement
+    }
+  })
+
+  it('falls back to tab geometry when elementsFromPoint misses', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    const docHolder = globalThis as typeof globalThis & { document?: Document }
+    if (!docHolder.document) docHolder.document = {} as Document
+    const docAny = docHolder.document as Document & {
+      elementsFromPoint?: (x: number, y: number) => Element[]
+      querySelectorAll?: Document['querySelectorAll']
+    }
+    const origElementsFromPoint = docAny.elementsFromPoint
+    const origQuerySelectorAll = docAny.querySelectorAll
+    const overlay = asElem({
+      closest() {
+        return null
+      },
+    })
+    const tab = asElem({
+      closest(sel: string) {
+        if (sel === '[data-workspace-tab]') return this as unknown as Element
+        if (sel === '[data-tab-drop-slot]') return null
+        if (sel === `[data-shell-window-frame="3"]`) return null
+        return null
+      },
+      getAttribute(name: string) {
+        if (name === 'data-workspace-tab') return '2'
+        if (name === 'data-workspace-tab-group') return 'group-2'
+        return null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: 20,
+          right: 200,
+          bottom: 60,
+          width: 100,
+          height: 40,
+          x: 100,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    docAny.elementsFromPoint = () => [overlay]
+    docAny.querySelectorAll = (() => [tab] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+    try {
+      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      expect(findMergeTarget(state, 3, 180, 40)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+    } finally {
+      if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
+      else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      if (origQuerySelectorAll) docAny.querySelectorAll = origQuerySelectorAll
+      else {
+        docAny.querySelectorAll = (() => [] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+      }
       globalThis.Element = OrigElement
     }
   })

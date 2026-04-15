@@ -113,6 +113,10 @@ export function workspaceGroupWindowIds(state: WorkspaceState, windowId: number)
   return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
 }
 
+function coerceOutputName(nextValue: unknown, previousValue: string): string {
+  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
+}
+
 export function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
   return (
     (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0 ||
@@ -154,7 +158,8 @@ export function buildWindowsMapFromList(
     const wid = coerceShellWindowId(r.window_id)
     const sid = coerceShellWindowId(r.surface_id)
     if (wid === null || sid === null) continue
-    const outputName = typeof r.output_name === 'string' ? r.output_name : ''
+    const previousWindow = prev?.get(wid)
+    const outputName = coerceOutputName(r.output_name, previousWindow?.output_name ?? '')
     const sfRaw = r.shell_flags
     const shell_flags =
       typeof sfRaw === 'number' && Number.isFinite(sfRaw)
@@ -165,7 +170,6 @@ export function buildWindowsMapFromList(
       typeof szRaw === 'number' && Number.isFinite(szRaw)
         ? Math.trunc(szRaw)
         : (prev?.get(wid)?.stack_z ?? wid)
-    const previousWindow = prev?.get(wid)
     const window: DerpWindow = {
       window_id: wid,
       surface_id: sid,
@@ -253,7 +257,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         height: detail.height,
         title: detail.title,
         app_id: detail.app_id,
-        output_name: typeof detail.output_name === 'string' ? detail.output_name : '',
+        output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
         minimized: false,
         maximized: false,
         fullscreen: false,
@@ -303,9 +307,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
           height: detail.height,
           output_name:
             detail.output_name !== undefined
-              ? typeof detail.output_name === 'string'
-                ? detail.output_name
-                : ''
+              ? coerceOutputName(detail.output_name, w.output_name)
               : w.output_name,
           maximized: detail.maximized ?? w.maximized,
           fullscreen: detail.fullscreen ?? w.fullscreen,

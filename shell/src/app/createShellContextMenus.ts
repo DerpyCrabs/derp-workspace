@@ -340,6 +340,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     })
   }
 
+  function focusProgramsMenuSearch() {
+    queueMicrotask(() => programsMenuSearchRef?.focus())
+    requestAnimationFrame(() => {
+      programsMenuSearchRef?.focus()
+      requestAnimationFrame(() => programsMenuSearchRef?.focus())
+    })
+  }
+
   function openProgramsMenu(outputName?: string | null) {
     args.closeAllAtlasSelects()
     anchorProgramsMenuToCenter(outputName)
@@ -347,7 +355,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
     setProgramsMenuOutputName(outputName ?? null)
-    queueMicrotask(() => programsMenuSearchRef?.focus())
+    focusProgramsMenuSearch()
     void desktopApps.refresh()
     void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
   }
@@ -637,8 +645,10 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (!tabMenuOpen()) return
     const item = tabMenuListItems()[tabMenuHighlightIdx()]
     if (!item || item.disabled) return
-    item.action()
     hideContextMenu()
+  queueMicrotask(() => {
+    item.action()
+  })
   }
 
   function moveTraySniMenuHighlight(delta: number) {

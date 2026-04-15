@@ -68,6 +68,50 @@ async function waitForSessionRestoreIdle(base: string) {
   )
 }
 
+async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
+  let lastTop = -1
+  let lastChangedAt = Date.now()
+  await waitFor(
+    'wait for programs menu scroll settle',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const metrics = shell.programs_menu_list_scroll
+      if (!metrics || !shell.programs_menu_open) return null
+      if (metrics.scroll_top < minimumTop) return null
+      if (Math.abs(metrics.scroll_top - lastTop) > 1) {
+        lastTop = metrics.scroll_top
+        lastChangedAt = Date.now()
+        return null
+      }
+      return Date.now() - lastChangedAt >= 75 ? shell : null
+    },
+    400,
+    25,
+  )
+}
+
+async function waitForPointerIdle(base: string) {
+  let lastPointerKey = ''
+  let lastChangedAt = Date.now()
+  await waitFor(
+    'wait for pointer idle',
+    async () => {
+      const { compositor } = await getSnapshots(base)
+      const pointer = compositor.pointer
+      if (!pointer) return null
+      const nextKey = `${Math.round(pointer.x)}:${Math.round(pointer.y)}`
+      if (nextKey !== lastPointerKey) {
+        lastPointerKey = nextKey
+        lastChangedAt = Date.now()
+        return null
+      }
+      return Date.now() - lastChangedAt >= 75 ? compositor : null
+    },
+    400,
+    25,
+  )
+}
+
 async function clearSessionState(base: string) {
   await postJson(base, '/session_state', {
     version: 1,
@@ -91,7 +135,7 @@ async function pressSuperEnter(base: string) {
   await postJson(base, '/test/input/key', { keycode: 125, action: 'release' })
 }
 
-async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean) {
+async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean, timeoutMs = 5000) {
   return waitFor(
     `wait for session shell window ${windowId ?? 'none'} ${present ? 'present' : 'absent'}`,
     async () => {
@@ -99,7 +143,7 @@ async function waitForSessionShellWindow(base: string, windowId: number | null, 
       const hasWindow = state.shell.shellWindows.some((entry) => entry.windowId === windowId)
       return hasWindow === present ? state : null
     },
-    5000,
+    timeoutMs,
     100,
   )
 }
@@ -232,7 +276,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const peak = scrolledDown.programs_menu_list_scroll?.scroll_top
     assert(peak !== undefined && peak > beforeTop + 8, 'expected scroll_top after wheel down')
-    await new Promise((resolve) => setTimeout(resolve, 700))
+    await waitForProgramsMenuScrollStable(base, peak - 1)
     await pointerWheel(base, 0, -120)
     await waitFor(
       'programs menu scroll decreases after wheel up',
@@ -334,7 +378,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       x: toggle.global_x + toggle.width / 2,
       y: toggle.global_y + toggle.height / 2,
     }
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await waitForPointerIdle(base)
     await movePoint(base, target.x, target.y)
     const awake = await waitFor(
       'pointer reaches taskbar settings after idle move',
@@ -437,7 +481,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control after enabling')
     await clickRect(base, shell.controls.settings_session_autosave_disable)
-    await waitForSessionShellWindow(base, shellTestWindowId, false)
+    await waitFor(
+      'wait for automatic save disabled after re-disable',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-root]')
+        return html.includes('Automatic save disabled') ? html : null
+      },
+      8000,
+      100,
+    )
+    await waitForSessionShellWindow(base, shellTestWindowId, false, 8000)
 
     let powerMenu = await openPowerMenu(base)
     assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')

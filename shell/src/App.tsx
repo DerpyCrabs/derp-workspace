@@ -115,7 +115,6 @@ import {
   coerceShellWindowId,
   type DerpShellDetail,
   type DerpWindow,
-  promoteWindowStack,
   windowIsShellHosted,
   windowOnMonitor,
   workspaceGroupWindowIds,
@@ -1234,6 +1233,7 @@ function App() {
           actionId: pinned ? 'unpin' : 'pin',
           label: pinned ? 'Unpin tab' : 'Pin tab',
           action: () => {
+            setSuppressTabClickWindowId(null)
             setWorkspaceState((prev) => setWorkspaceWindowPinned(prev, windowId, !pinned))
           },
         },
@@ -1243,6 +1243,7 @@ function App() {
           actionId: 'use-split-left',
           label: 'Use as split left tab',
           action: () => {
+            setSuppressTabClickWindowId(null)
             if (!enterSplitGroupWindow(windowId)) return
             queueMicrotask(() => {
               applySplitGroupGeometry(groupId)
@@ -1255,6 +1256,7 @@ function App() {
           actionId: 'exit-split',
           label: 'Exit split view',
           action: () => {
+            setSuppressTabClickWindowId(null)
             exitSplitGroupWindow(windowId)
           },
         })
@@ -1581,6 +1583,13 @@ function App() {
           sessionSnapshotError,
           sessionRestoreActive: sessionRestoreSnapshot() !== null,
           floatingLayers: floatingLayers.layers(),
+          tabDragTarget: tabDragState()?.target
+            ? {
+                windowId: tabDragState()!.windowId,
+                groupId: tabDragState()!.target!.groupId,
+                insertIndex: tabDragState()!.target!.insertIndex,
+              }
+            : null,
           projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
           isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceState(), windowId),
         }),
@@ -1746,7 +1755,6 @@ function App() {
 
   function focusWindowLocally(windowId: number) {
     setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
-    setWindows((map) => promoteWindowStack(map, windowId))
   }
 
   function focusShellUiWindow(windowId: number) {
@@ -1837,6 +1845,30 @@ function App() {
     return findMergeTarget(state, windowId, client.left, client.top, ignoreDraggedWindowFrame)
   }
 
+  function refreshTabDragTarget(pointerId: number) {
+    setTabDragState((current) => {
+      if (!current || current.pointerId !== pointerId || !current.dragging || current.detached) return current
+      const ignoreDraggedWindowFrame =
+        current.detached || (workspaceGroupsById().get(current.sourceGroupId)?.members.length ?? 0) <= 1
+      const nextTarget = findTabMergeTargetFromPointer(
+        current.windowId,
+        current.currentClientX,
+        current.currentClientY,
+        ignoreDraggedWindowFrame,
+      )
+      if (
+        current.target?.groupId === nextTarget?.groupId &&
+        current.target?.insertIndex === nextTarget?.insertIndex
+      ) {
+        return current
+      }
+      return {
+        ...current,
+        target: nextTarget,
+      }
+    })
+  }
+
   const {
     syncHiddenGroupWindowGeometry,
     focusWindowViaShell,
@@ -1899,13 +1931,15 @@ function App() {
   function finishTabPointerGesture(pointerId: number, clientX: number, clientY: number) {
     const drag = tabDragState()
     if (!drag || drag.pointerId !== pointerId) return
+    const dragDistance = Math.hypot(clientX - drag.startClientX, clientY - drag.startClientY)
+    const dragging = drag.dragging || dragDistance >= 40
     const ignoreDraggedWindowFrame =
       drag.detached || (workspaceGroupsById().get(drag.sourceGroupId)?.members.length ?? 0) <= 1
-    const nextTarget = drag.dragging
+    const nextTarget = dragging
       ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame) ?? drag.target
       : drag.target
-    const merged = drag.dragging && nextTarget ? applyTabDrop(drag.windowId, nextTarget) : false
-    const clickTarget = !drag.dragging
+    const merged = dragging && nextTarget ? applyTabDrop(drag.windowId, nextTarget) : false
+    const clickTarget = !dragging
       ? (document
           .elementsFromPoint(clientX, clientY)
           .find(
@@ -2127,7 +2161,7 @@ function App() {
       ? findTabMergeTargetFromPointer(prev.windowId, event.clientX, event.clientY, ignoreDraggedWindowFrame)
       : null
     let detached = prev.detached
-    if (dragging && !detached && (target === null || Math.abs(dy) >= 80)) {
+    if (dragging && !detached && target === null && Math.abs(dy) >= 64) {
       detached = detachGroupWindow(prev.windowId, event.clientX, event.clientY)
     } else if (dragging && detached) {
       moveWindowUnderPointer(prev.windowId, event.clientX, event.clientY)
@@ -2158,6 +2192,19 @@ function App() {
   const onSplitGroupPointerCancel = (event: PointerEvent) => {
     endSplitGroupGesture(event.pointerId)
   }
+  createEffect(() => {
+    const drag = tabDragState()
+    if (!drag?.dragging || drag.detached) return
+    let frame = 0
+    const update = () => {
+      refreshTabDragTarget(drag.pointerId)
+      const current = tabDragState()
+      if (!current || current.pointerId !== drag.pointerId || !current.dragging || current.detached) return
+      frame = requestAnimationFrame(update)
+    }
+    frame = requestAnimationFrame(update)
+    onCleanup(() => cancelAnimationFrame(frame))
+  })
   document.addEventListener('pointermove', onTabDragPointerMove, true)
   document.addEventListener('pointerup', onTabDragPointerUp, true)
   document.addEventListener('pointercancel', onTabDragPointerCancel, true)

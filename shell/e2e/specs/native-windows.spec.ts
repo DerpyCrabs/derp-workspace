@@ -139,7 +139,12 @@ async function raiseTaskbarWindow(base: string, windowId: number) {
       await activateTaskbarWindow(base, shell, windowId)
     }
     try {
-      return await waitForWindowRaised(base, windowId, 2500)
+      if (windowId === SHELL_UI_SETTINGS_WINDOW_ID || windowId === SHELL_UI_DEBUG_WINDOW_ID) {
+        const focused = await waitForShellUiFocus(base, windowId, 2500)
+        return { ...focused, window: shellWindowById(focused.shell, windowId)! }
+      }
+      const focused = await waitForNativeFocus(base, windowId, 2500)
+      return { ...focused, window: shellWindowById(focused.shell, windowId)! }
     } catch (error) {
       lastError = error
     }
@@ -165,15 +170,28 @@ function windowContainsPoint(
 }
 
 async function tileNativePair(base: string, redId: number, greenId: number) {
-  const initial = await getSnapshots(base)
-  if (initial.compositor.focused_window_id !== redId) {
-    await raiseTaskbarWindow(base, redId)
-  }
+  await raiseTaskbarWindow(base, redId)
   await runKeybind(base, 'tile_left')
-  const afterRed = await getSnapshots(base)
-  if (afterRed.compositor.focused_window_id !== greenId) {
-    await raiseTaskbarWindow(base, greenId)
-  }
+  await waitFor(
+    'wait for native red tiled left',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const red = compositorWindowById(compositor, redId)
+      if (!red) return null
+      const redOutput = outputForWindow(compositor, red)
+      const taskbar = redOutput ? taskbarForMonitor(shell, redOutput.name) : null
+      if (!redOutput || !taskbar?.rect) return null
+      try {
+        assertWindowTiled(red, redOutput, taskbar.rect, 'left')
+      } catch {
+        return null
+      }
+      return { compositor, shell, red, output: redOutput }
+    },
+    5000,
+    100,
+  )
+  await raiseTaskbarWindow(base, greenId)
   await runKeybind(base, 'tile_right')
   return waitFor(
     'wait for native red and green tiling',
@@ -284,15 +302,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const { red, green } = await ensureNativePair(base, state)
     const redId = red.window.window_id
     const greenId = green.window.window_id
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, shell, redId)
-    await waitForNativeFocus(base, redId)
-    const shellWithRedFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const redFocused = await raiseTaskbarWindow(base, redId)
+    const shellWithRedFocus = redFocused.shell
     await activateTaskbarWindow(base, shellWithRedFocus, redId)
     const redMinimized = await waitForWindowMinimized(base, redId)
     assert(shellWindowById(redMinimized.shell, redId)?.minimized, 'red taskbar activation should minimize when focused')
-    await activateTaskbarWindow(base, redMinimized.shell, redId)
-    await waitForNativeFocus(base, redId)
+    await raiseTaskbarWindow(base, redId)
     const tiled = await tileNativePair(base, redId, greenId)
     const tiledRed = compositorWindowById(tiled.compositor, redId)
     const tiledGreen = compositorWindowById(tiled.compositor, greenId)

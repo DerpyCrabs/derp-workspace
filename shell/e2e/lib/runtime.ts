@@ -186,6 +186,7 @@ export interface ShellTabGroup {
   split_right_rect?: Rect | null
   split_divider_rect?: Rect | null
   tabs: ShellTabButton[]
+  drop_slots?: { insert_index: number; rect?: Rect | null }[]
 }
 
 export interface ShellWindowControls {
@@ -311,6 +312,11 @@ export interface ShellSnapshot {
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null
   session_restore_active?: boolean
+  tab_drag_target?: {
+    window_id: number
+    group_id: string
+    insert_index: number
+  } | null
   [key: string]: unknown
 }
 

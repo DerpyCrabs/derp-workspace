@@ -12,6 +12,8 @@ export type TabMergeTarget = {
   insertIndex: number
 }
 
+const TAB_INSERT_BEFORE_FRACTION = 0.4
+
 export function tabsInGroup<T extends { window_id: number }>(
   windows: readonly T[],
   state: WorkspaceState,
@@ -86,6 +88,69 @@ function parseDropSlotValue(value: string | null): TabMergeTarget | null {
   return Number.isFinite(insertIndex) ? { groupId, insertIndex: Math.max(0, Math.trunc(insertIndex)) } : null
 }
 
+function mergeTargetFromDropSlotAtPoint(
+  draggedWindowId: number,
+  clientX: number,
+  clientY: number,
+  ignoreDraggedWindowFrame: boolean,
+): TabMergeTarget | null {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null
+  const slots = document.querySelectorAll('[data-tab-drop-slot]')
+  for (const slot of slots) {
+    if (!(slot instanceof Element)) continue
+    if (
+      ignoreDraggedWindowFrame &&
+      slot.closest(`[data-shell-window-frame="${draggedWindowId}"]`)
+    ) {
+      continue
+    }
+    const rect = slot.getBoundingClientRect()
+    if (
+      clientX < rect.left ||
+      clientX > rect.right ||
+      clientY < rect.top ||
+      clientY > rect.bottom
+    ) {
+      continue
+    }
+    const target = parseDropSlotValue(slot.getAttribute('data-tab-drop-slot'))
+    if (target) return target
+  }
+  return null
+}
+
+function mergeTargetFromTabAtPoint(
+  state: WorkspaceState,
+  draggedWindowId: number,
+  clientX: number,
+  clientY: number,
+  ignoreDraggedWindowFrame: boolean,
+): TabMergeTarget | null {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null
+  const tabs = document.querySelectorAll('[data-workspace-tab]')
+  for (const tab of tabs) {
+    if (!(tab instanceof Element)) continue
+    if (
+      ignoreDraggedWindowFrame &&
+      tab.closest(`[data-shell-window-frame="${draggedWindowId}"]`)
+    ) {
+      continue
+    }
+    const rect = tab.getBoundingClientRect()
+    if (
+      clientX < rect.left ||
+      clientX > rect.right ||
+      clientY < rect.top ||
+      clientY > rect.bottom
+    ) {
+      continue
+    }
+    const target = mergeTargetFromElement(tab, state, draggedWindowId, clientX)
+    if (target) return target
+  }
+  return null
+}
+
 export function mergeTargetFromElement(
   element: Element | null,
   state: WorkspaceState,
@@ -105,7 +170,10 @@ export function mergeTargetFromElement(
   const targetIndex = group.windowIds.indexOf(Math.trunc(targetWindowId))
   if (targetIndex < 0) return null
   const rect = tabEl.getBoundingClientRect()
-  const insertIndex = pointerClientX < rect.left + rect.width / 2 ? targetIndex : targetIndex + 1
+  const insertIndex =
+    pointerClientX <= rect.left + rect.width * TAB_INSERT_BEFORE_FRACTION
+      ? targetIndex
+      : targetIndex + 1
   const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
   return {
     groupId,
@@ -142,7 +210,20 @@ export function findMergeTarget(
     const target = mergeTargetFromElement(element, state, draggedWindowId, clientX)
     if (target) return target
   }
-  return null
+  const slotTarget = mergeTargetFromDropSlotAtPoint(
+    draggedWindowId,
+    clientX,
+    clientY,
+    ignoreDraggedWindowFrame,
+  )
+  if (slotTarget) return slotTarget
+  return mergeTargetFromTabAtPoint(
+    state,
+    draggedWindowId,
+    clientX,
+    clientY,
+    ignoreDraggedWindowFrame,
+  )
 }
 
 export function resolveGroupVisibleWindowId(

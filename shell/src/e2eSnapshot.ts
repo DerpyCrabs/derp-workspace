@@ -23,6 +23,11 @@ type E2eSnapshotGroupMember = {
   window_id: number
 }
 
+type E2eSnapshotDropSlot = {
+  insert_index: number
+  rect: E2eRectSnapshot | null
+}
+
 type E2eSnapshotWorkspaceGroup = {
   id: string
   visibleWindowId: number
@@ -58,6 +63,12 @@ type E2eSnapAssistPicker = {
   monitorName: string | null
 }
 
+type E2eTabDragTarget = {
+  windowId: number
+  groupId: string
+  insertIndex: number
+}
+
 export type BuildE2eShellSnapshotArgs = {
   document: Document
   viewport: unknown
@@ -84,6 +95,7 @@ export type BuildE2eShellSnapshotArgs = {
   sessionSnapshotError: string | null
   sessionRestoreActive: boolean
   floatingLayers: E2eFloatingLayer[]
+  tabDragTarget: E2eTabDragTarget | null
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
   isWorkspaceWindowPinned: (windowId: number) => boolean
 }
@@ -321,6 +333,18 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       pinned: args.isWorkspaceWindowPinned(member.window_id),
       split_left: member.window_id === group.splitLeftWindowId,
     })),
+    drop_slots: cache
+      .queryAllAttr('data-tab-drop-slot')
+      .filter((el) => (el.getAttribute('data-tab-drop-slot') ?? '').startsWith(`${group.id}:`))
+      .map((el) => {
+        const raw = el.getAttribute('data-tab-drop-slot') ?? ''
+        const insertIndex = Number(raw.slice(group.id.length + 1))
+        return {
+          insert_index: Number.isFinite(insertIndex) ? Math.trunc(insertIndex) : -1,
+          rect: snapshotRect(el, args.origin),
+        }
+      })
+      .filter((slot): slot is E2eSnapshotDropSlot => slot.insert_index >= 0),
   }))
   const snapPreviewRect =
     args.main && args.canvas && args.activeSnapPreviewCanvas
@@ -387,6 +411,13 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     session_snapshot: args.sessionSnapshot,
     session_snapshot_error: args.sessionSnapshotError,
     session_restore_active: args.sessionRestoreActive,
+    tab_drag_target: args.tabDragTarget
+      ? {
+          window_id: args.tabDragTarget.windowId,
+          group_id: args.tabDragTarget.groupId,
+          insert_index: args.tabDragTarget.insertIndex,
+        }
+      : null,
     programs_menu_list_scroll: (() => {
       if (!args.programsMenuOpen) return null
       const el = cache.query('[data-programs-menu-scroll]')

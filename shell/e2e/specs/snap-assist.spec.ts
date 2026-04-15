@@ -31,6 +31,20 @@ import {
 
 const TITLEBAR_PX = 28
 
+function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
+  if (window.output_name) return window.output_name
+  const centerX = window.x + window.width / 2
+  const centerY = window.y + window.height / 2
+  const output = compositor.outputs.find(
+    (entry) =>
+      centerX >= entry.x &&
+      centerX < entry.x + entry.width &&
+      centerY >= entry.y &&
+      centerY < entry.y + entry.height,
+  )
+  return output?.name ?? null
+}
+
 function assertTopThirdWindow(
   window: WindowSnapshot,
   outputName: string,
@@ -393,11 +407,22 @@ export default defineGroup(import.meta.url, ({ test }) => {
     if (initial.compositor.outputs.length < 2) {
       return
     }
-
-    const redWindow = compositorWindowById(initial.compositor, redId)
-    assert(redWindow, 'missing red native compositor window')
-    const nativeMove = pickMonitorMove(initial.compositor.outputs, redWindow.output_name)
-    assert(nativeMove, `no adjacent monitor from ${redWindow.output_name}`)
+    const nativeInitial = await waitFor(
+      'wait for native output assignment before monitor move',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const redWindow = compositorWindowById(compositor, redId)
+        if (!redWindow) return null
+        const outputName = resolveWindowOutputName(compositor, redWindow)
+        if (!outputName) return null
+        const nativeMove = pickMonitorMove(compositor.outputs, outputName)
+        if (!nativeMove) return null
+        return { compositor, shell, redWindow, nativeMove, outputName }
+      },
+      5000,
+      100,
+    )
+    const nativeMove = nativeInitial.nativeMove
     await focusNativeWindow(base, redId)
     await runKeybind(base, nativeMove.action)
     const nativeMoved = await waitFor(
@@ -453,8 +478,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const settingsFocused = await focusSettingsWindow(base)
     const settingsWindow = compositorWindowById(settingsFocused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsWindow, 'missing settings compositor window')
-    const shellMove = pickMonitorMove(settingsFocused.compositor.outputs, settingsWindow.output_name)
-    assert(shellMove, `no adjacent monitor from ${settingsWindow.output_name}`)
+    const settingsOutputName = resolveWindowOutputName(settingsFocused.compositor, settingsWindow)
+    assert(settingsOutputName, 'missing settings output assignment')
+    const shellMove = pickMonitorMove(settingsFocused.compositor.outputs, settingsOutputName)
+    assert(shellMove, `no adjacent monitor from ${settingsOutputName}`)
     await runKeybind(base, shellMove.action)
     await waitFor(
       'wait for settings monitor move before picker',

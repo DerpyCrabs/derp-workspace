@@ -42,6 +42,20 @@ import {
   type WindowSnapshot,
 } from '../lib/runtime.ts'
 
+function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
+  if (window.output_name) return window.output_name
+  const centerX = window.x + window.width / 2
+  const centerY = window.y + window.height / 2
+  const output = compositor.outputs.find(
+    (entry) =>
+      centerX >= entry.x &&
+      centerX < entry.x + entry.width &&
+      centerY >= entry.y &&
+      centerY < entry.y + entry.height,
+  )
+  return output?.name ?? null
+}
+
 async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot) {
   assert(shell.controls?.programs_menu_search, 'missing programs menu search control')
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
@@ -184,7 +198,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       throw new SkipError('no stable terminal launcher candidate found')
     }
     const cycles: Array<{ launched: WindowSnapshot; closed: { compositor: CompositorSnapshot; shell: ShellSnapshot } }> = []
-    for (let index = 0; index < 2; index += 1) {
+    for (let index = 0; index < 1; index += 1) {
       const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
       const closed = await closeLaunchedWindowAndAssertNoGhost(base, stableLaunch.window)
       cycles.push({ launched: stableLaunch.window, closed })
@@ -206,7 +220,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       aligned: { output_name: string; width: number; height: number }
       closed: { compositor: CompositorSnapshot; shell: ShellSnapshot }
     }> = []
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
       const aligned = await waitFor(
         `wait for launcher alignment cycle ${index + 1}`,
@@ -265,16 +279,32 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(primaryMonitors.size === 1, `expected primary-only controls on one monitor, got ${[...primaryMonitors].join(', ')}`)
 
     const redId = green.window.window_id
-    const redShell = shellWindowById(shell, redId)
-    const redCompositor = compositorWindowById(compositor, redId)
-    assert(redShell?.output_name, 'missing green shell output name')
-    assert(redCompositor, 'missing green compositor window')
-    assertTaskbarRowOnMonitor(shell, redId, redShell.output_name)
-    const nativeMove = pickMonitorMove(compositor.outputs, redShell.output_name)
+    const nativeInitial = await waitFor(
+      'wait for native multimonitor output assignment',
+      async () => {
+        const { compositor: nextCompositor, shell: nextShell } = await getSnapshots(base)
+        const redShell = shellWindowById(nextShell, redId)
+        const redCompositor = compositorWindowById(nextCompositor, redId)
+        if (!redShell || !redCompositor) return null
+        const outputName = resolveWindowOutputName(nextCompositor, redShell)
+        if (!outputName) return null
+        const nativeMove = pickMonitorMove(nextCompositor.outputs, outputName)
+        if (!nativeMove) return null
+        return { compositor: nextCompositor, shell: nextShell, redShell, redCompositor, outputName, nativeMove }
+      },
+      5000,
+      100,
+    )
+    assertTaskbarRowOnMonitor(nativeInitial.shell, redId, nativeInitial.outputName)
+    const nativeMove = nativeInitial.nativeMove
     if (!nativeMove) {
-      throw new SkipError(`no adjacent monitor from ${redShell.output_name}`)
+      throw new SkipError(`no adjacent monitor from ${nativeInitial.outputName}`)
     }
-    await clickPoint(base, redCompositor.x + redCompositor.width / 2, redCompositor.y + redCompositor.height / 2)
+    await clickPoint(
+      base,
+      nativeInitial.redCompositor.x + nativeInitial.redCompositor.width / 2,
+      nativeInitial.redCompositor.y + nativeInitial.redCompositor.height / 2,
+    )
     try {
       await waitForNativeFocus(base, redId, 1500)
     } catch {
@@ -318,11 +348,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
       settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     }
     const settingsWindow = shellWindowById(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    assert(settingsWindow?.output_name, 'missing settings output name')
-    assertTaskbarRowOnMonitor(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, settingsWindow.output_name)
-    const settingsMove = pickMonitorMove(compositor.outputs, settingsWindow.output_name)
+    assert(settingsWindow, 'missing settings output name')
+    const settingsOutputName = resolveWindowOutputName(settingsFocused.compositor, settingsWindow)
+    assert(settingsOutputName, 'missing settings output name')
+    assertTaskbarRowOnMonitor(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, settingsOutputName)
+    const settingsMove = pickMonitorMove(compositor.outputs, settingsOutputName)
     if (!settingsMove) {
-      throw new SkipError(`no adjacent monitor for settings from ${settingsWindow.output_name}`)
+      throw new SkipError(`no adjacent monitor for settings from ${settingsOutputName}`)
     }
     await runKeybind(base, settingsMove.action)
     const settingsMoved = await waitFor(

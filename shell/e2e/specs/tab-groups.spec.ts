@@ -56,6 +56,20 @@ function windowTitlebarRect(shell: ShellSnapshot, windowId: number) {
   return controls.titlebar
 }
 
+async function waitForPointerNear(base: string, x: number, y: number, tolerance = 12, timeoutMs = 250) {
+  return waitFor(
+    `wait for pointer near ${Math.round(x)},${Math.round(y)}`,
+    async () => {
+      const { compositor } = await getSnapshots(base)
+      const pointer = compositor.pointer
+      if (!pointer) return null
+      return Math.abs(pointer.x - x) <= tolerance && Math.abs(pointer.y - y) <= tolerance ? compositor : null
+    },
+    timeoutMs,
+    25,
+  )
+}
+
 async function waitForVisibleTabWindow(base: string, windowIds: number[]) {
   return waitFor(
     `wait for visible tab window ${windowIds.join(',')}`,
@@ -137,24 +151,76 @@ async function resolveNativeTabTarget(base: string, windowIds: number[]) {
 async function dragTabOntoTab(
   base: string,
   sourceWindowId: number,
-  target: { x?: number; y?: number; global_x: number; global_y: number; width: number; height: number },
+  targetWindowId: number,
 ) {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const source = tabRect(shell, sourceWindowId)
+  const target = tabRect(shell, targetWindowId)
+  const expectedInsertIndex = target.group.member_window_ids.indexOf(targetWindowId) + 1
   const start = rectCenter(source.tab.rect!)
-  const end = rectCenter({
-    x: target.x ?? target.global_x,
-    y: target.y ?? target.global_y,
-    width: target.width,
-    height: target.height,
-    global_x: target.global_x,
-    global_y: target.global_y,
-  })
   await movePoint(base, start.x, start.y)
   await pointerButton(base, BTN_LEFT, 'press')
+  await movePoint(base, start.x + 18, start.y)
+  const dragTargetRect = await waitFor(
+    `wait for drop slot ${target.group.group_id}:${expectedInsertIndex}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const currentTarget = tabGroupByWindow(shell, targetWindowId)
+      const dropSlot = currentTarget?.drop_slots?.find((slot) => slot.insert_index === expectedInsertIndex)?.rect ?? null
+      return dropSlot ?? null
+    },
+    400,
+    25,
+  ).catch(() => target.tab.rect!)
+  const end = rectCenter(dragTargetRect)
+  const dragTargetMatches = async () => {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const dragTarget = shell.tab_drag_target
+    if (!dragTarget) return null
+    return (
+      dragTarget.window_id === sourceWindowId &&
+      dragTarget.group_id === target.group.group_id &&
+      dragTarget.insert_index === expectedInsertIndex
+    )
+      ? dragTarget
+      : null
+  }
+  await movePoint(base, start.x + (end.x - start.x) * 0.25, start.y + (end.y - start.y) * 0.25)
   await movePoint(base, start.x + (end.x - start.x) * 0.5, start.y + (end.y - start.y) * 0.5)
-  await movePoint(base, end.x, end.y)
-  await new Promise((resolve) => setTimeout(resolve, 75))
+  await movePoint(base, start.x + (end.x - start.x) * 0.75, start.y + (end.y - start.y) * 0.75)
+  const probePoints =
+    dragTargetRect === target.tab.rect!
+      ? [
+          end,
+          {
+            x: Math.min(target.tab.rect!.global_x + target.tab.rect!.width - 4, target.tab.rect!.global_x + target.tab.rect!.width * 0.72),
+            y: target.tab.rect!.global_y + target.tab.rect!.height / 2,
+          },
+          {
+            x: Math.min(target.tab.rect!.global_x + target.tab.rect!.width - 2, target.tab.rect!.global_x + target.tab.rect!.width * 0.84),
+            y: target.tab.rect!.global_y + target.tab.rect!.height / 2,
+          },
+        ]
+      : [
+          end,
+          { x: dragTargetRect.global_x + 1, y: end.y },
+          { x: dragTargetRect.global_x + dragTargetRect.width - 1, y: end.y },
+          { x: dragTargetRect.global_x + Math.max(2, dragTargetRect.width / 2), y: end.y },
+        ]
+  for (const point of probePoints) {
+    await movePoint(base, point.x, point.y)
+    try {
+      await waitFor(`wait for tab drag target ${target.group.group_id}`, dragTargetMatches, 100, 20)
+      break
+    } catch {}
+  }
+  try {
+    const lastPoint = probePoints[probePoints.length - 1]!
+    await waitForPointerNear(base, lastPoint.x, lastPoint.y)
+  } catch {}
+  try {
+    await waitFor(`wait for tab drag target ${target.group.group_id}`, dragTargetMatches, 200, 20)
+  } catch {}
   await pointerButton(base, BTN_LEFT, 'release')
 }
 
@@ -358,7 +424,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const target = await timing.step('resolve visible native target', () =>
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
-      await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!))
+      await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId))
       const merged = await timing.step('wait for merged group', () => waitFor(
         'wait for native/js group merge',
         async () => {
@@ -417,7 +483,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const target = await timing.step('resolve visible native target', () =>
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
-      await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!))
+      await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId))
       await timing.step('wait for grouped members', () => waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id]))
       await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
       const jsFocused = await timing.step('focus grouped js tab', () => waitForShellUiFocus(base, jsWindow.window.window_id))
@@ -460,7 +526,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
     )
     const draggedWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
-    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.tab.rect!))
+    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.windowId))
     const grouped = await timing.step('wait for grouped pair', () =>
       waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
     )
@@ -503,7 +569,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
     )
     const draggedWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
-    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.tab.rect!))
+    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.windowId))
     const grouped = await timing.step('wait for grouped pair', () =>
       waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
     )
@@ -564,7 +630,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
       await timing.step('merge js tab into native tab', () =>
-        dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!),
+        dragTabOntoTab(base, jsWindow.window.window_id, target.windowId),
       )
       const merged = await timing.step('wait for merged members', () =>
         waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], target.windowId),
@@ -689,7 +755,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
       await timing.step('merge first js tab into native tab', () =>
-        dragTabOntoTab(base, jsWindowA.window.window_id, nativeTarget.tab.rect!),
+        dragTabOntoTab(base, jsWindowA.window.window_id, nativeTarget.windowId),
       )
       await timing.step('wait for grouped source members', () =>
         waitForGroupedMembers(base, [nativeTarget.windowId, jsWindowA.window.window_id], nativeTarget.windowId),
@@ -795,7 +861,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       const target = await timing.step('merge js into native target', async () => {
         const visibleNative = await resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id])
-        await dragTabOntoTab(base, jsWindow.window.window_id, visibleNative.tab.rect!)
+        await dragTabOntoTab(base, jsWindow.window.window_id, visibleNative.windowId)
         return waitForGroupedMembers(
           base,
           [visibleNative.windowId, jsWindow.window.window_id],
@@ -880,7 +946,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       dragTabOntoTab(
         base,
         target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id,
-        target.tab.rect!,
+        target.windowId,
       ),
     )
     await timing.step('wait for grouped pair', () =>
@@ -919,15 +985,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
       await timing.step('merge js into native target', () =>
-        dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!),
+        dragTabOntoTab(base, jsWindow.window.window_id, target.windowId),
       )
       await timing.step('wait for native/js group', () =>
         waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], target.windowId),
       )
       const otherNativeId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
-      const groupedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       await timing.step('merge second native into grouped target', () =>
-        dragTabOntoTab(base, otherNativeId, tabRect(groupedShell, target.windowId).tab.rect!),
+        dragTabOntoTab(base, otherNativeId, target.windowId),
       )
       await timing.step('wait for three tab group', () =>
         waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id, otherNativeId], target.windowId),
@@ -989,7 +1054,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
     )
     const otherWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
-    await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.tab.rect!))
+    await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.windowId))
     await timing.step('wait for grouped pair', () =>
       waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
     )
@@ -1030,7 +1095,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
       const otherWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
-      await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.tab.rect!))
+      await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.windowId))
       await timing.step('wait for grouped pair', () =>
         waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
       )
@@ -1120,7 +1185,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
       const merged = await timing.step('merge js tab into native tab', async () => {
-        await dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!)
+        await dragTabOntoTab(base, jsWindow.window.window_id, target.windowId)
         return waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], target.windowId)
       })
       const leaderSnapshot = await getSnapshots(base)

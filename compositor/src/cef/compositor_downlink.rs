@@ -52,13 +52,13 @@ fn flush_shell_updates(
         *snapshot_dirty = false;
         return;
     };
-    if *snapshot_dirty {
-        dispatch_shell_snapshot_notify(browser);
-        *snapshot_dirty = false;
-    }
     if !details.is_empty() {
         dispatch_shell_detail_batch(browser, details);
         details.clear();
+    }
+    if *snapshot_dirty {
+        dispatch_shell_snapshot_notify(browser);
+        *snapshot_dirty = false;
     }
 }
 

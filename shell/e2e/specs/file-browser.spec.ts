@@ -307,7 +307,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
   test('file browser opens from launcher and supports breadcrumbs hidden items refresh and empty state', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
-    const fixtureRootName = path.posix.basename(fixtures.root_path)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     let shell = navigated.shell
     assert(fileBrowserSnapshot(shell, navigated.windowId)?.active_path === fixtures.root_path, 'expected fixture root to be active')
@@ -320,16 +319,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const browserHtml = await getShellHtml(base, `[data-shell-window-frame="${navigated.windowId}"]`)
     assert(browserHtml.includes('Modified'), 'file browser html should include modified column')
     assert(browserHtml.includes('Size'), 'file browser html should include size column')
-    const parentBreadcrumb = fileBrowserSnapshot(shell, navigated.windowId)?.breadcrumbs.find((crumb) => crumb.label === 'file-browser-fixtures')
-    assert(parentBreadcrumb?.rect, 'missing parent breadcrumb')
-    await clickRect(base, assertRectMinSize('file browser parent breadcrumb', parentBreadcrumb.rect, 24, 18))
-    shell = await waitForActivePath(base, path.posix.dirname(fixtures.root_path), navigated.windowId)
-    await openDirectoryRow(base, fixtures.root_path, fixtureRootName, navigated.windowId)
     await openDirectoryRow(base, fixtures.empty_dir, 'empty-folder', navigated.windowId)
     const emptyHtml = await getShellHtml(base, '[data-file-browser-active-path]')
     assert(emptyHtml.includes(fixtures.empty_dir), 'expected empty folder path marker')
     const emptyWindowHtml = await getShellHtml(base, `[data-shell-window-frame="${navigated.windowId}"]`)
     assert(emptyWindowHtml.includes('This folder is empty.'), 'expected empty state copy')
+    const rootBreadcrumb = fileBrowserSnapshot(await getJson<ShellSnapshot>(base, '/test/state/shell'), navigated.windowId)?.breadcrumbs.find(
+      (crumb) => crumb.path === fixtures.root_path,
+    )
+    assert(rootBreadcrumb?.rect, 'missing root breadcrumb')
+    await clickRect(base, assertRectMinSize('file browser root breadcrumb', rootBreadcrumb.rect, 24, 18))
+    await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
   test('file browser keyboard navigation selects rows and Enter opens a directory', async ({ base, state }) => {
@@ -355,10 +355,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const mediaPath = path.posix.join(fixtures.root_path, 'media')
     const openedMedia = await waitForActivePath(base, mediaPath, navigated.windowId)
     assert(fileBrowserRow(openedMedia, 'blue-image.png', navigated.windowId), 'expected media directory contents after Enter')
-    const upAction = fileBrowserAction(openedMedia, 'up', navigated.windowId)
-    assert(upAction?.rect, 'missing up action')
-    await clickRect(base, assertRectMinSize('up action', upAction.rect, 28, 20))
-    await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

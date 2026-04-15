@@ -28,6 +28,11 @@ export function ProgramsContextMenu() {
   }
 
   onMount(() => {
+    syncSearchFocus()
+    requestAnimationFrame(() => {
+      syncSearchFocus()
+      requestAnimationFrame(() => syncSearchFocus())
+    })
     document.addEventListener('keydown', redirectLauncherTyping, true)
   })
 
