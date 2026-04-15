@@ -59,6 +59,18 @@ pub(crate) fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Opt
     }
 }
 
+pub(crate) fn keysym_is_super(keysym: &smithay::input::keyboard::KeysymHandle<'_>) -> bool {
+    keysym.raw_syms().into_iter().any(|sym| {
+        matches!(
+            sym.raw(),
+            keysyms::KEY_Super_L
+                | keysyms::KEY_Super_R
+                | keysyms::KEY_Meta_L
+                | keysyms::KEY_Meta_R
+        )
+    })
+}
+
 /// Map libinput / Smithay pointer-axis values to integers for CEF [`send_mouse_wheel_event`].
 fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
     if let Some(v) = discrete_v120 {
@@ -575,13 +587,7 @@ impl CompositorState {
                     time,
                     move |state, mods, keysym| {
                         let raw_sym = keysym.modified_sym().raw();
-                        let is_super = matches!(
-                            raw_sym,
-                            keysyms::KEY_Super_L
-                                | keysyms::KEY_Super_R
-                                | keysyms::KEY_Meta_L
-                                | keysyms::KEY_Meta_R
-                        );
+                        let is_super = keysym_is_super(&keysym);
                         if state.screenshot_selection_active() {
                             if key_state == KeyState::Released && is_super {
                                 state.programs_menu_super_armed = false;
@@ -634,39 +640,83 @@ impl CompositorState {
                                 return FilterResult::Intercept(());
                             }
                         }
-                        if state.shell_cef_active() && state.shell_has_frame {
-                            if key_state == KeyState::Pressed {
-                                if is_super && !state.seat.keyboard_shortcuts_inhibited() {
-                                    state.programs_menu_super_armed = true;
-                                    state.programs_menu_super_chord = false;
-                                    return FilterResult::Intercept(());
-                                }
-                                if state.programs_menu_super_armed
-                                    && !is_super
-                                    && !state.seat.keyboard_shortcuts_inhibited()
-                                {
-                                    if let Some(action) =
-                                        super_keybind_action(raw_sym, mods.ctrl, mods.shift)
-                                    {
-                                        state.programs_menu_super_chord = true;
-                                        state.handle_super_keybind(action);
-                                        return FilterResult::Intercept(());
-                                    }
-                                    state.programs_menu_super_chord = true;
-                                    return FilterResult::Intercept(());
-                                }
-                            } else if key_state == KeyState::Released
-                                && is_super
+                        if key_state == KeyState::Pressed {
+                            if is_super && !state.seat.keyboard_shortcuts_inhibited() {
+                                tracing::warn!(
+                                    target: "derp_shell_menu",
+                                    source = "libinput",
+                                    key_state = "pressed",
+                                    raw_sym,
+                                    shell_cef_active = state.shell_cef_active(),
+                                    shell_has_frame = state.shell_has_frame,
+                                    shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
+                                    pending_toggle = state.programs_menu_super_pending_toggle,
+                                    "super key pressed"
+                                );
+                                state.programs_menu_super_armed = true;
+                                state.programs_menu_super_chord = false;
+                                return FilterResult::Intercept(());
+                            }
+                            if state.programs_menu_super_armed
+                                && !is_super
                                 && !state.seat.keyboard_shortcuts_inhibited()
                             {
-                                let armed = state.programs_menu_super_armed;
-                                let chord = state.programs_menu_super_chord;
-                                state.programs_menu_super_armed = false;
-                                state.programs_menu_super_chord = false;
-                                if armed && !chord {
-                                    state.programs_menu_toggle_from_super(serial);
+                                if let Some(action) =
+                                    super_keybind_action(raw_sym, mods.ctrl, mods.shift)
+                                {
+                                    tracing::warn!(
+                                        target: "derp_shell_menu",
+                                        source = "libinput",
+                                        %action,
+                                        raw_sym,
+                                        shell_cef_active = state.shell_cef_active(),
+                                        shell_has_frame = state.shell_has_frame,
+                                        shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
+                                        pending_toggle = state.programs_menu_super_pending_toggle,
+                                        "super chord matched action"
+                                    );
+                                    state.programs_menu_super_chord = true;
+                                    if state.shell_cef_active() {
+                                        state.handle_super_keybind(action);
+                                    }
                                     return FilterResult::Intercept(());
                                 }
+                                state.programs_menu_super_chord = true;
+                                return FilterResult::Intercept(());
+                            }
+                        } else if key_state == KeyState::Released
+                            && is_super
+                            && !state.seat.keyboard_shortcuts_inhibited()
+                        {
+                            let armed = state.programs_menu_super_armed;
+                            let chord = state.programs_menu_super_chord;
+                            tracing::warn!(
+                                target: "derp_shell_menu",
+                                source = "libinput",
+                                key_state = "released",
+                                raw_sym,
+                                armed,
+                                chord,
+                                shell_cef_active = state.shell_cef_active(),
+                                shell_has_frame = state.shell_has_frame,
+                                shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
+                                pending_toggle = state.programs_menu_super_pending_toggle,
+                                "super key released"
+                            );
+                            state.programs_menu_super_armed = false;
+                            state.programs_menu_super_chord = false;
+                            if armed && !chord {
+                                if state.shell_cef_active() {
+                                    state.programs_menu_toggle_from_super(serial);
+                                } else {
+                                    tracing::warn!(
+                                        target: "derp_shell_menu",
+                                        source = "libinput",
+                                        "queue pending launcher toggle until shell load success"
+                                    );
+                                    state.programs_menu_super_pending_toggle = true;
+                                }
+                                return FilterResult::Intercept(());
                             }
                         }
                         if state.shell_ipc_keyboard_to_cef

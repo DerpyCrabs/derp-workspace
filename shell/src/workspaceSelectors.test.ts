@@ -34,6 +34,7 @@ const workspaceState: WorkspaceState = {
     'group-b': 2,
   },
   pinnedWindowIds: [],
+  splitByGroupId: {},
   nextGroupSeq: 3,
 }
 
@@ -104,5 +105,23 @@ describe('workspaceSelectors', () => {
 
     expect(second.get('HDMI-A-1')).toBe(first.get('HDMI-A-1'))
     expect(second.get('DP-1')).toBe(first.get('DP-1'))
+  })
+
+  it('exposes split metadata on workspace groups', () => {
+    const groups = buildWorkspaceGroups(
+      {
+        ...workspaceState,
+        groups: [{ id: 'group-a', windowIds: [1, 2] }],
+        activeTabByGroupId: { 'group-a': 2 },
+        splitByGroupId: { 'group-a': { leftWindowId: 1, leftPaneFraction: 0.5 } },
+      },
+      new Map([
+        [1, makeWindow(1)],
+        [2, makeWindow(2, { x: 420 })],
+      ]),
+    )
+    expect(groups[0]?.splitLeftWindowId).toBe(1)
+    expect(groups[0]?.visibleWindowIds).toEqual([1, 2])
+    expect(groups[0]?.hiddenWindowIds).toEqual([])
   })
 })

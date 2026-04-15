@@ -1,5 +1,6 @@
 import {
   BTN_LEFT,
+  KEY,
   SkipError,
   activateTaskbarWindow,
   assert,
@@ -10,7 +11,6 @@ import {
   compositorWindowById,
   createTimingMarks,
   defineGroup,
-  dragRectToRect,
   ensureNativePair,
   getJson,
   getShellHtml,
@@ -27,6 +27,7 @@ import {
   tabGroupByWindow,
   taskbarForMonitor,
   taskbarEntry,
+  tapKey,
   waitFor,
   waitForShellUiFocus,
   waitForWindowGone,
@@ -140,7 +141,8 @@ async function dragTabOntoTab(
 ) {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const source = tabRect(shell, sourceWindowId)
-  await dragRectToRect(base, source.tab.rect!, {
+  const start = rectCenter(source.tab.rect!)
+  const end = rectCenter({
     x: target.x ?? target.global_x,
     y: target.y ?? target.global_y,
     width: target.width,
@@ -148,6 +150,12 @@ async function dragTabOntoTab(
     global_x: target.global_x,
     global_y: target.global_y,
   })
+  await movePoint(base, start.x, start.y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await movePoint(base, start.x + (end.x - start.x) * 0.5, start.y + (end.y - start.y) * 0.5)
+  await movePoint(base, end.x, end.y)
+  await new Promise((resolve) => setTimeout(resolve, 75))
+  await pointerButton(base, BTN_LEFT, 'release')
 }
 
 async function closeTabByClick(base: string, windowId: number) {
@@ -189,6 +197,15 @@ async function waitForGroupedMembers(base: string, memberWindowIds: number[], vi
 async function selectTabByClick(base: string, windowId: number) {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const tab = tabRect(shell, windowId)
+  const point = rectCenter(tab.tab.rect!)
+  await movePoint(base, point.x, point.y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await pointerButton(base, BTN_LEFT, 'release')
+}
+
+async function selectTabByFastClick(base: string, windowId: number) {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const tab = tabRect(shell, windowId)
   await clickRect(base, tab.tab.rect!)
 }
 
@@ -205,6 +222,55 @@ async function openTabMenu(base: string, windowId: number) {
     5000,
     100,
   )
+}
+
+async function waitForSplitGroup(base: string, windowId: number, leftWindowId: number) {
+  return waitFor(
+    `wait for split group ${windowId}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const group = tabGroupByWindow(shell, windowId)
+      if (!group) return null
+      if (group.split_left_window_id !== leftWindowId) return null
+      if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
+      return { shell, group }
+    },
+    8000,
+    125,
+  )
+}
+
+async function enterSplitViewFromTabMenu(base: string, leftWindowId: number) {
+  await openTabMenu(base, leftWindowId)
+  const shell = await waitFor(
+    `wait for split menu action ${leftWindowId}`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.tab_menu_use_split_left ? next : null
+    },
+    5000,
+    100,
+  )
+  assert(shell.controls?.tab_menu_use_split_left, 'missing split-left menu action')
+  await tapKey(base, KEY.down)
+  await tapKey(base, KEY.enter)
+  return waitForSplitGroup(base, leftWindowId, leftWindowId)
+}
+
+async function exitSplitViewFromTabMenu(base: string, leftWindowId: number) {
+  await openTabMenu(base, leftWindowId)
+  const shell = await waitFor(
+    `wait for exit split action ${leftWindowId}`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.tab_menu_exit_split ? next : null
+    },
+    5000,
+    100,
+  )
+  assert(shell.controls?.tab_menu_exit_split, 'missing exit split menu action')
+  await tapKey(base, KEY.down)
+  await tapKey(base, KEY.enter)
 }
 
 async function moveShellWindowToOtherMonitor(base: string, windowId: number) {
@@ -385,6 +451,73 @@ export default defineGroup(import.meta.url, ({ test }) => {
         } catch {}
       }
     }
+  })
+
+  test('single click switches grouped native tabs without moving the group', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-single-click-switch')
+    const { red, green } = await ensureFreshNativePair(base, state)
+    const target = await timing.step('resolve visible native target', () =>
+      resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+    )
+    const draggedWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.tab.rect!))
+    const grouped = await timing.step('wait for grouped pair', () =>
+      waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+    )
+    const anchorTitlebar = windowTitlebarRect(grouped.shell, target.windowId)
+    const switched = await timing.step('single click hidden dragged tab', async () => {
+      await selectTabByClick(base, draggedWindowId)
+      return waitFor(
+        `wait for single click switch ${draggedWindowId}`,
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const group = tabGroupByWindow(shell, draggedWindowId)
+          const switchedTitlebar = shell.window_controls?.find((entry) => entry.window_id === draggedWindowId)?.titlebar
+          if (!group || group.visible_window_id !== draggedWindowId || !switchedTitlebar) return null
+          if (
+            Math.abs(switchedTitlebar.global_x - anchorTitlebar.global_x) > 12 ||
+            Math.abs(switchedTitlebar.global_y - anchorTitlebar.global_y) > 12
+          ) {
+            return null
+          }
+          return { compositor, shell, group, switchedTitlebar }
+        },
+        8000,
+        125,
+      )
+    })
+    await timing.step('write single click switch artifact', () =>
+      writeJsonArtifact('tab-groups-single-click-switch.json', {
+        grouped,
+        switched,
+        anchorTitlebar,
+        draggedWindowId,
+      }),
+    )
+  })
+
+  test('fast click switches grouped tab immediately', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-fast-click-switch')
+    const { red, green } = await ensureFreshNativePair(base, state)
+    const target = await timing.step('resolve visible native target', () =>
+      resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+    )
+    const draggedWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+    await timing.step('group native windows', () => dragTabOntoTab(base, draggedWindowId, target.tab.rect!))
+    const grouped = await timing.step('wait for grouped pair', () =>
+      waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+    )
+    await timing.step('fast click hidden grouped tab', () => selectTabByFastClick(base, draggedWindowId))
+    const switched = await timing.step('wait for fast click switch', () =>
+      waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], draggedWindowId),
+    )
+    await timing.step('write fast click artifact', () =>
+      writeJsonArtifact('tab-groups-fast-click-switch.json', {
+        grouped,
+        switched,
+        draggedWindowId,
+      }),
+    )
   })
 
   test('tab menu closes when its window closes', async ({ base, state }) => {
@@ -732,6 +865,238 @@ export default defineGroup(import.meta.url, ({ test }) => {
         try {
           await closeWindow(base, jsWindowId)
           await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('tab menu enters and exits split view for grouped native tabs', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-split-enter-exit')
+    const { red, green } = await ensureFreshNativePair(base, state)
+    const target = await timing.step('resolve visible native target', () =>
+      resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+    )
+    await timing.step('group native windows', () =>
+      dragTabOntoTab(
+        base,
+        target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id,
+        target.tab.rect!,
+      ),
+    )
+    await timing.step('wait for grouped pair', () =>
+      waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+    )
+    const split = await timing.step('enter split from tab menu', () => enterSplitViewFromTabMenu(base, target.windowId))
+    await timing.step('exit split from left tab menu', async () => {
+      await exitSplitViewFromTabMenu(base, target.windowId)
+      await waitFor(
+        'wait for split exit',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const group = tabGroupByWindow(shell, target.windowId)
+          return group && !group.split_left_rect && !group.split_right_rect ? { shell, group } : null
+        },
+        8000,
+        125,
+      )
+    })
+    await timing.step('write split enter exit artifact', () =>
+      writeJsonArtifact('tab-groups-split-enter-exit.json', split),
+    )
+  })
+
+  test('activating a hidden split tab keeps the split frame stable', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-split-activate-stable')
+    let jsWindowId: number | null = null
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindow.window.window_id),
+      )
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      await timing.step('merge js into native target', () =>
+        dragTabOntoTab(base, jsWindow.window.window_id, target.tab.rect!),
+      )
+      await timing.step('wait for native/js group', () =>
+        waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], target.windowId),
+      )
+      const otherNativeId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+      const groupedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await timing.step('merge second native into grouped target', () =>
+        dragTabOntoTab(base, otherNativeId, tabRect(groupedShell, target.windowId).tab.rect!),
+      )
+      await timing.step('wait for three tab group', () =>
+        waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id, otherNativeId], target.windowId),
+      )
+      const split = await timing.step('enter split', () => enterSplitViewFromTabMenu(base, target.windowId))
+      const hiddenRightWindowId =
+        [jsWindow.window.window_id, otherNativeId].find(
+          (windowId) => !(split.group.visible_window_ids ?? []).includes(windowId),
+        ) ?? null
+      assert(hiddenRightWindowId !== null, 'expected a hidden right tab after entering split')
+      const initialLeft = split.group.split_left_rect!
+      const initialRight = split.group.split_right_rect!
+      const initialDivider = split.group.split_divider_rect!
+      const initialWidth = initialLeft.width + initialRight.width + initialDivider.width
+      await timing.step('activate hidden split tab', () => selectTabByClick(base, hiddenRightWindowId))
+      const activated = await timing.step('wait for stable split activation', () =>
+        waitFor(
+          `wait for split activation ${hiddenRightWindowId}`,
+          async () => {
+            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const group = tabGroupByWindow(shell, hiddenRightWindowId)
+            if (!group || group.visible_window_id !== hiddenRightWindowId) return null
+            if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
+            const width =
+              group.split_left_rect.width +
+              group.split_right_rect.width +
+              group.split_divider_rect.width
+            if (Math.abs(width - initialWidth) > 12) return null
+            if (Math.abs(group.split_left_rect.global_x - initialLeft.global_x) > 12) return null
+            if (Math.abs(group.split_right_rect.global_x - initialRight.global_x) > 12) return null
+            return { shell, group }
+          },
+          8000,
+          125,
+        ),
+      )
+      await timing.step('write split activation artifact', () =>
+        writeJsonArtifact('tab-groups-split-activation-stable.json', {
+          split,
+          activated,
+          hiddenRightWindowId,
+          initialWidth,
+        }),
+      )
+    } finally {
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('split divider keeps both native panes above minimum width', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-split-divider')
+    const { red, green } = await ensureFreshNativePair(base, state)
+    const target = await timing.step('resolve visible native target', () =>
+      resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+    )
+    const otherWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+    await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.tab.rect!))
+    await timing.step('wait for grouped pair', () =>
+      waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+    )
+    const split = await timing.step('enter split', () => enterSplitViewFromTabMenu(base, target.windowId))
+    assert(split.group.split_divider_rect, 'missing split divider')
+    assert(split.group.split_right_rect, 'missing split right rect')
+    const divider = split.group.split_divider_rect
+    const start = rectCenter(divider)
+    const dragMidX = Math.round(start.x + split.group.split_right_rect.width * 0.35)
+    const dragEndX = Math.round(split.group.split_right_rect.x + split.group.split_right_rect.width * 0.7)
+    await timing.step('drag split divider', async () => {
+      await movePoint(base, start.x, start.y)
+      await pointerButton(base, BTN_LEFT, 'press')
+      await movePoint(base, start.x + 36, start.y)
+      await movePoint(base, dragMidX, start.y)
+      await movePoint(base, dragEndX, start.y)
+      await pointerButton(base, BTN_LEFT, 'release')
+    })
+    const resized = await timing.step('wait for resized split panes', () =>
+      waitForSplitGroup(base, target.windowId, target.windowId),
+    )
+    const left = resized.group.split_left_rect!
+    const right = resized.group.split_right_rect!
+    const rowWidth = left.width + right.width
+    assert(left.width / rowWidth >= 0.28, `left pane too narrow: ${left.width}/${rowWidth}`)
+    assert(right.width / rowWidth >= 0.28, `right pane too narrow: ${right.width}/${rowWidth}`)
+    await timing.step('write split divider artifact', () =>
+      writeJsonArtifact('tab-groups-split-divider.json', resized),
+    )
+  })
+
+  test('split-left tab does not tear out but right tab still can', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-split-tear-out-rules')
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const otherWindowId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+      await timing.step('group native windows', () => dragTabOntoTab(base, otherWindowId, target.tab.rect!))
+      await timing.step('wait for grouped pair', () =>
+        waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+      )
+      await timing.step('enter split', () => enterSplitViewFromTabMenu(base, target.windowId))
+
+      const leftShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const leftTab = tabRect(leftShell, target.windowId)
+      const leftStart = rectCenter(leftTab.tab.rect!)
+      await timing.step('attempt left tab tear-out', async () => {
+        await movePoint(base, leftStart.x, leftStart.y)
+        await pointerButton(base, BTN_LEFT, 'press')
+        await movePoint(base, leftStart.x, leftStart.y + 96)
+        await pointerButton(base, BTN_LEFT, 'release')
+      })
+      const stillSplit = await timing.step('confirm split-left stayed grouped', () =>
+        waitForSplitGroup(base, target.windowId, target.windowId),
+      )
+      assert(
+        tabGroupByWindow(stillSplit.shell, otherWindowId)?.group_id === stillSplit.group.group_id,
+        'split-left tab should stay grouped',
+      )
+
+      const rightShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rightTab = tabRect(rightShell, otherWindowId)
+      const rightStart = rectCenter(rightTab.tab.rect!)
+      const previewPoint = { x: rightStart.x + 48, y: rightStart.y }
+      await timing.step('start right tab drag', () => dragTabStep(base, otherWindowId, previewPoint))
+      await timing.step('pull right tab out of strip', () => movePoint(base, previewPoint.x + 24, rightStart.y - 72))
+      await timing.step('wait for right tab detached', () =>
+        waitFor(
+          `wait for split right tab ${otherWindowId} detached`,
+          async () => {
+            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const leftGroup = tabGroupByWindow(shell, target.windowId)
+            const rightGroup = tabGroupByWindow(shell, otherWindowId)
+            if (!leftGroup || !rightGroup || leftGroup.group_id === rightGroup.group_id) return null
+            return { shell, leftGroup, rightGroup }
+          },
+          5000,
+          100,
+        ),
+      )
+      await timing.step('release right tab drag', () => finishDrag(base))
+      released = true
+      const split = await timing.step('confirm right tab became separate group', () =>
+        waitFor(
+          `wait for split right tab ${otherWindowId} separated`,
+          async () => {
+            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const leftGroup = tabGroupByWindow(shell, target.windowId)
+            const rightGroup = tabGroupByWindow(shell, otherWindowId)
+            if (!leftGroup || !rightGroup || leftGroup.group_id === rightGroup.group_id) return null
+            if (leftGroup.member_window_ids.length !== 1 || rightGroup.member_window_ids.length !== 1) return null
+            return { shell, leftGroup, rightGroup }
+          },
+          8000,
+          125,
+        ),
+      )
+      await timing.step('write split tear-out artifact', () =>
+        writeJsonArtifact('tab-groups-split-tear-out.json', split),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
         } catch {}
       }
     }

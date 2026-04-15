@@ -26,6 +26,9 @@ type E2eSnapshotGroupMember = {
 type E2eSnapshotWorkspaceGroup = {
   id: string
   visibleWindowId: number
+  splitLeftWindowId: number | null
+  splitPaneFraction: number | null
+  visibleWindowIds: number[]
   hiddenWindowIds: number[]
   members: E2eSnapshotGroupMember[]
 }
@@ -268,7 +271,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     }
   }
 
-  const volumeMenuRect = (selector: string) => projectFloatingElementRect(selector) ?? queryRect(cache, selector, args.origin)
+  const floatingMenuRect = (selector: string) => projectFloatingElementRect(selector) ?? queryRect(cache, selector, args.origin)
+  const volumeMenuRect = (selector: string) => floatingMenuRect(selector)
+  const powerMenuRect = (selector: string) => floatingMenuRect(selector)
 
   const stackOrderedWindows = [...args.windows].sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
   const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-monitor').map((taskbarEl) => ({
@@ -291,14 +296,30 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const tabGroups = args.workspaceGroups.map((group) => ({
     group_id: group.id,
     visible_window_id: group.visibleWindowId,
+    split_left_window_id: group.splitLeftWindowId,
+    split_left_pane_fraction: group.splitPaneFraction,
     hidden_window_ids: [...group.hiddenWindowIds],
     member_window_ids: group.members.map((member) => member.window_id),
+    visible_window_ids: [...group.visibleWindowIds],
+    split_left_rect:
+      group.splitLeftWindowId !== null
+        ? snapshotRect(cache.queryAttr('data-workspace-split-left-pane', group.splitLeftWindowId), args.origin)
+        : null,
+    split_right_rect: snapshotRect(
+      cache.queryAttr('data-workspace-split-right-pane', group.visibleWindowId),
+      args.origin,
+    ),
+    split_divider_rect: snapshotRect(
+      cache.queryAttr('data-workspace-split-divider', group.id),
+      args.origin,
+    ),
     tabs: group.members.map((member) => ({
       window_id: member.window_id,
       rect: snapshotRect(cache.queryAttr('data-workspace-tab', member.window_id), args.origin),
       close: snapshotRect(cache.queryAttr('data-workspace-tab-close', member.window_id), args.origin),
       active: member.window_id === group.visibleWindowId,
       pinned: args.isWorkspaceWindowPinned(member.window_id),
+      split_left: member.window_id === group.splitLeftWindowId,
     })),
   }))
   const snapPreviewRect =
@@ -414,14 +435,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       programs_menu_list: queryRect(cache, '[data-programs-menu-scroll]', args.origin),
       tab_menu_pin: queryRect(cache, '[data-tab-menu-idx="0"]', args.origin),
       tab_menu_unpin: queryRect(cache, '[data-tab-menu-idx="0"]', args.origin),
+      tab_menu_use_split_left: queryRect(cache, '[data-tab-menu-action="use-split-left"]', args.origin),
+      tab_menu_exit_split: queryRect(cache, '[data-tab-menu-action="exit-split"]', args.origin),
       settings_tab_user: queryRect(cache, '[data-settings-tab="user"]', args.origin),
       settings_tab_displays: queryRect(cache, '[data-settings-tab="displays"]', args.origin),
       settings_tab_tiling: queryRect(cache, '[data-settings-tab="tiling"]', args.origin),
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
       settings_session_autosave_enable: queryRect(cache, '[data-settings-session-autosave-enable]', args.origin),
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
-      power_menu_save_session: queryRect(cache, '[data-power-menu-action="save-session"]', args.origin),
-      power_menu_restore_session: queryRect(cache, '[data-power-menu-action="restore-session"]', args.origin),
+      power_menu_save_session: powerMenuRect('[data-power-menu-action="save-session"]'),
+      power_menu_restore_session: powerMenuRect('[data-power-menu-action="restore-session"]'),
       debug_reload_button: queryRect(cache, '[data-shell-debug-reload]', args.origin),
       debug_copy_snapshot_button: queryRect(cache, '[data-shell-debug-copy-snapshot]', args.origin),
       debug_crosshair_toggle: queryRect(cache, '[data-shell-debug-crosshair-toggle]', args.origin),

@@ -2,6 +2,7 @@ import type { SnapZone } from './tileZones'
 import type { TilingConfig } from './tilingConfig'
 import { getShellJson, postShellJson } from './shellBridge'
 import { shellHttpBase } from './shellHttp'
+import { clampWorkspaceSplitPaneFraction } from './workspaceState'
 
 export type SessionWindowRef = string
 
@@ -51,6 +52,8 @@ export type SavedWorkspaceGroup = {
   id: string
   windowRefs: SessionWindowRef[]
   activeWindowRef: SessionWindowRef | null
+  splitLeftWindowRef: SessionWindowRef | null
+  leftPaneFraction: number | null
 }
 
 export type SavedMonitorTileEntry = {
@@ -205,10 +208,18 @@ function sanitizeWorkspaceGroup(value: unknown): SavedWorkspaceGroup | null {
   }
   if (windowRefs.length === 0) return null
   const activeWindowRef = sanitizeWindowRef(value.activeWindowRef)
+  const splitLeftWindowRef = sanitizeWindowRef(value.splitLeftWindowRef)
+  const rawFraction =
+    typeof value.leftPaneFraction === 'number' ? value.leftPaneFraction : Number(value.leftPaneFraction)
+  const validSplitLeftWindowRef =
+    splitLeftWindowRef && windowRefs.includes(splitLeftWindowRef) && windowRefs.length > 1 ? splitLeftWindowRef : null
   return {
     id,
     windowRefs,
     activeWindowRef: activeWindowRef && windowRefs.includes(activeWindowRef) ? activeWindowRef : windowRefs[0],
+    splitLeftWindowRef: validSplitLeftWindowRef,
+    leftPaneFraction:
+      validSplitLeftWindowRef !== null ? clampWorkspaceSplitPaneFraction(rawFraction) : null,
   }
 }
 

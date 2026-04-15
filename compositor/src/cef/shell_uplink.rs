@@ -131,6 +131,10 @@ fn handle_uplink_list(
             let wid = args.int(1) as u32;
             uplink.shell_taskbar_activate(wid);
         }
+        "activate_window" => {
+            let wid = args.int(1) as u32;
+            uplink.shell_activate_window(wid);
+        }
         "shell_focus_ui_window" => {
             let wid = args.int(1) as u32;
             uplink.shell_focus_shell_ui_window(wid);
@@ -371,10 +375,11 @@ wrap_v8_handler! {
                     let cmd = cef_string_userfree_to_string(&a1.string_value());
                     let _ = list.set_string(1, Some(&CefString::from(cmd.as_str())));
                 }
-                "move_begin" | "move_end" | "taskbar_activate" | "shell_focus_ui_window"
-                | "shell_ui_grab_begin" | "minimize" | "resize_end" | "resize_shell_grab_begin" => {
+                "move_begin" | "move_end" | "taskbar_activate" | "activate_window"
+                | "shell_focus_ui_window" | "shell_ui_grab_begin" | "minimize" | "resize_end"
+                | "resize_shell_grab_begin" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/shell_focus_ui_window/shell_ui_grab_begin/minimize require window id");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize require window id");
                     };
                     let id = if a1.is_int() != 0 {
                         a1.int_value()
@@ -383,7 +388,7 @@ wrap_v8_handler! {
                     } else if a1.is_double() != 0 {
                         a1.double_value() as i32
                     } else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/shell_focus_ui_window/shell_ui_grab_begin/minimize: second arg must be a number");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize: second arg must be a number");
                     };
                     if id < 0 {
                         return_exception!("window id must be non-negative");
@@ -817,7 +822,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
+                        "unknown op (use close, quit, backed_window_open, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
                     );
                 }
             }

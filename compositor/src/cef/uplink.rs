@@ -143,6 +143,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_activate_window(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_activate_window(window_id);
+        });
+    }
+
     pub fn shell_focus_shell_ui_window(&self, window_id: u32) {
         self.run(move |s| {
             s.shell_focus_shell_ui_window(window_id);

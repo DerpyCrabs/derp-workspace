@@ -12,7 +12,15 @@ describe('sessionSnapshot', () => {
         version: 99,
         nextNativeWindowSeq: '3',
         workspace: {
-          groups: [{ id: 'group-1', windowRefs: ['bad', shellWindowRef(9002)], activeWindowRef: 'bad' }],
+        groups: [
+          {
+            id: 'group-1',
+            windowRefs: ['bad', shellWindowRef(9002)],
+            activeWindowRef: 'bad',
+            splitLeftWindowRef: 'bad',
+            leftPaneFraction: 0.5,
+          },
+        ],
           pinnedWindowRefs: ['bad', nativeWindowRef(2)],
           nextGroupSeq: '4',
         },
@@ -47,7 +55,15 @@ describe('sessionSnapshot', () => {
       version: 1,
       nextNativeWindowSeq: 3,
       workspace: {
-        groups: [{ id: 'group-1', windowRefs: [shellWindowRef(9002)], activeWindowRef: shellWindowRef(9002) }],
+        groups: [
+          {
+            id: 'group-1',
+            windowRefs: [shellWindowRef(9002)],
+            activeWindowRef: shellWindowRef(9002),
+            splitLeftWindowRef: null,
+            leftPaneFraction: null,
+          },
+        ],
         pinnedWindowRefs: [nativeWindowRef(2)],
         nextGroupSeq: 4,
       },

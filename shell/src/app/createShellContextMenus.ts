@@ -353,6 +353,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function toggleProgramsMenuMeta(outputName?: string | null) {
+    console.warn(
+      `[derp-shell-launcher] toggleProgramsMenuMeta open=${triggerIsOpen(programsMenuTrigger)} output=${outputName ?? ''}`,
+    )
     if (triggerIsOpen(programsMenuTrigger)) {
       hideContextMenu()
       return
@@ -763,19 +766,30 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
       return
     }
+    const layerPresent = args.floatingLayers.hasLayer(ROOT_CONTEXT_MENU_LAYER_ID)
+    if (!layerPresent) return
     void menuAtlasHostRevision()
     void menuListItems().length
     void menuPanelRevision()
     void menuPanelLayoutRevision()
     void args.screenDraftRows().length
     const anchor = ctxMenuAnchor()
-    const rid = requestAnimationFrame(() => {
+    const og = args.outputGeom()
+    const ph = args.outputPhysical()
+    const layoutOrigin = args.layoutCanvasOrigin()
+    const atlasBufferH = args.contextMenuAtlasBufferH()
+    let cancelled = false
+    const syncPlacement = () => {
+      if (cancelled) return
       const main = args.mainEl()
       const atlas = menuAtlasHostRef
       const panel = menuPanelRef
-      const og = args.outputGeom()
-      const ph = args.outputPhysical()
-      if (!main || !atlas || !panel || !og || !ph) return
+      if (!main || !atlas || !panel || !og || !ph) {
+        console.warn(
+          `[derp-shell-launcher] programsMenu syncPlacement skipped main=${Boolean(main)} atlas=${Boolean(atlas)} panel=${Boolean(panel)} og=${Boolean(og)} ph=${Boolean(ph)} open=${ctxMenuOpen()} output=${programsMenuOutputName() ?? ''}`,
+        )
+        return
+      }
       const { placement } = measureShellFloatingPlacementFromDom({
         main,
         atlasHost: atlas,
@@ -785,9 +799,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         canvasH: og.h,
         physicalW: ph.w,
         physicalH: ph.h,
-        contextMenuAtlasBufferH: args.contextMenuAtlasBufferH(),
+        contextMenuAtlasBufferH: atlasBufferH,
         screens: args.screenDraftRows(),
-        layoutOrigin: args.layoutCanvasOrigin(),
+        layoutOrigin,
       })
       shellContextMenuWire(
         true,
@@ -800,9 +814,17 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         placement.gw,
         placement.gh,
       )
+      console.warn(
+        `[derp-shell-launcher] programsMenu placement gx=${placement.gx} gy=${placement.gy} gw=${placement.gw} gh=${placement.gh} bx=${placement.bx} by=${placement.by} bw=${placement.bw} bh=${placement.bh} output=${programsMenuOutputName() ?? ''}`,
+      )
       args.floatingLayers.setLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID, placement)
+    }
+    queueMicrotask(syncPlacement)
+    const rid = requestAnimationFrame(syncPlacement)
+    onCleanup(() => {
+      cancelled = true
+      cancelAnimationFrame(rid)
     })
-    onCleanup(() => cancelAnimationFrame(rid))
   })
 
   function projectCurrentMenuElementRect(el: Element | null) {
@@ -853,6 +875,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   const onCtxKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight') {
+      console.warn(
+        `[derp-shell-launcher] document keydown key=${e.key} code=${e.code} repeat=${e.repeat} defaultPrevented=${e.defaultPrevented} open=${programsMenuOpen()}`,
+      )
+    }
     if (args.screenshotMode() && e.key === 'Escape') {
       e.preventDefault()
       args.stopScreenshotMode()
@@ -863,11 +890,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         e.preventDefault()
         return
       }
-      return
-    }
-    if (!e.repeat && (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight')) {
-      e.preventDefault()
-      toggleProgramsMenuMeta()
       return
     }
     if (
@@ -1036,6 +1058,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     }
   }
 
+  const onCtxKeyUp = (e: KeyboardEvent) => {
+    if (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight') {
+      console.warn(
+        `[derp-shell-launcher] document keyup key=${e.key} code=${e.code} repeat=${e.repeat} defaultPrevented=${e.defaultPrevented} open=${programsMenuOpen()}`,
+      )
+    }
+  }
+
   const onCtxPointerDown = (e: PointerEvent) => {
     if (!args.floatingLayers.anyOpen()) return
     const shouldDismiss = shouldDismissContextMenuPointerDown({
@@ -1046,9 +1076,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   document.addEventListener('keydown', onCtxKeyDown, true)
+  document.addEventListener('keyup', onCtxKeyUp, true)
   document.addEventListener('pointerdown', onCtxPointerDown, true)
   onCleanup(() => {
     document.removeEventListener('keydown', onCtxKeyDown, true)
+    document.removeEventListener('keyup', onCtxKeyUp, true)
     document.removeEventListener('pointerdown', onCtxPointerDown, true)
   })
 

@@ -171,13 +171,20 @@ export interface ShellTabButton {
   close?: Rect | null
   active: boolean
   pinned?: boolean
+  split_left?: boolean
 }
 
 export interface ShellTabGroup {
   group_id: string
   visible_window_id: number
+  split_left_window_id?: number | null
+  split_left_pane_fraction?: number | null
   hidden_window_ids: number[]
   member_window_ids: number[]
+  visible_window_ids?: number[]
+  split_left_rect?: Rect | null
+  split_right_rect?: Rect | null
+  split_divider_rect?: Rect | null
   tabs: ShellTabButton[]
 }
 
@@ -214,6 +221,8 @@ export interface ShellControls {
   programs_menu_list?: Rect | null
   tab_menu_pin?: Rect | null
   tab_menu_unpin?: Rect | null
+  tab_menu_use_split_left?: Rect | null
+  tab_menu_exit_split?: Rect | null
   settings_tab_user?: Rect | null
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
@@ -719,8 +728,20 @@ export async function normalizeTransientShellState(base: string): Promise<ShellS
 
 export async function normalizePersistentShellState(base: string): Promise<ShellSnapshot> {
   let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const shellUiWindowIds = [SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID]
-  for (const windowId of shellUiWindowIds) {
+  const persistentShellWindowIds = new Set<number>([
+    SHELL_UI_DEBUG_WINDOW_ID,
+    SHELL_UI_SETTINGS_WINDOW_ID,
+    ...shell.windows
+      .filter(
+        (window) =>
+          window.shell_hosted &&
+          !window.minimized &&
+          window.window_id !== SHELL_UI_DEBUG_WINDOW_ID &&
+          window.window_id !== SHELL_UI_SETTINGS_WINDOW_ID,
+      )
+      .map((window) => window.window_id),
+  ])
+  for (const windowId of persistentShellWindowIds) {
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const shellWindow = shellWindowById(shell, windowId)
     if (!shellWindow || shellWindow.minimized) continue
@@ -755,14 +776,22 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
   await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
   await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
   state.spawnedShellWindowIds.clear()
-  await normalizeTransientShellState(base)
-  let shell = await normalizePersistentShellState(base)
-  if (shell.windows.length === 0 && shell.focused_window_id == null && !shell.shell_keyboard_layout) {
+  let recovered = false
+  let shell: ShellSnapshot
+  for (;;) {
+    await normalizeTransientShellState(base)
+    shell = await normalizePersistentShellState(base)
     try {
-      await openSettings(base, 'keybind')
+      await openSettings(base, 'click')
       await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
       shell = await normalizePersistentShellState(base)
-    } catch {}
+      break
+    } catch {
+      if (recovered) break
+      await restartSession(state)
+      base = state.base
+      recovered = true
+    }
   }
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
   syncTrackedWindows(state, compositor)
@@ -1391,7 +1420,7 @@ export async function waitForPowerMenuOpen(base: string, timeoutMs = 5000): Prom
     'wait for power menu open',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.power_menu_open ? shell : null
+      return shell.power_menu_open && shell.controls?.power_menu_save_session ? shell : null
     },
     timeoutMs,
     100,

@@ -172,11 +172,14 @@ import { createShellExclusionSync } from './shellExclusionSync'
 import { createWorkspaceActions } from './workspaceActions'
 import {
   findMergeTarget,
+  splitLeftWindowId,
   windowLabel as groupedWindowLabel,
   type TabMergeTarget,
 } from './tabGroupOps'
 import { buildTaskbarGroupRows } from './taskbarGroups'
 import {
+  clampWorkspaceSplitPaneFraction,
+  getWorkspaceGroupSplit,
   isWorkspaceWindowPinned,
   reconcileWorkspaceState,
   setWorkspaceActiveTab,
@@ -184,7 +187,7 @@ import {
   workspaceStatesEqual,
   type WorkspaceState,
 } from './workspaceState'
-import { createWorkspaceSelectors } from './workspaceSelectors'
+import { createWorkspaceSelectors, type WorkspaceGroupModel } from './workspaceSelectors'
 import { buildE2eShellHtml, buildE2eShellSnapshot } from './e2eSnapshot'
 
 declare global {
@@ -215,6 +218,7 @@ declare global {
         | 'resize_shell_grab_begin'
         | 'resize_shell_grab_end'
         | 'taskbar_activate'
+        | 'activate_window'
         | 'shell_focus_ui_window'
         | 'shell_blur_ui_window'
         | 'shell_ui_grab_begin'
@@ -267,6 +271,9 @@ type ScreenshotSelectionState = {
 const PORTAL_PICKER_PREVIEW_W = 520
 const PORTAL_PICKER_PREVIEW_H = 260
 const PORTAL_PICKER_PREVIEW_PAD = 16
+const WORKSPACE_SPLIT_DIVIDER_PX = 4
+const WORKSPACE_SPLIT_MIN_PANE_PX = 160
+const WORKSPACE_SPLIT_MIN_HEIGHT_PX = 140
 
 type TabDragState = {
   pointerId: number
@@ -279,6 +286,31 @@ type TabDragState = {
   dragging: boolean
   detached: boolean
   target: TabMergeTarget | null
+}
+
+type SplitGroupRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type SplitLayoutRects = {
+  group: SplitGroupRect
+  left: SplitGroupRect
+  right: SplitGroupRect
+  leftWindowId: number
+  rightWindowIds: number[]
+}
+
+type SplitGroupGestureState = {
+  pointerId: number
+  groupId: string
+  kind: 'divider' | 'move' | 'resize'
+  edges: number
+  startGlobalX: number
+  startGlobalY: number
+  originGroupRect: SplitGroupRect
 }
 
 function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>): SavedRect {
@@ -344,6 +376,7 @@ function shellWireSend(
     | 'resize_shell_grab_begin'
     | 'resize_shell_grab_end'
     | 'taskbar_activate'
+    | 'activate_window'
     | 'shell_focus_ui_window'
     | 'shell_blur_ui_window'
     | 'shell_ui_grab_begin'
@@ -588,6 +621,7 @@ function App() {
   const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
   const [dragWindowId, setDragWindowId] = createSignal<number | null>(null)
   const [tabDragState, setTabDragState] = createSignal<TabDragState | null>(null)
+  const [splitGroupGesture, setSplitGroupGesture] = createSignal<SplitGroupGestureState | null>(null)
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const [shellWireIssue, setShellWireIssue] = createSignal<string | null>(null)
   const [shellActionIssue, setShellActionIssue] = createSignal<string | null>(null)
@@ -597,6 +631,8 @@ function App() {
   const [savedSessionAvailable, setSavedSessionAvailable] = createSignal(false)
   const [sessionPersistenceReady, setSessionPersistenceReady] = createSignal(false)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
+  const [hasSeenCompositorWindowSync, setHasSeenCompositorWindowSync] = createSignal(false)
+  const appliedSplitGroupLayoutKeys = new Map<string, string>()
   let windowSyncRecoveryPending = false
   let windowSyncRecoveryRequestedAt = 0
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
@@ -776,13 +812,28 @@ function App() {
         if (windowIds.length === 0) return null
         const activeWindowId =
           (group.activeWindowRef ? liveWindowIdForRef(group.activeWindowRef) : null) ?? windowIds[0]
+        const splitLeftWindowId =
+          group.splitLeftWindowRef !== null ? liveWindowIdForRef(group.splitLeftWindowRef) : null
         return {
           id: group.id,
           windowIds,
           activeWindowId,
+          splitLeftWindowId:
+            splitLeftWindowId !== null && windowIds.includes(splitLeftWindowId) ? splitLeftWindowId : null,
+          leftPaneFraction: group.leftPaneFraction,
         }
       })
-      .filter((group): group is { id: string; windowIds: number[]; activeWindowId: number } => group !== null)
+      .filter(
+        (
+          group,
+        ): group is {
+          id: string
+          windowIds: number[]
+          activeWindowId: number
+          splitLeftWindowId: number | null
+          leftPaneFraction: number | null
+        } => group !== null,
+      )
     const pinnedWindowIds = snapshot.workspace.pinnedWindowRefs
       .map((windowRef) => liveWindowIdForRef(windowRef))
       .filter((windowId): windowId is number => windowId !== null)
@@ -790,6 +841,21 @@ function App() {
       groups: groups.map((group) => ({ id: group.id, windowIds: group.windowIds })),
       activeTabByGroupId: Object.fromEntries(groups.map((group) => [group.id, group.activeWindowId])),
       pinnedWindowIds,
+      splitByGroupId: Object.fromEntries(
+        groups.flatMap((group) =>
+          group.splitLeftWindowId !== null
+            ? [
+                [
+                  group.id,
+                  {
+                    leftWindowId: group.splitLeftWindowId,
+                    leftPaneFraction: group.leftPaneFraction ?? 0.5,
+                  },
+                ] as const,
+              ]
+            : [],
+        ),
+      ),
       nextGroupSeq: snapshot.workspace.nextGroupSeq,
     }
     const reconciled = reconcileWorkspaceState(next, windowsListIds())
@@ -886,6 +952,9 @@ function App() {
     let json: string
     try {
       snapshot = sanitizeSessionSnapshot(buildSessionSnapshot())
+      if (!sessionSnapshotHasData(snapshot) && savedSessionAvailable() && !hasSeenCompositorWindowSync()) {
+        return
+      }
       json = JSON.stringify(snapshot)
     } catch (error) {
       console.warn('[derp-shell-session] build failed', error)
@@ -1157,15 +1226,40 @@ function App() {
     reportShellActionIssue,
     describeError,
     tabMenuItems: (windowId: number) => {
+      const groupId = workspaceGroupIdForWindow(windowId)
+      const split = groupId ? getWorkspaceGroupSplit(workspaceState(), groupId) : undefined
       const pinned = isWorkspaceWindowPinned(workspaceState(), windowId)
-      return [
+      const items = [
         {
+          actionId: pinned ? 'unpin' : 'pin',
           label: pinned ? 'Unpin tab' : 'Pin tab',
           action: () => {
             setWorkspaceState((prev) => setWorkspaceWindowPinned(prev, windowId, !pinned))
           },
         },
       ]
+      if (groupId && !split && (workspaceGroupsById().get(groupId)?.members.length ?? 0) >= 2) {
+        items.push({
+          actionId: 'use-split-left',
+          label: 'Use as split left tab',
+          action: () => {
+            if (!enterSplitGroupWindow(windowId)) return
+            queueMicrotask(() => {
+              applySplitGroupGeometry(groupId)
+            })
+          },
+        })
+      }
+      if (groupId && split?.leftWindowId === windowId) {
+        items.push({
+          actionId: 'exit-split',
+          label: 'Exit split view',
+          action: () => {
+            exitSplitGroupWindow(windowId)
+          },
+        })
+      }
+      return items
     },
     tabMenuWindowAvailable: (windowId: number) => {
       return allWindowsMap().has(windowId) && workspaceGroupIdForWindow(windowId) !== null
@@ -1177,7 +1271,8 @@ function App() {
 
   createEffect(() => {
     void shellWireReadyRev()
-    const layers = floatingLayers.layers()
+    const allLayers = floatingLayers.layers()
+    const layers = allLayers
       .filter((layer) => layer.placement)
       .map((layer) => ({
         id: layer.order >>> 0,
@@ -1185,6 +1280,7 @@ function App() {
         ...layer.placement!,
       }))
     if (layers.length === 0) {
+      if (allLayers.length > 0) return
       if (!portalPickerVisible()) hideFloatingPlacementWire()
       return
     }
@@ -1498,8 +1594,115 @@ function App() {
     send('e2e_html_response', requestId, buildE2eShellHtml(document, selector))
   }
 
+  function splitLayoutForGroup(
+    group: WorkspaceGroupModel,
+    overrideGroupRect?: SplitGroupRect,
+  ): SplitLayoutRects | null {
+    if (!group.splitLeftWindow || group.splitPaneFraction === null) return null
+    const stateGroup = workspaceState().groups.find((entry) => entry.id === group.id)
+    if (!stateGroup) return null
+    const rightWindowIds = stateGroup.windowIds.filter((windowId) => windowId !== group.splitLeftWindowId)
+    if (rightWindowIds.length === 0) return null
+    const leftWindow = group.splitLeftWindow
+    const rightWindow = group.visibleWindow
+    const overlapping =
+      leftWindow.x === rightWindow.x &&
+      leftWindow.y === rightWindow.y &&
+      leftWindow.width === rightWindow.width &&
+      leftWindow.height === rightWindow.height
+    const groupRect =
+      overrideGroupRect ??
+      (overlapping
+        ? rectFromWindow(rightWindow)
+        : {
+            x: Math.min(leftWindow.x, rightWindow.x),
+            y: Math.min(leftWindow.y, rightWindow.y),
+            width: Math.max(leftWindow.x + leftWindow.width, rightWindow.x + rightWindow.width) - Math.min(leftWindow.x, rightWindow.x),
+            height: Math.max(leftWindow.y + leftWindow.height, rightWindow.y + rightWindow.height) - Math.min(leftWindow.y, rightWindow.y),
+          })
+    const contentWidth = Math.max(2 * WORKSPACE_SPLIT_MIN_PANE_PX, groupRect.width)
+    const leftWidth = Math.max(
+      WORKSPACE_SPLIT_MIN_PANE_PX,
+      Math.min(
+        contentWidth - WORKSPACE_SPLIT_MIN_PANE_PX,
+        Math.round(contentWidth * clampWorkspaceSplitPaneFraction(group.splitPaneFraction)),
+      ),
+    )
+    const rightWidth = Math.max(WORKSPACE_SPLIT_MIN_PANE_PX, contentWidth - leftWidth)
+    return {
+      group: {
+        x: groupRect.x,
+        y: groupRect.y,
+        width: leftWidth + rightWidth,
+        height: Math.max(WORKSPACE_SPLIT_MIN_HEIGHT_PX, groupRect.height),
+      },
+      left: {
+        x: groupRect.x,
+        y: groupRect.y,
+        width: leftWidth,
+        height: Math.max(WORKSPACE_SPLIT_MIN_HEIGHT_PX, groupRect.height),
+      },
+      right: {
+        x: groupRect.x + leftWidth,
+        y: groupRect.y,
+        width: rightWidth,
+        height: Math.max(WORKSPACE_SPLIT_MIN_HEIGHT_PX, groupRect.height),
+      },
+      leftWindowId: group.splitLeftWindowId!,
+      rightWindowIds,
+    }
+  }
+
+  function applySplitGroupGeometry(groupId: string, overrideGroupRect?: SplitGroupRect) {
+    const group = workspaceGroupsById().get(groupId)
+    if (!group) return null
+    const layout = splitLayoutForGroup(group, overrideGroupRect)
+    if (!layout) return null
+    for (const windowId of [layout.leftWindowId, ...layout.rightWindowIds]) {
+      const rect = windowId === layout.leftWindowId ? layout.left : layout.right
+      shellWireSend(
+        'set_geometry',
+        windowId,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        SHELL_LAYOUT_FLOATING,
+      )
+    }
+    setWindows((map) => {
+      const next = new Map(map)
+      for (const windowId of [layout.leftWindowId, ...layout.rightWindowIds]) {
+        const current = next.get(windowId)
+        if (!current) continue
+        const rect = windowId === layout.leftWindowId ? layout.left : layout.right
+        next.set(windowId, {
+          ...current,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          maximized: false,
+          minimized: windowId === layout.leftWindowId || windowId === group.visibleWindowId ? false : current.minimized,
+        })
+      }
+      return next
+    })
+    const leftWindow = allWindowsMap().get(layout.leftWindowId)
+    const rightWindow = allWindowsMap().get(group.visibleWindowId)
+    if (leftWindow?.minimized) shellWireSend('taskbar_activate', layout.leftWindowId)
+    if (rightWindow?.minimized) queueMicrotask(() => activateTaskbarWindowViaShell(group.visibleWindowId))
+    return layout
+  }
+
   function syncWindowGeometry(targetWindowId: number, fromWindow: DerpWindow) {
     const layoutFlag = fromWindow.maximized ? SHELL_LAYOUT_MAXIMIZED : SHELL_LAYOUT_FLOATING
+    const groupId = workspaceGroupIdForWindow(targetWindowId)
+    const split = groupId ? getWorkspaceGroupSplit(workspaceState(), groupId) : undefined
+    const groupWindowIds =
+      split && split.leftWindowId !== targetWindowId
+        ? workspaceGroupWindowIds(workspaceState(), targetWindowId).filter((windowId) => windowId !== split.leftWindowId)
+        : workspaceGroupWindowIds(workspaceState(), targetWindowId)
     shellWireSend(
       'set_geometry',
       targetWindowId,
@@ -1510,7 +1713,6 @@ function App() {
       layoutFlag,
     )
     setWindows((map) => {
-      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), targetWindowId)
       let next = map
       let changed = false
       for (const windowId of groupWindowIds) {
@@ -1558,6 +1760,14 @@ function App() {
       focusWindowLocally(windowId)
     }
     shellWireSend('taskbar_activate', windowId)
+  }
+
+  function activateWindowViaShell(windowId: number) {
+    const window = allWindowsMap().get(windowId)
+    if (window && windowIsShellHosted(window) && !window.minimized) {
+      focusWindowLocally(windowId)
+    }
+    shellWireSend('activate_window', windowId)
   }
 
   function moveWindowUnderPointer(windowId: number, clientX: number, clientY: number) {
@@ -1636,6 +1846,9 @@ function App() {
     closeGroupWindow,
     cycleFocusedWorkspaceGroup,
     activateTaskbarGroup,
+    enterSplitGroupWindow,
+    exitSplitGroupWindow,
+    setSplitGroupFraction,
   } = createWorkspaceActions({
     workspaceState,
     setWorkspaceState,
@@ -1649,6 +1862,7 @@ function App() {
     groupForWindow: workspaceGroupForWindow,
     syncWindowGeometry,
     focusShellUiWindow,
+    activateWindowViaShell,
     activateTaskbarWindowViaShell,
     moveWindowUnderPointer,
     shellWireSend,
@@ -1665,6 +1879,7 @@ function App() {
     if (button !== 0) return
     const sourceGroupId = workspaceGroupIdForWindow(windowId)
     if (!sourceGroupId) return
+    if (splitLeftWindowId(workspaceState(), sourceGroupId) === windowId) return
     shellContextMenus.hideContextMenu()
     setSuppressTabClickWindowId(null)
     setTabDragState({
@@ -1690,9 +1905,30 @@ function App() {
       ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame) ?? drag.target
       : drag.target
     const merged = drag.dragging && nextTarget ? applyTabDrop(drag.windowId, nextTarget) : false
+    const clickTarget = !drag.dragging
+      ? (document
+          .elementsFromPoint(clientX, clientY)
+          .find(
+            (element) =>
+              element instanceof HTMLElement &&
+              element.closest(`[data-workspace-tab="${drag.windowId}"]`),
+          ) ?? null)
+      : null
     const changed = merged || drag.detached
-    setTabDragState(null)
-    if (changed) setSuppressTabClickWindowId(drag.windowId)
+    if (changed) {
+      setTabDragState(null)
+      setSuppressTabClickWindowId(drag.windowId)
+      return
+    }
+    if (clickTarget) {
+      setTabDragState(null)
+      setSuppressTabClickWindowId(drag.windowId)
+      selectGroupWindow(drag.windowId)
+      return
+    }
+    queueMicrotask(() => {
+      setTabDragState((current) => (current?.pointerId === pointerId ? null : current))
+    })
   }
 
   function renderShellWindowContent(windowId: number) {
@@ -1782,6 +2018,103 @@ function App() {
     }
   })
 
+  createEffect(() => {
+    const activeSplitGesture = splitGroupGesture()
+    const nextKeys = new Map<string, string>()
+    for (const group of workspaceGroups()) {
+      if (group.splitLeftWindowId === null || group.splitPaneFraction === null) continue
+      if (activeSplitGesture?.groupId === group.id) continue
+      const key = `${group.splitLeftWindowId}:${group.visibleWindowId}:${group.splitPaneFraction}`
+      nextKeys.set(group.id, key)
+      if (appliedSplitGroupLayoutKeys.get(group.id) === key) continue
+      queueMicrotask(() => {
+        applySplitGroupGeometry(group.id)
+      })
+    }
+    appliedSplitGroupLayoutKeys.clear()
+    for (const [groupId, key] of nextKeys) appliedSplitGroupLayoutKeys.set(groupId, key)
+  })
+
+  function beginSplitGroupGesture(
+    groupId: string,
+    pointerId: number,
+    kind: SplitGroupGestureState['kind'],
+    edges: number,
+    clientX: number,
+    clientY: number,
+  ) {
+    if (splitGroupGesture()) return false
+    const group = workspaceGroupsById().get(groupId)
+    if (!group) return false
+    const layout = splitLayoutForGroup(group)
+    const global = shellPointerGlobalLogical(clientX, clientY)
+    if (!layout || !global) return false
+    setSplitGroupGesture({
+      pointerId,
+      groupId,
+      kind,
+      edges,
+      startGlobalX: global.x,
+      startGlobalY: global.y,
+      originGroupRect: layout.group,
+    })
+    shellWireSend('shell_ui_grab_begin', SHELL_UI_SETTINGS_WINDOW_ID)
+    return true
+  }
+
+  function updateSplitGroupGesture(pointerId: number, clientX: number, clientY: number) {
+    const gesture = splitGroupGesture()
+    if (!gesture || gesture.pointerId !== pointerId) return
+    const global = shellPointerGlobalLogical(clientX, clientY)
+    if (!global) return
+    if (gesture.kind === 'divider') {
+      const group = workspaceGroupsById().get(gesture.groupId)
+      if (!group) return
+      const relativeX = Math.max(
+        0,
+        Math.min(gesture.originGroupRect.width, global.x - gesture.originGroupRect.x),
+      )
+      const fraction = clampWorkspaceSplitPaneFraction(relativeX / Math.max(1, gesture.originGroupRect.width))
+      setSplitGroupFraction(gesture.groupId, fraction)
+      applySplitGroupGeometry(gesture.groupId, gesture.originGroupRect)
+      return
+    }
+    const dx = global.x - gesture.startGlobalX
+    const dy = global.y - gesture.startGlobalY
+    let nextRect = { ...gesture.originGroupRect }
+    if (gesture.kind === 'move') {
+      nextRect = {
+        ...nextRect,
+        x: gesture.originGroupRect.x + dx,
+        y: gesture.originGroupRect.y + dy,
+      }
+    } else {
+      if ((gesture.edges & SHELL_RESIZE_LEFT) !== 0) {
+        const maxLeft = gesture.originGroupRect.x + gesture.originGroupRect.width - 2 * WORKSPACE_SPLIT_MIN_PANE_PX
+        const nextX = Math.min(gesture.originGroupRect.x + dx, maxLeft)
+        nextRect.x = nextX
+        nextRect.width = gesture.originGroupRect.width + (gesture.originGroupRect.x - nextX)
+      }
+      if ((gesture.edges & SHELL_RESIZE_RIGHT) !== 0) {
+        nextRect.width = Math.max(
+          2 * WORKSPACE_SPLIT_MIN_PANE_PX,
+          gesture.originGroupRect.width + dx,
+        )
+      }
+      if ((gesture.edges & SHELL_RESIZE_BOTTOM) !== 0) {
+        nextRect.height = Math.max(WORKSPACE_SPLIT_MIN_HEIGHT_PX, gesture.originGroupRect.height + dy)
+      }
+    }
+    applySplitGroupGeometry(gesture.groupId, nextRect)
+  }
+
+  function endSplitGroupGesture(pointerId: number) {
+    const gesture = splitGroupGesture()
+    if (!gesture || gesture.pointerId !== pointerId) return
+    setSplitGroupGesture(null)
+    shellWireSend('shell_ui_grab_end')
+  }
+
   const onTabDragPointerMove = (event: PointerEvent) => {
     const prev = tabDragState()
     if (!prev || prev.pointerId !== event.pointerId) return
@@ -1816,24 +2149,54 @@ function App() {
     if (!prev || prev.pointerId !== event.pointerId) return
     setTabDragState(null)
   }
+  const onSplitGroupPointerMove = (event: PointerEvent) => {
+    updateSplitGroupGesture(event.pointerId, event.clientX, event.clientY)
+  }
+  const onSplitGroupPointerUp = (event: PointerEvent) => {
+    endSplitGroupGesture(event.pointerId)
+  }
+  const onSplitGroupPointerCancel = (event: PointerEvent) => {
+    endSplitGroupGesture(event.pointerId)
+  }
   document.addEventListener('pointermove', onTabDragPointerMove, true)
   document.addEventListener('pointerup', onTabDragPointerUp, true)
   document.addEventListener('pointercancel', onTabDragPointerCancel, true)
+  document.addEventListener('pointermove', onSplitGroupPointerMove, true)
+  document.addEventListener('pointerup', onSplitGroupPointerUp, true)
+  document.addEventListener('pointercancel', onSplitGroupPointerCancel, true)
   onCleanup(() => {
     document.removeEventListener('pointermove', onTabDragPointerMove, true)
     document.removeEventListener('pointerup', onTabDragPointerUp, true)
     document.removeEventListener('pointercancel', onTabDragPointerCancel, true)
+    document.removeEventListener('pointermove', onSplitGroupPointerMove, true)
+    document.removeEventListener('pointerup', onSplitGroupPointerUp, true)
+    document.removeEventListener('pointercancel', onSplitGroupPointerCancel, true)
   })
 
   function WorkspaceGroupFrame(props: { groupId: string }) {
-      const group = createMemo(() => workspaceGroupsById().get(props.groupId) ?? null)
+    const group = createMemo(() => workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
-    const winModel = createMemo((): ShellWindowModel | undefined => {
+    const splitLayout = createMemo(() => {
+      const currentGroup = group()
+      return currentGroup ? splitLayoutForGroup(currentGroup) : null
+    })
+    const frameModel = createMemo((): ShellWindowModel | undefined => {
       const currentVisibleWindowId = visibleWindowId()
       if (currentVisibleWindowId == null) return undefined
       const r = allWindowsMap().get(currentVisibleWindowId)
       if (!r || r.minimized) return undefined
-      return { ...r, snap_tiled: perMonitorTiles.isTiled(r.window_id) }
+      const split = splitLayout()
+      if (!split) return { ...r, snap_tiled: perMonitorTiles.isTiled(r.window_id) }
+      return {
+        ...r,
+        x: split.group.x,
+        y: split.group.y,
+        width: split.group.width,
+        height: split.group.height,
+        maximized: false,
+        fullscreen: false,
+        snap_tiled: false,
+      }
     })
     const stackZ = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()
@@ -1860,14 +2223,58 @@ function App() {
         },
       }
     })
+    const selectTab = (windowId: number) => {
+      const changed = selectGroupWindow(windowId)
+      if (!changed) return
+      if ((group()?.splitLeftWindowId ?? null) === windowId) return
+      if (splitLayout()) {
+        queueMicrotask(() => {
+          applySplitGroupGeometry(props.groupId)
+        })
+      }
+    }
+    const renderSplitPane = (
+      windowId: number,
+      rect: SplitGroupRect,
+      testId: string,
+      extraAttrs: Record<string, string>,
+    ) => {
+      const window = allWindowsMap().get(windowId)
+      const shellHosted = !!window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+      return (
+        <div
+          data-testid={testId}
+          {...extraAttrs}
+          class="pointer-events-none fixed box-border"
+          style={{
+            left: `${rect.x}px`,
+            top: `${rect.y}px`,
+            width: `${rect.width}px`,
+            height: `${rect.height}px`,
+            'z-index': 1005 + stackZ(),
+          }}
+        >
+          <Show when={shellHosted}>
+            <div
+              class="pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
+              onPointerDown={() => {
+                selectGroupWindow(windowId)
+              }}
+            >
+              {renderShellWindowContent(windowId)}
+            </div>
+          </Show>
+        </div>
+      )
+    }
     return (
-      <Show when={winModel()} fallback={null}>
+      <Show when={frameModel()} fallback={null}>
         <ShellWindowFrame
-          win={winModel}
+          win={frameModel}
           repaintKey={snapChromeRev}
           stackZ={stackZ}
           focused={rowFocused}
-          shellUiRegister={deskShellUiReg()}
+          shellUiRegister={splitLayout() ? undefined : deskShellUiReg()}
           tabStrip={
             group() ? (
               <WorkspaceTabStrip
@@ -1879,10 +2286,11 @@ function App() {
                   active: member.window_id === group()!.visibleWindowId,
                   pinned: isWorkspaceWindowPinned(workspaceState(), member.window_id),
                 }))}
+                splitLeftWindowId={group()!.splitLeftWindowId}
                 dragWindowId={tabDragState()?.windowId ?? null}
                 dropTarget={tabDragState()?.target ?? null}
                 suppressClickWindowId={suppressTabClickWindowId()}
-                onSelectTab={selectGroupWindow}
+                onSelectTab={selectTab}
                 onConsumeSuppressedClick={(windowId) => {
                   if (suppressTabClickWindowId() === windowId) setSuppressTabClickWindowId(null)
                 }}
@@ -1895,7 +2303,10 @@ function App() {
             ) : undefined
           }
           onFocusRequest={() => {
-            const currentVisibleWindowId = visibleWindowId()
+            const currentVisibleWindowId =
+              group()?.members.some((member) => member.window_id === focusedWindowId())
+                ? focusedWindowId()
+                : visibleWindowId()
             if (currentVisibleWindowId == null) return
             const window = allWindowsMap().get(currentVisibleWindowId)
             if (!window) return
@@ -1907,7 +2318,8 @@ function App() {
               activateTaskbarWindowViaShell(currentVisibleWindowId)
             }
           }}
-          onTitlebarPointerDown={(cx, cy) => {
+          onTitlebarPointerDown={(pointerId, cx, cy) => {
+            if (splitLayout() && beginSplitGroupGesture(props.groupId, pointerId, 'move', 0, cx, cy)) return
             const currentVisibleWindowId = visibleWindowId()
             if (currentVisibleWindowId != null) beginShellWindowMove(currentVisibleWindowId, cx, cy)
           }}
@@ -1917,11 +2329,24 @@ function App() {
             focusWindowViaShell(currentVisibleWindowId)
             openSnapAssistPicker(currentVisibleWindowId, 'button', anchorRect)
           }}
-          onResizeEdgeDown={(edges, cx, cy) => {
+          onResizeEdgeDown={(edges, pointerId, cx, cy) => {
+            if (
+              splitLayout() &&
+              beginSplitGroupGesture(props.groupId, pointerId, 'resize', edges, cx, cy)
+            ) {
+              return
+            }
             const currentVisibleWindowId = visibleWindowId()
             if (currentVisibleWindowId != null) beginShellWindowResize(currentVisibleWindowId, edges, cx, cy)
           }}
           onMinimize={() => {
+            if (splitLayout()) {
+              const leftWindowId = group()?.splitLeftWindowId
+              const rightWindowId = visibleWindowId()
+              if (leftWindowId != null) shellWireSend('minimize', leftWindowId)
+              if (rightWindowId != null) shellWireSend('minimize', rightWindowId)
+              return
+            }
             const currentVisibleWindowId = visibleWindowId()
             if (currentVisibleWindowId != null) shellWireSend('minimize', currentVisibleWindowId)
           }}
@@ -1930,14 +2355,57 @@ function App() {
             if (currentVisibleWindowId != null) toggleShellMaximizeForWindow(currentVisibleWindowId)
           }}
           onClose={() => {
-            const currentVisibleWindowId = visibleWindowId()
-            if (currentVisibleWindowId != null) closeGroupWindow(currentVisibleWindowId)
+            const focusedGroupWindowId =
+              group()?.members.some((member) => member.window_id === focusedWindowId())
+                ? focusedWindowId()
+                : visibleWindowId()
+            if (focusedGroupWindowId != null) closeGroupWindow(focusedGroupWindowId)
           }}
         >
-          <Show when={visibleWindowId() !== null}>
+          <Show when={!splitLayout() && visibleWindowId() !== null}>
             {renderShellWindowContent(visibleWindowId()!)}
           </Show>
         </ShellWindowFrame>
+        <Show when={splitLayout()} keyed>
+          {(layout) => (
+            <>
+              {renderSplitPane(
+                layout.leftWindowId,
+                layout.left,
+                'workspace-split-left-pane',
+                {
+                  'data-workspace-split-left-pane': String(layout.leftWindowId),
+                },
+              )}
+              {renderSplitPane(
+                group()!.visibleWindowId,
+                layout.right,
+                'workspace-split-right-pane',
+                {
+                  'data-workspace-split-right-pane': String(group()!.visibleWindowId),
+                },
+              )}
+              <div
+                data-testid="workspace-split-divider"
+                data-workspace-split-divider={props.groupId}
+                class="fixed z-6 cursor-col-resize bg-[color-mix(in_srgb,var(--shell-border)_88%,var(--shell-accent)_12%)]"
+                style={{
+                  left: `${layout.left.x + layout.left.width - Math.floor(WORKSPACE_SPLIT_DIVIDER_PX / 2)}px`,
+                  top: `${layout.left.y + 6}px`,
+                  width: `${WORKSPACE_SPLIT_DIVIDER_PX}px`,
+                  height: `${Math.max(24, layout.left.height - 12)}px`,
+                  'z-index': 1006 + stackZ(),
+                }}
+                onPointerDown={(event) => {
+                  if (!event.isPrimary || event.button !== 0) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  beginSplitGroupGesture(props.groupId, event.pointerId, 'divider', 0, event.clientX, event.clientY)
+                }}
+              />
+            </>
+          )}
+        </Show>
       </Show>
     )
   }
@@ -2114,6 +2582,27 @@ function App() {
           )}
         </Show>
       </div>
+    )
+  }
+
+  function SplitGestureOverlay() {
+    const cursorClass = createMemo(() => {
+      const gesture = splitGroupGesture()
+      if (!gesture) return 'cursor-default'
+      return gesture.kind === 'divider' ? 'cursor-col-resize' : 'cursor-grabbing'
+    })
+
+    return (
+      <div
+        data-workspace-split-gesture-overlay
+        class={`fixed inset-0 z-470110 touch-none ${cursorClass()}`}
+        onContextMenu={(event) => {
+          event.preventDefault()
+        }}
+        onPointerMove={onSplitGroupPointerMove}
+        onPointerUp={onSplitGroupPointerUp}
+        onPointerCancel={onSplitGroupPointerCancel}
+      />
     )
   }
 
@@ -2883,8 +3372,7 @@ function App() {
       version: 1,
       nextNativeWindowSeq: nextNativeWindowSeq(),
       workspace: {
-        groups: workspaceState().groups
-          .map((group) => {
+        groups: workspaceState().groups.flatMap((group) => {
             const windowRefs = group.windowIds
               .map((windowId) => {
                 const window = allWindowsMap().get(windowId)
@@ -2895,20 +3383,27 @@ function App() {
                   : null
               })
               .filter((windowRef): windowRef is SessionWindowRef => windowRef !== null)
-            if (windowRefs.length === 0) return null
+            if (windowRefs.length === 0) return []
             const activeWindowRef = windowRefs.find(
               (windowRef) => liveWindowIdForRef(windowRef) === workspaceState().activeTabByGroupId[group.id],
             )
-            return {
-              id: group.id,
-              windowRefs,
-              activeWindowRef: activeWindowRef ?? windowRefs[0],
-            }
-          })
-          .filter(
-            (group): group is { id: string; windowRefs: SessionWindowRef[]; activeWindowRef: SessionWindowRef } =>
-              group !== null,
-          ),
+            return [
+              {
+                id: group.id,
+                windowRefs,
+                activeWindowRef: activeWindowRef ?? windowRefs[0],
+                splitLeftWindowRef:
+                  workspaceState().splitByGroupId[group.id] &&
+                  workspaceState().splitByGroupId[group.id]!.leftWindowId > 0
+                    ? windowRefs.find(
+                        (windowRef) =>
+                          liveWindowIdForRef(windowRef) === workspaceState().splitByGroupId[group.id]!.leftWindowId,
+                      ) ?? null
+                    : null,
+                leftPaneFraction: workspaceState().splitByGroupId[group.id]?.leftPaneFraction ?? null,
+              },
+            ]
+          }),
         pinnedWindowRefs: workspaceState().pinnedWindowIds
           .map((windowId) => {
             const window = allWindowsMap().get(windowId)
@@ -2997,6 +3492,7 @@ function App() {
     }
     setSessionPersistenceReady(false)
     setSessionRestoreSnapshot(snapshot)
+    setHasSeenCompositorWindowSync(false)
     lastPersistedSessionJson = JSON.stringify(snapshot)
     lastAppliedRestoreSignature = ''
     setNextNativeWindowSeq(Math.max(1, snapshot.nextNativeWindowSeq))
@@ -3778,6 +4274,9 @@ function App() {
         return
       }
       if (d.type === 'programs_menu_toggle') {
+        console.warn(
+          `[derp-shell-launcher] detail programs_menu_toggle output=${typeof d.output_name === 'string' ? d.output_name : ''}`,
+        )
         shellContextMenus.toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
         return
       }
@@ -3890,6 +4389,9 @@ function App() {
           return
         }
         if (action === 'toggle_programs_menu') {
+          console.warn(
+            `[derp-shell-launcher] keybind toggle_programs_menu output=${typeof d.output_name === 'string' ? d.output_name : ''}`,
+          )
           shellContextMenus.toggleProgramsMenuMeta(
             typeof d.output_name === 'string' ? d.output_name : null,
           )
@@ -4198,6 +4700,7 @@ function App() {
         return
       }
       if (d.type === 'window_list') {
+        setHasSeenCompositorWindowSync(true)
         windowSyncRecoveryPending = false
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
@@ -4207,6 +4710,7 @@ function App() {
         return
       }
       if (d.type === 'window_state') {
+        setHasSeenCompositorWindowSync(true)
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
@@ -4215,6 +4719,7 @@ function App() {
         return
       }
       if (d.type === 'window_unmapped') {
+        setHasSeenCompositorWindowSync(true)
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
@@ -4241,12 +4746,14 @@ function App() {
               ),
             )
             activateTaskbarWindowViaShell(pendingCloseActivation.nextVisibleId)
+            applySplitGroupGeometry(pendingCloseActivation.groupId)
           })
         }
         if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }
       if (d.type === 'window_geometry') {
+        setHasSeenCompositorWindowSync(true)
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
@@ -4269,6 +4776,7 @@ function App() {
         return
       }
       if (d.type === 'window_mapped') {
+        setHasSeenCompositorWindowSync(true)
         const result = applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
@@ -4277,6 +4785,7 @@ function App() {
         return
       }
       if (d.type === 'window_metadata') {
+        setHasSeenCompositorWindowSync(true)
         applyModelCompositorDetail(d, {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
@@ -4349,6 +4858,10 @@ function App() {
       bootstrapSnapshotTimer = window.setTimeout(retryBootstrapSnapshot, 100)
     }
     retryBootstrapSnapshot()
+    queueMicrotask(() => {
+      requestCompositorSync()
+      syncCompositorSnapshot(true)
+    })
 
     const syncViewport = () =>
       setViewportCss({ w: window.innerWidth, h: window.innerHeight })
@@ -4411,6 +4924,10 @@ function App() {
         shellMoveLog('window_blur_while_shell_resize', {
           windowId: shellWindowResize.windowId,
         })
+      }
+      if (splitGroupGesture()) {
+        setSplitGroupGesture(null)
+        shellWireSend('shell_ui_grab_end')
       }
       if (screenshotMode()) stopScreenshotMode()
       if (portalPickerVisible()) closePortalPickerUi()
@@ -4574,6 +5091,10 @@ function App() {
       </For>
 
       <TabDragOverlay />
+
+      <Show when={splitGroupGesture()}>
+        <SplitGestureOverlay />
+      </Show>
 
       {volumeOverlayHud()}
 

@@ -32,6 +32,7 @@ export function TabContextMenu(props: TabContextMenuProps) {
               role="menuitem"
               title={item.title}
               data-tab-menu-idx={idx()}
+              data-tab-menu-action={item.actionId}
               onClick={() => {
                 if (item.disabled) return
                 item.action()

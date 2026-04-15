@@ -28,7 +28,6 @@ import {
   postJson,
   runKeybind,
   windowControls,
-  tapKey,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
@@ -83,6 +82,13 @@ async function clearSessionState(base: string) {
       nativeWindows: [],
     },
   })
+}
+
+async function pressSuperEnter(base: string) {
+  await postJson(base, '/test/input/key', { keycode: 125, action: 'press' })
+  await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'press' })
+  await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'release' })
+  await postJson(base, '/test/input/key', { keycode: 125, action: 'release' })
 }
 
 async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean) {
@@ -282,6 +288,38 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('settings-shell.json', settingsFocused.shell)
   })
 
+  test('super enter launches terminal without opening programs menu', async ({ base }) => {
+    const before = await getSnapshots(base)
+    const knownWindowIds = new Set(before.compositor.windows.map((window) => window.window_id))
+    await pressSuperEnter(base)
+    const launched = await waitFor(
+      'wait for super enter terminal launch',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (shell.programs_menu_open) return null
+        const window = compositor.windows.find(
+          (entry) => !entry.shell_hosted && !knownWindowIds.has(entry.window_id) && entry.app_id === 'foot',
+        )
+        return window ? { compositor, shell, window } : null
+      },
+      10000,
+      100,
+    )
+    await writeJsonArtifact('super-enter-terminal.json', {
+      before: {
+        programs_menu_open: before.shell.programs_menu_open,
+        window_ids: [...knownWindowIds],
+      },
+      after: {
+        programs_menu_open: launched.shell.programs_menu_open,
+        window_id: launched.window.window_id,
+        app_id: launched.window.app_id,
+        title: launched.window.title,
+      },
+    })
+    await cleanupNativeWindows(base, new Set([launched.window.window_id]))
+  })
+
   test('taskbar settings wakes cleanly after idle pointer move', async ({ base }) => {
     await waitForSessionRestoreIdle(base)
     const initialShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -403,7 +441,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     let powerMenu = await openPowerMenu(base)
     assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')
-    await tapKey(base, KEY.enter)
+    await clickRect(base, powerMenu.controls.power_menu_save_session)
     await waitForSessionShellWindow(base, shellTestWindowId, true)
 
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -412,8 +450,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     powerMenu = await openPowerMenu(base)
     assert(powerMenu.controls?.power_menu_restore_session, 'missing restore workspace power control')
-    await tapKey(base, KEY.down)
-    await tapKey(base, KEY.enter)
+    await clickRect(base, powerMenu.controls.power_menu_restore_session)
     const restored = await waitFor(
       `wait for restored shell test window ${shellTestWindowId}`,
       async () => {

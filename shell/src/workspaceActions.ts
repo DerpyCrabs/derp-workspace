@@ -6,8 +6,12 @@ import type { DerpWindow } from './app/appWindowState'
 import type { WorkspaceState } from './workspaceState'
 import {
   cycleWorkspaceTab,
+  enterWorkspaceSplitView,
+  exitWorkspaceSplitView,
   groupIdForWindow,
+  getWorkspaceGroupSplit,
   moveWorkspaceWindowToGroup,
+  setWorkspaceSplitFraction,
   setWorkspaceActiveTab,
   splitWorkspaceWindowToOwnGroup,
   workspaceStatesEqual,
@@ -27,6 +31,7 @@ type WorkspaceActionsOptions = {
   groupForWindow: (windowId: number | null | undefined) => WorkspaceGroupModel | null
   syncWindowGeometry: (windowId: number, fromWindow: DerpWindow) => void
   focusShellUiWindow: (windowId: number) => void
+  activateWindowViaShell: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   moveWindowUnderPointer: (windowId: number, clientX: number, clientY: number) => void
   shellWireSend: (op: 'minimize' | 'close', arg?: number | string) => boolean
@@ -44,7 +49,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
       options.focusShellUiWindow(windowId)
       return true
     }
-    options.activateTaskbarWindowViaShell(windowId)
+    options.activateWindowViaShell(windowId)
     return true
   }
 
@@ -94,6 +99,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     const sourceGroup = options.groupForWindow(windowId)
     const sourceWindow = options.allWindowsMap().get(windowId)
     if (!sourceGroupId || !sourceGroup || !sourceWindow || sourceGroup.members.length < 2) return false
+    if (getWorkspaceGroupSplit(prevState, sourceGroupId)?.leftWindowId === windowId) return false
     const nextState = splitWorkspaceWindowToOwnGroup(prevState, windowId)
     if (workspaceStatesEqual(nextState, prevState)) return false
     const nextVisibleId =
@@ -119,6 +125,22 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     if (!groupId) return false
     const group = options.groupForWindow(windowId)
     if (!group) return false
+    if (group.splitLeftWindowId === windowId) {
+      const window = options.allWindowsMap().get(windowId)
+      if (
+        window &&
+        !window.minimized &&
+        options.activeWorkspaceGroupId() === groupId &&
+        options.focusedWindowId() === windowId
+      ) {
+        return true
+      }
+      if (window && (window.shell_flags & 1) !== 0) {
+        options.focusShellUiWindow(windowId)
+        return true
+      }
+      return focusWindowViaShell(windowId)
+    }
     if (group.visibleWindowId === windowId) {
       const window = options.allWindowsMap().get(windowId)
       if (
@@ -136,11 +158,14 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
       return focusWindowViaShell(windowId)
     }
     const targetWindow = options.allWindowsMap().get(windowId)
-    if (targetWindow) options.syncWindowGeometry(windowId, group.visibleWindow)
+    const previousVisibleWindow = group.visibleWindow
+    const splitSwitch = group.splitLeftWindowId !== null && targetWindow && windowId !== group.splitLeftWindowId
+    if (splitSwitch) options.syncWindowGeometry(windowId, previousVisibleWindow)
     options.setWorkspaceState((prev) => setWorkspaceActiveTab(prev, groupId, windowId))
     queueMicrotask(() => {
-      options.activateTaskbarWindowViaShell(windowId)
-      if (!group.visibleWindow.minimized) options.shellWireSend('minimize', group.visibleWindow.window_id)
+      options.activateWindowViaShell(windowId)
+      if (targetWindow && !splitSwitch) options.syncWindowGeometry(windowId, previousVisibleWindow)
+      if (!previousVisibleWindow.minimized) options.shellWireSend('minimize', previousVisibleWindow.window_id)
     })
     return true
   }
@@ -194,6 +219,40 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     options.activateTaskbarWindowViaShell(visibleWindow.window_id)
   }
 
+  const enterSplitGroupWindow = (windowId: number) => {
+    const groupId = options.groupIdForWindow(windowId)
+    if (!groupId) return false
+    const prevState = options.workspaceState()
+    const nextState = enterWorkspaceSplitView(prevState, groupId, windowId)
+    if (workspaceStatesEqual(nextState, prevState)) return false
+    options.setWorkspaceState(nextState)
+    const nextVisibleId = nextState.activeTabByGroupId[groupId]
+    if (nextVisibleId !== windowId) {
+      queueMicrotask(() => {
+        options.activateTaskbarWindowViaShell(nextVisibleId)
+      })
+    }
+    return true
+  }
+
+  const exitSplitGroupWindow = (windowId: number) => {
+    const groupId = options.groupIdForWindow(windowId)
+    if (!groupId) return false
+    const prevState = options.workspaceState()
+    const nextState = exitWorkspaceSplitView(prevState, groupId)
+    if (workspaceStatesEqual(nextState, prevState)) return false
+    options.setWorkspaceState(nextState)
+    return true
+  }
+
+  const setSplitGroupFraction = (groupId: string, fraction: number) => {
+    const prevState = options.workspaceState()
+    const nextState = setWorkspaceSplitFraction(prevState, groupId, fraction)
+    if (workspaceStatesEqual(nextState, prevState)) return false
+    options.setWorkspaceState(nextState)
+    return true
+  }
+
   return {
     syncHiddenGroupWindowGeometry,
     focusWindowViaShell,
@@ -203,5 +262,8 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     closeGroupWindow,
     cycleFocusedWorkspaceGroup,
     activateTaskbarGroup,
+    enterSplitGroupWindow,
+    exitSplitGroupWindow,
+    setSplitGroupFraction,
   }
 }

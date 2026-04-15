@@ -3,13 +3,17 @@ import { matchDesktopApplication, type DesktopAppMatchCandidate } from './deskto
 import { buildTaskbarGroupRows, type TaskbarGroupRow } from './taskbarGroups'
 import { resolveGroupVisibleWindowId } from './tabGroupOps'
 import type { DerpWindow } from './app/appWindowState'
-import type { WorkspaceState } from './workspaceState'
+import { getWorkspaceGroupSplit, type WorkspaceState } from './workspaceState'
 
 export type WorkspaceGroupModel = {
   id: string
   members: DerpWindow[]
   visibleWindowId: number
   visibleWindow: DerpWindow
+  splitLeftWindowId: number | null
+  splitLeftWindow: DerpWindow | null
+  splitPaneFraction: number | null
+  visibleWindowIds: number[]
   hiddenWindowIds: number[]
 }
 
@@ -52,15 +56,26 @@ export function buildWorkspaceGroups(
       members.find((window) => !window.minimized) ??
       members[0]
     if (!visibleWindow) continue
+    const split = getWorkspaceGroupSplit(workspaceState, group.id)
+    const splitLeftWindow =
+      split ? members.find((window) => window.window_id === split.leftWindowId) ?? null : null
+    const visibleWindowIds = [
+      ...(splitLeftWindow ? [splitLeftWindow.window_id] : []),
+      visibleWindow.window_id,
+    ].filter((windowId, index, all) => all.indexOf(windowId) === index)
     const hiddenWindowIds = members
       .map((window) => window.window_id)
-      .filter((windowId) => windowId !== visibleWindow.window_id)
+      .filter((windowId) => !visibleWindowIds.includes(windowId))
     const previousGroup = previousById.get(group.id)
     if (
       previousGroup &&
       previousGroup.visibleWindowId === visibleWindow.window_id &&
       previousGroup.visibleWindow === visibleWindow &&
+      previousGroup.splitLeftWindowId === (splitLeftWindow?.window_id ?? null) &&
+      previousGroup.splitLeftWindow === splitLeftWindow &&
+      previousGroup.splitPaneFraction === (split?.leftPaneFraction ?? null) &&
       sameWindowMembers(previousGroup.members, members) &&
+      sameWindowIds(previousGroup.visibleWindowIds, visibleWindowIds) &&
       sameWindowIds(previousGroup.hiddenWindowIds, hiddenWindowIds)
     ) {
       groups.push(previousGroup)
@@ -71,6 +86,10 @@ export function buildWorkspaceGroups(
       members,
       visibleWindowId: visibleWindow.window_id,
       visibleWindow,
+      splitLeftWindowId: splitLeftWindow?.window_id ?? null,
+      splitLeftWindow,
+      splitPaneFraction: split?.leftPaneFraction ?? null,
+      visibleWindowIds,
       hiddenWindowIds,
     })
   }

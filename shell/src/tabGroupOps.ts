@@ -1,4 +1,4 @@
-import type { WorkspaceState } from './workspaceState'
+import { getWorkspaceGroupSplit, type WorkspaceState } from './workspaceState'
 
 export type GroupWindowLike = {
   window_id: number
@@ -25,6 +25,25 @@ export function tabsInGroup<T extends { window_id: number }>(
 
 export function isTabPinned(state: WorkspaceState, windowId: number): boolean {
   return state.pinnedWindowIds.includes(windowId)
+}
+
+export function splitLeftWindowId(state: WorkspaceState, groupId: string): number | null {
+  return getWorkspaceGroupSplit(state, groupId)?.leftWindowId ?? null
+}
+
+export function isSplitLeftWindow(state: WorkspaceState, groupId: string, windowId: number): boolean {
+  return splitLeftWindowId(state, groupId) === windowId
+}
+
+export function rightTabsInGroup<T extends { window_id: number }>(
+  windows: readonly T[],
+  state: WorkspaceState,
+  groupId: string,
+): T[] {
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  return leftWindowId === null
+    ? tabsInGroup(windows, state, groupId)
+    : tabsInGroup(windows, state, groupId).filter((window) => window.window_id !== leftWindowId)
 }
 
 export function leadingPinnedTabCount(
@@ -134,7 +153,12 @@ export function resolveGroupVisibleWindowId(
   const members = tabsInGroup(windows, state, groupId)
   if (members.length === 0) return null
   const active = state.activeTabByGroupId[groupId]
-  if (members.some((window) => window.window_id === active)) return active
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  if (members.some((window) => window.window_id === active) && active !== leftWindowId) return active
+  if (leftWindowId !== null) {
+    const firstRight = members.find((window) => window.window_id !== leftWindowId)
+    if (firstRight) return firstRight.window_id
+  }
   const firstVisible = members.find((window) => !window.minimized)
   return firstVisible?.window_id ?? members[0].window_id
 }
@@ -148,9 +172,63 @@ export function nextActiveWindowAfterRemoval(
   if (!group) return null
   const remaining = group.windowIds.filter((windowId) => windowId !== removedWindowId)
   if (remaining.length === 0) return null
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  if (leftWindowId !== null) {
+    const rightTabs = remaining.filter((windowId) => windowId !== leftWindowId)
+    if (removedWindowId === leftWindowId) return rightTabs[0] ?? remaining[0] ?? null
+    if (rightTabs.length > 0) {
+      const rightIndex = rightTabs.indexOf(removedWindowId)
+      const nextIndex = rightIndex < 0 ? 0 : Math.min(rightIndex, rightTabs.length - 1)
+      return rightTabs[nextIndex] ?? rightTabs[rightTabs.length - 1] ?? null
+    }
+  }
   const removedIndex = group.windowIds.indexOf(removedWindowId)
   const nextIndex = removedIndex < 0 ? 0 : Math.min(removedIndex, remaining.length - 1)
   return remaining[nextIndex] ?? remaining[remaining.length - 1] ?? null
+}
+
+export function insertIndexAfterAllRightTabs(state: WorkspaceState, groupId: string): number {
+  const group = state.groups.find((entry) => entry.id === groupId)
+  if (!group) return 0
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  if (leftWindowId === null) return group.windowIds.length
+  let lastRightIndex = -1
+  for (let index = 0; index < group.windowIds.length; index += 1) {
+    if (group.windowIds[index] !== leftWindowId) lastRightIndex = index
+  }
+  return lastRightIndex + 1
+}
+
+export function rightStripIndexToGroupInsertIndex(
+  state: WorkspaceState,
+  groupId: string,
+  rightStripIndex: number,
+): number {
+  const group = state.groups.find((entry) => entry.id === groupId)
+  if (!group) return 0
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  if (leftWindowId === null) return rightStripIndex
+  const rightWindowIds = group.windowIds.filter((windowId) => windowId !== leftWindowId)
+  if (rightStripIndex >= rightWindowIds.length) return insertIndexAfterAllRightTabs(state, groupId)
+  const targetWindowId = rightWindowIds[rightStripIndex]
+  const targetIndex = group.windowIds.indexOf(targetWindowId)
+  return targetIndex < 0 ? group.windowIds.length : targetIndex
+}
+
+export function mergeInsertIndexToRightStripSlot(
+  state: WorkspaceState,
+  groupId: string,
+  fullGroupInsertIndex: number,
+): number {
+  const group = state.groups.find((entry) => entry.id === groupId)
+  if (!group) return 0
+  const leftWindowId = splitLeftWindowId(state, groupId)
+  if (leftWindowId === null) return fullGroupInsertIndex
+  let rightSlot = 0
+  for (let index = 0; index < fullGroupInsertIndex && index < group.windowIds.length; index += 1) {
+    if (group.windowIds[index] !== leftWindowId) rightSlot += 1
+  }
+  return rightSlot
 }
 
 export function windowLabel(window: Pick<GroupWindowLike, 'window_id' | 'title' | 'app_id'>): string {

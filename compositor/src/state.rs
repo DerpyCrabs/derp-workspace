@@ -432,6 +432,7 @@ pub struct CompositorState {
     /// Super key pressed; used with [`Self::programs_menu_super_chord`] for Programs menu tap detection.
     pub(crate) programs_menu_super_armed: bool,
     pub(crate) programs_menu_super_chord: bool,
+    pub(crate) programs_menu_super_pending_toggle: bool,
     keyboard_layout_by_window: HashMap<u32, u32>,
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
@@ -832,6 +833,7 @@ impl CompositorState {
             shell_cef_repeat_sym_raw: None,
             programs_menu_super_armed: false,
             programs_menu_super_chord: false,
+            programs_menu_super_pending_toggle: false,
             keyboard_layout_by_window: HashMap::new(),
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
@@ -1177,6 +1179,12 @@ impl CompositorState {
                 self.apply_shell_ui_windows_payload(&payload);
             }
             crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS => {
+                tracing::warn!(
+                    target: "derp_shell_menu",
+                    sequence,
+                    payload_len = payload.len(),
+                    "sync_shell_shared_state floating_layers"
+                );
                 self.shell_floating_layers_shared_sequence = sequence;
                 self.apply_shell_floating_layers_payload(&payload);
             }
@@ -1902,7 +1910,14 @@ impl CompositorState {
     }
 
     pub(crate) fn programs_menu_toggle_from_super(&mut self, serial: Serial) {
-        tracing::debug!(target: "derp_shell_menu", "programs_menu_toggle_from_super");
+        tracing::warn!(
+            target: "derp_shell_menu",
+            shell_cef_active = self.shell_cef_active(),
+            shell_has_frame = self.shell_has_frame,
+            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
+            pending_toggle = self.programs_menu_super_pending_toggle,
+            "programs_menu_toggle_from_super"
+        );
         self.space.elements().for_each(|e| {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
@@ -1922,6 +1937,17 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_keybind_ex(&mut self, action: &str, target_window_id: Option<u32>) {
+        tracing::warn!(
+            target: "derp_shell_menu",
+            %action,
+            ?target_window_id,
+            shell_cef_active = self.shell_cef_active(),
+            shell_has_frame = self.shell_has_frame,
+            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
+            pending_toggle = self.programs_menu_super_pending_toggle,
+            "shell_send_keybind_ex"
+        );
+        self.shell_begin_frame_note_shell_input();
         self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
             target_window_id,
@@ -1929,6 +1955,7 @@ impl CompositorState {
                 .new_toplevel_placement_output(None)
                 .map(|output| output.name().to_string()),
         });
+        self.shell_nudge_cef_repaint();
     }
 
     pub(crate) fn screenshot_selection_active(&self) -> bool {
@@ -2277,6 +2304,7 @@ impl CompositorState {
     }
 
     pub(crate) fn handle_super_keybind(&mut self, action: &str) {
+        self.programs_menu_super_chord = true;
         match action {
             "close_focused" => {
                 if let Some(wid) = self.super_keybind_target_window_id() {
@@ -4756,12 +4784,28 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_ipc_on_shell_load_success(&mut self) {
+        if let Ok(g) = self.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.set_delivery_ready(true);
+            }
+        }
         self.shell_ipc_watchdog_armed = true;
         self.shell_ipc_last_rx = Some(Instant::now());
         self.shell_ipc_last_compositor_ping = None;
         self.shell_ipc_last_pong = None;
         self.shell_ipc_unanswered_ping_since = None;
         self.shell_ipc_ping_late_warned_for = None;
+        tracing::warn!(
+            target: "derp_shell_menu",
+            pending_toggle = self.programs_menu_super_pending_toggle,
+            shell_has_frame = self.shell_has_frame,
+            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
+            "shell_ipc_on_shell_load_success"
+        );
+        if self.programs_menu_super_pending_toggle {
+            self.programs_menu_super_pending_toggle = false;
+            self.programs_menu_toggle_from_super(SERIAL_COUNTER.next_serial());
+        }
     }
 
     pub(crate) fn shell_ipc_on_pong(&mut self) {
@@ -6982,6 +7026,29 @@ impl CompositorState {
         }
     }
 
+    /// Shell-internal activation without taskbar toggle semantics.
+    pub fn shell_activate_window(&mut self, window_id: u32) {
+        if self.window_registry.is_shell_hosted(window_id) {
+            if self
+                .window_registry
+                .window_info(window_id)
+                .is_some_and(|info| info.minimized)
+            {
+                self.shell_backed_restore_minimized_if_any(window_id);
+            }
+            self.shell_focus_shell_ui_window(window_id);
+            return;
+        }
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if info.minimized {
+            self.shell_restore_minimized_window(window_id);
+            return;
+        }
+        self.shell_raise_and_focus_window(window_id);
+    }
+
     pub(crate) fn shell_pointer_ipc_for_cef(&self, pos: Point<f64, Logical>) -> Option<(i32, i32)> {
         let (cox, coy) = self.shell_canvas_logical_origin;
         let (clw, clh) = self.shell_canvas_logical_size;
@@ -7343,6 +7410,13 @@ impl CompositorState {
         }
         if count == 0 {
             self.shell_floating_layers.clear();
+            tracing::warn!(
+                target: "derp_shell_menu",
+                payload_len = payload.len(),
+                count,
+                applied = 0usize,
+                "apply_shell_floating_layers_payload"
+            );
             return;
         }
         let existing_ids: HashMap<u32, Id> = self
@@ -7380,6 +7454,13 @@ impl CompositorState {
             });
         }
         next.sort_by_key(|layer| (layer.z, layer.id));
+        tracing::warn!(
+            target: "derp_shell_menu",
+            payload_len = payload.len(),
+            count,
+            applied = next.len(),
+            "apply_shell_floating_layers_payload"
+        );
         self.shell_floating_layers = next;
     }
 

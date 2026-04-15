@@ -54,9 +54,9 @@ type ShellWindowFrameProps = {
   focused: MaybeAcc<boolean>
   stackZ: MaybeAcc<number>
   onFocusRequest?: () => void
-  onTitlebarPointerDown: (clientX: number, clientY: number) => void
+  onTitlebarPointerDown: (pointerId: number, clientX: number, clientY: number) => void
   onSnapAssistOpen?: (anchorRect: DOMRect) => void
-  onResizeEdgeDown: (edges: number, clientX: number, clientY: number) => void
+  onResizeEdgeDown: (edges: number, pointerId: number, clientX: number, clientY: number) => void
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
@@ -101,8 +101,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       ? 'var(--shell-window-chrome-focused)'
       : 'var(--shell-window-chrome-unfocused)',
   )
-  const startResize = (edges: number, clientX: number, clientY: number) => {
-    props.onResizeEdgeDown(edges, clientX, clientY)
+  const startResize = (edges: number, pointerId: number, clientX: number, clientY: number) => {
+    props.onResizeEdgeDown(edges, pointerId, clientX, clientY)
   }
 
   onMount(() => {
@@ -200,7 +200,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           console.log(
             `[derp-shell-move] titlebar pointerdown win=${model()?.window_id ?? 0} ${e.clientX},${e.clientY}`,
           )
-          props.onTitlebarPointerDown(e.clientX, e.clientY)
+          props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           requestFocus()
@@ -212,7 +212,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           console.log(
             `[derp-shell-move] titlebar touchstart win=${model()?.window_id ?? 0} ${t.clientX},${t.clientY}`,
           )
-          props.onTitlebarPointerDown(t.clientX, t.clientY)
+          props.onTitlebarPointerDown(-1, t.clientX, t.clientY)
         }}
       >
         <Show
@@ -343,14 +343,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, e.clientX, e.clientY)
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, t.clientX, t.clientY)
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_LEFT, -1, t.clientX, t.clientY)
         }}
       />
       <div
@@ -369,14 +369,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, e.clientX, e.clientY)
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, t.clientX, t.clientY)
+          startResize(SHELL_RESIZE_BOTTOM | SHELL_RESIZE_RIGHT, -1, t.clientX, t.clientY)
         }}
       />
       <div
@@ -395,14 +395,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM, e.clientX, e.clientY)
+          startResize(SHELL_RESIZE_BOTTOM, e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_BOTTOM, t.clientX, t.clientY)
+          startResize(SHELL_RESIZE_BOTTOM, -1, t.clientX, t.clientY)
         }}
       />
       <div
@@ -421,14 +421,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_LEFT, e.clientX, e.clientY)
+          startResize(SHELL_RESIZE_LEFT, e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_LEFT, t.clientX, t.clientY)
+          startResize(SHELL_RESIZE_LEFT, -1, t.clientX, t.clientY)
         }}
       />
       <div
@@ -447,14 +447,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_RIGHT, e.clientX, e.clientY)
+          startResize(SHELL_RESIZE_RIGHT, e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          startResize(SHELL_RESIZE_RIGHT, t.clientX, t.clientY)
+          startResize(SHELL_RESIZE_RIGHT, -1, t.clientX, t.clientY)
         }}
       />
     </div>

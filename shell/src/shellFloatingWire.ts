@@ -1,5 +1,7 @@
 import { writeShellFloatingLayersState } from './sharedShellState'
 
+const SHELL_SHARED_STATE_KIND_FLOATING_LAYERS = 3
+
 export type ShellFloatingWireLayer = {
   id: number
   bx: number
@@ -44,7 +46,19 @@ export function shellContextMenuWire(
 }
 
 export function shellFloatingLayersWire(layers: readonly ShellFloatingWireLayer[]): boolean {
-  return writeShellFloatingLayersState(layers)
+  const ok = writeShellFloatingLayersState(layers)
+  if (!ok) return false
+  console.warn(
+    `[derp-shell-launcher] shellFloatingLayersWire count=${layers.length} ids=${layers.map((layer) => layer.id).join(',')}`,
+  )
+  const fn = window.__derpShellWireSend as ((op: 'shared_state_sync', kind: number) => void) | undefined
+  if (typeof fn === 'function') {
+    console.warn(
+      `[derp-shell-launcher] shellFloatingLayersWire shared_state_sync kind=${SHELL_SHARED_STATE_KIND_FLOATING_LAYERS}`,
+    )
+    fn('shared_state_sync', SHELL_SHARED_STATE_KIND_FLOATING_LAYERS)
+  }
+  return true
 }
 
 export function hideShellFloatingWire(): void {

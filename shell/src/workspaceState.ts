@@ -3,20 +3,38 @@ export type WorkspaceGroupState = {
   windowIds: number[]
 }
 
+export type WorkspaceGroupSplitState = {
+  leftWindowId: number
+  leftPaneFraction: number
+}
+
 export type WorkspaceState = {
   groups: WorkspaceGroupState[]
   activeTabByGroupId: Record<string, number>
   pinnedWindowIds: number[]
+  splitByGroupId: Record<string, WorkspaceGroupSplitState>
   nextGroupSeq: number
 }
 
 export const WORKSPACE_STATE_STORAGE_KEY = 'derp-shell-workspace-state-v1'
+export const WORKSPACE_SPLIT_PANE_FRACTION_MIN = 0.3
+export const WORKSPACE_SPLIT_PANE_FRACTION_MAX = 0.7
+export const WORKSPACE_SPLIT_PANE_FRACTION_DEFAULT = 0.5
+
+export function clampWorkspaceSplitPaneFraction(value: number): number {
+  if (!Number.isFinite(value)) return WORKSPACE_SPLIT_PANE_FRACTION_DEFAULT
+  return Math.min(
+    WORKSPACE_SPLIT_PANE_FRACTION_MAX,
+    Math.max(WORKSPACE_SPLIT_PANE_FRACTION_MIN, value),
+  )
+}
 
 function cloneState(state: WorkspaceState): WorkspaceState {
   return {
     groups: state.groups.map((group) => ({ id: group.id, windowIds: [...group.windowIds] })),
     activeTabByGroupId: { ...state.activeTabByGroupId },
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
+    splitByGroupId: { ...(state.splitByGroupId ?? {}) },
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -26,6 +44,7 @@ export function createEmptyWorkspaceState(): WorkspaceState {
     groups: [],
     activeTabByGroupId: {},
     pinnedWindowIds: [],
+    splitByGroupId: {},
     nextGroupSeq: 1,
   }
 }
@@ -44,6 +63,16 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
   if (aPinned.length !== bPinned.length) return false
   for (let index = 0; index < aPinned.length; index += 1) {
     if (aPinned[index] !== bPinned[index]) return false
+  }
+  const aSplits = Object.keys(a.splitByGroupId ?? {})
+  const bSplits = Object.keys(b.splitByGroupId ?? {})
+  if (aSplits.length !== bSplits.length) return false
+  for (const key of aSplits) {
+    const splitA = a.splitByGroupId[key]
+    const splitB = b.splitByGroupId[key]
+    if (!splitA || !splitB) return false
+    if (splitA.leftWindowId !== splitB.leftWindowId) return false
+    if (splitA.leftPaneFraction !== splitB.leftPaneFraction) return false
   }
   if (a.groups.length !== b.groups.length) return false
   for (let index = 0; index < a.groups.length; index += 1) {
@@ -78,6 +107,76 @@ function clampIndex(value: number, max: number): number {
 
 function normalizePinnedWindowIds(raw: unknown): number[] {
   return normalizeWindowIds(raw)
+}
+
+function normalizeSplitByGroupId(
+  raw: unknown,
+  groups: readonly WorkspaceGroupState[],
+): Record<string, WorkspaceGroupSplitState> {
+  if (!raw || typeof raw !== 'object') return {}
+  const groupsById = new Map(groups.map((group) => [group.id, group]))
+  const out: Record<string, WorkspaceGroupSplitState> = {}
+  for (const [groupId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue
+    const group = groupsById.get(groupId)
+    if (!group) continue
+    const record = value as Record<string, unknown>
+    const rawLeft =
+      typeof record.leftWindowId === 'number' ? record.leftWindowId : Number(record.leftWindowId)
+    const leftWindowId = Math.trunc(rawLeft)
+    if (!Number.isFinite(leftWindowId) || !group.windowIds.includes(leftWindowId)) continue
+    if (group.windowIds.filter((windowId) => windowId !== leftWindowId).length === 0) continue
+    const rawFraction =
+      typeof record.leftPaneFraction === 'number'
+        ? record.leftPaneFraction
+        : Number(record.leftPaneFraction)
+    out[groupId] = {
+      leftWindowId,
+      leftPaneFraction: clampWorkspaceSplitPaneFraction(rawFraction),
+    }
+  }
+  return out
+}
+
+function firstRightWindowId(group: WorkspaceGroupState, leftWindowId: number): number | null {
+  return group.windowIds.find((windowId) => windowId !== leftWindowId) ?? null
+}
+
+function ensureValidSplitState(state: WorkspaceState): void {
+  state.splitByGroupId = normalizeSplitByGroupId(state.splitByGroupId, state.groups)
+  for (const group of state.groups) {
+    const split = state.splitByGroupId[group.id]
+    if (!split) continue
+    const rightWindowId = firstRightWindowId(group, split.leftWindowId)
+    if (rightWindowId === null) {
+      delete state.splitByGroupId[group.id]
+      continue
+    }
+    const activeWindowId = state.activeTabByGroupId[group.id]
+    if (activeWindowId === split.leftWindowId || !group.windowIds.includes(activeWindowId)) {
+      state.activeTabByGroupId[group.id] = rightWindowId
+    }
+  }
+}
+
+function withoutGroupSplit(
+  splitByGroupId: Record<string, WorkspaceGroupSplitState>,
+  groupId: string,
+): Record<string, WorkspaceGroupSplitState> {
+  if (!splitByGroupId[groupId]) return splitByGroupId
+  const next = { ...splitByGroupId }
+  delete next[groupId]
+  return next
+}
+
+function normalizedRequestedActiveWindowId(
+  state: WorkspaceState,
+  group: WorkspaceGroupState,
+  windowId: number,
+): number {
+  const split = state.splitByGroupId[group.id]
+  if (!split || split.leftWindowId !== windowId) return windowId
+  return firstRightWindowId(group, split.leftWindowId) ?? windowId
 }
 
 function leadingPinnedWindowCount(
@@ -145,6 +244,7 @@ export function normalizeWorkspaceState(raw: unknown): WorkspaceState {
     }
   }
   state.pinnedWindowIds = normalizePinnedWindowIds(source.pinnedWindowIds)
+  state.splitByGroupId = normalizeSplitByGroupId(source.splitByGroupId, state.groups)
   const nextRaw = typeof source.nextGroupSeq === 'number' ? source.nextGroupSeq : Number(source.nextGroupSeq)
   const nextSeq = Math.trunc(nextRaw)
   state.nextGroupSeq =
@@ -244,6 +344,7 @@ export function reconcileWorkspaceState(
     next.activeTabByGroupId[groupId] = windowId
   }
   ensurePinnedWindowIds(next)
+  ensureValidSplitState(next)
   return next
 }
 
@@ -254,7 +355,8 @@ export function setWorkspaceActiveTab(
 ): WorkspaceState {
   const group = state.groups.find((entry) => entry.id === groupId)
   if (!group || !group.windowIds.includes(windowId)) return state
-  if (state.activeTabByGroupId[groupId] === windowId) return state
+  const nextWindowId = normalizedRequestedActiveWindowId(state, group, windowId)
+  if (state.activeTabByGroupId[groupId] === nextWindowId) return state
   return {
     groups: state.groups.map((entry) => ({
       id: entry.id,
@@ -262,9 +364,10 @@ export function setWorkspaceActiveTab(
     })),
     activeTabByGroupId: {
       ...state.activeTabByGroupId,
-      [groupId]: windowId,
+      [groupId]: nextWindowId,
     },
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
+    splitByGroupId: { ...(state.splitByGroupId ?? {}) },
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -309,16 +412,19 @@ export function moveWorkspaceWindowToGroup(
   if (sourceGroup.windowIds.length === 0) {
     next.groups = next.groups.filter((group) => group.id !== sourceGroupId)
     delete next.activeTabByGroupId[sourceGroupId]
+    next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, sourceGroupId)
   } else {
     const sourceActive = next.activeTabByGroupId[sourceGroupId]
     next.activeTabByGroupId[sourceGroupId] = sourceGroup.windowIds.includes(sourceActive)
       ? sourceActive
       : sourceGroup.windowIds[0]
   }
+  next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
   next.activeTabByGroupId[targetGroupId] =
     next.activeTabByGroupId[targetGroupId] && targetGroup.windowIds.includes(next.activeTabByGroupId[targetGroupId])
       ? next.activeTabByGroupId[targetGroupId]
       : targetGroup.windowIds[0]
+  ensureValidSplitState(next)
   return next
 }
 
@@ -338,6 +444,7 @@ export function splitWorkspaceWindowToOwnGroup(
   if (nextSourceGroup.windowIds.length === 0) {
     next.groups = next.groups.filter((group) => group.id !== sourceGroupId)
     delete next.activeTabByGroupId[sourceGroupId]
+    next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, sourceGroupId)
   } else {
     const sourceActive = next.activeTabByGroupId[sourceGroupId]
     next.activeTabByGroupId[sourceGroupId] = nextSourceGroup.windowIds.includes(sourceActive)
@@ -350,6 +457,7 @@ export function splitWorkspaceWindowToOwnGroup(
     windowIds: [windowId],
   })
   next.activeTabByGroupId[newGroupId] = windowId
+  ensureValidSplitState(next)
   return next
 }
 
@@ -378,6 +486,66 @@ export function setWorkspaceWindowPinned(
   return next
 }
 
+export function getWorkspaceGroupSplit(
+  state: WorkspaceState,
+  groupId: string,
+): WorkspaceGroupSplitState | undefined {
+  return state.splitByGroupId[groupId]
+}
+
+export function enterWorkspaceSplitView(
+  state: WorkspaceState,
+  groupId: string,
+  leftWindowId: number,
+  leftPaneFraction: number = WORKSPACE_SPLIT_PANE_FRACTION_DEFAULT,
+): WorkspaceState {
+  const group = state.groups.find((entry) => entry.id === groupId)
+  if (!group || !group.windowIds.includes(leftWindowId)) return state
+  if (group.windowIds.filter((windowId) => windowId !== leftWindowId).length === 0) return state
+  const next = cloneState(state)
+  next.splitByGroupId[groupId] = {
+    leftWindowId,
+    leftPaneFraction: clampWorkspaceSplitPaneFraction(leftPaneFraction),
+  }
+  ensureValidSplitState(next)
+  return workspaceStatesEqual(state, next) ? state : next
+}
+
+export function exitWorkspaceSplitView(state: WorkspaceState, groupId: string): WorkspaceState {
+  if (!state.splitByGroupId[groupId]) return state
+  return {
+    groups: state.groups.map((entry) => ({ id: entry.id, windowIds: [...entry.windowIds] })),
+    activeTabByGroupId: { ...state.activeTabByGroupId },
+    pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
+    splitByGroupId: withoutGroupSplit(state.splitByGroupId, groupId),
+    nextGroupSeq: state.nextGroupSeq,
+  }
+}
+
+export function setWorkspaceSplitFraction(
+  state: WorkspaceState,
+  groupId: string,
+  leftPaneFraction: number,
+): WorkspaceState {
+  const split = state.splitByGroupId[groupId]
+  if (!split) return state
+  const nextFraction = clampWorkspaceSplitPaneFraction(leftPaneFraction)
+  if (split.leftPaneFraction === nextFraction) return state
+  return {
+    groups: state.groups.map((entry) => ({ id: entry.id, windowIds: [...entry.windowIds] })),
+    activeTabByGroupId: { ...state.activeTabByGroupId },
+    pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
+    splitByGroupId: {
+      ...state.splitByGroupId,
+      [groupId]: {
+        ...split,
+        leftPaneFraction: nextFraction,
+      },
+    },
+    nextGroupSeq: state.nextGroupSeq,
+  }
+}
+
 export function mergeWorkspaceGroups(
   state: WorkspaceState,
   sourceWindowId: number,
@@ -404,8 +572,12 @@ export function cycleWorkspaceTab(
 ): WorkspaceState {
   const group = state.groups.find((entry) => entry.id === groupId)
   if (!group || group.windowIds.length < 2) return state
-  const current = state.activeTabByGroupId[groupId]
-  const currentIndex = Math.max(0, group.windowIds.indexOf(current))
-  const nextIndex = (currentIndex + delta + group.windowIds.length) % group.windowIds.length
-  return setWorkspaceActiveTab(state, groupId, group.windowIds[nextIndex])
+  const split = state.splitByGroupId[groupId]
+  const cycleWindowIds =
+    split ? group.windowIds.filter((windowId) => windowId !== split.leftWindowId) : group.windowIds
+  if (cycleWindowIds.length < 2) return state
+  const current = normalizedRequestedActiveWindowId(state, group, state.activeTabByGroupId[groupId])
+  const currentIndex = Math.max(0, cycleWindowIds.indexOf(current))
+  const nextIndex = (currentIndex + delta + cycleWindowIds.length) % cycleWindowIds.length
+  return setWorkspaceActiveTab(state, groupId, cycleWindowIds[nextIndex])
 }

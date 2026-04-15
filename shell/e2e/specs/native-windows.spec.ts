@@ -389,6 +389,50 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('native windows raise to front when clicking content', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
+    const trackedWindowIds = [redId, greenId]
+
+    await tileNativePair(base, redId, greenId)
+    const initial = await waitForTrackedStackParity(base, trackedWindowIds, 'native click initial parity')
+
+    const redClickPoint = visibleWindowClickPoint(initial.shell, redId)
+    await clickPoint(base, redClickPoint.x, redClickPoint.y)
+    const redFocused = await waitForNativeFocus(base, redId)
+    assertRestackToFront(
+      initial.shell,
+      redFocused.shell,
+      redId,
+      trackedWindowIds,
+      'native red content click restack order',
+    )
+
+    const greenClickPoint = visibleWindowClickPoint(redFocused.shell, greenId)
+    await clickPoint(base, greenClickPoint.x, greenClickPoint.y)
+    const greenFocused = await waitForNativeFocus(base, greenId)
+    assertRestackToFront(
+      redFocused.shell,
+      greenFocused.shell,
+      greenId,
+      trackedWindowIds,
+      'native green content click restack order',
+    )
+
+    const parity = await waitForTrackedStackParity(base, trackedWindowIds, 'native click final parity')
+    await writeJsonArtifact('native-content-click-focus.json', {
+      redId,
+      greenId,
+      redClickPoint,
+      greenClickPoint,
+      initialShell: initial.shell,
+      redFocused: redFocused.shell,
+      greenFocused: greenFocused.shell,
+      finalCompositor: parity.compositor,
+    })
+  })
+
   test('native and shell windows share focus stacking and taskbar parity', async ({ base, state }) => {
     const { red, green } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -446,6 +490,65 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should be frontmost after taskbar activate')
     await writeJsonArtifact('native-js-parity-shell.json', settingsFocused.shell)
     await writeJsonArtifact('native-js-parity-compositor.json', settingsFocused.compositor)
+  })
+
+  test('mouse clicks switch focus between native and shell windows with stack parity', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const greenId = green.window.window_id
+    const trackedWindowIds = [redId, greenId, SHELL_UI_SETTINGS_WINDOW_ID]
+
+    await tileNativePair(base, redId, greenId)
+    await openSettings(base, 'click')
+    const initial = await waitForTrackedStackParity(base, trackedWindowIds, 'native shell click initial parity')
+
+    const redClickPoint = visibleWindowClickPoint(initial.shell, redId)
+    await clickPoint(base, redClickPoint.x, redClickPoint.y)
+    const redFocused = await waitForNativeFocus(base, redId)
+    assertRestackToFront(
+      initial.shell,
+      redFocused.shell,
+      redId,
+      trackedWindowIds,
+      'native shell red click restack order',
+    )
+
+    const settingsClickPoint = visibleWindowClickPoint(redFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    await clickPoint(base, settingsClickPoint.x, settingsClickPoint.y)
+    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertRestackToFront(
+      redFocused.shell,
+      settingsFocused.shell,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      trackedWindowIds,
+      'native shell settings click restack order',
+    )
+
+    const greenClickPoint = visibleWindowClickPoint(settingsFocused.shell, greenId)
+    await clickPoint(base, greenClickPoint.x, greenClickPoint.y)
+    const greenFocused = await waitForNativeFocus(base, greenId)
+    assertRestackToFront(
+      settingsFocused.shell,
+      greenFocused.shell,
+      greenId,
+      trackedWindowIds,
+      'native shell green click restack order',
+    )
+
+    const parity = await waitForTrackedStackParity(base, trackedWindowIds, 'native shell click final parity')
+    assertTopWindow(parity.shell, greenId, 'green should be frontmost after mixed mouse activation')
+    await writeJsonArtifact('native-shell-content-click-focus.json', {
+      redId,
+      greenId,
+      redClickPoint,
+      settingsClickPoint,
+      greenClickPoint,
+      initialShell: initial.shell,
+      redFocused: redFocused.shell,
+      settingsFocused: settingsFocused.shell,
+      greenFocused: greenFocused.shell,
+      finalCompositor: parity.compositor,
+    })
   })
 
   test('js and native windows preserve restack order across focus changes', async ({ base, state }) => {
