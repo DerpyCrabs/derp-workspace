@@ -306,7 +306,6 @@ pub(crate) fn reset_perf_counters() {
 }
 
 fn maybe_log_shell_latency() {
-    let now = Instant::now();
     let Ok(mut latency) = LATENCY.lock() else {
         return;
     };
@@ -316,62 +315,9 @@ fn maybe_log_shell_latency() {
     if latency.last_logged_dmabuf_rx_at == Some(dmabuf_rx_at) {
         return;
     }
-    if now.duration_since(dmabuf_rx_at) > Duration::from_secs(1) {
+    if Instant::now().duration_since(dmabuf_rx_at) > Duration::from_secs(1) {
         return;
     }
-    let message_pump_to_begin_us = latency.message_pump_at.and_then(|at| {
-        latency
-            .cef_begin_frame_at
-            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
-    });
-    let schedule_to_begin_us = latency.compositor_schedule_at.and_then(|at| {
-        latency
-            .cef_begin_frame_at
-            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
-    });
-    let invalidate_to_begin_us = latency.view_invalidate_at.and_then(|at| {
-        latency
-            .cef_begin_frame_at
-            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
-    });
-    let begin_to_paint_us = latency.cef_begin_frame_at.and_then(|at| {
-        latency
-            .accelerated_paint_at
-            .map(|paint| paint.saturating_duration_since(at).as_micros() as u64)
-    });
-    let invalidate_to_paint_us = latency.view_invalidate_at.and_then(|at| {
-        latency
-            .accelerated_paint_at
-            .map(|paint| paint.saturating_duration_since(at).as_micros() as u64)
-    });
-    let paint_to_dmabuf_rx_us = latency
-        .accelerated_paint_at
-        .map(|paint| dmabuf_rx_at.saturating_duration_since(paint).as_micros() as u64);
-    let dmabuf_rx_to_render_us = now.saturating_duration_since(dmabuf_rx_at).as_micros() as u64;
-    let schedule_to_render_us = latency
-        .compositor_schedule_at
-        .map(|at| now.saturating_duration_since(at).as_micros() as u64);
-    tracing::warn!(
-        target: "derp_shell_latency",
-        message_pump_delay_ms = latency.message_pump_delay_ms,
-        schedule_kind = ?latency.compositor_schedule_kind,
-        invalidate_reason = ?latency.view_invalidate_reason,
-        paint_size = ?latency.accelerated_paint_size,
-        dirty_rect_kind = ?latency.dirty_rect_kind,
-        dirty_rect_count = latency.dirty_rect_count,
-        dirty_rect_coverage_per_mille = latency.dirty_rect_coverage_per_mille,
-        dirty_rect_bbox_full = latency.dirty_rect_bbox_full,
-        dmabuf_size = ?latency.dmabuf_rx_size,
-        message_pump_to_begin_us,
-        schedule_to_begin_us,
-        invalidate_to_begin_us,
-        begin_to_paint_us,
-        invalidate_to_paint_us,
-        paint_to_dmabuf_rx_us,
-        dmabuf_rx_to_render_us,
-        schedule_to_render_us,
-        "shell latency chain"
-    );
     latency.last_logged_dmabuf_rx_at = Some(dmabuf_rx_at);
 }
 

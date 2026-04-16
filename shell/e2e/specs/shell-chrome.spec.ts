@@ -350,6 +350,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(terminal, 'expected foot')
+    await waitForNativeFocus(base, terminal.window_id)
     await openSettings(base, 'click')
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     await runKeybind(base, 'close_focused')

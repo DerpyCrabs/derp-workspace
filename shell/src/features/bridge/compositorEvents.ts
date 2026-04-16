@@ -55,30 +55,6 @@ export function markActiveShellLatencySample(
 export function flushShellLatencySample(id: number) {
   const sample = shellLatencySample
   if (!sample || sample.id !== id) return false
-  const payload = {
-    sequence: sample.sequence,
-    detailCount: sample.detailCount,
-    force: sample.force,
-    sync_to_decode_ms:
-      sample.decodedAt === undefined ? null : +(sample.decodedAt - sample.syncStartAt).toFixed(3),
-    decode_to_apply_ms:
-      sample.decodedAt === undefined || sample.appliedAt === undefined
-        ? null
-        : +(sample.appliedAt - sample.decodedAt).toFixed(3),
-    apply_to_authoritative_ms:
-      sample.appliedAt === undefined || sample.authoritativeAt === undefined
-        ? null
-        : +(sample.authoritativeAt - sample.appliedAt).toFixed(3),
-    authoritative_to_visual_ms:
-      sample.authoritativeAt === undefined || sample.visualAt === undefined
-        ? null
-        : +(sample.visualAt - sample.authoritativeAt).toFixed(3),
-    visual_to_raf_ms:
-      sample.visualAt === undefined || sample.rafAt === undefined ? null : +(sample.rafAt - sample.visualAt).toFixed(3),
-    sync_to_raf_ms:
-      sample.rafAt === undefined ? null : +(sample.rafAt - sample.syncStartAt).toFixed(3),
-  }
-  console.warn('[derp-shell-latency]', JSON.stringify(payload))
   shellLatencySample = null
   return true
 }

@@ -1575,29 +1575,6 @@ impl CompositorState {
             });
         }
         let js_changed = out != self.shell_ui_windows;
-        if js_changed {
-            let placements: Vec<_> = out
-                .iter()
-                .map(|w| {
-                    (
-                        w.id,
-                        w.z,
-                        w.global_rect.loc.x,
-                        w.global_rect.loc.y,
-                        w.global_rect.size.w,
-                        w.global_rect.size.h,
-                    )
-                })
-                .collect();
-            tracing::warn!(
-                target: "derp_shell_clip",
-                generation,
-                focused = ?self.shell_focused_ui_window_id,
-                stack_order = ?self.shell_window_stack_ids(),
-                placements = ?placements,
-                "shell_ui_windows updated"
-            );
-        }
         self.shell_ui_windows = out;
         self.shell_ui_windows_generation = generation;
         if let Some(fid) = self.shell_focused_ui_window_id {
@@ -1790,20 +1767,6 @@ impl CompositorState {
         self.shell_exclusion_decor = next_decor;
         self.shell_tray_strip_global = next_tray_strip;
         if changed || tray_changed {
-            let mut decor_counts: Vec<_> = self
-                .shell_exclusion_decor
-                .iter()
-                .map(|(window_id, rects)| (*window_id, rects.len()))
-                .collect();
-            decor_counts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            tracing::warn!(
-                target: "derp_shell_clip",
-                stack_order = ?self.shell_window_stack_ids(),
-                global_count = self.shell_exclusion_global.len(),
-                decor_counts = ?decor_counts,
-                tray_strip = ?self.shell_tray_strip_global,
-                "shell exclusion zones updated"
-            );
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }

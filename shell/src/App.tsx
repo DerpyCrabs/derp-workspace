@@ -78,10 +78,6 @@ import type {
   LayoutScreen,
 } from '@/host/types'
 import { createCompositorModel } from '@/features/bridge/compositorModel'
-import {
-  flushActiveShellLatencySample,
-  markActiveShellLatencySample,
-} from '@/features/bridge/compositorEvents'
 import { registerAppRuntimeBootstrap } from '@/features/bridge/appRuntimeBootstrap'
 import { createScreenshotPortalBridge } from '@/features/bridge/screenshotPortalBridge'
 import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
@@ -196,8 +192,8 @@ const TASKBAR_HEIGHT = 44
 
 /** Tee’d into `compositor.log` when `cef_host` stderr is captured (session). Filter: `derp-shell-move`. */
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
-  const extra = detail !== undefined ? ` ${JSON.stringify(detail)}` : ''
-  console.log(`[derp-shell-move] ${msg}${extra}`)
+  void msg
+  void detail
 }
 
 function shellWireSend(
@@ -334,7 +330,6 @@ function App() {
   const shellBuildLabel = shellBuildLabelText()
   const desktopApps = useDesktopApplicationsState()
   const {
-    windows: compositorWindows,
     allWindowsMap: compositorWindowsMap,
     windowsListIds: compositorWindowsListIds,
     windowsList: compositorWindowsList,
@@ -347,20 +342,6 @@ function App() {
   const windows = compositorWindowsMap
   const windowsListIds = compositorWindowsListIds
   const windowsList = compositorWindowsList
-  createEffect(() => {
-    compositorWindows()
-    markActiveShellLatencySample({ authoritativeAt: performance.now() })
-  })
-  createEffect(() => {
-    windowsList()
-    const sample = markActiveShellLatencySample({ visualAt: performance.now() })
-    if (!sample || sample.rafAt !== undefined) return
-    requestAnimationFrame(() => {
-      const next = markActiveShellLatencySample({ rafAt: performance.now() })
-      if (!next) return
-      flushActiveShellLatencySample()
-    })
-  })
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
   const [viewportCss, setViewportCss] = createSignal({

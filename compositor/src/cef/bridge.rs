@@ -32,6 +32,24 @@ fn is_window_delta(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
     )
 }
 
+fn should_schedule_begin_frame_for_message(
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+) -> bool {
+    matches!(
+        msg,
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+    )
+}
+
 fn push_pending_message(
     messages: &mut Vec<shell_wire::DecodedCompositorToShellMessage>,
     msg: shell_wire::DecodedCompositorToShellMessage,
@@ -99,19 +117,45 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            loop {
-                let messages = {
-                    let Ok(mut guard) = self.pending_messages.lock() else {
-                        return;
-                    };
-                    if guard.messages.is_empty() {
-                        guard.scheduled = false;
-                        self.pending_work.store(false, Ordering::Relaxed);
-                        return;
-                    }
-                    std::mem::take(&mut guard.messages)
+            let messages = {
+                let Ok(mut guard) = self.pending_messages.lock() else {
+                    return;
                 };
-                compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+                if guard.messages.is_empty() {
+                    guard.scheduled = false;
+                    self.pending_work.store(false, Ordering::Relaxed);
+                    return;
+                }
+                guard.scheduled = false;
+                std::mem::take(&mut guard.messages)
+            };
+            compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+            let should_repost = {
+                let Ok(mut guard) = self.pending_messages.lock() else {
+                    return;
+                };
+                if guard.messages.is_empty() {
+                    self.pending_work.store(false, Ordering::Relaxed);
+                    false
+                } else if guard.scheduled {
+                    false
+                } else {
+                    guard.scheduled = true;
+                    true
+                }
+            };
+            if should_repost {
+                let mut task = ApplyCompositorToShellTask::new(
+                    self.browser_holder.clone(),
+                    self.view_state.clone(),
+                    self.pending_messages.clone(),
+                    self.pending_work.clone(),
+                );
+                if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+                    if let Ok(mut guard) = self.pending_messages.lock() {
+                        guard.scheduled = false;
+                    }
+                }
             }
         }
     }
@@ -121,6 +165,7 @@ wrap_task! {
     struct ExternalBeginFrameTask {
         browser_holder: Arc<Mutex<Option<Browser>>>,
         pending_begin_frame: Arc<AtomicBool>,
+        pending_begin_frame_reschedule: Arc<AtomicBool>,
     }
 
     impl Task {
@@ -138,6 +183,23 @@ wrap_task! {
                 crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
             }
             self.pending_begin_frame.store(false, Ordering::Relaxed);
+            if self
+                .pending_begin_frame_reschedule
+                .swap(false, Ordering::Relaxed)
+                && self
+                    .pending_begin_frame
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                let mut task = ExternalBeginFrameTask::new(
+                    self.browser_holder.clone(),
+                    self.pending_begin_frame.clone(),
+                    self.pending_begin_frame_reschedule.clone(),
+                );
+                if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+                    self.pending_begin_frame.store(false, Ordering::Relaxed);
+                }
+            }
         }
     }
 }
@@ -149,6 +211,7 @@ pub struct ShellToCefLink {
     delivery_ready: Arc<AtomicBool>,
     pending_work: Arc<AtomicBool>,
     pending_begin_frame: Arc<AtomicBool>,
+    pending_begin_frame_reschedule: Arc<AtomicBool>,
     shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
 }
 
@@ -167,6 +230,7 @@ impl ShellToCefLink {
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
             pending_begin_frame: Arc::new(AtomicBool::new(false)),
+            pending_begin_frame_reschedule: Arc::new(AtomicBool::new(false)),
             shared_snapshot: Arc::new(Mutex::new(
                 SharedShellSnapshotWriter::new(crate::cef::runtime_dir()).ok(),
             )),
@@ -182,6 +246,7 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        let should_schedule_begin_frame = should_schedule_begin_frame_for_message(&msg);
         if let Ok(mut snapshot) = self.shared_snapshot.lock() {
             if let Some(snapshot) = snapshot.as_mut() {
                 let _ = snapshot.apply_message(&msg);
@@ -204,6 +269,11 @@ impl ShellToCefLink {
             return;
         }
         self.post_pending_messages();
+        if should_schedule_begin_frame {
+            self.schedule_external_begin_frame(
+                crate::cef::begin_frame_diag::CompositorScheduleKind::Active,
+            );
+        }
     }
 
     pub fn shared_snapshot_path(&self) -> Option<PathBuf> {
@@ -225,11 +295,14 @@ impl ShellToCefLink {
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
         {
+            self.pending_begin_frame_reschedule
+                .store(true, Ordering::Relaxed);
             return;
         }
         let mut task = ExternalBeginFrameTask::new(
             self.browser_holder.clone(),
             self.pending_begin_frame.clone(),
+            self.pending_begin_frame_reschedule.clone(),
         );
         if post_task(ThreadId::UI, Some(&mut task)) == 0 {
             self.pending_begin_frame.store(false, Ordering::Relaxed);
