@@ -332,6 +332,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('settings-shell.json', settingsFocused.shell)
   })
 
+  test('close_focused keybind closes focused shell window when native windows exist', async ({ base }) => {
+    const before = await getSnapshots(base)
+    const knownIds = new Set(before.compositor.windows.map((w) => w.window_id))
+    await pressSuperEnter(base)
+    const terminal = await waitFor(
+      'wait for foot from super enter',
+      async () => {
+        const { compositor } = await getSnapshots(base)
+        return (
+          compositor.windows.find(
+            (e) => !e.shell_hosted && !knownIds.has(e.window_id) && e.app_id === 'foot',
+          ) ?? null
+        )
+      },
+      10000,
+      100,
+    )
+    assert(terminal, 'expected foot')
+    await openSettings(base, 'click')
+    await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    await runKeybind(base, 'close_focused')
+    await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const after = await getSnapshots(base)
+    assert(
+      after.compositor.windows.some((w) => w.window_id === terminal.window_id),
+      'native foot should stay open when closing focused shell window',
+    )
+    await cleanupNativeWindows(base, new Set([terminal.window_id]))
+  })
+
   test('super enter launches terminal without opening programs menu', async ({ base }) => {
     const before = await getSnapshots(base)
     const knownWindowIds = new Set(before.compositor.windows.map((window) => window.window_id))

@@ -2388,7 +2388,19 @@ impl CompositorState {
         self.programs_menu_super_chord = true;
         match action {
             "close_focused" => {
-                if let Some(wid) = self.super_keybind_target_window_id() {
+                if let Some(wid) = self.logical_focused_window_id() {
+                    if self.window_registry.is_shell_hosted(wid) {
+                        self.shell_send_keybind("close_focused");
+                    } else if self
+                        .window_registry
+                        .window_info(wid)
+                        .is_some_and(|info| !self.window_info_is_solid_shell_host(&info))
+                    {
+                        self.shell_close_window(wid);
+                    } else {
+                        self.shell_send_keybind("close_focused");
+                    }
+                } else if let Some(wid) = self.super_keybind_target_window_id() {
                     self.shell_close_window(wid);
                 }
             }
