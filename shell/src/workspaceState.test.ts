@@ -31,6 +31,7 @@ describe('workspaceState', () => {
 
   it('prunes unmapped windows and repairs invalid active tabs', () => {
     const state: WorkspaceState = {
+      ...createEmptyWorkspaceState(),
       groups: [
         { id: 'group-1', windowIds: [3, 4] },
         { id: 'group-2', windowIds: [9] },
@@ -39,8 +40,6 @@ describe('workspaceState', () => {
         'group-1': 4,
         'group-2': 9,
       },
-      pinnedWindowIds: [],
-      splitByGroupId: {},
       nextGroupSeq: 3,
     }
     const next = reconcileWorkspaceState(state, [3])
@@ -51,10 +50,10 @@ describe('workspaceState', () => {
 
   it('drops pinned ids for windows removed during reconciliation', () => {
     const state: WorkspaceState = {
+      ...createEmptyWorkspaceState(),
       groups: [{ id: 'group-1', windowIds: [3, 4] }],
       activeTabByGroupId: { 'group-1': 4 },
       pinnedWindowIds: [4, 9],
-      splitByGroupId: {},
       nextGroupSeq: 2,
     }
     const next = reconcileWorkspaceState(state, [3])

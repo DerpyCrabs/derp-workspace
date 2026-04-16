@@ -68,10 +68,9 @@ describe('tabGroupOps', () => {
 
   it('falls back to the first non-minimized member when the active tab is unavailable', () => {
     const state = {
+      ...createEmptyWorkspaceState(),
       groups: [{ id: 'group-1', windowIds: [1, 2, 3] }],
       activeTabByGroupId: { 'group-1': 9 },
-      pinnedWindowIds: [],
-      splitByGroupId: {},
       nextGroupSeq: 2,
     }
     expect(
@@ -92,10 +91,9 @@ describe('tabGroupOps', () => {
 
   it('picks the next sensible tab after removal', () => {
     const state = {
+      ...createEmptyWorkspaceState(),
       groups: [{ id: 'group-1', windowIds: [10, 11, 12] }],
       activeTabByGroupId: { 'group-1': 11 },
-      pinnedWindowIds: [],
-      splitByGroupId: {},
       nextGroupSeq: 2,
     }
     expect(nextActiveWindowAfterRemoval(state, 'group-1', 11)).toBe(12)

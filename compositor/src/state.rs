@@ -1503,12 +1503,12 @@ impl CompositorState {
             let gy = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
             let gw = u32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
             let gh = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
-            let z = u32::from_le_bytes(payload[offset + 20..offset + 24].try_into().unwrap());
+            let _z = u32::from_le_bytes(payload[offset + 20..offset + 24].try_into().unwrap());
             offset += 28;
             if id == 0 || gw == 0 || gh == 0 {
                 continue;
             }
-            rows.push((id, gx, gy, gw as i32, gh as i32, z));
+            rows.push((id, gx, gy, gw as i32, gh as i32, self.shell_window_stack_z(id)));
         }
         rows.sort_by(|a, b| a.5.cmp(&b.5).then_with(|| a.0.cmp(&b.0)));
         let mut out = Vec::new();
@@ -6281,6 +6281,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation produced no change");
             return;
         };
+        let next_state = reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
         let mut activation_window_id = None;
         match &mutation {
             WorkspaceMutation::SelectTab { group_id, .. } => {
@@ -6314,7 +6315,13 @@ impl CompositorState {
                 activation_window_id = next_state.visible_window_id_for_group(group_id);
             }
             WorkspaceMutation::SetWindowPinned { .. }
-            | WorkspaceMutation::SetSplitFraction { .. } => {}
+            | WorkspaceMutation::SetSplitFraction { .. }
+            | WorkspaceMutation::SetMonitorTile { .. }
+            | WorkspaceMutation::RemoveMonitorTile { .. }
+            | WorkspaceMutation::ClearMonitorTiles { .. }
+            | WorkspaceMutation::SetPreTileGeometry { .. }
+            | WorkspaceMutation::ClearPreTileGeometry { .. }
+            | WorkspaceMutation::ReplaceState { .. } => {}
         }
         self.workspace_state = next_state;
         self.workspace_send_state();

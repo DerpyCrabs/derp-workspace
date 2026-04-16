@@ -2,7 +2,6 @@ import { For, Show } from 'solid-js'
 import type { Accessor, Setter } from 'solid-js'
 import { LayoutTypePicker } from '../LayoutTypePicker'
 import { getMonitorLayout } from '../tilingConfig'
-import type { PerMonitorTileStates } from '../tileState'
 import type { SettingsLayoutScreen } from './settingsTypes'
 
 export type SettingsTilingPageProps = {
@@ -11,7 +10,7 @@ export type SettingsTilingPageProps = {
   setTilingCfgRev: Setter<number>
   sessionAutoSaveEnabled: Accessor<boolean>
   setSessionAutoSaveEnabled: (enabled: boolean) => void
-  perMonitorTiles: PerMonitorTileStates
+  clearMonitorTiles: (monitorName: string) => void
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
   applyAutoLayout: (monitorName: string) => void
@@ -45,7 +44,7 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                     const name = row.name
                     queueMicrotask(() => {
                       if (getMonitorLayout(name).layout.type === 'manual-snap') {
-                        props.perMonitorTiles.stateFor(name).clearAllTiled()
+                        props.clearMonitorTiles(name)
                         props.bumpSnapChrome()
                         props.scheduleExclusionZonesSync()
                       } else {

@@ -1,3 +1,5 @@
+import type { Rect, SnapZone } from './tileZones'
+
 export type WorkspaceGroupState = {
   id: string
   windowIds: number[]
@@ -8,11 +10,29 @@ export type WorkspaceGroupSplitState = {
   leftPaneFraction: number
 }
 
+export type WorkspaceMonitorTileEntry = {
+  windowId: number
+  zone: SnapZone
+  bounds: Rect
+}
+
+export type WorkspaceMonitorTileState = {
+  outputName: string
+  entries: WorkspaceMonitorTileEntry[]
+}
+
+export type WorkspacePreTileGeometry = {
+  windowId: number
+  bounds: Rect
+}
+
 export type WorkspaceState = {
   groups: WorkspaceGroupState[]
   activeTabByGroupId: Record<string, number>
   pinnedWindowIds: number[]
   splitByGroupId: Record<string, WorkspaceGroupSplitState>
+  monitorTiles: WorkspaceMonitorTileState[]
+  preTileGeometry: WorkspacePreTileGeometry[]
   nextGroupSeq: number
 }
 
@@ -34,6 +54,18 @@ function cloneState(state: WorkspaceState): WorkspaceState {
     activeTabByGroupId: { ...state.activeTabByGroupId },
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
     splitByGroupId: { ...(state.splitByGroupId ?? {}) },
+    monitorTiles: state.monitorTiles.map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.map((entry) => ({
+        windowId: entry.windowId,
+        zone: entry.zone,
+        bounds: { ...entry.bounds },
+      })),
+    })),
+    preTileGeometry: state.preTileGeometry.map((entry) => ({
+      windowId: entry.windowId,
+      bounds: { ...entry.bounds },
+    })),
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -44,6 +76,8 @@ export function createEmptyWorkspaceState(): WorkspaceState {
     activeTabByGroupId: {},
     pinnedWindowIds: [],
     splitByGroupId: {},
+    monitorTiles: [],
+    preTileGeometry: [],
     nextGroupSeq: 1,
   }
 }
@@ -72,6 +106,33 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
     if (!splitA || !splitB) return false
     if (splitA.leftWindowId !== splitB.leftWindowId) return false
     if (splitA.leftPaneFraction !== splitB.leftPaneFraction) return false
+  }
+  if (a.monitorTiles.length !== b.monitorTiles.length) return false
+  for (let monitorIndex = 0; monitorIndex < a.monitorTiles.length; monitorIndex += 1) {
+    const monitorA = a.monitorTiles[monitorIndex]
+    const monitorB = b.monitorTiles[monitorIndex]
+    if (monitorA.outputName !== monitorB.outputName) return false
+    if (monitorA.entries.length !== monitorB.entries.length) return false
+    for (let entryIndex = 0; entryIndex < monitorA.entries.length; entryIndex += 1) {
+      const entryA = monitorA.entries[entryIndex]
+      const entryB = monitorB.entries[entryIndex]
+      if (entryA.windowId !== entryB.windowId) return false
+      if (entryA.zone !== entryB.zone) return false
+      if (entryA.bounds.x !== entryB.bounds.x) return false
+      if (entryA.bounds.y !== entryB.bounds.y) return false
+      if (entryA.bounds.width !== entryB.bounds.width) return false
+      if (entryA.bounds.height !== entryB.bounds.height) return false
+    }
+  }
+  if (a.preTileGeometry.length !== b.preTileGeometry.length) return false
+  for (let entryIndex = 0; entryIndex < a.preTileGeometry.length; entryIndex += 1) {
+    const entryA = a.preTileGeometry[entryIndex]
+    const entryB = b.preTileGeometry[entryIndex]
+    if (entryA.windowId !== entryB.windowId) return false
+    if (entryA.bounds.x !== entryB.bounds.x) return false
+    if (entryA.bounds.y !== entryB.bounds.y) return false
+    if (entryA.bounds.width !== entryB.bounds.width) return false
+    if (entryA.bounds.height !== entryB.bounds.height) return false
   }
   if (a.groups.length !== b.groups.length) return false
   for (let index = 0; index < a.groups.length; index += 1) {
@@ -108,6 +169,50 @@ function normalizePinnedWindowIds(raw: unknown): number[] {
   return normalizeWindowIds(raw)
 }
 
+function isSnapZone(value: unknown): value is SnapZone {
+  switch (value) {
+    case 'auto-fill':
+    case 'left-half':
+    case 'right-half':
+    case 'top-left':
+    case 'top-right':
+    case 'bottom-left':
+    case 'bottom-right':
+    case 'left-third':
+    case 'center-third':
+    case 'right-third':
+    case 'top-left-two-thirds':
+    case 'top-center-two-thirds':
+    case 'top-right-two-thirds':
+    case 'top-left-third':
+    case 'top-center-third':
+    case 'top-right-third':
+    case 'bottom-left-two-thirds':
+    case 'bottom-center-two-thirds':
+    case 'bottom-right-two-thirds':
+    case 'bottom-left-third':
+    case 'bottom-center-third':
+    case 'bottom-right-third':
+      return true
+    default:
+      return false
+  }
+}
+
+function normalizeRect(raw: unknown): Rect | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  const x = Math.trunc(typeof record.x === 'number' ? record.x : Number(record.x))
+  const y = Math.trunc(typeof record.y === 'number' ? record.y : Number(record.y))
+  const width = Math.trunc(typeof record.width === 'number' ? record.width : Number(record.width))
+  const height = Math.trunc(typeof record.height === 'number' ? record.height : Number(record.height))
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return null
+  }
+  if (width <= 0 || height <= 0) return null
+  return { x, y, width, height }
+}
+
 function normalizeSplitByGroupId(
   raw: unknown,
   groups: readonly WorkspaceGroupState[],
@@ -133,6 +238,55 @@ function normalizeSplitByGroupId(
       leftWindowId,
       leftPaneFraction: clampWorkspaceSplitPaneFraction(rawFraction),
     }
+  }
+  return out
+}
+
+function normalizeMonitorTiles(raw: unknown): WorkspaceMonitorTileState[] {
+  if (!Array.isArray(raw)) return []
+  const out: WorkspaceMonitorTileState[] = []
+  const usedWindows = new Set<number>()
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') continue
+    const record = value as Record<string, unknown>
+    const outputName =
+      typeof record.outputName === 'string' && record.outputName.trim().length > 0
+        ? record.outputName.trim()
+        : ''
+    if (!outputName) continue
+    const entriesRaw = Array.isArray(record.entries) ? record.entries : []
+    const entries: WorkspaceMonitorTileEntry[] = []
+    for (const entryValue of entriesRaw) {
+      if (!entryValue || typeof entryValue !== 'object') continue
+      const entryRecord = entryValue as Record<string, unknown>
+      const windowId = Math.trunc(
+        typeof entryRecord.windowId === 'number' ? entryRecord.windowId : Number(entryRecord.windowId),
+      )
+      if (!Number.isFinite(windowId) || windowId <= 0 || usedWindows.has(windowId)) continue
+      const zone = isSnapZone(entryRecord.zone) ? entryRecord.zone : null
+      const bounds = normalizeRect(entryRecord.bounds)
+      if (!zone || !bounds) continue
+      usedWindows.add(windowId)
+      entries.push({ windowId, zone, bounds })
+    }
+    if (entries.length > 0) out.push({ outputName, entries })
+  }
+  return out
+}
+
+function normalizePreTileGeometry(raw: unknown): WorkspacePreTileGeometry[] {
+  if (!Array.isArray(raw)) return []
+  const out: WorkspacePreTileGeometry[] = []
+  const seen = new Set<number>()
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') continue
+    const record = value as Record<string, unknown>
+    const windowId = Math.trunc(typeof record.windowId === 'number' ? record.windowId : Number(record.windowId))
+    if (!Number.isFinite(windowId) || windowId <= 0 || seen.has(windowId)) continue
+    const bounds = normalizeRect(record.bounds)
+    if (!bounds) continue
+    seen.add(windowId)
+    out.push({ windowId, bounds })
   }
   return out
 }
@@ -244,6 +398,8 @@ export function normalizeWorkspaceState(raw: unknown): WorkspaceState {
   }
   state.pinnedWindowIds = normalizePinnedWindowIds(source.pinnedWindowIds)
   state.splitByGroupId = normalizeSplitByGroupId(source.splitByGroupId, state.groups)
+  state.monitorTiles = normalizeMonitorTiles(source.monitorTiles)
+  state.preTileGeometry = normalizePreTileGeometry(source.preTileGeometry)
   const nextRaw = typeof source.nextGroupSeq === 'number' ? source.nextGroupSeq : Number(source.nextGroupSeq)
   const nextSeq = Math.trunc(nextRaw)
   state.nextGroupSeq =
@@ -307,6 +463,13 @@ export function reconcileWorkspaceState(
     next.groups.push({ id: groupId, windowIds: [windowId] })
     next.activeTabByGroupId[groupId] = windowId
   }
+  next.monitorTiles = next.monitorTiles
+    .map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.filter((entry) => live.has(entry.windowId)),
+    }))
+    .filter((monitor) => monitor.entries.length > 0)
+  next.preTileGeometry = next.preTileGeometry.filter((entry) => live.has(entry.windowId))
   ensurePinnedWindowIds(next)
   ensureValidSplitState(next)
   return next
@@ -332,6 +495,11 @@ export function setWorkspaceActiveTab(
     },
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
     splitByGroupId: { ...(state.splitByGroupId ?? {}) },
+    monitorTiles: state.monitorTiles.map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
+    })),
+    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -457,6 +625,36 @@ export function getWorkspaceGroupSplit(
   return state.splitByGroupId[groupId]
 }
 
+export function workspaceIsWindowTiled(state: WorkspaceState, windowId: number): boolean {
+  return state.monitorTiles.some((monitor) => monitor.entries.some((entry) => entry.windowId === windowId))
+}
+
+export function workspaceFindMonitorForTiledWindow(state: WorkspaceState, windowId: number): string | null {
+  for (const monitor of state.monitorTiles) {
+    if (monitor.entries.some((entry) => entry.windowId === windowId)) return monitor.outputName
+  }
+  return null
+}
+
+export function workspaceGetTiledZone(state: WorkspaceState, windowId: number): SnapZone | undefined {
+  for (const monitor of state.monitorTiles) {
+    const entry = monitor.entries.find((candidate) => candidate.windowId === windowId)
+    if (entry) return entry.zone
+  }
+  return undefined
+}
+
+export function workspaceGetPreTileGeometry(state: WorkspaceState, windowId: number): Rect | undefined {
+  return state.preTileGeometry.find((entry) => entry.windowId === windowId)?.bounds
+}
+
+export function workspaceMonitorTileEntries(
+  state: WorkspaceState,
+  outputName: string,
+): WorkspaceMonitorTileEntry[] {
+  return state.monitorTiles.find((monitor) => monitor.outputName === outputName)?.entries ?? []
+}
+
 export function enterWorkspaceSplitView(
   state: WorkspaceState,
   groupId: string,
@@ -482,6 +680,11 @@ export function exitWorkspaceSplitView(state: WorkspaceState, groupId: string): 
     activeTabByGroupId: { ...state.activeTabByGroupId },
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
     splitByGroupId: withoutGroupSplit(state.splitByGroupId, groupId),
+    monitorTiles: state.monitorTiles.map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
+    })),
+    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -506,6 +709,11 @@ export function setWorkspaceSplitFraction(
         leftPaneFraction: nextFraction,
       },
     },
+    monitorTiles: state.monitorTiles.map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
+    })),
+    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }
 }

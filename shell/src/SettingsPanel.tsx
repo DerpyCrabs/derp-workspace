@@ -1,7 +1,6 @@
 import { For, Show, createSignal } from 'solid-js'
 import type { Accessor, Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
-import type { PerMonitorTileStates } from './tileState'
 import { SettingsAppearancePage } from './settings/SettingsAppearancePage'
 import { SettingsBluetoothPage } from './settings/SettingsBluetoothPage'
 import { SettingsDisplaysPage } from './settings/SettingsDisplaysPage'
@@ -46,7 +45,7 @@ export type SettingsPanelProps = {
   setOrientationPickerOpen: Setter<number | null>
   tilingCfgRev: Accessor<number>
   setTilingCfgRev: Setter<number>
-  perMonitorTiles: PerMonitorTileStates
+  clearMonitorTiles: (monitorName: string) => void
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
   applyAutoLayout: (monitorName: string) => void
@@ -123,7 +122,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             screenDraftRows={props.screenDraft.rows}
             tilingCfgRev={props.tilingCfgRev}
             setTilingCfgRev={props.setTilingCfgRev}
-            perMonitorTiles={props.perMonitorTiles}
+            clearMonitorTiles={props.clearMonitorTiles}
             bumpSnapChrome={props.bumpSnapChrome}
             scheduleExclusionZonesSync={props.scheduleExclusionZonesSync}
             applyAutoLayout={props.applyAutoLayout}

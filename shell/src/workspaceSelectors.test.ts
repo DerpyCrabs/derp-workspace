@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildTaskbarRowsByMonitor, buildWorkspaceGroups } from './workspaceSelectors'
 import type { DerpWindow } from './app/appWindowState'
-import type { WorkspaceState } from './workspaceState'
+import { createEmptyWorkspaceState, type WorkspaceState } from './workspaceState'
 
 function makeWindow(window_id: number, patch: Partial<DerpWindow> = {}): DerpWindow {
   return {
@@ -25,6 +25,7 @@ function makeWindow(window_id: number, patch: Partial<DerpWindow> = {}): DerpWin
 }
 
 const workspaceState: WorkspaceState = {
+  ...createEmptyWorkspaceState(),
   groups: [
     { id: 'group-a', windowIds: [1] },
     { id: 'group-b', windowIds: [2] },
@@ -33,8 +34,6 @@ const workspaceState: WorkspaceState = {
     'group-a': 1,
     'group-b': 2,
   },
-  pinnedWindowIds: [],
-  splitByGroupId: {},
   nextGroupSeq: 3,
 }
 

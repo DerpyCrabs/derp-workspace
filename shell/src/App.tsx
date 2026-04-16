@@ -72,7 +72,7 @@ import { SnapAssistPicker } from './SnapAssistPicker'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
 import {
   computeTiledResizeRects,
-  PerMonitorTileStates,
+  findEdgeNeighborsInMap,
   TILE_RESIZE_EDGE_ALIGN_PX,
   TILED_RESIZE_MIN_H,
   TILED_RESIZE_MIN_W,
@@ -189,6 +189,11 @@ import {
   setWorkspaceActiveTab,
   setWorkspaceWindowPinned,
   splitWorkspaceWindowToOwnGroup,
+  workspaceFindMonitorForTiledWindow,
+  workspaceGetPreTileGeometry,
+  workspaceGetTiledZone,
+  workspaceIsWindowTiled,
+  workspaceMonitorTileEntries,
 } from './workspaceState'
 import { createWorkspaceSelectors, type WorkspaceGroupModel } from './workspaceSelectors'
 import { buildE2eShellHtml, buildE2eShellSnapshot } from './e2eSnapshot'
@@ -327,7 +332,6 @@ function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>
 }
 
 const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
-const perMonitorTiles = new PerMonitorTileStates()
 const dragPreTileSnapshot = new Map<number, { x: number; y: number; w: number; h: number }>()
 let activeSnapPreviewCanvas: { x: number; y: number; w: number; h: number } | null = null
 let activeSnapZone: SnapZone | null = null
@@ -503,16 +507,116 @@ function App() {
   let traySniMenuNextSerial = 0
   const desktopApps = useDesktopApplicationsState()
   const {
-    windows,
-    setWindows,
-    allWindowsMap,
-    windowsListIds,
-    windowsList,
+    windows: compositorWindows,
+    allWindowsMap: compositorWindowsMap,
     workspaceState,
     focusedWindowId,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
     applyCompositorDetail: applyModelCompositorDetail,
   } = createCompositorModel()
+  type WindowDraftPatch = Partial<
+    Pick<DerpWindow, 'x' | 'y' | 'width' | 'height' | 'maximized' | 'output_name'>
+  >
+  const [windowDrafts, setWindowDrafts] = createSignal<Map<number, WindowDraftPatch>>(new Map())
+  const allWindowsMap = createMemo(() => {
+    const authoritative = compositorWindowsMap()
+    const drafts = windowDrafts()
+    if (drafts.size === 0) return authoritative
+    let next: Map<number, DerpWindow> | null = null
+    for (const [windowId, draft] of drafts) {
+      const current = authoritative.get(windowId)
+      if (!current) continue
+      const merged = { ...current, ...draft }
+      if (
+        merged.x === current.x &&
+        merged.y === current.y &&
+        merged.width === current.width &&
+        merged.height === current.height &&
+        merged.maximized === current.maximized &&
+        merged.output_name === current.output_name
+      ) {
+        continue
+      }
+      if (!next) next = new Map(authoritative)
+      next.set(windowId, merged)
+    }
+    return next ?? authoritative
+  })
+  const windows = allWindowsMap
+  const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
+  const windowsList = createMemo(() => {
+    const out: DerpWindow[] = []
+    for (const windowId of windowsListIds()) {
+      const window = allWindowsMap().get(windowId)
+      if (window) out.push(window)
+    }
+    return out
+  })
+  createEffect(() => {
+    const authoritative = compositorWindows()
+    setWindowDrafts((prev) => {
+      let next: Map<number, WindowDraftPatch> | null = null
+      for (const [windowId, draft] of prev) {
+        const current = authoritative.get(windowId)
+        if (
+          current &&
+          draft.x === current.x &&
+          draft.y === current.y &&
+          draft.width === current.width &&
+          draft.height === current.height &&
+          draft.maximized === current.maximized &&
+          draft.output_name === current.output_name
+        ) {
+          if (!next) next = new Map(prev)
+          next.delete(windowId)
+          continue
+        }
+        if (!current) {
+          if (!next) next = new Map(prev)
+          next.delete(windowId)
+        }
+      }
+      return next ?? prev
+    })
+  })
+  const patchWindowDrafts = (
+    windowIds: readonly number[],
+    buildPatch: (windowId: number, current: DerpWindow) => WindowDraftPatch,
+  ) => {
+    setWindowDrafts((prev) => {
+      let next: Map<number, WindowDraftPatch> | null = null
+      for (const windowId of windowIds) {
+        const current = allWindowsMap().get(windowId)
+        if (!current) continue
+        const patch = buildPatch(windowId, current)
+        const merged = {
+          x: patch.x ?? current.x,
+          y: patch.y ?? current.y,
+          width: patch.width ?? current.width,
+          height: patch.height ?? current.height,
+          maximized: patch.maximized ?? current.maximized,
+          output_name: patch.output_name ?? current.output_name,
+        }
+        if (
+          merged.x === current.x &&
+          merged.y === current.y &&
+          merged.width === current.width &&
+          merged.height === current.height &&
+          merged.maximized === current.maximized &&
+          merged.output_name === current.output_name
+        ) {
+          if (prev.has(windowId)) {
+            if (!next) next = new Map(prev)
+            next.delete(windowId)
+          }
+          continue
+        }
+        if (!next) next = new Map(prev)
+        next.set(windowId, merged)
+      }
+      return next ?? prev
+    })
+  }
   const [rootPointerDowns, setRootPointerDowns] = createSignal(0)
 
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -846,12 +950,8 @@ function App() {
     for (const group of groups) {
       for (const windowId of group.windowIds) desiredGroupByWindowId.set(windowId, group.id)
     }
-    const sendRestoreMutation = (mutation: Record<string, unknown>) =>
-      shellWireSend('workspace_mutation', JSON.stringify(mutation))
-
     for (const windowId of [...planned.pinnedWindowIds]) {
       if (!restoredWindowIds.has(windowId)) continue
-      if (!sendRestoreMutation({ type: 'set_window_pinned', windowId, pinned: false })) return
       planned = setWorkspaceWindowPinned(planned, windowId, false)
     }
 
@@ -868,7 +968,6 @@ function App() {
         currentGroup.windowIds[0] !== anchorWindowId ||
         currentGroup.windowIds.some((windowId) => desiredGroupByWindowId.get(windowId) !== group.id)
       if (needsOwnGroup) {
-        if (!sendRestoreMutation({ type: 'split_window_to_own_group', windowId: anchorWindowId })) return
         planned = splitWorkspaceWindowToOwnGroup(planned, anchorWindowId)
       }
       let targetGroupId = planned.groups.find((entry) => entry.windowIds[0] === anchorWindowId)?.id ?? null
@@ -879,16 +978,6 @@ function App() {
         const sameGroup = workspaceStateGroupIdForWindow(planned, windowId) === targetGroupId
         const sameIndex = targetGroup?.windowIds[index] === windowId
         if (!sameGroup || !sameIndex) {
-          if (
-            !sendRestoreMutation({
-              type: 'move_window_to_group',
-              windowId,
-              targetGroupId,
-              insertIndex: index,
-            })
-          ) {
-            return
-          }
           planned = moveWorkspaceWindowToGroup(planned, windowId, targetGroupId, index)
           targetGroupId = planned.groups.find((entry) => entry.windowIds.includes(anchorWindowId))?.id ?? targetGroupId
         }
@@ -897,32 +986,12 @@ function App() {
       if (group.splitLeftWindowId !== null) {
         if (!split || split.leftWindowId !== group.splitLeftWindowId) {
           const leftPaneFraction = group.leftPaneFraction ?? 0.5
-          if (
-            !sendRestoreMutation({
-              type: 'enter_split',
-              groupId: targetGroupId,
-              leftWindowId: group.splitLeftWindowId,
-              leftPaneFraction,
-            })
-          ) {
-            return
-          }
           planned = enterWorkspaceSplitView(planned, targetGroupId, group.splitLeftWindowId, leftPaneFraction)
         } else if (split.leftPaneFraction !== (group.leftPaneFraction ?? 0.5)) {
           const leftPaneFraction = group.leftPaneFraction ?? 0.5
-          if (
-            !sendRestoreMutation({
-              type: 'set_split_fraction',
-              groupId: targetGroupId,
-              leftPaneFraction,
-            })
-          ) {
-            return
-          }
           planned = setWorkspaceSplitFraction(planned, targetGroupId, leftPaneFraction)
         }
       } else if (split) {
-        if (!sendRestoreMutation({ type: 'exit_split', groupId: targetGroupId })) return
         planned = exitWorkspaceSplitView(planned, targetGroupId)
       }
       const normalizedActiveWindowId =
@@ -930,15 +999,6 @@ function App() {
           ? setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId).activeTabByGroupId[targetGroupId]
           : planned.activeTabByGroupId[targetGroupId]
       if (normalizedActiveWindowId !== planned.activeTabByGroupId[targetGroupId]) {
-        if (
-          !sendRestoreMutation({
-            type: 'select_tab',
-            groupId: targetGroupId,
-            windowId: group.activeWindowId,
-          })
-        ) {
-          return
-        }
         planned = setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId)
       }
     }
@@ -947,82 +1007,92 @@ function App() {
     for (const windowId of restoredWindowIds) {
       const pinned = desiredPinned.has(windowId)
       if (isWorkspaceWindowPinned(planned, windowId) === pinned) continue
-      if (!sendRestoreMutation({ type: 'set_window_pinned', windowId, pinned })) return
       planned = setWorkspaceWindowPinned(planned, windowId, pinned)
     }
-  }
-  function applyRestoredTiles(snapshot: SessionSnapshot) {
+    planned = {
+      ...planned,
+      monitorTiles: [],
+      preTileGeometry: [],
+    }
+    if (!sendWorkspaceMutation({ type: 'replace_state', state: planned })) return
+
     const screens = taskbarScreens()
     const co = layoutCanvasOrigin()
-    if (screens.length === 0 || !co) return
-    perMonitorTiles.clearAll()
     for (const entry of snapshot.preTileGeometry) {
       const windowId = liveWindowIdForRef(entry.windowRef)
       if (windowId === null) continue
-      perMonitorTiles.preTileGeometry.set(windowId, {
-        x: entry.bounds.x,
-        y: entry.bounds.y,
-        w: entry.bounds.width,
-        h: entry.bounds.height,
-      })
-    }
-    for (const monitorState of snapshot.monitorTiles) {
-      const targetMonitor =
-        screens.find((screen) => screen.name === monitorState.outputName) ?? screens[0] ?? null
-      if (!targetMonitor) continue
-      const resolvedEntries = monitorState.entries
-        .map((entry) => {
-          const windowId = liveWindowIdForRef(entry.windowRef)
-          if (windowId === null) return null
-          return { windowId, zone: entry.zone, bounds: entry.bounds }
+      if (
+        !sendSetPreTileGeometry(windowId, {
+          x: entry.bounds.x,
+          y: entry.bounds.y,
+          w: entry.bounds.width,
+          h: entry.bounds.height,
         })
-        .filter((entry): entry is { windowId: number; zone: SnapZone; bounds: SavedRect } => entry !== null)
-      if (resolvedEntries.length === 0) continue
-      const { layout, params } = getMonitorLayout(targetMonitor.name)
-      let boundsByWindowId = new Map<number, SavedRect>()
-      if (layout.type === 'manual-snap') {
-        boundsByWindowId = new Map(resolvedEntries.map((entry) => [entry.windowId, entry.bounds]))
-      } else {
-        const reserveTb = reserveTaskbarForMon(targetMonitor)
-        const work = monitorWorkAreaGlobal(targetMonitor, reserveTb)
-        const rects = layout.computeLayout(
-          resolvedEntries.map((entry) => entry.windowId),
-          { x: work.x, y: work.y, width: work.w, height: work.h },
-          params,
-        )
-        boundsByWindowId = new Map(
-          Array.from(rects.entries()).map(([windowId, rect]) => [
-            windowId,
-            { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          ]),
-        )
+      ) {
+        return
       }
-      perMonitorTiles.replaceMonitorEntries(
-        targetMonitor.name,
-        resolvedEntries.map((entry) => ({
-          windowId: entry.windowId,
-          zone: entry.zone,
-          bounds: boundsByWindowId.get(entry.windowId) ?? entry.bounds,
-        })),
-      )
-      for (const entry of resolvedEntries) {
-        const bounds = boundsByWindowId.get(entry.windowId) ?? entry.bounds
-        const local = rectGlobalToCanvasLocal(
-          bounds.x,
-          bounds.y,
-          bounds.width,
-          bounds.height,
-          co,
-        )
-        shellWireSend(
-          'set_geometry',
-          entry.windowId,
-          local.x,
-          local.y,
-          local.w,
-          local.h,
-          SHELL_LAYOUT_FLOATING,
-        )
+    }
+    if (screens.length > 0 && co) {
+      for (const monitorState of snapshot.monitorTiles) {
+        const targetMonitor =
+          screens.find((screen) => screen.name === monitorState.outputName) ?? screens[0] ?? null
+        if (!targetMonitor) continue
+        const resolvedEntries = monitorState.entries
+          .map((entry) => {
+            const windowId = liveWindowIdForRef(entry.windowRef)
+            if (windowId === null) return null
+            return { windowId, zone: entry.zone, bounds: entry.bounds }
+          })
+          .filter((entry): entry is { windowId: number; zone: SnapZone; bounds: SavedRect } => entry !== null)
+        if (resolvedEntries.length === 0) continue
+        const { layout, params } = getMonitorLayout(targetMonitor.name)
+        let boundsByWindowId = new Map<number, SavedRect>()
+        if (layout.type === 'manual-snap') {
+          boundsByWindowId = new Map(resolvedEntries.map((entry) => [entry.windowId, entry.bounds]))
+        } else {
+          const reserveTb = reserveTaskbarForMon(targetMonitor)
+          const work = monitorWorkAreaGlobal(targetMonitor, reserveTb)
+          const rects = layout.computeLayout(
+            resolvedEntries.map((entry) => entry.windowId),
+            { x: work.x, y: work.y, width: work.w, height: work.h },
+            params,
+          )
+          boundsByWindowId = new Map(
+            Array.from(rects.entries()).map(([windowId, rect]) => [
+              windowId,
+              { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            ]),
+          )
+        }
+        for (const entry of resolvedEntries) {
+          const bounds = boundsByWindowId.get(entry.windowId) ?? entry.bounds
+          if (
+            !sendSetMonitorTile(entry.windowId, targetMonitor.name, entry.zone, {
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+            })
+          ) {
+            return
+          }
+          const local = rectGlobalToCanvasLocal(
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            co,
+          )
+          shellWireSend(
+            'set_geometry',
+            entry.windowId,
+            local.x,
+            local.y,
+            local.w,
+            local.h,
+            SHELL_LAYOUT_FLOATING,
+          )
+        }
       }
     }
     bumpSnapChrome()
@@ -1567,7 +1637,6 @@ function App() {
     lastAppliedRestoreSignature = signature
     restoreWindowModes(snapshot)
     applyRestoredWorkspace(snapshot)
-    applyRestoredTiles(snapshot)
   })
 
   createEffect(() => {
@@ -1827,26 +1896,11 @@ function App() {
       window.height,
       SHELL_LAYOUT_FLOATING,
     )
-    setWindows((map) => {
-      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), windowId)
-      let next = map
-      let changed = false
-      for (const groupWindowId of groupWindowIds) {
-        const current = next.get(groupWindowId)
-        if (!current) continue
-        if (!changed) {
-          next = new Map(next)
-          changed = true
-        }
-        next.set(groupWindowId, {
-          ...current,
-          x: nextX,
-          y: nextY,
-          maximized: false,
-        })
-      }
-      return changed ? next : map
-    })
+    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), windowId), () => ({
+      x: nextX,
+      y: nextY,
+      maximized: false,
+    }))
     return true
   }
 
@@ -2032,7 +2086,7 @@ function App() {
           setOrientationPickerOpen={setOrientationPickerOpen}
           tilingCfgRev={tilingCfgRev}
           setTilingCfgRev={setTilingCfgRev}
-          perMonitorTiles={perMonitorTiles}
+          clearMonitorTiles={clearMonitorTiles}
           bumpSnapChrome={() => bumpSnapChrome()}
           scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
           applyAutoLayout={(name) => applyAutoLayout(name)}
@@ -2253,7 +2307,7 @@ function App() {
       const r = allWindowsMap().get(currentVisibleWindowId)
       if (!r || r.minimized) return undefined
       const split = splitLayout()
-      if (!split) return { ...r, snap_tiled: perMonitorTiles.isTiled(r.window_id) }
+      if (!split) return { ...r, snap_tiled: workspaceIsWindowTiled(workspaceState(), r.window_id) }
       return {
         ...r,
         x: split.group.x,
@@ -3016,13 +3070,72 @@ function App() {
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
+  function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
+    return shellWireSend('workspace_mutation', JSON.stringify(mutation))
+  }
+
+  function sendSetMonitorTile(windowId: number, outputName: string, zone: SnapZone, bounds: TileRect): boolean {
+    return sendWorkspaceMutation({
+      type: 'set_monitor_tile',
+      windowId,
+      outputName,
+      zone,
+      bounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      },
+    })
+  }
+
+  function sendRemoveMonitorTile(windowId: number): boolean {
+    return sendWorkspaceMutation({ type: 'remove_monitor_tile', windowId })
+  }
+
+  function sendClearMonitorTiles(outputName: string): boolean {
+    return sendWorkspaceMutation({ type: 'clear_monitor_tiles', outputName })
+  }
+
+  function sendSetPreTileGeometry(windowId: number, bounds: { x: number; y: number; w: number; h: number }): boolean {
+    return sendWorkspaceMutation({
+      type: 'set_pre_tile_geometry',
+      windowId,
+      bounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.w,
+        height: bounds.h,
+      },
+    })
+  }
+
+  function sendClearPreTileGeometry(windowId: number): boolean {
+    return sendWorkspaceMutation({ type: 'clear_pre_tile_geometry', windowId })
+  }
+
+  function workspacePreTileSnapshot(windowId: number): { x: number; y: number; w: number; h: number } | null {
+    const bounds = workspaceGetPreTileGeometry(workspaceState(), windowId)
+    return bounds ? { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height } : null
+  }
+
+  function workspaceTiledRectMap(outputName: string): Map<number, TileRect> {
+    return new Map(
+      workspaceMonitorTileEntries(workspaceState(), outputName).map((entry) => [entry.windowId, { ...entry.bounds }]),
+    )
+  }
+
+  function clearMonitorTiles(outputName: string) {
+    sendClearMonitorTiles(outputName)
+  }
+
   const { scheduleExclusionZonesSync, syncExclusionZonesNow } = createShellExclusionSync({
     mainEl: () => mainRef,
     outputGeom,
     layoutCanvasOrigin,
     taskbarScreens,
     windows: windowsList,
-    isWindowTiled: (windowId) => perMonitorTiles.isTiled(windowId),
+    isWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
     onHudChange: setExclusionZonesHud,
   })
 
@@ -3055,14 +3168,14 @@ function App() {
     const co = layoutCanvasOrigin()
     const list = taskbarScreens()
     const out: { zone: SnapZone; bounds: TileRect }[] = []
-    const st = perMonitorTiles.stateFor(mon.name)
-    for (const [wid, e] of st.tiledWindows) {
+    for (const entry of workspaceMonitorTileEntries(workspaceState(), mon.name)) {
+      const wid = entry.windowId
       if (wid === excludeWindowId) continue
       const win = allWindowsMap().get(wid)
       if (!win || win.minimized) continue
       if (!windowOnMonitor(win, mon, list, co)) continue
       const g = rectCanvasLocalToGlobal(win.x, win.y, win.width, win.height, co)
-      out.push({ zone: e.zone, bounds: { x: g.x, y: g.y, width: g.w, height: g.h } })
+      out.push({ zone: entry.zone, bounds: { x: g.x, y: g.y, width: g.w, height: g.h } })
     }
     return out
   }
@@ -3102,25 +3215,27 @@ function App() {
     })
     const windowIds = candidates.map((w) => w.window_id).sort((a, b) => a - b)
     const rectMap = layout.computeLayout(windowIds, workRect, params)
-    perMonitorTiles.stateFor(monitorName).replaceFromAutoLayoutRects(rectMap)
     const snap = windows()
-    for (const [wid, gr] of rectMap) {
+    if (!sendClearMonitorTiles(monitorName)) return
+    for (const [wid] of rectMap) {
       const pt = snap.get(wid)
-      if (pt) perMonitorTiles.preTileGeometry.set(wid, { x: pt.x, y: pt.y, w: pt.width, h: pt.height })
+      if (pt) {
+        if (!sendSetPreTileGeometry(wid, { x: pt.x, y: pt.y, w: pt.width, h: pt.height })) return
+      }
+    }
+    for (const [wid, gr] of rectMap) {
+      if (!sendSetMonitorTile(wid, monitorName, 'auto-fill', gr)) return
       const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
       shellWireSend('set_geometry', wid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
     }
-    setWindows((m) => {
-      let next: Map<number, DerpWindow> | null = null
-      for (const [wid, gr] of rectMap) {
-        const cur = m.get(wid)
-        if (!cur) continue
+    patchWindowDrafts(
+      Array.from(rectMap.keys()),
+      (wid) => {
+        const gr = rectMap.get(wid)!
         const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
-        if (!next) next = new Map(m)
-        next.set(wid, { ...cur, x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false })
-      }
-      return next ?? m
-    })
+        return { x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false }
+      },
+    )
     scheduleExclusionZonesSync()
     bumpSnapChrome()
   }
@@ -3244,28 +3359,13 @@ function App() {
     loc: { x: number; y: number; w: number; h: number },
     patch: Partial<DerpWindow> = {},
   ) {
-    setWindows((m) => {
-      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), wid)
-      let next = m
-      let changed = false
-      for (const groupWindowId of groupWindowIds) {
-        const current = next.get(groupWindowId)
-        if (!current) continue
-        if (!changed) {
-          next = new Map(next)
-          changed = true
-        }
-        next.set(groupWindowId, {
-          ...current,
-          ...patch,
-          x: loc.x,
-          y: loc.y,
-          width: loc.w,
-          height: loc.h,
-        })
-      }
-      return changed ? next : m
-    })
+    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), wid), () => ({
+      ...patch,
+      x: loc.x,
+      y: loc.y,
+      width: loc.w,
+      height: loc.h,
+    }))
   }
 
   function minimizeDebugShellWindow() {
@@ -3484,7 +3584,7 @@ function App() {
         nextGroupSeq: workspaceState().nextGroupSeq,
       },
       tilingConfig: loadTilingConfig(),
-      monitorTiles: perMonitorTiles.monitorEntries().map((monitor) => ({
+      monitorTiles: workspaceState().monitorTiles.map((monitor) => ({
         outputName: monitor.outputName,
         entries: monitor.entries
           .map((entry) => {
@@ -3507,8 +3607,9 @@ function App() {
           })
           .filter((entry): entry is SavedMonitorTileState['entries'][number] => entry !== null),
       })),
-      preTileGeometry: Array.from(perMonitorTiles.preTileGeometry.entries())
-        .map(([windowId, bounds]) => {
+      preTileGeometry: workspaceState()
+        .preTileGeometry
+        .map(({ windowId, bounds }) => {
           const window = allWindowsMap().get(windowId)
           if (!window) return null
           const windowRef = windowIsShellHosted(window)
@@ -3517,7 +3618,7 @@ function App() {
           if (!windowRef) return null
           return {
             windowRef,
-            bounds: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h },
+            bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
           }
         })
         .filter((entry): entry is SessionSnapshot['preTileGeometry'][number] => entry !== null),
@@ -3587,8 +3688,8 @@ function App() {
       shellWireSend('set_maximized', wid, 0)
       return
     }
-    perMonitorTiles.untileWindowEverywhere(wid)
-    perMonitorTiles.preTileGeometry.delete(wid)
+    if (!sendRemoveMonitorTile(wid)) return
+    if (!sendClearPreTileGeometry(wid)) return
     bumpSnapChrome()
     scheduleExclusionZonesSync()
     floatBeforeMaximize.set(wid, { x: w.x, y: w.y, w: w.width, h: w.height })
@@ -3742,7 +3843,7 @@ function App() {
     const currentWindow = allWindowsMap().get(snapWindowId)
     const preTile =
       dragPreTileSnapshot.get(snapWindowId) ??
-      perMonitorTiles.preTileGeometry.get(snapWindowId) ??
+      workspacePreTileSnapshot(snapWindowId) ??
       (currentWindow
         ? {
             x: currentWindow.x,
@@ -3751,21 +3852,14 @@ function App() {
             h: currentWindow.height,
           }
         : null)
-    if (preTile) {
-      perMonitorTiles.preTileGeometry.set(snapWindowId, preTile)
-    }
     const origin = layoutCanvasOrigin()
     const reserveTaskbar = reserveTaskbarForMon(snapScreen)
     const work = monitorWorkAreaGlobal(snapScreen, reserveTaskbar)
     const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
     const occupied = occupiedSnapZonesOnMonitor(snapScreen, snapWindowId)
-    const previousMonitor = perMonitorTiles.findMonitorForTiledWindow(snapWindowId)
-    if (previousMonitor !== null && previousMonitor !== snapScreen.name) {
-      perMonitorTiles.stateFor(previousMonitor).untileWindow(snapWindowId)
-    }
-    const globalBounds = perMonitorTiles
-      .stateFor(snapScreen.name)
-      .tileWindow(snapWindowId, droppedZone, workRect, occupied)
+    const globalBounds = snapZoneToBoundsWithOccupied(droppedZone, workRect, occupied)
+    if (preTile ? !sendSetPreTileGeometry(snapWindowId, preTile) : !sendClearPreTileGeometry(snapWindowId)) return
+    if (!sendSetMonitorTile(snapWindowId, snapScreen.name, droppedZone, globalBounds)) return
     const localBounds = rectGlobalToCanvasLocal(
       globalBounds.x,
       globalBounds.y,
@@ -3899,8 +3993,8 @@ function App() {
         dragPreTileSnapshot.set(windowId, { x: nx, y: ny, w: rest.w, h: rest.h })
         scheduleExclusionZonesSync()
         bumpSnapChrome()
-      } else if (perMonitorTiles.isTiled(windowId)) {
-        const tr = perMonitorTiles.preTileGeometry.get(windowId)
+      } else if (workspaceIsWindowTiled(workspaceState(), windowId)) {
+        const tr = workspacePreTileSnapshot(windowId)
         if (tr) {
           const grabDx = ptrCl.x - w.x
           const grabDy = ptrCl.y - w.y
@@ -3909,8 +4003,8 @@ function App() {
           shellWireSend('set_geometry', windowId, nx, ny, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
           applyGeometryToWindowMaps(windowId, { x: nx, y: ny, w: tr.w, h: tr.h }, { maximized: false })
         }
-        perMonitorTiles.untileWindowEverywhere(windowId)
-        perMonitorTiles.preTileGeometry.delete(windowId)
+        if (!sendRemoveMonitorTile(windowId)) return
+        if (!sendClearPreTileGeometry(windowId)) return
         dragPreTileSnapshot.set(windowId, tr ?? { x: w.x, y: w.y, w: w.width, h: w.height })
         scheduleExclusionZonesSync()
         bumpSnapChrome()
@@ -3929,21 +4023,10 @@ function App() {
 
   /** Optimistic HUD position in output-local integers; matches compositor `move_delta` after layout unification. */
   function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
-    setWindows((m) => {
-      const groupWindowIds = workspaceGroupWindowIds(workspaceState(), windowId)
-      let next = m
-      let changed = false
-      for (const groupWindowId of groupWindowIds) {
-        const current = next.get(groupWindowId)
-        if (!current) continue
-        if (!changed) {
-          next = new Map(next)
-          changed = true
-        }
-        next.set(groupWindowId, { ...current, x: current.x + dx, y: current.y + dy })
-      }
-      return changed ? next : m
-    })
+    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), windowId), (_windowId, current) => ({
+      x: current.x + dx,
+      y: current.y + dy,
+    }))
   }
 
   function isShellHostedWindow(windowId: number): boolean {
@@ -4057,12 +4140,12 @@ function App() {
   function beginShellWindowResize(windowId: number, edges: number, clientX: number, clientY: number) {
     if (shellWindowResize !== null || shellWindowDrag !== null) return
     shellResizeDeltaLogSeq = 0
-    const mon = perMonitorTiles.findMonitorForTiledWindow(windowId)
+    const mon = workspaceFindMonitorForTiledWindow(workspaceState(), windowId)
     const tol = TILE_RESIZE_EDGE_ALIGN_PX
     let useTiledPropagate = false
     const initialRects = new Map<number, TileRect>()
     if (mon !== null) {
-      const st = perMonitorTiles.stateFor(mon)
+      const rects = workspaceTiledRectMap(mon)
       const dirs: Array<'left' | 'right' | 'top' | 'bottom'> = []
       if (edges & SHELL_RESIZE_LEFT) dirs.push('left')
       if (edges & SHELL_RESIZE_RIGHT) dirs.push('right')
@@ -4070,15 +4153,15 @@ function App() {
       if (edges & SHELL_RESIZE_BOTTOM) dirs.push('bottom')
       const seen = new Set<number>([windowId])
       for (const dir of dirs) {
-        for (const nid of st.findEdgeNeighbors(windowId, dir, tol)) {
+        for (const nid of findEdgeNeighborsInMap(rects, windowId, dir, tol)) {
           seen.add(nid)
         }
       }
       if (seen.size > 1) {
         useTiledPropagate = true
         for (const sid of seen) {
-          const e = st.tiledWindows.get(sid)
-          if (e) initialRects.set(sid, { ...e.bounds })
+          const rect = rects.get(sid)
+          if (rect) initialRects.set(sid, { ...rect })
         }
       }
     }
@@ -4156,21 +4239,14 @@ function App() {
       const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
       shellWireSend('set_geometry', wid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
     }
-    setWindows((m) => {
-      let next = m
-      let changed = false
-      for (const [wid, gr] of rects) {
-        const cur = next.get(wid)
-        if (!cur) continue
-        if (!changed) {
-          next = new Map(next)
-          changed = true
-        }
+    patchWindowDrafts(
+      Array.from(rects.keys()),
+      (wid) => {
+        const gr = rects.get(wid)!
         const loc = rectGlobalToCanvasLocal(gr.x, gr.y, gr.width, gr.height, co)
-        next.set(wid, { ...cur, x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false })
-      }
-      return changed ? next : m
-    })
+        return { x: loc.x, y: loc.y, width: loc.w, height: loc.h, maximized: false }
+      },
+    )
     scheduleExclusionZonesSync()
     bumpSnapChrome()
   }
@@ -4196,9 +4272,10 @@ function App() {
       TILED_RESIZE_MIN_W,
       TILED_RESIZE_MIN_H,
     )
-    const st = perMonitorTiles.stateFor(s.outputName)
-    for (const [wid, gr] of rects) {
-      st.setTiledBounds(wid, gr)
+    for (const [windowId, bounds] of rects) {
+      if (!sendSetMonitorTile(windowId, s.outputName, workspaceGetTiledZone(workspaceState(), windowId) ?? 'auto-fill', bounds)) {
+        return
+      }
     }
     bumpSnapChrome()
     shellWireSend('resize_shell_grab_end')
@@ -4516,19 +4593,13 @@ function App() {
           if (w.maximized) {
             gRect = shellMaximizedWorkAreaGlobalRect(tgtMon, reserveTgt)
             layoutFlag = SHELL_LAYOUT_MAXIMIZED
-          } else if (perMonitorTiles.isTiled(fid)) {
-            const zone = perMonitorTiles.getTiledZone(fid)!
+          } else if (workspaceIsWindowTiled(workspaceState(), fid)) {
+            const zone = workspaceGetTiledZone(workspaceState(), fid)!
             const tw = monitorWorkAreaGlobal(tgtMon, reserveTgt)
             const workRect: TileRect = { x: tw.x, y: tw.y, width: tw.w, height: tw.h }
             const occ = occupiedSnapZonesOnMonitor(tgtMon, fid)
-            const gb = perMonitorTiles.moveTiledWindowToMonitor(
-              fid,
-              curMon.name,
-              tgtMon.name,
-              zone,
-              workRect,
-              occ,
-            )
+            const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
+            if (!sendSetMonitorTile(fid, tgtMon.name, zone, gb)) return
             gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
             layoutFlag = SHELL_LAYOUT_FLOATING
           } else {
@@ -4546,21 +4617,14 @@ function App() {
           }
           const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
           shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, layoutFlag)
-          setWindows((m) => {
-            const cur = m.get(fid)
-            if (!cur) return m
-            const next = new Map(m)
-            next.set(fid, {
-              ...cur,
-              output_name: tgtMon.name,
-              x: loc.x,
-              y: loc.y,
-              width: loc.w,
-              height: loc.h,
-              maximized: layoutFlag === SHELL_LAYOUT_MAXIMIZED,
-            })
-            return next
-          })
+          patchWindowDrafts([fid], () => ({
+            output_name: tgtMon.name,
+            x: loc.x,
+            y: loc.y,
+            width: loc.w,
+            height: loc.h,
+            maximized: layoutFlag === SHELL_LAYOUT_MAXIMIZED,
+          }))
           scheduleExclusionZonesSync()
           bumpSnapChrome()
           queueMicrotask(() => {
@@ -4582,11 +4646,7 @@ function App() {
           const wr = monitorWorkAreaGlobal(mon, reserveTb)
           const workRect: TileRect = { x: wr.x, y: wr.y, width: wr.w, height: wr.h }
           const occ = occupiedSnapZonesOnMonitor(mon, fid)
-          const prevMonKb = perMonitorTiles.findMonitorForTiledWindow(fid)
-          if (prevMonKb !== null && prevMonKb !== mon.name) {
-            perMonitorTiles.stateFor(prevMonKb).untileWindow(fid)
-          }
-          const gb = perMonitorTiles.stateFor(mon.name).tileWindow(fid, zone, workRect, occ)
+          const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
           const gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
           const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
           const preTile = w.maximized
@@ -4597,23 +4657,17 @@ function App() {
                 h: w.height,
               })
             : { x: w.x, y: w.y, w: w.width, h: w.height }
-          perMonitorTiles.preTileGeometry.set(fid, preTile)
+          if (!sendSetPreTileGeometry(fid, preTile)) return
+          if (!sendSetMonitorTile(fid, mon.name, zone, gb)) return
           if (w.maximized) floatBeforeMaximize.delete(fid)
           shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
-          setWindows((m) => {
-            const cur = m.get(fid)
-            if (!cur) return m
-            const next = new Map(m)
-            next.set(fid, {
-              ...cur,
-              x: loc.x,
-              y: loc.y,
-              width: loc.w,
-              height: loc.h,
-              maximized: false,
-            })
-            return next
-          })
+          patchWindowDrafts([fid], () => ({
+            x: loc.x,
+            y: loc.y,
+            width: loc.w,
+            height: loc.h,
+            maximized: false,
+          }))
           scheduleExclusionZonesSync()
           bumpSnapChrome()
           return
@@ -4636,45 +4690,31 @@ function App() {
             }
             floatBeforeMaximize.delete(fid)
             shellWireSend('set_geometry', fid, rest.x, rest.y, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
-            setWindows((m) => {
-              const cur = m.get(fid)
-              if (!cur) return m
-              const next = new Map(m)
-              next.set(fid, {
-                ...cur,
-                x: rest.x,
-                y: rest.y,
-                width: rest.w,
-                height: rest.h,
-                maximized: false,
-              })
-              return next
-            })
+            patchWindowDrafts([fid], () => ({
+              x: rest.x,
+              y: rest.y,
+              width: rest.w,
+              height: rest.h,
+              maximized: false,
+            }))
             scheduleExclusionZonesSync()
             bumpSnapChrome()
             return
           }
-          if (perMonitorTiles.isTiled(fid)) {
-            const tr = perMonitorTiles.preTileGeometry.get(fid)
+          if (workspaceIsWindowTiled(workspaceState(), fid)) {
+            const tr = workspacePreTileSnapshot(fid)
             if (tr) {
               shellWireSend('set_geometry', fid, tr.x, tr.y, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
-              setWindows((m) => {
-                const cur = m.get(fid)
-                if (!cur) return m
-                const next = new Map(m)
-                next.set(fid, {
-                  ...cur,
-                  x: tr.x,
-                  y: tr.y,
-                  width: tr.w,
-                  height: tr.h,
-                  maximized: false,
-                })
-                return next
-              })
+              patchWindowDrafts([fid], () => ({
+                x: tr.x,
+                y: tr.y,
+                width: tr.w,
+                height: tr.h,
+                maximized: false,
+              }))
             }
-            perMonitorTiles.untileWindowEverywhere(fid)
-            perMonitorTiles.preTileGeometry.delete(fid)
+            if (!sendRemoveMonitorTile(fid)) return
+            if (!sendClearPreTileGeometry(fid)) return
             scheduleExclusionZonesSync()
             bumpSnapChrome()
             return
@@ -4798,11 +4838,6 @@ function App() {
           fallbackMonitorKey,
           requestWindowSyncRecovery,
         })
-        const wid = result.windowId ?? null
-        if (wid !== null) {
-          perMonitorTiles.untileWindowEverywhere(wid)
-          perMonitorTiles.preTileGeometry.delete(wid)
-        }
         if (result.followup) scheduleCompositorFollowup(result.followup)
         return
       }

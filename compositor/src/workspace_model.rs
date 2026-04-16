@@ -21,6 +21,36 @@ pub struct WorkspaceGroupSplitState {
     pub left_pane_fraction: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMonitorTileEntry {
+    #[serde(rename = "windowId")]
+    pub window_id: u32,
+    pub zone: String,
+    pub bounds: WorkspaceRect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMonitorTileState {
+    #[serde(rename = "outputName")]
+    pub output_name: String,
+    pub entries: Vec<WorkspaceMonitorTileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspacePreTileGeometry {
+    #[serde(rename = "windowId")]
+    pub window_id: u32,
+    pub bounds: WorkspaceRect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceState {
     pub groups: Vec<WorkspaceGroupState>,
@@ -30,6 +60,10 @@ pub struct WorkspaceState {
     pub pinned_window_ids: Vec<u32>,
     #[serde(rename = "splitByGroupId")]
     pub split_by_group_id: HashMap<String, WorkspaceGroupSplitState>,
+    #[serde(default, rename = "monitorTiles")]
+    pub monitor_tiles: Vec<WorkspaceMonitorTileState>,
+    #[serde(default, rename = "preTileGeometry")]
+    pub pre_tile_geometry: Vec<WorkspacePreTileGeometry>,
     #[serde(rename = "nextGroupSeq")]
     pub next_group_seq: u32,
 }
@@ -78,6 +112,34 @@ pub enum WorkspaceMutation {
         #[serde(rename = "leftPaneFraction")]
         left_pane_fraction: f64,
     },
+    SetMonitorTile {
+        #[serde(rename = "outputName")]
+        output_name: String,
+        #[serde(rename = "windowId")]
+        window_id: u32,
+        zone: String,
+        bounds: WorkspaceRect,
+    },
+    RemoveMonitorTile {
+        #[serde(rename = "windowId")]
+        window_id: u32,
+    },
+    ClearMonitorTiles {
+        #[serde(rename = "outputName")]
+        output_name: String,
+    },
+    SetPreTileGeometry {
+        #[serde(rename = "windowId")]
+        window_id: u32,
+        bounds: WorkspaceRect,
+    },
+    ClearPreTileGeometry {
+        #[serde(rename = "windowId")]
+        window_id: u32,
+    },
+    ReplaceState {
+        state: WorkspaceState,
+    },
 }
 
 impl Default for WorkspaceState {
@@ -87,6 +149,8 @@ impl Default for WorkspaceState {
             active_tab_by_group_id: HashMap::new(),
             pinned_window_ids: Vec::new(),
             split_by_group_id: HashMap::new(),
+            monitor_tiles: Vec::new(),
+            pre_tile_geometry: Vec::new(),
             next_group_seq: 1,
         }
     }
@@ -283,6 +347,26 @@ pub fn reconcile_workspace_state(state: &WorkspaceState, live_window_ids: &[u32]
         });
         next.active_tab_by_group_id.insert(group_id, window_id);
     }
+    next.monitor_tiles = next
+        .monitor_tiles
+        .iter()
+        .map(|monitor| WorkspaceMonitorTileState {
+            output_name: monitor.output_name.clone(),
+            entries: monitor
+                .entries
+                .iter()
+                .filter(|entry| live.contains(&entry.window_id))
+                .cloned()
+                .collect(),
+        })
+        .filter(|monitor| !monitor.entries.is_empty())
+        .collect();
+    next.pre_tile_geometry = next
+        .pre_tile_geometry
+        .iter()
+        .filter(|entry| live.contains(&entry.window_id))
+        .cloned()
+        .collect();
     ensure_pinned_window_ids(&mut next);
     ensure_valid_split_state(&mut next);
     next
@@ -576,6 +660,90 @@ impl WorkspaceState {
                     },
                 );
                 Some(next)
+            }
+            WorkspaceMutation::SetMonitorTile {
+                output_name,
+                window_id,
+                zone,
+                bounds,
+            } => {
+                let mut next = self.clone();
+                for monitor in &mut next.monitor_tiles {
+                    monitor.entries.retain(|entry| entry.window_id != *window_id);
+                }
+                next.monitor_tiles.retain(|monitor| !monitor.entries.is_empty());
+                if let Some(monitor) = next
+                    .monitor_tiles
+                    .iter_mut()
+                    .find(|monitor| monitor.output_name == *output_name)
+                {
+                    monitor.entries.push(WorkspaceMonitorTileEntry {
+                        window_id: *window_id,
+                        zone: zone.clone(),
+                        bounds: bounds.clone(),
+                    });
+                } else {
+                    next.monitor_tiles.push(WorkspaceMonitorTileState {
+                        output_name: output_name.clone(),
+                        entries: vec![WorkspaceMonitorTileEntry {
+                            window_id: *window_id,
+                            zone: zone.clone(),
+                            bounds: bounds.clone(),
+                        }],
+                    });
+                }
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::RemoveMonitorTile { window_id } => {
+                let mut next = self.clone();
+                for monitor in &mut next.monitor_tiles {
+                    monitor.entries.retain(|entry| entry.window_id != *window_id);
+                }
+                next.monitor_tiles.retain(|monitor| !monitor.entries.is_empty());
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::ClearMonitorTiles { output_name } => {
+                let mut next = self.clone();
+                next.monitor_tiles
+                    .retain(|monitor| monitor.output_name != *output_name);
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::SetPreTileGeometry { window_id, bounds } => {
+                let mut next = self.clone();
+                next.pre_tile_geometry
+                    .retain(|entry| entry.window_id != *window_id);
+                next.pre_tile_geometry.push(WorkspacePreTileGeometry {
+                    window_id: *window_id,
+                    bounds: bounds.clone(),
+                });
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::ClearPreTileGeometry { window_id } => {
+                let mut next = self.clone();
+                next.pre_tile_geometry
+                    .retain(|entry| entry.window_id != *window_id);
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::ReplaceState { state } => {
+                if *state == *self {
+                    return None;
+                }
+                Some(state.clone())
             }
         }
     }
