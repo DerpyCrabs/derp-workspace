@@ -5624,6 +5624,7 @@ impl CompositorState {
             "shell_move_delta: flushing to space"
         );
         self.shell_move_flush_pending_deltas();
+        self.shell_nudge_cef_repaint();
     }
 
     /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.

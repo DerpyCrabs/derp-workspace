@@ -19,7 +19,7 @@ pub(crate) fn cef_string_userfree_to_string(s: &CefStringUserfreeUtf16) -> Strin
 static LAST_DRAG_VIEW_INVALIDATE: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn drag_invalidate_min_interval() -> Duration {
-    Duration::from_millis(4)
+    Duration::from_millis(1)
 }
 
 fn reset_drag_invalidate_throttle() {

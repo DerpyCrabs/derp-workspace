@@ -702,7 +702,7 @@ impl DrmSession {
             any_advanced |= advanced;
         }
 
-        const SHELL_BEGIN_MIN_WHEN_ACTIVE: Duration = Duration::from_millis(16);
+        const SHELL_BEGIN_MIN_WHEN_ACTIVE: Duration = Duration::from_millis(8);
         const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(250);
         let now = Instant::now();
         let schedule_kind = if any_advanced || state.shell_begin_frame_interaction_active(now) {
