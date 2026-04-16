@@ -27,10 +27,6 @@ import { snapZoneToBoundsWithOccupied } from '@/features/tiling/tileZones'
 import { workspaceGetTiledZone, workspaceIsWindowTiled, type WorkspaceState } from '@/features/workspace/workspaceState'
 import { SHELL_LAYOUT_FLOATING, SHELL_LAYOUT_MAXIMIZED } from '@/lib/chromeConstants'
 
-type WindowDraftPatch = Partial<
-  Pick<DerpWindow, 'x' | 'y' | 'width' | 'height' | 'maximized' | 'output_name'>
->
-
 type CompositorFollowup = {
   syncExclusion?: boolean
   flushWindows?: boolean
@@ -107,10 +103,6 @@ type CompositorBridgeRuntimeOptions = {
   workspaceState: () => WorkspaceState
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
   sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect) => boolean
-  patchWindowDrafts: (
-    windowIds: readonly number[],
-    buildPatch: (windowId: number, current: DerpWindow) => WindowDraftPatch,
-  ) => void
   bumpSnapChrome: () => void
   applyAutoLayout: (monitorName: string) => void
   sendSetPreTileGeometry: (windowId: number, bounds: { x: number; y: number; w: number; h: number }) => boolean
@@ -454,14 +446,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         }
         const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
         options.shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, layoutFlag)
-        options.patchWindowDrafts([fid], () => ({
-          output_name: tgtMon.name,
-          x: loc.x,
-          y: loc.y,
-          width: loc.w,
-          height: loc.h,
-          maximized: layoutFlag === SHELL_LAYOUT_MAXIMIZED,
-        }))
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
         queueMicrotask(() => {
@@ -498,13 +482,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         if (!options.sendSetMonitorTile(fid, mon.name, zone, gb)) return
         if (w.maximized) options.floatBeforeMaximize.delete(fid)
         options.shellWireSend('set_geometry', fid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
-        options.patchWindowDrafts([fid], () => ({
-          x: loc.x,
-          y: loc.y,
-          width: loc.w,
-          height: loc.h,
-          maximized: false,
-        }))
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
         return
@@ -527,13 +504,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
           }
           options.floatBeforeMaximize.delete(fid)
           options.shellWireSend('set_geometry', fid, rest.x, rest.y, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
-          options.patchWindowDrafts([fid], () => ({
-            x: rest.x,
-            y: rest.y,
-            width: rest.w,
-            height: rest.h,
-            maximized: false,
-          }))
           options.scheduleExclusionZonesSync()
           options.bumpSnapChrome()
           return
@@ -542,13 +512,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
           const tr = options.workspacePreTileSnapshot(fid)
           if (tr) {
             options.shellWireSend('set_geometry', fid, tr.x, tr.y, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
-            options.patchWindowDrafts([fid], () => ({
-              x: tr.x,
-              y: tr.y,
-              width: tr.w,
-              height: tr.h,
-              maximized: false,
-            }))
           }
           if (!options.sendRemoveMonitorTile(fid)) return
           if (!options.sendClearPreTileGeometry(fid)) return

@@ -59,7 +59,6 @@ import {
 import {
   type DerpWindow,
   windowIsShellHosted,
-  workspaceGroupWindowIds,
 } from '@/host/appWindowState'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
@@ -344,71 +343,13 @@ function App() {
     applyCompositorSnapshot: applyModelCompositorSnapshot,
     applyCompositorDetail: applyModelCompositorDetail,
   } = createCompositorModel()
-  type WindowDraftPatch = Partial<
-    Pick<DerpWindow, 'x' | 'y' | 'width' | 'height' | 'maximized' | 'output_name'>
-  >
-  const [windowDrafts, setWindowDrafts] = createSignal<Map<number, WindowDraftPatch>>(new Map())
-  const allWindowsMap = createMemo(() => {
-    const authoritative = compositorWindowsMap()
-    const drafts = windowDrafts()
-    if (drafts.size === 0) return authoritative
-    let next: Map<number, DerpWindow> | null = null
-    for (const [windowId, draft] of drafts) {
-      const current = authoritative.get(windowId)
-      if (!current) continue
-      const merged = { ...current, ...draft }
-      if (
-        merged.x === current.x &&
-        merged.y === current.y &&
-        merged.width === current.width &&
-        merged.height === current.height &&
-        merged.maximized === current.maximized &&
-        merged.output_name === current.output_name
-      ) {
-        continue
-      }
-      if (!next) next = new Map(authoritative)
-      next.set(windowId, merged)
-    }
-    return next ?? authoritative
-  })
-  const windows = allWindowsMap
+  const allWindowsMap = compositorWindowsMap
+  const windows = compositorWindowsMap
   const windowsListIds = compositorWindowsListIds
-  const windowsList = createMemo(() => {
-    const out: DerpWindow[] = []
-    for (const windowId of windowsListIds()) {
-      const window = allWindowsMap().get(windowId)
-      if (window) out.push(window)
-    }
-    return out
-  })
+  const windowsList = compositorWindowsList
   createEffect(() => {
-    const authoritative = compositorWindows()
+    compositorWindows()
     markActiveShellLatencySample({ authoritativeAt: performance.now() })
-    setWindowDrafts((prev) => {
-      let next: Map<number, WindowDraftPatch> | null = null
-      for (const [windowId, draft] of prev) {
-        const current = authoritative.get(windowId)
-        if (
-          current &&
-          draft.x === current.x &&
-          draft.y === current.y &&
-          draft.width === current.width &&
-          draft.height === current.height &&
-          draft.maximized === current.maximized &&
-          draft.output_name === current.output_name
-        ) {
-          if (!next) next = new Map(prev)
-          next.delete(windowId)
-          continue
-        }
-        if (!current) {
-          if (!next) next = new Map(prev)
-          next.delete(windowId)
-        }
-      }
-      return next ?? prev
-    })
   })
   createEffect(() => {
     windowsList()
@@ -420,44 +361,6 @@ function App() {
       flushActiveShellLatencySample()
     })
   })
-  const patchWindowDrafts = (
-    windowIds: readonly number[],
-    buildPatch: (windowId: number, current: DerpWindow) => WindowDraftPatch,
-  ) => {
-    setWindowDrafts((prev) => {
-      let next: Map<number, WindowDraftPatch> | null = null
-      for (const windowId of windowIds) {
-        const current = allWindowsMap().get(windowId)
-        if (!current) continue
-        const patch = buildPatch(windowId, current)
-        const merged = {
-          x: patch.x ?? current.x,
-          y: patch.y ?? current.y,
-          width: patch.width ?? current.width,
-          height: patch.height ?? current.height,
-          maximized: patch.maximized ?? current.maximized,
-          output_name: patch.output_name ?? current.output_name,
-        }
-        if (
-          merged.x === current.x &&
-          merged.y === current.y &&
-          merged.width === current.width &&
-          merged.height === current.height &&
-          merged.maximized === current.maximized &&
-          merged.output_name === current.output_name
-        ) {
-          if (prev.has(windowId)) {
-            if (!next) next = new Map(prev)
-            next.delete(windowId)
-          }
-          continue
-        }
-        if (!next) next = new Map(prev)
-        next.set(windowId, merged)
-      }
-      return next ?? prev
-    })
-  }
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
   const [viewportCss, setViewportCss] = createSignal({
@@ -990,11 +893,6 @@ function App() {
       window.height,
       SHELL_LAYOUT_FLOATING,
     )
-    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), windowId), () => ({
-      x: nextX,
-      y: nextY,
-      maximized: false,
-    }))
     return true
   }
 
@@ -1127,7 +1025,6 @@ function App() {
     getScreenDraftRows: () => screenDraft.rows,
     getOutputGeom: outputGeom,
     getFallbackMonitorName: fallbackMonitorName,
-    patchWindowDrafts,
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,
@@ -1200,29 +1097,8 @@ function App() {
     setSnapChromeRev((n) => n + 1)
   }
 
-  function applyGeometryToWindowMaps(
-    wid: number,
-    loc: { x: number; y: number; w: number; h: number },
-    patch: Partial<DerpWindow> = {},
-  ) {
-    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), wid), () => ({
-      ...patch,
-      x: loc.x,
-      y: loc.y,
-      width: loc.w,
-      height: loc.h,
-    }))
-  }
-
   function openShellTestWindow() {
     return backedShellWindowActions.openShellTestWindow()
-  }
-
-  function bumpShellWindowPosition(windowId: number, dx: number, dy: number) {
-    patchWindowDrafts(workspaceGroupWindowIds(workspaceState(), windowId), (_windowId, current) => ({
-      x: current.x + dx,
-      y: current.y + dy,
-    }))
   }
 
   const shellWindowGestureRuntime = createShellWindowGestureRuntime({
@@ -1242,8 +1118,6 @@ function App() {
     workspaceTiledZone: (windowId) => workspaceGetTiledZone(workspaceState(), windowId) ?? null,
     isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
     workspaceFindMonitorForTiledWindow: (windowId) => workspaceFindMonitorForTiledWindow(workspaceState(), windowId),
-    applyGeometryToWindowMaps,
-    bumpShellWindowPosition,
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,
@@ -1459,7 +1333,6 @@ function App() {
         workspaceState,
         occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
         sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
-        patchWindowDrafts,
         bumpSnapChrome,
         applyAutoLayout: workspaceLayoutBridge.applyAutoLayout,
         sendSetPreTileGeometry: workspaceLayoutBridge.sendSetPreTileGeometry,

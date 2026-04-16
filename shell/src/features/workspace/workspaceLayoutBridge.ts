@@ -33,10 +33,6 @@ type WorkspaceLayoutBridgeOptions = {
   getScreenDraftRows: () => LayoutScreen[]
   getOutputGeom: () => { w: number; h: number } | null
   getFallbackMonitorName: () => string
-  patchWindowDrafts: (
-    ids: number[],
-    patcher: (windowId: number, current: DerpWindow) => Partial<DerpWindow>,
-  ) => void
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
@@ -193,11 +189,6 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
       const local = rectGlobalToCanvasLocal(globalRect.x, globalRect.y, globalRect.width, globalRect.height, origin)
       options.shellWireSend('set_geometry', windowId, local.x, local.y, local.w, local.h, SHELL_LAYOUT_FLOATING)
     }
-    options.patchWindowDrafts(Array.from(rectMap.keys()), (windowId) => {
-      const globalRect = rectMap.get(windowId)!
-      const local = rectGlobalToCanvasLocal(globalRect.x, globalRect.y, globalRect.width, globalRect.height, origin)
-      return { x: local.x, y: local.y, width: local.w, height: local.h, maximized: false }
-    })
     options.scheduleExclusionZonesSync()
     options.bumpSnapChrome()
   }

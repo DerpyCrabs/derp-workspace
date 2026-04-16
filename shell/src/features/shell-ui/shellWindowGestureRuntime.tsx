@@ -50,7 +50,7 @@ import type {
   SnapAssistPickerState,
   SnapAssistStripState,
 } from '@/host/types'
-import { batch, createEffect, createMemo, createSignal, Show, type Accessor } from 'solid-js'
+import { createEffect, createMemo, createSignal, Show, type Accessor } from 'solid-js'
 
 type SnapAssistContext = {
   windowId: number
@@ -93,8 +93,6 @@ type ShellWindowGestureRuntimeOptions = {
   workspaceTiledZone: (windowId: number) => SnapZone | null
   isWorkspaceWindowTiled: (windowId: number) => boolean
   workspaceFindMonitorForTiledWindow: (windowId: number) => string | null
-  applyGeometryToWindowMaps: (wid: number, loc: WindowRect, patch?: Partial<DerpWindow>) => void
-  bumpShellWindowPosition: (windowId: number, dx: number, dy: number) => void
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
@@ -320,7 +318,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       localBounds.h,
       SHELL_LAYOUT_FLOATING,
     )
-    options.applyGeometryToWindowMaps(snapWindowId, localBounds, { maximized: false })
     dragPreTileSnapshot.delete(snapWindowId)
     options.scheduleExclusionZonesSync()
     options.bumpSnapChrome()
@@ -343,11 +340,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       anchorRect: snapAssistAnchorRect(anchorRect),
       autoHover,
     })
-  }
-
-  function isShellHostedWindow(windowId: number): boolean {
-    const flags = options.allWindowsMap().get(windowId)?.shell_flags ?? 0
-    return (flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
   }
 
   function flushTilePreviewWire() {
@@ -446,7 +438,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_PX
         options.shellWireSend('set_geometry', windowId, nextX, nextY, restore.w, restore.h, SHELL_LAYOUT_FLOATING)
         options.floatBeforeMaximize.delete(windowId)
-        options.applyGeometryToWindowMaps(windowId, { x: nextX, y: nextY, w: restore.w, h: restore.h }, { maximized: false })
         dragPreTileSnapshot.set(windowId, { x: nextX, y: nextY, w: restore.w, h: restore.h })
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
@@ -458,7 +449,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
           const nextX = pointerCanvas.x - grabDx + CHROME_BORDER_PX
           const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_PX
           options.shellWireSend('set_geometry', windowId, nextX, nextY, preTile.w, preTile.h, SHELL_LAYOUT_FLOATING)
-          options.applyGeometryToWindowMaps(windowId, { x: nextX, y: nextY, w: preTile.w, h: preTile.h }, { maximized: false })
         }
         if (!options.sendRemoveMonitorTile(windowId)) return
         if (!options.sendClearPreTileGeometry(windowId)) return
@@ -497,13 +487,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
           options.shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
         }
-        const shellHosted = isShellHostedWindow(windowId)
-        batch(() => {
-          options.bumpShellWindowPosition(windowId, dx, dy)
-          if (!shellHosted) {
-            options.shellWireSend('move_delta', dx, dy)
-          }
-        })
+        options.shellWireSend('move_delta', dx, dy)
       }
       shellWindowDrag.lastX = cx
       shellWindowDrag.lastY = cy
@@ -661,9 +645,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
         options.shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
       }
-      if (!isShellHostedWindow(shellWindowResize.windowId)) {
-        options.shellWireSend('resize_delta', dx, dy)
-      }
+      options.shellWireSend('resize_delta', dx, dy)
       shellWindowResize.lastX = cx
       shellWindowResize.lastY = cy
       return
@@ -685,10 +667,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     for (const [windowId, globalRect] of rects) {
       const local = rectGlobalToCanvasLocal(globalRect.x, globalRect.y, globalRect.width, globalRect.height, origin)
       options.shellWireSend('set_geometry', windowId, local.x, local.y, local.w, local.h, SHELL_LAYOUT_FLOATING)
-    }
-    for (const [windowId, globalRect] of rects) {
-      const local = rectGlobalToCanvasLocal(globalRect.x, globalRect.y, globalRect.width, globalRect.height, origin)
-      options.applyGeometryToWindowMaps(windowId, { x: local.x, y: local.y, w: local.w, h: local.h }, { maximized: false })
     }
     options.scheduleExclusionZonesSync()
     options.bumpSnapChrome()
