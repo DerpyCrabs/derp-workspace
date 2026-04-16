@@ -12,6 +12,7 @@ import {
   openProgramsMenu,
   prepareFileBrowserFixtures,
   resetFileBrowserFixtures,
+  rightClickRect,
   tapKey,
   waitFor,
   writeJsonArtifact,
@@ -355,6 +356,44 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const mediaPath = path.posix.join(fixtures.root_path, 'media')
     const openedMedia = await waitForActivePath(base, mediaPath, navigated.windowId)
     assert(fileBrowserRow(openedMedia, 'blue-image.png', navigated.windowId), 'expected media directory contents after Enter')
+  })
+
+  test('file browser open in new window lists the selected directory path', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const rootPath = fixtures.root_path
+    const { row } = await waitForDirectoryRowRect(base, rootPath, 'media', navigated.windowId)
+    const expectedMediaPath = row.path
+    const rowRect = assertRectMinSize('media row context target', row.rect, 32, 24)
+    await rightClickRect(base, rowRect)
+    const openNewItem = await waitFor(
+      'wait for open in new window context menu item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'open-new')
+        return item?.rect ? item : null
+      },
+      8000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('open in new window menu item', openNewItem.rect!, 24, 18))
+    const opened = await waitFor(
+      'wait for file browser window at media path',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const match = shell.file_browser_windows?.find(
+          (w) => w.active_path === expectedMediaPath && w.window_id !== navigated.windowId,
+        )
+        return match ? shell : null
+      },
+      10000,
+      100,
+    )
+    const newEntry = opened.file_browser_windows?.find(
+      (w) => w.active_path === expectedMediaPath && w.window_id !== navigated.windowId,
+    )
+    assert(newEntry, 'expected a second file browser window at the media directory path')
+    state.spawnedShellWindowIds.add(newEntry.window_id)
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

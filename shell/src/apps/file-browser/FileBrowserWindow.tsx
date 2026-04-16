@@ -24,10 +24,13 @@ import {
   registerShellWindowStateSource,
   subscribeShellWindowState,
 } from '@/features/shell-ui/shellWindowState'
+import type { ShellContextMenuItem } from '@/host/contextMenu'
+import { FileBrowserContextMenu } from './FileBrowserContextMenu'
 
 type FileBrowserWindowProps = {
   windowId: number
   onOpenFile: (path: string) => void
+  onOpenInNewWindow?: (path: string) => void
 }
 
 type Breadcrumb = {
@@ -107,17 +110,23 @@ function buildBreadcrumbs(path: string | null, roots: readonly FileBrowserRoot[]
   return out
 }
 
+function clipboardCanWritePath(): boolean {
+  return typeof navigator !== 'undefined' && !!navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
+}
+
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
-  const restoredState = sanitizeFileBrowserWindowMemento(peekShellWindowState(props.windowId))
   const initialPrefs = loadFileBrowserPrefs()
   const [state, setState] = createStore(
-    createInitialFileBrowserWindowState(restoredState?.showHidden ?? initialPrefs.showHidden),
+    createInitialFileBrowserWindowState(
+      sanitizeFileBrowserWindowMemento(peekShellWindowState(props.windowId))?.showHidden ?? initialPrefs.showHidden,
+    ),
   )
   const [busy, setBusy] = createSignal(false)
   let requestSeq = 0
   let lastAppliedRestoredStateVersion = 0
   let rootRef: HTMLDivElement | undefined
-  const initialPath = consumeFileBrowserWindowPath(props.windowId) ?? restoredState?.activePath ?? null
+
+  const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
   const selectedEntry = createMemo(
@@ -135,7 +144,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       const roots = forceRoots || state.roots.length === 0 ? await listFileBrowserRoots(base) : { roots: state.roots }
       if (runId !== requestSeq) return
       setState('roots', roots.roots)
-      const path = targetPath ?? state.activePath ?? initialPath ?? roots.roots[0]?.path ?? null
+      const path = targetPath ?? state.activePath ?? roots.roots[0]?.path ?? null
       if (!path) {
         throw new Error('No file browser roots are available.')
       }
@@ -178,6 +187,77 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     props.onOpenFile(entry.path)
   }
 
+  function closeCtxMenu() {
+    setCtxMenu(null)
+  }
+
+  function entryContextItems(entry: FileBrowserEntry): ShellContextMenuItem[] {
+    const clip = clipboardCanWritePath()
+    const items: ShellContextMenuItem[] = [
+      {
+        actionId: 'open',
+        label: 'Open',
+        action: () => {
+          openEntry(entry)
+        },
+      },
+    ]
+    if (fileBrowserEntryIsDirectory(entry) && props.onOpenInNewWindow) {
+      const openNew = props.onOpenInNewWindow
+      items.push({
+        actionId: 'open-new',
+        label: 'Open in new window',
+        action: () => {
+          openNew(entry.path)
+        },
+      })
+    }
+    items.push({
+      actionId: 'copy-path',
+      label: 'Copy path',
+      disabled: !clip,
+      title: clip ? undefined : 'Clipboard unavailable',
+      action: () => {
+        if (clip) void navigator.clipboard.writeText(entry.path)
+      },
+    })
+    return items
+  }
+
+  function placeContextItems(root: FileBrowserRoot): ShellContextMenuItem[] {
+    const clip = clipboardCanWritePath()
+    const items: ShellContextMenuItem[] = [
+      {
+        actionId: 'open',
+        label: 'Open',
+        action: () => {
+          setState('selectedPath', null)
+          void loadDirectory(root.path)
+        },
+      },
+    ]
+    if (props.onOpenInNewWindow) {
+      const openNew = props.onOpenInNewWindow
+      items.push({
+        actionId: 'open-new',
+        label: 'Open in new window',
+        action: () => {
+          openNew(root.path)
+        },
+      })
+    }
+    items.push({
+      actionId: 'copy-path',
+      label: 'Copy path',
+      disabled: !clip,
+      title: clip ? undefined : 'Clipboard unavailable',
+      action: () => {
+        if (clip) void navigator.clipboard.writeText(root.path)
+      },
+    })
+    return items
+  }
+
   function moveSelection(delta: number) {
     setState('selectedPath', moveFileBrowserSelection(state.entries, state.selectedPath, delta))
   }
@@ -208,9 +288,16 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   }
 
   onMount(() => {
-    applyPrimedRestoredState()
+    const wid = props.windowId
+    const restored = sanitizeFileBrowserWindowMemento(peekShellWindowState(wid))
+    const primed = consumeFileBrowserWindowPath(wid)
+    const showHidden = restored?.showHidden ?? loadFileBrowserPrefs().showHidden
+    setState('showHidden', showHidden)
+    setFileBrowserShowHidden(showHidden)
+    lastAppliedRestoredStateVersion = primedShellWindowStateVersion(wid)
+    const target = restored?.activePath ?? primed ?? null
+    void loadDirectory(target, true, showHidden)
     queueMicrotask(() => rootRef?.focus())
-    void loadDirectory(initialPath, true)
   })
 
   const unregisterStateSource = registerShellWindowStateSource(props.windowId, () =>
@@ -230,6 +317,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     notifyShellWindowStateChanged()
   })
 
+  createEffect(() => {
+    void state.activePath
+    closeCtxMenu()
+  })
+
   return (
     <div
       ref={(el) => {
@@ -239,6 +331,20 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.defaultPrevented) return
+        if (ctxMenu()) {
+          if (
+            event.key === 'ArrowDown' ||
+            event.key === 'ArrowUp' ||
+            event.key === 'Home' ||
+            event.key === 'End' ||
+            event.key === 'Enter' ||
+            event.key === 'Backspace' ||
+            event.key === 'ArrowLeft' ||
+            event.key === 'ArrowRight'
+          ) {
+            closeCtxMenu()
+          }
+        }
         if (event.key === 'ArrowDown') {
           event.preventDefault()
           moveSelection(1)
@@ -301,6 +407,12 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                 onClick={() => {
                   setState('selectedPath', null)
                   void loadDirectory(root.path)
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setState('selectedPath', null)
+                  setCtxMenu({ x: e.clientX, y: e.clientY, items: placeContextItems(root) })
                 }}
               >
                 <span class="min-w-0 truncate">{root.label}</span>
@@ -378,7 +490,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
               <button
                 type="button"
                 class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
-                onClick={() => void loadDirectory(state.activePath ?? initialPath, true)}
+                onClick={() => void loadDirectory(state.activePath ?? state.roots[0]?.path, true)}
               >
                 Retry
               </button>
@@ -405,6 +517,12 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                     data-file-browser-kind={entry.kind}
                     data-file-browser-selected={selected() ? 'true' : 'false'}
                     onClick={() => clickEntry(entry)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      selectEntry(entry.path)
+                      setCtxMenu({ x: e.clientX, y: e.clientY, items: entryContextItems(entry) })
+                    }}
                   >
                     <div class="min-w-0 truncate font-medium">{normalizeDisplayName(entry)}</div>
                     <div class="truncate text-(--shell-text-dim)">{entry.kind}</div>
@@ -421,6 +539,15 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           <span>{busy() ? 'Busy' : `${state.entries.length} item${state.entries.length === 1 ? '' : 's'}`}</span>
         </div>
       </section>
+      <FileBrowserContextMenu
+        open={() => ctxMenu() !== null}
+        anchor={() => {
+          const m = ctxMenu()
+          return m ? { x: m.x, y: m.y } : null
+        }}
+        items={() => ctxMenu()?.items ?? []}
+        onRequestClose={closeCtxMenu}
+      />
     </div>
   )
 }

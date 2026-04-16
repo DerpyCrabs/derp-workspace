@@ -35,7 +35,12 @@ export function createInitialFileBrowserWindowState(showHidden: boolean): FileBr
 }
 
 export function primeFileBrowserWindowPath(windowId: number, path: string | null | undefined): void {
-  initialPathByWindowId.set(windowId, path ?? null)
+  const next = path ?? null
+  if (next == null) {
+    const existing = initialPathByWindowId.get(windowId)
+    if (existing != null && existing !== '') return
+  }
+  initialPathByWindowId.set(windowId, next)
 }
 
 export function consumeFileBrowserWindowPath(windowId: number): string | null {

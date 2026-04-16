@@ -477,7 +477,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shellTestWindowId = shellTest.window.window_id
     await waitForSessionShellWindow(base, shellTestWindowId, false)
 
-    await openSettings(base, 'click')
+    const settingsAfterShellTest = await openSettings(base, 'click')
+    assert(settingsAfterShellTest.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, settingsAfterShellTest.shell.controls.settings_tab_tiling)
     shell = await waitFor(
       'wait for enable autosave control',
       async () => {
@@ -500,7 +502,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
 
     await clearSessionState(base)
-    await openSettings(base, 'click')
+    const settingsAfterClear = await openSettings(base, 'click')
+    assert(settingsAfterClear.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, settingsAfterClear.shell.controls.settings_tab_tiling)
     shell = await waitFor(
       'wait for disable autosave control after enabling',
       async () => {

@@ -12,7 +12,9 @@ import {
   SHELL_UI_TEST_APP_ID,
   type BackedWindowOpenPayload,
 } from '@/features/shell-ui/backedShellWindows'
+import { loadFileBrowserPrefs } from '@/apps/file-browser/fileBrowserPrefs'
 import { primeFileBrowserWindowPath } from '@/apps/file-browser/fileBrowserState'
+import { primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import { screensListForLayout } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
@@ -43,15 +45,18 @@ function hostedWindowStaggerIndex(
 
 function nextWindowId(
   windows: readonly DerpWindow[],
+  pendingIds: Iterable<number>,
+  reservedIds: Iterable<number>,
   isWindowId: (windowId: number) => boolean,
   appId: string,
   makeWindowId: (instance: number) => number,
 ): number | null {
-  const used = new Set(
-    windows
-      .filter((window) => isWindowId(window.window_id) || window.app_id === appId)
-      .map((window) => window.window_id),
-  )
+  const used = new Set<number>()
+  for (const id of pendingIds) used.add(id)
+  for (const id of reservedIds) used.add(id)
+  for (const window of windows) {
+    if (isWindowId(window.window_id) || window.app_id === appId) used.add(window.window_id)
+  }
   for (let instance = 0; instance <= 99; instance += 1) {
     const windowId = makeWindowId(instance)
     if (!used.has(windowId)) return windowId
@@ -61,7 +66,15 @@ function nextWindowId(
 
 export function createBackedShellWindowActions(options: BackedShellWindowActionsOptions) {
   const pendingBackedWindowOpens = new Map<number, BackedWindowOpenPayload>()
+  const reservedBackedWindowIds = new Set<number>()
   let backedWindowOpenRaf = 0
+
+  const pruneReservedBackedWindowIds = () => {
+    const ids = new Set(options.getWindows().map((w) => w.window_id))
+    for (const id of [...reservedBackedWindowIds]) {
+      if (ids.has(id)) reservedBackedWindowIds.delete(id)
+    }
+  }
 
   const resolveMonitorContext = () => {
     const screens = screensListForLayout(
@@ -129,13 +142,17 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
   const openShellTestWindow = () => {
     const context = resolveMonitorContext()
     if (!context) return false
+    pruneReservedBackedWindowIds()
     const windowId = nextWindowId(
       options.getWindows(),
+      pendingBackedWindowOpens.keys(),
+      reservedBackedWindowIds,
       isShellTestWindowId,
       SHELL_UI_TEST_APP_ID,
       shellTestWindowId,
     )
     if (windowId === null) return false
+    reservedBackedWindowIds.add(windowId)
     const title = shellTestWindowTitle(windowId - shellTestWindowId(0))
     queueBackedWindowOpen(
       buildShellTestWindowOpenPayload(
@@ -153,14 +170,24 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
   const openFileBrowserWindow = (path?: string | null) => {
     const context = resolveMonitorContext()
     if (!context) return false
+    pruneReservedBackedWindowIds()
     const windowId = nextWindowId(
       options.getWindows(),
+      pendingBackedWindowOpens.keys(),
+      reservedBackedWindowIds,
       isFileBrowserWindowId,
       SHELL_UI_FILE_BROWSER_APP_ID,
       fileBrowserWindowId,
     )
     if (windowId === null) return false
+    reservedBackedWindowIds.add(windowId)
     const title = fileBrowserWindowTitle(windowId - fileBrowserWindowId(0))
+    const prefs = loadFileBrowserPrefs()
+    primeShellWindowState(windowId, {
+      activePath: path ?? null,
+      selectedPath: null,
+      showHidden: prefs.showHidden,
+    })
     primeFileBrowserWindowPath(windowId, path)
     queueBackedWindowOpen(
       buildFileBrowserWindowOpenPayload(

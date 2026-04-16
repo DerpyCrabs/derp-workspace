@@ -385,6 +385,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const globalFileBrowserWindow =
     fileBrowserWindows.find((entry) => entry.window_id === args.focusedWindowId) ?? fileBrowserWindows[0] ?? null
 
+  const fileBrowserContextMenu = cache.queryAll('[data-file-browser-context-action]').map((el) => ({
+    id: el.getAttribute('data-file-browser-context-action') ?? '',
+    label: (el.querySelector('span')?.textContent ?? el.textContent ?? '').trim(),
+    rect: snapshotRect(el, args.origin),
+  }))
+
   return {
     captured_at_ms: Date.now(),
     viewport: args.viewport,
@@ -407,6 +413,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     snap_hover_span: args.assistOverlayHoverSpan,
     file_browser: globalFileBrowserWindow,
     file_browser_windows: fileBrowserWindows,
+    file_browser_context_menu: fileBrowserContextMenu,
     programs_menu_query: args.programsMenuQuery,
     session_snapshot: args.sessionSnapshot,
     session_snapshot_error: args.sessionSnapshotError,

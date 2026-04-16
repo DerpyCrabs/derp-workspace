@@ -283,6 +283,12 @@ export interface FileBrowserSnapshot {
   primary_actions: FileBrowserSnapshotAction[]
 }
 
+export interface FileBrowserContextMenuActionSnapshot {
+  id: string
+  label: string
+  rect: Rect | null
+}
+
 export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
   window_id: number
 }
@@ -313,6 +319,7 @@ export interface ShellSnapshot {
   focused_window_id?: number | null
   file_browser?: FileBrowserSnapshot | null
   file_browser_windows?: FileBrowserWindowSnapshot[]
+  file_browser_context_menu?: FileBrowserContextMenuActionSnapshot[]
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null
   session_restore_active?: boolean

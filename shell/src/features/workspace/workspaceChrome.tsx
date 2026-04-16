@@ -8,7 +8,7 @@ import type { WorkspaceGroupModel } from './workspaceSelectors'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED, SHELL_UI_SETTINGS_WINDOW_ID, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { SnapAssistPickerSource } from '@/host/types'
-import { createEffect, createMemo, createSignal, onCleanup, Show, type Accessor, type JSX } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, For, Show, type Accessor, type JSX } from 'solid-js'
 
 type TabDragState = {
   pointerId: number
@@ -494,6 +494,11 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function WorkspaceGroupFrame(props: { groupId: string }) {
     const group = createMemo(() => options.workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
+    const shellHostedMemberWindows = createMemo(() => {
+      const g = group()
+      if (!g) return [] as readonly DerpWindow[]
+      return g.members.filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
+    })
     const splitLayout = createMemo(() => {
       const currentGroup = group()
       return currentGroup ? splitLayoutForGroup(currentGroup) : null
@@ -684,7 +689,22 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
         >
           <Show when={!splitLayout() && visibleWindowId() !== null}>
-            {options.renderShellWindowContent(visibleWindowId()!)}
+            <For each={shellHostedMemberWindows()}>
+              {(member) => {
+                const visible = () => member.window_id === visibleWindowId()!
+                return (
+                  <div
+                    class={
+                      visible()
+                        ? 'pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)'
+                        : 'pointer-events-none hidden h-full min-h-0 min-w-0 overflow-auto'
+                    }
+                  >
+                    {options.renderShellWindowContent(member.window_id)}
+                  </div>
+                )
+              }}
+            </For>
           </Show>
         </ShellWindowFrame>
         <Show when={splitLayout()} keyed>

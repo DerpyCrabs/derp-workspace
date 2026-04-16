@@ -969,12 +969,17 @@ function App() {
     }
     if (isFileBrowserWindowId(windowId)) {
       return (
-        <FileBrowserWindow
-          windowId={windowId}
-          onOpenFile={(path) => {
-            reportShellActionIssue(`File viewers land in a later phase: ${path}`)
-          }}
-        />
+        <Show when={windowId} keyed>
+          {(id) => (
+            <FileBrowserWindow
+              windowId={id}
+              onOpenFile={(path) => {
+                reportShellActionIssue(`File viewers land in a later phase: ${path}`)
+              }}
+              onOpenInNewWindow={(path) => backedShellWindowActions.openFileBrowserWindow(path)}
+            />
+          )}
+        </Show>
       )
     }
     return undefined
