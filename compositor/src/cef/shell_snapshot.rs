@@ -16,6 +16,7 @@ struct SnapshotState {
     windows: BTreeMap<u32, shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state_json: Option<String>,
+    shell_hosted_app_state_json: Option<String>,
     keyboard_layout: Option<String>,
     volume_overlay: Option<(u16, bool, bool)>,
     tray_hints: Option<(u32, i32, u32)>,
@@ -347,6 +348,10 @@ impl SharedShellSnapshotWriter {
                 self.state.workspace_state_json = Some(state_json.clone());
                 true
             }
+            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json } => {
+                self.state.shell_hosted_app_state_json = Some(state_json.clone());
+                true
+            }
             shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
                 self.state.windows.clear();
                 for window in windows {
@@ -475,6 +480,11 @@ impl SharedShellSnapshotWriter {
         }
         if let Some(state_json) = &self.state.workspace_state_json {
             if let Some(bytes) = shell_wire::encode_compositor_workspace_state(state_json) {
+                payload.extend_from_slice(&bytes);
+            }
+        }
+        if let Some(state_json) = &self.state.shell_hosted_app_state_json {
+            if let Some(bytes) = shell_wire::encode_compositor_shell_hosted_app_state(state_json) {
                 payload.extend_from_slice(&bytes);
             }
         }

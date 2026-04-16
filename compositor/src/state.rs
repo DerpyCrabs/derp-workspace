@@ -452,6 +452,7 @@ pub struct CompositorState {
     keyboard_layout_by_window: HashMap<u32, u32>,
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
+    pub(crate) shell_hosted_app_state: HashMap<u32, serde_json::Value>,
     session_default_layout_index: u32,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
@@ -935,6 +936,7 @@ impl CompositorState {
             keyboard_layout_by_window: HashMap::new(),
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
+            shell_hosted_app_state: HashMap::new(),
             session_default_layout_index: 0,
             shell_pointer_norm: None,
             shell_initial_pointer_centered: false,
@@ -1022,6 +1024,7 @@ impl CompositorState {
         }
         crate::desktop::desktop_background::load_from_display_file_into(&mut s);
         s.session_default_layout_index = s.keyboard_layout_index_current();
+        s.hydrate_shell_hosted_app_state_from_session();
         Ok(s)
     }
 
@@ -3769,6 +3772,9 @@ impl CompositorState {
         if self.keyboard_layout_last_focus_window == Some(window_id) {
             self.keyboard_layout_last_focus_window = None;
         }
+        if self.shell_hosted_app_state.remove(&window_id).is_some() {
+            self.shell_hosted_app_state_send();
+        }
         let hint = removed_info.as_ref();
         self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
         self.shell_reply_window_list();
@@ -4863,6 +4869,7 @@ impl CompositorState {
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
+        self.shell_hosted_app_state_send();
         let window_id = self.logical_focused_window_id();
         let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
@@ -6280,6 +6287,76 @@ impl CompositorState {
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json },
         );
+    }
+
+    fn shell_hosted_app_state_broadcast_json(&self) -> String {
+        let mut m = serde_json::Map::new();
+        for (k, v) in &self.shell_hosted_app_state {
+            m.insert(k.to_string(), v.clone());
+        }
+        serde_json::json!({ "byWindowId": serde_json::Value::Object(m) }).to_string()
+    }
+
+    pub(crate) fn shell_hosted_app_state_send(&mut self) {
+        let state_json = self.shell_hosted_app_state_broadcast_json();
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json },
+        );
+    }
+
+    pub(crate) fn hydrate_shell_hosted_app_state_from_session(&mut self) {
+        let file = crate::session::session_state::read_session_state();
+        let Some(shell) = file.shell.as_object() else {
+            return;
+        };
+        let Some(rows) = shell.get("shellWindows").and_then(|x| x.as_array()) else {
+            return;
+        };
+        for row in rows {
+            let Some(obj) = row.as_object() else {
+                continue;
+            };
+            let wid = obj
+                .get("windowId")
+                .and_then(|x| x.as_u64())
+                .map(|u| u as u32);
+            let kind = obj.get("kind").and_then(|x| x.as_str());
+            let (Some(wid), Some("file_browser")) = (wid, kind) else {
+                continue;
+            };
+            let Some(st) = obj.get("state") else {
+                continue;
+            };
+            if st.is_null() {
+                continue;
+            }
+            self.shell_hosted_app_state.insert(wid, st.clone());
+        }
+    }
+
+    pub(crate) fn apply_shell_hosted_window_state_json(&mut self, json: &str) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+            return;
+        };
+        let Some(window_id) = v.get("window_id").and_then(|x| x.as_u64()).map(|u| u as u32) else {
+            return;
+        };
+        let Some(kind) = v.get("kind").and_then(|x| x.as_str()) else {
+            return;
+        };
+        if kind != "file_browser" {
+            return;
+        }
+        if !self.window_registry.is_shell_hosted(window_id) {
+            return;
+        }
+        let state = match v.get("state") {
+            Some(s) if s.is_object() => s.clone(),
+            Some(s) if s.is_null() => serde_json::json!({}),
+            _ => return,
+        };
+        self.shell_hosted_app_state.insert(window_id, state);
+        self.shell_hosted_app_state_send();
     }
 
     fn workspace_copy_window_geometry(&mut self, target_window_id: u32, source_window_id: u32) {

@@ -144,6 +144,7 @@ declare global {
         | 'set_chrome_metrics'
         | 'set_desktop_background'
         | 'workspace_mutation'
+        | 'shell_hosted_window_state'
         | 'context_menu'
         | 'backed_window_open'
         | 'e2e_snapshot_response'
@@ -229,6 +230,7 @@ function shellWireSend(
     | 'set_chrome_metrics'
     | 'set_desktop_background'
     | 'workspace_mutation'
+    | 'shell_hosted_window_state'
     | 'backed_window_open'
     | 'sni_tray_activate'
     | 'sni_tray_open_menu'
@@ -292,6 +294,8 @@ function shellWireSend(
     fn(op, arg)
   } else if (op === 'workspace_mutation' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'shell_hosted_window_state' && typeof arg === 'string') {
+    fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
@@ -335,6 +339,7 @@ function App() {
     windowsList: compositorWindowsList,
     workspaceState,
     focusedWindowId,
+    shellHostedAppByWindow,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
     applyCompositorDetail: applyModelCompositorDetail,
   } = createCompositorModel()
@@ -493,6 +498,7 @@ function App() {
     scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
     nativeLaunchMetadataByRef,
     pendingNativeLaunches,
+    getShellHostedAppStateForWindow: (windowId) => shellHostedAppByWindow()[windowId],
   })
   function closeAllAtlasSelects(): boolean {
     return floatingLayers.closeByKind('select')
@@ -973,6 +979,8 @@ function App() {
           {(id) => (
             <FileBrowserWindow
               windowId={id}
+              compositorAppState={() => shellHostedAppByWindow()[id] ?? null}
+              shellWireSend={shellWireSend}
               onOpenFile={(path) => {
                 reportShellActionIssue(`File viewers land in a later phase: ${path}`)
               }}

@@ -76,6 +76,7 @@ type SessionRuntimeOptions = {
   scheduleExclusionZonesSync: () => void
   nativeLaunchMetadataByRef: Map<SessionWindowRef, NativeLaunchMetadata>
   pendingNativeLaunches: NativeLaunchQueueEntry[]
+  getShellHostedAppStateForWindow?: (windowId: number) => unknown | undefined
 }
 
 export function createSessionRuntime(options: SessionRuntimeOptions) {
@@ -435,6 +436,15 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       if (windowIsShellHosted(window)) {
         const kind = backedShellWindowKind(window.window_id, window.app_id)
         if (!kind) continue
+        let shellWindowState = captureShellWindowState(window.window_id) ?? null
+        if (
+          shellWindowState == null &&
+          kind === 'file_browser' &&
+          options.getShellHostedAppStateForWindow
+        ) {
+          const fromCompositor = options.getShellHostedAppStateForWindow(window.window_id)
+          if (fromCompositor != null) shellWindowState = fromCompositor
+        }
         shellWindows.push({
           windowId: window.window_id,
           windowRef: shellWindowRef(window.window_id),
@@ -447,7 +457,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
           maximized: window.maximized,
           fullscreen: window.fullscreen,
           stackZ: window.stack_z,
-          state: captureShellWindowState(window.window_id) ?? null,
+          state: shellWindowState,
         })
         continue
       }

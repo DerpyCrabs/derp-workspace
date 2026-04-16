@@ -556,6 +556,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       })
       return
     }
+    if (d.type === 'shell_hosted_app_state') {
+      options.applyModelCompositorDetail(d, {
+        fallbackMonitorKey: options.fallbackMonitorKey,
+        requestWindowSyncRecovery: options.requestWindowSyncRecovery,
+      })
+      return
+    }
     if (d.type === 'window_state') {
       options.markHasSeenCompositorWindowSync()
       const result = options.applyModelCompositorDetail(d, {

@@ -299,6 +299,25 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_hosted_window_state(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_hosted_window_state_json(&json);
+        });
+    }
+
+    pub fn write_session_state_json_with_merge(
+        &self,
+        mut v: serde_json::Value,
+    ) -> Result<String, String> {
+        self.run_result(move |s| {
+            crate::session::session_state::merge_shell_hosted_into_session_value(
+                &mut v,
+                &s.shell_hosted_app_state,
+            );
+            crate::session::session_state::write_session_state_json(v)
+        })
+    }
+
     pub fn sni_tray_activate(&self, id: String) {
         self.run(move |s| {
             s.sni_tray_activate_clicked(id);

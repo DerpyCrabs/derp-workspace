@@ -1,3 +1,4 @@
+import type { Accessor } from 'solid-js'
 import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import {
@@ -18,10 +19,8 @@ import {
 } from './fileBrowserState'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import {
-  notifyShellWindowStateChanged,
   peekShellWindowState,
   primedShellWindowStateVersion,
-  registerShellWindowStateSource,
   subscribeShellWindowState,
 } from '@/features/shell-ui/shellWindowState'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
@@ -29,6 +28,8 @@ import { FileBrowserContextMenu } from './FileBrowserContextMenu'
 
 type FileBrowserWindowProps = {
   windowId: number
+  compositorAppState: Accessor<unknown | null>
+  shellWireSend: (op: 'shell_hosted_window_state', json: string) => boolean
   onOpenFile: (path: string) => void
   onOpenInNewWindow?: (path: string) => void
 }
@@ -124,6 +125,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const [busy, setBusy] = createSignal(false)
   let requestSeq = 0
   let lastAppliedRestoredStateVersion = 0
+  let applyingFromCompositor = false
+  let lastCompositorMementoJson = ''
   let rootRef: HTMLDivElement | undefined
 
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
@@ -269,6 +272,18 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     void loadDirectory(state.activePath, false, nextShowHidden)
   }
 
+  function pushFileBrowserStateToCompositor() {
+    if (applyingFromCompositor) return
+    props.shellWireSend(
+      'shell_hosted_window_state',
+      JSON.stringify({
+        window_id: props.windowId,
+        kind: 'file_browser',
+        state: snapshotFileBrowserWindowMemento(state),
+      }),
+    )
+  }
+
   function applyRestoredState(value: unknown) {
     const nextState = sanitizeFileBrowserWindowMemento(value)
     if (!nextState) return
@@ -300,21 +315,47 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     queueMicrotask(() => rootRef?.focus())
   })
 
-  const unregisterStateSource = registerShellWindowStateSource(props.windowId, () =>
-    snapshotFileBrowserWindowMemento(state),
-  )
-  onCleanup(unregisterStateSource)
-
   const unsubscribeShellWindowState = subscribeShellWindowState(() => {
     applyPrimedRestoredState()
   })
   onCleanup(unsubscribeShellWindowState)
 
   createEffect(() => {
-    state.activePath
-    state.selectedPath
-    state.showHidden
-    notifyShellWindowStateChanged()
+    const raw = props.compositorAppState()
+    void state.activePath
+    void state.selectedPath
+    void state.showHidden
+    void state.status
+    if (
+      (state.status !== 'ready' && state.status !== 'loading') ||
+      raw == null ||
+      typeof raw !== 'object'
+    )
+      return
+    const next = sanitizeFileBrowserWindowMemento(raw)
+    if (!next) return
+    const j = JSON.stringify(next)
+    const local = JSON.stringify(snapshotFileBrowserWindowMemento(state))
+    if (j === local) {
+      lastCompositorMementoJson = j
+      return
+    }
+    if (j === lastCompositorMementoJson) return
+    lastCompositorMementoJson = j
+    applyingFromCompositor = true
+    applyRestoredState(next)
+    queueMicrotask(() => {
+      applyingFromCompositor = false
+    })
+  })
+
+  createEffect(() => {
+    void state.activePath
+    void state.selectedPath
+    void state.showHidden
+    void state.status
+    if (state.status !== 'ready' || applyingFromCompositor) return
+    pushFileBrowserStateToCompositor()
   })
 
   createEffect(() => {

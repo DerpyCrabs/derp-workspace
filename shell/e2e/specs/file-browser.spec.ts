@@ -12,6 +12,7 @@ import {
   openProgramsMenu,
   prepareFileBrowserFixtures,
   resetFileBrowserFixtures,
+  restartSession,
   rightClickRect,
   tapKey,
   waitFor,
@@ -394,6 +395,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(newEntry, 'expected a second file browser window at the media directory path')
     state.spawnedShellWindowIds.add(newEntry.window_id)
+  })
+
+  test('session restart restores file browser directory path from compositor', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', navigated.windowId)
+    await waitForActivePath(base, mediaPath, navigated.windowId)
+    const restartedBase = await restartSession(state)
+    await waitForActivePath(restartedBase, mediaPath, navigated.windowId)
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

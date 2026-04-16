@@ -1016,7 +1016,7 @@ fn handle_one(
         "/session_quit" => uplink.quit_compositor(),
         "/session_reload" => {
             if v.get("shell").is_some() {
-                crate::session::session_state::write_session_state_json(v.clone())?;
+                uplink.write_session_state_json_with_merge(v.clone())?;
             }
             unsafe {
                 libc::raise(libc::SIGUSR2);
@@ -1053,7 +1053,7 @@ fn handle_one(
             crate::desktop::desktop_app_usage::increment_desktop_app_usage(key)?;
         }
         "/session_state" => {
-            let json = crate::session::session_state::write_session_state_json(v)?;
+            let json = uplink.write_session_state_json_with_merge(v)?;
             write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
             return Ok(());
         }

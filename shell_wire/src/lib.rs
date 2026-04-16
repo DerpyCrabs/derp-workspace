@@ -102,6 +102,7 @@ pub const MSG_COMPOSITOR_TRAY_HINTS: u32 = 55;
 pub const MSG_COMPOSITOR_TRAY_SNI: u32 = 56;
 pub const MSG_COMPOSITOR_WORKSPACE_STATE: u32 = 57;
 pub const MSG_SHELL_WORKSPACE_MUTATION: u32 = 58;
+pub const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE: u32 = 59;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -133,8 +134,9 @@ pub const MAX_DMABUF_PLANES: u32 = 4;
 /// Max rows in [`MSG_SHELL_WINDOWS_SYNC`].
 pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
+pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 1;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 2;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -1154,6 +1156,9 @@ pub enum DecodedCompositorToShellMessage {
     WorkspaceState {
         state_json: String,
     },
+    ShellHostedAppState {
+        state_json: String,
+    },
     TrayHints {
         slot_count: u32,
         slot_w: i32,
@@ -1389,6 +1394,27 @@ pub fn encode_compositor_workspace_state(state_json: &str) -> Option<Vec<u8>> {
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_WORKSPACE_STATE.to_le_bytes());
+    v.extend_from_slice(&len.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
+pub fn encode_compositor_shell_hosted_app_state(state_json: &str) -> Option<Vec<u8>> {
+    let b = state_json.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let len = u32::try_from(b.len()).ok()?;
+    if len > MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES {
+        return None;
+    }
+    let body_len = 8u32.checked_add(len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE.to_le_bytes());
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
     Some(v)
@@ -1985,6 +2011,25 @@ fn decode_compositor_to_shell_body(
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
             Ok(DecodedCompositorToShellMessage::WorkspaceState { state_json })
+        }
+        MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE => {
+            if body.len() < 8 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            if len == 0 || len > MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 8usize
+                .checked_add(len)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let state_json = std::str::from_utf8(&body[8..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedCompositorToShellMessage::ShellHostedAppState { state_json })
         }
         MSG_COMPOSITOR_TRAY_HINTS => {
             if body.len() != 16 {

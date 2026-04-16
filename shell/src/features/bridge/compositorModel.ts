@@ -31,6 +31,7 @@ export type CompositorApplyResult = {
     | 'window_geometry'
     | 'window_mapped'
     | 'window_metadata'
+    | 'shell_hosted_app_state'
     | 'ignored'
     | 'recovery_requested'
   detailType: DerpShellDetail['type']
@@ -65,6 +66,7 @@ type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: unknown[]
   workspaceState?: WorkspaceState
+  shellHostedAppByWindow?: Record<number, unknown>
 }
 
 function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]): SnapshotAuthoritativeState {
@@ -76,6 +78,10 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
     }
     if (detail.type === 'workspace_state') {
       next.workspaceState = normalizeWorkspaceState(detail.state)
+      continue
+    }
+    if (detail.type === 'shell_hosted_app_state') {
+      next.shellHostedAppByWindow = { ...detail.byWindowId }
       continue
     }
     if (detail.type === 'focus_changed') {
@@ -91,6 +97,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     options.initialWorkspaceState ?? createEmptyWorkspaceState(),
   )
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
+  const [shellHostedAppByWindow, setShellHostedAppByWindow] = createSignal<Readonly<Record<number, unknown>>>({})
 
   const allWindowsMap = createMemo(() => windows())
   const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
@@ -116,6 +123,9 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       setWorkspaceState((prev) =>
         workspaceStatesEqual(prev, authoritative.workspaceState!) ? prev : authoritative.workspaceState!,
       )
+    }
+    if (authoritative.shellHostedAppByWindow !== undefined) {
+      setShellHostedAppByWindow(authoritative.shellHostedAppByWindow)
     }
     const nextFocusedWindowId = authoritative.focusedWindowId
     if (nextFocusedWindowId !== undefined) {
@@ -160,6 +170,14 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
       return {
         kind: 'workspace_state',
+        detailType: detail.type,
+      }
+    }
+
+    if (detail.type === 'shell_hosted_app_state') {
+      setShellHostedAppByWindow({ ...detail.byWindowId })
+      return {
+        kind: 'shell_hosted_app_state',
         detailType: detail.type,
       }
     }
@@ -263,6 +281,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     setWorkspaceState,
     focusedWindowId,
     setFocusedWindowId,
+    shellHostedAppByWindow,
     applyCompositorSnapshot,
     applyCompositorDetail,
   }

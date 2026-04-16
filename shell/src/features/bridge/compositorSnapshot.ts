@@ -10,9 +10,10 @@ const MSG_COMPOSITOR_VOLUME_OVERLAY = 53
 const MSG_COMPOSITOR_TRAY_HINTS = 55
 const MSG_COMPOSITOR_TRAY_SNI = 56
 const MSG_COMPOSITOR_WORKSPACE_STATE = 57
+const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE = 59
 
 const SNAPSHOT_MAGIC = 0x44525053
-const SNAPSHOT_ABI = 1
+const SNAPSHOT_ABI = 2
 const SNAPSHOT_HEADER_BYTES = 32
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
@@ -265,6 +266,27 @@ function decodeTraySni(bytes: Uint8Array, view: DataView, offset: number): DerpS
   return { type: 'tray_sni', items }
 }
 
+function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 8 > view.byteLength) return null
+  const jsonLen = view.getUint32(offset + 4, true)
+  if (jsonLen === 0) return null
+  const json = readUtf8(bytes, offset + 8, jsonLen)
+  if (json == null || offset + 8 + jsonLen !== view.byteLength) return null
+  try {
+    const parsed = JSON.parse(json) as { byWindowId?: Record<string, unknown> }
+    const raw = parsed.byWindowId
+    if (!raw || typeof raw !== 'object') return null
+    const byWindowId: Record<number, unknown> = {}
+    for (const [k, v] of Object.entries(raw)) {
+      const id = Number(k)
+      if (Number.isFinite(id) && id > 0) byWindowId[id] = v
+    }
+    return { type: 'shell_hosted_app_state', byWindowId }
+  } catch {
+    return null
+  }
+}
+
 function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
   if (offset + 8 > view.byteLength) return null
   const jsonLen = view.getUint32(offset + 4, true)
@@ -338,6 +360,9 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
         break
       case MSG_COMPOSITOR_WORKSPACE_STATE:
         detail = decodeWorkspaceState(bodyBytes, bodyView, 0)
+        break
+      case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
+        detail = decodeShellHostedAppState(bodyBytes, bodyView, 0)
         break
       default:
         break

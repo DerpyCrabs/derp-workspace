@@ -29,6 +29,7 @@ fn is_window_delta(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
             | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
             | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
             | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
     )
 }
 
@@ -44,7 +45,8 @@ fn push_pending_message(
         | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
         | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
-        | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+        | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
             let keep = std::mem::discriminant(&msg);
             messages.retain(|pending| std::mem::discriminant(pending) != keep);
         }

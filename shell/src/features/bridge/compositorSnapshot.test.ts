@@ -76,7 +76,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(1),
+      ...u32(2),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),

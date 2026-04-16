@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -71,6 +73,43 @@ pub fn write_session_state_json(value: Value) -> Result<String, String> {
     );
     write_session_state(state.clone())?;
     serde_json::to_string(&state).map_err(|e| e.to_string())
+}
+
+pub fn merge_shell_hosted_into_session_value(root: &mut Value, by_window: &HashMap<u32, Value>) {
+    if by_window.is_empty() {
+        return;
+    }
+    let Some(shell) = root.get_mut("shell") else {
+        return;
+    };
+    merge_shell_hosted_file_browser_into_shell_snapshot(shell, by_window);
+}
+
+fn merge_shell_hosted_file_browser_into_shell_snapshot(
+    shell_snapshot: &mut Value,
+    by_window: &HashMap<u32, Value>,
+) {
+    let Some(arr) = shell_snapshot
+        .get_mut("shellWindows")
+        .and_then(|x| x.as_array_mut())
+    else {
+        return;
+    };
+    for win in arr.iter_mut() {
+        let Some(obj) = win.as_object_mut() else {
+            continue;
+        };
+        let wid = obj
+            .get("windowId")
+            .and_then(|x| x.as_u64())
+            .map(|u| u as u32);
+        let kind = obj.get("kind").and_then(|x| x.as_str());
+        if let (Some(wid), Some("file_browser")) = (wid, kind) {
+            if let Some(st) = by_window.get(&wid) {
+                obj.insert("state".to_string(), st.clone());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

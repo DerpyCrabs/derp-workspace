@@ -324,6 +324,7 @@ fn apply_message(
         | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
         | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
         | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
         | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
             *snapshot_dirty = true;
