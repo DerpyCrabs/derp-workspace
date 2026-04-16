@@ -19,3 +19,13 @@ Rules:
 - tests should use real user interactions where possible, if they don't work it can indicate bugs and needs to be fixed, not replaced with some test only api
 - flaky tests can be bugs in existing code, make sure that test is really flaky and not uncovering some bug. Tests should never be run in parallel
 - always run full e2e-remote.sh if you think you are done with the task
+
+Architecture:
+1) compositor owns windows, screens and other state. It shares it using SharedMemory with CEF
+2) CEF hosts shell, passes state to it and implements required APIs
+3) shell draws decorations and windows according to state
+
+Restrictions:
+1) there should be no "cache", copy or editing of state in shell, only commands to change it in compositor
+2) all window interactions, tiling, tabs, window opening is done in compositor
+3) tests shouldn't have any delays, timeouts, retries
