@@ -42,9 +42,10 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     let Ok(js) = serde_json::to_string(details) else {
         return;
     };
-    let code = format!(
-        "(()=>{{const derpShellBatch={js};const derpApplyCompositorBatch=window.__DERP_APPLY_COMPOSITOR_BATCH;if(typeof derpApplyCompositorBatch==='function'){{try{{derpApplyCompositorBatch(derpShellBatch);return;}}catch(err){{console.warn('[derp-shell-bridge] compositor batch handler failed',err);}}}}for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{{detail:derpShellBatch[i]}}));}})();"
-    );
+    let mut code = String::with_capacity(js.len() + 320);
+    code.push_str("(()=>{const derpShellBatch=");
+    code.push_str(&js);
+    code.push_str(";const derpApplyCompositorBatch=window.__DERP_APPLY_COMPOSITOR_BATCH;if(typeof derpApplyCompositorBatch==='function'){try{derpApplyCompositorBatch(derpShellBatch);return;}catch(err){console.warn('[derp-shell-bridge] compositor batch handler failed',err);}}for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{detail:derpShellBatch[i]}));})();");
     let Some(frame) = browser.main_frame() else {
         return;
     };
@@ -93,22 +94,22 @@ pub fn apply_messages(
     browser: &Mutex<Option<Browser>>,
     view_state: &Mutex<OsrViewState>,
 ) {
-    let Ok(guard) = browser.lock() else {
-        return;
+    let browser = match browser.lock() {
+        Ok(guard) => guard.as_ref().cloned(),
+        Err(_) => return,
     };
-    let browser = guard.as_ref();
     let mut pending_details = Vec::new();
     let mut snapshot_dirty = false;
     for msg in messages {
         apply_message(
             msg,
-            browser,
+            browser.as_ref(),
             view_state,
             &mut pending_details,
             &mut snapshot_dirty,
         );
     }
-    flush_shell_updates(browser, &mut pending_details, &mut snapshot_dirty);
+    flush_shell_updates(browser.as_ref(), &mut pending_details, &mut snapshot_dirty);
 }
 
 fn apply_message(

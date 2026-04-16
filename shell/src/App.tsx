@@ -769,6 +769,7 @@ function App() {
   let sessionPersistGeneration = 0
   let lastPersistedSessionJson = ''
   let lastAppliedRestoreSignature = ''
+  let shellUiWindowsInvalidateQueued = false
   function setNativeWindowRef(windowId: number, windowRef: SessionWindowRef) {
     setNativeWindowRefs((prev) => {
       if (prev.get(windowId) === windowRef) return prev
@@ -797,6 +798,19 @@ function App() {
       if (ref === windowRef && allWindowsMap().has(windowId)) return windowId
     }
     return null
+  }
+  function sessionRestoreSignature(snapshot: SessionSnapshot): string {
+    const shellWindowIds = snapshot.shellWindows
+      .map((window) => window.windowId)
+      .filter((windowId) => allWindowsMap().has(windowId))
+      .join(',')
+    const nativeWindowKeys = snapshot.nativeWindows
+      .map((window) => `${window.windowRef}:${liveWindowIdForRef(window.windowRef) ?? ''}`)
+      .join(',')
+    const outputs = taskbarScreens()
+      .map((screen) => screen.name)
+      .join(',')
+    return `${shellWindowIds}|${nativeWindowKeys}|${outputs}|${tilingCfgRev()}`
   }
   function savedWindowBoundsToLocalRect(bounds: SavedRect, outputName: string): SavedRect {
     const screens = taskbarScreens()
@@ -1615,21 +1629,8 @@ function App() {
 
   createEffect(() => {
     const snapshot = sessionRestoreSnapshot()
-    windows()
-    nativeWindowRefs()
-    taskbarScreens()
-    layoutCanvasOrigin()
-    tilingCfgRev()
     if (!snapshot) return
-    const signature = JSON.stringify({
-      shellWindowIds: snapshot.shellWindows.map((window) => window.windowId).filter((windowId) => allWindowsMap().has(windowId)),
-      nativeWindowRefs: snapshot.nativeWindows.map((window) => ({
-        windowRef: window.windowRef,
-        liveWindowId: liveWindowIdForRef(window.windowRef),
-      })),
-      outputs: taskbarScreens().map((screen) => screen.name),
-      tilingCfgRev: tilingCfgRev(),
-    })
+    const signature = sessionRestoreSignature(snapshot)
     if (signature === lastAppliedRestoreSignature) return
     lastAppliedRestoreSignature = signature
     restoreWindowModes(snapshot)
@@ -1685,6 +1686,7 @@ function App() {
     fallbackMonitorKey: fallbackMonitorName,
     desktopApps: desktopApps.items,
   })
+  const workspaceGroupIds = createMemo(() => workspaceGroups().map((group) => group.id))
 
   const dragSnapAssistContext = createMemo(() => {
     const windowId = dragWindowId()
@@ -3344,7 +3346,12 @@ function App() {
   createEffect(() => {
     outputGeom()
     layoutCanvasOrigin()
-    queueMicrotask(() => invalidateAllShellUiWindows())
+    if (shellUiWindowsInvalidateQueued) return
+    shellUiWindowsInvalidateQueued = true
+    queueMicrotask(() => {
+      shellUiWindowsInvalidateQueued = false
+      invalidateAllShellUiWindows()
+    })
   })
 
   function bumpSnapChrome() {
@@ -5231,7 +5238,7 @@ function App() {
         )}
       </Show>
 
-      <For each={workspaceGroups().map((group) => group.id)}>
+      <For each={workspaceGroupIds()}>
         {(groupId) => <WorkspaceGroupFrame groupId={groupId} />}
       </For>
 

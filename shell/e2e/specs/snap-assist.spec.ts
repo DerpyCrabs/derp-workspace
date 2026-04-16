@@ -450,6 +450,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     try {
       const nativePicker = await openPickerWhileDragging(base, redId)
       assert(nativePicker.snap_picker_monitor === nativeMove.target.name, 'native picker should stay on moved monitor')
+      const nativeOutput = nativeMoved.compositor.outputs.find((entry) => entry.name === nativeMove.target.name) ?? null
+      assert(nativeOutput, `missing moved native output ${nativeMove.target.name}`)
+      assertRectCenteredOnOutput(assertRectMinSize('native picker root', nativePicker.controls?.snap_picker_root, 48), nativeOutput)
       const topCenter = assertRectMinSize('native picker top-center cell', nativePicker.controls?.snap_picker_top_center_cell, 12)
       await hoverPickerCellWhileDragging(base, 'hover native picker top-center cell', topCenter)
       await pointerButton(base, 0x110, 'release')
@@ -483,7 +486,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shellMove = pickMonitorMove(settingsFocused.compositor.outputs, settingsOutputName)
     assert(shellMove, `no adjacent monitor from ${settingsOutputName}`)
     await runKeybind(base, shellMove.action)
-    await waitFor(
+    const settingsMoved = await waitFor(
       'wait for settings monitor move before picker',
       async () => {
         const { compositor, shell } = await getSnapshots(base)
@@ -501,6 +504,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const settingsPicker = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(settingsPicker.snap_picker_monitor === shellMove.target.name, 'settings picker should stay on moved monitor')
+    const settingsOutput = settingsMoved.compositor.outputs.find((entry) => entry.name === shellMove.target.name) ?? null
+    assert(settingsOutput, `missing moved settings output ${shellMove.target.name}`)
+    const settingsPickerRoot = assertRectMinSize('settings picker root', settingsPicker.controls?.snap_picker_root, 48)
+    const settingsPickerCenter = rectGlobalCenter(settingsPickerRoot)
+    assert(
+      settingsPickerCenter.x >= settingsOutput.x &&
+        settingsPickerCenter.x < settingsOutput.x + settingsOutput.width &&
+        settingsPickerCenter.y >= settingsOutput.y &&
+        settingsPickerCenter.y < settingsOutput.y + settingsOutput.height,
+      `expected settings picker center to stay within ${settingsOutput.name}, got ${settingsPickerCenter.x},${settingsPickerCenter.y}`,
+    )
     const firstCell = assertRectMinSize('settings picker first cell', settingsPicker.controls?.snap_picker_first_cell, 12)
     const firstCellCenter = rectGlobalCenter(firstCell)
     await clickPoint(base, firstCellCenter.x, firstCellCenter.y)

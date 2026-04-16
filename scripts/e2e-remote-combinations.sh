@@ -257,11 +257,16 @@ ssh_base mkdir -p "$REMOTE_REPO"
 echo "=== tar (gzip) $REPO_ROOT/ -> ${REMOTE_HOST}:$REMOTE_REPO/ ==="
 run_tar_sync
 
-echo "=== remote cargo build --release -p derp-test-client ==="
+echo "=== remote cargo build --release -p compositor -p derp-test-client ==="
 ssh_base bash -s <<EOF
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
-exec cargo build --release -p derp-test-client
+cargo build --release -p compositor -p derp-test-client
+if [[ -f shell/package.json ]]; then
+  cd shell
+  bash ../scripts/ensure-shell-node-modules.sh .
+  npm run build
+fi
 EOF
 
 echo "=== remote combination matrix ==="
@@ -328,8 +333,8 @@ fi
 EOF
 
 mkdir -p "$local_root"
-ssh -T "${REMOTE_USER}@${REMOTE_HOST}" "bash -lc $(printf '%q' "cat $(printf '%q' "${DERP_E2E_ARTIFACT_DIR:-$remote_root_default}/summary.tsv")")" > "$local_root/summary.tsv" || true
-ssh -T "${REMOTE_USER}@${REMOTE_HOST}" "bash -lc $(printf '%q' "cat $(printf '%q' "${DERP_E2E_ARTIFACT_DIR:-$remote_root_default}/summary.txt")")" > "$local_root/summary.txt" || true
+ssh -T "${REMOTE_USER}@${REMOTE_HOST}" "bash -lc $(printf '%q' "cat $(printf '%q' "${DERP_E2E_ARTIFACT_DIR:-$remote_root_default}/summary.tsv")")" > "$local_root/summary.tsv"
+ssh -T "${REMOTE_USER}@${REMOTE_HOST}" "bash -lc $(printf '%q' "cat $(printf '%q' "${DERP_E2E_ARTIFACT_DIR:-$remote_root_default}/summary.txt")")" > "$local_root/summary.txt"
 
 echo "=== local summary ==="
 echo "$local_root"

@@ -796,8 +796,14 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
       await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
       shell = await normalizePersistentShellState(base)
       break
-    } catch {
-      if (recovered) break
+    } catch (error) {
+      if (recovered) {
+        throw new Error(
+          `primeState: failed to normalize settings window after session restart: ${
+            error instanceof Error ? error.stack || error.message : String(error)
+          }`,
+        )
+      }
       await restartSession(state)
       base = state.base
       recovered = true
@@ -868,63 +874,61 @@ export async function discoverReadyBase(timeoutMs = 30000): Promise<string> {
 
 export async function restartSession(state: E2eState, timeoutMs = 45000): Promise<string> {
   const currentBase = state.base
-  try {
-    const compositor = await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
-    const shell = await getJson<ShellSnapshot>(currentBase, '/test/state/shell')
-    const liveLaunchKeys = new Map<string, string>()
-    for (const window of compositor.windows) {
-      const command = state.nativeLaunchByWindowId.get(window.window_id)
-      if (!command) continue
-      liveLaunchKeys.set(
+  const compositor = await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
+  const shell = await getJson<ShellSnapshot>(currentBase, '/test/state/shell')
+  const liveLaunchKeys = new Map<string, string>()
+  for (const window of compositor.windows) {
+    const command = state.nativeLaunchByWindowId.get(window.window_id)
+    if (!command) continue
+    liveLaunchKeys.set(
+      JSON.stringify({
+        title: window.title,
+        appId: window.app_id,
+        outputName: window.output_name,
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+      }),
+      command,
+    )
+  }
+  const shellSessionSnapshot =
+    shell.session_snapshot && !shell.session_snapshot_error ? structuredClone(shell.session_snapshot) : null
+  const nativeWindows = Array.isArray(shellSessionSnapshot?.nativeWindows) ? shellSessionSnapshot.nativeWindows : null
+  if (nativeWindows) {
+    for (const entry of nativeWindows) {
+      if (!entry || typeof entry !== 'object') continue
+      const row = entry as Record<string, unknown>
+      if (row.launch && typeof row.launch === 'object') continue
+      const bounds = row.bounds && typeof row.bounds === 'object' ? (row.bounds as Record<string, unknown>) : {}
+      const command = liveLaunchKeys.get(
         JSON.stringify({
-          title: window.title,
-          appId: window.app_id,
-          outputName: window.output_name,
-          x: window.x,
-          y: window.y,
-          width: window.width,
-          height: window.height,
+          title: row.title,
+          appId: row.appId,
+          outputName: row.outputName,
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
         }),
-        command,
       )
-    }
-    const shellSessionSnapshot =
-      shell.session_snapshot && !shell.session_snapshot_error ? structuredClone(shell.session_snapshot) : null
-    const nativeWindows = Array.isArray(shellSessionSnapshot?.nativeWindows) ? shellSessionSnapshot.nativeWindows : null
-    if (nativeWindows) {
-      for (const entry of nativeWindows) {
-        if (!entry || typeof entry !== 'object') continue
-        const row = entry as Record<string, unknown>
-        if (row.launch && typeof row.launch === 'object') continue
-        const bounds = row.bounds && typeof row.bounds === 'object' ? (row.bounds as Record<string, unknown>) : {}
-        const command = liveLaunchKeys.get(
-          JSON.stringify({
-            title: row.title,
-            appId: row.appId,
-            outputName: row.outputName,
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height,
-          }),
-        )
-        if (!command) continue
-        row.launch = {
-          command,
-          desktopId: null,
-          appName: null,
-        }
+      if (!command) continue
+      row.launch = {
+        command,
+        desktopId: null,
+        appName: null,
       }
     }
-    const body =
-      shellSessionSnapshot
-        ? {
-            version: 1,
-            shell: shellSessionSnapshot,
-          }
-        : {}
-    await postJson(currentBase, '/session_reload', body)
-  } catch {}
+  }
+  const body =
+    shellSessionSnapshot
+      ? {
+          version: 1,
+          shell: shellSessionSnapshot,
+        }
+      : {}
+  await postJson(currentBase, '/session_reload', body)
   await waitFor(
     'wait for shell http restart',
     async () => {

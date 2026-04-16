@@ -1,10 +1,14 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use cef::{Browser, CefString, ImplBrowser, ImplFrame};
+use cef::{
+    post_task, rc::Rc, wrap_task, Browser, CefString, ImplBrowser, ImplFrame, ImplTask, Task,
+    ThreadId, WrapTask,
+};
 
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
@@ -56,6 +60,8 @@ fn cors_headers() -> &'static str {
     "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n"
 }
 
+const CONTROL_SERVER_MAX_INFLIGHT: usize = 32;
+
 pub fn start(
     uplink: UplinkToCompositor,
     browser: Arc<Mutex<Option<Browser>>>,
@@ -86,6 +92,7 @@ fn run(
     );
     let _ = port_tx.send(Ok(port));
     std::thread::spawn(crate::cef::desktop_apps::warm_applications_cache);
+    let inflight = Arc::new(AtomicUsize::new(0));
 
     for conn in listener.incoming() {
         let stream = match conn {
@@ -96,6 +103,13 @@ fn run(
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         let uplink_cl = uplink.clone();
         let browser_cl = browser.clone();
+        let inflight_cl = inflight.clone();
+        if inflight_cl.fetch_add(1, Ordering::AcqRel) >= CONTROL_SERVER_MAX_INFLIGHT {
+            inflight_cl.fetch_sub(1, Ordering::AcqRel);
+            let mut stream = stream;
+            let _ = write_http_json(&mut stream, 503, r#"{"error":"server_busy"}"#);
+            continue;
+        }
         std::thread::spawn(move || {
             let mut stream = stream;
             if let Err(e) = handle_one(&mut stream, &uplink_cl, &browser_cl) {
@@ -103,6 +117,7 @@ fn run(
                 let body = format!(r#"{{"error":"{}"}}"#, msg.replace('"', "'"));
                 let _ = write_http_json(&mut stream, 500, &body);
             }
+            inflight_cl.fetch_sub(1, Ordering::AcqRel);
         });
     }
 }
@@ -212,31 +227,69 @@ fn quote_js_string(input: &str) -> Result<String, String> {
     serde_json::to_string(input).map_err(|e| format!("serialize js string: {e}"))
 }
 
+wrap_task! {
+    struct ExecuteShellBridgeJsTask {
+        browser_holder: Arc<Mutex<Option<Browser>>>,
+        script: String,
+        result_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            let result = {
+                let browser = match self.browser_holder.lock() {
+                    Ok(guard) => match guard.as_ref().cloned() {
+                        Some(browser) => browser,
+                        None => {
+                            let _ = self
+                                .result_tx
+                                .send(Err("shell browser is unavailable".to_string()));
+                            return;
+                        }
+                    },
+                    Err(_) => {
+                        let _ = self
+                            .result_tx
+                            .send(Err("shell browser lock poisoned".to_string()));
+                        return;
+                    }
+                };
+                let frame = match browser.main_frame() {
+                    Some(frame) => frame,
+                    None => {
+                        let _ = self
+                            .result_tx
+                            .send(Err("shell main frame is unavailable".to_string()));
+                        return;
+                    }
+                };
+                tracing::warn!(
+                    target: "derp_shell_boot",
+                    browser_id = browser.identifier(),
+                    frame_url = %cef_userfree_string_to_string(&frame.url()),
+                    script_len = self.script.len(),
+                    "execute_shell_bridge_js"
+                );
+                frame.execute_java_script(Some(&CefString::from(self.script.as_str())), None, 0);
+                Ok(())
+            };
+            let _ = self.result_tx.send(result);
+        }
+    }
+}
+
 fn execute_shell_bridge_js(
     browser: &Arc<Mutex<Option<Browser>>>,
     script: String,
 ) -> Result<(), String> {
-    let browser = {
-        let guard = browser
-            .lock()
-            .map_err(|_| "shell browser lock poisoned".to_string())?;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "shell browser is unavailable".to_string())?
-    };
-    let frame = browser
-        .main_frame()
-        .ok_or_else(|| "shell main frame is unavailable".to_string())?;
-    tracing::warn!(
-        target: "derp_shell_boot",
-        browser_id = browser.identifier(),
-        frame_url = %cef_userfree_string_to_string(&frame.url()),
-        script_len = script.len(),
-        "execute_shell_bridge_js"
-    );
-    frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 0);
-    Ok(())
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let mut task = ExecuteShellBridgeJsTask::new(browser.clone(), script, result_tx);
+    if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+        return Err("failed to post shell bridge js task".to_string());
+    }
+    result_rx
+        .recv_timeout(Duration::from_secs(3))
+        .map_err(|_| "timed out waiting for shell bridge js task".to_string())?
 }
 
 fn request_shell_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
@@ -320,7 +373,13 @@ fn portal_screencast_request_json() -> String {
     r#"{"pending":false}"#.to_string()
 }
 
-fn portal_screencast_pick(v: &serde_json::Value) -> String {
+enum PortalScreencastPickResult {
+    Selected(String),
+    Cancelled,
+    TimedOut,
+}
+
+fn portal_screencast_pick(v: &serde_json::Value) -> PortalScreencastPickResult {
     let (lock, condvar) = portal_screencast_state();
     let mut state = lock.lock().expect("portal_screencast_state");
     let types = v
@@ -338,7 +397,7 @@ fn portal_screencast_pick(v: &serde_json::Value) -> String {
         }
     });
     if let Some(selection) = reuse {
-        return selection;
+        return PortalScreencastPickResult::Selected(selection);
     }
     let request_id = state.next_request_id;
     state.next_request_id += 1;
@@ -349,7 +408,7 @@ fn portal_screencast_pick(v: &serde_json::Value) -> String {
     });
     condvar.notify_all();
     let timeout = Duration::from_secs(90);
-    let (mut state, _) = condvar
+    let (mut state, wait_result) = condvar
         .wait_timeout_while(state, timeout, |state| {
             state
                 .current
@@ -366,7 +425,11 @@ fn portal_screencast_pick(v: &serde_json::Value) -> String {
         }
         None => None,
     };
-    selection.unwrap_or_default()
+    match selection {
+        Some(selection) => PortalScreencastPickResult::Selected(selection),
+        None if wait_result.timed_out() => PortalScreencastPickResult::TimedOut,
+        None => PortalScreencastPickResult::Cancelled,
+    }
 }
 
 fn portal_screencast_respond(v: &serde_json::Value) -> Result<(), String> {
@@ -699,15 +762,38 @@ fn handle_one(
         8192
     };
     if content_length > max_content_length {
-        return Err("body too large".into());
+        write_http_json(stream, 413, r#"{"error":"body_too_large"}"#).map_err(|e| e.to_string())?;
+        return Ok(());
     }
 
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body).map_err(|e| e.to_string())?;
     }
-    let body_str = std::str::from_utf8(&body).map_err(|_| "invalid utf-8 body".to_string())?;
-    let v: serde_json::Value = serde_json::from_str(body_str).unwrap_or(serde_json::Value::Null);
+    let body_str = match std::str::from_utf8(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            write_http_json(stream, 400, r#"{"error":"invalid_utf8_body"}"#)
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    };
+    let v: serde_json::Value = if body_str.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        match serde_json::from_str(body_str) {
+            Ok(value) => value,
+            Err(error) => {
+                let body = serde_json::json!({
+                    "error": "invalid_json_body",
+                    "detail": error.to_string(),
+                })
+                .to_string();
+                write_http_json(stream, 400, &body).map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        }
+    };
 
     if req_path == "/test/shell_window/open" {
         open_shell_test_window(browser)?;
@@ -734,9 +820,20 @@ fn handle_one(
     }
 
     if req_path == "/portal_screencast_pick" {
-        let selection = portal_screencast_pick(&v);
-        write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
-            .map_err(|e| e.to_string())?;
+        match portal_screencast_pick(&v) {
+            PortalScreencastPickResult::Selected(selection) => {
+                write_http_ok_bytes(stream, "text/plain; charset=utf-8", selection.as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            PortalScreencastPickResult::Cancelled => {
+                write_http_json(stream, 409, r#"{"error":"portal_screencast_cancelled"}"#)
+                    .map_err(|e| e.to_string())?;
+            }
+            PortalScreencastPickResult::TimedOut => {
+                write_http_json(stream, 408, r#"{"error":"portal_screencast_timeout"}"#)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         return Ok(());
     }
 

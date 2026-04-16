@@ -87,15 +87,26 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     const box = measuredBox()
     const width = Math.max(1, box?.width ?? PICKER_APPROX_WIDTH)
     const height = Math.max(1, box?.height ?? PICKER_APPROX_HEIGHT)
-    const viewportWidth = window.innerWidth
-    const viewportHeight = window.innerHeight
+    const containerRect = props.container.getBoundingClientRect()
+    const minLeft = containerRect.left + 8
+    const maxLeft = containerRect.right - width - 8
+    const minTop = containerRect.top + 8
+    const maxTop = containerRect.bottom - height - 8
     let left = props.anchorRect.left + props.anchorRect.width / 2 - width / 2
-    if (left + width > viewportWidth - 8) left = viewportWidth - width - 8
-    if (left < 8) left = 8
+    if (maxLeft >= minLeft) {
+      if (left > maxLeft) left = maxLeft
+      if (left < minLeft) left = minLeft
+    } else {
+      left = containerRect.left + Math.max(0, (containerRect.width - width) / 2)
+    }
     let top = props.anchorRect.bottom + 6
-    if (top + height > viewportHeight - 8) top = props.anchorRect.top - height - 6
-    if (top + height > viewportHeight - 8) top = viewportHeight - height - 8
-    if (top < 8) top = 8
+    if (top > maxTop) top = props.anchorRect.top - height - 6
+    if (maxTop >= minTop) {
+      if (top > maxTop) top = maxTop
+      if (top < minTop) top = minTop
+    } else {
+      top = containerRect.top + Math.max(0, (containerRect.height - height) / 2)
+    }
     return { left, top }
   })
 

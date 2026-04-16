@@ -7,13 +7,14 @@ export type SnapAssistTopStripProps = {
 }
 
 export function SnapAssistTopStrip(props: SnapAssistTopStripProps) {
+  const screenRect = () => props.screenCssRect(props.screen)
   return (
     <div
       class="pointer-events-none fixed z-401200"
       style={{
-        left: `${props.screenCssRect(props.screen).x}px`,
-        top: `${props.screenCssRect(props.screen).y}px`,
-        width: `${props.screenCssRect(props.screen).width}px`,
+        left: `${screenRect().x}px`,
+        top: `${screenRect().y}px`,
+        width: `${screenRect().width}px`,
         height: '0px',
       }}
     >
