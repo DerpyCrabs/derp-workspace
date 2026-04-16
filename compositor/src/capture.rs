@@ -449,19 +449,19 @@ impl Dispatch<ZwlrScreencopyManagerV1, (), CompositorState> for ScreencopyManage
         match request {
             zwlr_screencopy_manager_v1::Request::CaptureOutput {
                 frame,
-                overlay_cursor: _,
                 output,
+                ..
             } => {
                 init_screencopy_frame(state, frame, output, None, data_init);
             }
             zwlr_screencopy_manager_v1::Request::CaptureOutputRegion {
                 frame,
-                overlay_cursor: _,
                 output,
                 x,
                 y,
                 width,
                 height,
+                ..
             } => {
                 let region = Rectangle::new((x, y).into(), (width.max(1), height.max(1)).into());
                 init_screencopy_frame(state, frame, output, Some(region), data_init);

@@ -48,6 +48,19 @@ type ApplyCompositorDetailOptions = {
   requestWindowSyncRecovery: () => void
 }
 
+function requestRecovery(
+  detail: DerpShellDetail,
+  applyOptions: ApplyCompositorDetailOptions,
+  windowId?: number | null,
+): CompositorApplyResult {
+  applyOptions.requestWindowSyncRecovery()
+  return {
+    kind: 'recovery_requested',
+    detailType: detail.type,
+    windowId,
+  }
+}
+
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: unknown[]
@@ -118,11 +131,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const windowId = coerceShellWindowId(detail.window_id)
       if (windowId !== null) {
         if (!windows().has(windowId)) {
-          return {
-            kind: 'ignored',
-            detailType: detail.type,
-            windowId,
-          }
+          return requestRecovery(detail, applyOptions, windowId)
         }
         setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
         setWindows((map) => applyDetail(map, detail))
@@ -161,11 +170,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       let relayoutMonitor: string | null = null
       if (windowId !== null) {
         if (!previousWindow) {
-          return {
-            kind: 'ignored',
-            detailType: detail.type,
-            windowId,
-          }
+          return requestRecovery(detail, applyOptions, windowId)
         }
         relayoutMonitor = previousWindow.output_name || applyOptions.fallbackMonitorKey()
       }
@@ -204,11 +209,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const windowId = coerceShellWindowId(detail.window_id)
       const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
       if (windowId !== null && !previousWindow) {
-        return {
-          kind: 'ignored',
-          detailType: detail.type,
-          windowId,
-        }
+        return requestRecovery(detail, applyOptions, windowId)
       }
       setWindows((map) => applyDetail(map, detail))
       return {
@@ -236,11 +237,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (detail.type === 'window_metadata') {
       const windowId = coerceShellWindowId(detail.window_id)
       if (windowId !== null && !windows().has(windowId)) {
-        return {
-          kind: 'ignored',
-          detailType: detail.type,
-          windowId,
-        }
+        return requestRecovery(detail, applyOptions, windowId)
       }
       setWindows((map) => applyDetail(map, detail))
       return {

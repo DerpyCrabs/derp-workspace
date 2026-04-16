@@ -2,8 +2,6 @@ use tracing::info;
 
 static SOLID_SHELL_FIRST_DMABUF_LOG: std::sync::Once = std::sync::Once::new();
 
-pub fn drain_shell_stream(_state: &mut crate::state::CompositorState) {}
-
 pub(crate) fn log_first_shell_dmabuf(
     width: u32,
     height: u32,

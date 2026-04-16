@@ -101,18 +101,10 @@ fn run(
             if let Err(e) = handle_one(&mut stream, &uplink_cl, &browser_cl) {
                 let msg = e.replace('\r', "").replace('\n', "");
                 let body = format!(r#"{{"error":"{}"}}"#, msg.replace('"', "'"));
-                let _ = write_http_json_error(&mut stream, 500, &body);
+                let _ = write_http_json(&mut stream, 500, &body);
             }
         });
     }
-}
-
-fn write_http_json_error(
-    stream: &mut std::net::TcpStream,
-    status: u16,
-    json: &str,
-) -> std::io::Result<()> {
-    write_http_json(stream, status, json)
 }
 
 fn write_http_json(
@@ -224,13 +216,15 @@ fn execute_shell_bridge_js(
     browser: &Arc<Mutex<Option<Browser>>>,
     script: String,
 ) -> Result<(), String> {
-    let guard = browser
-        .lock()
-        .map_err(|_| "shell browser lock poisoned".to_string())?;
-    let browser = guard
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "shell browser is unavailable".to_string())?;
+    let browser = {
+        let guard = browser
+            .lock()
+            .map_err(|_| "shell browser lock poisoned".to_string())?;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "shell browser is unavailable".to_string())?
+    };
     let frame = browser
         .main_frame()
         .ok_or_else(|| "shell main frame is unavailable".to_string())?;
@@ -684,7 +678,7 @@ fn handle_one(
             .canonicalize()
             .map_err(|e| format!("wallpaper_preview: {e}"))?;
         if !wallpaper_preview_allowed(&canon) {
-            write_http_json_error(stream, 403, r#"{"error":"forbidden"}"#)
+            write_http_json(stream, 403, r#"{"error":"forbidden"}"#)
                 .map_err(|e| e.to_string())?;
             return Ok(());
         }
@@ -694,7 +688,7 @@ fn handle_one(
     }
 
     if !method.eq_ignore_ascii_case("POST") {
-        write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)
+        write_http_json(stream, 404, r#"{"error":"not_found"}"#)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1073,7 +1067,7 @@ fn handle_one(
             portal_screencast_respond(&v)?;
         }
         _ => {
-            write_http_json_error(stream, 404, r#"{"error":"not_found"}"#)
+            write_http_json(stream, 404, r#"{"error":"not_found"}"#)
                 .map_err(|e| e.to_string())?;
             return Ok(());
         }

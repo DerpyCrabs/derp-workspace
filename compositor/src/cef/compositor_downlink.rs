@@ -8,6 +8,32 @@ use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
 
+fn apply_output_dimensions_to_osr(
+    logical_w: u32,
+    logical_h: u32,
+    physical_w: u32,
+    physical_h: u32,
+    view_state: &Mutex<OsrViewState>,
+    browser: Option<&Browser>,
+    snapshot_dirty: &mut bool,
+) {
+    if let Ok(mut g) = view_state.lock() {
+        g.logical_width = logical_w.max(1) as i32;
+        g.logical_height = logical_h.max(1) as i32;
+        let pw = physical_w.max(1) as i32;
+        let ph = physical_h.max(1) as i32;
+        g.set_physical_size(pw, ph);
+    }
+    if let Some(b) = browser {
+        if let Some(host) = b.host() {
+            host.was_resized();
+            host.notify_screen_info_changed();
+            host.invalidate(cef::PaintElementType::VIEW);
+        }
+    }
+    *snapshot_dirty = true;
+}
+
 fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     if details.is_empty() {
         return;
@@ -99,121 +125,54 @@ fn apply_message(
             physical_w,
             physical_h,
         } => {
-            if let Ok(mut g) = view_state.lock() {
-                g.logical_width = logical_w.max(1) as i32;
-                g.logical_height = logical_h.max(1) as i32;
-                let pw = physical_w.max(1) as i32;
-                let ph = physical_h.max(1) as i32;
-                g.set_physical_size(pw, ph);
-            }
-            if let Some(b) = browser {
-                if let Some(host) = b.host() {
-                    host.was_resized();
-                    host.notify_screen_info_changed();
-                    host.invalidate(cef::PaintElementType::VIEW);
-                }
-            }
-            *snapshot_dirty = true;
+            apply_output_dimensions_to_osr(
+                logical_w,
+                logical_h,
+                physical_w,
+                physical_h,
+                view_state,
+                browser,
+                snapshot_dirty,
+            );
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
-            context_menu_atlas_buffer_h: _,
-            screens,
-            shell_chrome_primary,
+            ..
         } => {
-            tracing::warn!(
-                target: "derp_hotplug_shell",
+            apply_output_dimensions_to_osr(
                 canvas_logical_w,
                 canvas_logical_h,
                 canvas_physical_w,
                 canvas_physical_h,
-                n_screens = screens.len(),
-                primary = ?shell_chrome_primary,
-                "cef_ui OutputLayout task enter"
+                view_state,
+                browser,
+                snapshot_dirty,
             );
-            if let Ok(mut g) = view_state.lock() {
-                g.logical_width = canvas_logical_w.max(1) as i32;
-                g.logical_height = canvas_logical_h.max(1) as i32;
-                let pw = canvas_physical_w.max(1) as i32;
-                let ph = canvas_physical_h.max(1) as i32;
-                g.set_physical_size(pw, ph);
-            }
-            if let Some(b) = browser {
-                if let Some(host) = b.host() {
-                    tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout was_resized notify_screen invalidate");
-                    host.was_resized();
-                    host.notify_screen_info_changed();
-                    host.invalidate(cef::PaintElementType::VIEW);
-                } else {
-                    tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout no browser host");
-                }
-            } else {
-                tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout missing browser");
-                return;
-            }
-            *snapshot_dirty = true;
-            tracing::warn!(target: "derp_hotplug_shell", "cef_ui OutputLayout dispatch_shell_detail done");
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-            window_id: _,
-            surface_id: _,
-            x: _,
-            y: _,
-            w: _,
-            h: _,
-            title: _,
-            app_id: _,
-            client_side_decoration: _,
-            output_name: _,
-        } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id: _ } => {
-            *snapshot_dirty = true;
-        }
-        shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-            window_id: _,
-            surface_id: _,
-            x: _,
-            y: _,
-            w: _,
-            h: _,
-            maximized: _,
-            fullscreen: _,
-            client_side_decoration: _,
-            output_name: _,
-        } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-            window_id: _,
-            surface_id: _,
-            title: _,
-            app_id: _,
-        } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowList { windows: _ } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_list();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowState {
-            window_id: _,
-            minimized: _,
-        } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_state();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
-            surface_id: _,
-            window_id: _,
-        } => {
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
             *snapshot_dirty = true;
         }
@@ -233,8 +192,8 @@ fn apply_message(
             y,
             button,
             mouse_up,
-            titlebar_drag_window_id: _,
             modifiers,
+            ..
         } => {
             flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
@@ -359,28 +318,12 @@ fn apply_message(
                 "output_name": output_name,
             }));
         }
-        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label: _ } => {
-            *snapshot_dirty = true;
-        }
-        shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
-            volume_linear_percent_x100: _,
-            muted: _,
-            state_known: _,
-        } => {
-            *snapshot_dirty = true;
-        }
-        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
-            let _ = state_json;
-            *snapshot_dirty = true;
-        }
-        shell_wire::DecodedCompositorToShellMessage::TrayHints {
-            slot_count: _,
-            slot_w: _,
-            reserved_w: _,
-        } => {
-            *snapshot_dirty = true;
-        }
-        shell_wire::DecodedCompositorToShellMessage::TraySni { items: _ } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+        | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+        | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+        | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
             *snapshot_dirty = true;
         }
         shell_wire::DecodedCompositorToShellMessage::TraySniMenu { menu } => {

@@ -76,7 +76,7 @@ fn log_egl_dmabuf_caps_after_drm_init(renderer: &GlesRenderer) {
 
 use crate::{
     desktop_stack::{DesktopStack, SpaceExclusionClip},
-    pointer_render, shell_ipc, CalloopData, CompositorState,
+    pointer_render, CalloopData, CompositorState,
 };
 
 pub struct DrmHead {
@@ -671,7 +671,6 @@ impl DrmSession {
     }
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
-        shell_ipc::drain_shell_stream(state);
         state.shell_check_ipc_watchdog();
 
         if state.display_config_save_pending && !state.display_config_save_suppressed {

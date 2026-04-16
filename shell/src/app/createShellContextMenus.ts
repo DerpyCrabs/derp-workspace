@@ -19,6 +19,7 @@ import { measureShellFloatingPlacementFromDom } from '../shellFloatingPlacement'
 import { shellContextMenuWire } from '../shellFloatingWire'
 import { shellHttpBase } from '../shellHttp'
 import { canvasRectToClientCss } from '../shellCoords'
+import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
 
 const ROOT_CONTEXT_MENU_LAYER_ID = 'shell-context-menu-root'
@@ -56,17 +57,13 @@ type CreateShellContextMenusArgs = {
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
   exitSession: () => void
-  clearShellActionIssue: () => void
-  reportShellActionIssue: (message: string) => void
-  describeError: (error: unknown) => string
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
 }
 
 export function shouldHandleContextMenuNavigationKey(nestedInteractiveFocus: boolean): boolean {
-  if (!nestedInteractiveFocus) return true
-  return false
+  return !nestedInteractiveFocus
 }
 
 export function shouldDismissContextMenuPointerDown(args: {
@@ -96,28 +93,6 @@ function layoutScreenCssRect(
     transform: screen.transform,
     refresh_milli_hz: screen.refresh_milli_hz,
   }
-}
-
-function screensListForLayout(
-  rows: LayoutScreen[],
-  canvas: { w: number; h: number } | null,
-  origin: { x: number; y: number } | null,
-) {
-  if (rows.length > 0) return rows
-  if (canvas && canvas.w > 0 && canvas.h > 0) {
-    return [
-      {
-        name: '',
-        x: origin?.x ?? 0,
-        y: origin?.y ?? 0,
-        refresh_milli_hz: 0,
-        width: canvas.w,
-        height: canvas.h,
-        transform: 0,
-      },
-    ]
-  }
-  return []
 }
 
 export function createShellContextMenus(args: CreateShellContextMenusArgs) {
@@ -155,9 +130,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [menuPanelLayoutRevision, setMenuPanelLayoutRevision] = createSignal(0)
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
-    console.warn(
-      `[derp-shell-power-menu] panel_ref aria=${el.getAttribute('aria-label') ?? ''} class=${el.className}`,
-    )
     setMenuPanelRevision((value) => value + 1)
   }
 
@@ -203,9 +175,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function hideContextMenu(skipStore = false) {
-    console.warn(
-      `[derp-shell-power-menu] hide_context_menu skipStore=${skipStore ? 1 : 0} powerOpen=${powerMenuOpen() ? 1 : 0}`,
-    )
     resetContextMenuState()
     shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
     args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
@@ -215,19 +184,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function openRootContextMenu(trigger: object) {
-    const label =
-      trigger === programsMenuTrigger
-        ? 'programs'
-        : trigger === powerMenuTrigger
-          ? 'power'
-          : trigger === volumeMenuTrigger
-            ? 'volume'
-            : trigger === tabMenuTrigger
-              ? 'tab'
-              : trigger === traySniMenuTrigger
-                ? 'tray'
-                : 'unknown'
-    console.warn(`[derp-shell-power-menu] open_root_context_menu trigger=${label}`)
     args.floatingLayers.openLayer({
       id: ROOT_CONTEXT_MENU_LAYER_ID,
       kind: 'context_menu',
@@ -380,9 +336,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function toggleProgramsMenuMeta(outputName?: string | null) {
-    console.warn(
-      `[derp-shell-launcher] toggleProgramsMenuMeta open=${triggerIsOpen(programsMenuTrigger)} output=${outputName ?? ''}`,
-    )
     if (triggerIsOpen(programsMenuTrigger)) {
       hideContextMenu()
       return
@@ -405,18 +358,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
     e.preventDefault()
-    console.warn(
-      `[derp-shell-power-menu] trigger_click open=${triggerIsOpen(powerMenuTrigger)} x=${Math.round(e.clientX)} y=${Math.round(e.clientY)}`,
-    )
     if (triggerIsOpen(powerMenuTrigger)) {
       hideContextMenu()
       return
     }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()
-    console.warn(
-      `[derp-shell-power-menu] trigger_rect left=${Math.round(rect.left)} top=${Math.round(rect.top)} right=${Math.round(rect.right)} bottom=${Math.round(rect.bottom)}`,
-    )
     setCtxMenuAnchor({ x: rect.right, y: rect.bottom, alignAboveY: rect.top })
     setPowerMenuHighlightIdx(0)
     openRootContextMenu(powerMenuTrigger)
@@ -671,9 +618,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const item = tabMenuListItems()[tabMenuHighlightIdx()]
     if (!item || item.disabled) return
     hideContextMenu()
-  queueMicrotask(() => {
-    item.action()
-  })
+    queueMicrotask(() => {
+      item.action()
+    })
   }
 
   function moveTraySniMenuHighlight(delta: number) {
@@ -820,9 +767,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       const atlas = menuAtlasHostRef
       const panel = menuPanelRef
       if (!main || !atlas || !panel || !og || !ph) {
-        console.warn(
-          `[derp-shell-launcher] programsMenu syncPlacement skipped main=${Boolean(main)} atlas=${Boolean(atlas)} panel=${Boolean(panel)} og=${Boolean(og)} ph=${Boolean(ph)} open=${ctxMenuOpen()} output=${programsMenuOutputName() ?? ''}`,
-        )
         return
       }
       const { placement } = measureShellFloatingPlacementFromDom({
@@ -848,9 +792,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         placement.gy,
         placement.gw,
         placement.gh,
-      )
-      console.warn(
-        `[derp-shell-launcher] programsMenu placement gx=${placement.gx} gy=${placement.gy} gw=${placement.gw} gh=${placement.gh} bx=${placement.bx} by=${placement.by} bw=${placement.bw} bh=${placement.bh} output=${programsMenuOutputName() ?? ''}`,
       )
       args.floatingLayers.setLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID, placement)
     }
@@ -896,12 +837,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
     const width = Math.max(1, globalRight - globalLeft)
     const height = Math.max(1, globalBottom - globalTop)
-    const powerAction = el.getAttribute('data-power-menu-action')
-    if (powerAction) {
-      console.warn(
-        `[derp-shell-power-menu] projected_rect action=${powerAction} left=${globalLeft} top=${globalTop} width=${width} height=${height} panelLeft=${Math.round(panelRect.left)} panelTop=${Math.round(panelRect.top)} panelWidth=${Math.round(panelRect.width)} panelHeight=${Math.round(panelRect.height)}`,
-      )
-    }
     const origin = args.layoutCanvasOrigin()
     const ox = origin?.x ?? 0
     const oy = origin?.y ?? 0
@@ -916,11 +851,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   const onCtxKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight') {
-      console.warn(
-        `[derp-shell-launcher] document keydown key=${e.key} code=${e.code} repeat=${e.repeat} defaultPrevented=${e.defaultPrevented} open=${programsMenuOpen()}`,
-      )
-    }
     if (args.screenshotMode() && e.key === 'Escape') {
       e.preventDefault()
       args.stopScreenshotMode()
@@ -1099,36 +1029,19 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     }
   }
 
-  const onCtxKeyUp = (e: KeyboardEvent) => {
-    if (e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight') {
-      console.warn(
-        `[derp-shell-launcher] document keyup key=${e.key} code=${e.code} repeat=${e.repeat} defaultPrevented=${e.defaultPrevented} open=${programsMenuOpen()}`,
-      )
-    }
-  }
-
   const onCtxPointerDown = (e: PointerEvent) => {
     if (!args.floatingLayers.anyOpen()) return
     const shouldDismiss = shouldDismissContextMenuPointerDown({
       target: e.target,
     })
-    const target =
-      e.target instanceof Element
-        ? `${e.target.tagName.toLowerCase()} class=${e.target.className} power=${e.target.getAttribute('data-power-menu-action') ?? ''}`
-        : String(e.target)
-    console.warn(
-      `[derp-shell-power-menu] document_pointerdown dismiss=${shouldDismiss ? 1 : 0} powerOpen=${powerMenuOpen() ? 1 : 0} target=${target}`,
-    )
     if (!shouldDismiss) return
     args.floatingLayers.dismissPointerDown(e.target instanceof Node ? e.target : null)
   }
 
   document.addEventListener('keydown', onCtxKeyDown, true)
-  document.addEventListener('keyup', onCtxKeyUp, true)
   document.addEventListener('pointerdown', onCtxPointerDown, true)
   onCleanup(() => {
     document.removeEventListener('keydown', onCtxKeyDown, true)
-    document.removeEventListener('keyup', onCtxKeyUp, true)
     document.removeEventListener('pointerdown', onCtxPointerDown, true)
   })
 

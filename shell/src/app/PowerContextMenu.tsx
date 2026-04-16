@@ -34,9 +34,6 @@ export function PowerContextMenu() {
               data-power-menu-idx={idx()}
               data-power-menu-action={item.actionId}
               onPointerDown={(e) => {
-                console.warn(
-                  `[derp-shell-power-menu] item_pointerdown action=${item.actionId ?? ''} disabled=${item.disabled ? 1 : 0} button=${e.button}`,
-                )
                 if (!e.isPrimary || e.button !== 0) return
                 e.preventDefault()
                 e.stopPropagation()
@@ -45,15 +42,9 @@ export function PowerContextMenu() {
                 props.closeContextMenu()
               }}
               onMouseDown={(e) => {
-                console.warn(
-                  `[derp-shell-power-menu] item_mousedown action=${item.actionId ?? ''} disabled=${item.disabled ? 1 : 0} button=${e.button}`,
-                )
                 e.preventDefault()
               }}
               onClick={(e) => {
-                console.warn(
-                  `[derp-shell-power-menu] item_click action=${item.actionId ?? ''} disabled=${item.disabled ? 1 : 0}`,
-                )
                 if (e.detail !== 0) return
                 if (item.disabled) return
                 item.action()

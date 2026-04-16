@@ -1388,9 +1388,6 @@ function App() {
         reportShellActionIssue(`Exit session failed: ${describeError(error)}`)
       })
     },
-    clearShellActionIssue,
-    reportShellActionIssue,
-    describeError,
     tabMenuItems: (windowId: number) => {
       const groupId = workspaceGroupIdForWindow(windowId)
       const split = groupId ? getWorkspaceGroupSplit(workspaceState(), groupId) : undefined
@@ -4411,6 +4408,175 @@ function App() {
       requestCompositorSync()
     }, 750)
 
+    const applyKeyboardLayoutDetail = (d: Extract<DerpShellDetail, { type: 'keyboard_layout' }>) => {
+      const label = typeof d.label === 'string' ? d.label.trim() : ''
+      setKeyboardLayoutLabel(label.length > 0 ? label : null)
+    }
+
+    const applyVolumeOverlayDetail = (d: Extract<DerpShellDetail, { type: 'volume_overlay' }>) => {
+      if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
+      const linRaw = d.volume_linear_percent_x100
+      const lin = typeof linRaw === 'number' && Number.isFinite(linRaw) ? Math.max(0, linRaw) : 0
+      setVolumeOverlay({
+        linear: lin,
+        muted: !!d.muted,
+        stateKnown: d.state_known !== false,
+      })
+      setTrayVolumeState({
+        muted: !!d.muted,
+        volumePercent: d.state_known === false ? null : Math.min(100, Math.round(lin / 100)),
+      })
+      volumeOverlayHideTimer = setTimeout(() => {
+        setVolumeOverlay(null)
+        volumeOverlayHideTimer = undefined
+      }, 2200)
+      dispatchAudioStateChanged({ reason: 'volume_overlay' })
+    }
+
+    const applyTrayHintsDetail = (d: Extract<DerpShellDetail, { type: 'tray_hints' }>) => {
+      const rw = typeof d.reserved_w === 'number' && Number.isFinite(d.reserved_w) ? Math.max(0, d.reserved_w) : 0
+      setTrayReservedPx(rw)
+      const sw =
+        typeof d.slot_w === 'number' && Number.isFinite(d.slot_w)
+          ? Math.max(24, Math.min(64, Math.round(d.slot_w)))
+          : 40
+      setTrayIconSlotPx(sw)
+      queueMicrotask(() => scheduleExclusionZonesSync())
+    }
+
+    const applyTraySniDetail = (d: Extract<DerpShellDetail, { type: 'tray_sni' }>) => {
+      const raw = (d as { items?: unknown }).items
+      const next: TaskbarSniItem[] = []
+      if (Array.isArray(raw)) {
+        for (const row of raw) {
+          if (row && typeof row === 'object') {
+            const o = row as Record<string, unknown>
+            const id = typeof o.id === 'string' ? o.id : ''
+            const title = typeof o.title === 'string' ? o.title : ''
+            const icon_base64 = typeof o.icon_base64 === 'string' ? o.icon_base64 : ''
+            if (id) next.push({ id, title, icon_base64 })
+          }
+        }
+      }
+      setSniTrayItems(next)
+      queueMicrotask(() => scheduleExclusionZonesSync())
+    }
+
+    const applyOutputGeometryDetail = (d: Extract<DerpShellDetail, { type: 'output_geometry' }>) => {
+      setOutputGeom({ w: d.logical_width, h: d.logical_height })
+      scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
+    }
+
+    const applyOutputLayoutDetail = (d: Extract<DerpShellDetail, { type: 'output_layout' }>) => {
+      batch(() => {
+        setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
+        setOutputPhysical({
+          w: d.canvas_physical_width,
+          h: d.canvas_physical_height,
+        })
+        if (
+          typeof d.context_menu_atlas_buffer_h === 'number' &&
+          d.context_menu_atlas_buffer_h > 0
+        ) {
+          setContextMenuAtlasBufferH(d.context_menu_atlas_buffer_h)
+        }
+        if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
+          setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
+        } else {
+          setLayoutCanvasOrigin(null)
+        }
+        {
+          const lw = Math.max(1, d.canvas_logical_width)
+          const pw = Math.max(1, d.canvas_physical_width)
+          const s = (pw / lw) * 100
+          const candidates = [100, 150, 200] as const
+          let best: (typeof candidates)[number] = 150
+          let bestD = Number.POSITIVE_INFINITY
+          for (const c of candidates) {
+            const dist = Math.abs(s - c)
+            if (dist < bestD) {
+              bestD = dist
+              best = c
+            }
+          }
+          setUiScalePercent(best)
+        }
+        setScreenDraft(
+          'rows',
+          d.screens.map((s) => ({
+            name: s.name,
+            x: s.x,
+            y: s.y,
+            width: s.width,
+            height: s.height,
+            transform: s.transform,
+            refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
+          })),
+        )
+        setTilingCfgRev((n) => n + 1)
+        const pr =
+          typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
+            ? d.shell_chrome_primary
+            : null
+        setShellChromePrimaryName(pr)
+      })
+      scheduleCompositorFollowup({
+        syncExclusion: true,
+        flushWindows: true,
+        relayoutAll: true,
+        resetScroll: true,
+      })
+    }
+
+    const applySnapshotVisualDetail = (
+      d: DerpShellDetail,
+      skipOutputGeometry: boolean,
+    ) => {
+      if (d.type === 'keyboard_layout') {
+        applyKeyboardLayoutDetail(d)
+        return true
+      }
+      if (d.type === 'volume_overlay') {
+        applyVolumeOverlayDetail(d)
+        return true
+      }
+      if (d.type === 'tray_hints') {
+        applyTrayHintsDetail(d)
+        return true
+      }
+      if (d.type === 'tray_sni') {
+        applyTraySniDetail(d)
+        return true
+      }
+      if (d.type === 'output_geometry') {
+        if (!skipOutputGeometry) applyOutputGeometryDetail(d)
+        return true
+      }
+      if (d.type === 'output_layout') {
+        applyOutputLayoutDetail(d)
+        return true
+      }
+      return false
+    }
+
+    const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
+      if (details.length === 0) return
+      const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
+      let sawWindowList = false
+      batch(() => {
+        applyModelCompositorSnapshot(details)
+        for (const detail of details) {
+          if (detail.type === 'window_list') {
+            sawWindowList = true
+            continue
+          }
+          applySnapshotVisualDetail(detail, skipOutputGeometry)
+        }
+        if (sawWindowList) setHasSeenCompositorWindowSync(true)
+      })
+      if (sawWindowList) windowSyncRecoveryPending = false
+    }
+
     const applyCompositorDetail = (d: DerpShellDetail) => {
       if (d.type === 'context_menu_dismiss') {
         closeAllAtlasSelects()
@@ -4418,9 +4584,6 @@ function App() {
         return
       }
       if (d.type === 'programs_menu_toggle') {
-        console.warn(
-          `[derp-shell-launcher] detail programs_menu_toggle output=${typeof d.output_name === 'string' ? d.output_name : ''}`,
-        )
         shellContextMenus.toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
         return
       }
@@ -4429,57 +4592,19 @@ function App() {
         return
       }
       if (d.type === 'keyboard_layout') {
-        const label = typeof d.label === 'string' ? d.label.trim() : ''
-        setKeyboardLayoutLabel(label.length > 0 ? label : null)
+        applyKeyboardLayoutDetail(d)
         return
       }
       if (d.type === 'volume_overlay') {
-        if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
-        const linRaw = d.volume_linear_percent_x100
-        const lin = typeof linRaw === 'number' && Number.isFinite(linRaw) ? Math.max(0, linRaw) : 0
-        setVolumeOverlay({
-          linear: lin,
-          muted: !!d.muted,
-          stateKnown: d.state_known !== false,
-        })
-        setTrayVolumeState({
-          muted: !!d.muted,
-          volumePercent: d.state_known === false ? null : Math.min(100, Math.round(lin / 100)),
-        })
-        volumeOverlayHideTimer = setTimeout(() => {
-          setVolumeOverlay(null)
-          volumeOverlayHideTimer = undefined
-        }, 2200)
-        dispatchAudioStateChanged({ reason: 'volume_overlay' })
+        applyVolumeOverlayDetail(d)
         return
       }
       if (d.type === 'tray_hints') {
-        const rw = typeof d.reserved_w === 'number' && Number.isFinite(d.reserved_w) ? Math.max(0, d.reserved_w) : 0
-        setTrayReservedPx(rw)
-        const sw =
-          typeof d.slot_w === 'number' && Number.isFinite(d.slot_w)
-            ? Math.max(24, Math.min(64, Math.round(d.slot_w)))
-            : 40
-        setTrayIconSlotPx(sw)
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        applyTrayHintsDetail(d)
         return
       }
       if (d.type === 'tray_sni') {
-        const raw = (d as { items?: unknown }).items
-        const next: TaskbarSniItem[] = []
-        if (Array.isArray(raw)) {
-          for (const row of raw) {
-            if (row && typeof row === 'object') {
-              const o = row as Record<string, unknown>
-              const id = typeof o.id === 'string' ? o.id : ''
-              const title = typeof o.title === 'string' ? o.title : ''
-              const icon_base64 = typeof o.icon_base64 === 'string' ? o.icon_base64 : ''
-              if (id) next.push({ id, title, icon_base64 })
-            }
-          }
-        }
-        setSniTrayItems(next)
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        applyTraySniDetail(d)
         return
       }
       if (d.type === 'tray_sni_menu') {
@@ -4533,9 +4658,6 @@ function App() {
           return
         }
         if (action === 'toggle_programs_menu') {
-          console.warn(
-            `[derp-shell-launcher] keybind toggle_programs_menu output=${typeof d.output_name === 'string' ? d.output_name : ''}`,
-          )
           shellContextMenus.toggleProgramsMenuMeta(
             typeof d.output_name === 'string' ? d.output_name : null,
           )
@@ -4732,78 +4854,11 @@ function App() {
         return
       }
       if (d.type === 'output_geometry') {
-        setOutputGeom({ w: d.logical_width, h: d.logical_height })
-        scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
+        applyOutputGeometryDetail(d)
         return
       }
       if (d.type === 'output_layout') {
-        console.warn(
-          '[derp_hotplug_shell] output_layout',
-          JSON.stringify({
-            screens: d.screens?.length,
-            lw: d.canvas_logical_width,
-            lh: d.canvas_logical_height,
-            primary: d.shell_chrome_primary,
-          }),
-        )
-        batch(() => {
-          setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
-          setOutputPhysical({
-            w: d.canvas_physical_width,
-            h: d.canvas_physical_height,
-          })
-          if (
-            typeof d.context_menu_atlas_buffer_h === 'number' &&
-            d.context_menu_atlas_buffer_h > 0
-          ) {
-            setContextMenuAtlasBufferH(d.context_menu_atlas_buffer_h)
-          }
-          if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
-            setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
-          } else {
-            setLayoutCanvasOrigin(null)
-          }
-          {
-            const lw = Math.max(1, d.canvas_logical_width)
-            const pw = Math.max(1, d.canvas_physical_width)
-            const s = (pw / lw) * 100
-            const candidates = [100, 150, 200] as const
-            let best: (typeof candidates)[number] = 150
-            let bestD = Number.POSITIVE_INFINITY
-            for (const c of candidates) {
-              const dist = Math.abs(s - c)
-              if (dist < bestD) {
-                bestD = dist
-                best = c
-              }
-            }
-            setUiScalePercent(best)
-          }
-          setScreenDraft(
-            'rows',
-            d.screens.map((s) => ({
-              name: s.name,
-              x: s.x,
-              y: s.y,
-              width: s.width,
-              height: s.height,
-              transform: s.transform,
-              refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
-            })),
-          )
-          setTilingCfgRev((n) => n + 1)
-          const pr =
-            typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
-              ? d.shell_chrome_primary
-              : null
-          setShellChromePrimaryName(pr)
-        })
-        scheduleCompositorFollowup({
-          syncExclusion: true,
-          flushWindows: true,
-          relayoutAll: true,
-          resetScroll: true,
-        })
+        applyOutputLayoutDetail(d)
         return
       }
       if (d.type === 'window_list') {
@@ -4884,9 +4939,11 @@ function App() {
 
     const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
       if (details.length === 0) return
-      for (const detail of details) {
-        applyCompositorDetail(detail)
-      }
+      batch(() => {
+        for (const detail of details) {
+          applyCompositorDetail(detail)
+        }
+      })
     }
 
     let lastSnapshotSequence = 0
@@ -4910,8 +4967,7 @@ function App() {
       const decoded = decodeCompositorSnapshot(raw)
       if (!decoded || decoded.details.length === 0) return false
       lastSnapshotSequence = decoded.sequence
-      applyModelCompositorSnapshot(decoded.details)
-      applyCompositorBatch(decoded.details)
+      applyCompositorSnapshot(decoded.details)
       return true
     }
 
