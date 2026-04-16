@@ -10,6 +10,7 @@ use cef::{args::Args, rc::*, sys, *};
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 use smithay::reexports::calloop::channel::Sender;
 
+use crate::cef::cef_userfree_string_to_string;
 use crate::cef::bridge::ShellToCefLink;
 use crate::cef::compositor_tx::CefToCompositor;
 use crate::cef::frame_sink::DirectDmabufSink;
@@ -18,10 +19,6 @@ use crate::cef::osr_view_state::{
 };
 use crate::cef::shell_uplink;
 use crate::cef::uplink::UplinkToCompositor;
-
-fn cef_userfree_string_to_string(s: &CefStringUserfreeUtf16) -> String {
-    CefStringUtf8::from(&CefStringUtf16::from(s)).to_string()
-}
 
 #[cfg(unix)]
 static SHELL_USE_ACCELERATED_FRAMES: AtomicBool = AtomicBool::new(false);
@@ -342,8 +339,8 @@ wrap_render_handler! {
                 drm_fmt,
                 info.modifier,
                 flags,
-                &planes,
-                &fds,
+                planes,
+                fds,
                 dirty_buffer,
             ) {
                 tracing::warn!(target: "derp_shell_osr", "cef: dma-buf frame: {e}");

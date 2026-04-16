@@ -41,8 +41,6 @@ export type SettingsPanelProps = {
   autoShellChromeMonitorName: Accessor<string | null>
   canSessionControl: Accessor<boolean>
   uiScalePercent: Accessor<100 | 150 | 200>
-  orientationPickerOpen: Accessor<number | null>
-  setOrientationPickerOpen: Setter<number | null>
   tilingCfgRev: Accessor<number>
   setTilingCfgRev: Setter<number>
   clearMonitorTiles: (monitorName: string) => void
@@ -61,6 +59,7 @@ export type SettingsPanelProps = {
 
 export function SettingsPanel(props: SettingsPanelProps) {
   const [activePage, setActivePage] = createSignal<SettingsPageId>('displays')
+  const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
 
   return (
     <div
@@ -109,8 +108,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             autoShellChromeMonitorName={props.autoShellChromeMonitorName}
             canSessionControl={props.canSessionControl}
             uiScalePercent={props.uiScalePercent}
-            orientationPickerOpen={props.orientationPickerOpen}
-            setOrientationPickerOpen={props.setOrientationPickerOpen}
+            orientationPickerOpen={orientationPickerOpen}
+            setOrientationPickerOpen={setOrientationPickerOpen}
             setShellPrimary={props.setShellPrimary}
             setUiScale={props.setUiScale}
             applyCompositorLayoutFromDraft={props.applyCompositorLayoutFromDraft}

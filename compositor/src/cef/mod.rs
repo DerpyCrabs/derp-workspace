@@ -25,6 +25,10 @@ pub use shell_uplink::DerpRenderProcessHandler;
 
 use std::path::PathBuf;
 
+pub fn cef_userfree_string_to_string(s: &cef::CefStringUserfreeUtf16) -> String {
+    cef::CefStringUtf8::from(&cef::CefStringUtf16::from(s)).to_string()
+}
+
 pub fn runtime_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)

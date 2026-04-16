@@ -8,6 +8,13 @@ use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
 
+fn execute_main_frame_script(browser: &Browser, code: &str) {
+    let Some(frame) = browser.main_frame() else {
+        return;
+    };
+    frame.execute_java_script(Some(&CefString::from(code)), None, 0);
+}
+
 fn apply_output_dimensions_to_osr(
     logical_w: u32,
     logical_h: u32,
@@ -46,24 +53,12 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     code.push_str("(()=>{const derpShellBatch=");
     code.push_str(&js);
     code.push_str(";const derpApplyCompositorBatch=window.__DERP_APPLY_COMPOSITOR_BATCH;if(typeof derpApplyCompositorBatch==='function'){try{derpApplyCompositorBatch(derpShellBatch);return;}catch(err){console.warn('[derp-shell-bridge] compositor batch handler failed',err);}}for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{detail:derpShellBatch[i]}));})();");
-    let Some(frame) = browser.main_frame() else {
-        return;
-    };
-    frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
+    execute_main_frame_script(browser, code.as_str());
 }
 
 fn dispatch_shell_snapshot_notify(browser: &Browser) {
     crate::cef::begin_frame_diag::note_shell_snapshot_notify();
-    let Some(frame) = browser.main_frame() else {
-        return;
-    };
-    frame.execute_java_script(
-        Some(&CefString::from(
-            "window.dispatchEvent(new Event('derp-shell-snapshot'));",
-        )),
-        None,
-        0,
-    );
+    execute_main_frame_script(browser, "window.dispatchEvent(new Event('derp-shell-snapshot'));");
 }
 
 fn flush_shell_updates(

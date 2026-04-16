@@ -1982,9 +1982,6 @@ impl CompositorState {
             link.schedule_external_begin_frame(
                 crate::cef::begin_frame_diag::CompositorScheduleKind::Forced,
             );
-            link.schedule_external_begin_frame(
-                crate::cef::begin_frame_diag::CompositorScheduleKind::Forced,
-            );
         } else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
         }

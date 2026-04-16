@@ -27,8 +27,8 @@ impl DirectDmabufSink {
         drm_format: u32,
         modifier: u64,
         flags: u32,
-        planes: &[shell_wire::FrameDmabufPlane],
-        src_fds: &[RawFd],
+        planes: Vec<shell_wire::FrameDmabufPlane>,
+        src_fds: Vec<RawFd>,
         dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) -> io::Result<()> {
         if planes.is_empty() || planes.len() != src_fds.len() {
@@ -38,7 +38,7 @@ impl DirectDmabufSink {
             ));
         }
         let mut owned: Vec<OwnedFd> = Vec::with_capacity(src_fds.len());
-        for &fd in src_fds {
+        for fd in src_fds {
             if fd < 0 {
                 drop(owned);
                 return Err(io::Error::new(
@@ -55,7 +55,6 @@ impl DirectDmabufSink {
         }
         self.dmabuf_generation = self.dmabuf_generation.wrapping_add(1);
         let generation = self.dmabuf_generation;
-        let planes_vec: Vec<shell_wire::FrameDmabufPlane> = planes.to_vec();
         self.cef_tx
             .send(CefToCompositor::Dmabuf {
                 width,
@@ -64,7 +63,7 @@ impl DirectDmabufSink {
                 modifier,
                 flags,
                 generation,
-                planes: planes_vec,
+                planes,
                 fds: owned,
                 dirty_buffer,
             })

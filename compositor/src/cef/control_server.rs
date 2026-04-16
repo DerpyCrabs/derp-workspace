@@ -12,10 +12,7 @@ use cef::{
 
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
-
-fn cef_userfree_string_to_string(s: &cef::CefStringUserfreeUtf16) -> String {
-    cef::CefStringUtf8::from(&cef::CefStringUtf16::from(s)).to_string()
-}
+use crate::cef::cef_userfree_string_to_string;
 
 struct PortalScreencastRequest {
     request_id: u64,

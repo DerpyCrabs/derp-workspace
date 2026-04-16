@@ -1,6 +1,10 @@
 import { For, Show } from 'solid-js'
 import { shellAudioSectionTitle, ShellAudioRow } from './ShellAudioControls'
+import type { ShellAudioDevice, ShellAudioStream } from './audioState'
 import { useShellAudioState } from './useShellAudioState'
+
+const EMPTY_AUDIO_DEVICES: ShellAudioDevice[] = []
+const EMPTY_AUDIO_STREAMS: ShellAudioStream[] = []
 
 export function SettingsSoundPage() {
   const audio = useShellAudioState()
@@ -35,7 +39,7 @@ export function SettingsSoundPage() {
         )}
         <Show when={(audio.state()?.sinks.length ?? 0) > 0} fallback={<p class="text-[0.78rem] text-(--shell-text-dim)">No output devices found.</p>}>
           <div class="space-y-3">
-            <For each={audio.state()?.sinks ?? []}>
+            <For each={audio.state()?.sinks ?? EMPTY_AUDIO_DEVICES}>
               {(row) => (
                 <ShellAudioRow
                   row={row}
@@ -57,7 +61,7 @@ export function SettingsSoundPage() {
         )}
         <Show when={(audio.state()?.sources.length ?? 0) > 0} fallback={<p class="text-[0.78rem] text-(--shell-text-dim)">No microphones found.</p>}>
           <div class="space-y-3">
-            <For each={audio.state()?.sources ?? []}>
+            <For each={audio.state()?.sources ?? EMPTY_AUDIO_DEVICES}>
               {(row) => (
                 <ShellAudioRow
                   row={row}
@@ -87,7 +91,7 @@ export function SettingsSoundPage() {
               fallback={<p class="text-[0.78rem] text-(--shell-text-dim)">No active playback streams.</p>}
             >
               <div class="space-y-3">
-                <For each={audio.state()?.playback_streams ?? []}>
+                <For each={audio.state()?.playback_streams ?? EMPTY_AUDIO_STREAMS}>
                   {(row) => (
                     <ShellAudioRow
                       row={row}
@@ -110,7 +114,7 @@ export function SettingsSoundPage() {
               fallback={<p class="text-[0.78rem] text-(--shell-text-dim)">No active capture streams.</p>}
             >
               <div class="space-y-3">
-                <For each={audio.state()?.capture_streams ?? []}>
+                <For each={audio.state()?.capture_streams ?? EMPTY_AUDIO_STREAMS}>
                   {(row) => (
                     <ShellAudioRow
                       row={row}

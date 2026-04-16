@@ -1,0 +1,189 @@
+import {
+  buildBackedWindowOpenPayload,
+  buildFileBrowserWindowOpenPayload,
+  buildShellTestWindowOpenPayload,
+  fileBrowserWindowId,
+  fileBrowserWindowTitle,
+  isFileBrowserWindowId,
+  isShellTestWindowId,
+  shellTestWindowId,
+  shellTestWindowTitle,
+  SHELL_UI_FILE_BROWSER_APP_ID,
+  SHELL_UI_TEST_APP_ID,
+  type BackedWindowOpenPayload,
+} from '@/features/shell-ui/backedShellWindows'
+import { primeFileBrowserWindowPath } from '@/apps/file-browser/fileBrowserState'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { screensListForLayout } from '@/host/appLayout'
+import type { DerpWindow } from '@/host/appWindowState'
+import type { LayoutScreen } from '@/host/types'
+import { monitorWorkAreaGlobal } from '@/features/tiling/tileSnap'
+
+type BackedShellWindowActionsOptions = {
+  getWindows: () => DerpWindow[]
+  getScreenDraftRows: () => LayoutScreen[]
+  getOutputGeom: () => { w: number; h: number } | null
+  getLayoutCanvasOrigin: () => { x: number; y: number } | null
+  getPrimaryMonitorName: () => string
+  reserveTaskbarForMon: (screen: ReturnType<typeof screensListForLayout>[number]) => boolean
+  sendBackedWindowOpen: (payload: BackedWindowOpenPayload) => boolean
+}
+
+function hostedWindowStaggerIndex(
+  windows: readonly DerpWindow[],
+  monitorName: string,
+): number {
+  return windows.filter(
+    (window) =>
+      window.output_name === monitorName &&
+      !window.minimized &&
+      (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0,
+  ).length
+}
+
+function nextWindowId(
+  windows: readonly DerpWindow[],
+  isWindowId: (windowId: number) => boolean,
+  appId: string,
+  makeWindowId: (instance: number) => number,
+): number | null {
+  const used = new Set(
+    windows
+      .filter((window) => isWindowId(window.window_id) || window.app_id === appId)
+      .map((window) => window.window_id),
+  )
+  for (let instance = 0; instance <= 99; instance += 1) {
+    const windowId = makeWindowId(instance)
+    if (!used.has(windowId)) return windowId
+  }
+  return null
+}
+
+export function createBackedShellWindowActions(options: BackedShellWindowActionsOptions) {
+  const pendingBackedWindowOpens = new Map<number, BackedWindowOpenPayload>()
+  let backedWindowOpenRaf = 0
+
+  const resolveMonitorContext = () => {
+    const screens = screensListForLayout(
+      options.getScreenDraftRows(),
+      options.getOutputGeom(),
+      options.getLayoutCanvasOrigin(),
+    )
+    const origin = options.getLayoutCanvasOrigin()
+    const primaryMonitorName = options.getPrimaryMonitorName()
+    const monitor =
+      screens.find((screen) => screen.name === primaryMonitorName) ?? screens[0] ?? null
+    if (!monitor) return null
+    const reserveTaskbar = options.reserveTaskbarForMon(monitor)
+    return {
+      origin,
+      monitor,
+      work: monitorWorkAreaGlobal(monitor, reserveTaskbar),
+      staggerIndex: hostedWindowStaggerIndex(options.getWindows(), monitor.name),
+    }
+  }
+
+  const flushPendingBackedWindowOpens = () => {
+    if (backedWindowOpenRaf !== 0) return
+    const trySend = () => {
+      backedWindowOpenRaf = 0
+      for (const [windowId, payload] of pendingBackedWindowOpens) {
+        if (options.sendBackedWindowOpen(payload)) {
+          pendingBackedWindowOpens.delete(windowId)
+        }
+      }
+      if (pendingBackedWindowOpens.size > 0) {
+        backedWindowOpenRaf = requestAnimationFrame(trySend)
+      }
+    }
+    trySend()
+  }
+
+  const queueBackedWindowOpen = (payload: BackedWindowOpenPayload) => {
+    pendingBackedWindowOpens.set(payload.window_id, payload)
+    flushPendingBackedWindowOpens()
+  }
+
+  const openBackedShellWindow = (kind: 'debug' | 'settings') => {
+    const context = resolveMonitorContext()
+    if (!context) return
+    queueBackedWindowOpen(
+      buildBackedWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        kind,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+  }
+
+  const openDebugShellWindow = () => {
+    openBackedShellWindow('debug')
+  }
+
+  const openSettingsShellWindow = () => {
+    openBackedShellWindow('settings')
+  }
+
+  const openShellTestWindow = () => {
+    const context = resolveMonitorContext()
+    if (!context) return false
+    const windowId = nextWindowId(
+      options.getWindows(),
+      isShellTestWindowId,
+      SHELL_UI_TEST_APP_ID,
+      shellTestWindowId,
+    )
+    if (windowId === null) return false
+    const title = shellTestWindowTitle(windowId - shellTestWindowId(0))
+    queueBackedWindowOpen(
+      buildShellTestWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        windowId,
+        title,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+    return true
+  }
+
+  const openFileBrowserWindow = (path?: string | null) => {
+    const context = resolveMonitorContext()
+    if (!context) return false
+    const windowId = nextWindowId(
+      options.getWindows(),
+      isFileBrowserWindowId,
+      SHELL_UI_FILE_BROWSER_APP_ID,
+      fileBrowserWindowId,
+    )
+    if (windowId === null) return false
+    const title = fileBrowserWindowTitle(windowId - fileBrowserWindowId(0))
+    primeFileBrowserWindowPath(windowId, path)
+    queueBackedWindowOpen(
+      buildFileBrowserWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        windowId,
+        title,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+    return true
+  }
+
+  const dispose = () => {
+    if (backedWindowOpenRaf !== 0) cancelAnimationFrame(backedWindowOpenRaf)
+  }
+
+  return {
+    openDebugShellWindow,
+    openSettingsShellWindow,
+    openShellTestWindow,
+    openFileBrowserWindow,
+    dispose,
+  }
+}

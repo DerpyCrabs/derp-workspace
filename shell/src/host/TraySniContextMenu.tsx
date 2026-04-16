@@ -1,5 +1,6 @@
 import { For, Show, type Accessor } from 'solid-js'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
+import { ShellContextMenuItemButton } from './ShellContextMenuItemButton'
 
 type TraySniContextMenuProps = {
   items: Accessor<ShellContextMenuItem[]>
@@ -25,18 +26,11 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
               when={!item.separator}
               fallback={<div role="separator" class="my-1 h-px bg-(--shell-border) mx-2" />}
             >
-              <button
-                type="button"
-                class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-3 py-[0.45rem] text-left font-inherit text-inherit"
-                classList={{
-                  'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                    props.highlightIdx() === idx(),
-                  'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
-                }}
-                role="menuitem"
-                tabIndex={-1}
-                title={item.title}
-                data-tray-sni-menu-idx={idx()}
+              <ShellContextMenuItemButton
+                item={item}
+                highlighted={props.highlightIdx() === idx()}
+                itemIndex={idx()}
+                itemIndexDataAttr="data-tray-sni-menu-idx"
                 onMouseDown={(e) => {
                   e.preventDefault()
                 }}
@@ -45,18 +39,7 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
                   item.action()
                   props.closeContextMenu()
                 }}
-              >
-                <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                  {item.label}
-                </span>
-                <Show when={item.badge} keyed>
-                  {(badge) => (
-                    <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
-                      {badge}
-                    </span>
-                  )}
-                </Show>
-              </button>
+              />
             </Show>
           )}
         </For>
