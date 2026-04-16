@@ -137,6 +137,8 @@ export interface CompositorSnapshot {
   outputs: OutputSnapshot[]
   focused_window_id: number | null
   focused_shell_ui_window_id: number | null
+  session_power_action?: string | null
+  session_power_requested_at_ms?: number | null
   window_stack_order?: number[]
   ordered_window_ids_by_output?: CompositorOutputWindowStackSnapshot[]
   shell_ui_windows_generation?: number
@@ -232,6 +234,8 @@ export interface ShellControls {
   settings_session_autosave_disable?: Rect | null
   power_menu_save_session?: Rect | null
   power_menu_restore_session?: Rect | null
+  power_menu_restart?: Rect | null
+  power_menu_shutdown?: Rect | null
   debug_reload_button?: Rect | null
   debug_copy_snapshot_button?: Rect | null
   debug_crosshair_toggle?: Rect | null

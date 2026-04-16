@@ -476,6 +476,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
       power_menu_save_session: powerMenuRect('[data-power-menu-action="save-session"]'),
       power_menu_restore_session: powerMenuRect('[data-power-menu-action="restore-session"]'),
+      power_menu_restart: powerMenuRect('[data-power-menu-action="restart"]'),
+      power_menu_shutdown: powerMenuRect('[data-power-menu-action="shutdown"]'),
       debug_reload_button: queryRect(cache, '[data-shell-debug-reload]', args.origin),
       debug_copy_snapshot_button: queryRect(cache, '[data-shell-debug-copy-snapshot]', args.origin),
       debug_crosshair_toggle: queryRect(cache, '[data-shell-debug-crosshair-toggle]', args.origin),

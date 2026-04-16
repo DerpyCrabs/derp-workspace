@@ -30,9 +30,13 @@ export function TabContextMenu(props: TabContextMenuProps) {
                 'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
               }}
               role="menuitem"
+              tabIndex={-1}
               title={item.title}
               data-tab-menu-idx={idx()}
               data-tab-menu-action={item.actionId}
+              onMouseDown={(e) => {
+                e.preventDefault()
+              }}
               onClick={() => {
                 if (item.disabled) return
                 item.action()

@@ -179,6 +179,8 @@ struct E2eCompositorSnapshot {
     pointer: E2ePointSnapshot,
     focused_window_id: Option<u32>,
     focused_shell_ui_window_id: Option<u32>,
+    session_power_action: Option<String>,
+    session_power_requested_at_ms: Option<u128>,
     shell_keyboard_focus: bool,
     screenshot_selection_active: bool,
     shell_context_menu_visible: bool,
@@ -654,6 +656,8 @@ impl CompositorState {
             },
             focused_window_id: self.keyboard_focused_window_id(),
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
+            session_power_action: self.e2e_last_session_power_action.clone(),
+            session_power_requested_at_ms: self.e2e_last_session_power_requested_at_ms,
             shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
             screenshot_selection_active: self.screenshot_selection_active,
             shell_context_menu_visible: self.shell_context_menu.is_some()

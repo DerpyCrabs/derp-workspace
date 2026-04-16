@@ -155,6 +155,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [menuPanelLayoutRevision, setMenuPanelLayoutRevision] = createSignal(0)
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
+    console.warn(
+      `[derp-shell-power-menu] panel_ref aria=${el.getAttribute('aria-label') ?? ''} class=${el.className}`,
+    )
     setMenuPanelRevision((value) => value + 1)
   }
 
@@ -200,6 +203,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function hideContextMenu(skipStore = false) {
+    console.warn(
+      `[derp-shell-power-menu] hide_context_menu skipStore=${skipStore ? 1 : 0} powerOpen=${powerMenuOpen() ? 1 : 0}`,
+    )
     resetContextMenuState()
     shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
     args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
@@ -209,6 +215,19 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function openRootContextMenu(trigger: object) {
+    const label =
+      trigger === programsMenuTrigger
+        ? 'programs'
+        : trigger === powerMenuTrigger
+          ? 'power'
+          : trigger === volumeMenuTrigger
+            ? 'volume'
+            : trigger === tabMenuTrigger
+              ? 'tab'
+              : trigger === traySniMenuTrigger
+                ? 'tray'
+                : 'unknown'
+    console.warn(`[derp-shell-power-menu] open_root_context_menu trigger=${label}`)
     args.floatingLayers.openLayer({
       id: ROOT_CONTEXT_MENU_LAYER_ID,
       kind: 'context_menu',
@@ -386,12 +405,18 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function onPowerMenuClick(e: MouseEvent & { currentTarget: HTMLButtonElement }) {
     e.preventDefault()
+    console.warn(
+      `[derp-shell-power-menu] trigger_click open=${triggerIsOpen(powerMenuTrigger)} x=${Math.round(e.clientX)} y=${Math.round(e.clientY)}`,
+    )
     if (triggerIsOpen(powerMenuTrigger)) {
       hideContextMenu()
       return
     }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()
+    console.warn(
+      `[derp-shell-power-menu] trigger_rect left=${Math.round(rect.left)} top=${Math.round(rect.top)} right=${Math.round(rect.right)} bottom=${Math.round(rect.bottom)}`,
+    )
     setCtxMenuAnchor({ x: rect.right, y: rect.bottom, alignAboveY: rect.top })
     setPowerMenuHighlightIdx(0)
     openRootContextMenu(powerMenuTrigger)
@@ -871,6 +896,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
     const width = Math.max(1, globalRight - globalLeft)
     const height = Math.max(1, globalBottom - globalTop)
+    const powerAction = el.getAttribute('data-power-menu-action')
+    if (powerAction) {
+      console.warn(
+        `[derp-shell-power-menu] projected_rect action=${powerAction} left=${globalLeft} top=${globalTop} width=${width} height=${height} panelLeft=${Math.round(panelRect.left)} panelTop=${Math.round(panelRect.top)} panelWidth=${Math.round(panelRect.width)} panelHeight=${Math.round(panelRect.height)}`,
+      )
+    }
     const origin = args.layoutCanvasOrigin()
     const ox = origin?.x ?? 0
     const oy = origin?.y ?? 0
@@ -1081,6 +1112,13 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const shouldDismiss = shouldDismissContextMenuPointerDown({
       target: e.target,
     })
+    const target =
+      e.target instanceof Element
+        ? `${e.target.tagName.toLowerCase()} class=${e.target.className} power=${e.target.getAttribute('data-power-menu-action') ?? ''}`
+        : String(e.target)
+    console.warn(
+      `[derp-shell-power-menu] document_pointerdown dismiss=${shouldDismiss ? 1 : 0} powerOpen=${powerMenuOpen() ? 1 : 0} target=${target}`,
+    )
     if (!shouldDismiss) return
     args.floatingLayers.dismissPointerDown(e.target instanceof Node ? e.target : null)
   }

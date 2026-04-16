@@ -1,5 +1,6 @@
 use smithay::reexports::calloop::channel::Sender;
 use smithay::utils::{Logical, Rectangle};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cef::compositor_tx::CefToCompositor;
 
@@ -48,6 +49,16 @@ impl UplinkToCompositor {
     }
 
     pub fn session_power_systemctl(&self, verb: String) {
+        let state_verb = verb.clone();
+        self.run(move |s| {
+            s.e2e_last_session_power_action = Some(state_verb);
+            s.e2e_last_session_power_requested_at_ms = Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            );
+        });
         std::thread::spawn(move || {
             match std::process::Command::new("systemctl").arg(&verb).output() {
                 Ok(out) if out.status.success() => {}

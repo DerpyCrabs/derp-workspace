@@ -34,8 +34,12 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
                   'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
                 }}
                 role="menuitem"
+                tabIndex={-1}
                 title={item.title}
                 data-tray-sni-menu-idx={idx()}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                }}
                 onClick={() => {
                   if (item.disabled) return
                   item.action()
