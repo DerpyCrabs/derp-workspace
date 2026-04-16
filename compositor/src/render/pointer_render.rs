@@ -1,0 +1,119 @@
+//! Draw the client cursor: `wl_surface` sprite, or the system / themed bitmap fallback for [`Named`].
+
+use smithay::{
+    backend::renderer::{
+        element::{
+            memory::MemoryRenderBufferRenderElement, surface::render_elements_from_surface_tree,
+            AsRenderElements, Kind,
+        },
+        gles::GlesRenderer,
+    },
+    input::pointer::{CursorImageStatus, CursorImageSurfaceData},
+    output::Output,
+    utils::{IsAlive, Logical, Physical, Point, Scale},
+    wayland::compositor,
+};
+
+use crate::{
+    derp_space::DerpSpaceElem,
+    desktop::desktop_stack::{DesktopStack, FractionalDamageElement},
+    CompositorState,
+};
+
+type WinEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
+type Desk<'a> = DesktopStack<'a, WinEl>;
+
+fn push_named_cursor_fallback(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    pos_output_local: Point<f64, Logical>,
+    scale_f: f64,
+    out: &mut Vec<Desk<'_>>,
+) {
+    let (hx, hy) = state.cursor_fallback_hotspot;
+    let top_left = Point::from((
+        pos_output_local.x - hx as f64,
+        pos_output_local.y - hy as f64,
+    ));
+    let phys_i: Point<i32, Physical> = top_left.to_physical_precise_round(Scale::from(scale_f));
+    let phys = phys_i.to_f64();
+    match MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        phys,
+        &state.cursor_fallback_buffer,
+        None,
+        None,
+        None,
+        Kind::Cursor,
+    ) {
+        Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
+            el, scale_f,
+        ))),
+        Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
+    }
+}
+
+/// Append pointer layers. Caller should place these **first** in the `elements` slice passed to
+/// [`smithay::backend::renderer::damage::OutputDamageTracker::render_output`] (front-to-back: cursor is frontmost).
+pub fn append_pointer_desktop_elements(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    out: &mut Vec<Desk<'_>>,
+) {
+    let Some(pointer) = state.seat.get_pointer() else {
+        return;
+    };
+    let pos_global = pointer.current_location();
+    let scale_f = output.current_scale().fractional_scale();
+
+    if !matches!(
+        &state.pointer_cursor_image,
+        CursorImageStatus::Named(_) | CursorImageStatus::Surface(_)
+    ) {
+        return;
+    }
+    let Some(hit) = state.output_containing_global_point(pos_global) else {
+        return;
+    };
+    if hit.name() != output.name() {
+        return;
+    }
+    let Some(output_geo) = state.space.output_geometry(output) else {
+        return;
+    };
+    let pos = pos_global - output_geo.loc.to_f64();
+
+    match &state.pointer_cursor_image {
+        CursorImageStatus::Named(_) => {
+            push_named_cursor_fallback(state, renderer, pos, scale_f, out);
+        }
+        CursorImageStatus::Surface(surface) => {
+            if !surface.alive() {
+                return;
+            }
+            let hotspot: Point<i32, Logical> = compositor::with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .map(|m| m.lock().unwrap().hotspot)
+                    .unwrap_or_default()
+            });
+            let top_left = Point::from((pos.x - hotspot.x as f64, pos.y - hotspot.y as f64));
+            let phys = top_left.to_physical_precise_round(Scale::from(scale_f));
+            for el in render_elements_from_surface_tree(
+                renderer,
+                surface,
+                phys,
+                Scale::from(scale_f),
+                1.0,
+                Kind::Cursor,
+            ) {
+                out.push(DesktopStack::Pointer(FractionalDamageElement::new(
+                    el, scale_f,
+                )));
+            }
+        }
+        CursorImageStatus::Hidden => unreachable!(),
+    }
+}

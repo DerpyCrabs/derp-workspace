@@ -609,13 +609,13 @@ fn handle_one(
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_app_usage" {
-        let json = crate::desktop_app_usage::read_desktop_app_usage_json()?;
+        let json = crate::desktop::desktop_app_usage::read_desktop_app_usage_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/session_state" {
-        let json = crate::session_state::read_session_state_json()?;
+        let json = crate::session::session_state::read_session_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -633,37 +633,37 @@ fn handle_one(
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_theme" {
-        let json = crate::settings_config::read_theme_settings_json()?;
+        let json = crate::session::settings_config::read_theme_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_keyboard" {
-        let json = crate::settings_config::read_keyboard_settings_json()?;
+        let json = crate::session::settings_config::read_keyboard_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_user" {
-        let json = crate::gdm_settings::read_gdm_autologin_settings_json()?;
+        let json = crate::session::gdm_settings::read_gdm_autologin_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/audio_state" {
-        let json = crate::audio_control::read_audio_state_json()?;
+        let json = crate::controls::audio_control::read_audio_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/bluetooth_state" {
-        let json = crate::bluetooth_control::read_bluetooth_state_json()?;
+        let json = crate::controls::bluetooth_control::read_bluetooth_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/wifi_state" {
-        let json = crate::wifi_control::read_wifi_state_json()?;
+        let json = crate::controls::wifi_control::read_wifi_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -682,7 +682,7 @@ fn handle_one(
                 .map_err(|e| e.to_string())?;
             return Ok(());
         }
-        let jpeg = crate::desktop_background::encode_wallpaper_preview_jpeg(&canon)?;
+        let jpeg = crate::desktop::desktop_background::encode_wallpaper_preview_jpeg(&canon)?;
         write_http_ok_bytes(stream, "image/jpeg", &jpeg).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -924,7 +924,7 @@ fn handle_one(
         "/session_quit" => uplink.quit_compositor(),
         "/session_reload" => {
             if v.get("shell").is_some() {
-                crate::session_state::write_session_state_json(v.clone())?;
+                crate::session::session_state::write_session_state_json(v.clone())?;
             }
             unsafe {
                 libc::raise(libc::SIGUSR2);
@@ -958,94 +958,94 @@ fn handle_one(
                 .and_then(|x| x.as_str())
                 .ok_or_else(|| "missing key".to_string())?
                 .to_string();
-            crate::desktop_app_usage::increment_desktop_app_usage(key)?;
+            crate::desktop::desktop_app_usage::increment_desktop_app_usage(key)?;
         }
         "/session_state" => {
-            let json = crate::session_state::write_session_state_json(v)?;
+            let json = crate::session::session_state::write_session_state_json(v)?;
             write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
             return Ok(());
         }
         "/settings_theme" => {
-            let theme = serde_json::from_value::<crate::settings_config::ThemeSettingsFile>(v)
+            let theme = serde_json::from_value::<crate::session::settings_config::ThemeSettingsFile>(v)
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
-            crate::settings_config::write_theme_settings(theme)?;
+            crate::session::settings_config::write_theme_settings(theme)?;
         }
         "/settings_keyboard" => {
             let keyboard =
-                serde_json::from_value::<crate::settings_config::KeyboardSettingsFile>(v)
+                serde_json::from_value::<crate::session::settings_config::KeyboardSettingsFile>(v)
                     .map_err(|e| format!("invalid keyboard settings: {e}"))?;
             uplink.settings_keyboard_apply(keyboard)?;
         }
         "/settings_user" => {
-            let update = serde_json::from_value::<crate::gdm_settings::GdmAutologinUpdate>(v)
+            let update = serde_json::from_value::<crate::session::gdm_settings::GdmAutologinUpdate>(v)
                 .map_err(|e| format!("invalid user settings: {e}"))?;
-            crate::gdm_settings::write_gdm_autologin_settings(update)?;
+            crate::session::gdm_settings::write_gdm_autologin_settings(update)?;
         }
         "/audio_default" => {
             let id = json_u32_field(&v, "id")?;
-            crate::audio_control::set_default_audio_device(id)?;
+            crate::controls::audio_control::set_default_audio_device(id)?;
         }
         "/audio_volume" => {
             let id = json_u32_field(&v, "id")?;
             let volume_percent = json_u32_field(&v, "volume_percent")?;
-            crate::audio_control::set_audio_volume_percent(id, volume_percent)?;
+            crate::controls::audio_control::set_audio_volume_percent(id, volume_percent)?;
         }
         "/audio_mute" => {
             let id = json_u32_field(&v, "id")?;
             let muted = json_bool_field(&v, "muted")?;
-            crate::audio_control::set_audio_mute(id, muted)?;
+            crate::controls::audio_control::set_audio_mute(id, muted)?;
         }
         "/bluetooth_scan" => {
-            crate::bluetooth_control::scan_bluetooth()?;
+            crate::controls::bluetooth_control::scan_bluetooth()?;
         }
         "/bluetooth_radio" => {
             let enabled = json_bool_field(&v, "enabled")?;
-            crate::bluetooth_control::set_bluetooth_power(enabled)?;
+            crate::controls::bluetooth_control::set_bluetooth_power(enabled)?;
         }
         "/bluetooth_pairable" => {
             let enabled = json_bool_field(&v, "enabled")?;
-            crate::bluetooth_control::set_bluetooth_pairable(enabled)?;
+            crate::controls::bluetooth_control::set_bluetooth_pairable(enabled)?;
         }
         "/bluetooth_discoverable" => {
             let enabled = json_bool_field(&v, "enabled")?;
-            crate::bluetooth_control::set_bluetooth_discoverable(enabled)?;
+            crate::controls::bluetooth_control::set_bluetooth_discoverable(enabled)?;
         }
         "/bluetooth_pair_connect" => {
             let address = json_string_field(&v, "address")?;
-            crate::bluetooth_control::pair_and_connect_bluetooth_device(&address)?;
+            crate::controls::bluetooth_control::pair_and_connect_bluetooth_device(&address)?;
         }
         "/bluetooth_connect" => {
             let address = json_string_field(&v, "address")?;
-            crate::bluetooth_control::connect_bluetooth_device(&address)?;
+            crate::controls::bluetooth_control::connect_bluetooth_device(&address)?;
         }
         "/bluetooth_disconnect" => {
             let address = json_string_field(&v, "address")?;
-            crate::bluetooth_control::disconnect_bluetooth_device(&address)?;
+            crate::controls::bluetooth_control::disconnect_bluetooth_device(&address)?;
         }
         "/bluetooth_trust" => {
             let address = json_string_field(&v, "address")?;
             let trusted = json_bool_field(&v, "trusted")?;
-            crate::bluetooth_control::set_bluetooth_trust(&address, trusted)?;
+            crate::controls::bluetooth_control::set_bluetooth_trust(&address, trusted)?;
         }
         "/bluetooth_forget" => {
             let address = json_string_field(&v, "address")?;
-            crate::bluetooth_control::forget_bluetooth_device(&address)?;
+            crate::controls::bluetooth_control::forget_bluetooth_device(&address)?;
         }
         "/wifi_scan" => {
-            crate::wifi_control::scan_wifi()?;
+            crate::controls::wifi_control::scan_wifi()?;
         }
         "/wifi_radio" => {
             let enabled = json_bool_field(&v, "enabled")?;
-            crate::wifi_control::set_wifi_radio(enabled)?;
+            crate::controls::wifi_control::set_wifi_radio(enabled)?;
         }
         "/wifi_connect" => {
             let ssid = json_string_field(&v, "ssid")?;
             let password = json_optional_string_field(&v, "password")?;
-            crate::wifi_control::connect_wifi(&ssid, password.as_deref())?;
+            crate::controls::wifi_control::connect_wifi(&ssid, password.as_deref())?;
         }
         "/wifi_disconnect" => {
             let device = json_optional_string_field(&v, "device")?;
-            crate::wifi_control::disconnect_wifi(device.as_deref())?;
+            crate::controls::wifi_control::disconnect_wifi(device.as_deref())?;
         }
         "/screenshot_region" => {
             let x = json_i32_field(&v, "x")?;

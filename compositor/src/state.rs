@@ -88,12 +88,13 @@ use smithay::{
 use crate::{
     chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge, WindowInfo},
     derp_space::DerpSpaceElem,
-    exclusion_clip, shell_ipc,
-    window_registry::{WindowKind, WindowRegistry},
-    workspace_model::{
+    desktop::exclusion_clip as exclusion_clip,
+    shell::shell_ipc as shell_ipc,
+    session::workspace_model::{
         group_id_for_window, next_active_window_after_removal, reconcile_workspace_state,
         WorkspaceMutation, WorkspaceState,
     },
+    window_registry::{WindowKind, WindowRegistry},
     CalloopData,
 };
 use smithay::input::pointer::CursorImageStatus;
@@ -181,19 +182,19 @@ pub(crate) struct BackdropWallpaperIdCache {
 }
 
 pub(crate) struct CachedBackdropLayers {
-    pub key: crate::backdrop_render::BackdropCacheKey,
-    pub layers: crate::backdrop_render::BackdropLayers,
+    pub key: crate::render::backdrop_render::BackdropCacheKey,
+    pub layers: crate::render::backdrop_render::BackdropLayers,
 }
 
 #[derive(Default)]
 pub(crate) struct CachedShellRenderOutput {
     pub main:
-        Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellMainCacheKey>>,
+        Option<crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellMainCacheKey>>,
     pub context_menu:
-        Option<crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>>,
+        Option<crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellOverlayCacheKey>>,
     pub floating: HashMap<
         u32,
-        crate::shell_render::CachedShellElement<crate::shell_render::ShellOverlayCacheKey>,
+        crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellOverlayCacheKey>,
     >,
     pub floating_order: Vec<u32>,
 }
@@ -372,18 +373,18 @@ pub struct CompositorState {
     pub layer_shell_state: WlrLayerShellState,
     pub(crate) foreign_toplevel_list_state: ForeignToplevelListState,
     pub(crate) capture_toplevel_handles: HashMap<u32, ForeignToplevelHandle>,
-    pub(crate) capture_window_source_cache: HashMap<u32, crate::capture::CachedCaptureWindowSource>,
+    pub(crate) capture_window_source_cache: HashMap<u32, crate::render::capture::CachedCaptureWindowSource>,
     pub(crate) _idle_inhibit_manager_state: IdleInhibitManagerState,
     pub(crate) idle_inhibit_surfaces: HashSet<(ClientId, u32)>,
     pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
-    pub(crate) _screencopy_manager_state: crate::capture::ScreencopyManagerState,
-    pub(crate) pending_screencopy_copies: Vec<crate::capture::PendingScreencopyCopy>,
-    pub(crate) _ext_image_capture_manager_state: crate::capture_ext::ExtImageCaptureManagerState,
-    pub(crate) pending_image_copy_captures: Vec<crate::capture_ext::PendingImageCopyCapture>,
+    pub(crate) _screencopy_manager_state: crate::render::capture::ScreencopyManagerState,
+    pub(crate) pending_screencopy_copies: Vec<crate::render::capture::PendingScreencopyCopy>,
+    pub(crate) _ext_image_capture_manager_state: crate::render::capture_ext::ExtImageCaptureManagerState,
+    pub(crate) pending_image_copy_captures: Vec<crate::render::capture_ext::PendingImageCopyCapture>,
     pub seat_state: SeatState<CompositorState>,
     pub data_device_state: DataDeviceState,
     pub data_control_state: DataControlState,
-    pub(crate) screenshot_request: Option<crate::screenshot::PendingScreenshotRequest>,
+    pub(crate) screenshot_request: Option<crate::render::screenshot::PendingScreenshotRequest>,
     pub(crate) screenshot_selection_active: bool,
     pub(crate) screenshot_selection_anchor: Option<Point<i32, Logical>>,
     pub(crate) screenshot_selection_current: Option<Point<i32, Logical>>,
@@ -392,7 +393,7 @@ pub struct CompositorState {
     pub(crate) active_image_copy_capture_sessions: usize,
     pub popups: PopupManager,
     pub(crate) shell_tray_strip_global: Option<Rectangle<i32, Logical>>,
-    pub(crate) sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::sni_tray::SniTrayCmd>>,
+    pub(crate) sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::tray::sni_tray::SniTrayCmd>>,
     pub(crate) sni_tray_slot_count: u32,
 
     pub xwayland_shell_state: XWaylandShellState,
@@ -525,15 +526,15 @@ pub struct CompositorState {
     pub(crate) shell_chrome_titlebar_h: i32,
     pub(crate) shell_chrome_border_w: i32,
 
-    pub(crate) desktop_background_config: crate::display_config::DesktopBackgroundConfig,
+    pub(crate) desktop_background_config: crate::controls::display_config::DesktopBackgroundConfig,
     pub(crate) desktop_background_by_output_name:
-        HashMap<String, crate::display_config::DesktopBackgroundConfig>,
+        HashMap<String, crate::controls::display_config::DesktopBackgroundConfig>,
     wallpaper_req_tx: std::sync::mpsc::Sender<PathBuf>,
     wallpaper_done_rx: std::sync::mpsc::Receiver<
-        Result<(PathBuf, crate::desktop_background::DesktopWallpaperCpu), String>,
+        Result<(PathBuf, crate::desktop::desktop_background::DesktopWallpaperCpu), String>,
     >,
     pub(crate) desktop_wallpaper_cpu_by_path:
-        HashMap<PathBuf, Arc<crate::desktop_background::DesktopWallpaperCpu>>,
+        HashMap<PathBuf, Arc<crate::desktop::desktop_background::DesktopWallpaperCpu>>,
     pub(crate) desktop_wallpaper_gpu_by_path: HashMap<PathBuf, DesktopWallpaperGpuEntry>,
     wallpaper_decode_inflight: HashSet<PathBuf>,
     pub(crate) backdrop_wallpaper_id_cache: HashMap<String, BackdropWallpaperIdCache>,
@@ -740,9 +741,9 @@ impl CompositorState {
         let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&dh);
         let idle_inhibit_manager_state = IdleInhibitManagerState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
-        let screencopy_manager_state = crate::capture::ScreencopyManagerState::new::<Self>(&dh);
+        let screencopy_manager_state = crate::render::capture::ScreencopyManagerState::new::<Self>(&dh);
         let ext_image_capture_manager_state =
-            crate::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
+            crate::render::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let data_control_state = DataControlState::new::<Self, _>(&dh, None, |_| true);
@@ -753,9 +754,9 @@ impl CompositorState {
         let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
-        let wallpaper_loader = crate::desktop_background::spawn_wallpaper_loader_thread();
+        let wallpaper_loader = crate::desktop::desktop_background::spawn_wallpaper_loader_thread();
         let (cursor_fallback_buffer, cursor_fallback_hotspot) =
-            crate::cursor_fallback::load_cursor_fallback();
+            crate::platform::cursor_fallback::load_cursor_fallback();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, &options.seat_name);
         seat.add_keyboard(Default::default(), 200, 25)
@@ -765,7 +766,7 @@ impl CompositorState {
         let space = Space::default();
 
         let socket_name =
-            crate::wayland_listener::init_wayland_listener(display, event_loop, &options.socket)?;
+            crate::platform::wayland_listener::init_wayland_listener(display, event_loop, &options.socket)?;
 
         let loop_signal = event_loop.get_signal();
         let event_loop_stop = Arc::new(AtomicBool::new(false));
@@ -810,8 +811,8 @@ impl CompositorState {
             .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
         let (sni_to_loop_tx, sni_rx) = channel::channel::<shell_wire::SniTrayLoopMsg>();
-        let (sni_cmd_tx, sni_cmd_rx) = std::sync::mpsc::channel::<crate::sni_tray::SniTrayCmd>();
-        crate::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
+        let (sni_cmd_tx, sni_cmd_rx) = std::sync::mpsc::channel::<crate::tray::sni_tray::SniTrayCmd>();
+        crate::tray::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
         event_loop
             .handle()
             .insert_source(sni_rx, |ev, _, d: &mut CalloopData| match ev {
@@ -971,7 +972,7 @@ impl CompositorState {
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
             shell_chrome_border_w: SHELL_BORDER_THICKNESS,
-            desktop_background_config: crate::display_config::DesktopBackgroundConfig::default(),
+            desktop_background_config: crate::controls::display_config::DesktopBackgroundConfig::default(),
             desktop_background_by_output_name: HashMap::new(),
             wallpaper_req_tx: wallpaper_loader.req_tx,
             wallpaper_done_rx: wallpaper_loader.done_rx,
@@ -984,12 +985,12 @@ impl CompositorState {
             shell_begin_frame_last: None,
             shell_begin_frame_fast_until: None,
         };
-        crate::display_config::apply_keyboard_from_display_file(&mut s);
-        let keyboard_settings = crate::settings_config::read_keyboard_settings();
+        crate::controls::display_config::apply_keyboard_from_display_file(&mut s);
+        let keyboard_settings = crate::session::settings_config::read_keyboard_settings();
         if !keyboard_settings.layouts.is_empty() {
             let _ = s.keyboard_apply_settings(&keyboard_settings);
         }
-        crate::desktop_background::load_from_display_file_into(&mut s);
+        crate::desktop::desktop_background::load_from_display_file_into(&mut s);
         s.session_default_layout_index = s.keyboard_layout_index_current();
         Ok(s)
     }
@@ -1002,7 +1003,7 @@ impl CompositorState {
 
     pub(crate) fn keyboard_apply_settings(
         &mut self,
-        settings: &crate::settings_config::KeyboardSettingsFile,
+        settings: &crate::session::settings_config::KeyboardSettingsFile,
     ) -> Result<(), String> {
         if settings.layouts.is_empty() {
             return Err("keyboard layouts cannot be empty".into());
@@ -1010,7 +1011,7 @@ impl CompositorState {
         let Some(handle) = self.seat.get_keyboard() else {
             return Err("missing keyboard handle".into());
         };
-        let base = crate::display_config::read_keyboard_from_display_file().unwrap_or_default();
+        let base = crate::controls::display_config::read_keyboard_from_display_file().unwrap_or_default();
         let layout = settings
             .layouts
             .iter()
@@ -1047,7 +1048,7 @@ impl CompositorState {
 
     pub(crate) fn apply_desktop_background_from_display_file(
         &mut self,
-        cfg: &crate::display_config::DisplayConfigFile,
+        cfg: &crate::controls::display_config::DisplayConfigFile,
     ) {
         self.desktop_background_config = cfg.desktop_background.clone();
         self.desktop_background_by_output_name = cfg.desktop_background_outputs.clone();
@@ -1058,7 +1059,7 @@ impl CompositorState {
     pub(crate) fn desktop_background_for_output(
         &self,
         output: &Output,
-    ) -> &crate::display_config::DesktopBackgroundConfig {
+    ) -> &crate::controls::display_config::DesktopBackgroundConfig {
         let n = output.name();
         self.desktop_background_by_output_name
             .get(&n)
@@ -1067,9 +1068,9 @@ impl CompositorState {
 
     fn collect_desktop_wallpaper_paths(&self) -> HashSet<PathBuf> {
         let mut s = HashSet::new();
-        let mut add = |cfg: &crate::display_config::DesktopBackgroundConfig| {
+        let mut add = |cfg: &crate::controls::display_config::DesktopBackgroundConfig| {
             if cfg.mode == "image" && !cfg.image_path.trim().is_empty() {
-                let p = crate::desktop_background::normalize_filesystem_path(&cfg.image_path);
+                let p = crate::desktop::desktop_background::normalize_filesystem_path(&cfg.image_path);
                 if !p.as_os_str().is_empty() {
                     s.insert(p);
                 }
@@ -1095,15 +1096,15 @@ impl CompositorState {
         #[derive(serde::Deserialize)]
         struct ShellDesktopBg {
             #[serde(flatten)]
-            default: crate::display_config::DesktopBackgroundConfig,
+            default: crate::controls::display_config::DesktopBackgroundConfig,
             #[serde(default)]
             desktop_background_outputs:
-                HashMap<String, crate::display_config::DesktopBackgroundConfig>,
+                HashMap<String, crate::controls::display_config::DesktopBackgroundConfig>,
         }
         let (default, outs) = match serde_json::from_str::<ShellDesktopBg>(json) {
             Ok(w) => (w.default, w.desktop_background_outputs),
             Err(_) => {
-                let cfg: crate::display_config::DesktopBackgroundConfig =
+                let cfg: crate::controls::display_config::DesktopBackgroundConfig =
                     match serde_json::from_str(json) {
                         Ok(c) => c,
                         Err(e) => {
@@ -1439,7 +1440,7 @@ impl CompositorState {
         let lw = lw_u as i32;
         let lh = lh_u as i32;
         let (ox, oy, cw_l, ch_l) =
-            crate::shell_letterbox::letterbox_logical(Size::from((lw, lh)), buf_w, content_h)?;
+            crate::shell::shell_letterbox::letterbox_logical(Size::from((lw, lh)), buf_w, content_h)?;
         let ws = self.workspace_logical_bounds()?;
         let g = global.intersection(ws)?;
         if g.size.w < 1 || g.size.h < 1 {
@@ -1461,7 +1462,7 @@ impl CompositorState {
             let ny = ((gy - ws.loc.y as f64) / hsf).clamp(0.0, 1.0);
             let lx = nx * lw as f64 - ox as f64;
             let ly = ny * lh as f64 - oy as f64;
-            if let Some((bx, by)) = crate::shell_letterbox::local_in_letterbox_to_buffer_px(
+            if let Some((bx, by)) = crate::shell::shell_letterbox::local_in_letterbox_to_buffer_px(
                 lx, ly, cw_l, ch_l, buf_w, content_h,
             ) {
                 any = true;
@@ -2142,7 +2143,7 @@ impl CompositorState {
         let output = self
             .new_toplevel_placement_output(None)
             .ok_or_else(|| "no output available for screenshot".to_string())?;
-        self.screenshot_request = Some(crate::screenshot::PendingScreenshotRequest::for_output(
+        self.screenshot_request = Some(crate::render::screenshot::PendingScreenshotRequest::for_output(
             output.name(),
         ));
         self.loop_signal.wakeup();
@@ -2168,7 +2169,7 @@ impl CompositorState {
                 }
             })
             .collect();
-        self.screenshot_request = Some(crate::screenshot::PendingScreenshotRequest::for_region(
+        self.screenshot_request = Some(crate::render::screenshot::PendingScreenshotRequest::for_region(
             logical_rect,
             outputs,
         )?);
@@ -2198,13 +2199,13 @@ impl CompositorState {
             let mode = output
                 .current_mode()
                 .ok_or_else(|| format!("screenshot missing mode for output {output_name}"))?;
-            let image = crate::screenshot::capture_output_image(
+            let image = crate::render::screenshot::capture_output_image(
                 renderer,
                 framebuffer,
                 Size::from((mode.size.w as i32, mode.size.h as i32)),
                 output.current_transform(),
             )?;
-            request.push_capture(crate::screenshot::CapturedOutputFrame {
+            request.push_capture(crate::render::screenshot::CapturedOutputFrame {
                 output_name: output_name.clone(),
                 logical_rect: geo,
                 image,
@@ -2233,14 +2234,14 @@ impl CompositorState {
 
     fn finish_screenshot_request(
         &mut self,
-        request: crate::screenshot::PendingScreenshotRequest,
+        request: crate::render::screenshot::PendingScreenshotRequest,
     ) -> Result<PathBuf, String> {
         let image = request.finalize_image()?;
-        let png = crate::screenshot::encode_png(&image)?;
+        let png = crate::render::screenshot::encode_png(&image)?;
         let path = if let Some(save_path) = request.save_path.as_ref() {
-            crate::screenshot::save_png_to_path(&png, save_path)?
+            crate::render::screenshot::save_png_to_path(&png, save_path)?
         } else {
-            crate::screenshot::save_png(&png)?
+            crate::render::screenshot::save_png(&png)?
         };
         if let Some(request_id) = request.e2e_request_id {
             crate::e2e::publish_screenshot_result(
@@ -3927,7 +3928,7 @@ impl CompositorState {
 
         if !skip_shell_packet {
             if let Some(msg) =
-                crate::shell_encode::chrome_event_to_shell_message(&shell_packet_source)
+                crate::shell::shell_encode::chrome_event_to_shell_message(&shell_packet_source)
             {
                 self.shell_send_to_cef(msg);
             }
@@ -4985,19 +4986,19 @@ impl CompositorState {
 
     pub(crate) fn sni_tray_activate_clicked(&mut self, id: String) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::sni_tray::SniTrayCmd::Activate { id });
+            let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::Activate { id });
         }
     }
 
     pub(crate) fn sni_tray_open_menu(&mut self, id: String, request_serial: u32) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::sni_tray::SniTrayCmd::OpenMenu { id, request_serial });
+            let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::OpenMenu { id, request_serial });
         }
     }
 
     pub(crate) fn sni_tray_menu_event(&mut self, id: String, menu_path: String, item_id: i32) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::sni_tray::SniTrayCmd::MenuEvent {
+            let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::MenuEvent {
                 id,
                 menu_path,
                 item_id,
@@ -5086,7 +5087,7 @@ impl CompositorState {
             .saturating_sub(self.shell_context_menu_atlas_buffer_h)
             .max(1);
         let (lw, lh) = self.shell_output_logical_size()?;
-        let (ox, oy, cw, ch) = crate::shell_letterbox::letterbox_logical(
+        let (ox, oy, cw, ch) = crate::shell::shell_letterbox::letterbox_logical(
             Size::from((lw as i32, lh as i32)),
             buf_w,
             content_h,
@@ -5095,7 +5096,7 @@ impl CompositorState {
         let ny = ny.clamp(0.0, 1.0);
         let lx = nx * lw as f64 - ox as f64;
         let ly = ny * lh as f64 - oy as f64;
-        crate::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, content_h)
+        crate::shell::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, content_h)
     }
 
     pub(crate) fn shell_pointer_coords_for_cef(

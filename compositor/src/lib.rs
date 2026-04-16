@@ -1,55 +1,31 @@
 #![allow(irrefutable_let_patterns)]
 #![cfg(unix)]
 
-pub mod cef;
-pub mod chrome_bridge;
-pub mod layout;
-pub mod window_registry;
+mod api;
+pub use api::chrome_bridge;
+pub use api::derp_space;
+pub use api::layout;
+pub use api::sidecar;
+pub use api::window_registry;
 
-mod audio_control;
-mod backdrop_render;
-mod bluetooth_control;
-mod calloop_xwm;
-mod capture;
-mod capture_ext;
-mod cursor_fallback;
-pub mod derp_space;
-mod derp_space_render;
-mod desktop_app_usage;
-mod desktop_background;
-mod desktop_stack;
-mod display_config;
-pub mod drm;
+pub mod cef;
+mod controls;
+mod desktop;
 mod e2e;
-mod exclusion_clip;
-mod gdm_settings;
 mod grabs;
 mod handlers;
 mod input;
-mod json_state;
-mod pointer_render;
-mod screenshot;
-mod screenshot_overlay_render;
-mod session_state;
-mod settings_config;
-mod shell_backed;
-mod shell_encode;
-mod shell_ipc;
-mod shell_letterbox;
-mod shell_overlay;
-mod shell_render;
-pub mod sidecar;
-mod sni_tray;
+mod platform;
+mod render;
+mod session;
+mod shell;
+mod tray;
 pub mod state;
-mod tile_preview_render;
-mod volume;
-mod wayland_listener;
-mod wifi_control;
-mod workspace_model;
-pub mod xwayland;
 
 pub use derp_space::DerpSpaceElem;
 pub use state::{ClientState, CompositorInitOptions, CompositorState, SocketConfig};
+pub use platform::drm;
+pub use platform::xwayland;
 
 use smithay::reexports::wayland_server::DisplayHandle;
 

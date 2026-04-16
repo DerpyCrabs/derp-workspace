@@ -18,8 +18,8 @@ import {
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
   SHELL_RESIZE_TOP,
-} from './chromeConstants'
-import { ShellWindowFrame, type ShellWindowModel } from './ShellWindowFrame'
+} from '@/lib/chromeConstants'
+import { ShellWindowFrame, type ShellWindowModel } from '@/host/ShellWindowFrame'
 import {
   canvasRectToClientCss,
   clientPointToCanvasLocal,
@@ -30,9 +30,9 @@ import {
   pickScreenForWindow,
   rectCanvasLocalToGlobal,
   rectGlobalToCanvasLocal,
-} from './shellCoords'
-import { SettingsPanel } from './SettingsPanel'
-import { defaultAudioDevice, useShellAudioState } from './settings/useShellAudioState'
+} from '@/lib/shellCoords'
+import { SettingsPanel } from '@/apps/settings/SettingsPanel'
+import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
 import {
   type BackedWindowOpenPayload,
   backedShellWindowKind,
@@ -47,7 +47,7 @@ import {
   shellTestWindowTitle,
   SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_TEST_APP_ID,
-} from './backedShellWindows'
+} from '@/features/shell-ui/backedShellWindows'
 import {
   flushShellUiWindowsSyncNow,
   invalidateAllShellUiWindows,
@@ -58,7 +58,7 @@ import {
   SHELL_UI_SETTINGS_WINDOW_ID,
   type ShellUiMeasureEnv,
   shellUiWindowMeasureFromEnv,
-} from './shellUiWindows'
+} from '@/features/shell-ui/shellUiWindows'
 import {
   type AssistGridShape,
   type AssistGridSpan,
@@ -67,40 +67,40 @@ import {
   assistSpanFromWorkAreaPoint,
   DEFAULT_ASSIST_GRID_SHAPE,
   snapZoneAndPreviewFromAssistSpan,
-} from './assistGrid'
-import { SnapAssistPicker } from './SnapAssistPicker'
-import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from './tileSnap'
+} from '@/features/tiling/assistGrid'
+import { SnapAssistPicker } from '@/features/tiling/SnapAssistPicker'
+import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from '@/features/tiling/tileSnap'
 import {
   computeTiledResizeRects,
   findEdgeNeighborsInMap,
   TILE_RESIZE_EDGE_ALIGN_PX,
   TILED_RESIZE_MIN_H,
   TILED_RESIZE_MIN_W,
-} from './tileState'
+} from '@/features/tiling/tileState'
 import {
   type SnapZone,
   snapZoneToBoundsWithOccupied,
   type Rect as TileRect,
-} from './tileZones'
-import { ShellFloatingProvider, type ShellFloatingRegistry } from './ShellFloatingContext'
-import { createFloatingLayerStore } from './floatingLayers'
-import { shellFloatingLayersWire } from './shellFloatingWire'
-import { hideFloatingPlacementWire, pushShellFloatingWireFromDom } from './shellFloatingPlacement'
-import { getMonitorLayout, loadTilingConfig, saveTilingConfig } from './tilingConfig'
+} from '@/features/tiling/tileZones'
+import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
+import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
+import { shellFloatingLayersWire } from '@/features/floating/shellFloatingWire'
+import { hideFloatingPlacementWire, pushShellFloatingWireFromDom } from '@/features/floating/shellFloatingPlacement'
+import { getMonitorLayout, loadTilingConfig, saveTilingConfig } from '@/features/tiling/tilingConfig'
 import {
   fetchPortalScreencastRequestState,
   postShellJson,
   respondPortalScreencastRequest,
   spawnViaShellHttp,
-} from './shellBridge'
-import { shellHttpBase } from './shellHttp'
-import { startThemeDomSync } from './themeDom'
-import { refreshThemeSettingsFromRemote } from './themeStore'
-import { ShellContextMenusProvider } from './app/ShellContextMenusContext'
-import { createShellContextMenus, type TraySniMenuEntry } from './app/createShellContextMenus'
-import { ShellContextMenuLayer } from './app/ShellContextMenuLayer'
-import { ShellDebugHudContent } from './app/ShellDebugHudContent'
-import { ShellSurfaceLayers } from './app/ShellSurfaceLayers'
+} from '@/features/bridge/shellBridge'
+import { shellHttpBase } from '@/features/bridge/shellHttp'
+import { startThemeDomSync } from '@/features/theme/themeDom'
+import { refreshThemeSettingsFromRemote } from '@/features/theme/themeStore'
+import { ShellContextMenusProvider } from '@/host/ShellContextMenusContext'
+import { createShellContextMenus, type TraySniMenuEntry } from '@/host/createShellContextMenus'
+import { ShellContextMenuLayer } from '@/host/ShellContextMenuLayer'
+import { ShellDebugHudContent } from '@/apps/debug/ShellDebugHudContent'
+import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
 import {
   formatMonitorPixels,
   layoutScreenCssRect,
@@ -110,7 +110,7 @@ import {
   shellBuildLabelText,
   shellMaximizedWorkAreaGlobalRect,
   unionBBoxFromScreens,
-} from './app/appLayout'
+} from '@/host/appLayout'
 import {
   coerceShellWindowId,
   type DerpShellDetail,
@@ -118,12 +118,12 @@ import {
   windowIsShellHosted,
   windowOnMonitor,
   workspaceGroupWindowIds,
-} from './app/appWindowState'
-import { useDesktopApplicationsState } from './desktopApplicationsState'
-import type { TaskbarSniItem } from './Taskbar'
-import { FileBrowserWindow } from './FileBrowserWindow'
-import { primeFileBrowserWindowPath } from './fileBrowserState'
-import { matchNativeSessionWindow } from './nativeSessionMatch'
+} from '@/host/appWindowState'
+import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
+import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
+import { FileBrowserWindow } from '@/apps/file-browser/FileBrowserWindow'
+import { primeFileBrowserWindowPath } from '@/apps/file-browser/fileBrowserState'
+import { matchNativeSessionWindow } from '@/features/bridge/nativeSessionMatch'
 import {
   loadSessionSnapshot,
   nativeWindowRef,
@@ -137,18 +137,18 @@ import {
   type SavedShellWindow,
   type SessionSnapshot,
   type SessionWindowRef,
-} from './sessionSnapshot'
+} from '@/features/bridge/sessionSnapshot'
 import {
   loadSessionPersistenceSettings,
   setSessionAutoSaveEnabled as persistSessionAutoSaveEnabled,
-} from './sessionPersistenceSettings'
+} from '@/features/bridge/sessionPersistenceSettings'
 import {
   captureShellWindowState,
   primeShellWindowState,
   subscribeShellWindowState,
-} from './shellWindowState'
-import { ShellTestWindowContent } from './ShellTestWindowContent'
-import { WorkspaceTabStrip } from './WorkspaceTabStrip'
+} from '@/features/shell-ui/shellWindowState'
+import { ShellTestWindowContent } from '@/apps/debug/ShellTestWindowContent'
+import { WorkspaceTabStrip } from '@/features/workspace/WorkspaceTabStrip'
 import type {
   AssistOverlayState,
   ExclusionHudZone,
@@ -157,25 +157,25 @@ import type {
   SnapAssistPickerState,
   SnapAssistPickerSource,
   SnapAssistStripState,
-} from './app/types'
+} from '@/host/types'
 import { Portal } from 'solid-js/web'
-import { dispatchAudioStateChanged } from './audioEvents'
+import { dispatchAudioStateChanged } from '@/features/audio/audioEvents'
 import {
   DERP_SHELL_EVENT,
   DERP_SHELL_SNAPSHOT_EVENT,
   installCompositorBatchHandler,
-} from './compositorEvents'
-import { compositorSnapshotAbi, decodeCompositorSnapshot } from './compositorSnapshot'
-import { createCompositorModel } from './compositorModel'
-import { createShellExclusionSync } from './shellExclusionSync'
-import { createWorkspaceActions } from './workspaceActions'
+} from '@/features/bridge/compositorEvents'
+import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
+import { createCompositorModel } from '@/features/bridge/compositorModel'
+import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
+import { createWorkspaceActions } from '@/features/workspace/workspaceActions'
 import {
   findMergeTarget,
   splitLeftWindowId,
   windowLabel as groupedWindowLabel,
   type TabMergeTarget,
-} from './tabGroupOps'
-import { buildTaskbarGroupRows } from './taskbarGroups'
+} from '@/features/workspace/tabGroupOps'
+import { buildTaskbarGroupRows } from '@/features/taskbar/taskbarGroups'
 import {
   clampWorkspaceSplitPaneFraction,
   enterWorkspaceSplitView,
@@ -194,9 +194,9 @@ import {
   workspaceGetTiledZone,
   workspaceIsWindowTiled,
   workspaceMonitorTileEntries,
-} from './workspaceState'
-import { createWorkspaceSelectors, type WorkspaceGroupModel } from './workspaceSelectors'
-import { buildE2eShellHtml, buildE2eShellSnapshot } from './e2eSnapshot'
+} from '@/features/workspace/workspaceState'
+import { createWorkspaceSelectors, type WorkspaceGroupModel } from '@/features/workspace/workspaceSelectors'
+import { buildE2eShellHtml, buildE2eShellSnapshot } from '@/features/bridge/e2eSnapshot'
 
 declare global {
   interface Window {

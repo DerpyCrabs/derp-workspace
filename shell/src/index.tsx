@@ -19,5 +19,5 @@ if (import.meta.hot) {
     })
   }
   import.meta.hot.accept('./App.tsx', resyncShellFromCompositor)
-  import.meta.hot.accept('./ShellWindowFrame.tsx', resyncShellFromCompositor)
+  import.meta.hot.accept('./host/ShellWindowFrame.tsx', resyncShellFromCompositor)
 }

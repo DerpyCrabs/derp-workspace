@@ -78,11 +78,11 @@ impl UplinkToCompositor {
 
     pub fn settings_keyboard_apply(
         &self,
-        settings: crate::settings_config::KeyboardSettingsFile,
+        settings: crate::session::settings_config::KeyboardSettingsFile,
     ) -> Result<(), String> {
         self.run_result(move |s| {
             s.keyboard_apply_settings(&settings)?;
-            crate::settings_config::write_keyboard_settings(settings.clone())
+            crate::session::settings_config::write_keyboard_settings(settings.clone())
         })
     }
 

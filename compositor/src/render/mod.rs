@@ -1,0 +1,10 @@
+pub(crate) mod backdrop_render;
+pub(crate) mod capture;
+pub(crate) mod capture_ext;
+pub(crate) mod derp_space_render;
+pub(crate) mod pointer_render;
+pub(crate) mod screenshot;
+pub(crate) mod screenshot_overlay_render;
+pub(crate) mod shell_overlay;
+pub(crate) mod shell_render;
+pub(crate) mod tile_preview_render;
