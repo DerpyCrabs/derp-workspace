@@ -333,6 +333,8 @@ function App() {
   const {
     windows: compositorWindows,
     allWindowsMap: compositorWindowsMap,
+    windowsListIds: compositorWindowsListIds,
+    windowsList: compositorWindowsList,
     workspaceState,
     focusedWindowId,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
@@ -367,7 +369,7 @@ function App() {
     return next ?? authoritative
   })
   const windows = allWindowsMap
-  const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
+  const windowsListIds = compositorWindowsListIds
   const windowsList = createMemo(() => {
     const out: DerpWindow[] = []
     for (const windowId of windowsListIds()) {
@@ -901,7 +903,7 @@ function App() {
   })
 
   createEffect(() => {
-    const list = windowsList()
+    const list = compositorWindowsList()
     const liveIds = new Set(list.map((window) => window.window_id))
     for (const window of list) {
       if (windowIsShellHosted(window)) continue
@@ -930,8 +932,8 @@ function App() {
     taskbarRowsByMonitor,
   } = createWorkspaceSelectors({
     workspaceState,
-    windowsById: allWindowsMap,
-    windowsList,
+    windowsById: compositorWindowsMap,
+    windowsList: compositorWindowsList,
     focusedWindowId,
     fallbackMonitorKey: fallbackMonitorName,
     desktopApps: desktopApps.items,
