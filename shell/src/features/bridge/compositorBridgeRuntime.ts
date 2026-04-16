@@ -658,8 +658,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (typeof path !== 'string' || path.length === 0) return false
     const readSnapshot = window.__derpCompositorSnapshotRead
     if (typeof readSnapshot !== 'function') return false
+    const readSnapshotIfChanged = window.__derpCompositorSnapshotReadIfChanged
     const abi = window.__DERP_COMPOSITOR_SNAPSHOT_ABI ?? compositorSnapshotAbi()
-    if (!force) {
+    let raw: ArrayBuffer | null = null
+    if (!force && typeof readSnapshotIfChanged === 'function') {
+      raw = readSnapshotIfChanged(path, lastSnapshotSequence, abi)
+    } else if (!force) {
       const snapshotVersion = window.__derpCompositorSnapshotVersion
       if (typeof snapshotVersion === 'function') {
         const version = snapshotVersion(path, abi)
@@ -667,8 +671,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
           return false
         }
       }
+      raw = readSnapshot(path, abi)
+    } else {
+      raw = readSnapshot(path, abi)
     }
-    const raw = readSnapshot(path, abi)
     if (!(raw instanceof ArrayBuffer)) return false
     const decoded = decodeCompositorSnapshot(raw)
     if (!decoded || decoded.details.length === 0) return false

@@ -568,3 +568,47 @@ pub fn snapshot_read(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, 
     }
 }
 
+pub fn snapshot_read_if_changed(
+    path: &Path,
+    expected_abi: u32,
+    last_sequence: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    #[cfg(not(unix))]
+    {
+        let _ = (path, expected_abi, last_sequence);
+        return Err("shared snapshots require unix reads".to_string());
+    }
+    let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
+    #[cfg(unix)]
+    {
+        let mut cache = snapshot_read_cache()
+            .lock()
+            .map_err(|_| format!("snapshot cache lock poisoned {}", path.display()))?;
+        let mapped = cache.mapped_slice(path)?;
+        let head_a_bytes = mapped_snapshot_header(mapped)?;
+        let head_a = shell_wire::read_shared_snapshot_header(&head_a_bytes)?;
+        if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
+            || head_a.abi_version != expected_abi
+            || head_a.sequence % 2 != 0
+            || head_a.sequence == last_sequence
+        {
+            return Ok(None);
+        }
+        let payload_len = head_a.payload_len as usize;
+        if header_len + payload_len > mapped.len() {
+            return Ok(None);
+        }
+        fence(Ordering::Acquire);
+        let mut out = Vec::with_capacity(header_len + payload_len);
+        out.extend_from_slice(&head_a_bytes);
+        out.extend_from_slice(&mapped[header_len..header_len + payload_len]);
+        fence(Ordering::Acquire);
+        let head_b_bytes = mapped_snapshot_header(mapped)?;
+        let head_b = shell_wire::read_shared_snapshot_header(&head_b_bytes)?;
+        if head_a.sequence != head_b.sequence || head_b.sequence % 2 != 0 {
+            return Ok(None);
+        }
+        Ok(Some(out))
+    }
+}
+

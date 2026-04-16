@@ -167,6 +167,11 @@ declare global {
     ) => boolean
     __derpCompositorSnapshotVersion?: (path: string, abi?: number) => number | null
     __derpCompositorSnapshotRead?: (path: string, abi?: number) => ArrayBuffer | null
+    __derpCompositorSnapshotReadIfChanged?: (
+      path: string,
+      lastSequence: number,
+      abi?: number,
+    ) => ArrayBuffer | null
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_OPEN_TEST_WINDOW?: () => boolean

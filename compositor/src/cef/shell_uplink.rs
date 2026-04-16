@@ -1051,6 +1051,79 @@ wrap_v8_handler! {
     }
 }
 
+wrap_v8_handler! {
+    pub struct SharedSnapshotReadIfChangedV8Handler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            macro_rules! return_exception {
+                ($message:expr) => {{
+                    if let Some(ex) = exception {
+                        *ex = CefString::from($message);
+                    }
+                    return 1;
+                }};
+            }
+
+            let Some(args) = arguments else {
+                return_exception!("expected snapshot path");
+            };
+            let Some(path_v) = args.first().and_then(|a| a.as_ref()) else {
+                return_exception!("expected snapshot path");
+            };
+            if path_v.is_string() == 0 {
+                return_exception!("snapshot path must be a string");
+            }
+            let path = cef_string_userfree_to_string(&path_v.string_value());
+            if path.is_empty() {
+                return_exception!("snapshot path must not be empty");
+            }
+            let Some(last_sequence_v) = args.get(1).and_then(|a| a.as_ref()) else {
+                return_exception!("expected last snapshot sequence");
+            };
+            let last_sequence = if last_sequence_v.is_double() != 0 && last_sequence_v.double_value() >= 0.0 {
+                last_sequence_v.double_value() as u64
+            } else if last_sequence_v.is_uint() != 0 {
+                u64::from(last_sequence_v.uint_value())
+            } else if last_sequence_v.is_int() != 0 && last_sequence_v.int_value() >= 0 {
+                last_sequence_v.int_value() as u64
+            } else {
+                return_exception!("last snapshot sequence must be a non-negative number");
+            };
+            let abi = match args.get(2).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_uint() != 0 => v.uint_value(),
+                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
+                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
+                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
+                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
+            };
+            let value = match shell_snapshot::snapshot_read_if_changed(
+                std::path::Path::new(&path),
+                abi,
+                last_sequence,
+            ) {
+                Ok(Some(bytes)) => {
+                    crate::cef::begin_frame_diag::note_shell_snapshot_read();
+                    v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
+                }
+                Ok(None) => v8_value_create_null(),
+                Err(_) => v8_value_create_null(),
+            };
+            if let Some(retval) = retval {
+                *retval = value;
+            }
+            1
+        }
+    }
+}
+
 wrap_render_process_handler! {
     pub struct DerpRenderProcessHandler;
 
@@ -1108,6 +1181,12 @@ wrap_render_process_handler! {
             let mut snapshot_read_handler = SharedSnapshotReadV8Handler::new();
             let mut snapshot_read_func =
                 v8_value_create_function(Some(&snapshot_read_name), Some(&mut snapshot_read_handler));
+            let snapshot_read_if_changed_name = CefString::from("__derpCompositorSnapshotReadIfChanged");
+            let mut snapshot_read_if_changed_handler = SharedSnapshotReadIfChangedV8Handler::new();
+            let mut snapshot_read_if_changed_func = v8_value_create_function(
+                Some(&snapshot_read_if_changed_name),
+                Some(&mut snapshot_read_if_changed_handler),
+            );
             let attrs = sys::cef_v8_propertyattribute_t(0);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
             let _ = global.set_value_bykey(
@@ -1123,6 +1202,11 @@ wrap_render_process_handler! {
             let _ = global.set_value_bykey(
                 Some(&snapshot_read_name),
                 snapshot_read_func.as_mut(),
+                attrs.into(),
+            );
+            let _ = global.set_value_bykey(
+                Some(&snapshot_read_if_changed_name),
+                snapshot_read_if_changed_func.as_mut(),
                 attrs.into(),
             );
             tracing::warn!(
