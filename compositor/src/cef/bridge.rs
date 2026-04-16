@@ -120,20 +120,24 @@ wrap_task! {
 wrap_task! {
     struct ExternalBeginFrameTask {
         browser_holder: Arc<Mutex<Option<Browser>>>,
+        pending_begin_frame: Arc<AtomicBool>,
     }
 
     impl Task {
         fn execute(&self) {
             let Ok(guard) = self.browser_holder.lock() else {
+                self.pending_begin_frame.store(false, Ordering::Relaxed);
                 return;
             };
             let Some(b) = guard.as_ref() else {
+                self.pending_begin_frame.store(false, Ordering::Relaxed);
                 return;
             };
             if let Some(host) = b.host() {
                 host.send_external_begin_frame();
                 crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
             }
+            self.pending_begin_frame.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -144,6 +148,7 @@ pub struct ShellToCefLink {
     pending_messages: Arc<Mutex<PendingCompositorMessages>>,
     delivery_ready: Arc<AtomicBool>,
     pending_work: Arc<AtomicBool>,
+    pending_begin_frame: Arc<AtomicBool>,
     shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
 }
 
@@ -161,6 +166,7 @@ impl ShellToCefLink {
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
+            pending_begin_frame: Arc::new(AtomicBool::new(false)),
             shared_snapshot: Arc::new(Mutex::new(
                 SharedShellSnapshotWriter::new(crate::cef::runtime_dir()).ok(),
             )),
@@ -214,8 +220,20 @@ impl ShellToCefLink {
         kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
     ) {
         crate::cef::begin_frame_diag::note_schedule_from_compositor(kind);
-        let mut task = ExternalBeginFrameTask::new(self.browser_holder.clone());
-        let _ = post_task(ThreadId::UI, Some(&mut task));
+        if self
+            .pending_begin_frame
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let mut task = ExternalBeginFrameTask::new(
+            self.browser_holder.clone(),
+            self.pending_begin_frame.clone(),
+        );
+        if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            self.pending_begin_frame.store(false, Ordering::Relaxed);
+        }
     }
 
     pub fn set_delivery_ready(&self, ready: bool) {
@@ -229,6 +247,7 @@ impl ShellToCefLink {
 
     pub fn has_pending_shell_updates(&self) -> bool {
         self.pending_work.load(Ordering::Relaxed)
+            || self.pending_begin_frame.load(Ordering::Relaxed)
     }
 
     fn post_pending_messages(&self) {

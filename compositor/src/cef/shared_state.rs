@@ -258,14 +258,18 @@ fn read_exact_at(file: &File, path: &Path, mut offset: u64, buf: &mut [u8]) -> R
 }
 
 #[cfg(unix)]
-fn read_header_bytes(file: &File, path: &Path) -> Result<[u8; SHELL_SHARED_STATE_HEADER_BYTES], String> {
+fn read_header_bytes(
+    file: &File,
+    path: &Path,
+) -> Result<[u8; SHELL_SHARED_STATE_HEADER_BYTES], String> {
     let mut header = [0u8; SHELL_SHARED_STATE_HEADER_BYTES];
     read_exact_at(file, path, 0, &mut header)?;
     Ok(header)
 }
 
 pub fn read_payload(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, String> {
-    read_payload_if_newer(path, expected_abi, None).map(|payload| payload.map(|(_, payload)| payload))
+    read_payload_if_newer(path, expected_abi, None)
+        .map(|payload| payload.map(|(_, payload)| payload))
 }
 
 pub fn read_payload_if_newer(

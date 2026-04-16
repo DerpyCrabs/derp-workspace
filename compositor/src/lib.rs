@@ -19,13 +19,13 @@ mod platform;
 mod render;
 mod session;
 mod shell;
-mod tray;
 pub mod state;
+mod tray;
 
 pub use derp_space::DerpSpaceElem;
-pub use state::{ClientState, CompositorInitOptions, CompositorState, SocketConfig};
 pub use platform::drm;
 pub use platform::xwayland;
+pub use state::{ClientState, CompositorInitOptions, CompositorState, SocketConfig};
 
 use smithay::reexports::wayland_server::DisplayHandle;
 

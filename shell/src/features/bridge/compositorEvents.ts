@@ -3,6 +3,92 @@ import type { DerpShellDetail } from '@/host/appWindowState'
 export const DERP_SHELL_EVENT = 'derp-shell'
 export const DERP_SHELL_SNAPSHOT_EVENT = 'derp-shell-snapshot'
 
+type DerpShellLatencySample = {
+  id: number
+  sequence: number
+  detailCount: number
+  force: boolean
+  syncStartAt: number
+  decodedAt?: number
+  appliedAt?: number
+  authoritativeAt?: number
+  visualAt?: number
+  rafAt?: number
+}
+
+let shellLatencyNextId = 1
+let shellLatencySample: DerpShellLatencySample | null = null
+
+function shellLatencyNow() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+export function beginShellLatencySample(sequence: number, detailCount: number, force: boolean): number {
+  const id = shellLatencyNextId++
+  shellLatencySample = {
+    id,
+    sequence,
+    detailCount,
+    force,
+    syncStartAt: shellLatencyNow(),
+  }
+  return id
+}
+
+export function markShellLatencySample(
+  id: number,
+  patch: Partial<Omit<DerpShellLatencySample, 'id' | 'sequence' | 'detailCount' | 'force' | 'syncStartAt'>>,
+) {
+  if (!shellLatencySample || shellLatencySample.id !== id) return null
+  shellLatencySample = { ...shellLatencySample, ...patch }
+  return shellLatencySample
+}
+
+export function markActiveShellLatencySample(
+  patch: Partial<Omit<DerpShellLatencySample, 'id' | 'sequence' | 'detailCount' | 'force' | 'syncStartAt'>>,
+) {
+  if (!shellLatencySample) return null
+  shellLatencySample = { ...shellLatencySample, ...patch }
+  return shellLatencySample
+}
+
+export function flushShellLatencySample(id: number) {
+  const sample = shellLatencySample
+  if (!sample || sample.id !== id) return false
+  const payload = {
+    sequence: sample.sequence,
+    detailCount: sample.detailCount,
+    force: sample.force,
+    sync_to_decode_ms:
+      sample.decodedAt === undefined ? null : +(sample.decodedAt - sample.syncStartAt).toFixed(3),
+    decode_to_apply_ms:
+      sample.decodedAt === undefined || sample.appliedAt === undefined
+        ? null
+        : +(sample.appliedAt - sample.decodedAt).toFixed(3),
+    apply_to_authoritative_ms:
+      sample.appliedAt === undefined || sample.authoritativeAt === undefined
+        ? null
+        : +(sample.authoritativeAt - sample.appliedAt).toFixed(3),
+    authoritative_to_visual_ms:
+      sample.authoritativeAt === undefined || sample.visualAt === undefined
+        ? null
+        : +(sample.visualAt - sample.authoritativeAt).toFixed(3),
+    visual_to_raf_ms:
+      sample.visualAt === undefined || sample.rafAt === undefined ? null : +(sample.rafAt - sample.visualAt).toFixed(3),
+    sync_to_raf_ms:
+      sample.rafAt === undefined ? null : +(sample.rafAt - sample.syncStartAt).toFixed(3),
+  }
+  console.warn('[derp-shell-latency]', JSON.stringify(payload))
+  shellLatencySample = null
+  return true
+}
+
+export function flushActiveShellLatencySample() {
+  const sample = shellLatencySample
+  if (!sample) return false
+  return flushShellLatencySample(sample.id)
+}
+
 declare global {
   interface Window {
     __DERP_APPLY_COMPOSITOR_BATCH?: (details: readonly DerpShellDetail[]) => void

@@ -19,12 +19,30 @@ static SHELL_DETAIL_FOCUS_CHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_REPLY_WINDOW_LIST_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_NOTIFY_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
+static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum CompositorScheduleKind {
     Idle,
     Active,
     Forced,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ShellViewInvalidateReason {
+    MoveEnd,
+    ResizeDelta,
+    ResizeEnd,
+    ResizeShellGrabEnd,
+    OutputResize,
+    BrowserLoad,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DirtyRectKind {
+    Missing,
+    Empty,
+    Provided,
 }
 
 struct PacingLog {
@@ -38,6 +56,48 @@ struct PacingLog {
 }
 
 static PACING: Mutex<Option<PacingLog>> = Mutex::new(None);
+
+struct LatencyTrace {
+    message_pump_at: Option<Instant>,
+    message_pump_delay_ms: i64,
+    compositor_schedule_at: Option<Instant>,
+    compositor_schedule_kind: Option<CompositorScheduleKind>,
+    view_invalidate_at: Option<Instant>,
+    view_invalidate_reason: Option<ShellViewInvalidateReason>,
+    cef_begin_frame_at: Option<Instant>,
+    accelerated_paint_at: Option<Instant>,
+    accelerated_paint_size: Option<(u32, u32)>,
+    dirty_rect_kind: Option<DirtyRectKind>,
+    dirty_rect_count: Option<usize>,
+    dirty_rect_coverage_per_mille: Option<u16>,
+    dirty_rect_bbox_full: Option<bool>,
+    dmabuf_rx_at: Option<Instant>,
+    dmabuf_rx_size: Option<(u32, u32)>,
+    last_logged_dmabuf_rx_at: Option<Instant>,
+}
+
+impl LatencyTrace {
+    const fn new() -> Self {
+        Self {
+            message_pump_at: None,
+            message_pump_delay_ms: 0,
+            compositor_schedule_at: None,
+            compositor_schedule_kind: None,
+            view_invalidate_at: None,
+            view_invalidate_reason: None,
+            cef_begin_frame_at: None,
+            accelerated_paint_at: None,
+            accelerated_paint_size: None,
+            dirty_rect_kind: None,
+            dirty_rect_count: None,
+            dirty_rect_coverage_per_mille: None,
+            dirty_rect_bbox_full: None,
+            dmabuf_rx_at: None,
+            dmabuf_rx_size: None,
+            last_logged_dmabuf_rx_at: None,
+        }
+    }
+}
 
 #[derive(serde::Serialize)]
 pub(crate) struct PerfCounterSnapshot {
@@ -77,6 +137,10 @@ struct ShellSyncSnapshot {
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
     COMPOSITOR_SCHEDULE.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.compositor_schedule_at = Some(Instant::now());
+        latency.compositor_schedule_kind = Some(kind);
+    }
     match kind {
         CompositorScheduleKind::Idle => {
             COMPOSITOR_SCHEDULE_IDLE.fetch_add(1, Ordering::Relaxed);
@@ -92,10 +156,21 @@ pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
 
 pub(crate) fn note_cef_ui_send_external_begin_frame() {
     CEF_UI_SEND.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.cef_begin_frame_at = Some(Instant::now());
+    }
+}
+
+pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.view_invalidate_at = Some(Instant::now());
+        latency.view_invalidate_reason = Some(reason);
+    }
 }
 
 pub(crate) fn note_drm_render_tick() {
     DRM_RENDER_TICK.fetch_add(1, Ordering::Relaxed);
+    maybe_log_shell_latency();
 }
 
 pub(crate) fn note_shell_detail_batch(message_count: usize) {
@@ -137,6 +212,38 @@ pub(crate) fn note_shell_snapshot_notify() {
 
 pub(crate) fn note_shell_snapshot_read() {
     SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn note_cef_message_pump_scheduled(delay_ms: i64) {
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.message_pump_at = Some(Instant::now());
+        latency.message_pump_delay_ms = delay_ms;
+    }
+}
+
+pub(crate) fn note_cef_accelerated_paint(
+    width: u32,
+    height: u32,
+    dirty_rect_kind: DirtyRectKind,
+    dirty_rect_count: usize,
+    dirty_rect_coverage_per_mille: u16,
+    dirty_rect_bbox_full: bool,
+) {
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.accelerated_paint_at = Some(Instant::now());
+        latency.accelerated_paint_size = Some((width, height));
+        latency.dirty_rect_kind = Some(dirty_rect_kind);
+        latency.dirty_rect_count = Some(dirty_rect_count);
+        latency.dirty_rect_coverage_per_mille = Some(dirty_rect_coverage_per_mille);
+        latency.dirty_rect_bbox_full = Some(dirty_rect_bbox_full);
+    }
+}
+
+pub(crate) fn note_shell_dmabuf_rx(width: u32, height: u32) {
+    if let Ok(mut latency) = LATENCY.lock() {
+        latency.dmabuf_rx_at = Some(Instant::now());
+        latency.dmabuf_rx_size = Some((width, height));
+    }
 }
 
 pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
@@ -190,9 +297,82 @@ pub(crate) fn reset_perf_counters() {
     SHELL_REPLY_WINDOW_LIST_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_NOTIFY_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_READ_COUNT.store(0, Ordering::Relaxed);
+    if let Ok(mut latency) = LATENCY.lock() {
+        *latency = LatencyTrace::new();
+    }
     if let Ok(mut pacing) = PACING.lock() {
         *pacing = None;
     }
+}
+
+fn maybe_log_shell_latency() {
+    let now = Instant::now();
+    let Ok(mut latency) = LATENCY.lock() else {
+        return;
+    };
+    let Some(dmabuf_rx_at) = latency.dmabuf_rx_at else {
+        return;
+    };
+    if latency.last_logged_dmabuf_rx_at == Some(dmabuf_rx_at) {
+        return;
+    }
+    if now.duration_since(dmabuf_rx_at) > Duration::from_secs(1) {
+        return;
+    }
+    let message_pump_to_begin_us = latency.message_pump_at.and_then(|at| {
+        latency
+            .cef_begin_frame_at
+            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
+    });
+    let schedule_to_begin_us = latency.compositor_schedule_at.and_then(|at| {
+        latency
+            .cef_begin_frame_at
+            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
+    });
+    let invalidate_to_begin_us = latency.view_invalidate_at.and_then(|at| {
+        latency
+            .cef_begin_frame_at
+            .map(|begin| begin.saturating_duration_since(at).as_micros() as u64)
+    });
+    let begin_to_paint_us = latency.cef_begin_frame_at.and_then(|at| {
+        latency
+            .accelerated_paint_at
+            .map(|paint| paint.saturating_duration_since(at).as_micros() as u64)
+    });
+    let invalidate_to_paint_us = latency.view_invalidate_at.and_then(|at| {
+        latency
+            .accelerated_paint_at
+            .map(|paint| paint.saturating_duration_since(at).as_micros() as u64)
+    });
+    let paint_to_dmabuf_rx_us = latency
+        .accelerated_paint_at
+        .map(|paint| dmabuf_rx_at.saturating_duration_since(paint).as_micros() as u64);
+    let dmabuf_rx_to_render_us = now.saturating_duration_since(dmabuf_rx_at).as_micros() as u64;
+    let schedule_to_render_us = latency
+        .compositor_schedule_at
+        .map(|at| now.saturating_duration_since(at).as_micros() as u64);
+    tracing::warn!(
+        target: "derp_shell_latency",
+        message_pump_delay_ms = latency.message_pump_delay_ms,
+        schedule_kind = ?latency.compositor_schedule_kind,
+        invalidate_reason = ?latency.view_invalidate_reason,
+        paint_size = ?latency.accelerated_paint_size,
+        dirty_rect_kind = ?latency.dirty_rect_kind,
+        dirty_rect_count = latency.dirty_rect_count,
+        dirty_rect_coverage_per_mille = latency.dirty_rect_coverage_per_mille,
+        dirty_rect_bbox_full = latency.dirty_rect_bbox_full,
+        dmabuf_size = ?latency.dmabuf_rx_size,
+        message_pump_to_begin_us,
+        schedule_to_begin_us,
+        invalidate_to_begin_us,
+        begin_to_paint_us,
+        invalidate_to_paint_us,
+        paint_to_dmabuf_rx_us,
+        dmabuf_rx_to_render_us,
+        schedule_to_render_us,
+        "shell latency chain"
+    );
+    latency.last_logged_dmabuf_rx_at = Some(dmabuf_rx_at);
 }
 
 pub(crate) fn maybe_log_cef_begin_frame_pacing() {

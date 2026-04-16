@@ -88,12 +88,12 @@ use smithay::{
 use crate::{
     chrome_bridge::{ChromeEvent, NoOpChromeBridge, SharedChromeBridge, WindowInfo},
     derp_space::DerpSpaceElem,
-    desktop::exclusion_clip as exclusion_clip,
-    shell::shell_ipc as shell_ipc,
+    desktop::exclusion_clip,
     session::workspace_model::{
         group_id_for_window, next_active_window_after_removal, reconcile_workspace_state,
         WorkspaceMutation, WorkspaceState,
     },
+    shell::shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
     CalloopData,
 };
@@ -188,13 +188,21 @@ pub(crate) struct CachedBackdropLayers {
 
 #[derive(Default)]
 pub(crate) struct CachedShellRenderOutput {
-    pub main:
-        Option<crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellMainCacheKey>>,
-    pub context_menu:
-        Option<crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellOverlayCacheKey>>,
+    pub main: Option<
+        crate::render::shell_render::CachedShellElement<
+            crate::render::shell_render::ShellMainCacheKey,
+        >,
+    >,
+    pub context_menu: Option<
+        crate::render::shell_render::CachedShellElement<
+            crate::render::shell_render::ShellOverlayCacheKey,
+        >,
+    >,
     pub floating: HashMap<
         u32,
-        crate::render::shell_render::CachedShellElement<crate::render::shell_render::ShellOverlayCacheKey>,
+        crate::render::shell_render::CachedShellElement<
+            crate::render::shell_render::ShellOverlayCacheKey,
+        >,
     >,
     pub floating_order: Vec<u32>,
 }
@@ -373,14 +381,17 @@ pub struct CompositorState {
     pub layer_shell_state: WlrLayerShellState,
     pub(crate) foreign_toplevel_list_state: ForeignToplevelListState,
     pub(crate) capture_toplevel_handles: HashMap<u32, ForeignToplevelHandle>,
-    pub(crate) capture_window_source_cache: HashMap<u32, crate::render::capture::CachedCaptureWindowSource>,
+    pub(crate) capture_window_source_cache:
+        HashMap<u32, crate::render::capture::CachedCaptureWindowSource>,
     pub(crate) _idle_inhibit_manager_state: IdleInhibitManagerState,
     pub(crate) idle_inhibit_surfaces: HashSet<(ClientId, u32)>,
     pub(crate) keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     pub(crate) _screencopy_manager_state: crate::render::capture::ScreencopyManagerState,
     pub(crate) pending_screencopy_copies: Vec<crate::render::capture::PendingScreencopyCopy>,
-    pub(crate) _ext_image_capture_manager_state: crate::render::capture_ext::ExtImageCaptureManagerState,
-    pub(crate) pending_image_copy_captures: Vec<crate::render::capture_ext::PendingImageCopyCapture>,
+    pub(crate) _ext_image_capture_manager_state:
+        crate::render::capture_ext::ExtImageCaptureManagerState,
+    pub(crate) pending_image_copy_captures:
+        Vec<crate::render::capture_ext::PendingImageCopyCapture>,
     pub seat_state: SeatState<CompositorState>,
     pub data_device_state: DataDeviceState,
     pub data_control_state: DataControlState,
@@ -531,7 +542,13 @@ pub struct CompositorState {
         HashMap<String, crate::controls::display_config::DesktopBackgroundConfig>,
     wallpaper_req_tx: std::sync::mpsc::Sender<PathBuf>,
     wallpaper_done_rx: std::sync::mpsc::Receiver<
-        Result<(PathBuf, crate::desktop::desktop_background::DesktopWallpaperCpu), String>,
+        Result<
+            (
+                PathBuf,
+                crate::desktop::desktop_background::DesktopWallpaperCpu,
+            ),
+            String,
+        >,
     >,
     pub(crate) desktop_wallpaper_cpu_by_path:
         HashMap<PathBuf, Arc<crate::desktop::desktop_background::DesktopWallpaperCpu>>,
@@ -634,7 +651,8 @@ impl CompositorState {
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
             return false;
         };
-        self.find_window_by_surface_id(sid).is_some() || self.find_x11_window_by_surface_id(sid).is_some()
+        self.find_window_by_surface_id(sid).is_some()
+            || self.find_x11_window_by_surface_id(sid).is_some()
     }
 
     pub(crate) fn pick_next_logical_focus_target(
@@ -741,7 +759,8 @@ impl CompositorState {
         let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&dh);
         let idle_inhibit_manager_state = IdleInhibitManagerState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
-        let screencopy_manager_state = crate::render::capture::ScreencopyManagerState::new::<Self>(&dh);
+        let screencopy_manager_state =
+            crate::render::capture::ScreencopyManagerState::new::<Self>(&dh);
         let ext_image_capture_manager_state =
             crate::render::capture_ext::ExtImageCaptureManagerState::new::<Self>(&dh);
         let mut seat_state = SeatState::new();
@@ -765,8 +784,11 @@ impl CompositorState {
 
         let space = Space::default();
 
-        let socket_name =
-            crate::platform::wayland_listener::init_wayland_listener(display, event_loop, &options.socket)?;
+        let socket_name = crate::platform::wayland_listener::init_wayland_listener(
+            display,
+            event_loop,
+            &options.socket,
+        )?;
 
         let loop_signal = event_loop.get_signal();
         let event_loop_stop = Arc::new(AtomicBool::new(false));
@@ -802,6 +824,9 @@ impl CompositorState {
                         fds,
                         dirty_buffer,
                     );
+                    if let Some(drms) = d.drm.as_mut() {
+                        drms.request_render();
+                    }
                 }
                 CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
                     f(&mut d.state);
@@ -811,7 +836,8 @@ impl CompositorState {
             .map_err(|e| format!("cef from-shell channel: {e}"))?;
 
         let (sni_to_loop_tx, sni_rx) = channel::channel::<shell_wire::SniTrayLoopMsg>();
-        let (sni_cmd_tx, sni_cmd_rx) = std::sync::mpsc::channel::<crate::tray::sni_tray::SniTrayCmd>();
+        let (sni_cmd_tx, sni_cmd_rx) =
+            std::sync::mpsc::channel::<crate::tray::sni_tray::SniTrayCmd>();
         crate::tray::sni_tray::spawn_sni_tray_thread(sni_to_loop_tx, sni_cmd_rx);
         event_loop
             .handle()
@@ -972,7 +998,8 @@ impl CompositorState {
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
             shell_chrome_border_w: SHELL_BORDER_THICKNESS,
-            desktop_background_config: crate::controls::display_config::DesktopBackgroundConfig::default(),
+            desktop_background_config:
+                crate::controls::display_config::DesktopBackgroundConfig::default(),
             desktop_background_by_output_name: HashMap::new(),
             wallpaper_req_tx: wallpaper_loader.req_tx,
             wallpaper_done_rx: wallpaper_loader.done_rx,
@@ -1011,7 +1038,8 @@ impl CompositorState {
         let Some(handle) = self.seat.get_keyboard() else {
             return Err("missing keyboard handle".into());
         };
-        let base = crate::controls::display_config::read_keyboard_from_display_file().unwrap_or_default();
+        let base =
+            crate::controls::display_config::read_keyboard_from_display_file().unwrap_or_default();
         let layout = settings
             .layouts
             .iter()
@@ -1070,7 +1098,8 @@ impl CompositorState {
         let mut s = HashSet::new();
         let mut add = |cfg: &crate::controls::display_config::DesktopBackgroundConfig| {
             if cfg.mode == "image" && !cfg.image_path.trim().is_empty() {
-                let p = crate::desktop::desktop_background::normalize_filesystem_path(&cfg.image_path);
+                let p =
+                    crate::desktop::desktop_background::normalize_filesystem_path(&cfg.image_path);
                 if !p.as_os_str().is_empty() {
                     s.insert(p);
                 }
@@ -1265,9 +1294,13 @@ impl CompositorState {
     }
 
     pub(crate) fn sync_shell_shared_state_for_input(&mut self) {
-        self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES);
+        self.sync_shell_shared_state(
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES,
+        );
         self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS);
-        self.sync_shell_shared_state(crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS);
+        self.sync_shell_shared_state(
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS,
+        );
     }
 
     pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
@@ -1439,8 +1472,11 @@ impl CompositorState {
         let (lw_u, lh_u) = self.shell_output_logical_size()?;
         let lw = lw_u as i32;
         let lh = lh_u as i32;
-        let (ox, oy, cw_l, ch_l) =
-            crate::shell::shell_letterbox::letterbox_logical(Size::from((lw, lh)), buf_w, content_h)?;
+        let (ox, oy, cw_l, ch_l) = crate::shell::shell_letterbox::letterbox_logical(
+            Size::from((lw, lh)),
+            buf_w,
+            content_h,
+        )?;
         let ws = self.workspace_logical_bounds()?;
         let g = global.intersection(ws)?;
         if g.size.w < 1 || g.size.h < 1 {
@@ -1509,7 +1545,14 @@ impl CompositorState {
             if id == 0 || gw == 0 || gh == 0 {
                 continue;
             }
-            rows.push((id, gx, gy, gw as i32, gh as i32, self.shell_window_stack_z(id)));
+            rows.push((
+                id,
+                gx,
+                gy,
+                gw as i32,
+                gh as i32,
+                self.shell_window_stack_z(id),
+            ));
         }
         rows.sort_by(|a, b| a.5.cmp(&b.5).then_with(|| a.0.cmp(&b.0)));
         let mut out = Vec::new();
@@ -1707,7 +1750,8 @@ impl CompositorState {
             let y = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
             let w = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
             let h = i32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
-            let window_id = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
+            let window_id =
+                u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
             offset += 20;
             let r = Rectangle::new(
                 Point::<i32, Logical>::from((x, y)),
@@ -2140,9 +2184,8 @@ impl CompositorState {
         let output = self
             .new_toplevel_placement_output(None)
             .ok_or_else(|| "no output available for screenshot".to_string())?;
-        self.screenshot_request = Some(crate::render::screenshot::PendingScreenshotRequest::for_output(
-            output.name(),
-        ));
+        self.screenshot_request =
+            Some(crate::render::screenshot::PendingScreenshotRequest::for_output(output.name()));
         self.loop_signal.wakeup();
         Ok(())
     }
@@ -2166,10 +2209,9 @@ impl CompositorState {
                 }
             })
             .collect();
-        self.screenshot_request = Some(crate::render::screenshot::PendingScreenshotRequest::for_region(
-            logical_rect,
-            outputs,
-        )?);
+        self.screenshot_request = Some(
+            crate::render::screenshot::PendingScreenshotRequest::for_region(logical_rect, outputs)?,
+        );
         self.loop_signal.wakeup();
         Ok(())
     }
@@ -2449,6 +2491,7 @@ impl CompositorState {
         dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) {
         self.shell_note_shell_ipc_rx();
+        crate::cef::begin_frame_diag::note_shell_dmabuf_rx(width, height);
         if width == 0 || height == 0 || planes.is_empty() || planes.len() != fds.len() {
             fds.clear();
             return;
@@ -5093,7 +5136,9 @@ impl CompositorState {
         let ny = ny.clamp(0.0, 1.0);
         let lx = nx * lw as f64 - ox as f64;
         let ly = ny * lh as f64 - oy as f64;
-        crate::shell::shell_letterbox::local_in_letterbox_to_buffer_px(lx, ly, cw, ch, buf_w, content_h)
+        crate::shell::shell_letterbox::local_in_letterbox_to_buffer_px(
+            lx, ly, cw, ch, buf_w, content_h,
+        )
     }
 
     pub(crate) fn shell_pointer_coords_for_cef(
@@ -6241,7 +6286,8 @@ impl CompositorState {
     }
 
     fn workspace_sync_from_registry(&mut self) -> bool {
-        let next = reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
+        let next =
+            reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
         if next == self.workspace_state {
             return false;
         }
@@ -6258,9 +6304,9 @@ impl CompositorState {
             groups = self.workspace_state.groups.len(),
             "workspace_send_state"
         );
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
-            state_json,
-        });
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json },
+        );
     }
 
     fn workspace_copy_window_geometry(&mut self, target_window_id: u32, source_window_id: u32) {
@@ -6298,7 +6344,9 @@ impl CompositorState {
             WorkspaceMutation::SelectTab { group_id, .. } => {
                 let previous_visible = previous_state.visible_window_id_for_group(group_id);
                 let next_visible = next_state.visible_window_id_for_group(group_id);
-                if let (Some(previous_visible), Some(next_visible)) = (previous_visible, next_visible) {
+                if let (Some(previous_visible), Some(next_visible)) =
+                    (previous_visible, next_visible)
+                {
                     if previous_visible != next_visible {
                         self.workspace_copy_window_geometry(next_visible, previous_visible);
                         activation_window_id = Some(next_visible);
@@ -6310,9 +6358,12 @@ impl CompositorState {
                 target_group_id,
                 ..
             } => {
-                let source_group_id = group_id_for_window(&previous_state, *window_id).map(str::to_string);
+                let source_group_id =
+                    group_id_for_window(&previous_state, *window_id).map(str::to_string);
                 if source_group_id.as_deref() != Some(target_group_id.as_str()) {
-                    if let Some(target_visible) = previous_state.visible_window_id_for_group(target_group_id) {
+                    if let Some(target_visible) =
+                        previous_state.visible_window_id_for_group(target_group_id)
+                    {
                         self.workspace_copy_window_geometry(*window_id, target_visible);
                         activation_window_id = Some(target_visible);
                     }
@@ -6348,7 +6399,8 @@ impl CompositorState {
             self.workspace_send_state();
             return;
         };
-        let next_visible = next_active_window_after_removal(&self.workspace_state, &group_id, window_id);
+        let next_visible =
+            next_active_window_after_removal(&self.workspace_state, &group_id, window_id);
         self.workspace_state =
             reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
         self.workspace_send_state();
@@ -6869,7 +6921,8 @@ impl CompositorState {
     pub(crate) fn keyboard_focused_window_id(&self) -> Option<u32> {
         let surf = self.seat.get_keyboard()?.current_focus()?;
         let window_id = self.window_registry.window_id_for_wl_surface(&surf)?;
-        self.logical_focus_target_is_valid(window_id).then_some(window_id)
+        self.logical_focus_target_is_valid(window_id)
+            .then_some(window_id)
     }
 
     pub(crate) fn try_refocus_after_closed_toplevel(&mut self) {

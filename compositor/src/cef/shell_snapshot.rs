@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{fence, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -611,4 +611,3 @@ pub fn snapshot_read_if_changed(
         Ok(Some(out))
     }
 }
-

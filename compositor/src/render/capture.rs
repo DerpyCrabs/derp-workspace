@@ -447,11 +447,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, (), CompositorState> for ScreencopyManage
         data_init: &mut DataInit<'_, CompositorState>,
     ) {
         match request {
-            zwlr_screencopy_manager_v1::Request::CaptureOutput {
-                frame,
-                output,
-                ..
-            } => {
+            zwlr_screencopy_manager_v1::Request::CaptureOutput { frame, output, .. } => {
                 init_screencopy_frame(state, frame, output, None, data_init);
             }
             zwlr_screencopy_manager_v1::Request::CaptureOutputRegion {

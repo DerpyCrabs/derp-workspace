@@ -28,7 +28,10 @@ fn reset_drag_invalidate_throttle() {
         .expect("LAST_DRAG_VIEW_INVALIDATE") = None;
 }
 
-fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
+fn maybe_invalidate_shell_view_after_move_delta(
+    browser: Option<&mut Browser>,
+    reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
+) {
     let min_gap = drag_invalidate_min_interval();
     let now = Instant::now();
     {
@@ -44,15 +47,20 @@ fn maybe_invalidate_shell_view_after_move_delta(browser: Option<&mut Browser>) {
     }
     if let Some(b) = browser {
         if let Some(host) = b.host() {
+            crate::cef::begin_frame_diag::note_shell_view_invalidate(reason);
             host.invalidate(PaintElementType::VIEW);
         }
     }
 }
 
-fn invalidate_shell_view_unthrottled(browser: Option<&mut Browser>) {
+fn invalidate_shell_view_unthrottled(
+    browser: Option<&mut Browser>,
+    reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
+) {
     reset_drag_invalidate_throttle();
     if let Some(b) = browser {
         if let Some(host) = b.host() {
+            crate::cef::begin_frame_diag::note_shell_view_invalidate(reason);
             host.invalidate(PaintElementType::VIEW);
         }
     }
@@ -86,13 +94,15 @@ fn handle_uplink_list(
             let dy = args.int(2) as i32;
             tracing::debug!(target: "derp_shell_move", dx, dy, "cef uplink: move_delta");
             uplink.shell_move_delta(dx, dy);
-            maybe_invalidate_shell_view_after_move_delta(browser);
         }
         "move_end" => {
             let wid = args.int(1) as u32;
             tracing::debug!(target: "derp_shell_move", wid, "cef uplink: move_end");
             uplink.shell_move_end(wid);
-            invalidate_shell_view_unthrottled(browser);
+            invalidate_shell_view_unthrottled(
+                browser,
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::MoveEnd,
+            );
         }
         "resize_begin" => {
             let wid = args.int(1) as u32;
@@ -108,13 +118,19 @@ fn handle_uplink_list(
             let dy = args.int(2) as i32;
             tracing::debug!(target: "derp_shell_resize", dx, dy, "cef uplink: resize_delta");
             uplink.shell_resize_delta(dx, dy);
-            maybe_invalidate_shell_view_after_move_delta(browser);
+            maybe_invalidate_shell_view_after_move_delta(
+                browser,
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::ResizeDelta,
+            );
         }
         "resize_end" => {
             let wid = args.int(1) as u32;
             tracing::debug!(target: "derp_shell_resize", wid, "cef uplink: resize_end");
             uplink.shell_resize_end(wid);
-            invalidate_shell_view_unthrottled(browser);
+            invalidate_shell_view_unthrottled(
+                browser,
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::ResizeEnd,
+            );
         }
         "resize_shell_grab_begin" => {
             let wid = args.int(1) as u32;
@@ -125,7 +141,10 @@ fn handle_uplink_list(
         "resize_shell_grab_end" => {
             tracing::debug!(target: "derp_shell_resize", "cef uplink: resize_shell_grab_end");
             uplink.shell_resize_shell_grab_end();
-            invalidate_shell_view_unthrottled(browser);
+            invalidate_shell_view_unthrottled(
+                browser,
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::ResizeShellGrabEnd,
+            );
         }
         "taskbar_activate" => {
             let wid = args.int(1) as u32;

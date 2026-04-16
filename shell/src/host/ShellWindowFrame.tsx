@@ -139,14 +139,17 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
-        position: 'fixed',
+        position: 'absolute',
         'z-index': 1000 + readAcc(props.stackZ),
-        left: `${(model()?.x ?? 0) - layout().inset}px`,
-        top: `${(model()?.y ?? 0) - layout().th - layout().inset}px`,
+        left: '0',
+        top: '0',
         width: `${(model()?.width ?? 0) + layout().inset * 2}px`,
         height: `${(model()?.height ?? 0) + layout().th + layout().inset * 2}px`,
+        transform: `translate3d(${(model()?.x ?? 0) - layout().inset}px, ${(model()?.y ?? 0) - layout().th - layout().inset}px, 0)`,
+        'will-change': 'transform',
         'box-sizing': 'border-box',
         'pointer-events': 'none',
+        contain: 'layout paint',
         '--shell-chrome-bg': chromeBg(),
       }}
     >

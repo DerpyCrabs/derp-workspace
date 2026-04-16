@@ -16,8 +16,8 @@ use smithay::{
     utils::{Buffer, Logical, Physical, Point, Rectangle, Size},
 };
 
-use crate::desktop::desktop_stack::ShellDmaElement;
 use crate::controls::display_config::DesktopBackgroundConfig;
+use crate::desktop::desktop_stack::ShellDmaElement;
 use crate::state::{BackdropWallpaperIdCache, CompositorState};
 
 #[derive(Clone)]

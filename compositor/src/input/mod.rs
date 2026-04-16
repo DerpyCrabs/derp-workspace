@@ -63,10 +63,7 @@ pub(crate) fn keysym_is_super(keysym: &smithay::input::keyboard::KeysymHandle<'_
     keysym.raw_syms().into_iter().any(|sym| {
         matches!(
             sym.raw(),
-            keysyms::KEY_Super_L
-                | keysyms::KEY_Super_R
-                | keysyms::KEY_Meta_L
-                | keysyms::KEY_Meta_R
+            keysyms::KEY_Super_L | keysyms::KEY_Super_R | keysyms::KEY_Meta_L | keysyms::KEY_Meta_R
         )
     })
 }

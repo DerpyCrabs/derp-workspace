@@ -58,7 +58,11 @@ pub fn write_session_state(state: SessionStateFile) -> Result<(), String> {
     let Some(path) = session_state_path() else {
         return Err("session state path unavailable".into());
     };
-    crate::session::json_state::write_json_file(&path, &sanitize_session_state(state), "write session state")
+    crate::session::json_state::write_json_file(
+        &path,
+        &sanitize_session_state(state),
+        "write session state",
+    )
 }
 
 pub fn write_session_state_json(value: Value) -> Result<String, String> {
@@ -76,7 +80,9 @@ mod tests {
 
     #[test]
     fn reads_and_writes_session_state() {
-        let _guard = crate::session::json_state::test_state_dir_lock().lock().unwrap();
+        let _guard = crate::session::json_state::test_state_dir_lock()
+            .lock()
+            .unwrap();
         let mut dir = std::env::temp_dir();
         dir.push(format!(
             "derp-session-state-test-{}-{}",
@@ -114,7 +120,9 @@ mod tests {
 
     #[test]
     fn sanitizes_non_object_shell_payload() {
-        let _guard = crate::session::json_state::test_state_dir_lock().lock().unwrap();
+        let _guard = crate::session::json_state::test_state_dir_lock()
+            .lock()
+            .unwrap();
         let mut dir = std::env::temp_dir();
         dir.push(format!(
             "derp-session-state-sanitize-test-{}-{}",

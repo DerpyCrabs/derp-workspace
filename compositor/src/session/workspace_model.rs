@@ -167,7 +167,8 @@ pub fn clamp_workspace_split_pane_fraction(value: f64) -> f64 {
 }
 
 fn first_right_window_id(group: &WorkspaceGroupState, left_window_id: u32) -> Option<u32> {
-    group.window_ids
+    group
+        .window_ids
         .iter()
         .copied()
         .find(|window_id| *window_id != left_window_id)
@@ -280,7 +281,8 @@ fn ensure_valid_split_state(state: &mut WorkspaceState) {
             .get(&group.id)
             .copied()
             .unwrap_or(group.window_ids[0]);
-        if active_window_id == split.left_window_id || !group.window_ids.contains(&active_window_id) {
+        if active_window_id == split.left_window_id || !group.window_ids.contains(&active_window_id)
+        {
             state
                 .active_tab_by_group_id
                 .insert(group.id.clone(), right_window_id);
@@ -296,7 +298,10 @@ fn ensure_valid_split_state(state: &mut WorkspaceState) {
     state.split_by_group_id = next;
 }
 
-pub fn reconcile_workspace_state(state: &WorkspaceState, live_window_ids: &[u32]) -> WorkspaceState {
+pub fn reconcile_workspace_state(
+    state: &WorkspaceState,
+    live_window_ids: &[u32],
+) -> WorkspaceState {
     let mut next = state.clone();
     let live: HashSet<u32> = live_window_ids
         .iter()
@@ -398,11 +403,18 @@ pub fn next_active_window_after_removal(
             .filter(|window_id| *window_id != left_window_id)
             .collect();
         if removed_window_id == left_window_id {
-            return right_tabs.first().copied().or_else(|| remaining.first().copied());
+            return right_tabs
+                .first()
+                .copied()
+                .or_else(|| remaining.first().copied());
         }
         if !right_tabs.is_empty() {
-            let right_index = right_tabs.iter().position(|window_id| *window_id == removed_window_id);
-            let next_index = right_index.unwrap_or(0).min(right_tabs.len().saturating_sub(1));
+            let right_index = right_tabs
+                .iter()
+                .position(|window_id| *window_id == removed_window_id);
+            let next_index = right_index
+                .unwrap_or(0)
+                .min(right_tabs.len().saturating_sub(1));
             return right_tabs
                 .get(next_index)
                 .copied()
@@ -424,7 +436,10 @@ pub fn next_active_window_after_removal(
 impl WorkspaceState {
     pub fn apply_mutation(&self, mutation: &WorkspaceMutation) -> Option<WorkspaceState> {
         match mutation {
-            WorkspaceMutation::SelectTab { group_id, window_id } => {
+            WorkspaceMutation::SelectTab {
+                group_id,
+                window_id,
+            } => {
                 let group = self.groups.iter().find(|entry| entry.id == *group_id)?;
                 if !group.window_ids.contains(window_id) {
                     return None;
@@ -453,7 +468,10 @@ impl WorkspaceState {
                 if source_group_id == *target_group_id {
                     let mut next = self.clone();
                     let snapshot = next.clone();
-                    let group = next.groups.iter_mut().find(|group| group.id == *target_group_id)?;
+                    let group = next
+                        .groups
+                        .iter_mut()
+                        .find(|group| group.id == *target_group_id)?;
                     let before = group.window_ids.clone();
                     insert_into_group(&snapshot, group, *window_id, *insert_index);
                     if group.window_ids == before {
@@ -462,7 +480,10 @@ impl WorkspaceState {
                     return Some(next);
                 }
                 let mut next = self.clone();
-                let source_index = next.groups.iter().position(|group| group.id == source_group_id)?;
+                let source_index = next
+                    .groups
+                    .iter()
+                    .position(|group| group.id == source_group_id)?;
                 let target_index = next
                     .groups
                     .iter()
@@ -484,9 +505,11 @@ impl WorkspaceState {
                     let removed_group_id = next.groups[source_index].id.clone();
                     next.groups.remove(source_index);
                     next.active_tab_by_group_id.remove(&removed_group_id);
-                    next.split_by_group_id = without_group_split(&next.split_by_group_id, &removed_group_id);
+                    next.split_by_group_id =
+                        without_group_split(&next.split_by_group_id, &removed_group_id);
                 } else {
-                    let source_group = &next.groups[source_index.min(next.groups.len().saturating_sub(1))];
+                    let source_group =
+                        &next.groups[source_index.min(next.groups.len().saturating_sub(1))];
                     let source_active = next
                         .active_tab_by_group_id
                         .get(&source_group_id)
@@ -501,8 +524,13 @@ impl WorkspaceState {
                         },
                     );
                 }
-                next.split_by_group_id = without_group_split(&next.split_by_group_id, target_group_id);
-                if let Some(target_group) = next.groups.iter().find(|group| group.id == *target_group_id) {
+                next.split_by_group_id =
+                    without_group_split(&next.split_by_group_id, target_group_id);
+                if let Some(target_group) = next
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id)
+                {
                     let target_active = next
                         .active_tab_by_group_id
                         .get(target_group_id)
@@ -522,19 +550,27 @@ impl WorkspaceState {
             }
             WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
                 let source_group_id = group_id_for_window(self, *window_id)?.to_string();
-                let source_group = self.groups.iter().find(|group| group.id == source_group_id)?;
-                if source_group.window_ids.len() < 2 || !source_group.window_ids.contains(window_id) {
+                let source_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == source_group_id)?;
+                if source_group.window_ids.len() < 2 || !source_group.window_ids.contains(window_id)
+                {
                     return None;
                 }
                 let mut next = self.clone();
-                let source_index = next.groups.iter().position(|group| group.id == source_group_id)?;
+                let source_index = next
+                    .groups
+                    .iter()
+                    .position(|group| group.id == source_group_id)?;
                 next.groups[source_index]
                     .window_ids
                     .retain(|entry| *entry != *window_id);
                 if next.groups[source_index].window_ids.is_empty() {
                     next.groups.remove(source_index);
                     next.active_tab_by_group_id.remove(&source_group_id);
-                    next.split_by_group_id = without_group_split(&next.split_by_group_id, &source_group_id);
+                    next.split_by_group_id =
+                        without_group_split(&next.split_by_group_id, &source_group_id);
                 } else {
                     let source_active = next
                         .active_tab_by_group_id
@@ -625,7 +661,9 @@ impl WorkspaceState {
                     group_id.clone(),
                     WorkspaceGroupSplitState {
                         left_window_id: *left_window_id,
-                        left_pane_fraction: clamp_workspace_split_pane_fraction(*left_pane_fraction),
+                        left_pane_fraction: clamp_workspace_split_pane_fraction(
+                            *left_pane_fraction,
+                        ),
                     },
                 );
                 ensure_valid_split_state(&mut next);
@@ -669,9 +707,12 @@ impl WorkspaceState {
             } => {
                 let mut next = self.clone();
                 for monitor in &mut next.monitor_tiles {
-                    monitor.entries.retain(|entry| entry.window_id != *window_id);
+                    monitor
+                        .entries
+                        .retain(|entry| entry.window_id != *window_id);
                 }
-                next.monitor_tiles.retain(|monitor| !monitor.entries.is_empty());
+                next.monitor_tiles
+                    .retain(|monitor| !monitor.entries.is_empty());
                 if let Some(monitor) = next
                     .monitor_tiles
                     .iter_mut()
@@ -700,9 +741,12 @@ impl WorkspaceState {
             WorkspaceMutation::RemoveMonitorTile { window_id } => {
                 let mut next = self.clone();
                 for monitor in &mut next.monitor_tiles {
-                    monitor.entries.retain(|entry| entry.window_id != *window_id);
+                    monitor
+                        .entries
+                        .retain(|entry| entry.window_id != *window_id);
                 }
-                next.monitor_tiles.retain(|monitor| !monitor.entries.is_empty());
+                next.monitor_tiles
+                    .retain(|monitor| !monitor.entries.is_empty());
                 if next == *self {
                     return None;
                 }

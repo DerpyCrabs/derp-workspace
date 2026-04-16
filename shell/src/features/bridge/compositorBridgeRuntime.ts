@@ -1,10 +1,12 @@
 import { batch } from 'solid-js'
 import { dispatchAudioStateChanged } from '@/features/audio/audioEvents'
 import {
+  beginShellLatencySample,
   DERP_SHELL_EVENT,
   DERP_SHELL_SNAPSHOT_EVENT,
   installCompositorBatchHandler,
   installCompositorSnapshotHandler,
+  markShellLatencySample,
 } from '@/features/bridge/compositorEvents'
 import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
 import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
@@ -683,8 +685,20 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (!(raw instanceof ArrayBuffer)) return false
     const decoded = decodeCompositorSnapshot(raw)
     if (!decoded || decoded.details.length === 0) return false
+    const shouldTrace =
+      decoded.details.some((detail) => detail.type.startsWith('window_')) ||
+      decoded.details.some((detail) => detail.type === 'focus_changed' || detail.type === 'workspace_state')
+    const shellLatencySampleId = shouldTrace
+      ? beginShellLatencySample(decoded.sequence, decoded.details.length, force)
+      : 0
+    if (shellLatencySampleId !== 0) {
+      markShellLatencySample(shellLatencySampleId, { decodedAt: performance.now() })
+    }
     lastSnapshotSequence = decoded.sequence
     applyCompositorSnapshot(decoded.details)
+    if (shellLatencySampleId !== 0) {
+      markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
+    }
     return true
   }
 

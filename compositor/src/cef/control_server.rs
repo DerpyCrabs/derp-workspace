@@ -10,9 +10,9 @@ use cef::{
     ThreadId, WrapTask,
 };
 
+use crate::cef::cef_userfree_string_to_string;
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
-use crate::cef::cef_userfree_string_to_string;
 
 struct PortalScreencastRequest {
     request_id: u64,
@@ -738,8 +738,7 @@ fn handle_one(
             .canonicalize()
             .map_err(|e| format!("wallpaper_preview: {e}"))?;
         if !wallpaper_preview_allowed(&canon) {
-            write_http_json(stream, 403, r#"{"error":"forbidden"}"#)
-                .map_err(|e| e.to_string())?;
+            write_http_json(stream, 403, r#"{"error":"forbidden"}"#).map_err(|e| e.to_string())?;
             return Ok(());
         }
         let jpeg = crate::desktop::desktop_background::encode_wallpaper_preview_jpeg(&canon)?;
@@ -748,8 +747,7 @@ fn handle_one(
     }
 
     if !method.eq_ignore_ascii_case("POST") {
-        write_http_json(stream, 404, r#"{"error":"not_found"}"#)
-            .map_err(|e| e.to_string())?;
+        write_http_json(stream, 404, r#"{"error":"not_found"}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -1060,8 +1058,9 @@ fn handle_one(
             return Ok(());
         }
         "/settings_theme" => {
-            let theme = serde_json::from_value::<crate::session::settings_config::ThemeSettingsFile>(v)
-                .map_err(|e| format!("invalid theme settings: {e}"))?;
+            let theme =
+                serde_json::from_value::<crate::session::settings_config::ThemeSettingsFile>(v)
+                    .map_err(|e| format!("invalid theme settings: {e}"))?;
             crate::session::settings_config::write_theme_settings(theme)?;
         }
         "/settings_keyboard" => {
@@ -1071,8 +1070,9 @@ fn handle_one(
             uplink.settings_keyboard_apply(keyboard)?;
         }
         "/settings_user" => {
-            let update = serde_json::from_value::<crate::session::gdm_settings::GdmAutologinUpdate>(v)
-                .map_err(|e| format!("invalid user settings: {e}"))?;
+            let update =
+                serde_json::from_value::<crate::session::gdm_settings::GdmAutologinUpdate>(v)
+                    .map_err(|e| format!("invalid user settings: {e}"))?;
             crate::session::gdm_settings::write_gdm_autologin_settings(update)?;
         }
         "/audio_default" => {
@@ -1161,8 +1161,7 @@ fn handle_one(
             portal_screencast_respond(&v)?;
         }
         _ => {
-            write_http_json(stream, 404, r#"{"error":"not_found"}"#)
-                .map_err(|e| e.to_string())?;
+            write_http_json(stream, 404, r#"{"error":"not_found"}"#).map_err(|e| e.to_string())?;
             return Ok(());
         }
     }

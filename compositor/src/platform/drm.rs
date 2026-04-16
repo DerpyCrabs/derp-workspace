@@ -189,148 +189,151 @@ impl DrmHead {
 
             let cc = state.desktop_background_config.solid_rgba;
 
-            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> = if state
-                .shell_presentation_fullscreen
-            {
-                match space_render_elements(renderer, [&state.space], output, 1.0) {
-                    Ok(space_els) => {
-                        for el in &shell_render.floating {
-                            render_elements.push(DesktopStack::ShellDma(el));
-                        }
-                        if let Some(ref el) = shell_render.context_menu {
-                            render_elements.push(DesktopStack::ShellDma(el));
-                        }
-                        if let Some(ref el) = shell_render.dmabuf {
-                            render_elements.push(DesktopStack::ShellDma(el));
-                        }
-                        render_elements.extend(space_els.into_iter().map(|el| {
-                            DesktopStack::Space(
+            let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
+                if state.shell_presentation_fullscreen {
+                    match space_render_elements(renderer, [&state.space], output, 1.0) {
+                        Ok(space_els) => {
+                            for el in &shell_render.floating {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
+                            if let Some(ref el) = shell_render.context_menu {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
+                            if let Some(ref el) = shell_render.dmabuf {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
+                            render_elements.extend(space_els.into_iter().map(|el| {
+                                DesktopStack::Space(
                                 crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
                                     el,
                                     output_scale,
                                 ),
                             )
-                        }));
-                        let (backdrop, backdrop_force_full_damage) =
-                            crate::render::backdrop_render::desktop_backdrop_layers(
-                                state,
-                                output,
-                                output_scale,
-                            );
-                        for s in backdrop.solids {
-                            render_elements.push(DesktopStack::BackdropSolid(s));
-                        }
-                        for t in backdrop.textures {
-                            render_elements.push(DesktopStack::BackdropTex(t));
-                        }
-                        let capture_needs_full_damage = state.active_image_copy_capture_sessions
-                            > 0
-                            || state.capture_force_full_damage_frames > 0
-                            || !state.pending_screencopy_copies.is_empty()
-                            || !state.pending_image_copy_captures.is_empty();
-                        let age_for_render = if state.shell_exclusion_zones_need_full_damage
-                            || state.screenshot_overlay_needs_full_damage
-                            || shell_render.force_full_damage
-                            || backdrop_force_full_damage
-                            || capture_needs_full_damage
-                        {
-                            0usize
-                        } else {
-                            buffer_age as usize
-                        };
-                        let out = self.damage_tracker.render_output(
-                            renderer,
-                            &mut fb_target,
-                            age_for_render,
-                            &render_elements,
-                            [cc[0], cc[1], cc[2], cc[3]],
-                        );
-                        if out.is_ok() {
-                            state.shell_exclusion_zones_need_full_damage = false;
-                            state.screenshot_overlay_needs_full_damage = false;
-                            if state.capture_force_full_damage_frames > 0 {
-                                state.capture_force_full_damage_frames -= 1;
+                            }));
+                            let (backdrop, backdrop_force_full_damage) =
+                                crate::render::backdrop_render::desktop_backdrop_layers(
+                                    state,
+                                    output,
+                                    output_scale,
+                                );
+                            for s in backdrop.solids {
+                                render_elements.push(DesktopStack::BackdropSolid(s));
                             }
+                            for t in backdrop.textures {
+                                render_elements.push(DesktopStack::BackdropTex(t));
+                            }
+                            let capture_needs_full_damage =
+                                state.active_image_copy_capture_sessions > 0
+                                    || state.capture_force_full_damage_frames > 0
+                                    || !state.pending_screencopy_copies.is_empty()
+                                    || !state.pending_image_copy_captures.is_empty();
+                            let age_for_render = if state.shell_exclusion_zones_need_full_damage
+                                || state.screenshot_overlay_needs_full_damage
+                                || shell_render.force_full_damage
+                                || backdrop_force_full_damage
+                                || capture_needs_full_damage
+                            {
+                                0usize
+                            } else {
+                                buffer_age as usize
+                            };
+                            let out = self.damage_tracker.render_output(
+                                renderer,
+                                &mut fb_target,
+                                age_for_render,
+                                &render_elements,
+                                [cc[0], cc[1], cc[2], cc[3]],
+                            );
+                            if out.is_ok() {
+                                state.shell_exclusion_zones_need_full_damage = false;
+                                state.screenshot_overlay_needs_full_damage = false;
+                                if state.capture_force_full_damage_frames > 0 {
+                                    state.capture_force_full_damage_frames -= 1;
+                                }
+                            }
+                            out
                         }
-                        out
+                        Err(e) => Err(e.into()),
                     }
-                    Err(e) => Err(e.into()),
-                }
-            } else {
-                let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
-                    &state.space,
-                    state,
-                    renderer,
-                    output,
-                    1.0,
-                );
-                for el in &shell_render.floating {
-                    render_elements.push(DesktopStack::ShellDma(el));
-                }
-                if let Some(ref el) = shell_render.context_menu {
-                    render_elements.push(DesktopStack::ShellDma(el));
-                }
-                let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
-                for (el, wid, include_self_decor) in tagged {
-                    let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
-                        output,
-                        wid,
-                        include_self_decor,
-                        Some(&ordered_window_ids_on_output),
-                    );
-                    match excl_ctx {
-                        None => render_elements.push(DesktopStack::Space(
-                            crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
-                                el,
-                                output_scale,
-                            ),
-                        )),
-                        Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
-                            SpaceExclusionClip::new(el, output_scale, ctx, wid),
-                        )),
-                    }
-                }
-                if let Some(ref el) = shell_render.dmabuf {
-                    render_elements.push(DesktopStack::ShellDma(el));
-                }
-                let (backdrop, backdrop_force_full_damage) =
-                    crate::render::backdrop_render::desktop_backdrop_layers(state, output, output_scale);
-                for s in backdrop.solids {
-                    render_elements.push(DesktopStack::BackdropSolid(s));
-                }
-                for t in backdrop.textures {
-                    render_elements.push(DesktopStack::BackdropTex(t));
-                }
-                let capture_needs_full_damage = state.active_image_copy_capture_sessions > 0
-                    || state.capture_force_full_damage_frames > 0
-                    || !state.pending_screencopy_copies.is_empty()
-                    || !state.pending_image_copy_captures.is_empty();
-                let age_for_render = if state.shell_exclusion_zones_need_full_damage
-                    || state.screenshot_overlay_needs_full_damage
-                    || shell_render.force_full_damage
-                    || backdrop_force_full_damage
-                    || capture_needs_full_damage
-                {
-                    0usize
                 } else {
-                    buffer_age as usize
-                };
-                let out = self.damage_tracker.render_output(
-                    renderer,
-                    &mut fb_target,
-                    age_for_render,
-                    &render_elements,
-                    [cc[0], cc[1], cc[2], cc[3]],
-                );
-                if out.is_ok() {
-                    state.shell_exclusion_zones_need_full_damage = false;
-                    state.screenshot_overlay_needs_full_damage = false;
-                    if state.capture_force_full_damage_frames > 0 {
-                        state.capture_force_full_damage_frames -= 1;
+                    let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
+                        &state.space,
+                        state,
+                        renderer,
+                        output,
+                        1.0,
+                    );
+                    for el in &shell_render.floating {
+                        render_elements.push(DesktopStack::ShellDma(el));
                     }
-                }
-                out
-            };
+                    if let Some(ref el) = shell_render.context_menu {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
+                    let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
+                    for (el, wid, include_self_decor) in tagged {
+                        let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(
+                            output,
+                            wid,
+                            include_self_decor,
+                            Some(&ordered_window_ids_on_output),
+                        );
+                        match excl_ctx {
+                            None => render_elements.push(DesktopStack::Space(
+                                crate::desktop::desktop_stack::FractionalDamageSpaceElements::new(
+                                    el,
+                                    output_scale,
+                                ),
+                            )),
+                            Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
+                                SpaceExclusionClip::new(el, output_scale, ctx, wid),
+                            )),
+                        }
+                    }
+                    if let Some(ref el) = shell_render.dmabuf {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
+                    let (backdrop, backdrop_force_full_damage) =
+                        crate::render::backdrop_render::desktop_backdrop_layers(
+                            state,
+                            output,
+                            output_scale,
+                        );
+                    for s in backdrop.solids {
+                        render_elements.push(DesktopStack::BackdropSolid(s));
+                    }
+                    for t in backdrop.textures {
+                        render_elements.push(DesktopStack::BackdropTex(t));
+                    }
+                    let capture_needs_full_damage = state.active_image_copy_capture_sessions > 0
+                        || state.capture_force_full_damage_frames > 0
+                        || !state.pending_screencopy_copies.is_empty()
+                        || !state.pending_image_copy_captures.is_empty();
+                    let age_for_render = if state.shell_exclusion_zones_need_full_damage
+                        || state.screenshot_overlay_needs_full_damage
+                        || shell_render.force_full_damage
+                        || backdrop_force_full_damage
+                        || capture_needs_full_damage
+                    {
+                        0usize
+                    } else {
+                        buffer_age as usize
+                    };
+                    let out = self.damage_tracker.render_output(
+                        renderer,
+                        &mut fb_target,
+                        age_for_render,
+                        &render_elements,
+                        [cc[0], cc[1], cc[2], cc[3]],
+                    );
+                    if out.is_ok() {
+                        state.shell_exclusion_zones_need_full_damage = false;
+                        state.screenshot_overlay_needs_full_damage = false;
+                        if state.capture_force_full_damage_frames > 0 {
+                            state.capture_force_full_damage_frames -= 1;
+                        }
+                    }
+                    out
+                };
 
             if render_res.is_ok() {
                 state.screenshot_capture_output_if_needed(output, renderer, &fb_target);
@@ -452,6 +455,10 @@ impl DrmSession {
         self.drm_idle_render_armed = true;
         let h = self.loop_handle.clone();
         h.insert_idle(|d| drm_idle_render(d));
+    }
+
+    pub(crate) fn request_render(&mut self) {
+        self.schedule_drm_idle_render_coalesced();
     }
 
     fn prune_disconnected_heads(&mut self, state: &mut CompositorState) {
@@ -666,7 +673,8 @@ impl DrmSession {
             shift_total,
             "hotplug attach calling apply_stored_from_heads+shell_after_drm_topology_changed"
         );
-        let _ = crate::controls::display_config::apply_stored_from_heads(state, &self.drm, &self.heads);
+        let _ =
+            crate::controls::display_config::apply_stored_from_heads(state, &self.drm, &self.heads);
         state.shell_after_drm_topology_changed();
         self.schedule_drm_idle_render_coalesced();
     }

@@ -79,6 +79,10 @@ import type {
   LayoutScreen,
 } from '@/host/types'
 import { createCompositorModel } from '@/features/bridge/compositorModel'
+import {
+  flushActiveShellLatencySample,
+  markActiveShellLatencySample,
+} from '@/features/bridge/compositorEvents'
 import { registerAppRuntimeBootstrap } from '@/features/bridge/appRuntimeBootstrap'
 import { createScreenshotPortalBridge } from '@/features/bridge/screenshotPortalBridge'
 import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
@@ -380,6 +384,7 @@ function App() {
   })
   createEffect(() => {
     const authoritative = compositorWindows()
+    markActiveShellLatencySample({ authoritativeAt: performance.now() })
     setWindowDrafts((prev) => {
       let next: Map<number, WindowDraftPatch> | null = null
       for (const [windowId, draft] of prev) {
@@ -403,6 +408,16 @@ function App() {
         }
       }
       return next ?? prev
+    })
+  })
+  createEffect(() => {
+    windowsList()
+    const sample = markActiveShellLatencySample({ visualAt: performance.now() })
+    if (!sample || sample.rafAt !== undefined) return
+    requestAnimationFrame(() => {
+      const next = markActiveShellLatencySample({ rafAt: performance.now() })
+      if (!next) return
+      flushActiveShellLatencySample()
     })
   })
   const patchWindowDrafts = (

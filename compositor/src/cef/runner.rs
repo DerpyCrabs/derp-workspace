@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,8 +10,8 @@ use cef::{args::Args, rc::*, sys, *};
 use signal_hook::{consts::SIGINT, consts::SIGTERM, flag};
 use smithay::reexports::calloop::channel::Sender;
 
-use crate::cef::cef_userfree_string_to_string;
 use crate::cef::bridge::ShellToCefLink;
+use crate::cef::cef_userfree_string_to_string;
 use crate::cef::compositor_tx::CefToCompositor;
 use crate::cef::frame_sink::DirectDmabufSink;
 use crate::cef::osr_view_state::{
@@ -37,6 +37,62 @@ fn cef_color_to_drm_format(ct: ColorType) -> u32 {
 
 #[cfg(unix)]
 static FIRST_ACCELERATED_PAINT_LOG: std::sync::Once = std::sync::Once::new();
+
+struct ExternalMessagePump {
+    next_work_at: Mutex<Option<Instant>>,
+    cv: Condvar,
+}
+
+impl ExternalMessagePump {
+    fn new() -> Self {
+        Self {
+            next_work_at: Mutex::new(None),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn schedule(&self, delay_ms: i64) {
+        let due = if delay_ms <= 0 {
+            Instant::now()
+        } else {
+            Instant::now() + Duration::from_millis(delay_ms as u64)
+        };
+        let Ok(mut next) = self.next_work_at.lock() else {
+            return;
+        };
+        let should_update = match *next {
+            Some(prev) => due < prev,
+            None => true,
+        };
+        if should_update {
+            *next = Some(due);
+            self.cv.notify_one();
+        }
+    }
+
+    fn wait(&self, fallback: Duration) {
+        let Ok(mut next) = self.next_work_at.lock() else {
+            thread::sleep(fallback);
+            return;
+        };
+        if let Some(due) = *next {
+            let now = Instant::now();
+            if due <= now {
+                *next = None;
+                return;
+            }
+            let wait = due.saturating_duration_since(now).min(fallback);
+            let Ok((mut next_after, _)) = self.cv.wait_timeout(next, wait) else {
+                return;
+            };
+            if next_after.is_some_and(|scheduled| scheduled <= Instant::now()) {
+                *next_after = None;
+            }
+            return;
+        }
+        let _ = self.cv.wait_timeout(next, fallback);
+    }
+}
 
 #[cfg(unix)]
 fn cef_dirty_rects_for_dmabuf(
@@ -80,8 +136,83 @@ fn cef_dirty_rects_for_dmabuf(
     }
 }
 
+#[cfg(unix)]
+fn cef_dirty_rect_metrics(
+    dirty_rects: Option<&[Rect]>,
+    buf_w: u32,
+    buf_h: u32,
+) -> (
+    crate::cef::begin_frame_diag::DirtyRectKind,
+    usize,
+    u16,
+    bool,
+) {
+    let Some(rects) = dirty_rects else {
+        return (
+            crate::cef::begin_frame_diag::DirtyRectKind::Missing,
+            0,
+            1000,
+            true,
+        );
+    };
+    if rects.is_empty() {
+        return (
+            crate::cef::begin_frame_diag::DirtyRectKind::Empty,
+            0,
+            0,
+            false,
+        );
+    }
+    let bw = buf_w as i64;
+    let bh = buf_h as i64;
+    let total_area = bw.saturating_mul(bh).max(1);
+    let mut count = 0usize;
+    let mut covered_area = 0i64;
+    let mut min_x = bw;
+    let mut min_y = bh;
+    let mut max_x = 0i64;
+    let mut max_y = 0i64;
+    for r in rects {
+        if r.width <= 0 || r.height <= 0 {
+            continue;
+        }
+        let x0 = (r.x as i64).clamp(0, bw);
+        let y0 = (r.y as i64).clamp(0, bh);
+        let x1 = (r.x as i64 + r.width as i64).clamp(0, bw);
+        let y1 = (r.y as i64 + r.height as i64).clamp(0, bh);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        count += 1;
+        covered_area = covered_area.saturating_add((x1 - x0).saturating_mul(y1 - y0));
+        min_x = min_x.min(x0);
+        min_y = min_y.min(y0);
+        max_x = max_x.max(x1);
+        max_y = max_y.max(y1);
+    }
+    if count == 0 {
+        return (
+            crate::cef::begin_frame_diag::DirtyRectKind::Empty,
+            0,
+            0,
+            false,
+        );
+    }
+    let coverage_per_mille = ((covered_area.min(total_area) * 1000) / total_area) as u16;
+    let bbox_area = (max_x - min_x).saturating_mul(max_y - min_y);
+    let bbox_full = bbox_area * 20 >= total_area * 19;
+    (
+        crate::cef::begin_frame_diag::DirtyRectKind::Provided,
+        count,
+        coverage_per_mille,
+        bbox_full,
+    )
+}
+
 wrap_app! {
-    struct DerpApp;
+    struct DerpApp {
+        message_pump: Arc<ExternalMessagePump>,
+    }
     impl App {
         fn on_before_command_line_processing(
             &self,
@@ -130,6 +261,23 @@ wrap_app! {
 
         fn render_process_handler(&self) -> Option<RenderProcessHandler> {
             Some(shell_uplink::DerpRenderProcessHandler::new())
+        }
+
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(DerpBrowserProcessHandler::new(self.message_pump.clone()))
+        }
+    }
+}
+
+wrap_browser_process_handler! {
+    struct DerpBrowserProcessHandler {
+        message_pump: Arc<ExternalMessagePump>,
+    }
+
+    impl BrowserProcessHandler {
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            crate::cef::begin_frame_diag::note_cef_message_pump_scheduled(delay_ms);
+            self.message_pump.schedule(delay_ms);
         }
     }
 }
@@ -194,6 +342,9 @@ wrap_load_handler! {
             };
             host.notify_screen_info_changed();
             host.set_focus(1);
+            crate::cef::begin_frame_diag::note_shell_view_invalidate(
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::BrowserLoad,
+            );
             host.invalidate(PaintElementType::VIEW);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
                 if let Ok(g) = state.shell_to_cef.lock() {
@@ -308,6 +459,16 @@ wrap_render_handler! {
             let drm_fmt = cef_color_to_drm_format(info.format);
             let w = info.extra.coded_size.width as u32;
             let h = info.extra.coded_size.height as u32;
+            let (dirty_rect_kind, dirty_rect_count, dirty_rect_coverage_per_mille, dirty_rect_bbox_full) =
+                cef_dirty_rect_metrics(dirty_rects, w, h);
+            crate::cef::begin_frame_diag::note_cef_accelerated_paint(
+                w,
+                h,
+                dirty_rect_kind,
+                dirty_rect_count,
+                dirty_rect_coverage_per_mille,
+                dirty_rect_bbox_full,
+            );
             FIRST_ACCELERATED_PAINT_LOG.call_once(|| {
                 tracing::debug!(
                     target: "derp_shell_osr",
@@ -477,7 +638,7 @@ wrap_client! {
 
 pub fn maybe_run_cef_subprocess_only() -> Option<i32> {
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-    let mut app = DerpApp::new();
+    let mut app = DerpApp::new(Arc::new(ExternalMessagePump::new()));
     let cef_args = Args::new();
     let cmd = cef_args
         .as_cmd_line()
@@ -560,8 +721,9 @@ fn run_cef(
         settings.cache_path = s;
     }
 
+    let message_pump = Arc::new(ExternalMessagePump::new());
     let cef_args = Args::new();
-    let mut app = DerpApp::new();
+    let mut app = DerpApp::new(message_pump.clone());
     let init_ret = initialize(
         Some(cef_args.as_main_args()),
         Some(&settings),
@@ -626,27 +788,24 @@ fn run_cef(
                 .unwrap_or_else(|_| "\"\"".to_string());
             let snapshot_path_js =
                 serde_json::to_string(&snapshot_path).unwrap_or_else(|_| "null".to_string());
-            let exclusion_state_path_js = serde_json::to_string(
-                &crate::cef::shared_state::path_for_kind(
+            let exclusion_state_path_js =
+                serde_json::to_string(&crate::cef::shared_state::path_for_kind(
                     crate::cef::runtime_dir(),
                     crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES,
-                ),
-            )
-            .unwrap_or_else(|_| "null".to_string());
-            let ui_windows_state_path_js = serde_json::to_string(
-                &crate::cef::shared_state::path_for_kind(
+                ))
+                .unwrap_or_else(|_| "null".to_string());
+            let ui_windows_state_path_js =
+                serde_json::to_string(&crate::cef::shared_state::path_for_kind(
                     crate::cef::runtime_dir(),
                     crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS,
-                ),
-            )
-            .unwrap_or_else(|_| "null".to_string());
-            let floating_layers_state_path_js = serde_json::to_string(
-                &crate::cef::shared_state::path_for_kind(
+                ))
+                .unwrap_or_else(|_| "null".to_string());
+            let floating_layers_state_path_js =
+                serde_json::to_string(&crate::cef::shared_state::path_for_kind(
                     crate::cef::runtime_dir(),
                     crate::cef::shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS,
-                ),
-            )
-            .unwrap_or_else(|_| "null".to_string());
+                ))
+                .unwrap_or_else(|_| "null".to_string());
             Some(format!(
                 "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_COMPOSITOR_SNAPSHOT_ABI={};window.__DERP_SHELL_EXCLUSION_STATE_PATH={exclusion_state_path_js};window.__DERP_SHELL_UI_WINDOWS_STATE_PATH={ui_windows_state_path_js};window.__DERP_SHELL_FLOATING_LAYERS_STATE_PATH={floating_layers_state_path_js};window.__DERP_SHELL_SHARED_STATE_ABI={};",
                 shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
@@ -721,7 +880,11 @@ fn run_cef(
     while !shutdown_requested.load(Ordering::Relaxed) && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(if link.has_pending_shell_updates() { 1 } else { 4 }));
+        message_pump.wait(Duration::from_millis(if link.has_pending_shell_updates() {
+            1
+        } else {
+            4
+        }));
     }
 
     if let Ok(g) = browser_holder.lock() {

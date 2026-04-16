@@ -35,6 +35,9 @@ fn apply_output_dimensions_to_osr(
         if let Some(host) = b.host() {
             host.was_resized();
             host.notify_screen_info_changed();
+            crate::cef::begin_frame_diag::note_shell_view_invalidate(
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::OutputResize,
+            );
             host.invalidate(cef::PaintElementType::VIEW);
         }
     }

@@ -563,13 +563,16 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         <div
           data-testid={testId}
           {...extraAttrs}
-          class="pointer-events-none fixed box-border"
+          class="pointer-events-none absolute box-border"
           style={{
-            left: `${rect.x}px`,
-            top: `${rect.y}px`,
+            left: '0',
+            top: '0',
             width: `${rect.width}px`,
             height: `${rect.height}px`,
+            transform: `translate3d(${rect.x}px, ${rect.y}px, 0)`,
+            'will-change': 'transform',
             'z-index': 1005 + stackZ(),
+            contain: 'layout paint',
           }}
         >
           <Show when={shellHosted}>
@@ -696,12 +699,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
               <div
                 data-testid="workspace-split-divider"
                 data-workspace-split-divider={props.groupId}
-                class="fixed z-6 cursor-col-resize bg-[color-mix(in_srgb,var(--shell-border)_88%,var(--shell-accent)_12%)]"
+                class="absolute z-6 cursor-col-resize bg-[color-mix(in_srgb,var(--shell-border)_88%,var(--shell-accent)_12%)]"
                 style={{
-                  left: `${layout.left.x + layout.left.width - Math.floor(WORKSPACE_SPLIT_DIVIDER_PX / 2)}px`,
-                  top: `${layout.left.y + 6}px`,
+                  left: '0',
+                  top: '0',
                   width: `${WORKSPACE_SPLIT_DIVIDER_PX}px`,
                   height: `${Math.max(24, layout.left.height - 12)}px`,
+                  transform: `translate3d(${layout.left.x + layout.left.width - Math.floor(WORKSPACE_SPLIT_DIVIDER_PX / 2)}px, ${layout.left.y + 6}px, 0)`,
+                  'will-change': 'transform',
                   'z-index': 1006 + stackZ(),
                 }}
                 onPointerDown={(event) => {

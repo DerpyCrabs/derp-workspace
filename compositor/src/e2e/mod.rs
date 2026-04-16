@@ -706,13 +706,14 @@ impl CompositorState {
             .collect();
         let request_id = next_screenshot_request_id();
         let save_path = next_artifact_path("screenshot", "png")?;
-        self.screenshot_request =
-            Some(crate::render::screenshot::PendingScreenshotRequest::for_region_e2e(
+        self.screenshot_request = Some(
+            crate::render::screenshot::PendingScreenshotRequest::for_region_e2e(
                 logical_rect,
                 outputs,
                 request_id,
                 save_path,
-            )?);
+            )?,
+        );
         self.loop_signal.wakeup();
         Ok(request_id)
     }

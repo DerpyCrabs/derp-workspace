@@ -221,13 +221,14 @@ pub fn load_from_display_file_into(state: &mut crate::state::CompositorState) {
             return;
         }
     };
-    let cfg_file: crate::controls::display_config::DisplayConfigFile = match serde_json::from_str(&raw) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(target: "derp_wallpaper", ?e, "parse display config");
-            return;
-        }
-    };
+    let cfg_file: crate::controls::display_config::DisplayConfigFile =
+        match serde_json::from_str(&raw) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(target: "derp_wallpaper", ?e, "parse display config");
+                return;
+            }
+        };
     if cfg_file.version != 1 {
         return;
     }

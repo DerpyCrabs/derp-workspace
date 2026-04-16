@@ -507,16 +507,17 @@ fn render_window_output_texture(
     let output_source = state
         .capture_output_source(&output)
         .ok_or_else(|| "capture output source is no longer available".to_string())?;
-    let elements: Vec<_> = crate::render::derp_space_render::derp_space_render_elements_with_window_ids(
-        &state.space,
-        state,
-        renderer,
-        &output,
-        1.0,
-    )
-    .into_iter()
-    .filter_map(|(el, wid, _)| (wid == Some(window_id)).then_some(el))
-    .collect();
+    let elements: Vec<_> =
+        crate::render::derp_space_render::derp_space_render_elements_with_window_ids(
+            &state.space,
+            state,
+            renderer,
+            &output,
+            1.0,
+        )
+        .into_iter()
+        .filter_map(|(el, wid, _)| (wid == Some(window_id)).then_some(el))
+        .collect();
     let rendered_bounds = elements
         .iter()
         .fold(None::<Rectangle<i32, Physical>>, |acc, el| {
@@ -634,7 +635,12 @@ fn render_window_capture_image(
         &mut target,
         buffer_size,
     )?;
-    crate::render::screenshot::capture_output_image(renderer, &target, buffer_size, Transform::Normal)
+    crate::render::screenshot::capture_output_image(
+        renderer,
+        &target,
+        buffer_size,
+        Transform::Normal,
+    )
 }
 
 fn render_window_to_dmabuf(
