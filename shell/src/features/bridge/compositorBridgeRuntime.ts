@@ -1,6 +1,11 @@
 import { batch } from 'solid-js'
 import { dispatchAudioStateChanged } from '@/features/audio/audioEvents'
-import { DERP_SHELL_EVENT, DERP_SHELL_SNAPSHOT_EVENT, installCompositorBatchHandler } from '@/features/bridge/compositorEvents'
+import {
+  DERP_SHELL_EVENT,
+  DERP_SHELL_SNAPSHOT_EVENT,
+  installCompositorBatchHandler,
+  installCompositorSnapshotHandler,
+} from '@/features/bridge/compositorEvents'
 import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
 import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
@@ -697,6 +702,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const removeCompositorBatchHandler = installCompositorBatchHandler((details) => {
     applyCompositorBatch(details)
   })
+  const removeCompositorSnapshotHandler = installCompositorSnapshotHandler(() => {
+    syncCompositorSnapshot()
+  })
 
   window.addEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
   window.addEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
@@ -723,6 +731,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
     if (bootstrapSnapshotTimer !== undefined) clearTimeout(bootstrapSnapshotTimer)
     removeCompositorBatchHandler()
+    removeCompositorSnapshotHandler()
     window.removeEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
     window.removeEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
   }

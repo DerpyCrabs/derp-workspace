@@ -58,7 +58,10 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
 
 fn dispatch_shell_snapshot_notify(browser: &Browser) {
     crate::cef::begin_frame_diag::note_shell_snapshot_notify();
-    execute_main_frame_script(browser, "window.dispatchEvent(new Event('derp-shell-snapshot'));");
+    execute_main_frame_script(
+        browser,
+        "(()=>{const derpSyncSnapshot=window.__DERP_SYNC_COMPOSITOR_SNAPSHOT;if(typeof derpSyncSnapshot==='function'){try{derpSyncSnapshot();return;}catch(err){console.warn('[derp-shell-bridge] compositor snapshot handler failed',err);}}window.dispatchEvent(new Event('derp-shell-snapshot'));})();",
+    );
 }
 
 fn flush_shell_updates(

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installCompositorBatchHandler } from './compositorEvents'
+import { installCompositorBatchHandler, installCompositorSnapshotHandler } from './compositorEvents'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -42,5 +42,33 @@ describe('installCompositorBatchHandler', () => {
     window.__DERP_APPLY_COMPOSITOR_BATCH?.({ type: 'compositor_ping' } as never)
 
     expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe('installCompositorSnapshotHandler', () => {
+  it('forwards compositor snapshot sync to the installed handler', () => {
+    const handler = vi.fn()
+    vi.stubGlobal('window', {})
+    const dispose = installCompositorSnapshotHandler(handler)
+
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    dispose()
+  })
+
+  it('restores the previous handler when disposed', () => {
+    const previous = vi.fn()
+    vi.stubGlobal('window', {
+      __DERP_SYNC_COMPOSITOR_SNAPSHOT: previous,
+    })
+    const dispose = installCompositorSnapshotHandler(() => {})
+
+    dispose()
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(window.__DERP_SYNC_COMPOSITOR_SNAPSHOT).toBe(previous)
+    expect(previous).toHaveBeenCalledTimes(1)
   })
 })
