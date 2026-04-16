@@ -13,15 +13,14 @@ import {
   shellUiWindowMeasureFromEnv,
   type ShellUiMeasureEnv,
 } from '@/features/shell-ui/shellUiWindows'
-import { registerShellWindowFrame } from './shellWindowFrameDom'
 import {
   CHROME_BORDER_PX,
   CHROME_RESIZE_HANDLE_PX,
-  CHROME_TITLEBAR_PX,
   SHELL_RESIZE_BOTTOM,
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
 } from '@/lib/chromeConstants'
+import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
 
 export type ShellWindowModel = {
   window_id: number
@@ -62,14 +61,12 @@ type ShellWindowFrameProps = {
   onMaximize: () => void
   onClose: () => void
   shellUiRegister?: { id: number; z: number; getEnv: () => ShellUiMeasureEnv | null }
-  allowImperativeGeometrySync?: boolean
   tabStrip?: JSX.Element
   children?: JSX.Element
 }
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
   let root: HTMLDivElement | undefined
-  let unregisterFrame: (() => void) | undefined
   const requestFocus = () => {
     props.onFocusRequest?.()
   }
@@ -87,17 +84,31 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         inset: 0,
         outerW: 1,
         showBorderChrome: false,
+        ox: 0,
+        oy: 0,
+        ow: 1,
+        oh: 1,
       }
     }
-    const th = CHROME_TITLEBAR_PX
     const bd = CHROME_BORDER_PX
     const rh = CHROME_RESIZE_HANDLE_PX
     const noTilingChrome = w.maximized || w.fullscreen
     const snapTiled = !!w.snap_tiled && !noTilingChrome
     const inset = noTilingChrome || snapTiled ? 0 : bd
+    const o = shellOuterFrameFromClient({
+      x: w.x,
+      y: w.y,
+      width: w.width,
+      height: w.height,
+      maximized: w.maximized,
+      fullscreen: w.fullscreen,
+      minimized: false,
+      snap_tiled: w.snap_tiled,
+    })
+    const th = o.th
     const outerW = w.width + inset * 2
     const showBorderChrome = !noTilingChrome
-    return { th, bd, rh, inset, outerW, showBorderChrome }
+    return { th, bd, rh, inset, outerW, showBorderChrome, ox: o.x, oy: o.y, ow: o.w, oh: o.h }
   })
   const chromeBg = createMemo(() =>
     readAcc(props.focused)
@@ -116,18 +127,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       return shellUiWindowMeasureFromEnv(cfg.id, cfg.z, root, cfg.getEnv)
     })
     onCleanup(unreg)
-  })
-
-  createEffect(() => {
-    unregisterFrame?.()
-    unregisterFrame = undefined
-    const windowId = model()?.window_id
-    if (!root || windowId == null || props.allowImperativeGeometrySync === false) return
-    unregisterFrame = registerShellWindowFrame(windowId, root)
-  })
-
-  onCleanup(() => {
-    unregisterFrame?.()
   })
 
   createEffect(() => {
@@ -151,8 +150,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         root = el
       }}
       data-shell-window-frame={model()?.window_id ?? 0}
-      data-shell-frame-inset={layout().inset}
-      data-shell-frame-titlebar={layout().th}
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
@@ -160,9 +157,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         'z-index': 1000 + readAcc(props.stackZ),
         left: '0',
         top: '0',
-        width: `${(model()?.width ?? 0) + layout().inset * 2}px`,
-        height: `${(model()?.height ?? 0) + layout().th + layout().inset * 2}px`,
-        transform: `translate3d(${(model()?.x ?? 0) - layout().inset}px, ${(model()?.y ?? 0) - layout().th - layout().inset}px, 0)`,
+        width: `${layout().ow}px`,
+        height: `${layout().oh}px`,
+        transform: `translate3d(${layout().ox}px, ${layout().oy}px, 0)`,
         'will-change': 'transform',
         'box-sizing': 'border-box',
         'pointer-events': 'none',

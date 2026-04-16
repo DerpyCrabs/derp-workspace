@@ -743,7 +743,11 @@ fn run_cef(
 
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
-    let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(cef_tx.clone())));
+    let latest_dmabuf = Arc::new(crate::cef::compositor_tx::LatestShellDmabuf::new());
+    let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(
+        cef_tx.clone(),
+        latest_dmabuf,
+    )));
     let link = Arc::new(ShellToCefLink::new(
         browser_holder.clone(),
         view_state.clone(),

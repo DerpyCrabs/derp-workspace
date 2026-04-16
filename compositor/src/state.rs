@@ -803,32 +803,33 @@ impl CompositorState {
                 ) => {
                     d.state.shell_note_shell_ipc_rx();
                 }
-                CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Dmabuf {
-                    width,
-                    height,
-                    drm_format,
-                    modifier,
-                    flags,
-                    generation,
-                    planes,
-                    fds,
-                    dirty_buffer,
-                }) => {
+                CalloopChannelEvent::Msg(
+                    crate::cef::compositor_tx::CefToCompositor::DmabufReady(latest_dmabuf),
+                ) => loop {
+                    let Some(frame) = latest_dmabuf.take() else {
+                        if latest_dmabuf.finish_dispatch() {
+                            continue;
+                        }
+                        break;
+                    };
                     d.state.accept_shell_dmabuf_from_cef(
-                        width,
-                        height,
-                        drm_format,
-                        modifier,
-                        flags,
-                        generation,
-                        &planes,
-                        fds,
-                        dirty_buffer,
+                        frame.width,
+                        frame.height,
+                        frame.drm_format,
+                        frame.modifier,
+                        frame.flags,
+                        frame.generation,
+                        &frame.planes,
+                        frame.fds,
+                        frame.dirty_buffer,
                     );
                     if let Some(drms) = d.drm.as_mut() {
                         drms.request_render();
                     }
-                }
+                    if !latest_dmabuf.finish_dispatch() {
+                        break;
+                    }
+                },
                 CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
                     f(&mut d.state);
                 }
@@ -1762,13 +1763,12 @@ impl CompositorState {
                 .intersection(ws)
             }
         };
-        let changed =
-            next_global != self.shell_exclusion_global || next_decor != self.shell_exclusion_decor;
+        let global_changed = next_global != self.shell_exclusion_global;
         let tray_changed = next_tray_strip != self.shell_tray_strip_global;
         self.shell_exclusion_global = next_global;
         self.shell_exclusion_decor = next_decor;
         self.shell_tray_strip_global = next_tray_strip;
-        if changed || tray_changed {
+        if global_changed || tray_changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }

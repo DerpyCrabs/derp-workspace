@@ -1,6 +1,5 @@
 import {
   CHROME_BORDER_PX,
-  CHROME_TITLEBAR_PX,
   SHELL_LAYOUT_FLOATING,
   SHELL_LAYOUT_MAXIMIZED,
   SHELL_RESIZE_BOTTOM,
@@ -8,6 +7,7 @@ import {
   SHELL_RESIZE_RIGHT,
   SHELL_RESIZE_TOP,
 } from '@/lib/chromeConstants'
+import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
 import {
   clientPointToCanvasLocal,
   clientPointToGlobalLogical,
@@ -211,19 +211,17 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapZone = zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
-    const previewGlobal = {
+    const o = shellOuterFrameFromClient({
       x: previewRect.x,
-      y: previewRect.y - CHROME_TITLEBAR_PX,
-      w: previewRect.width,
-      h: previewRect.height + CHROME_TITLEBAR_PX,
-    }
-    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
-      previewGlobal.x,
-      previewGlobal.y,
-      previewGlobal.w,
-      previewGlobal.h,
-      origin,
-    )
+      y: previewRect.y,
+      width: previewRect.width,
+      height: previewRect.height,
+      maximized: false,
+      fullscreen: false,
+      minimized: false,
+      snap_tiled: true,
+    })
+    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(o.x, o.y, o.w, o.h, origin)
   }
 
   function updateSnapAssistFromSpan(context: SnapAssistContext, span: AssistGridSpan | null) {

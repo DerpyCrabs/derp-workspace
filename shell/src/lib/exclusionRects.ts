@@ -22,6 +22,26 @@ export type WindowChromeExclusionSource = {
   snap_tiled?: boolean
 }
 
+export function shellOuterFrameFromClient(w: WindowChromeExclusionSource): {
+  x: number
+  y: number
+  w: number
+  h: number
+  inset: number
+  th: number
+} {
+  const th = CHROME_TITLEBAR_PX
+  const bd = CHROME_BORDER_PX
+  const noTilingChrome = w.maximized || w.fullscreen
+  const snapTiled = !!w.snap_tiled && !noTilingChrome
+  const inset = noTilingChrome || snapTiled ? 0 : bd
+  const x = w.x - inset
+  const y = w.y - th - inset
+  const ow = w.width + inset * 2
+  const oh = w.height + th + inset * 2
+  return { x, y, w: ow, h: oh, inset, th }
+}
+
 function rangesTouchOrOverlap(a0: number, a1: number, b0: number, b1: number) {
   return Math.max(a0, b0) <= Math.min(a1, b1)
 }
@@ -82,9 +102,9 @@ export function ssdDecorationExclusionRects(
   const out: Array<{ x: number; y: number; w: number; h: number }> = []
   out.push({
     x: w.x - inset,
-    y: w.y - th,
+    y: w.y - th - inset,
     w: w.width + inset * 2,
-    h: th,
+    h: th + inset,
   })
   if (!suppressSideStrips) {
     out.push({

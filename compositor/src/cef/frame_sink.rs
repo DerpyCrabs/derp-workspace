@@ -3,20 +3,24 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
 
 use libc;
+use std::sync::Arc;
+
 use smithay::reexports::calloop::channel::Sender;
 
-use crate::cef::compositor_tx::CefToCompositor;
+use crate::cef::compositor_tx::{CefToCompositor, LatestShellDmabuf, PendingShellDmabuf};
 
 pub struct DirectDmabufSink {
     dmabuf_generation: u32,
     cef_tx: Sender<CefToCompositor>,
+    latest_dmabuf: Arc<LatestShellDmabuf>,
 }
 
 impl DirectDmabufSink {
-    pub fn new(cef_tx: Sender<CefToCompositor>) -> Self {
+    pub fn new(cef_tx: Sender<CefToCompositor>, latest_dmabuf: Arc<LatestShellDmabuf>) -> Self {
         Self {
             dmabuf_generation: 0,
             cef_tx,
+            latest_dmabuf,
         }
     }
 
@@ -55,18 +59,22 @@ impl DirectDmabufSink {
         }
         self.dmabuf_generation = self.dmabuf_generation.wrapping_add(1);
         let generation = self.dmabuf_generation;
+        let should_notify = self.latest_dmabuf.replace(PendingShellDmabuf {
+            width,
+            height,
+            drm_format,
+            modifier,
+            flags,
+            generation,
+            planes,
+            fds: owned,
+            dirty_buffer,
+        });
+        if !should_notify {
+            return Ok(());
+        }
         self.cef_tx
-            .send(CefToCompositor::Dmabuf {
-                width,
-                height,
-                drm_format,
-                modifier,
-                flags,
-                generation,
-                planes,
-                fds: owned,
-                dirty_buffer,
-            })
+            .send(CefToCompositor::DmabufReady(self.latest_dmabuf.clone()))
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "compositor channel closed"))
     }
 }
