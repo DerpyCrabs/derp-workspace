@@ -1,10 +1,14 @@
 import {
+  assertTaskbarRowOnMonitor,
   compositorWindowStack,
   GREEN_NATIVE_TITLE,
   NATIVE_APP_ID,
+  pickMonitorMove,
   RED_NATIVE_TITLE,
+  rectCenter,
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
+  SkipError,
   activateTaskbarWindow,
   assert,
   assertTopWindow,
@@ -23,6 +27,7 @@ import {
   shellWindowStack,
   spawnNativeWindow,
   shellWindowById,
+  taskbarEntry,
   taskbarForMonitor,
   waitFor,
   waitForNativeFocus,
@@ -33,7 +38,26 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
   type ShellSnapshot,
+  type WindowSnapshot,
 } from '../lib/runtime.ts'
+
+function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
+  if (window.output_name) return window.output_name
+  const centerX = window.x + window.width / 2
+  const centerY = window.y + window.height / 2
+  const output = compositor.outputs.find(
+    (entry) =>
+      centerX >= entry.x &&
+      centerX < entry.x + entry.width &&
+      centerY >= entry.y &&
+      centerY < entry.y + entry.height,
+  )
+  return output?.name ?? null
+}
+
+function windowFillsOutput(window: WindowSnapshot, output: { x: number; y: number; width: number; height: number }): boolean {
+  return window.x === output.x && window.y === output.y && window.width === output.width && window.height === output.height
+}
 
 function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
   const tracked = new Set(windowIds)
@@ -414,6 +438,155 @@ export default defineGroup(import.meta.url, ({ test }) => {
       before,
       maximized: maximized.window,
       restored: restored.window,
+    })
+  })
+
+  test('multi-monitor super fullscreen maximize and tile hotkeys track window output', async ({ base, state }) => {
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const compositor0 = (await getSnapshots(base)).compositor
+    if (compositor0.outputs.length < 2) {
+      throw new SkipError('requires at least two outputs')
+    }
+    const nativeInitial = await waitFor(
+      'wait for native multimonitor output assignment',
+      async () => {
+        const { compositor: nextCompositor, shell: nextShell } = await getSnapshots(base)
+        const redShell = shellWindowById(nextShell, redId)
+        const redCompositor = compositorWindowById(nextCompositor, redId)
+        if (!redShell || !redCompositor) return null
+        const outputName = resolveWindowOutputName(nextCompositor, redShell)
+        if (!outputName) return null
+        const nativeMove = pickMonitorMove(nextCompositor.outputs, outputName)
+        if (!nativeMove) return null
+        return { compositor: nextCompositor, shell: nextShell, redShell, redCompositor, outputName, nativeMove }
+      },
+      5000,
+      100,
+    )
+    assertTaskbarRowOnMonitor(nativeInitial.shell, redId, nativeInitial.outputName)
+    const nativeMove = nativeInitial.nativeMove
+    if (!nativeMove) {
+      throw new SkipError(`no adjacent monitor from ${nativeInitial.outputName}`)
+    }
+    await clickPoint(
+      base,
+      nativeInitial.redCompositor.x + nativeInitial.redCompositor.width / 2,
+      nativeInitial.redCompositor.y + nativeInitial.redCompositor.height / 2,
+    )
+    try {
+      await waitForNativeFocus(base, redId, 1500)
+    } catch {
+      const shellBeforeRedFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await activateTaskbarWindow(base, shellBeforeRedFocus, redId)
+      await waitForNativeFocus(base, redId)
+    }
+    await runKeybind(base, nativeMove.action)
+    const moved = await waitFor(
+      'wait for native monitor move',
+      async () => {
+        const { compositor: nextCompositor, shell: nextShell } = await getSnapshots(base)
+        const compWindow = compositorWindowById(nextCompositor, redId)
+        const shellWindow = shellWindowById(nextShell, redId)
+        if (!compWindow || !shellWindow) return null
+        if (compWindow.output_name !== nativeMove.target.name || shellWindow.output_name !== nativeMove.target.name) {
+          return null
+        }
+        const taskbar = taskbarForMonitor(nextShell, nativeMove.target.name)
+        const output = nextCompositor.outputs.find((entry) => entry.name === nativeMove.target.name)
+        if (!taskbar?.rect || !output) return null
+        const row = taskbarEntry(nextShell, redId)
+        if (!row?.activate || !pointInRect(taskbar.rect, rectCenter(row.activate))) return null
+        if (compWindow.x < output.x || compWindow.x + compWindow.width > output.x + output.width) return null
+        return { compositor: nextCompositor, shell: nextShell, compWindow, output }
+      },
+      8000,
+      125,
+    )
+    await runKeybind(base, 'toggle_fullscreen')
+    const fullscreenOn = await waitFor(
+      'wait for fullscreen on secondary output',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        const output = compositor.outputs.find((entry) => entry.name === nativeMove.target.name)
+        if (!window?.fullscreen || !output) return null
+        if (window.output_name !== nativeMove.target.name) return null
+        if (!windowFillsOutput(window, output)) return null
+        return { compositor, window, output }
+      },
+      5000,
+      100,
+    )
+    await runKeybind(base, 'toggle_fullscreen')
+    await waitFor(
+      'wait for fullscreen off after multimonitor',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        return window && !window.fullscreen ? { compositor, window } : null
+      },
+      5000,
+      100,
+    )
+    await runKeybind(base, 'toggle_maximize')
+    const maximizedOnTarget = await waitFor(
+      'wait for maximize on moved monitor',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        if (!window?.maximized) return null
+        if (window.output_name !== nativeMove.target.name) return null
+        return { compositor, window }
+      },
+      5000,
+      100,
+    )
+    await runKeybind(base, 'toggle_maximize')
+    await waitFor(
+      'wait for unmaximize on moved monitor',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        return window && !window.maximized ? { compositor, window } : null
+      },
+      5000,
+      100,
+    )
+    await runKeybind(base, 'tile_up')
+    const tileUpMax = await waitFor(
+      'wait for tile up on moved monitor',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        if (!window?.maximized) return null
+        if (window.output_name !== nativeMove.target.name) return null
+        return { compositor, window }
+      },
+      5000,
+      100,
+    )
+    await runKeybind(base, 'tile_down')
+    const tileDown = await waitFor(
+      'wait for tile down restore on moved monitor',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        return window && !window.maximized && !window.fullscreen ? { compositor, window } : null
+      },
+      5000,
+      100,
+    )
+    state.multiMonitorNativeMove = {
+      window_id: redId,
+      target_output: nativeMove.target.name,
+    }
+    await writeJsonArtifact('native-multimonitor-super-hotkeys.json', {
+      moved,
+      fullscreenOn,
+      maximizedOnTarget,
+      tileUpMax,
+      tileDown,
     })
   })
 

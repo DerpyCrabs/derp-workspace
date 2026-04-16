@@ -3471,12 +3471,6 @@ impl CompositorState {
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
     }
 
-    fn resolve_smithay_output(&self, wl_output: Option<&WlOutput>) -> Option<Output> {
-        wl_output
-            .and_then(Output::from_resource)
-            .or_else(|| self.leftmost_output())
-    }
-
     fn client_wl_output_for(&self, wl_surface: &WlSurface, output: &Output) -> Option<WlOutput> {
         let client = wl_surface.client()?;
         output.client_outputs(&client).next()
@@ -3554,7 +3548,16 @@ impl CompositorState {
         window: &Window,
         wl_output_hint: Option<WlOutput>,
     ) -> bool {
-        let Some(sm_out) = self.resolve_smithay_output(wl_output_hint.as_ref()) else {
+        let Some(sm_out) = wl_output_hint
+            .as_ref()
+            .and_then(Output::from_resource)
+            .or_else(|| {
+                self.wayland_window_shell_rect_and_deco(window).and_then(|(gx, gy, gw, gh)| {
+                    self.output_for_global_xywh(gx, gy, gw, gh)
+                })
+            })
+            .or_else(|| self.leftmost_output())
+        else {
             return false;
         };
         let Some(geo) = self.space.output_geometry(&sm_out) else {
@@ -6748,12 +6751,7 @@ impl CompositorState {
                         }
                     }
                 }
-                let wl_out = self
-                    .space
-                    .outputs()
-                    .next()
-                    .and_then(|o| self.client_wl_output_for(wl, o));
-                self.apply_toplevel_fullscreen_layout(&window, wl_out);
+                self.apply_toplevel_fullscreen_layout(&window, None);
             } else {
                 if !read_toplevel_tiling(wl).1 {
                     return;
