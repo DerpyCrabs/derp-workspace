@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{fence, Ordering};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::FileExt;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
 
@@ -81,41 +80,107 @@ impl Drop for SharedMmapFile {
     }
 }
 
+struct ReadOnlyMmapFile {
+    _file: File,
+    ptr: usize,
+    len: usize,
+}
+
+impl ReadOnlyMmapFile {
+    #[cfg(unix)]
+    fn open(path: &Path) -> Result<Self, String> {
+        let file = open_snapshot_file(path)?;
+        let len = file
+            .metadata()
+            .map_err(|e| format!("stat snapshot file {}: {e}", path.display()))?
+            .len() as usize;
+        if len == 0 {
+            return Err(format!("snapshot file {} is empty", path.display()));
+        }
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(format!("mmap snapshot file {}", path.display()));
+        }
+        Ok(Self {
+            _file: file,
+            ptr: ptr as usize,
+            len,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open(path: &Path) -> Result<Self, String> {
+        let _ = path;
+        Err("shared snapshots require unix mmap".to_string())
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+}
+
+impl Drop for ReadOnlyMmapFile {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::munmap(self.ptr as *mut libc::c_void, self.len);
+        }
+    }
+}
+
+#[derive(Default)]
+struct SnapshotReadCache {
+    path: Option<PathBuf>,
+    mmap: Option<ReadOnlyMmapFile>,
+}
+
+impl SnapshotReadCache {
+    fn mapped_slice<'a>(&'a mut self, path: &Path) -> Result<&'a [u8], String> {
+        let reuse = self.path.as_deref() == Some(path) && self.mmap.is_some();
+        if !reuse {
+            self.path = Some(path.to_path_buf());
+            self.mmap = Some(ReadOnlyMmapFile::open(path)?);
+        }
+        Ok(self
+            .mmap
+            .as_ref()
+            .ok_or_else(|| format!("snapshot cache unavailable {}", path.display()))?
+            .as_slice())
+    }
+}
+
+fn snapshot_read_cache() -> &'static Mutex<SnapshotReadCache> {
+    static CACHE: OnceLock<Mutex<SnapshotReadCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(SnapshotReadCache::default()))
+}
+
+fn mapped_snapshot_header(
+    mapped: &[u8],
+) -> Result<[u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize], String> {
+    let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
+    if mapped.len() < header_len {
+        return Err("snapshot mapping shorter than header".to_string());
+    }
+    let mut header = [0u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize];
+    header.copy_from_slice(&mapped[..header_len]);
+    Ok(header)
+}
+
 #[cfg(unix)]
 fn open_snapshot_file(path: &Path) -> Result<File, String> {
     OpenOptions::new()
         .read(true)
         .open(path)
         .map_err(|e| format!("open snapshot file {}: {e}", path.display()))
-}
-
-#[cfg(unix)]
-fn read_exact_at(file: &File, path: &Path, mut offset: u64, buf: &mut [u8]) -> Result<(), String> {
-    let mut filled = 0;
-    while filled < buf.len() {
-        let read = file
-            .read_at(&mut buf[filled..], offset)
-            .map_err(|e| format!("read snapshot file {}: {e}", path.display()))?;
-        if read == 0 {
-            return Err(format!(
-                "unexpected eof reading snapshot file {}",
-                path.display()
-            ));
-        }
-        filled += read;
-        offset += read as u64;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn read_snapshot_header(
-    file: &File,
-    path: &Path,
-) -> Result<[u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize], String> {
-    let mut header = [0u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize];
-    read_exact_at(file, path, 0, &mut header)?;
-    Ok(header)
 }
 
 pub struct SharedShellSnapshotWriter {
@@ -446,9 +511,13 @@ pub fn snapshot_version(path: &Path, expected_abi: u32) -> Result<Option<u64>, S
         return Err("shared snapshots require unix reads".to_string());
     }
     #[cfg(unix)]
-    let file = open_snapshot_file(path)?;
-    #[cfg(unix)]
-    let header_bytes = read_snapshot_header(&file, path)?;
+    let header_bytes = {
+        let mut cache = snapshot_read_cache()
+            .lock()
+            .map_err(|_| format!("snapshot cache lock poisoned {}", path.display()))?;
+        let mapped = cache.mapped_slice(path)?;
+        mapped_snapshot_header(mapped)?
+    };
     #[cfg(unix)]
     let header = shell_wire::read_shared_snapshot_header(&header_bytes)?;
     if header.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
@@ -466,44 +535,36 @@ pub fn snapshot_read(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, 
         let _ = (path, expected_abi);
         return Err("shared snapshots require unix reads".to_string());
     }
-    #[cfg(unix)]
-    let file = open_snapshot_file(path)?;
     let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
     #[cfg(unix)]
-    let head_a_bytes = read_snapshot_header(&file, path)?;
-    #[cfg(unix)]
-    let head_a = shell_wire::read_shared_snapshot_header(&head_a_bytes)?;
-    if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
-        || head_a.abi_version != expected_abi
-        || head_a.sequence % 2 != 0
     {
-        return Ok(None);
+        let mut cache = snapshot_read_cache()
+            .lock()
+            .map_err(|_| format!("snapshot cache lock poisoned {}", path.display()))?;
+        let mapped = cache.mapped_slice(path)?;
+        let head_a_bytes = mapped_snapshot_header(mapped)?;
+        let head_a = shell_wire::read_shared_snapshot_header(&head_a_bytes)?;
+        if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
+            || head_a.abi_version != expected_abi
+            || head_a.sequence % 2 != 0
+        {
+            return Ok(None);
+        }
+        let payload_len = head_a.payload_len as usize;
+        if header_len + payload_len > mapped.len() {
+            return Ok(None);
+        }
+        fence(Ordering::Acquire);
+        let mut out = Vec::with_capacity(header_len + payload_len);
+        out.extend_from_slice(&head_a_bytes);
+        out.extend_from_slice(&mapped[header_len..header_len + payload_len]);
+        fence(Ordering::Acquire);
+        let head_b_bytes = mapped_snapshot_header(mapped)?;
+        let head_b = shell_wire::read_shared_snapshot_header(&head_b_bytes)?;
+        if head_a.sequence != head_b.sequence || head_b.sequence % 2 != 0 {
+            return Ok(None);
+        }
+        Ok(Some(out))
     }
-    let payload_len = head_a.payload_len as usize;
-    #[cfg(unix)]
-    let file_len = file
-        .metadata()
-        .map_err(|e| format!("stat snapshot file {}: {e}", path.display()))?
-        .len() as usize;
-    #[cfg(unix)]
-    if header_len + payload_len > file_len {
-        return Ok(None);
-    }
-    fence(Ordering::Acquire);
-    let mut out = Vec::with_capacity(header_len + payload_len);
-    #[cfg(unix)]
-    {
-        out.resize(header_len + payload_len, 0);
-        out[..header_len].copy_from_slice(&head_a_bytes);
-        read_exact_at(&file, path, header_len as u64, &mut out[header_len..])?;
-    }
-    fence(Ordering::Acquire);
-    #[cfg(unix)]
-    let head_b_bytes = read_snapshot_header(&file, path)?;
-    #[cfg(unix)]
-    let head_b = shell_wire::read_shared_snapshot_header(&head_b_bytes)?;
-    if head_a.sequence != head_b.sequence || head_b.sequence % 2 != 0 {
-        return Ok(None);
-    }
-    Ok(Some(out))
 }
+
