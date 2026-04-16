@@ -596,6 +596,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           stackZ={stackZ}
           focused={rowFocused}
           shellUiRegister={splitLayout() ? undefined : deskShellUiReg()}
+          allowImperativeGeometrySync={!splitLayout()}
           tabStrip={
             group() ? (
               <WorkspaceTabStrip

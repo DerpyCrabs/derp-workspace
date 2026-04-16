@@ -13,6 +13,7 @@ import {
   shellUiWindowMeasureFromEnv,
   type ShellUiMeasureEnv,
 } from '@/features/shell-ui/shellUiWindows'
+import { registerShellWindowFrame } from './shellWindowFrameDom'
 import {
   CHROME_BORDER_PX,
   CHROME_RESIZE_HANDLE_PX,
@@ -61,12 +62,14 @@ type ShellWindowFrameProps = {
   onMaximize: () => void
   onClose: () => void
   shellUiRegister?: { id: number; z: number; getEnv: () => ShellUiMeasureEnv | null }
+  allowImperativeGeometrySync?: boolean
   tabStrip?: JSX.Element
   children?: JSX.Element
 }
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
   let root: HTMLDivElement | undefined
+  let unregisterFrame: (() => void) | undefined
   const requestFocus = () => {
     props.onFocusRequest?.()
   }
@@ -116,6 +119,18 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   })
 
   createEffect(() => {
+    unregisterFrame?.()
+    unregisterFrame = undefined
+    const windowId = model()?.window_id
+    if (!root || windowId == null || props.allowImperativeGeometrySync === false) return
+    unregisterFrame = registerShellWindowFrame(windowId, root)
+  })
+
+  onCleanup(() => {
+    unregisterFrame?.()
+  })
+
+  createEffect(() => {
     if (!props.shellUiRegister) return
     const w = model()
     if (w) {
@@ -136,6 +151,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         root = el
       }}
       data-shell-window-frame={model()?.window_id ?? 0}
+      data-shell-frame-inset={layout().inset}
+      data-shell-frame-titlebar={layout().th}
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
@@ -150,19 +167,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         'box-sizing': 'border-box',
         'pointer-events': 'none',
         contain: 'layout paint',
+        background: 'var(--shell-chrome-bg)',
         '--shell-chrome-bg': chromeBg(),
       }}
     >
-      <div
-        class="pointer-events-none absolute z-4 box-border border-0"
-        style={{
-          left: `${layout().inset}px`,
-          top: `${layout().inset + layout().th}px`,
-          width: `${model()?.width ?? 0}px`,
-          height: `${model()?.height ?? 0}px`,
-          background: 'var(--shell-chrome-bg)',
-        }}
-      />
       <Show when={props.children}>
         <div
           class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
@@ -200,9 +208,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (titlebarInteractionTarget(e.target)) return
           e.preventDefault()
           e.stopPropagation()
-          console.log(
-            `[derp-shell-move] titlebar pointerdown win=${model()?.window_id ?? 0} ${e.clientX},${e.clientY}`,
-          )
           props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
@@ -212,9 +217,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           if (!t) return
           e.preventDefault()
           e.stopPropagation()
-          console.log(
-            `[derp-shell-move] titlebar touchstart win=${model()?.window_id ?? 0} ${t.clientX},${t.clientY}`,
-          )
           props.onTitlebarPointerDown(-1, t.clientX, t.clientY)
         }}
       >
@@ -297,39 +299,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
         </div>
       </div>
-      <div
-        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
-        classList={{ hidden: !layout().showBorderChrome }}
-        style={{
-          position: 'absolute',
-          left: '0',
-          top: `${layout().inset + layout().th}px`,
-          width: `${layout().bd}px`,
-          height: `${model()?.height ?? 0}px`,
-        }}
-      />
-      <div
-        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
-        classList={{ hidden: !layout().showBorderChrome }}
-        style={{
-          position: 'absolute',
-          right: '0',
-          top: `${layout().inset + layout().th}px`,
-          width: `${layout().bd}px`,
-          height: `${model()?.height ?? 0}px`,
-        }}
-      />
-      <div
-        class="pointer-events-none z-5 box-border border-0 bg-(--shell-chrome-bg)"
-        classList={{ hidden: !layout().showBorderChrome }}
-        style={{
-          position: 'absolute',
-          left: '0',
-          right: '0',
-          top: `${layout().inset + layout().th + (model()?.height ?? 0)}px`,
-          height: `${layout().bd}px`,
-        }}
-      />
       <div
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}

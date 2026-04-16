@@ -11,6 +11,7 @@ import {
 import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
 import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
+import { applyShellWindowFrameGeometry } from '@/host/shellWindowFrameDom'
 import {
   findAdjacentMonitor,
   pickScreenForWindow,
@@ -576,6 +577,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'window_geometry') {
       options.markHasSeenCompositorWindowSync()
+      applyShellWindowFrameGeometry(d.window_id, d.x, d.y)
       const result = options.applyModelCompositorDetail(d, {
         fallbackMonitorKey: options.fallbackMonitorKey,
         requestWindowSyncRecovery: options.requestWindowSyncRecovery,

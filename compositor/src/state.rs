@@ -500,6 +500,7 @@ pub struct CompositorState {
     pub shell_view_px: Option<(u32, u32)>,
     pub shell_frame_is_dmabuf: bool,
     pub shell_dmabuf: Option<Dmabuf>,
+    pub(crate) shell_dmabuf_generation: u32,
     pub(crate) shell_dmabuf_overlay_id: Id,
     pub(crate) shell_dmabuf_commit: CommitCounter,
     pub(crate) shell_dmabuf_dirty_buffer: Vec<Rectangle<i32, Buffer>>,
@@ -968,6 +969,7 @@ impl CompositorState {
             shell_view_px: None,
             shell_frame_is_dmabuf: false,
             shell_dmabuf: None,
+            shell_dmabuf_generation: 0,
             shell_dmabuf_overlay_id: Id::new(),
             shell_dmabuf_commit: CommitCounter::default(),
             shell_dmabuf_dirty_buffer: Vec::new(),
@@ -2448,7 +2450,7 @@ impl CompositorState {
         drm_format: u32,
         modifier: u64,
         flags: u32,
-        _generation: u32,
+        generation: u32,
         planes: &[shell_wire::FrameDmabufPlane],
         mut fds: Vec<OwnedFd>,
         dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
@@ -2456,6 +2458,10 @@ impl CompositorState {
         self.shell_note_shell_ipc_rx();
         crate::cef::begin_frame_diag::note_shell_dmabuf_rx(width, height);
         if width == 0 || height == 0 || planes.is_empty() || planes.len() != fds.len() {
+            fds.clear();
+            return;
+        }
+        if self.shell_has_frame && generation <= self.shell_dmabuf_generation {
             fds.clear();
             return;
         }
@@ -2470,6 +2476,7 @@ impl CompositorState {
             dirty_buffer,
         ) {
             Ok(()) => {
+                self.shell_dmabuf_generation = generation;
                 shell_ipc::log_first_shell_dmabuf(
                     width,
                     height,
@@ -7459,6 +7466,7 @@ impl CompositorState {
         self.shell_view_px = None;
         self.shell_frame_is_dmabuf = false;
         self.shell_dmabuf = None;
+        self.shell_dmabuf_generation = 0;
         self.shell_dmabuf_overlay_id = Id::new();
         self.shell_dmabuf_commit = CommitCounter::default();
         self.shell_dmabuf_dirty_buffer.clear();
