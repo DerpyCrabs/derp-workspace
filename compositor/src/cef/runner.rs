@@ -721,7 +721,7 @@ fn run_cef(
     while !shutdown_requested.load(Ordering::Relaxed) && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        thread::sleep(Duration::from_millis(4));
+        thread::sleep(Duration::from_millis(if link.has_pending_shell_updates() { 1 } else { 4 }));
     }
 
     if let Ok(g) = browser_holder.lock() {

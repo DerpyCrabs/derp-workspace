@@ -94,6 +94,7 @@ wrap_task! {
         browser_holder: Arc<Mutex<Option<Browser>>>,
         view_state: Arc<Mutex<OsrViewState>>,
         pending_messages: Arc<Mutex<PendingCompositorMessages>>,
+        pending_work: Arc<AtomicBool>,
     }
 
     impl Task {
@@ -105,6 +106,7 @@ wrap_task! {
                     };
                     if guard.messages.is_empty() {
                         guard.scheduled = false;
+                        self.pending_work.store(false, Ordering::Relaxed);
                         return;
                     }
                     std::mem::take(&mut guard.messages)
@@ -141,6 +143,7 @@ pub struct ShellToCefLink {
     view_state: Arc<Mutex<OsrViewState>>,
     pending_messages: Arc<Mutex<PendingCompositorMessages>>,
     delivery_ready: Arc<AtomicBool>,
+    pending_work: Arc<AtomicBool>,
     shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
 }
 
@@ -157,6 +160,7 @@ impl ShellToCefLink {
                 messages: Vec::new(),
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
+            pending_work: Arc::new(AtomicBool::new(false)),
             shared_snapshot: Arc::new(Mutex::new(
                 SharedShellSnapshotWriter::new(crate::cef::runtime_dir()).ok(),
             )),
@@ -182,6 +186,7 @@ impl ShellToCefLink {
                 return;
             };
             push_pending_message(&mut guard.messages, msg);
+            self.pending_work.store(true, Ordering::Relaxed);
             if guard.scheduled {
                 false
             } else {
@@ -222,11 +227,16 @@ impl ShellToCefLink {
         }
     }
 
+    pub fn has_pending_shell_updates(&self) -> bool {
+        self.pending_work.load(Ordering::Relaxed)
+    }
+
     fn post_pending_messages(&self) {
         let mut task = ApplyCompositorToShellTask::new(
             self.browser_holder.clone(),
             self.view_state.clone(),
             self.pending_messages.clone(),
+            self.pending_work.clone(),
         );
         if post_task(ThreadId::UI, Some(&mut task)) == 0 {
             if let Ok(mut guard) = self.pending_messages.lock() {
