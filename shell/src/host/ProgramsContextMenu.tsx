@@ -1,4 +1,5 @@
 import { For, Show, onCleanup, onMount } from 'solid-js'
+import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
 export function ProgramsContextMenu() {
@@ -41,7 +42,7 @@ export function ProgramsContextMenu() {
   })
 
   return (
-    <div
+    <DropdownMenuContent
       data-shell-programs-menu-panel
       data-shell-exclusion-floating
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex flex-col overflow-hidden"
@@ -117,6 +118,6 @@ export function ProgramsContextMenu() {
           )}
         </For>
       </div>
-    </div>
+    </DropdownMenuContent>
   )
 }

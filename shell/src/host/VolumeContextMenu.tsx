@@ -8,6 +8,7 @@ import {
   type AudioRow,
   useShellAudioState,
 } from '@/apps/settings/useShellAudioState'
+import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
 import { useShellContextMenus } from './ShellContextMenusContext'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 
@@ -46,7 +47,7 @@ export function VolumeContextMenu() {
   })
 
   return (
-    <div
+    <DropdownMenuContent
       data-shell-exclusion-floating
       data-shell-volume-menu-panel
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex max-w-120 flex-col overflow-hidden rounded-[0.35rem] shadow-[0_16px_40px_rgba(0,0,0,0.34)]"
@@ -172,6 +173,6 @@ export function VolumeContextMenu() {
           </div>
         </Show>
       </div>
-    </div>
+    </DropdownMenuContent>
   )
 }

@@ -1,7 +1,11 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
-import { Portal } from 'solid-js/web'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuPortal,
+} from '@/components/ui/context-menu'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
-import { ShellContextMenuItemButton } from '@/host/ShellContextMenuItemButton'
 
 export function FileBrowserContextMenu(props: {
   open: () => boolean
@@ -51,43 +55,60 @@ export function FileBrowserContextMenu(props: {
   })
 
   return (
-    <Show when={props.open() && props.anchor()}>
-      <Portal mount={document.body}>
-        <div
-          ref={(el) => {
-            panelEl = el
-          }}
-          class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-[95000] flex min-w-48 max-h-80 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
-          role="menu"
-          aria-label="Files"
-          style={{
-            left: `${placed().left}px`,
-            top: `${placed().top}px`,
-          }}
-        >
-          <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-            <For each={props.items()}>
-              {(item, idx) => (
-                <ShellContextMenuItemButton
-                  item={item}
-                  highlighted={false}
-                  itemIndex={idx()}
-                  itemIndexDataAttr="data-file-browser-context-idx"
-                  itemActionDataAttr="data-file-browser-context-action"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                  }}
-                  onClick={() => {
-                    if (item.disabled) return
-                    item.action()
-                    props.onRequestClose()
-                  }}
-                />
-              )}
-            </For>
-          </div>
-        </div>
-      </Portal>
-    </Show>
+    <ContextMenu
+      open={props.open()}
+      onOpenChange={(next) => {
+        if (!next) props.onRequestClose()
+      }}
+    >
+      <Show when={props.open() && props.anchor()}>
+        <ContextMenuPortal mount={document.body}>
+          <ContextMenuContent
+            ref={(el) => {
+              panelEl = el
+            }}
+            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 max-h-80 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
+            aria-label="Files"
+            style={{
+              left: `${placed().left}px`,
+              top: `${placed().top}px`,
+            }}
+          >
+            <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+              <For each={props.items()}>
+                {(item, idx) => (
+                  <ContextMenuItem
+                    title={item.title}
+                    disabled={!!item.disabled}
+                    classList={{
+                      'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                    }}
+                    data-file-browser-context-idx={idx()}
+                    {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                    }}
+                    onClick={() => {
+                      if (item.disabled) return
+                      item.action()
+                      props.onRequestClose()
+                    }}
+                  >
+                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
+                    <Show when={item.badge} keyed>
+                      {(badge) => (
+                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
+                          {badge}
+                        </span>
+                      )}
+                    </Show>
+                  </ContextMenuItem>
+                )}
+              </For>
+            </div>
+          </ContextMenuContent>
+        </ContextMenuPortal>
+      </Show>
+    </ContextMenu>
   )
 }

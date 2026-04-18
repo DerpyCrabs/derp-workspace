@@ -1,5 +1,5 @@
 import { Show, createContext, createEffect, useContext, type Accessor, type JSX, type ParentComponent } from 'solid-js'
-import { Portal } from 'solid-js/web'
+import { DropdownMenu, DropdownMenuPortal } from '@/components/ui/dropdown-menu'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
@@ -27,25 +27,32 @@ export const ProgramsTaskbarMenu: ParentComponent = (props) => {
   const shellContextMenus = useShellContextMenus()
   let suppressClick = false
   return (
-    <TaskbarContextMenuRoot
-      api={{
-        open: shellContextMenus.programsMenuOpen,
-        onPointerDown: (e) => {
-          e.preventDefault()
-          suppressClick = true
-          shellContextMenus.onProgramsMenuClick(e)
-        },
-        onClick: (e) => {
-          if (suppressClick) {
-            suppressClick = false
-            return
-          }
-          shellContextMenus.onProgramsMenuClick(e)
-        },
+    <DropdownMenu
+      open={shellContextMenus.programsMenuOpen()}
+      onOpenChange={(next) => {
+        if (!next) shellContextMenus.hideContextMenu()
       }}
     >
-      {props.children}
-    </TaskbarContextMenuRoot>
+      <TaskbarContextMenuRoot
+        api={{
+          open: shellContextMenus.programsMenuOpen,
+          onPointerDown: (e) => {
+            e.preventDefault()
+            suppressClick = true
+            shellContextMenus.onProgramsMenuClick(e)
+          },
+          onClick: (e) => {
+            if (suppressClick) {
+              suppressClick = false
+              return
+            }
+            shellContextMenus.onProgramsMenuClick(e)
+          },
+        }}
+      >
+        {props.children}
+      </TaskbarContextMenuRoot>
+    </DropdownMenu>
   )
 }
 
@@ -53,25 +60,32 @@ export const PowerTaskbarMenu: ParentComponent = (props) => {
   const shellContextMenus = useShellContextMenus()
   let suppressClick = false
   return (
-    <TaskbarContextMenuRoot
-      api={{
-        open: shellContextMenus.powerMenuOpen,
-        onPointerDown: (e) => {
-          e.preventDefault()
-          suppressClick = true
-          shellContextMenus.onPowerMenuClick(e)
-        },
-        onClick: (e) => {
-          if (suppressClick) {
-            suppressClick = false
-            return
-          }
-          shellContextMenus.onPowerMenuClick(e)
-        },
+    <DropdownMenu
+      open={shellContextMenus.powerMenuOpen()}
+      onOpenChange={(next) => {
+        if (!next) shellContextMenus.hideContextMenu()
       }}
     >
-      {props.children}
-    </TaskbarContextMenuRoot>
+      <TaskbarContextMenuRoot
+        api={{
+          open: shellContextMenus.powerMenuOpen,
+          onPointerDown: (e) => {
+            e.preventDefault()
+            suppressClick = true
+            shellContextMenus.onPowerMenuClick(e)
+          },
+          onClick: (e) => {
+            if (suppressClick) {
+              suppressClick = false
+              return
+            }
+            shellContextMenus.onPowerMenuClick(e)
+          },
+        }}
+      >
+        {props.children}
+      </TaskbarContextMenuRoot>
+    </DropdownMenu>
   )
 }
 
@@ -79,25 +93,32 @@ export const VolumeTaskbarMenu: ParentComponent = (props) => {
   const shellContextMenus = useShellContextMenus()
   let suppressClick = false
   return (
-    <TaskbarContextMenuRoot
-      api={{
-        open: shellContextMenus.volumeMenuOpen,
-        onPointerDown: (e) => {
-          e.preventDefault()
-          suppressClick = true
-          shellContextMenus.onVolumeMenuClick(e)
-        },
-        onClick: (e) => {
-          if (suppressClick) {
-            suppressClick = false
-            return
-          }
-          shellContextMenus.onVolumeMenuClick(e)
-        },
+    <DropdownMenu
+      open={shellContextMenus.volumeMenuOpen()}
+      onOpenChange={(next) => {
+        if (!next) shellContextMenus.hideContextMenu()
       }}
     >
-      {props.children}
-    </TaskbarContextMenuRoot>
+      <TaskbarContextMenuRoot
+        api={{
+          open: shellContextMenus.volumeMenuOpen,
+          onPointerDown: (e) => {
+            e.preventDefault()
+            suppressClick = true
+            shellContextMenus.onVolumeMenuClick(e)
+          },
+          onClick: (e) => {
+            if (suppressClick) {
+              suppressClick = false
+              return
+            }
+            shellContextMenus.onVolumeMenuClick(e)
+          },
+        }}
+      >
+        {props.children}
+      </TaskbarContextMenuRoot>
+    </DropdownMenu>
   )
 }
 
@@ -119,9 +140,9 @@ export function TaskbarContextMenuContent(props: { children: JSX.Element }) {
   return (
     <Show when={taskbarContextMenu.open() && shellContextMenus.menuLayerHostEl()} keyed>
       {(host) => (
-        <Portal mount={host}>
+        <DropdownMenuPortal mount={host}>
           <div class="pointer-events-auto">{props.children}</div>
-        </Portal>
+        </DropdownMenuPortal>
       )}
     </Show>
   )

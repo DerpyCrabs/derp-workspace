@@ -1,6 +1,11 @@
 import { For, Show, createMemo, type Accessor } from 'solid-js'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from '@/components/ui/context-menu'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
-import { ShellContextMenuItemButton } from './ShellContextMenuItemButton'
 
 type CtxMenuAnchor = { x: number; y: number; alignAboveY?: number }
 
@@ -21,41 +26,53 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
     }
   })
   return (
-    <div
-      data-shell-exclusion-floating
-      class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 fixed flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
-      role="menu"
-      aria-label="Tray"
-      ref={(el) => {
-        props.setPanelRef(el)
-      }}
-      style={panelStyle()}
-    >
-      <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
-        <For each={props.items()}>
-          {(item, idx) => (
-            <Show
-              when={!item.separator}
-              fallback={<div role="separator" class="my-1 h-px bg-(--shell-border) mx-2" />}
-            >
-              <ShellContextMenuItemButton
-                item={item}
-                highlighted={props.highlightIdx() === idx()}
-                itemIndex={idx()}
-                itemIndexDataAttr="data-tray-sni-menu-idx"
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                }}
-                onClick={() => {
-                  if (item.disabled) return
-                  item.action()
-                  props.closeContextMenu()
-                }}
-              />
-            </Show>
-          )}
-        </For>
-      </div>
-    </div>
+    <ContextMenu defaultOpen>
+      <ContextMenuContent
+        data-shell-exclusion-floating
+        class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 fixed flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
+        aria-label="Tray"
+        when={() => true}
+        ref={(el) => {
+          props.setPanelRef(el)
+        }}
+        style={panelStyle()}
+      >
+        <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
+          <For each={props.items()}>
+            {(item, idx) => (
+              <Show when={!item.separator} fallback={<ContextMenuSeparator />}>
+                <ContextMenuItem
+                  title={item.title}
+                  disabled={!!item.disabled}
+                  classList={{
+                    'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
+                      props.highlightIdx() === idx(),
+                    'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                  }}
+                  data-tray-sni-menu-idx={idx()}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                  }}
+                  onClick={() => {
+                    if (item.disabled) return
+                    item.action()
+                    props.closeContextMenu()
+                  }}
+                >
+                  <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
+                  <Show when={item.badge} keyed>
+                    {(badge) => (
+                      <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
+                        {badge}
+                      </span>
+                    )}
+                  </Show>
+                </ContextMenuItem>
+              </Show>
+            )}
+          </For>
+        </div>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
