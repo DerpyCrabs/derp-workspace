@@ -21,7 +21,7 @@
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
 //!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
 //!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`], [`MSG_SHELL_WINDOWS_SYNC`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`] rows include `shell_flags` ([`SHELL_WINDOW_FLAG_SHELL_HOSTED`] for compositor-backed OSR frames); [`MSG_FOCUS_CHANGED`] is the only compositor → shell focus event; [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`]; [`MSG_OUTPUT_LAYOUT`] includes trailing `context_menu_atlas_buffer_h`; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`]; [`MSG_COMPOSITOR_VOLUME_OVERLAY`]
+//! - compositor → shell: [`MSG_WINDOW_LIST`] rows include `shell_flags` ([`SHELL_WINDOW_FLAG_SHELL_HOSTED`] for compositor-backed OSR frames); [`MSG_FOCUS_CHANGED`] is the only compositor → shell focus event; [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`]; [`MSG_OUTPUT_LAYOUT`]; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`]; [`MSG_COMPOSITOR_VOLUME_OVERLAY`]
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
@@ -282,7 +282,6 @@ pub fn encode_output_layout(
     canvas_logical_h: u32,
     canvas_physical_w: u32,
     canvas_physical_h: u32,
-    context_menu_atlas_buffer_h: u32,
     screens: &[OutputLayoutScreen],
     shell_chrome_primary: Option<&str>,
 ) -> Option<Vec<u8>> {
@@ -313,7 +312,6 @@ pub fn encode_output_layout(
             .checked_add(24)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
-    body_sz = body_sz.checked_add(4)?;
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -341,7 +339,6 @@ pub fn encode_output_layout(
     let pl = u32::try_from(prim_bytes.len()).ok()?;
     v.extend_from_slice(&pl.to_le_bytes());
     v.extend_from_slice(prim_bytes);
-    v.extend_from_slice(&context_menu_atlas_buffer_h.to_le_bytes());
     Some(v)
 }
 
@@ -435,11 +432,6 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         )
     };
     off += pl;
-    if off + 4 > body.len() {
-        return Err(DecodeError::BadOutputLayoutPayload);
-    }
-    let context_menu_atlas_buffer_h = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-    off += 4;
     if off != body.len() {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
@@ -448,7 +440,6 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         canvas_logical_h: canvas_logical_h.max(1),
         canvas_physical_w: canvas_physical_w.max(1),
         canvas_physical_h: canvas_physical_h.max(1),
-        context_menu_atlas_buffer_h,
         screens,
         shell_chrome_primary,
     })
@@ -1088,7 +1079,6 @@ pub enum DecodedCompositorToShellMessage {
         canvas_logical_h: u32,
         canvas_physical_w: u32,
         canvas_physical_h: u32,
-        context_menu_atlas_buffer_h: u32,
         screens: Vec<OutputLayoutScreen>,
         shell_chrome_primary: Option<String>,
     },
@@ -2279,7 +2269,6 @@ mod tests {
             2160,
             3840,
             2160,
-            1536,
             &[OutputLayoutScreen {
                 name: "DP-1".into(),
                 x: 0,
@@ -2301,7 +2290,6 @@ mod tests {
                 canvas_logical_h: 2160,
                 canvas_physical_w: 3840,
                 canvas_physical_h: 2160,
-                context_menu_atlas_buffer_h: 1536,
                 screens: vec![OutputLayoutScreen {
                     name: "DP-1".into(),
                     x: 0,

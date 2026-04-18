@@ -23,7 +23,6 @@ export type DerpShellDetail =
         refresh_milli_hz?: number
       }>
       shell_chrome_primary?: string | null
-      context_menu_atlas_buffer_h?: number
     }
   | {
       type: 'window_mapped'

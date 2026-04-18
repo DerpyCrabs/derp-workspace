@@ -1,5 +1,6 @@
-import { Show, createContext, useContext, type Accessor, type JSX, type ParentComponent } from 'solid-js'
+import { Show, createContext, createEffect, useContext, type Accessor, type JSX, type ParentComponent } from 'solid-js'
 import { Portal } from 'solid-js/web'
+import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
 type TaskbarContextMenuApi = {
@@ -109,9 +110,19 @@ export function TaskbarContextMenuTrigger(props: {
 export function TaskbarContextMenuContent(props: { children: JSX.Element }) {
   const taskbarContextMenu = useTaskbarContextMenu()
   const shellContextMenus = useShellContextMenus()
+  createEffect(() => {
+    if (!taskbarContextMenu.open()) return
+    const host = shellContextMenus.menuLayerHostEl()
+    if (host) return
+    shellMenuPlacementWarn('taskbar_context_menu_portal', { awaiting_menu_layer_host: true })
+  })
   return (
-    <Show when={taskbarContextMenu.open() && shellContextMenus.atlasHostEl()} keyed>
-      {(host) => <Portal mount={host}>{props.children}</Portal>}
+    <Show when={taskbarContextMenu.open() && shellContextMenus.menuLayerHostEl()} keyed>
+      {(host) => (
+        <Portal mount={host}>
+          <div class="pointer-events-auto">{props.children}</div>
+        </Portal>
+      )}
     </Show>
   )
 }

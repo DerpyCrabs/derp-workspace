@@ -193,12 +193,6 @@ impl DrmHead {
                 if state.shell_presentation_fullscreen {
                     match space_render_elements(renderer, [&state.space], output, 1.0) {
                         Ok(space_els) => {
-                            for el in &shell_render.floating {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
-                            if let Some(ref el) = shell_render.context_menu {
-                                render_elements.push(DesktopStack::ShellDma(el));
-                            }
                             if let Some(ref el) = shell_render.dmabuf {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
@@ -263,12 +257,6 @@ impl DrmHead {
                         output,
                         1.0,
                     );
-                    for el in &shell_render.floating {
-                        render_elements.push(DesktopStack::ShellDma(el));
-                    }
-                    if let Some(ref el) = shell_render.context_menu {
-                        render_elements.push(DesktopStack::ShellDma(el));
-                    }
                     let ordered_window_ids_on_output = state.ordered_window_ids_on_output(output);
                     for (el, wid, include_self_decor) in tagged {
                         let excl_ctx = state.shell_exclusion_clip_ctx_for_draw(

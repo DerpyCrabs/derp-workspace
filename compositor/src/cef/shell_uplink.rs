@@ -213,18 +213,6 @@ fn handle_uplink_list(
             };
             uplink.shell_set_ui_scale(scale);
         }
-        "context_menu" => {
-            let vis = args.int(1) != 0;
-            let bx = args.int(2);
-            let by = args.int(3);
-            let bw = args.int(4) as u32;
-            let bh = args.int(5) as u32;
-            let gx = args.int(6);
-            let gy = args.int(7);
-            let gw = args.int(8) as u32;
-            let gh = args.int(9) as u32;
-            uplink.shell_context_menu(vis, bx, by, bw, bh, gx, gy, gw, gh);
-        }
         "set_tile_preview" => {
             let vis = args.int(1) != 0;
             let x = args.int(2);
@@ -653,48 +641,6 @@ wrap_v8_handler! {
                     }
                     let _ = list.set_int(1, pct);
                 }
-                "context_menu" => {
-                    macro_rules! int_at {
-                        ($idx:literal, $label:literal) => {{
-                            let Some(av) = args.get($idx).and_then(|a| a.as_ref()) else {
-                                return_exception!($label);
-                            };
-                            if av.is_int() != 0 {
-                                av.int_value()
-                            } else if av.is_uint() != 0 {
-                                av.uint_value() as i32
-                            } else if av.is_double() != 0 {
-                                av.double_value() as i32
-                            } else {
-                                return_exception!($label);
-                            }
-                        }};
-                    }
-                    let vis = int_at!(1, "context_menu: arg1 visible (0 or 1)");
-                    let bx = int_at!(2, "context_menu: arg2 bx");
-                    let by = int_at!(3, "context_menu: arg3 by");
-                    let bw = int_at!(4, "context_menu: arg4 bw");
-                    let bh = int_at!(5, "context_menu: arg5 bh");
-                    let gx = int_at!(6, "context_menu: arg6 gx");
-                    let gy = int_at!(7, "context_menu: arg7 gy");
-                    let gw = int_at!(8, "context_menu: arg8 gw");
-                    let gh = int_at!(9, "context_menu: arg9 gh");
-                    if vis < 0 || vis > 1 {
-                        return_exception!("context_menu: visible must be 0 or 1");
-                    }
-                    if vis != 0 && (bw <= 0 || bh <= 0 || gw <= 0 || gh <= 0) {
-                        return_exception!("context_menu: dimensions must be positive when visible");
-                    }
-                    let _ = list.set_int(1, vis);
-                    let _ = list.set_int(2, bx);
-                    let _ = list.set_int(3, by);
-                    let _ = list.set_int(4, bw);
-                    let _ = list.set_int(5, bh);
-                    let _ = list.set_int(6, gx);
-                    let _ = list.set_int(7, gy);
-                    let _ = list.set_int(8, gw);
-                    let _ = list.set_int(9, gh);
-                }
                 "set_tile_preview" => {
                     macro_rules! int_at_tp {
                         ($idx:literal, $label:literal) => {{
@@ -853,7 +799,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, backed_window_open, workspace_mutation, shell_hosted_window_state, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, context_menu, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
+                        "unknown op (use close, quit, backed_window_open, workspace_mutation, shell_hosted_window_state, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response)"
                     );
                 }
             }
@@ -921,7 +867,6 @@ wrap_v8_handler! {
             };
             if kind != shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES
                 && kind != shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS
-                && kind != shared_state::SHELL_SHARED_STATE_KIND_FLOATING_LAYERS
             {
                 return_exception!("unknown shared state kind");
             }

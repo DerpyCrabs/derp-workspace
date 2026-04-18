@@ -51,7 +51,6 @@ type CompositorBridgeRuntimeOptions = {
   setSniTrayItems: (items: TaskbarSniItem[]) => void
   setOutputGeom: (value: { w: number; h: number }) => void
   setOutputPhysical: (value: { w: number; h: number }) => void
-  setContextMenuAtlasBufferH: (value: number) => void
   setLayoutCanvasOrigin: (value: { x: number; y: number } | null) => void
   setUiScalePercent: (value: 100 | 150 | 200) => void
   setScreenDraftRows: (rows: LayoutScreen[]) => void
@@ -224,9 +223,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         w: d.canvas_physical_width,
         h: d.canvas_physical_height,
       })
-      if (typeof d.context_menu_atlas_buffer_h === 'number' && d.context_menu_atlas_buffer_h > 0) {
-        options.setContextMenuAtlasBufferH(d.context_menu_atlas_buffer_h)
-      }
       if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
         options.setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
       } else {

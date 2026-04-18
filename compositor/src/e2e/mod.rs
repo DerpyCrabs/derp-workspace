@@ -473,7 +473,8 @@ impl CompositorState {
         Ok(())
     }
 
-    pub(crate) fn e2e_compositor_snapshot_json(&self) -> Result<String, String> {
+    pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
+        self.sync_shell_shared_state_for_input();
         let pointer = self
             .seat
             .get_pointer()
@@ -597,29 +598,17 @@ impl CompositorState {
         orphaned_wayland_surface_protocol_ids.sort_unstable();
         orphaned_wayland_surface_protocol_ids.dedup();
         let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self
-            .shell_floating_layers
+            .shell_exclusion_floating
             .iter()
-            .map(|layer| E2eFloatingLayerSnapshot {
-                id: layer.id,
-                z: layer.z,
-                global: E2eRectSnapshot {
-                    x: layer.global_rect.loc.x,
-                    y: layer.global_rect.loc.y,
-                    width: layer.global_rect.size.w,
-                    height: layer.global_rect.size.h,
-                },
+            .enumerate()
+            .map(|(index, rect)| E2eFloatingLayerSnapshot {
+                id: index as u32 + 1,
+                z: index as u32 + 1,
+                global: Self::e2e_rect_snapshot(*rect),
             })
             .collect();
         let shell_context_menu_global = if shell_floating_layers.is_empty() {
-            self.shell_context_menu.as_ref().map(|m| {
-                let g = &m.global_rect;
-                E2eRectSnapshot {
-                    x: g.loc.x,
-                    y: g.loc.y,
-                    width: g.size.w,
-                    height: g.size.h,
-                }
-            })
+            None
         } else {
             let min_x = shell_floating_layers
                 .iter()
@@ -660,8 +649,8 @@ impl CompositorState {
             session_power_requested_at_ms: self.e2e_last_session_power_requested_at_ms,
             shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
             screenshot_selection_active: self.screenshot_selection_active,
-            shell_context_menu_visible: self.shell_context_menu.is_some()
-                || !shell_floating_layers.is_empty(),
+            shell_context_menu_visible: self.shell_exclusion_overlay_open
+                && !self.shell_exclusion_floating.is_empty(),
             shell_context_menu_global,
             shell_floating_layers,
             shell_pointer_grab_window_id: self.shell_ui_pointer_grab,

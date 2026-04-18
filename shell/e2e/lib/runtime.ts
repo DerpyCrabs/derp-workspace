@@ -305,6 +305,18 @@ export interface ShellSnapshot {
   programs_menu_open: boolean
   power_menu_open: boolean
   volume_menu_open?: boolean
+  menu_layer_host_connected?: boolean
+  menu_layer_host_z_index?: number | null
+  menu_portal_hit_test?: {
+    hit_ok: boolean
+    tray_flap_above_toggle: boolean | null
+  } | null
+  overlay_menu_dom?: {
+    host_connected: boolean
+    volume_panel_dom: boolean
+    power_menu_dom: boolean
+    programs_menu_dom: boolean
+  } | null
   programs_menu_query: string
   programs_menu_list_scroll?: ProgramsMenuListScroll | null
   crosshair_cursor: boolean

@@ -5,7 +5,6 @@ import {
   respondPortalScreencastRequest,
 } from '@/features/bridge/shellBridge'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
-import { hideFloatingPlacementWire, pushShellFloatingWireFromDom } from '@/features/floating/shellFloatingPlacement'
 import type { DerpWindow } from '@/host/appWindowState'
 import {
   formatMonitorPixels,
@@ -46,9 +45,8 @@ type ScreenshotPortalBridgeOptions = {
   getWindows: () => readonly DerpWindow[]
   focusedWindowId: Accessor<number | null>
   shellWireReadyRev: Accessor<number>
-  getAtlasHostEl: () => HTMLElement | undefined
-  getShellMenuAtlasTop: () => number
-  contextMenuAtlasBufferH: Accessor<number>
+  getMenuLayerHostEl: () => HTMLElement | undefined
+  scheduleExclusionZonesSync: () => void
   setCrosshairCursor: (value: boolean) => void
   hideContextMenu: () => void
   closeAllAtlasSelects: () => boolean
@@ -61,8 +59,8 @@ type ScreenshotPortalBridgeOptions = {
     op: 'shell_ui_grab_begin' | 'shell_ui_grab_end' | 'shell_blur_ui_window',
     arg?: number | string,
   ) => boolean
-  acquireAtlasOverlayPointer: () => void
-  releaseAtlasOverlayPointer: () => void
+  acquireOverlayPointer: () => void
+  releaseOverlayPointer: () => void
 }
 
 export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOptions) {
@@ -129,7 +127,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
     setPortalPickerBusy(false)
     setPortalPickerRequestId(null)
     setPortalPickerTypes(null)
-    hideFloatingPlacementWire()
+    options.scheduleExclusionZonesSync()
   }
 
   function beginPortalPicker(requestId: number, types: number | null) {
@@ -305,9 +303,8 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
     )
     const width = Math.max(320, Math.min(960, screenCss.width - 48))
     const maxHeight = Math.max(280, screenCss.height - 48)
-    const stripHeight = Math.max(1, options.canvasCss().h - options.getShellMenuAtlasTop())
-    const anchorX = Math.round(screenCss.left + (screenCss.width - width) / 2)
-    const anchorY = Math.round(screenCss.top + Math.max(24, (screenCss.height - maxHeight) / 2))
+    const mainRect = main.getBoundingClientRect()
+    const stripHeight = Math.max(1, mainRect.height)
     return {
       placement: {
         left: '50%',
@@ -316,11 +313,6 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
         'max-height': `${Math.round(maxHeight)}px`,
         transform: 'translateX(-50%)',
       } as const,
-      anchor: {
-        x: anchorX,
-        y: anchorY,
-        alignAboveY: anchorY,
-      },
     }
   })
 
@@ -442,7 +434,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
     let panel: HTMLDivElement | undefined
 
     onMount(() => {
-      options.acquireAtlasOverlayPointer()
+      options.acquireOverlayPointer()
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -452,46 +444,25 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
       document.addEventListener('keydown', onKeyDown, true)
       onCleanup(() => {
         document.removeEventListener('keydown', onKeyDown, true)
-        options.releaseAtlasOverlayPointer()
-        hideFloatingPlacementWire()
+        options.releaseOverlayPointer()
+        options.scheduleExclusionZonesSync()
       })
     })
 
     createEffect(() => {
       void options.shellWireReadyRev()
-      if (!portalPickerVisible()) {
-        hideFloatingPlacementWire()
-        return
-      }
-      const layout = portalPickerLayout()
-      const og = options.outputGeom()
-      const physical = options.outputPhysical()
-      const frame = requestAnimationFrame(() => {
-        const main = options.getMainRef()
-        const atlasHost = options.getAtlasHostEl()
-        if (!main || !atlasHost || !panel || !layout || !og || !physical) return
-        pushShellFloatingWireFromDom({
-          main,
-          atlasHost,
-          panel,
-          anchor: layout.anchor,
-          canvasW: og.w,
-          canvasH: og.h,
-          physicalW: physical.w,
-          physicalH: physical.h,
-          contextMenuAtlasBufferH: options.contextMenuAtlasBufferH(),
-          screens: options.screenDraftRows(),
-          layoutOrigin: options.layoutCanvasOrigin(),
-        })
-      })
+      if (!portalPickerVisible()) return
+      void portalPickerLayout()
+      const frame = requestAnimationFrame(() => options.scheduleExclusionZonesSync())
       onCleanup(() => cancelAnimationFrame(frame))
     })
 
     return (
-      <Show when={options.getAtlasHostEl()} keyed>
+      <Show when={options.getMenuLayerHostEl()} keyed>
         {(host) => (
           <Portal mount={host}>
             <div
+              data-shell-exclusion-floating
               class="absolute inset-0 z-90000"
               onContextMenu={(event) => {
                 event.preventDefault()

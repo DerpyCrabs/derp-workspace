@@ -98,6 +98,7 @@ export type BuildE2eShellSnapshotArgs = {
   tabDragTarget: E2eTabDragTarget | null
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
   isWorkspaceWindowPinned: (windowId: number) => boolean
+  menuLayerHost?: () => HTMLElement | undefined
 }
 
 type QueryCache = {
@@ -391,6 +392,48 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     rect: snapshotRect(el, args.origin),
   }))
 
+  const menuLayerHostElResolved =
+    args.menuLayerHost?.() ??
+    (args.document.getElementById('derp-shell-menu-layer-host') as HTMLElement | null) ??
+    (args.document.querySelector('[data-shell-menu-layer-host]') as HTMLElement | null)
+
+  const menu_layer_host_z_index = (() => {
+    if (!menuLayerHostElResolved) return null
+    const zAttr = menuLayerHostElResolved.getAttribute('data-shell-menu-layer-z')
+    if (zAttr != null && zAttr !== '') {
+      const n = Number.parseInt(zAttr, 10)
+      if (Number.isFinite(n)) return n
+    }
+    const z = getComputedStyle(menuLayerHostElResolved).zIndex
+    if (z === 'auto' || z === '') return null
+    const n = Number.parseInt(z, 10)
+    return Number.isFinite(n) ? n : null
+  })()
+
+  const menu_portal_hit_test = (() => {
+    if (!menuLayerHostElResolved) return null
+    let panel: HTMLElement | null = null
+    if (args.volumeMenuOpen) panel = cache.query('[data-shell-volume-menu-panel]')
+    else if (args.powerMenuOpen) panel = cache.query('[data-shell-power-menu-panel]')
+    else if (args.programsMenuOpen) panel = cache.query('[data-shell-programs-menu-panel]')
+    else return null
+    if (!(panel instanceof HTMLElement)) return { hit_ok: false, tray_flap_above_toggle: null }
+    const r = panel.getBoundingClientRect()
+    if (r.width < 4 || r.height < 4) return { hit_ok: false, tray_flap_above_toggle: null }
+    const hit = args.document.elementFromPoint(r.left + r.width * 0.5, r.top + r.height * 0.5)
+    const hit_ok = !!(hit && menuLayerHostElResolved.contains(hit))
+    let tray_flap_above_toggle: boolean | null = null
+    if (args.volumeMenuOpen || args.powerMenuOpen) {
+      const toggleSel = args.volumeMenuOpen ? '[data-shell-volume-toggle]' : '[data-shell-power-toggle]'
+      const toggle = cache.query(toggleSel)
+      if (toggle instanceof HTMLElement) {
+        const tr = toggle.getBoundingClientRect()
+        tray_flap_above_toggle = r.bottom <= tr.top + 3
+      }
+    }
+    return { hit_ok, tray_flap_above_toggle }
+  })()
+
   return {
     captured_at_ms: Date.now(),
     viewport: args.viewport,
@@ -402,6 +445,18 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     programs_menu_open: args.programsMenuOpen,
     power_menu_open: args.powerMenuOpen,
     volume_menu_open: args.volumeMenuOpen,
+    menu_layer_host_connected: !!menuLayerHostElResolved,
+    menu_layer_host_z_index,
+    menu_portal_hit_test,
+    overlay_menu_dom:
+      args.programsMenuOpen || args.volumeMenuOpen || args.powerMenuOpen
+        ? {
+            host_connected: !!menuLayerHostElResolved,
+            volume_panel_dom: !!cache.query('[data-shell-volume-menu-panel]'),
+            power_menu_dom: !!cache.query('[data-shell-power-menu-panel]'),
+            programs_menu_dom: !!cache.query('[data-shell-programs-menu-panel]'),
+          }
+        : null,
     debug_window_visible: args.debugWindowVisible,
     settings_window_visible: args.settingsWindowVisible,
     snap_picker_open: args.snapAssistPicker !== null,

@@ -9,6 +9,7 @@ import {
   useShellAudioState,
 } from '@/apps/settings/useShellAudioState'
 import { useShellContextMenus } from './ShellContextMenusContext'
+import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 
 const EMPTY_AUDIO_DEVICES: ShellAudioDevice[] = []
 const EMPTY_AUDIO_ROWS: AudioRow[] = []
@@ -26,10 +27,19 @@ export function VolumeContextMenu() {
 
   const panelStyle = createMemo(() => {
     const bounds = props.bounds()
+    const anchor = props.anchor()
     const width = Math.min(480, Math.max(320, bounds.w - 16))
+    const top = Math.round(anchor.alignAboveY ?? anchor.y)
+    shellMenuPlacementWarn('volume_menu', {
+      anchor: { x: anchor.x, y: anchor.y, alignAboveY: anchor.alignAboveY },
+      bounds,
+      style_top_px: top,
+    })
+    const ax = Math.round(anchor.x)
     return {
-      right: `calc(100% - ${Math.round(props.anchor().x)}px)`,
-      top: '8px',
+      left: `${ax}px`,
+      top: `${top}px`,
+      transform: 'translateX(-100%) translateY(-100%)',
       width: `${Math.round(width)}px`,
       'max-height': `${Math.max(240, bounds.h - 16)}px`,
     }
@@ -37,6 +47,7 @@ export function VolumeContextMenu() {
 
   return (
     <div
+      data-shell-exclusion-floating
       data-shell-volume-menu-panel
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex max-w-120 flex-col overflow-hidden rounded-[0.35rem] shadow-[0_16px_40px_rgba(0,0,0,0.34)]"
       role="dialog"

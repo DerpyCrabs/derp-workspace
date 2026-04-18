@@ -450,7 +450,6 @@ impl SharedShellSnapshotWriter {
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
-            context_menu_atlas_buffer_h,
             screens,
             shell_chrome_primary,
         }) = &self.state.output_layout
@@ -460,7 +459,6 @@ impl SharedShellSnapshotWriter {
                 *canvas_logical_h,
                 *canvas_physical_w,
                 *canvas_physical_h,
-                *context_menu_atlas_buffer_h,
                 screens,
                 shell_chrome_primary.as_deref(),
             ) {

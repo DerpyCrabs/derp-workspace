@@ -1,8 +1,11 @@
-import { For, type Accessor } from 'solid-js'
+import { For, createMemo, type Accessor } from 'solid-js'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
 import { ShellContextMenuItemButton } from './ShellContextMenuItemButton'
 
+type CtxMenuAnchor = { x: number; y: number; alignAboveY?: number }
+
 type TabContextMenuProps = {
+  anchor: Accessor<CtxMenuAnchor>
   items: Accessor<ShellContextMenuItem[]>
   highlightIdx: Accessor<number>
   setPanelRef: (el: HTMLDivElement) => void
@@ -10,14 +13,23 @@ type TabContextMenuProps = {
 }
 
 export function TabContextMenu(props: TabContextMenuProps) {
+  const panelStyle = createMemo(() => {
+    const a = props.anchor()
+    return {
+      left: `${Math.round(a.x)}px`,
+      top: `${Math.round(a.y)}px`,
+    }
+  })
   return (
     <div
-      class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute top-2 left-2 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
+      data-shell-exclusion-floating
+      class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 fixed flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
       role="menu"
       aria-label="Tab"
       ref={(el) => {
         props.setPanelRef(el)
       }}
+      style={panelStyle()}
     >
       <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
         <For each={props.items()}>

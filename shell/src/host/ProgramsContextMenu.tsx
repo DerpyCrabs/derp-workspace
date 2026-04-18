@@ -43,6 +43,7 @@ export function ProgramsContextMenu() {
   return (
     <div
       data-shell-programs-menu-panel
+      data-shell-exclusion-floating
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex flex-col overflow-hidden"
       role="group"
       aria-label="Application search"

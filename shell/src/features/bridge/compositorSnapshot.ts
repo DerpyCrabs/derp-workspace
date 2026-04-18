@@ -108,9 +108,6 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
   const shellChromePrimary = primaryLen === 0 ? null : readUtf8(bytes, cursor, primaryLen)
   if (shellChromePrimary === null && primaryLen !== 0) return null
   cursor += primaryLen
-  if (cursor + 4 > view.byteLength) return null
-  const contextMenuAtlasBufferH = view.getUint32(cursor, true)
-  cursor += 4
   if (cursor !== view.byteLength) return null
   return {
     type: 'output_layout',
@@ -120,7 +117,6 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     canvas_logical_origin_y: minY,
     canvas_physical_width: canvasPhysicalWidth,
     canvas_physical_height: canvasPhysicalHeight,
-    context_menu_atlas_buffer_h: contextMenuAtlasBufferH,
     screens,
     shell_chrome_primary: shellChromePrimary,
   }

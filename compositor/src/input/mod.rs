@@ -316,8 +316,8 @@ impl CompositorState {
         self.sync_shell_shared_state_for_input();
         let mut route_cef = self.shell_pointer_route_to_cef(pos);
         if button_state == ButtonState::Pressed
-            && (self.shell_context_menu.is_some() || !self.shell_floating_layers.is_empty())
-            && !self.shell_point_in_context_menu_global(pos)
+            && self.shell_exclusion_overlay_open
+            && !self.shell_point_in_shell_floating_overlay_global(pos)
             && !route_cef
         {
             self.shell_dismiss_context_menu_from_compositor();
@@ -343,13 +343,11 @@ impl CompositorState {
             None
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
-        let in_menu = self.shell_point_in_context_menu_global(pos);
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
         let native_hit = self.native_surface_under_no_shell_exclusion(pos);
         let under_native = native_hit.is_some();
         let force_native_buttons = under_native
             && !in_excl
-            && !in_menu
             && !in_shell_ui
             && !self.shell_ui_pointer_grab_active();
         let take_shell_base = shell_px.is_some()
@@ -828,8 +826,8 @@ impl CompositorState {
                 };
                 self.touch_emulation_slot = Some(event.slot());
                 let pos = self.touch_global_point(&event, ws);
-                if (self.shell_context_menu.is_some() || !self.shell_floating_layers.is_empty())
-                    && !self.shell_point_in_context_menu_global(pos)
+                if self.shell_exclusion_overlay_open
+                    && !self.shell_point_in_shell_floating_overlay_global(pos)
                     && !self.shell_pointer_route_to_cef(pos)
                 {
                     self.shell_dismiss_context_menu_from_compositor();

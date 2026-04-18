@@ -36,8 +36,6 @@ import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRunti
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
-import { shellFloatingLayersWire } from '@/features/floating/shellFloatingWire'
-import { hideFloatingPlacementWire } from '@/features/floating/shellFloatingPlacement'
 import {
   spawnViaShellHttp,
 } from '@/features/bridge/shellBridge'
@@ -108,7 +106,6 @@ declare global {
     __DERP_COMPOSITOR_SNAPSHOT_ABI?: number
     __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null
     __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
-    __DERP_SHELL_FLOATING_LAYERS_STATE_PATH?: string | null
     __DERP_SHELL_SHARED_STATE_ABI?: number
     /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
     __derpShellWireSend?: (
@@ -145,7 +142,6 @@ declare global {
         | 'set_desktop_background'
         | 'workspace_mutation'
         | 'shell_hosted_window_state'
-        | 'context_menu'
         | 'backed_window_open'
         | 'e2e_snapshot_response'
         | 'e2e_html_response'
@@ -440,7 +436,6 @@ function App() {
   const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
   const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
   const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
-  const [contextMenuAtlasBufferH, setContextMenuAtlasBufferH] = createSignal(1536)
   const [trayReservedPx, setTrayReservedPx] = createSignal(0)
   const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
   const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(40)
@@ -451,7 +446,7 @@ function App() {
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
   const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
-  const [atlasOverlayPointerUsers, setAtlasOverlayPointerUsers] = createSignal(0)
+  const [chromeOverlayPointerUsers, setChromeOverlayPointerUsers] = createSignal(0)
   const nativeLaunchMetadataByRef = new Map<SessionWindowRef, NativeLaunchMetadata>()
   const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
   let mainRef: HTMLElement | undefined
@@ -503,11 +498,11 @@ function App() {
   function closeAllAtlasSelects(): boolean {
     return floatingLayers.closeByKind('select')
   }
-  function acquireAtlasOverlayPointer() {
-    setAtlasOverlayPointerUsers((n) => n + 1)
+  function acquireOverlayPointer() {
+    setChromeOverlayPointerUsers((n) => n + 1)
   }
-  function releaseAtlasOverlayPointer() {
-    setAtlasOverlayPointerUsers((n) => Math.max(0, n - 1))
+  function releaseOverlayPointer() {
+    setChromeOverlayPointerUsers((n) => Math.max(0, n - 1))
   }
 
   const shellTransportBridge = createShellTransportBridge({
@@ -579,24 +574,6 @@ function App() {
     const w = Math.max(1, g?.w ?? v.w ?? 1)
     const h = Math.max(1, g?.h ?? v.h ?? 1)
     return { w, h }
-  })
-
-  createEffect(() => {
-    void shellWireReadyRev()
-    const allLayers = floatingLayers.layers()
-    const layers = allLayers
-      .filter((layer) => layer.placement)
-      .map((layer) => ({
-        id: layer.order >>> 0,
-        z: layer.order,
-        ...layer.placement!,
-      }))
-    if (layers.length === 0) {
-      if (allLayers.length > 0) return
-      if (!portalPickerVisible()) hideFloatingPlacementWire()
-      return
-    }
-    shellFloatingLayersWire(layers)
   })
 
   const workspacePartition = createMemo(() => {
@@ -697,9 +674,8 @@ function App() {
     getWindows: windowsList,
     focusedWindowId,
     shellWireReadyRev,
-    getAtlasHostEl: () => shellContextMenus.atlasHostEl(),
-    getShellMenuAtlasTop: () => shellContextMenus.shellMenuAtlasTop(),
-    contextMenuAtlasBufferH,
+    getMenuLayerHostEl: () => shellContextMenus.menuLayerHostEl(),
+    scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
     setCrosshairCursor,
     hideContextMenu: () => shellContextMenus.hideContextMenu(),
     closeAllAtlasSelects,
@@ -709,8 +685,8 @@ function App() {
     describeError,
     postShell,
     shellWireSend: (op, arg) => shellWireSend(op, arg),
-    acquireAtlasOverlayPointer,
-    releaseAtlasOverlayPointer,
+    acquireOverlayPointer,
+    releaseOverlayPointer,
   })
   const {
     ScreenshotOverlay,
@@ -731,7 +707,6 @@ function App() {
     shellChromePrimaryName,
     viewportCss,
     canvasCss,
-    contextMenuAtlasBufferH,
     screenshotMode,
     stopScreenshotMode,
     closeAllAtlasSelects,
@@ -997,6 +972,19 @@ function App() {
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
 
+  const exclusionReactiveDeps = createMemo(() => {
+    void shellContextMenus.ctxMenuOpen()
+    void shellContextMenus.programsMenuOpen()
+    void shellContextMenus.powerMenuOpen()
+    void shellContextMenus.volumeMenuOpen()
+    void shellContextMenus.tabMenuOpen()
+    void shellContextMenus.traySniMenuOpen()
+    void portalPickerVisible()
+    void floatingLayers.layers().length
+    void chromeOverlayPointerUsers()
+    return 0
+  })
+
   const { scheduleExclusionZonesSync, syncExclusionZonesNow } = createShellExclusionSync({
     mainEl: () => mainRef,
     outputGeom,
@@ -1005,6 +993,7 @@ function App() {
     windows: windowsList,
     isWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
     onHudChange: debugHudRuntime.setExclusionZonesHud,
+    exclusionReactiveDeps,
   })
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
@@ -1282,6 +1271,7 @@ function App() {
         projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
         isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceState(), windowId),
         openShellTestWindow,
+        getMenuLayerHostEl: shellContextMenus.menuLayerHostEl,
       },
       registerCompositorBridgeRuntime: {
         setKeyboardLayoutLabel,
@@ -1292,7 +1282,6 @@ function App() {
         setSniTrayItems,
         setOutputGeom,
         setOutputPhysical,
-        setContextMenuAtlasBufferH,
         setLayoutCanvasOrigin,
         setUiScalePercent,
         setScreenDraftRows: (rows) => setScreenDraft('rows', rows),
@@ -1405,12 +1394,10 @@ function App() {
     layers: floatingLayers.layers,
     closeAllAtlasSelects,
     dismissContextMenus: shellContextMenus.hideContextMenu,
-    acquireAtlasOverlayPointer,
-    releaseAtlasOverlayPointer,
+    acquireOverlayPointer,
+    releaseOverlayPointer,
     mainEl: () => mainRef,
-    atlasHostEl: shellContextMenus.atlasHostEl,
-    atlasBufferH: contextMenuAtlasBufferH,
-    menuAtlasTopPx: shellContextMenus.shellMenuAtlasTop,
+    menuLayerHostEl: shellContextMenus.menuLayerHostEl,
     outputGeom,
     outputPhysical,
     layoutCanvasOrigin,
@@ -1474,10 +1461,13 @@ function App() {
 
       <ShellContextMenuLayer
         ctxMenuOpen={shellContextMenus.ctxMenuOpen}
-        atlasOverlayPointerUsers={atlasOverlayPointerUsers}
-        setMenuAtlasHostRef={shellContextMenus.setMenuAtlasHostRef}
-        shellMenuAtlasTop={shellContextMenus.shellMenuAtlasTop}
-        volumeMenuOpen={shellContextMenus.volumeMenuOpen}
+        chromeOverlayPointerUsers={chromeOverlayPointerUsers}
+        setMenuLayerHostRef={shellContextMenus.setMenuLayerHostRef}
+        taskbarPortalMenusOpen={() =>
+          shellContextMenus.programsMenuOpen() ||
+          shellContextMenus.powerMenuOpen() ||
+          shellContextMenus.volumeMenuOpen()
+        }
         tabMenuOpen={shellContextMenus.tabMenuOpen}
         traySniMenuOpen={shellContextMenus.traySniMenuOpen}
         tabMenuProps={shellContextMenus.tabMenuProps}

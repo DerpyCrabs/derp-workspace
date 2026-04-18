@@ -11,11 +11,6 @@ import {
 import { Portal } from 'solid-js/web'
 import { useShellFloating } from '@/features/floating/ShellFloatingContext'
 import { resolveSelectBehavior } from '@/lib/selectBehavior'
-import {
-  measureShellFloatingPlacementFromDom,
-  type ShellFloatingAnchor,
-} from '@/features/floating/shellFloatingPlacement'
-
 export type SelectProps<T> = {
   options: readonly T[]
   value: T
@@ -59,38 +54,18 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   const floatingPlacement = () => behavior().floatingPlacement
 
   let anchorWrap: HTMLDivElement | undefined
-  let triggerBtn: HTMLButtonElement | undefined
   let panelEl: HTMLDivElement | undefined
   let suppressTriggerClick = false
   const layerId = `select:${createUniqueId()}`
 
-  const [anchorPt, setAnchorPt] = createSignal<ShellFloatingAnchor>({ x: 0, y: 0 })
   const [parentLayerId, setParentLayerId] = createSignal<string | null>(null)
 
   const eq = () => props.equals ?? ((a: unknown, b: unknown) => a === b)
 
   createEffect(() => {
     if (!isOpen() || !floatingPlacement()) return
-    shellFloat.acquireAtlasOverlayPointer()
-    onCleanup(() => shellFloat.releaseAtlasOverlayPointer())
-  })
-
-  createEffect(() => {
-    if (!isOpen() || !floatingPlacement()) return
-    const syncAnchor = () => {
-      const b = triggerBtn?.getBoundingClientRect()
-      if (b) {
-        setAnchorPt({ x: b.left, y: b.bottom, alignAboveY: b.top })
-      }
-    }
-    queueMicrotask(syncAnchor)
-    syncAnchor()
-    window.addEventListener('resize', syncAnchor)
-    window.addEventListener('scroll', syncAnchor, true)
-    onCleanup(() => {
-      window.removeEventListener('resize', syncAnchor)
-      window.removeEventListener('scroll', syncAnchor, true)
-    })
+    shellFloat.acquireOverlayPointer()
+    onCleanup(() => shellFloat.releaseOverlayPointer())
   })
 
   createEffect(() => {
@@ -137,44 +112,6 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   createEffect(() => {
-    if (!floatingPlacement()) {
-      shellFloat.clearLayerPlacement(layerId)
-      return
-    }
-    if (!isOpen()) {
-      shellFloat.clearLayerPlacement(layerId)
-      return
-    }
-    void props.options.length
-    void props.value
-    const anch = anchorPt()
-    const og = shellFloat.outputGeom()
-    const ph = shellFloat.outputPhysical()
-    const rid = requestAnimationFrame(() => {
-      const main = shellFloat.mainEl()
-      const atlas = shellFloat.atlasHostEl()
-      const panel = panelEl
-      const bufH = shellFloat.atlasBufferH()
-      if (!main || !atlas || !panel || !og || !ph) return
-      const { placement } = measureShellFloatingPlacementFromDom({
-        main,
-        atlasHost: atlas,
-        panel,
-        anchor: anch,
-        canvasW: og.w,
-        canvasH: og.h,
-        physicalW: ph.w,
-        physicalH: ph.h,
-        contextMenuAtlasBufferH: bufH,
-        screens: shellFloat.screenDraftRows(),
-        layoutOrigin: shellFloat.layoutCanvasOrigin(),
-      })
-      shellFloat.setLayerPlacement(layerId, placement)
-    })
-    onCleanup(() => cancelAnimationFrame(rid))
-  })
-
-  createEffect(() => {
     if (!isOpen()) return
     const onKey = (e: KeyboardEvent) => {
       const opts = props.options
@@ -215,8 +152,6 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
     shellFloat.closeAllAtlasSelects()
     if (behavior().dismissContextMenusOnOpen) shellFloat.dismissContextMenus()
     if (floatingPlacement()) {
-      const b = triggerBtn?.getBoundingClientRect()
-      if (b) setAnchorPt({ x: b.left, y: b.bottom, alignAboveY: b.top })
       setParentLayerId(
         preserveContextMenu() ? [...shellFloat.layers()].reverse().find((layer) => layer.kind === 'context_menu')?.id ?? null : null,
       )
@@ -228,7 +163,6 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
     <div class="relative self-start" ref={(el) => (anchorWrap = el)}>
       <button
         type="button"
-        ref={(el) => (triggerBtn = el)}
         class={props.triggerClass ?? DEFAULT_TRIGGER_CLASS}
         onMouseDown={(e) => {
           e.preventDefault()
@@ -268,6 +202,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
               data-select-list
               data-select-panel={props.panelDataId}
               data-floating-layer-id={floatingPlacement() ? layerId : undefined}
+              data-shell-exclusion-floating={floatingPlacement() ? true : undefined}
             >
               <For each={props.options as unknown[]}>
                 {(opt, idx) => (
@@ -307,7 +242,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
             </div>
           )
           if (!floatingPlacement()) return list
-          const host = shellFloat.atlasHostEl()
+          const host = shellFloat.menuLayerHostEl()
           if (!host) return <></>
           return (
             <Portal mount={host}>

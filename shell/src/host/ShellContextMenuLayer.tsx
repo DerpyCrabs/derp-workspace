@@ -4,10 +4,9 @@ import { TraySniContextMenu } from './TraySniContextMenu'
 
 type ShellContextMenuLayerProps = {
   ctxMenuOpen: Accessor<boolean>
-  atlasOverlayPointerUsers: Accessor<number>
-  shellMenuAtlasTop: Accessor<number>
-  setMenuAtlasHostRef: (el: HTMLDivElement) => void
-  volumeMenuOpen: Accessor<boolean>
+  chromeOverlayPointerUsers: Accessor<number>
+  setMenuLayerHostRef: (el: HTMLDivElement | undefined) => void
+  taskbarPortalMenusOpen: Accessor<boolean>
   tabMenuOpen: Accessor<boolean>
   traySniMenuOpen: Accessor<boolean>
   tabMenuProps: Parameters<typeof TabContextMenu>[0]
@@ -17,23 +16,24 @@ type ShellContextMenuLayerProps = {
 export function ShellContextMenuLayer(props: ShellContextMenuLayerProps) {
   return (
     <div
-      class="relative z-90000 contain-layout"
+      id="derp-shell-menu-layer-host"
+      data-shell-menu-layer-host
+      data-shell-menu-layer-z="420000"
+      class="pointer-events-none fixed inset-0 z-[420000]"
       classList={{
-        'pointer-events-auto': props.ctxMenuOpen() || props.atlasOverlayPointerUsers() > 0,
-        'pointer-events-none': !props.ctxMenuOpen() && props.atlasOverlayPointerUsers() === 0,
-        'overflow-visible': props.volumeMenuOpen(),
-        'overflow-hidden': !props.volumeMenuOpen(),
-        'contain-paint': !props.volumeMenuOpen(),
+        'pointer-events-auto':
+          props.ctxMenuOpen() || props.taskbarPortalMenusOpen() || props.chromeOverlayPointerUsers() > 0,
+        'pointer-events-none':
+          !props.ctxMenuOpen() && !props.taskbarPortalMenusOpen() && props.chromeOverlayPointerUsers() === 0,
+        'overflow-visible':
+          props.ctxMenuOpen() || props.taskbarPortalMenusOpen() || props.chromeOverlayPointerUsers() > 0,
+        'overflow-hidden':
+          !props.ctxMenuOpen() &&
+          !props.taskbarPortalMenusOpen() &&
+          props.chromeOverlayPointerUsers() === 0,
       }}
       ref={(el) => {
-        props.setMenuAtlasHostRef(el)
-      }}
-      style={{
-        position: 'absolute',
-        left: '0',
-        right: '0',
-        top: `${props.shellMenuAtlasTop()}px`,
-        bottom: '0',
+        props.setMenuLayerHostRef(el ?? undefined)
       }}
     >
       <Show when={props.tabMenuOpen()}>

@@ -212,6 +212,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(Array.isArray(shell.windows), 'shell snapshot missing windows array')
     assert(shell.controls?.taskbar_settings_toggle, 'shell snapshot missing settings toggle')
     assert(shell.controls?.taskbar_programs_toggle, 'shell snapshot missing programs toggle')
+    assert(shell.menu_layer_host_connected === true, 'shell snapshot missing menu layer host')
     state.knownWindowIds = new Set(compositor.windows.map((window) => window.window_id))
     const desktopApplications = await getJson<{ apps?: typeof state.desktopApps }>(base, '/desktop_applications')
     const apps = Array.isArray(desktopApplications?.apps) ? desktopApplications.apps : []
@@ -219,6 +220,63 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('bootstrap-compositor.json', compositor)
     await writeJsonArtifact('bootstrap-shell.json', shell)
     await writeJsonArtifact('desktop-applications.json', desktopApplications)
+  })
+
+  test('volume and power menus mount portaled panels with visible geometry', async ({ base }) => {
+    const vol = await openVolumeMenu(base)
+    assert(vol.volume_menu_open, 'volume menu should be open')
+    assert(vol.menu_layer_host_connected === true, 'menu layer host connected with volume open')
+    assert(vol.overlay_menu_dom?.host_connected, 'overlay_menu_dom.host_connected volume')
+    assert(vol.overlay_menu_dom?.volume_panel_dom, 'volume panel must exist in DOM')
+    assert(vol.controls?.volume_menu_panel, 'volume_menu_panel control rect')
+    assertRectMinSize('volume_menu_panel', vol.controls.volume_menu_panel, 32, 32)
+    assert(
+      typeof vol.menu_layer_host_z_index === 'number' && vol.menu_layer_host_z_index > 400000,
+      'menu layer z-index above shell surface while volume open',
+    )
+    assert(vol.menu_portal_hit_test?.hit_ok === true, 'volume panel center hit resolves under menu layer host')
+    assert(
+      vol.menu_portal_hit_test?.tray_flap_above_toggle === true,
+      'volume menu geometry clears taskbar toggle (opens upward)',
+    )
+    assert(vol.controls.taskbar_volume_toggle, 'taskbar volume toggle for dismiss')
+    await clickRect(base, vol.controls.taskbar_volume_toggle)
+    await waitForVolumeMenuClosed(base)
+    const pow = await openPowerMenu(base)
+    assert(pow.power_menu_open, 'power menu should be open')
+    assert(pow.menu_layer_host_connected === true, 'menu layer host connected with power open')
+    assert(pow.overlay_menu_dom?.power_menu_dom, 'power menu must exist in DOM')
+    assert(pow.controls?.power_menu_save_session, 'power_menu_save_session rect')
+    assertRectMinSize('power_menu_save_session', pow.controls.power_menu_save_session, 8, 8)
+    assert(
+      typeof pow.menu_layer_host_z_index === 'number' && pow.menu_layer_host_z_index > 400000,
+      'menu layer z-index above shell surface while power open',
+    )
+    assert(pow.menu_portal_hit_test?.hit_ok === true, 'power panel center hit resolves under menu layer host')
+    assert(
+      pow.menu_portal_hit_test?.tray_flap_above_toggle === true,
+      'power menu geometry clears taskbar toggle (opens upward)',
+    )
+    assert(pow.controls.taskbar_power_toggle, 'taskbar power toggle for dismiss')
+    await clickRect(base, pow.controls.taskbar_power_toggle)
+    await waitForPowerMenuClosed(base)
+  })
+
+  test('programs portaled menu hit-tests inside menu layer host', async ({ base, state }) => {
+    assert(state.desktopApps.length >= 1, `need desktop apps, got ${state.desktopApps.length}`)
+    const opened = await openProgramsMenu(base, 'click')
+    assert(opened.programs_menu_open, 'programs menu should be open')
+    assert(
+      typeof opened.menu_layer_host_z_index === 'number' && opened.menu_layer_host_z_index > 400000,
+      'menu layer z-index above shell surface while programs menu open',
+    )
+    assert(opened.menu_portal_hit_test?.hit_ok === true, 'programs panel center hit resolves under menu layer host')
+    assert(
+      opened.menu_portal_hit_test?.tray_flap_above_toggle === null,
+      'programs launcher is not a tray flap menu',
+    )
+    await runKeybind(base, 'toggle_programs_menu')
+    await waitForProgramsMenuClosed(base)
   })
 
   test('programs menu list scrolls with pointer wheel over launcher', async ({ base, state }) => {
@@ -231,12 +289,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       metrics0.scroll_height > metrics0.client_height + 32,
       `expected programs list overflow for wheel test (scroll_height ${metrics0.scroll_height} client_height ${metrics0.client_height})`,
     )
-    const { compositor, shell } = await getSnapshots(base)
-    assert(shell.programs_menu_open, 'programs menu should stay open')
-    const menuG = compositor.shell_context_menu_global
-    assert(
-      menuG && menuG.width > 0 && menuG.height > 0,
-      'compositor must expose shell_context_menu_global while programs menu is open',
+    const menuG = await waitFor(
+      'compositor shell_context_menu_global while programs menu open',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (!shell.programs_menu_open) return null
+        const g = compositor.shell_context_menu_global
+        if (!g || g.width <= 0 || g.height <= 0) return null
+        return g
+      },
+      3000,
+      50,
     )
     const menuAsRect: Rect = {
       x: 0,
@@ -526,11 +589,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     await waitForSessionShellWindow(base, shellTestWindowId, false, 8000)
+    await waitForSessionRestoreIdle(base)
 
     let powerMenu = await openPowerMenu(base)
     assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')
     await clickRect(base, powerMenu.controls.power_menu_save_session)
-    await waitForSessionShellWindow(base, shellTestWindowId, true)
+    await waitForSessionShellWindow(base, shellTestWindowId, true, 8000)
 
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shell, shellTestWindowId)

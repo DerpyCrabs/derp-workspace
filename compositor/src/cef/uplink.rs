@@ -252,23 +252,6 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn shell_context_menu(
-        &self,
-        visible: bool,
-        bx: i32,
-        by: i32,
-        bw: u32,
-        bh: u32,
-        gx: i32,
-        gy: i32,
-        gw: u32,
-        gh: u32,
-    ) {
-        self.run(move |s| {
-            s.apply_shell_context_menu(visible, bx, by, bw, bh, gx, gy, gw, gh);
-        });
-    }
-
     pub fn shell_tile_preview_canvas(&self, visible: bool, lx: i32, ly: i32, lw: i32, lh: i32) {
         self.run(move |s| {
             s.apply_shell_tile_preview_canvas(visible, lx, ly, lw, lh);

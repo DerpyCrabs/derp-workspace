@@ -11,14 +11,13 @@ import {
   type Accessor,
   type JSX,
 } from 'solid-js'
-import { atlasTopFromLayout, type ShellContextMenuItem } from '@/host/contextMenu'
+import { type ShellContextMenuItem } from '@/host/contextMenu'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
 import { searchDesktopApplications } from '@/features/desktop/desktopAppSearch'
 import type { createFloatingLayerStore } from '@/features/floating/floatingLayers'
-import { measureShellFloatingPlacementFromDom } from '@/features/floating/shellFloatingPlacement'
-import { shellContextMenuWire } from '@/features/floating/shellFloatingWire'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
-import { canvasRectToClientCss } from '@/lib/shellCoords'
+import { canvasRectToClientCss, clientRectToGlobalLogical } from '@/lib/shellCoords'
+import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
 
@@ -41,7 +40,6 @@ type CreateShellContextMenusArgs = {
   shellChromePrimaryName: Accessor<string | null>
   viewportCss: Accessor<{ w: number; h: number }>
   canvasCss: Accessor<{ w: number; h: number }>
-  contextMenuAtlasBufferH: Accessor<number>
   screenshotMode: Accessor<boolean>
   stopScreenshotMode: () => void
   closeAllAtlasSelects: () => boolean
@@ -122,15 +120,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [programsUsageCounts, setProgramsUsageCounts] = createSignal(getDesktopAppUsageCounts())
   const desktopApps = useDesktopApplicationsState()
 
-  let menuAtlasHostRef: HTMLElement | undefined
+  const [menuLayerHost, setMenuLayerHost] = createSignal<HTMLElement | undefined>(undefined)
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
-  const [menuAtlasHostRevision, setMenuAtlasHostRevision] = createSignal(0)
-  const [menuPanelRevision, setMenuPanelRevision] = createSignal(0)
-  const [menuPanelLayoutRevision, setMenuPanelLayoutRevision] = createSignal(0)
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
-    setMenuPanelRevision((value) => value + 1)
   }
 
 
@@ -176,7 +170,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function hideContextMenu(skipStore = false) {
     resetContextMenuState()
-    shellContextMenuWire(false, 0, 0, 0, 0, 0, 0, 0, 0)
     args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
     if (!skipStore) {
       args.floatingLayers.closeBranch(ROOT_CONTEXT_MENU_LAYER_ID)
@@ -196,16 +189,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   function triggerIsOpen(trigger: object) {
     return ctxMenuOpen() && activeMenuTrigger() === trigger
   }
-
-  const shellMenuAtlasTop = createMemo(() => {
-    const g = args.outputGeom()
-    const p = args.outputPhysical()
-    const ah = args.contextMenuAtlasBufferH()
-    const v = args.canvasCss()
-    const clh = Math.max(1, g?.h ?? v.h)
-    const cph = Math.max(1, p?.h ?? Math.round(clh * 1.5))
-    return atlasTopFromLayout(clh, cph, ah)
-  })
 
   const volumeMenuBounds = createMemo(() => {
     const og = args.outputGeom()
@@ -271,15 +254,45 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   const programsMenuPlacement = createMemo(() => {
-    const metrics = programsMenuMetrics(programsMenuOutputName())
-    if (!metrics) return null
-    const stripHeight = Math.max(1, args.canvasCss().h - shellMenuAtlasTop())
+    void args.viewportCss().w
+    void args.viewportCss().h
+    void args.canvasCss().w
+    void args.canvasCss().h
+    const outputName = programsMenuOutputName()
+    const metrics = programsMenuMetrics(outputName)
+    const main = args.mainEl()
+    const og = args.outputGeom()
+    if (!metrics || !main || !og) return null
+    const mainRect = main.getBoundingClientRect()
+    const scr = canvasRectToClientCss(
+      metrics.targetCss.x,
+      metrics.targetCss.y,
+      metrics.targetCss.width,
+      metrics.targetCss.height,
+      mainRect,
+      og.w,
+      og.h,
+    )
+    const left = Math.round(scr.left + (scr.width - metrics.width) / 2)
+    const top = Math.round(scr.top + (scr.height - metrics.height) / 2)
+    shellMenuPlacementWarn('programs_menu', {
+      output_name: outputName,
+      target_canvas: {
+        x: metrics.targetCss.x,
+        y: metrics.targetCss.y,
+        w: metrics.targetCss.width,
+        h: metrics.targetCss.height,
+      },
+      main_rect: { left: mainRect.left, top: mainRect.top, w: mainRect.width, h: mainRect.height },
+      og,
+      client_rect: scr,
+      placement_px: { left, top, w: metrics.width, h: metrics.height },
+    })
     return {
-      left: '50%',
-      top: `${Math.max(8, Math.round((stripHeight - metrics.height) / 2))}px`,
+      left: `${left}px`,
+      top: `${top}px`,
       width: `${Math.round(metrics.width)}px`,
       'max-height': `${Math.round(metrics.height)}px`,
-      transform: 'translateX(-50%)',
     } as const satisfies JSX.CSSProperties
   })
 
@@ -325,11 +338,11 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function openProgramsMenu(outputName?: string | null) {
     args.closeAllAtlasSelects()
+    setProgramsMenuOutputName(outputName ?? null)
     anchorProgramsMenuToCenter(outputName)
     openRootContextMenu(programsMenuTrigger)
     setProgramsMenuQuery('')
     setProgramsMenuHighlightIdx(0)
-    setProgramsMenuOutputName(outputName ?? null)
     focusProgramsMenuSearch()
     void desktopApps.refresh()
     void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
@@ -560,14 +573,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     ]
   })
 
-  const menuListItems = createMemo(() => {
-    if (programsMenuOpen()) return programsMenuListItems()
-    if (powerMenuOpen()) return powerMenuListItems()
-    if (tabMenuOpen()) return tabMenuListItems()
-    if (traySniMenuOpen()) return traySniMenuListItems()
-    return []
-  })
-
   function activateProgramsMenuSelection() {
     if (!programsMenuOpen()) return
     const items = programsMenuListItems()
@@ -725,128 +730,32 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   })
 
   createEffect(() => {
-    void menuPanelRevision()
-    const panel = menuPanelRef
-    if (!panel) return
-    setMenuPanelLayoutRevision((value) => value + 1)
-    const observer = new ResizeObserver(() => {
-      setMenuPanelLayoutRevision((value) => value + 1)
-    })
-    observer.observe(panel)
-    onCleanup(() => observer.disconnect())
-  })
-
-  createEffect(() => {
     if (!ctxMenuOpen()) return
     const hit = (target: Node) => menuPanelRef?.contains(target) === true
     args.floatingLayers.registerSurface(ROOT_CONTEXT_MENU_LAYER_ID, hit)
     onCleanup(() => args.floatingLayers.unregisterSurface(ROOT_CONTEXT_MENU_LAYER_ID, hit))
   })
 
-  createEffect(() => {
-    if (!ctxMenuOpen()) {
-      args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
-      return
-    }
-    const layerPresent = args.floatingLayers.hasLayer(ROOT_CONTEXT_MENU_LAYER_ID)
-    if (!layerPresent) return
-    void menuAtlasHostRevision()
-    void menuListItems().length
-    void menuPanelRevision()
-    void menuPanelLayoutRevision()
-    void args.screenDraftRows().length
-    const anchor = ctxMenuAnchor()
-    const og = args.outputGeom()
-    const ph = args.outputPhysical()
-    const layoutOrigin = args.layoutCanvasOrigin()
-    const atlasBufferH = args.contextMenuAtlasBufferH()
-    let cancelled = false
-    const syncPlacement = () => {
-      if (cancelled) return
-      const main = args.mainEl()
-      const atlas = menuAtlasHostRef
-      const panel = menuPanelRef
-      if (!main || !atlas || !panel || !og || !ph) {
-        return
-      }
-      const { placement } = measureShellFloatingPlacementFromDom({
-        main,
-        atlasHost: atlas,
-        panel,
-        anchor: { x: anchor.x, y: anchor.y, alignAboveY: anchor.alignAboveY },
-        canvasW: og.w,
-        canvasH: og.h,
-        physicalW: ph.w,
-        physicalH: ph.h,
-        contextMenuAtlasBufferH: atlasBufferH,
-        screens: args.screenDraftRows(),
-        layoutOrigin,
-      })
-      shellContextMenuWire(
-        true,
-        placement.bx,
-        placement.by,
-        placement.bw,
-        placement.bh,
-        placement.gx,
-        placement.gy,
-        placement.gw,
-        placement.gh,
-      )
-      args.floatingLayers.setLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID, placement)
-    }
-    queueMicrotask(syncPlacement)
-    const rid = requestAnimationFrame(syncPlacement)
-    onCleanup(() => {
-      cancelled = true
-      cancelAnimationFrame(rid)
-    })
-  })
-
   function projectCurrentMenuElementRect(el: Element | null) {
     if (!(el instanceof HTMLElement)) return null
     const main = args.mainEl()
-    const atlas = menuAtlasHostRef
     const panel = menuPanelRef
     const og = args.outputGeom()
-    const ph = args.outputPhysical()
-    if (!main || !atlas || !panel || !og || !ph || !panel.contains(el)) return null
-    const anchor = ctxMenuAnchor()
-    const { panelRect, placement } = measureShellFloatingPlacementFromDom({
-      main,
-      atlasHost: atlas,
-      panel,
-      anchor: { x: anchor.x, y: anchor.y, alignAboveY: anchor.alignAboveY },
-      canvasW: og.w,
-      canvasH: og.h,
-      physicalW: ph.w,
-      physicalH: ph.h,
-      contextMenuAtlasBufferH: args.contextMenuAtlasBufferH(),
-      screens: args.screenDraftRows(),
-      layoutOrigin: args.layoutCanvasOrigin(),
-    })
-    if (panelRect.width <= 0 || panelRect.height <= 0) return null
+    if (!main || !panel || !og || !panel.contains(el)) return null
+    const mainRect = main.getBoundingClientRect()
     const rect = el.getBoundingClientRect()
-    const leftRatio = (rect.left - panelRect.left) / panelRect.width
-    const topRatio = (rect.top - panelRect.top) / panelRect.height
-    const rightRatio = (rect.right - panelRect.left) / panelRect.width
-    const bottomRatio = (rect.bottom - panelRect.top) / panelRect.height
-    const globalLeft = Math.round(placement.gx + leftRatio * placement.gw)
-    const globalTop = Math.round(placement.gy + topRatio * placement.gh)
-    const globalRight = Math.round(placement.gx + rightRatio * placement.gw)
-    const globalBottom = Math.round(placement.gy + bottomRatio * placement.gh)
-    const width = Math.max(1, globalRight - globalLeft)
-    const height = Math.max(1, globalBottom - globalTop)
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const z = clientRectToGlobalLogical(mainRect, rect, og.w, og.h, args.layoutCanvasOrigin())
     const origin = args.layoutCanvasOrigin()
     const ox = origin?.x ?? 0
     const oy = origin?.y ?? 0
     return {
-      x: globalLeft - ox,
-      y: globalTop - oy,
-      width,
-      height,
-      global_x: globalLeft,
-      global_y: globalTop,
+      x: z.x - ox,
+      y: z.y - oy,
+      width: z.w,
+      height: z.h,
+      global_x: z.x,
+      global_y: z.y,
     }
   }
 
@@ -1052,7 +961,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     volumeMenuOpen,
     tabMenuOpen,
     traySniMenuOpen,
-    shellMenuAtlasTop,
     onProgramsMenuClick,
     onPowerMenuClick,
     onVolumeMenuClick,
@@ -1062,11 +970,10 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     hideContextMenu,
     toggleProgramsMenuMeta,
     warmProgramsMenuItems,
-    setMenuAtlasHostRef(el: HTMLDivElement) {
-      menuAtlasHostRef = el
-      setMenuAtlasHostRevision((value) => value + 1)
+    setMenuLayerHostRef(el: HTMLDivElement | undefined) {
+      setMenuLayerHost(el)
     },
-    atlasHostEl: () => menuAtlasHostRef,
+    menuLayerHostEl: menuLayerHost,
     projectCurrentMenuElementRect,
     programsMenuProps: {
       placement: programsMenuPlacement,
@@ -1093,18 +1000,19 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     },
     volumeMenuProps: {
       anchor: ctxMenuAnchor,
-      atlasTop: shellMenuAtlasTop,
       bounds: volumeMenuBounds,
       setPanelRef: setMenuPanelRef,
       closeContextMenu: hideContextMenu,
     },
     tabMenuProps: {
+      anchor: ctxMenuAnchor,
       items: tabMenuListItems,
       highlightIdx: tabMenuHighlightIdx,
       setPanelRef: setMenuPanelRef,
       closeContextMenu: hideContextMenu,
     },
     traySniMenuProps: {
+      anchor: ctxMenuAnchor,
       items: traySniMenuListItems,
       highlightIdx: traySniHighlightIdx,
       setPanelRef: setMenuPanelRef,

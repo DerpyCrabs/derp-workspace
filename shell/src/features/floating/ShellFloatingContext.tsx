@@ -33,12 +33,10 @@ export type ShellFloatingRegistry = {
   layers: Accessor<FloatingLayerStoreRecord[]>
   closeAllAtlasSelects: () => boolean
   dismissContextMenus: () => void
-  acquireAtlasOverlayPointer: () => void
-  releaseAtlasOverlayPointer: () => void
+  acquireOverlayPointer: () => void
+  releaseOverlayPointer: () => void
   mainEl: () => HTMLElement | undefined
-  atlasHostEl: () => HTMLElement | undefined
-  atlasBufferH: Accessor<number>
-  menuAtlasTopPx: Accessor<number>
+  menuLayerHostEl: () => HTMLElement | undefined
   outputGeom: Accessor<{ w: number; h: number } | null>
   outputPhysical: Accessor<{ w: number; h: number } | null>
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>

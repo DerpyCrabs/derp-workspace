@@ -5,7 +5,6 @@ use std::sync::{Mutex, OnceLock};
 use smithay::{
     backend::allocator::Buffer,
     backend::renderer::{
-        element::Id,
         gles::{GlesError, GlesRenderer},
         utils::CommitCounter,
         ImportDma,
@@ -28,14 +27,6 @@ pub(crate) struct ShellMainCacheKey {
     pub view_px: (u32, u32),
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct ShellOverlayCacheKey {
-    pub output_geo: Rectangle<i32, Logical>,
-    pub output_scale_bits: u64,
-    pub global_rect: Rectangle<i32, Logical>,
-    pub buffer_rect: Rectangle<i32, BufferCoord>,
-}
-
 pub(crate) struct CachedShellElement<K> {
     pub key: K,
     pub commit: CommitCounter,
@@ -44,8 +35,6 @@ pub(crate) struct CachedShellElement<K> {
 
 #[derive(Default)]
 pub(crate) struct ShellOutputRenderElements {
-    pub floating: Vec<ShellDmaElement>,
-    pub context_menu: Option<ShellDmaElement>,
     pub dmabuf: Option<ShellDmaElement>,
     pub force_full_damage: bool,
 }
@@ -330,107 +319,6 @@ fn build_main_shell_dmabuf_element(
     }
 }
 
-fn shell_overlay_element_for_placement(
-    state: &CompositorState,
-    renderer: &mut GlesRenderer,
-    output_geo: Rectangle<i32, Logical>,
-    output_scale: f64,
-    placement: &crate::state::ShellContextMenuPlacement,
-    overlay_id: &Id,
-    error_label: &'static str,
-) -> Result<Option<ShellDmaElement>, GlesError> {
-    let Some(ref dmabuf) = state.shell_dmabuf else {
-        return Ok(None);
-    };
-    let menu_g = placement.global_rect;
-    let Some(inter) = menu_g.intersection(Rectangle::new(output_geo.loc, output_geo.size)) else {
-        return Ok(None);
-    };
-    if inter.size.w <= 0 || inter.size.h <= 0 {
-        return Ok(None);
-    }
-
-    let bx = placement.buffer_rect.loc.x as f64;
-    let by = placement.buffer_rect.loc.y as f64;
-    let bw = placement.buffer_rect.size.w.max(1) as f64;
-    let bh = placement.buffer_rect.size.h.max(1) as f64;
-    let gx = menu_g.loc.x as f64;
-    let gy = menu_g.loc.y as f64;
-    let gw = menu_g.size.w.max(1) as f64;
-    let gh = menu_g.size.h.max(1) as f64;
-
-    let ix0 = inter.loc.x as f64;
-    let iy0 = inter.loc.y as f64;
-    let ix1 = ix0 + inter.size.w as f64;
-    let iy1 = iy0 + inter.size.h as f64;
-
-    let u0 = ((ix0 - gx) / gw).clamp(0.0, 1.0);
-    let v0 = ((iy0 - gy) / gh).clamp(0.0, 1.0);
-    let u1 = ((ix1 - gx) / gw).clamp(0.0, 1.0);
-    let v1 = ((iy1 - gy) / gh).clamp(0.0, 1.0);
-
-    let bsrc_x0 = bx + u0 * bw;
-    let bsrc_y0 = by + v0 * bh;
-    let bsrc_w = (u1 - u0) * bw;
-    let bsrc_h = (v1 - v0) * bh;
-    if bsrc_w < 0.5 || bsrc_h < 0.5 {
-        return Ok(None);
-    }
-
-    let buffer_src = Rectangle::new(
-        Point::<f64, BufferCoord>::from((bsrc_x0, bsrc_y0)),
-        Size::<f64, BufferCoord>::from((bsrc_w, bsrc_h)),
-    );
-
-    let output_scale = Scale::from(output_scale);
-    let d = inter.loc - output_geo.loc;
-    let shell_loc_phys =
-        Point::<f64, Physical>::from((d.x as f64 * output_scale.x, d.y as f64 * output_scale.x));
-    let shell_size_logical = inter.size;
-
-    let damage_phys = if state.shell_dmabuf_dirty_force_full {
-        None
-    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
-        None
-    } else {
-        let mapped = shell_dmabuf_dirty_buffer_to_physical(
-            buffer_src,
-            Rectangle::new(inter.loc, inter.size),
-            output_scale,
-            &state.shell_dmabuf_dirty_buffer,
-        );
-        if mapped.is_empty() {
-            None
-        } else {
-            Some(mapped)
-        }
-    };
-
-    log_shell_dmabuf_import_context(dmabuf, renderer);
-
-    match crate::desktop::desktop_stack::shell_dmabuf_overlay_element(
-        renderer,
-        dmabuf,
-        overlay_id.clone(),
-        shell_loc_phys,
-        shell_size_logical,
-        buffer_src,
-        state.shell_dmabuf_commit,
-        damage_phys,
-    ) {
-        Ok(el) => Ok(Some(el)),
-        Err(e) => {
-            tracing::warn!(
-                target: "derp_shell_dmabuf",
-                ?e,
-                %error_label,
-                "shell floating dma-buf layer import failed"
-            );
-            Ok(None)
-        }
-    }
-}
-
 fn cache_shell_element<K: Clone + PartialEq>(
     slot: &mut Option<CachedShellElement<K>>,
     key: K,
@@ -504,104 +392,6 @@ pub fn compositor_shell_render_elements(
         cache.main = None;
     } else {
         cache.main = None;
-    }
-
-    if let (Some(output_geo), Some(placement)) = (output_geo, state.shell_context_menu.clone()) {
-        let key = ShellOverlayCacheKey {
-            output_geo,
-            output_scale_bits: output_scale.to_bits(),
-            global_rect: placement.global_rect,
-            buffer_rect: placement.buffer_rect,
-        };
-        let (element, force_full_damage) = cache_shell_element(
-            &mut cache.context_menu,
-            key,
-            state.shell_dmabuf_commit,
-            || {
-                shell_overlay_element_for_placement(
-                    state,
-                    renderer,
-                    output_geo,
-                    output_scale,
-                    &placement,
-                    &state.shell_context_menu_overlay_id,
-                    "context menu dma-buf layer import failed",
-                )
-            },
-        )?;
-        render.context_menu = element;
-        render.force_full_damage |= force_full_damage;
-    } else if cache
-        .context_menu
-        .as_ref()
-        .is_some_and(|cached| cached.element.is_some())
-    {
-        render.force_full_damage = true;
-        cache.context_menu = None;
-    } else {
-        cache.context_menu = None;
-    }
-
-    let current_floating = state.shell_floating_layers.clone();
-    let current_ids: Vec<u32> = current_floating.iter().map(|layer| layer.id).collect();
-    if cache.floating_order != current_ids
-        && (cache
-            .floating
-            .iter()
-            .any(|(_, cached)| cached.element.is_some())
-            || !current_ids.is_empty())
-    {
-        render.force_full_damage = true;
-    }
-    cache.floating_order = current_ids.clone();
-    cache
-        .floating
-        .retain(|id, _| current_ids.iter().any(|current| current == id));
-
-    if let Some(output_geo) = output_geo {
-        for layer in current_floating {
-            let placement = crate::state::ShellContextMenuPlacement {
-                buffer_rect: layer.buffer_rect,
-                global_rect: layer.global_rect,
-            };
-            let key = ShellOverlayCacheKey {
-                output_geo,
-                output_scale_bits: output_scale.to_bits(),
-                global_rect: placement.global_rect,
-                buffer_rect: placement.buffer_rect,
-            };
-            let mut slot = cache.floating.remove(&layer.id);
-            let (element, force_full_damage) =
-                cache_shell_element(&mut slot, key, state.shell_dmabuf_commit, || {
-                    shell_overlay_element_for_placement(
-                        state,
-                        renderer,
-                        output_geo,
-                        output_scale,
-                        &placement,
-                        &layer.overlay_id,
-                        "floating layer dma-buf import failed",
-                    )
-                })?;
-            if let Some(slot) = slot {
-                cache.floating.insert(layer.id, slot);
-            }
-            if let Some(element) = element {
-                render.floating.push(element);
-            }
-            render.force_full_damage |= force_full_damage;
-        }
-    } else if cache
-        .floating
-        .values()
-        .any(|cached| cached.element.is_some())
-    {
-        render.force_full_damage = true;
-        cache.floating.clear();
-        cache.floating_order.clear();
-    } else {
-        cache.floating.clear();
-        cache.floating_order.clear();
     }
 
     state

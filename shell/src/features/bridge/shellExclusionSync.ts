@@ -1,25 +1,9 @@
-import { createEffect, createMemo, onCleanup, type Accessor } from 'solid-js'
+import { createEffect, onCleanup, type Accessor } from 'solid-js'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
 import { mergeExclusionRects, ssdDecorationExclusionRects } from '@/lib/exclusionRects'
 import { clientRectToGlobalLogical, rectCanvasLocalToGlobal } from '@/lib/shellCoords'
 import { writeShellExclusionState } from './sharedShellState'
-
-type ExclusionWindow = Pick<
-  DerpWindow,
-  | 'window_id'
-  | 'stack_z'
-  | 'x'
-  | 'y'
-  | 'width'
-  | 'height'
-  | 'output_name'
-  | 'minimized'
-  | 'maximized'
-  | 'fullscreen'
-> & {
-  snap_tiled: boolean
-}
 
 type ShellExclusionSyncOptions = {
   mainEl: Accessor<HTMLElement | undefined>
@@ -29,13 +13,15 @@ type ShellExclusionSyncOptions = {
   windows: Accessor<readonly DerpWindow[]>
   isWindowTiled: (windowId: number) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
+  exclusionReactiveDeps: Accessor<unknown>
 }
 
 export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let exclusionZonesRaf = 0
+  let exclusionZonesRaf2 = 0
   let lastExclusionZonesJson: string | null = null
 
-  const exclusionWindows = createMemo<ExclusionWindow[]>(() => {
+  const exclusionWindows = () => {
     const next = options.windows().map((window) => ({
       window_id: window.window_id,
       stack_z: window.stack_z,
@@ -51,9 +37,9 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     }))
     next.sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
     return next
-  })
+  }
 
-  const exclusionWindowsSig = createMemo(() =>
+  const exclusionWindowsSig = () =>
     exclusionWindows()
       .map((window) =>
         [
@@ -70,10 +56,9 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
           window.snap_tiled ? 1 : 0,
         ].join(':'),
       )
-      .join('|'),
-  )
+      .join('|')
 
-  const fullscreenTaskbarExclusionSig = createMemo(() => {
+  const fullscreenTaskbarExclusionSig = () => {
     const fullscreenOutputs = new Set<string>()
     for (const window of options.windows()) {
       if (!window.minimized && window.fullscreen) fullscreenOutputs.add(window.output_name)
@@ -82,9 +67,10 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       .taskbarScreens()
       .map((screen) => `${screen.name}:${fullscreenOutputs.has(screen.name) ? 1 : 0}`)
       .join('|')
-  })
+  }
 
   function syncExclusionZonesNow() {
+    void options.exclusionReactiveDeps()
     const main = options.mainEl()
     if (!main) {
       options.onHudChange([])
@@ -132,8 +118,17 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
         rects.push({ x: z.x, y: z.y, w: z.w, h: z.h, window_id: window.window_id })
       }
     }
+    const floatingRaw: typeof rects = []
+    for (const el of main.querySelectorAll('[data-shell-exclusion-floating]')) {
+      const r = el.getBoundingClientRect()
+      if (r.width < 1 || r.height < 1) continue
+      const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
+      floatingRaw.push({ x: z.x, y: z.y, w: z.w, h: z.h })
+      hud.push({ label: 'floating', ...z })
+    }
+    const overlayOpen = floatingRaw.length > 0
+    const mergedBase = mergeExclusionRects([...rects, ...floatingRaw])
     options.onHudChange(hud)
-    const sentRects = mergeExclusionRects(rects)
     let tray_strip: { x: number; y: number; w: number; h: number } | null = null
     const trayStripEl = main.querySelector('[data-shell-tray-strip]')
     if (trayStripEl) {
@@ -143,17 +138,27 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
         tray_strip = { x: z.x, y: z.y, w: z.w, h: z.h }
       }
     }
-    const payload = JSON.stringify({ rects: sentRects, tray_strip })
+    const floatingForPayload = mergeExclusionRects(floatingRaw)
+    const payload = JSON.stringify({
+      rects: mergedBase,
+      tray_strip,
+      overlayOpen,
+      floating: floatingForPayload,
+    })
     if (payload === lastExclusionZonesJson) return
-    if (!writeShellExclusionState(sentRects, tray_strip)) return
+    if (!writeShellExclusionState(mergedBase, tray_strip, overlayOpen, floatingForPayload)) return
     lastExclusionZonesJson = payload
   }
 
   function scheduleExclusionZonesSync() {
     if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
+    if (exclusionZonesRaf2) cancelAnimationFrame(exclusionZonesRaf2)
     exclusionZonesRaf = requestAnimationFrame(() => {
       exclusionZonesRaf = 0
-      syncExclusionZonesNow()
+      exclusionZonesRaf2 = requestAnimationFrame(() => {
+        exclusionZonesRaf2 = 0
+        syncExclusionZonesNow()
+      })
     })
   }
 
@@ -174,6 +179,11 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   })
 
   createEffect(() => {
+    options.exclusionReactiveDeps()
+    queueMicrotask(() => scheduleExclusionZonesSync())
+  })
+
+  createEffect(() => {
     const main = options.mainEl()
     if (!main) {
       options.onHudChange([])
@@ -187,6 +197,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
 
   onCleanup(() => {
     if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
+    if (exclusionZonesRaf2) cancelAnimationFrame(exclusionZonesRaf2)
   })
 
   return {

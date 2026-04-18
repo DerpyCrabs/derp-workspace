@@ -67,6 +67,7 @@ type RegisterShellE2eBridgeOptions = {
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
   isWorkspaceWindowPinned: (windowId: number) => boolean
   openShellTestWindow: () => boolean
+  getMenuLayerHostEl: () => HTMLElement | undefined
 }
 
 export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
@@ -114,6 +115,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
           tabDragTarget: options.getTabDragTarget(),
           projectCurrentMenuElementRect: options.projectCurrentMenuElementRect,
           isWorkspaceWindowPinned: options.isWorkspaceWindowPinned,
+          menuLayerHost: options.getMenuLayerHostEl,
         }),
       ),
     )
