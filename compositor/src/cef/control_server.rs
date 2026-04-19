@@ -662,6 +662,22 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/read" {
+        let q = query_str.ok_or_else(|| "file_browser/read: missing query".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "file_browser/read: missing p".to_string())?;
+        let path = percent_decode_component(p_enc)?;
+        match crate::cef::file_browser::file_browser_read_file_bytes(&path) {
+            Ok((bytes, content_type)) => {
+                write_http_ok_bytes(stream, content_type, &bytes).map_err(|e| e.to_string())?
+            }
+            Err(error) => {
+                write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?
+            }
+        }
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/portal_screencast_request" {
         let json = portal_screencast_request_json();
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;

@@ -9,6 +9,8 @@ export const SHELL_UI_TEST_WINDOW_ID_BASE = 9100
 export const SHELL_UI_TEST_WINDOW_ID_LIMIT = 9199
 export const SHELL_UI_FILE_BROWSER_WINDOW_ID_BASE = 9200
 export const SHELL_UI_FILE_BROWSER_WINDOW_ID_LIMIT = 9299
+export const SHELL_UI_IMAGE_VIEWER_WINDOW_ID_BASE = 9300
+export const SHELL_UI_IMAGE_VIEWER_WINDOW_ID_LIMIT = 9399
 
 export const SHELL_UI_DEBUG_TITLE = 'Debug'
 export const SHELL_UI_DEBUG_APP_ID = 'derp.debug'
@@ -18,6 +20,8 @@ export const SHELL_UI_TEST_TITLE_PREFIX = 'JS Test Window'
 export const SHELL_UI_TEST_APP_ID = 'derp.test-shell'
 export const SHELL_UI_FILE_BROWSER_TITLE = 'Files'
 export const SHELL_UI_FILE_BROWSER_APP_ID = 'derp.files'
+export const SHELL_UI_IMAGE_VIEWER_TITLE = 'Image'
+export const SHELL_UI_IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
 const SHELL_BACKED_WINDOW_STAGGER_X = 28
 const SHELL_BACKED_WINDOW_STAGGER_Y = 24
 const SHELL_BACKED_WINDOW_STAGGER_STEPS = 6
@@ -33,11 +37,11 @@ export type BackedWindowOpenPayload = {
   h: number
 }
 
-export type BackedShellWindowKind = 'debug' | 'settings' | 'test' | 'file_browser'
+export type BackedShellWindowKind = 'debug' | 'settings' | 'test' | 'file_browser' | 'image_viewer'
 
 export function defaultBackedClientAreaGlobal(
   work: { x: number; y: number; w: number; h: number },
-  kind: 'debug' | 'settings' | 'test' | 'file_browser',
+  kind: 'debug' | 'settings' | 'test' | 'file_browser' | 'image_viewer',
   staggerIndex = 0,
 ): { x: number; y: number; w: number; h: number } {
   const th = CHROME_TITLEBAR_PX
@@ -53,6 +57,9 @@ export function defaultBackedClientAreaGlobal(
   } else if (kind === 'file_browser') {
     cw = Math.round(Math.max(720, Math.min(1180, work.w * 0.74)))
     ch = Math.round(Math.max(420, Math.min(860, work.h * 0.72)))
+  } else if (kind === 'image_viewer') {
+    cw = Math.round(Math.max(640, Math.min(1100, work.w * 0.78)))
+    ch = Math.round(Math.max(480, Math.min(900, work.h * 0.78)))
   } else {
     cw = Math.round(Math.max(360, Math.min(560, work.w * 0.4)))
     ch = Math.round(Math.max(240, Math.min(360, work.h * 0.32)))
@@ -116,6 +123,10 @@ export function isFileBrowserWindowId(windowId: number): boolean {
   return windowId >= SHELL_UI_FILE_BROWSER_WINDOW_ID_BASE && windowId <= SHELL_UI_FILE_BROWSER_WINDOW_ID_LIMIT
 }
 
+export function isImageViewerWindowId(windowId: number): boolean {
+  return windowId >= SHELL_UI_IMAGE_VIEWER_WINDOW_ID_BASE && windowId <= SHELL_UI_IMAGE_VIEWER_WINDOW_ID_LIMIT
+}
+
 export function shellTestWindowId(instance: number): number {
   return SHELL_UI_TEST_WINDOW_ID_BASE + instance
 }
@@ -124,12 +135,20 @@ export function fileBrowserWindowId(instance: number): number {
   return SHELL_UI_FILE_BROWSER_WINDOW_ID_BASE + instance
 }
 
+export function imageViewerWindowId(instance: number): number {
+  return SHELL_UI_IMAGE_VIEWER_WINDOW_ID_BASE + instance
+}
+
 export function shellTestWindowTitle(instance: number): string {
   return `${SHELL_UI_TEST_TITLE_PREFIX} ${instance + 1}`
 }
 
 export function fileBrowserWindowTitle(instance: number): string {
   return instance === 0 ? SHELL_UI_FILE_BROWSER_TITLE : `${SHELL_UI_FILE_BROWSER_TITLE} ${instance + 1}`
+}
+
+export function imageViewerWindowTitle(instance: number): string {
+  return instance === 0 ? SHELL_UI_IMAGE_VIEWER_TITLE : `${SHELL_UI_IMAGE_VIEWER_TITLE} ${instance + 1}`
 }
 
 export function buildShellTestWindowOpenPayload(
@@ -176,10 +195,33 @@ export function buildFileBrowserWindowOpenPayload(
   }
 }
 
+export function buildImageViewerWindowOpenPayload(
+  monName: string,
+  work: { x: number; y: number; w: number; h: number },
+  windowId: number,
+  title: string,
+  origin: CanvasOrigin,
+  staggerIndex = 0,
+): BackedWindowOpenPayload {
+  const global = defaultBackedClientAreaGlobal(work, 'image_viewer', staggerIndex)
+  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  return {
+    window_id: windowId,
+    title,
+    app_id: SHELL_UI_IMAGE_VIEWER_APP_ID,
+    output_name: monName,
+    x: loc.x,
+    y: loc.y,
+    w: loc.w,
+    h: loc.h,
+  }
+}
+
 export function backedShellWindowKind(windowId: number, appId?: string | null): BackedShellWindowKind | null {
   if (windowId === SHELL_UI_DEBUG_WINDOW_ID || appId === SHELL_UI_DEBUG_APP_ID) return 'debug'
   if (windowId === SHELL_UI_SETTINGS_WINDOW_ID || appId === SHELL_UI_SETTINGS_APP_ID) return 'settings'
   if (isShellTestWindowId(windowId) || appId === SHELL_UI_TEST_APP_ID) return 'test'
   if (isFileBrowserWindowId(windowId) || appId === SHELL_UI_FILE_BROWSER_APP_ID) return 'file_browser'
+  if (isImageViewerWindowId(windowId) || appId === SHELL_UI_IMAGE_VIEWER_APP_ID) return 'image_viewer'
   return null
 }

@@ -6211,9 +6211,12 @@ impl CompositorState {
                 .and_then(|x| x.as_u64())
                 .map(|u| u as u32);
             let kind = obj.get("kind").and_then(|x| x.as_str());
-            let (Some(wid), Some("file_browser")) = (wid, kind) else {
+            let (Some(wid), Some(kind)) = (wid, kind) else {
                 continue;
             };
+            if kind != "file_browser" && kind != "image_viewer" {
+                continue;
+            }
             let Some(st) = obj.get("state") else {
                 continue;
             };
@@ -6234,7 +6237,7 @@ impl CompositorState {
         let Some(kind) = v.get("kind").and_then(|x| x.as_str()) else {
             return;
         };
-        if kind != "file_browser" {
+        if kind != "file_browser" && kind != "image_viewer" {
             return;
         }
         if !self.window_registry.is_shell_hosted(window_id) {

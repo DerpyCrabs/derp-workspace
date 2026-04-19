@@ -1,14 +1,19 @@
 import {
   buildBackedWindowOpenPayload,
   buildFileBrowserWindowOpenPayload,
+  buildImageViewerWindowOpenPayload,
   buildShellTestWindowOpenPayload,
   fileBrowserWindowId,
   fileBrowserWindowTitle,
+  imageViewerWindowId,
+  imageViewerWindowTitle,
   isFileBrowserWindowId,
+  isImageViewerWindowId,
   isShellTestWindowId,
   shellTestWindowId,
   shellTestWindowTitle,
   SHELL_UI_FILE_BROWSER_APP_ID,
+  SHELL_UI_IMAGE_VIEWER_APP_ID,
   SHELL_UI_TEST_APP_ID,
   type BackedShellWindowKind,
   type BackedWindowOpenPayload,
@@ -168,6 +173,40 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     return true
   }
 
+  const openImageViewerWindow = (detail: { path: string; directory: string; showHidden: boolean }) => {
+    const context = resolveMonitorContext()
+    if (!context) return false
+    pruneReservedBackedWindowIds()
+    const windowId = nextWindowId(
+      options.getWindows(),
+      pendingBackedWindowOpens.keys(),
+      reservedBackedWindowIds,
+      isImageViewerWindowId,
+      SHELL_UI_IMAGE_VIEWER_APP_ID,
+      imageViewerWindowId,
+    )
+    if (windowId === null) return false
+    reservedBackedWindowIds.add(windowId)
+    const baseTitle = detail.path.split('/').filter(Boolean).pop() ?? imageViewerWindowTitle(0)
+    const title = baseTitle.length > 0 ? baseTitle : imageViewerWindowTitle(windowId - imageViewerWindowId(0))
+    primeShellWindowState(windowId, {
+      viewingPath: detail.path,
+      directory: detail.directory,
+      showHidden: detail.showHidden,
+    })
+    queueBackedWindowOpen(
+      buildImageViewerWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        windowId,
+        title,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+    return true
+  }
+
   const openFileBrowserWindow = (path?: string | null) => {
     const context = resolveMonitorContext()
     if (!context) return false
@@ -226,6 +265,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     openSettingsShellWindow,
     openShellTestWindow,
     openFileBrowserWindow,
+    openImageViewerWindow,
     openShellHostedApp,
     dispose,
   }

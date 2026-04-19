@@ -386,6 +386,7 @@ export interface FileBrowserFixturePaths {
   read_only_text: string
   nested_text: string
   image_file: string
+  image_file_green: string
   pdf_file: string
   video_file: string
   unsupported_file: string

@@ -423,3 +423,84 @@ pub(crate) fn file_browser_stat_path_json(raw_path: &str) -> Result<String, File
         )
     })
 }
+
+const FILE_BROWSER_READ_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn content_type_for_file_path(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "heic" | "heif" => "image/heic",
+        "tif" | "tiff" => "image/tiff",
+        _ => "application/octet-stream",
+    }
+}
+
+pub(crate) fn file_browser_read_file_bytes(raw_path: &str) -> Result<(Vec<u8>, &'static str), FileBrowserHttpError> {
+    let canonical = canonicalize_existing_path(raw_path)?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => "not_found",
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = match error.kind() {
+            std::io::ErrorKind::NotFound => 404,
+            std::io::ErrorKind::PermissionDenied => 403,
+            _ => 500,
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to stat {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(http_error(
+            400,
+            "not_file",
+            format!("path is not a regular file: {}", canonical.display()),
+            Some(&canonical),
+        ));
+    }
+    let len = metadata.len();
+    if len > FILE_BROWSER_READ_MAX_BYTES {
+        return Err(http_error(
+            413,
+            "too_large",
+            format!("file exceeds {} bytes", FILE_BROWSER_READ_MAX_BYTES),
+            Some(&canonical),
+        ));
+    }
+    let bytes = fs::read(&canonical).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to read {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    let content_type = content_type_for_file_path(&canonical);
+    Ok((bytes, content_type))
+}

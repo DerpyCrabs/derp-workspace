@@ -800,6 +800,7 @@ function App() {
       shellHostedAppByWindow,
       shellWireSend,
       onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
+      onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
       reportShellActionIssue,
       copyDebugHudSnapshot,
       shellBuildLabel,

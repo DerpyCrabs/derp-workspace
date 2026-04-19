@@ -30,7 +30,10 @@ type FileBrowserWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
   shellWireSend: (op: 'shell_hosted_window_state', json: string) => boolean
-  onOpenFile: (path: string) => void
+  onOpenFile: (
+    path: string,
+    context: { directory: string; showHidden: boolean },
+  ) => void
   onOpenInNewWindow?: (path: string) => void
 }
 
@@ -176,7 +179,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   function clickEntry(entry: FileBrowserEntry) {
     const alreadySelected = state.selectedPath === entry.path
     selectEntry(entry.path)
-    if (alreadySelected && fileBrowserEntryIsDirectory(entry)) {
+    if (alreadySelected) {
       openEntry(entry)
     }
   }
@@ -187,7 +190,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       void loadDirectory(entry.path)
       return
     }
-    props.onOpenFile(entry.path)
+    const directory = state.activePath ?? ''
+    props.onOpenFile(entry.path, { directory, showHidden: state.showHidden })
   }
 
   function closeCtxMenu() {

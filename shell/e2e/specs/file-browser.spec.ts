@@ -25,6 +25,7 @@ import {
 } from '../lib/runtime.ts'
 
 const FILE_BROWSER_APP_ID = 'derp.files'
+const IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
 const WRITABLE_TEXT = 'Phase 1 writable fixture\nThis file should reset between runs.\n'
 const READ_ONLY_TEXT = 'Phase 1 read-only fixture\nThis file should refuse direct writes.\n'
 
@@ -244,6 +245,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       fixtures.read_only_text,
       fixtures.nested_text,
       fixtures.image_file,
+      fixtures.image_file_green,
       fixtures.pdf_file,
       fixtures.video_file,
       fixtures.unsupported_file,
@@ -252,13 +254,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
     assert((await readFile(fixtures.writable_text, 'utf8')) === WRITABLE_TEXT, 'unexpected writable fixture contents')
     assert((await readFile(fixtures.read_only_text, 'utf8')) === READ_ONLY_TEXT, 'unexpected read-only fixture contents')
-    const [imageStats, pdfStats, videoStats, unsupportedStats] = await Promise.all([
+    const [imageStats, imageGreenStats, pdfStats, videoStats, unsupportedStats] = await Promise.all([
       stat(fixtures.image_file),
+      stat(fixtures.image_file_green),
       stat(fixtures.pdf_file),
       stat(fixtures.video_file),
       stat(fixtures.unsupported_file),
     ])
     assert(imageStats.size > 0, 'expected image fixture bytes')
+    assert(imageGreenStats.size > 0, 'expected second image fixture bytes')
     assert(pdfStats.size > 0, 'expected pdf fixture bytes')
     assert(videoStats.size > 0, 'expected video fixture bytes')
     assert(unsupportedStats.size > 0, 'expected unsupported fixture bytes')
@@ -405,6 +409,75 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForActivePath(base, mediaPath, navigated.windowId)
     const restartedBase = await restartSession(state)
     await waitForActivePath(restartedBase, mediaPath, navigated.windowId)
+  })
+
+  test('image viewer opens from file browser and arrow keys switch images', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', navigated.windowId)
+    const mediaShell = await waitForActivePath(base, mediaPath, navigated.windowId)
+    const blueRow = fileBrowserRow(mediaShell, 'blue-image.png', navigated.windowId)
+    assert(blueRow?.rect, 'missing blue-image row')
+    await clickRect(base, assertRectMinSize('select blue-image', blueRow.rect, 32, 24))
+    await waitFor(
+      'wait for blue-image row selected',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return fileBrowserRow(shell, 'blue-image.png', navigated.windowId)?.selected ? shell : null
+      },
+      5000,
+      100,
+    )
+    const blueSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'blue-image.png', navigated.windowId)
+    assert(blueSelected?.rect, 'missing blue-image row rect after selection')
+    await clickRect(base, assertRectMinSize('open blue-image second click', blueSelected.rect, 32, 24))
+    const viewerWindow = await waitFor(
+      'wait for image viewer window',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const w = shell.windows.find(
+          (entry) => entry.shell_hosted && entry.app_id === IMAGE_VIEWER_APP_ID && !entry.minimized,
+        )
+        return w ? { shell, windowId: w.window_id } : null
+      },
+      10000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(viewerWindow.windowId)
+    const frameSelector = `[data-shell-window-frame="${viewerWindow.windowId}"]`
+    const html0 = await waitFor(
+      'wait for image viewer markup',
+      async () => {
+        const html = await getShellHtml(base, frameSelector)
+        return html.includes('data-image-viewer-counter') && html.includes('1 of 2') ? html : null
+      },
+      8000,
+      100,
+    )
+    assert(html0.includes('alt="blue-image.png"'), 'expected blue image alt')
+    await tapKey(base, KEY.right)
+    const html1 = await waitFor(
+      'wait for second image',
+      async () => {
+        const html = await getShellHtml(base, frameSelector)
+        return html.includes('2 of 2') && html.includes('alt="green-dot.png"') ? html : null
+      },
+      8000,
+      100,
+    )
+    assert(html1.includes('data-image-viewer-counter'), 'expected counter after next')
+    await tapKey(base, KEY.left)
+    const html2 = await waitFor(
+      'wait for first image again',
+      async () => {
+        const html = await getShellHtml(base, frameSelector)
+        return html.includes('1 of 2') && html.includes('alt="blue-image.png"') ? html : null
+      },
+      8000,
+      100,
+    )
+    assert(html2.includes('data-image-viewer-counter'), 'expected counter after previous')
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

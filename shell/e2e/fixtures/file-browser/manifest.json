@@ -55,6 +55,12 @@
       "asset": "assets/image.png.base64"
     },
     {
+      "id": "image_file_green",
+      "path": "media/green-dot.png",
+      "kind": "asset",
+      "asset": "assets/dot-green.png.base64"
+    },
+    {
       "id": "pdf_file",
       "path": "media/derp-doc.pdf",
       "kind": "asset",

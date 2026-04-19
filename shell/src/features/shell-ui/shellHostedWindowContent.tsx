@@ -1,14 +1,17 @@
 import { Show, type Accessor, type JSX, type Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
 import { FileBrowserWindow } from '@/apps/file-browser/FileBrowserWindow'
+import { ImageViewerWindow } from '@/apps/image-viewer/ImageViewerWindow'
 import { ShellDebugHudContent } from '@/apps/debug/ShellDebugHudContent'
 import { ShellTestWindowContent } from '@/apps/debug/ShellTestWindowContent'
 import { SettingsPanel } from '@/apps/settings/SettingsPanel'
 import {
   isFileBrowserWindowId,
+  isImageViewerWindowId,
   isShellTestWindowId,
   SHELL_UI_TEST_APP_ID,
 } from '@/features/shell-ui/backedShellWindows'
+import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import { windowLabel as groupedWindowLabel } from '@/features/workspace/tabGroupOps'
@@ -20,6 +23,7 @@ export type ShellHostedWindowContentEnv = {
   shellHostedAppByWindow: () => Record<number, unknown>
   shellWireSend: ShellCompositorWireSend
   onOpenFileBrowserInNewWindow: (path: string) => void
+  onOpenImageFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   reportShellActionIssue: (message: string) => void
   copyDebugHudSnapshot: () => void
   shellBuildLabel: string
@@ -131,10 +135,32 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            onOpenFile={(path) => {
+            onOpenFile={(path, context) => {
+              if (isImageFilePath(path) && context.directory.length > 0) {
+                env.onOpenImageFile({
+                  path,
+                  directory: context.directory,
+                  showHidden: context.showHidden,
+                })
+                return
+              }
               env.reportShellActionIssue(`File viewers land in a later phase: ${path}`)
             }}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
+          />
+        )}
+      </Show>
+    )
+  }
+  if (isImageViewerWindowId(windowId)) {
+    return (
+      <Show when={windowId} keyed>
+        {(id) => (
+          <ImageViewerWindow
+            windowId={id}
+            compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
+            shellWireSend={env.shellWireSend}
+            allWindowsMap={env.allWindowsMap}
           />
         )}
       </Show>

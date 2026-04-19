@@ -1,4 +1,5 @@
 import { ShellHttpError, getShellJson } from '@/features/bridge/shellBridge'
+import { shellHttpBase } from '@/features/bridge/shellHttp'
 
 export type FileBrowserRoot = {
   label: string
@@ -158,4 +159,10 @@ export async function statFileBrowserPath(path: string, base: string | null): Pr
   } catch (error) {
     throw parseBridgeError(error)
   }
+}
+
+export function fileBrowserReadUrl(path: string, base: string | null): string {
+  const origin = (base ?? shellHttpBase() ?? '').replace(/\/$/, '')
+  if (!origin) return ''
+  return `${origin}/file_browser/read?p=${encodeURIComponent(path)}`
 }

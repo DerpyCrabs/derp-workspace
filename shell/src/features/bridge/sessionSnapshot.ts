@@ -12,7 +12,7 @@ export type NativeLaunchMetadata = {
   appName: string | null
 }
 
-export type SavedShellWindowKind = 'debug' | 'settings' | 'test' | 'file_browser'
+export type SavedShellWindowKind = 'debug' | 'settings' | 'test' | 'file_browser' | 'image_viewer'
 
 export type SavedRect = {
   x: number
@@ -149,6 +149,7 @@ function sanitizeShellWindowKind(value: unknown): SavedShellWindowKind {
     case 'settings':
     case 'test':
     case 'file_browser':
+    case 'image_viewer':
       return value
     default:
       return 'test'
