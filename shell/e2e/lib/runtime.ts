@@ -277,6 +277,7 @@ export interface FileBrowserSnapshotAction {
 }
 
 export interface FileBrowserSnapshot {
+  list_state?: string | null
   active_path: string | null
   rows: FileBrowserSnapshotRow[]
   breadcrumbs: FileBrowserSnapshotBreadcrumb[]

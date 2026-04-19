@@ -84,7 +84,8 @@ async function openFileBrowserFromLauncher(
           !entry.minimized,
       )
       if (!window) return null
-      if (!fileBrowserSnapshot(shell, window.window_id)?.active_path) return null
+      const fb = fileBrowserSnapshot(shell, window.window_id)
+      if (!fb?.active_path) return null
       if (shell.programs_menu_open) return null
       return { shell, windowId: window.window_id }
     },
@@ -100,7 +101,10 @@ async function waitForActivePath(base: string, expectedPath: string, windowId?: 
     `wait for file browser path ${expectedPath}`,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return fileBrowserSnapshot(shell, windowId)?.active_path === expectedPath ? shell : null
+      const fb = fileBrowserSnapshot(shell, windowId)
+      if (fb?.active_path !== expectedPath) return null
+      if (fb.list_state === 'loading' || fb.list_state === 'error') return null
+      return shell
     },
     8000,
     100,
@@ -112,7 +116,9 @@ async function waitForDirectoryRowRect(base: string, currentPath: string, rowNam
     `wait for ${rowName} row rect`,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      if (fileBrowserSnapshot(shell, windowId)?.active_path !== currentPath) return null
+      const fb = fileBrowserSnapshot(shell, windowId)
+      if (fb?.active_path !== currentPath) return null
+      if (fb.list_state === 'loading' || fb.list_state === 'error') return null
       const row = fileBrowserRow(shell, rowName, windowId)
       return row?.rect ? { shell, row } : null
     },
@@ -132,7 +138,9 @@ async function ensureHiddenRowVisible(base: string, currentPath: string, rowName
     `wait for hidden row ${rowName}`,
     async () => {
       const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      if (fileBrowserSnapshot(next, windowId)?.active_path !== currentPath) return null
+      const fb = fileBrowserSnapshot(next, windowId)
+      if (fb?.active_path !== currentPath) return null
+      if (fb.list_state === 'loading' || fb.list_state === 'error') return null
       return fileBrowserRow(next, rowName, windowId)?.rect ? next : null
     },
     8000,
@@ -210,9 +218,11 @@ async function navigateToFixtureRoot(
       'wait for hidden rows to appear',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fb = fileBrowserSnapshot(shell, opened.windowId)
         const toggleApplied = !!fileBrowserAction(shell, 'hide-hidden', opened.windowId)
         if (!toggleApplied) return null
-        if (fileBrowserSnapshot(shell, opened.windowId)?.active_path !== initialPath) return null
+        if (fb?.active_path !== initialPath) return null
+        if (fb.list_state === 'loading' || fb.list_state === 'error') return null
         const firstSegment = relativeSegments[0]
         if (!firstSegment) return shell
         return fileBrowserRow(shell, firstSegment, opened.windowId) ? shell : null
@@ -275,6 +285,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(Array.isArray(shell.file_browser.rows), 'file_browser rows should be an array')
     assert(Array.isArray(shell.file_browser.breadcrumbs), 'file_browser breadcrumbs should be an array')
     assert(Array.isArray(shell.file_browser.primary_actions), 'file_browser primary_actions should be an array')
+    assert(
+      shell.file_browser.list_state == null || typeof shell.file_browser.list_state === 'string',
+      'expected file_browser list_state to be absent, null, or a string',
+    )
     assert(
       shell.file_browser.active_path === null || typeof shell.file_browser.active_path === 'string',
       'expected file_browser active_path to be null or a string',
@@ -481,22 +495,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {
-    const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
-    const settled = await waitFor(
-      'wait for a visible directory row',
-      async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const fileBrowser = fileBrowserSnapshot(shell, opened.windowId)
-        if (!fileBrowser?.active_path) return null
-        return fileBrowser.rows.find((row) => row.kind === 'directory') ? shell : null
-      },
-      8000,
-      100,
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const targetRow =
+      fileBrowserSnapshot(navigated.shell, navigated.windowId)?.rows.find((row) => row.kind === 'directory') ?? null
+    assert(targetRow, 'expected a directory row in fixture root')
+    const openedDirectory = await openDirectoryRowWithClicks(
+      base,
+      targetRow.path,
+      targetRow.name,
+      navigated.windowId,
     )
-    const targetRow = fileBrowserSnapshot(settled, opened.windowId)?.rows.find((row) => row.kind === 'directory') ?? null
-    assert(targetRow, 'expected a directory row to be visible')
-    const openedDirectory = await openDirectoryRowWithClicks(base, targetRow.path, targetRow.name, opened.windowId)
-    assert(fileBrowserSnapshot(openedDirectory, opened.windowId)?.active_path === targetRow.path, 'expected directory path after second click')
-    assert(openedDirectory.windows.some((window) => window.window_id === opened.windowId), 'expected file browser window to remain open')
+    assert(
+      fileBrowserSnapshot(openedDirectory, navigated.windowId)?.active_path === targetRow.path,
+      'expected directory path after second click',
+    )
+    assert(
+      openedDirectory.windows.some((window) => window.window_id === navigated.windowId),
+      'expected file browser window to remain open',
+    )
   })
 })

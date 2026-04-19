@@ -372,6 +372,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       ref={(el) => {
         rootRef = el
       }}
+      data-file-browser-list-state={state.status}
       class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-inset) text-(--shell-text)"
       tabIndex={0}
       onKeyDown={(event) => {

@@ -208,6 +208,7 @@ function queryLargestRect(cache: QueryCache, selector: string, origin: CanvasOri
 }
 
 export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin) {
+  const fileBrowserListStateEl = queryWithin(root, '[data-file-browser-list-state]')
   const fileBrowserActivePathEl = queryWithin(root, '[data-file-browser-active-path]')
   const fileBrowserViewerTitleEl = queryWithin(
     root,
@@ -233,6 +234,7 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     rect: snapshotRect(actionEl, origin),
   }))
   return {
+    list_state: fileBrowserListStateEl?.getAttribute('data-file-browser-list-state') ?? null,
     active_path:
       fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
       fileBrowserActivePathEl?.textContent?.trim() ??
