@@ -234,6 +234,91 @@ pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     })
 }
 
+fn global_point_in_output_rect(cx: i32, cy: i32, g: &Rectangle<i32, Logical>) -> bool {
+    cx >= g.loc.x
+        && cy >= g.loc.y
+        && cx < g.loc.x.saturating_add(g.size.w)
+        && cy < g.loc.y.saturating_add(g.size.h)
+}
+
+fn window_output_fit_challenger_beats_incumbent(
+    window_rect: Rectangle<i32, Logical>,
+    cx: i32,
+    cy: i32,
+    incumbent: (&str, Rectangle<i32, Logical>),
+    challenger: (&str, Rectangle<i32, Logical>),
+) -> bool {
+    let area_i = window_rect
+        .intersection(incumbent.1)
+        .map(|ix| (ix.size.w as i64).saturating_mul(ix.size.h as i64))
+        .unwrap_or(0);
+    let area_c = window_rect
+        .intersection(challenger.1)
+        .map(|ix| (ix.size.w as i64).saturating_mul(ix.size.h as i64))
+        .unwrap_or(0);
+    if area_c != area_i {
+        return area_c > area_i;
+    }
+    let center_in_i = global_point_in_output_rect(cx, cy, &incumbent.1);
+    let center_in_c = global_point_in_output_rect(cx, cy, &challenger.1);
+    if center_in_c != center_in_i {
+        return center_in_c;
+    }
+    if challenger.1.loc.x != incumbent.1.loc.x {
+        return challenger.1.loc.x < incumbent.1.loc.x;
+    }
+    challenger.0 < incumbent.0
+}
+
+fn pick_output_name_for_global_window_rect_from_output_rects(
+    pairs: &[(String, Rectangle<i32, Logical>)],
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Option<String> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let ww = w.max(1);
+    let hh = h.max(1);
+    let window_rect = Rectangle::new(Point::from((x, y)), Size::from((ww, hh)));
+    let cx = x.saturating_add(ww.saturating_div(2));
+    let cy = y.saturating_add(hh.saturating_div(2));
+
+    let mut chosen_idx = 0usize;
+    for idx in 1..pairs.len() {
+        let a = &pairs[chosen_idx];
+        let b = &pairs[idx];
+        if window_output_fit_challenger_beats_incumbent(
+            window_rect,
+            cx,
+            cy,
+            (a.0.as_str(), a.1),
+            (b.0.as_str(), b.1),
+        ) {
+            chosen_idx = idx;
+        }
+    }
+    let chosen = &pairs[chosen_idx];
+    let max_area = window_rect
+        .intersection(chosen.1)
+        .map(|ix| (ix.size.w as i64).saturating_mul(ix.size.h as i64))
+        .unwrap_or(0);
+    if max_area > 0 {
+        return Some(chosen.0.clone());
+    }
+    for (name, g) in pairs {
+        if global_point_in_output_rect(cx, cy, g) {
+            return Some(name.clone());
+        }
+    }
+    pairs
+        .iter()
+        .min_by_key(|(_, g)| g.loc.x)
+        .map(|(n, _)| n.clone())
+}
+
 #[derive(Debug, Clone)]
 pub enum SocketConfig {
     Auto,
@@ -4190,9 +4275,11 @@ impl CompositorState {
     }
 
     pub(crate) fn output_for_global_xywh(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Output> {
-        let cx = x.saturating_add(w.saturating_div(2));
-        let cy = y.saturating_add(h.saturating_div(2));
-        self.output_containing_global_point(Point::from((cx as f64, cy as f64)))
+        let picked = self.output_for_window_position(x, y, w, h)?;
+        self.space
+            .outputs()
+            .find(|o| o.name() == picked.as_str())
+            .cloned()
             .or_else(|| self.leftmost_output())
     }
 
@@ -4203,25 +4290,18 @@ impl CompositorState {
         w: i32,
         h: i32,
     ) -> Option<String> {
-        let cx = x.saturating_add(w.saturating_div(2));
-        let cy = y.saturating_add(h.saturating_div(2));
-        let mut first: Option<String> = None;
-        for o in self.space.outputs() {
-            if first.is_none() {
-                first = Some(o.name().into());
-            }
-            let Some(g) = self.space.output_geometry(o) else {
-                continue;
-            };
-            if cx >= g.loc.x
-                && cy >= g.loc.y
-                && cx < g.loc.x.saturating_add(g.size.w)
-                && cy < g.loc.y.saturating_add(g.size.h)
-            {
-                return Some(o.name().into());
-            }
+        let pairs: Vec<(String, Rectangle<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter_map(|o| {
+                let g = self.space.output_geometry(o)?;
+                Some((o.name().into(), g))
+            })
+            .collect();
+        if pairs.is_empty() {
+            return self.space.outputs().next().map(|o| o.name().into());
         }
-        first
+        pick_output_name_for_global_window_rect_from_output_rects(&pairs, x, y, w, h)
     }
 
     fn snapshot_output_geometry_by_name(&self) -> HashMap<String, Rectangle<i32, Logical>> {
@@ -4244,21 +4324,11 @@ impl CompositorState {
         if geos.is_empty() {
             return None;
         }
-        let cx = x.saturating_add(w.saturating_div(2));
-        let cy = y.saturating_add(h.saturating_div(2));
-        for (name, g) in geos {
-            if cx >= g.loc.x
-                && cy >= g.loc.y
-                && cx < g.loc.x.saturating_add(g.size.w)
-                && cy < g.loc.y.saturating_add(g.size.h)
-            {
-                return Some(name.clone());
-            }
-        }
-        let mut pairs: Vec<(i32, String)> =
-            geos.iter().map(|(n, g)| (g.loc.x, n.clone())).collect();
-        pairs.sort_by_key(|(px, _)| *px);
-        pairs.into_iter().next().map(|(_, n)| n)
+        let pairs: Vec<(String, Rectangle<i32, Logical>)> = geos
+            .iter()
+            .map(|(n, g)| (n.clone(), *g))
+            .collect();
+        pick_output_name_for_global_window_rect_from_output_rects(&pairs, x, y, w, h)
     }
 
     fn shift_mapped_toplevels_for_output_moves(
@@ -8359,5 +8429,42 @@ impl ClientData for ClientState {
         if let Ok(mut queue) = disconnected_wayland_clients().lock() {
             queue.push(client_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod output_name_pick_tests {
+    use super::{
+        pick_output_name_for_global_window_rect_from_output_rects, Logical, Point, Rectangle, Size,
+    };
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn wide_window_bottom_band_picks_more_overlap() {
+        let pairs = vec![
+            ("HDMI-A-1".to_string(), rect(0, 0, 1920, 1080)),
+            ("DP-1".to_string(), rect(1920, 0, 1920, 1080)),
+        ];
+        let got = pick_output_name_for_global_window_rect_from_output_rects(
+            &pairs,
+            200,
+            680,
+            3500,
+            400,
+        )
+        .unwrap();
+        assert_eq!(got, "DP-1");
+    }
+
+    #[test]
+    fn single_output_unchanged() {
+        let pairs = vec![("ONLY".to_string(), rect(0, 0, 800, 600))];
+        let got =
+            pick_output_name_for_global_window_rect_from_output_rects(&pairs, 10, 10, 400, 300)
+                .unwrap();
+        assert_eq!(got, "ONLY");
     }
 }
