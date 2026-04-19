@@ -368,6 +368,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       hideContextMenu()
       return
     }
+    if (ctxMenuOpen() && activeMenuTrigger() !== programsMenuTrigger) {
+      hideContextMenu()
+    }
     const monitorName =
       e.currentTarget.closest('[data-shell-taskbar-monitor]')?.getAttribute('data-shell-taskbar-monitor') ??
       null
@@ -379,6 +382,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (triggerIsOpen(powerMenuTrigger)) {
       hideContextMenu()
       return
+    }
+    if (ctxMenuOpen() && activeMenuTrigger() !== powerMenuTrigger) {
+      hideContextMenu()
     }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()
@@ -392,6 +398,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (triggerIsOpen(volumeMenuTrigger)) {
       hideContextMenu()
       return
+    }
+    if (ctxMenuOpen() && activeMenuTrigger() !== volumeMenuTrigger) {
+      hideContextMenu()
     }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()

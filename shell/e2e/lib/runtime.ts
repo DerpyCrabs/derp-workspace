@@ -1436,7 +1436,10 @@ export async function waitForProgramsMenuOpen(base: string, timeoutMs = 5000): P
     'wait for programs menu open',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.programs_menu_open && shell.controls?.programs_menu_search ? shell : null
+      return shell.programs_menu_open &&
+        (shell.controls?.programs_menu_search || shell.controls?.programs_menu_panel)
+        ? shell
+        : null
     },
     timeoutMs,
     100,

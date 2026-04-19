@@ -231,8 +231,26 @@ wrap_app! {
                 )));
                 cmd.append_switch(Some(&CefString::from("disable-gpu-vsync")));
                 cmd.append_switch(Some(&CefString::from("disable-frame-rate-limit")));
+                cmd.append_switch(Some(&CefString::from("disable-breakpad")));
+                cmd.append_switch(Some(&CefString::from("disable-crash-reporter")));
+                cmd.append_switch(Some(&CefString::from("disable-domain-reliability")));
+                cmd.append_switch(Some(&CefString::from("disable-hang-monitor")));
+                cmd.append_switch(Some(&CefString::from("disable-ipc-flooding-protection")));
+                cmd.append_switch(Some(&CefString::from("disable-client-side-phishing-detection")));
+                cmd.append_switch(Some(&CefString::from("disable-speech-api")));
+                cmd.append_switch(Some(&CefString::from("disable-print-preview")));
+                cmd.append_switch(Some(&CefString::from("disable-preconnect")));
+                cmd.append_switch(Some(&CefString::from("no-pings")));
+                cmd.append_switch(Some(&CefString::from("disable-default-apps")));
                 #[cfg(target_os = "linux")]
                 {
+                    cmd.append_switch_with_value(
+                        Some(&CefString::from("password-store")),
+                        Some(&CefString::from("basic")),
+                    );
+                    cmd.append_switch(Some(&CefString::from("disable-sync")));
+                    cmd.append_switch(Some(&CefString::from("disable-background-networking")));
+                    cmd.append_switch(Some(&CefString::from("disable-component-update")));
                     cmd.append_switch(Some(&CefString::from("enable-media-stream")));
                     cmd.append_switch(Some(&CefString::from("enable-webrtc-pipewire-capturer")));
                     cmd.append_switch_with_value(
@@ -245,7 +263,9 @@ wrap_app! {
                     );
                     cmd.append_switch_with_value(
                         Some(&CefString::from("disable-features")),
-                        Some(&CefString::from("WaylandFractionalScaleV1")),
+                        Some(&CefString::from(
+                            "WaylandFractionalScaleV1,MediaRouter,InterestFeedContentSuggestions,OptimizationHints",
+                        )),
                     );
                 }
                 #[cfg(not(target_os = "linux"))]

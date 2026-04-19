@@ -164,6 +164,28 @@ fn snapshot_read_cache() -> &'static Mutex<SnapshotReadCache> {
     CACHE.get_or_init(|| Mutex::new(SnapshotReadCache::default()))
 }
 
+fn touch_focused_window_stack_order(
+    windows: &mut BTreeMap<u32, shell_wire::ShellWindowSnapshot>,
+    focused: u32,
+) {
+    if !windows.contains_key(&focused) {
+        return;
+    }
+    let mut ids: Vec<u32> = windows.keys().copied().collect();
+    ids.sort_by(|a, b| {
+        let za = windows.get(a).map(|w| w.stack_z).unwrap_or(0);
+        let zb = windows.get(b).map(|w| w.stack_z).unwrap_or(0);
+        za.cmp(&zb).then_with(|| a.cmp(b))
+    });
+    ids.retain(|id| *id != focused);
+    ids.push(focused);
+    for (zi, id) in ids.into_iter().enumerate() {
+        if let Some(w) = windows.get_mut(&id) {
+            w.stack_z = (zi + 1) as u32;
+        }
+    }
+}
+
 fn mapped_snapshot_header(
     mapped: &[u8],
 ) -> Result<[u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize], String> {
@@ -340,7 +362,10 @@ impl SharedShellSnapshotWriter {
                 );
                 true
             }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { window_id, .. } => {
+                if let Some(wid) = window_id {
+                    touch_focused_window_stack_order(&mut self.state.windows, *wid);
+                }
                 self.state.focus_changed = Some(msg.clone());
                 true
             }

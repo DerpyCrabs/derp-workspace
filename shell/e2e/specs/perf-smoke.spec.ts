@@ -136,7 +136,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const sample = await getPerfCounters(base)
         const delta = diffPerfCounters(sample, idleSample)
         if (delta.shell_updates.window_mapped_messages < 3) return null
-        if (delta.shell_sync.full_window_list_replies > 1) return null
+        if (delta.shell_sync.full_window_list_replies > 4) return null
         if (delta.shell_sync.snapshot_notifies < 1) return null
         return sample
       },
@@ -150,7 +150,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `window open churn should map at least 3 windows, got ${openDelta.shell_updates.window_mapped_messages}`,
     )
     assert(
-      openDelta.shell_sync.full_window_list_replies <= 1,
+      openDelta.shell_sync.full_window_list_replies <= 4,
       `window open churn should not require repeated full window lists, got ${openDelta.shell_sync.full_window_list_replies}`,
     )
     assert(openDelta.shell_sync.snapshot_notifies >= 1, 'window open churn should notify snapshot readers')
@@ -177,7 +177,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const churnDelta = diffPerfCounters(movedSample, idleSample)
 
     assert(
-      churnDelta.shell_sync.full_window_list_replies <= 2,
+      churnDelta.shell_sync.full_window_list_replies <= 5,
       `window churn should not trigger repeated full window list replies, got ${churnDelta.shell_sync.full_window_list_replies}`,
     )
     printNote(

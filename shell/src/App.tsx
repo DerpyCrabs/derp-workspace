@@ -1138,7 +1138,9 @@ function App() {
         getKeyboardLayoutLabel: keyboardLayoutLabel,
         getScreenshotMode: screenshotMode,
         getCrosshairCursor: crosshairCursor,
-        getProgramsMenuOpen: shellContextMenus.programsMenuOpen,
+        getProgramsMenuOpen: () =>
+          shellContextMenus.programsMenuOpen() &&
+          !!document.querySelector('[data-shell-programs-menu-panel]'),
         getPowerMenuOpen: shellContextMenus.powerMenuOpen,
         getVolumeMenuOpen: shellContextMenus.volumeMenuOpen,
         getDebugWindowVisible: debugHudFrameVisible,
