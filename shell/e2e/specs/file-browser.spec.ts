@@ -214,8 +214,36 @@ async function navigateToFixtureRoot(
   )
   const initialPath = fileBrowserSnapshot(settled, opened.windowId)?.active_path
   assert(typeof initialPath === 'string' && initialPath.length > 0, 'missing initial file browser path')
-  const relativeSegments = path.posix.relative(initialPath, fixtures.root_path).split('/').filter(Boolean)
-  const showHiddenAction = fileBrowserAction(settled, 'show-hidden', opened.windowId)
+  let walkPath = initialPath
+  let relativeSegments = path.posix.relative(walkPath, fixtures.root_path).split('/').filter(Boolean)
+  for (let guard = 0; guard < 32 && relativeSegments[0] === '..'; guard += 1) {
+    const shellUp = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const upAction = fileBrowserAction(shellUp, 'up', opened.windowId)
+    assert(upAction?.rect, 'file browser up action')
+    await clickRect(base, assertRectMinSize('file browser up', upAction.rect, 28, 20))
+    const settledUp = await waitFor(
+      'file browser path after up',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const ap = fileBrowserSnapshot(shell, opened.windowId)?.active_path
+        const fb = fileBrowserSnapshot(shell, opened.windowId)
+        if (!ap || fb?.list_state === 'loading' || fb?.list_state === 'error') return null
+        const rel = path.posix.relative(ap, fixtures.root_path).split('/').filter(Boolean)
+        if (rel[0] === '..') return null
+        return shell
+      },
+      8000,
+      100,
+    )
+    walkPath = fileBrowserSnapshot(settledUp, opened.windowId)?.active_path ?? ''
+    assert(walkPath.length > 0, 'missing path after file browser up')
+    relativeSegments = path.posix.relative(walkPath, fixtures.root_path).split('/').filter(Boolean)
+  }
+  assert(relativeSegments[0] !== '..', 'fixture root not reachable from file browser')
+  relativeSegments = relativeSegments.filter((segment) => segment !== '.')
+  const shellAfterWalk = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  walkPath = fileBrowserSnapshot(shellAfterWalk, opened.windowId)?.active_path ?? walkPath
+  const showHiddenAction = fileBrowserAction(shellAfterWalk, 'show-hidden', opened.windowId)
   if (showHiddenAction?.rect) {
     await clickRect(base, assertRectMinSize('show hidden action', showHiddenAction.rect, 28, 20))
     await waitFor(
@@ -225,7 +253,7 @@ async function navigateToFixtureRoot(
         const fb = fileBrowserSnapshot(shell, opened.windowId)
         const toggleApplied = !!fileBrowserAction(shell, 'hide-hidden', opened.windowId)
         if (!toggleApplied) return null
-        if (fb?.active_path !== initialPath) return null
+        if (fb?.active_path !== walkPath) return null
         if (fb.list_state === 'loading' || fb.list_state === 'error') return null
         const firstSegment = relativeSegments[0]
         if (!firstSegment) return shell
