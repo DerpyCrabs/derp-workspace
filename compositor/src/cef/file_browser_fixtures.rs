@@ -65,9 +65,6 @@ fn fixture_manifest_path() -> PathBuf {
 }
 
 fn e2e_state_root() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(path).join("derp").join("e2e"));
-    }
     let home = dirs::home_dir().ok_or_else(|| "unable to resolve home directory".to_string())?;
     Ok(home.join(".local").join("state").join("derp").join("e2e"))
 }
