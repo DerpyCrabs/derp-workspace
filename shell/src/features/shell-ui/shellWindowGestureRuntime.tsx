@@ -16,6 +16,7 @@ import {
   pickScreenForWindow,
   rectGlobalToCanvasLocal,
 } from '@/lib/shellCoords'
+import { maximizedDragUnmaxCanvasPosition } from '@/lib/maximizedDragUnmax'
 import {
   assistGridGutterPx,
   assistShapeFromSpan,
@@ -418,22 +419,28 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
           w: Math.max(360, Math.floor(window.width * 0.55)),
           h: Math.max(280, Math.floor(window.height * 0.55)),
         }
-        const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), origin)
-        const globalPointer = clientPointToGlobalLogical(clientX, clientY, mainRect, output.w, output.h, origin)
-        const monitor = pickScreenForPointerSnap(globalPointer.x, globalPointer.y, list)
-        let maxCanvasX = window.x
-        let maxCanvasY = window.y
-        if (monitor) {
-          const reserveTaskbar = options.reserveTaskbarForMon(monitor)
-          const rect = shellMaximizedWorkAreaGlobalRect(monitor, reserveTaskbar)
-          const local = rectGlobalToCanvasLocal(rect.x, rect.y, rect.w, rect.h, origin)
-          maxCanvasX = local.x
-          maxCanvasY = local.y
-        }
-        const grabDx = pointerCanvas.x - maxCanvasX
-        const grabDy = pointerCanvas.y - maxCanvasY
-        const nextX = pointerCanvas.x - grabDx + CHROME_BORDER_PX
-        const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_PX
+        const unmax = maximizedDragUnmaxCanvasPosition({
+          pointerCanvasX: pointerCanvas.x,
+          pointerCanvasY: pointerCanvas.y,
+          frameX: window.x,
+          frameY: window.y,
+          frameW: window.width,
+          frameH: window.height,
+          restoreW: restore.w,
+          restoreH: restore.h,
+        })
+        const nextX = unmax.x
+        const nextY = unmax.y
+        options.shellMoveLog('max_drag_unmax', {
+          windowId,
+          origin,
+          frame: { x: window.x, y: window.y, w: window.width, h: window.height, out: window.output_name },
+          pointerCanvas,
+          hadFloatStash: options.floatBeforeMaximize.has(windowId),
+          restore,
+          ratio: { rx: unmax.rx, ry: unmax.ry },
+          next: { x: nextX, y: nextY, w: restore.w, h: restore.h },
+        })
         options.shellWireSend('set_geometry', windowId, nextX, nextY, restore.w, restore.h, SHELL_LAYOUT_FLOATING)
         options.floatBeforeMaximize.delete(windowId)
         dragPreTileSnapshot.set(windowId, { x: nextX, y: nextY, w: restore.w, h: restore.h })

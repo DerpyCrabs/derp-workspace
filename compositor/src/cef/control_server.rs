@@ -177,6 +177,20 @@ fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
         .unwrap_or((path_with_query, None))
 }
 
+fn normalize_http_request_origin_form(target: &str) -> &str {
+    let t = target.trim_matches(|c: char| c == '\r' || c == '\n').trim();
+    if let Some(rest) = t
+        .strip_prefix("http://")
+        .or_else(|| t.strip_prefix("https://"))
+    {
+        if let Some(i) = rest.find('/') {
+            return &rest[i..];
+        }
+        return "/";
+    }
+    t
+}
+
 fn query_param_raw<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     for part in query.split('&') {
         let part = part.trim_end_matches('\r');
@@ -567,8 +581,8 @@ fn handle_one(
         return Err("bad request".into());
     }
     let method = parts[0];
-    let path = parts[1];
-    let (req_path, query_str) = split_path_query(path);
+    let request_target = normalize_http_request_origin_form(parts[1]);
+    let (req_path, query_str) = split_path_query(request_target);
 
     let mut content_length: usize = 0;
     loop {
@@ -610,6 +624,17 @@ fn handle_one(
         let html = request_shell_html(browser, selector.as_deref())?;
         write_http_ok_bytes(stream, "text/html; charset=utf-8", html.as_bytes())
             .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/window/minimize" {
+        let q = query_str.ok_or_else(|| "minimize: missing query".to_string())?;
+        let window_id = query_param_raw(q, "window_id")
+            .ok_or_else(|| "minimize: missing window_id".to_string())?
+            .parse::<u32>()
+            .map_err(|_| "minimize: invalid window_id".to_string())?;
+        uplink.shell_minimize(window_id);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -989,6 +1014,13 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/window/minimize" {
+        let window_id = json_u32_field(&v, "window_id")?;
+        uplink.shell_minimize(window_id);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/window/crash" {
         let window_id = json_u32_field(&v, "window_id")?;
         uplink.test_crash_window(window_id)?;
@@ -1185,3 +1217,27 @@ fn handle_one(
     write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod normalize_http_request_origin_form_tests {
+    use super::normalize_http_request_origin_form;
+    use super::split_path_query;
+
+    #[test]
+    fn leaves_origin_form_unchanged() {
+        assert_eq!(
+            normalize_http_request_origin_form("/test/window/minimize?window_id=3"),
+            "/test/window/minimize?window_id=3"
+        );
+    }
+
+    #[test]
+    fn strips_absolute_form_http_host() {
+        let t = normalize_http_request_origin_form("http://127.0.0.1:9123/test/window/minimize?window_id=3");
+        assert_eq!(t, "/test/window/minimize?window_id=3");
+        let (p, q) = split_path_query(t);
+        assert_eq!(p, "/test/window/minimize");
+        assert_eq!(q, Some("window_id=3"));
+    }
+}
+

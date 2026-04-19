@@ -170,6 +170,7 @@ export interface ShellTaskbarWindow {
 export interface ShellTabButton {
   window_id: number
   rect?: Rect | null
+  handle?: Rect | null
   close?: Rect | null
   active: boolean
   pinned?: boolean
@@ -1310,6 +1311,10 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
 
 export async function closeWindow(base: string, windowId: number): Promise<void> {
   await postJson(base, '/test/window/close', { window_id: windowId })
+}
+
+export async function minimizeWindow(base: string, windowId: number): Promise<void> {
+  await getJson(base, `/test/window/minimize?window_id=${windowId}`)
 }
 
 export async function crashWindow(base: string, windowId: number): Promise<void> {

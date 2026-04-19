@@ -17,6 +17,7 @@ import {
 import {
   canvasRectToClientCss,
   clientPointToGlobalLogical,
+  rectGlobalToCanvasLocal,
 } from '@/lib/shellCoords'
 import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
 import {
@@ -131,7 +132,6 @@ const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h
 
 const TASKBAR_HEIGHT = 44
 
-/** Tee’d into `compositor.log` when `cef_host` stderr is captured (session). Filter: `derp-shell-move`. */
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   void msg
   void detail
@@ -752,15 +752,18 @@ function App() {
     const window = allWindowsMap().get(windowId)
     const global = shellPointerGlobalLogical(clientX, clientY)
     if (!window || !global) return false
-    const nextX = Math.round(global.x - window.width / 2)
-    const nextY = Math.round(global.y + CHROME_TITLEBAR_PX / 2)
+    const ww = Math.max(1, window.width)
+    const wh = Math.max(1, window.height)
+    const gx = Math.round(global.x - ww / 2)
+    const gy = Math.round(global.y + CHROME_TITLEBAR_PX / 2)
+    const local = rectGlobalToCanvasLocal(gx, gy, ww, wh, layoutCanvasOrigin())
     shellWireSend(
       'set_geometry',
       windowId,
-      nextX,
-      nextY,
-      window.width,
-      window.height,
+      local.x,
+      local.y,
+      local.w,
+      local.h,
       SHELL_LAYOUT_FLOATING,
     )
     return true

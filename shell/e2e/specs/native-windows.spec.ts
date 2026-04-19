@@ -16,6 +16,7 @@ import {
   clickPoint,
   compositorWindowById,
   defineGroup,
+  dragBetweenPoints,
   ensureNativePair,
   getJson,
   getSnapshots,
@@ -35,6 +36,7 @@ import {
   waitForWindowRaised,
   waitForWindowGone,
   waitForWindowMinimized,
+  windowControls,
   writeJsonArtifact,
   type CompositorSnapshot,
   type ShellSnapshot,
@@ -438,6 +440,52 @@ export default defineGroup(import.meta.url, ({ test }) => {
       before,
       maximized: maximized.window,
       restored: restored.window,
+    })
+  })
+
+  test('maximized native titlebar drag leaves maximized for geometry diagnostics', async ({ base, state }) => {
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    await raiseTaskbarWindow(base, redId)
+    await waitForNativeFocus(base, redId, 4000)
+    await runKeybind(base, 'toggle_maximize')
+    await waitFor(
+      'wait for red maximized',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        return window?.maximized ? { window } : null
+      },
+      5000,
+      100,
+    )
+    const shellMax = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const controls = windowControls(shellMax, redId)
+    assert(controls?.titlebar, 'missing red titlebar while maximized')
+    const start = rectCenter(controls.titlebar)
+    await dragBetweenPoints(base, start.x, start.y, start.x, start.y + 160, 18)
+    const unmaxed = await waitFor(
+      'wait for red unmaximized after titlebar drag',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        if (!window || window.maximized || window.fullscreen) return null
+        if (window.width > 900) return null
+        return { window }
+      },
+      5000,
+      100,
+    )
+    const w = unmaxed.window
+    const centerX = w.x + w.width / 2
+    assert(
+      Math.abs(centerX - start.x) < 220,
+      `restored window center x ${centerX} should stay near titlebar grab ${start.x}`,
+    )
+    await writeJsonArtifact('native-max-titlebar-drag-unmax.json', {
+      redId,
+      grab: { x: start.x, y: start.y },
+      after: { x: w.x, y: w.y, w: w.width, h: w.height, output: w.output_name, centerX },
     })
   })
 

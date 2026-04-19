@@ -235,7 +235,10 @@ export function resolveGroupVisibleWindowId(
   if (members.length === 0) return null
   const active = state.activeTabByGroupId[groupId]
   const leftWindowId = splitLeftWindowId(state, groupId)
-  if (members.some((window) => window.window_id === active) && active !== leftWindowId) return active
+  if (members.some((window) => window.window_id === active) && active !== leftWindowId) {
+    const activeWin = members.find((window) => window.window_id === active)
+    if (activeWin && !activeWin.minimized) return active
+  }
   if (leftWindowId !== null) {
     const firstRight = members.find((window) => window.window_id !== leftWindowId)
     if (firstRight) return firstRight.window_id

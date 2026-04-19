@@ -66,6 +66,18 @@ describe('tabGroupOps', () => {
     expect(resolveGroupVisibleWindowId(state, groupId, [makeWindow(1), makeWindow(2)])).toBe(1)
   })
 
+  it('skips minimized active tab in favor of first visible member', () => {
+    const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
+    const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
+    const state = setWorkspaceActiveTab(merged, groupId, 1)
+    expect(
+      resolveGroupVisibleWindowId(state, groupId, [
+        makeWindow(1, 'One', true),
+        makeWindow(2, 'Two', false),
+      ]),
+    ).toBe(2)
+  })
+
   it('falls back to the first non-minimized member when the active tab is unavailable', () => {
     const state = {
       ...createEmptyWorkspaceState(),

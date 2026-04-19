@@ -106,6 +106,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   const [splitGroupGesture, setSplitGroupGesture] = createSignal<SplitGroupGestureState | null>(null)
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
   const appliedSplitGroupLayoutKeys = new Map<string, string>()
+  let tabDragPointerGrab = false
+
+  function endTabDragPointerGrab() {
+    if (!tabDragPointerGrab) return
+    tabDragPointerGrab = false
+    options.shellWireSend('shell_ui_grab_end')
+  }
 
   function splitLayoutForGroup(
     group: WorkspaceGroupModel,
@@ -258,6 +265,8 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const sourceGroupId = options.workspaceGroupIdForWindow(windowId)
     if (!sourceGroupId) return
     if (splitLeftWindowId(options.workspaceState(), sourceGroupId) === windowId) return
+    options.shellWireSend('shell_ui_grab_begin', SHELL_UI_SETTINGS_WINDOW_ID)
+    tabDragPointerGrab = true
     options.shellContextHideMenu()
     setSuppressTabClickWindowId(null)
     setTabDragState({
@@ -277,6 +286,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function finishTabPointerGesture(pointerId: number, clientX: number, clientY: number) {
     const drag = tabDragState()
     if (!drag || drag.pointerId !== pointerId) return
+    try {
     const dragDistance = Math.hypot(clientX - drag.startClientX, clientY - drag.startClientY)
     const dragging = drag.dragging || dragDistance >= 40
     const ignoreDraggedWindowFrame =
@@ -308,6 +318,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     queueMicrotask(() => {
       setTabDragState((current) => (current?.pointerId === pointerId ? null : current))
     })
+    } finally {
+      endTabDragPointerGrab()
+    }
   }
 
   function beginSplitGroupGesture(
@@ -407,8 +420,24 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const target = dragging
       ? findTabMergeTargetFromPointer(prev.windowId, event.clientX, event.clientY, ignoreDraggedWindowFrame)
       : null
+    const state = options.workspaceState()
+    const splitLeftTabEl =
+      typeof document !== 'undefined'
+        ? document.querySelector(
+            `[data-workspace-tab-strip="${prev.sourceGroupId}"] [data-workspace-split-left-tab]`,
+          )
+        : null
+    const splitLeftFromDom =
+      splitLeftTabEl instanceof HTMLElement ? Number(splitLeftTabEl.getAttribute('data-workspace-tab')) : NaN
+    const splitLeftId = Number.isFinite(splitLeftFromDom)
+      ? Math.trunc(splitLeftFromDom)
+      : splitLeftWindowId(state, prev.sourceGroupId)
+    const splitRightStripDrag = splitLeftId !== null && prev.windowId !== splitLeftId
+    const crossGroupMerge = target !== null && target.groupId !== prev.sourceGroupId
+    const splitVerticalTear = splitRightStripDrag && Math.abs(dy) >= 64 && !crossGroupMerge
+    const classicTear = !splitRightStripDrag && target === null && Math.abs(dy) >= 64
     let detached = prev.detached
-    if (dragging && !detached && target === null && Math.abs(dy) >= 64) {
+    if (dragging && !detached && (splitVerticalTear || classicTear)) {
       detached = options.detachGroupWindow(prev.windowId, event.clientX, event.clientY)
     } else if (dragging && detached) {
       options.moveWindowUnderPointer(prev.windowId, event.clientX, event.clientY)
@@ -430,6 +459,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   const onTabDragPointerCancel = (event: PointerEvent) => {
     const prev = tabDragState()
     if (!prev || prev.pointerId !== event.pointerId) return
+    endTabDragPointerGrab()
     setTabDragState(null)
   }
 

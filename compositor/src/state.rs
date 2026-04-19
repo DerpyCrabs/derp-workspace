@@ -5156,20 +5156,28 @@ impl CompositorState {
             .space
             .element_location(&DerpSpaceElem::X11(window.clone()))
             .unwrap_or(geometry.loc);
+        let elem = DerpSpaceElem::X11(window.clone());
+        let in_space = self.space.elements().any(|e| *e == elem);
+        let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
+        let compositor_minimized = self.shell_minimized_x11_windows.contains_key(&window_id);
+        let minimized = compositor_minimized || (window.is_hidden() && prev.minimized);
+        let skip_x11_geometry = compositor_minimized && !in_space;
         let width = geometry.size.w.max(1);
         let height = geometry.size.h.max(1);
         let output_name = self
             .output_for_window_position(location.x, location.y, width, height)
             .unwrap_or_else(|| prev.output_name.clone());
-        let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
-        let minimized = self.shell_minimized_x11_windows.contains_key(&window_id)
-            || (window.is_hidden() && prev.minimized);
+        let (x, y, width, height, output_name) = if skip_x11_geometry {
+            (prev.x, prev.y, prev.width, prev.height, prev.output_name.clone())
+        } else {
+            (location.x, location.y, width, height, output_name)
+        };
         let info = self.window_registry.update_native(window_id, |info| {
             info.title = title.clone();
             info.app_id = app_id.clone();
             info.wayland_client_pid = pid;
-            info.x = location.x;
-            info.y = location.y;
+            info.x = x;
+            info.y = y;
             info.width = width;
             info.height = height;
             info.output_name = output_name.clone();
@@ -6401,6 +6409,86 @@ impl CompositorState {
         let target_output_name = self
             .output_for_window_position(x, y, w, h)
             .unwrap_or_default();
+        if info.minimized {
+            if let Some(window) = self.shell_minimized_windows.get(&window_id).cloned() {
+                if layout_state == 0 {
+                    self.clear_toplevel_layout_maps(window_id);
+                } else if layout_state == 1 {
+                    self.cancel_shell_move_resize_for_window(window_id);
+                    if !self.toplevel_floating_restore.contains_key(&window_id) {
+                        if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                            self.toplevel_floating_restore.insert(window_id, s);
+                        }
+                    }
+                }
+                let _ = self
+                    .window_registry
+                    .update_native(window_id, |window_info| {
+                        if layout_state == 1 {
+                            window_info.maximized = true;
+                        } else {
+                            window_info.maximized = false;
+                        }
+                        window_info.fullscreen = false;
+                        window_info.x = x;
+                        window_info.y = y;
+                        window_info.width = w.max(1);
+                        window_info.height = h.max(1);
+                        window_info.output_name = target_output_name.clone();
+                    });
+                self.capture_refresh_window_source_cache(window_id);
+                let tl = window.toplevel().unwrap();
+                tl.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.fullscreen_output = None;
+                    if layout_state == 1 {
+                        state.states.set(xdg_toplevel::State::Maximized);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                    }
+                    state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
+                });
+                tl.send_pending_configure();
+                return;
+            }
+            if let Some(x11) = self.shell_minimized_x11_windows.get(&window_id).cloned() {
+                if layout_state == 0 {
+                    self.clear_toplevel_layout_maps(window_id);
+                } else {
+                    self.cancel_shell_move_resize_for_window(window_id);
+                    if !self.toplevel_floating_restore.contains_key(&window_id) {
+                        let geometry = x11.geometry();
+                        self.toplevel_floating_restore.insert(
+                            window_id,
+                            (geometry.loc.x, geometry.loc.y, geometry.size.w, geometry.size.h),
+                        );
+                    }
+                }
+                let _ = self
+                    .window_registry
+                    .update_native(window_id, |window_info| {
+                        window_info.maximized = layout_state == 1;
+                        window_info.fullscreen = false;
+                        window_info.x = x;
+                        window_info.y = y;
+                        window_info.width = w.max(1);
+                        window_info.height = h.max(1);
+                        window_info.output_name = target_output_name.clone();
+                    });
+                self.capture_refresh_window_source_cache(window_id);
+                let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
+                if let Err(error) = x11.set_fullscreen(false) {
+                    tracing::warn!(window_id, ?error, "x11 set_fullscreen failed");
+                }
+                if let Err(error) = x11.set_maximized(layout_state == 1) {
+                    tracing::warn!(window_id, ?error, "x11 set_maximized failed");
+                }
+                if let Err(error) = x11.configure(Some(rect)) {
+                    tracing::warn!(window_id, ?error, "x11 configure failed");
+                }
+                return;
+            }
+        }
         if let Some(window) = self.find_window_by_surface_id(sid) {
             if layout_state == 0 {
                 self.clear_toplevel_layout_maps(window_id);

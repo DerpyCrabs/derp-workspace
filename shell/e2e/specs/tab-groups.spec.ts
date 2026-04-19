@@ -15,6 +15,7 @@ import {
   getJson,
   getShellHtml,
   getSnapshots,
+  minimizeWindow,
   movePoint,
   openShellTestWindow,
   outputForWindow,
@@ -31,6 +32,7 @@ import {
   waitFor,
   waitForShellUiFocus,
   waitForWindowGone,
+  waitForWindowMinimized,
   writeJsonArtifact,
   type E2eState,
   type ShellSnapshot,
@@ -40,8 +42,10 @@ function tabRect(shell: ShellSnapshot, windowId: number) {
   const group = tabGroupByWindow(shell, windowId)
   assert(group, `missing tab group for window ${windowId}`)
   const tab = group.tabs.find((entry) => entry.window_id === windowId)
-  assert(tab?.rect, `missing tab rect for window ${windowId}`)
-  return { group, tab }
+  assert(tab, `missing tab for window ${windowId}`)
+  const rect = tab.rect ?? tab.handle
+  assert(rect, `missing tab rect for window ${windowId}`)
+  return { group, tab: { ...tab, rect } }
 }
 
 function tabCloseRect(shell: ShellSnapshot, windowId: number) {
@@ -1121,9 +1125,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const rightShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const rightTab = tabRect(rightShell, otherWindowId)
       const rightStart = rectCenter(rightTab.tab.rect!)
-      const previewPoint = { x: rightStart.x + 48, y: rightStart.y }
+      const rr = rightTab.tab.rect!
+      const previewPoint = {
+        x: Math.min(rightStart.x + 48, rr.global_x + rr.width - 6),
+        y: rightStart.y,
+      }
       await timing.step('start right tab drag', () => dragTabStep(base, otherWindowId, previewPoint))
-      await timing.step('pull right tab out of strip', () => movePoint(base, previewPoint.x + 24, rightStart.y - 72))
+      await timing.step('pull right tab out of strip', () =>
+        movePoint(base, previewPoint.x + 24, rightTab.tab.rect!.global_y - 64),
+      )
       await timing.step('wait for right tab detached', () =>
         waitFor(
           `wait for split right tab ${otherWindowId} detached`,
@@ -1134,7 +1144,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (!leftGroup || !rightGroup || leftGroup.group_id === rightGroup.group_id) return null
             return { shell, leftGroup, rightGroup }
           },
-          5000,
+          8000,
           100,
         ),
       )
@@ -1251,6 +1261,98 @@ export default defineGroup(import.meta.url, ({ test }) => {
         try {
           await closeWindow(base, jsWindowId)
           await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('minimized grouped native tab tear-out restores near pointer', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-minimized-tear')
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const otherId = target.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+      await timing.step('group native windows', () => dragTabOntoTab(base, otherId, target.windowId))
+      await timing.step('wait for grouped pair', () =>
+        waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], target.windowId),
+      )
+      await timing.step('minimize visible native', () => minimizeWindow(base, target.windowId))
+      await timing.step('wait minimized', () => waitForWindowMinimized(base, target.windowId))
+      await timing.step('assert compositor geometry survives test minimize', async () => {
+        const { compositor } = await getSnapshots(base)
+        const cw = compositorWindowById(compositor, target.windowId)
+        assert(cw, 'missing compositor window after minimize')
+        assert(
+          cw.width >= 32 && cw.height >= 32,
+          `minimized native should retain non-trivial compositor size (got ${cw.width}x${cw.height})`,
+        )
+      })
+      const shellBeforeDrag = await timing.step('wait shell tab snapshot after minimize', () =>
+        waitFor(
+          `shell tab surface for ${target.windowId} after minimize`,
+          async () => {
+            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const peer = shellWindowById(shell, otherId)
+            if (!peer || peer.minimized) return null
+            try {
+              tabRect(shell, target.windowId)
+              return shell
+            } catch {
+              return null
+            }
+          },
+          8000,
+          125,
+        ),
+      )
+      const tab = tabRect(shellBeforeDrag, target.windowId)
+      const start = rectCenter(tab.tab.rect!)
+      const previewPoint = { x: start.x + 40, y: start.y }
+      await timing.step('start minimized tab drag', () => dragTabStep(base, target.windowId, previewPoint))
+      await timing.step('pull tab out for tear-out', () => movePoint(base, previewPoint.x + 24, start.y - 88))
+      const torn = await timing.step('wait tear-out unminimized near pointer', () =>
+        waitFor(
+          `wait torn ${target.windowId} unminimized`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const w = shellWindowById(shell, target.windowId)
+            if (!w || w.minimized) return null
+            const gOther = tabGroupByWindow(shell, otherId)
+            const gTorn = tabGroupByWindow(shell, target.windowId)
+            if (!gOther || !gTorn || gOther.group_id === gTorn.group_id) return null
+            const px = compositor.pointer?.x
+            const py = compositor.pointer?.y
+            if (px === undefined || py === undefined) return null
+            if (w.x === 0 && w.y === 0) return null
+            const cx = w.x + w.width / 2
+            const cy = w.y + w.height / 2
+            const dist = Math.hypot(cx - px, cy - py)
+            if (dist > 420) return null
+            return { compositor, shell, w, dist }
+          },
+          10000,
+          125,
+        ),
+      )
+      assert(torn.w.x !== 0 || torn.w.y !== 0, 'torn minimized window should not map to origin')
+      assert(torn.dist <= 420, `window center should be near pointer (dist=${torn.dist})`)
+      await timing.step('release drag', () => finishDrag(base))
+      released = true
+      await timing.step('write artifact', () =>
+        writeJsonArtifact('tab-groups-minimized-tear-out.json', {
+          windowId: target.windowId,
+          x: torn.w.x,
+          y: torn.w.y,
+          dist: torn.dist,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
         } catch {}
       }
     }

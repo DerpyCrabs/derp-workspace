@@ -329,6 +329,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     tabs: group.members.map((member) => ({
       window_id: member.window_id,
       rect: snapshotRect(cache.queryAttr('data-workspace-tab', member.window_id), args.origin),
+      handle: snapshotRect(cache.queryAttr('data-workspace-tab-handle', member.window_id), args.origin),
       close: snapshotRect(cache.queryAttr('data-workspace-tab-close', member.window_id), args.origin),
       active: member.window_id === group.visibleWindowId,
       pinned: args.isWorkspaceWindowPinned(member.window_id),
