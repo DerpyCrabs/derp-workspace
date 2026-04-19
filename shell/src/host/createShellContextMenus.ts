@@ -18,6 +18,11 @@ import type { createFloatingLayerStore } from '@/features/floating/floatingLayer
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import { canvasRectToClientCss, clientRectToGlobalLogical } from '@/lib/shellCoords'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
+import type { BackedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
+import {
+  shellHostedProgramsBuiltinMatchesQuery,
+  shellHostedProgramsMenuDefinitions,
+} from '@/features/shell-ui/shellHostedAppsRegistry'
 import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
 
@@ -43,7 +48,7 @@ type CreateShellContextMenusArgs = {
   screenshotMode: Accessor<boolean>
   stopScreenshotMode: () => void
   closeAllAtlasSelects: () => boolean
-  openFileBrowser: (path?: string | null) => void
+  openShellHostedApp: (kind: BackedShellWindowKind) => boolean
   spawnInCompositor: (
     cmd: string,
     launch?: { command: string; desktopId: string | null; appName: string | null } | null,
@@ -532,17 +537,18 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
     if (!programsMenuOpen()) return []
     const query = programsMenuQuery().trim().toLocaleLowerCase()
-    const builtins: ShellContextMenuItem[] =
-      query.length === 0 || 'files browser folder shell'.split(' ').some((token) => token.includes(query) || query.includes(token))
-        ? [
-            {
-              label: 'Files',
-              badge: 'shell',
-              title: 'Open the shell file browser',
-              action: () => args.openFileBrowser(),
-            },
-          ]
-        : []
+    const builtins: ShellContextMenuItem[] = []
+    for (const def of shellHostedProgramsMenuDefinitions()) {
+      if (!shellHostedProgramsBuiltinMatchesQuery(query, def.matchTokens)) continue
+      builtins.push({
+        label: def.label,
+        badge: def.badge,
+        title: def.title,
+        action: () => {
+          void args.openShellHostedApp(def.kind)
+        },
+      })
+    }
     if (desktopApps.busy() && !desktopApps.loaded()) {
       return builtins.length > 0 ? [...builtins, { label: 'Loading…', action: () => {} }] : [{ label: 'Loading…', action: () => {} }]
     }

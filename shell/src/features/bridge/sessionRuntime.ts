@@ -1,5 +1,6 @@
 import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import { backedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
+import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui/shellHostedAppsRegistry'
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { monitorWorkAreaGlobal } from '@/features/tiling/tileSnap'
 import type { SnapZone } from '@/features/tiling/tileZones'
@@ -439,7 +440,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         let shellWindowState = captureShellWindowState(window.window_id) ?? null
         if (
           shellWindowState == null &&
-          kind === 'file_browser' &&
+          shellHostedKindUsesCompositorSessionCapture(kind) &&
           options.getShellHostedAppStateForWindow
         ) {
           const fromCompositor = options.getShellHostedAppStateForWindow(window.window_id)

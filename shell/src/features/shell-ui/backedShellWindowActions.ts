@@ -10,6 +10,7 @@ import {
   shellTestWindowTitle,
   SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_TEST_APP_ID,
+  type BackedShellWindowKind,
   type BackedWindowOpenPayload,
 } from '@/features/shell-ui/backedShellWindows'
 import { loadFileBrowserPrefs } from '@/apps/file-browser/fileBrowserPrefs'
@@ -206,11 +207,26 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     if (backedWindowOpenRaf !== 0) cancelAnimationFrame(backedWindowOpenRaf)
   }
 
+  const openShellHostedApp = (kind: BackedShellWindowKind): boolean => {
+    if (kind === 'debug') {
+      openDebugShellWindow()
+      return true
+    }
+    if (kind === 'settings') {
+      openSettingsShellWindow()
+      return true
+    }
+    if (kind === 'test') return openShellTestWindow()
+    if (kind === 'file_browser') return openFileBrowserWindow()
+    return false
+  }
+
   return {
     openDebugShellWindow,
     openSettingsShellWindow,
     openShellTestWindow,
     openFileBrowserWindow,
+    openShellHostedApp,
     dispose,
   }
 }

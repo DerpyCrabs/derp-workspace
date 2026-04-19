@@ -18,13 +18,7 @@ import {
   canvasRectToClientCss,
   clientPointToGlobalLogical,
 } from '@/lib/shellCoords'
-import { SettingsPanel } from '@/apps/settings/SettingsPanel'
 import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
-import {
-  isFileBrowserWindowId,
-  isShellTestWindowId,
-  SHELL_UI_TEST_APP_ID,
-} from '@/features/shell-ui/backedShellWindows'
 import {
   flushShellUiWindowsSyncNow,
   invalidateAllShellUiWindows,
@@ -32,6 +26,8 @@ import {
   SHELL_UI_SETTINGS_WINDOW_ID,
 } from '@/features/shell-ui/shellUiWindows'
 import { createBackedShellWindowActions } from '@/features/shell-ui/backedShellWindowActions'
+import { renderShellHostedWindowContent } from '@/features/shell-ui/shellHostedWindowContent'
+import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
@@ -45,7 +41,6 @@ import { refreshThemeSettingsFromRemote } from '@/features/theme/themeStore'
 import { ShellContextMenusProvider } from '@/host/ShellContextMenusContext'
 import { createShellContextMenus } from '@/host/createShellContextMenus'
 import { ShellContextMenuLayer } from '@/host/ShellContextMenuLayer'
-import { ShellDebugHudContent } from '@/apps/debug/ShellDebugHudContent'
 import { createDebugHudRuntime } from '@/apps/debug/debugHudRuntime'
 import {
   layoutScreenCssRect,
@@ -60,7 +55,6 @@ import {
 } from '@/host/appWindowState'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
-import { FileBrowserWindow } from '@/apps/file-browser/FileBrowserWindow'
 import {
   nativeWindowRef,
   type NativeLaunchMetadata,
@@ -71,7 +65,6 @@ import {
 import {
   subscribeShellWindowState,
 } from '@/features/shell-ui/shellWindowState'
-import { ShellTestWindowContent } from '@/apps/debug/ShellTestWindowContent'
 import type {
   LayoutScreen,
 } from '@/host/types'
@@ -83,9 +76,6 @@ import { createSessionPersistenceRuntime } from '@/features/bridge/sessionPersis
 import { createSessionRuntime } from '@/features/bridge/sessionRuntime'
 import { createShellTransportBridge } from '@/features/bridge/shellTransportBridge'
 import { createWorkspaceActions } from '@/features/workspace/workspaceActions'
-import {
-  windowLabel as groupedWindowLabel,
-} from '@/features/workspace/tabGroupOps'
 import {
   getWorkspaceGroupSplit,
   isWorkspaceWindowPinned,
@@ -108,53 +98,7 @@ declare global {
     __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
     __DERP_SHELL_SHARED_STATE_ABI?: number
     /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
-    __derpShellWireSend?: (
-      op:
-        | 'close'
-        | 'quit'
-        | 'request_compositor_sync'
-        | 'shell_ipc_pong'
-        | 'spawn'
-        | 'move_begin'
-        | 'move_delta'
-        | 'move_end'
-        | 'resize_begin'
-        | 'resize_delta'
-        | 'resize_end'
-        | 'resize_shell_grab_begin'
-        | 'resize_shell_grab_end'
-        | 'taskbar_activate'
-        | 'activate_window'
-        | 'shell_focus_ui_window'
-        | 'shell_blur_ui_window'
-        | 'shell_ui_grab_begin'
-        | 'shell_ui_grab_end'
-        | 'minimize'
-        | 'set_geometry'
-        | 'set_fullscreen'
-        | 'set_maximized'
-        | 'presentation_fullscreen'
-        | 'set_output_layout'
-        | 'set_shell_primary'
-        | 'set_ui_scale'
-        | 'set_tile_preview'
-        | 'set_chrome_metrics'
-        | 'set_desktop_background'
-        | 'workspace_mutation'
-        | 'shell_hosted_window_state'
-        | 'backed_window_open'
-        | 'e2e_snapshot_response'
-        | 'e2e_html_response'
-        | 'sni_tray_activate'
-        | 'sni_tray_open_menu'
-        | 'sni_tray_menu_event',
-      arg?: number | string,
-      arg2?: number | string,
-      arg3?: number | string,
-      arg4?: number | string,
-      arg5?: number | string,
-      arg6?: number | string,
-    ) => void
+    __derpShellWireSend?: ShellCompositorWireSend
     __derpShellSharedStateWrite?: (
       path: string,
       payload: ArrayBuffer,
@@ -193,44 +137,8 @@ function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   void detail
 }
 
-function shellWireSend(
-  op:
-    | 'close'
-    | 'quit'
-    | 'request_compositor_sync'
-    | 'shell_ipc_pong'
-    | 'spawn'
-    | 'move_begin'
-    | 'move_delta'
-    | 'move_end'
-    | 'resize_begin'
-    | 'resize_delta'
-    | 'resize_end'
-    | 'resize_shell_grab_begin'
-    | 'resize_shell_grab_end'
-    | 'taskbar_activate'
-    | 'activate_window'
-    | 'shell_focus_ui_window'
-    | 'shell_blur_ui_window'
-    | 'shell_ui_grab_begin'
-    | 'shell_ui_grab_end'
-    | 'minimize'
-    | 'set_geometry'
-    | 'set_fullscreen'
-    | 'set_maximized'
-    | 'presentation_fullscreen'
-    | 'set_output_layout'
-    | 'set_shell_primary'
-    | 'set_ui_scale'
-    | 'set_tile_preview'
-    | 'set_chrome_metrics'
-    | 'set_desktop_background'
-    | 'workspace_mutation'
-    | 'shell_hosted_window_state'
-    | 'backed_window_open'
-    | 'sni_tray_activate'
-    | 'sni_tray_open_menu'
-    | 'sni_tray_menu_event',
+const shellWireSend: ShellCompositorWireSend = function shellWireSend(
+  op: ShellCompositorWireOp,
   arg?: number | string,
   arg2?: number | string,
   arg3?: number,
@@ -710,7 +618,7 @@ function App() {
     screenshotMode,
     stopScreenshotMode,
     closeAllAtlasSelects,
-    openFileBrowser: (path) => backedShellWindowActions.openFileBrowserWindow(path),
+    openShellHostedApp: (kind) => backedShellWindowActions.openShellHostedApp(kind),
     spawnInCompositor,
     saveSessionSnapshot: () => void sessionPersistenceRuntime.saveCurrentSessionSnapshot(),
     restoreSessionSnapshot: () => void sessionPersistenceRuntime.restoreSavedSessionSnapshot(),
@@ -887,85 +795,56 @@ function App() {
   })
 
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
-    if (windowId === SHELL_UI_DEBUG_WINDOW_ID) {
-      return (
-        <ShellDebugHudContent
-          onReload={() => location.reload()}
-          onCopySnapshot={copyDebugHudSnapshot}
-          shellBuildLabel={shellBuildLabel}
-          hudFps={debugHudRuntime.hudFps}
-          crosshairCursor={crosshairCursor}
-          setCrosshairCursor={setCrosshairCursor}
-          outputGeom={outputGeom}
-          layoutUnionBbox={layoutUnionBbox}
-          layoutCanvasOrigin={layoutCanvasOrigin}
-          panelHostForHud={panelHostForHud}
-          shellChromePrimaryName={shellChromePrimaryName}
-          viewportCss={viewportCss}
-          windowsCount={() => windowsList().length}
-          pointerClient={pointerClient}
-          pointerInMain={pointerInMain}
-          rootPointerDowns={debugHudRuntime.rootPointerDowns}
-          exclusionZonesHud={debugHudRuntime.exclusionZonesHud}
-        />
-      )
-    }
-    if (windowId === SHELL_UI_SETTINGS_WINDOW_ID) {
-      return (
-        <SettingsPanel
-          screenDraft={screenDraft}
-          setScreenDraft={setScreenDraft}
-          shellChromePrimaryName={shellChromePrimaryName}
-          autoShellChromeMonitorName={autoShellChromeMonitorName}
-          canSessionControl={canSessionControl}
-          uiScalePercent={uiScalePercent}
-          tilingCfgRev={tilingCfgRev}
-          setTilingCfgRev={setTilingCfgRev}
-          clearMonitorTiles={workspaceLayoutBridge.clearMonitorTiles}
-          bumpSnapChrome={() => bumpSnapChrome()}
-          scheduleExclusionZonesSync={() => scheduleExclusionZonesSync()}
-          applyAutoLayout={(name) => workspaceLayoutBridge.applyAutoLayout(name)}
-          setShellPrimary={(name) => shellWireSend('set_shell_primary', name)}
-          setUiScale={(pct) => shellWireSend('set_ui_scale', pct)}
-          applyCompositorLayoutFromDraft={() => {
-            const screens = screenDraft.rows.map((r) => ({
-              name: r.name,
-              x: r.x,
-              y: r.y,
-              transform: r.transform,
-            }))
-            shellWireSend('set_output_layout', JSON.stringify({ screens }))
-          }}
-          monitorRefreshLabel={monitorRefreshLabel}
-          keyboardLayoutLabel={keyboardLayoutLabel}
-          setDesktopBackgroundJson={(json) => shellWireSend('set_desktop_background', json)}
-          sessionAutoSaveEnabled={sessionPersistenceRuntime.sessionAutoSaveEnabled}
-          setSessionAutoSaveEnabled={sessionPersistenceRuntime.updateSessionAutoSavePreference}
-        />
-      )
-    }
-    if (isShellTestWindowId(windowId)) {
-      const window = allWindowsMap().get(windowId)
-      return <ShellTestWindowContent windowId={windowId} title={window?.title || groupedWindowLabel({ window_id: windowId, title: '', app_id: SHELL_UI_TEST_APP_ID })} />
-    }
-    if (isFileBrowserWindowId(windowId)) {
-      return (
-        <Show when={windowId} keyed>
-          {(id) => (
-            <FileBrowserWindow
-              windowId={id}
-              compositorAppState={() => shellHostedAppByWindow()[id] ?? null}
-              shellWireSend={shellWireSend}
-              onOpenFile={(path) => {
-                reportShellActionIssue(`File viewers land in a later phase: ${path}`)
-              }}
-              onOpenInNewWindow={(path) => backedShellWindowActions.openFileBrowserWindow(path)}
-            />
-          )}
-        </Show>
-      )
-    }
-    return undefined
+    return renderShellHostedWindowContent(windowId, {
+      allWindowsMap,
+      shellHostedAppByWindow,
+      shellWireSend,
+      onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
+      reportShellActionIssue,
+      copyDebugHudSnapshot,
+      shellBuildLabel,
+      hudFps: debugHudRuntime.hudFps,
+      crosshairCursor,
+      setCrosshairCursor,
+      outputGeom,
+      layoutUnionBbox,
+      layoutCanvasOrigin,
+      panelHostForHud,
+      shellChromePrimaryName,
+      viewportCss,
+      windowsList,
+      pointerClient,
+      pointerInMain,
+      rootPointerDowns: debugHudRuntime.rootPointerDowns,
+      exclusionZonesHud: debugHudRuntime.exclusionZonesHud,
+      screenDraft,
+      setScreenDraft,
+      autoShellChromeMonitorName,
+      canSessionControl,
+      uiScalePercent,
+      tilingCfgRev,
+      setTilingCfgRev,
+      clearMonitorTiles: workspaceLayoutBridge.clearMonitorTiles,
+      bumpSnapChrome,
+      scheduleExclusionZonesSync,
+      applyAutoLayout: (name) => workspaceLayoutBridge.applyAutoLayout(name),
+      setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
+      setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
+      applyCompositorLayoutFromDraft: () => {
+        const screens = screenDraft.rows.map((r) => ({
+          name: r.name,
+          x: r.x,
+          y: r.y,
+          transform: r.transform,
+        }))
+        shellWireSend('set_output_layout', JSON.stringify({ screens }))
+      },
+      monitorRefreshLabel,
+      keyboardLayoutLabel,
+      setDesktopBackgroundJson: (json) => shellWireSend('set_desktop_background', json),
+      sessionAutoSaveEnabled: sessionPersistenceRuntime.sessionAutoSaveEnabled,
+      setSessionAutoSaveEnabled: sessionPersistenceRuntime.updateSessionAutoSavePreference,
+    })
   }
 
   const taskbarScreens = createMemo(() =>

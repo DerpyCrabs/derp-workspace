@@ -108,7 +108,7 @@ type QueryCache = {
   queryAllAttr: (attr: string) => HTMLElement[]
 }
 
-function snapshotRect(el: Element | null, origin: CanvasOrigin): E2eRectSnapshot | null {
+export function snapshotRect(el: Element | null, origin: CanvasOrigin): E2eRectSnapshot | null {
   if (!(el instanceof HTMLElement)) return null
   const rect = el.getBoundingClientRect()
   const x = Math.round(rect.left)
@@ -207,7 +207,7 @@ function queryLargestRect(cache: QueryCache, selector: string, origin: CanvasOri
   return best
 }
 
-function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin) {
+export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin) {
   const fileBrowserActivePathEl = queryWithin(root, '[data-file-browser-active-path]')
   const fileBrowserViewerTitleEl = queryWithin(
     root,

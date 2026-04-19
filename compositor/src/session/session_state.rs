@@ -82,10 +82,10 @@ pub fn merge_shell_hosted_into_session_value(root: &mut Value, by_window: &HashM
     let Some(shell) = root.get_mut("shell") else {
         return;
     };
-    merge_shell_hosted_file_browser_into_shell_snapshot(shell, by_window);
+    merge_shell_hosted_window_state_into_shell_snapshot(shell, by_window);
 }
 
-fn merge_shell_hosted_file_browser_into_shell_snapshot(
+fn merge_shell_hosted_window_state_into_shell_snapshot(
     shell_snapshot: &mut Value,
     by_window: &HashMap<u32, Value>,
 ) {
@@ -103,8 +103,7 @@ fn merge_shell_hosted_file_browser_into_shell_snapshot(
             .get("windowId")
             .and_then(|x| x.as_u64())
             .map(|u| u as u32);
-        let kind = obj.get("kind").and_then(|x| x.as_str());
-        if let (Some(wid), Some("file_browser")) = (wid, kind) {
+        if let Some(wid) = wid {
             if let Some(st) = by_window.get(&wid) {
                 obj.insert("state".to_string(), st.clone());
             }
