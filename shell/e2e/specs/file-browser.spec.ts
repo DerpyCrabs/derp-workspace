@@ -164,7 +164,8 @@ async function openDirectoryRow(base: string, expectedPath: string, rowName: str
     100,
   )
   if (fileBrowserSnapshot(selectedOrOpened, windowId)?.active_path === expectedPath) return selectedOrOpened
-  await tapKey(base, KEY.enter)
+  const { row: selectedRow } = await waitForDirectoryRowRect(base, currentPath, rowName, windowId)
+  await clickRect(base, assertRectMinSize(`selected file browser row ${rowName}`, selectedRow.rect, 32, 24))
   return waitForActivePath(base, expectedPath, windowId)
 }
 
