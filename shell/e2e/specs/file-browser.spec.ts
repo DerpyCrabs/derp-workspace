@@ -164,7 +164,10 @@ async function openDirectoryRow(base: string, expectedPath: string, rowName: str
     100,
   )
   if (fileBrowserSnapshot(selectedOrOpened, windowId)?.active_path === expectedPath) return selectedOrOpened
-  const { row: selectedRow } = await waitForDirectoryRowRect(base, currentPath, rowName, windowId)
+  const peekShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (fileBrowserSnapshot(peekShell, windowId)?.active_path === expectedPath) return peekShell
+  const liveParent = fileBrowserSnapshot(peekShell, windowId)?.active_path ?? currentPath
+  const { row: selectedRow } = await waitForDirectoryRowRect(base, liveParent, rowName, windowId)
   await clickRect(base, assertRectMinSize(`selected file browser row ${rowName}`, selectedRow.rect, 32, 24))
   return waitForActivePath(base, expectedPath, windowId)
 }
