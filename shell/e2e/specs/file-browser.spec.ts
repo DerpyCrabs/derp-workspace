@@ -169,6 +169,17 @@ async function openDirectoryRow(base: string, expectedPath: string, rowName: str
   return waitForActivePath(base, expectedPath, windowId)
 }
 
+type FileBrowserStatResponse = { entry: { path: string } }
+
+async function fileBrowserStatCanonicalPath(base: string, rawPath: string): Promise<string> {
+  const stat = await getJson<FileBrowserStatResponse>(
+    base,
+    `/file_browser/stat?p=${encodeURIComponent(rawPath)}`,
+  )
+  assert(stat.entry?.path, 'file browser stat path')
+  return stat.entry.path
+}
+
 async function openDirectoryRowWithClicks(base: string, expectedPath: string, rowName: string, windowId: number) {
   const currentPath = path.posix.dirname(expectedPath)
   await ensureHiddenRowVisible(base, currentPath, rowName, windowId)
@@ -211,7 +222,12 @@ async function navigateToFixtureRoot(
   )
   const initialPath = fileBrowserSnapshot(settled, opened.windowId)?.active_path
   assert(typeof initialPath === 'string' && initialPath.length > 0, 'missing initial file browser path')
-  const relativeSegments = path.posix.relative(initialPath, fixtures.root_path).split('/').filter(Boolean)
+  const anchorPath = await fileBrowserStatCanonicalPath(base, initialPath)
+  const relativeSegments = path.posix.relative(anchorPath, fixtures.root_path).split('/').filter(Boolean)
+  assert(
+    relativeSegments.every((segment) => segment !== '.' && segment !== '..'),
+    'fixture root path is not under the file browser home directory',
+  )
   const showHiddenAction = fileBrowserAction(settled, 'show-hidden', opened.windowId)
   if (showHiddenAction?.rect) {
     await clickRect(base, assertRectMinSize('show hidden action', showHiddenAction.rect, 28, 20))
@@ -222,7 +238,7 @@ async function navigateToFixtureRoot(
         const fb = fileBrowserSnapshot(shell, opened.windowId)
         const toggleApplied = !!fileBrowserAction(shell, 'hide-hidden', opened.windowId)
         if (!toggleApplied) return null
-        if (fb?.active_path !== initialPath) return null
+        if (fb?.active_path !== initialPath && fb?.active_path !== anchorPath) return null
         if (fb.list_state === 'loading' || fb.list_state === 'error') return null
         const firstSegment = relativeSegments[0]
         if (!firstSegment) return shell
@@ -232,10 +248,13 @@ async function navigateToFixtureRoot(
       100,
     )
   }
-  let currentPath = initialPath
   for (const segment of relativeSegments) {
-    currentPath = path.posix.join(currentPath, segment)
-    await openDirectoryRow(base, currentPath, segment, opened.windowId)
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const currentPath = fileBrowserSnapshot(shell, opened.windowId)?.active_path
+    assert(typeof currentPath === 'string' && currentPath.length > 0, 'missing file browser path during fixture walk')
+    await ensureHiddenRowVisible(base, currentPath, segment, opened.windowId)
+    const { row } = await waitForDirectoryRowRect(base, currentPath, segment, opened.windowId)
+    await openDirectoryRow(base, row.path, segment, opened.windowId)
   }
   return {
     shell: await waitForActivePath(base, fixtures.root_path, opened.windowId),
