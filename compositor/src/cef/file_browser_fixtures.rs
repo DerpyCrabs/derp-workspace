@@ -138,6 +138,12 @@ fn read_asset_bytes(asset_relative_path: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("decode fixture asset {}: {e}", asset_path.display()))
 }
 
+fn canonical_path_string(abs: &Path) -> Result<String, String> {
+    abs.canonicalize()
+        .map(|value| value.to_string_lossy().into_owned())
+        .map_err(|error| format!("canonicalize {}: {error}", abs.display()))
+}
+
 fn collect_fixture_paths(
     root: &Path,
     entries: &[FixtureEntry],
@@ -146,10 +152,8 @@ fn collect_fixture_paths(
     for entry in entries {
         let relative_path =
             validate_relative_path(&entry.path, &format!("fixture entry {}", entry.id))?;
-        by_id.insert(
-            entry.id.clone(),
-            root.join(relative_path).to_string_lossy().into_owned(),
-        );
+        let abs = root.join(relative_path);
+        by_id.insert(entry.id.clone(), canonical_path_string(&abs)?);
     }
     let required = |id: &str| {
         by_id
@@ -158,7 +162,7 @@ fn collect_fixture_paths(
             .ok_or_else(|| format!("fixture manifest missing required id {id}"))
     };
     Ok(FileBrowserFixturePaths {
-        root_path: root.to_string_lossy().into_owned(),
+        root_path: canonical_path_string(root)?,
         empty_dir: required("empty_dir")?,
         hidden_dir: required("hidden_dir")?,
         nested_dir: required("nested_dir")?,
