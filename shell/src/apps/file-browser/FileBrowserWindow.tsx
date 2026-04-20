@@ -163,7 +163,10 @@ type FileBrowserUiDialog =
   | { kind: 'rename'; path: string; draft: string }
   | { kind: 'delete'; path: string; label: string }
 
+let nextFileBrowserMountSeq = 0
+
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
+  const mountSeq = ++nextFileBrowserMountSeq
   const initialPrefs = loadFileBrowserPrefs()
   const [state, setState] = createStore(
     createInitialFileBrowserWindowState(
@@ -171,6 +174,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     ),
   )
   const [busy, setBusy] = createSignal(false)
+  const [loadCount, setLoadCount] = createSignal(0)
   let requestSeq = 0
   let lastAppliedRestoredStateVersion = 0
   let applyingFromCompositor = false
@@ -203,6 +207,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
     const base = shellHttpBase()
     const runId = ++requestSeq
+    setLoadCount((count) => count + 1)
     const showHidden = showHiddenOverride ?? state.showHidden
     setBusy(true)
     setState('status', 'loading')
@@ -595,6 +600,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         rootRef = el
       }}
       data-file-browser-list-state={state.status}
+      data-file-browser-mount-seq={mountSeq}
+      data-file-browser-load-count={loadCount()}
       class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-inset) text-(--shell-text)"
       tabIndex={0}
       onKeyDown={(event) => {

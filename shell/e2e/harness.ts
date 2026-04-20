@@ -48,7 +48,7 @@ type HarnessCommand =
   | { op: 'keybind'; action: string; window_id?: number }
   | { op: 'spawn'; command: string }
   | { op: 'open-shell-test-window' }
-  | { op: 'scenario'; name: 'maximize-native-behind-shell' | 'maximize-file-browser-then-foot' | 'native-close-decoration-clears' }
+  | { op: 'scenario'; name: 'maximize-native-behind-shell' | 'maximize-file-browser-then-foot' | 'native-close-decoration-clears' | 'drag-file-browser-no-reload' }
 
 type SnapshotRect = { x: number; y: number; width: number; height: number }
 
@@ -105,6 +105,7 @@ function usage(): string {
     '  scenario maximize-native-behind-shell',
     '  scenario maximize-file-browser-then-foot',
     '  scenario native-close-decoration-clears',
+    '  scenario drag-file-browser-no-reload',
     '  run-json <file>',
     '',
     `Artifacts: ${artifactDir()}`,
@@ -213,7 +214,8 @@ function parseCli(argv: string[]): HarnessCommand[] {
       if (
         rest[0] !== 'maximize-native-behind-shell' &&
         rest[0] !== 'maximize-file-browser-then-foot' &&
-        rest[0] !== 'native-close-decoration-clears'
+        rest[0] !== 'native-close-decoration-clears' &&
+        rest[0] !== 'drag-file-browser-no-reload'
       ) {
         throw new Error(`unknown scenario ${rest[0] ?? ''}`)
       }
@@ -362,6 +364,16 @@ async function clickCloseButton(base: string, windowId: number, label: string): 
   await clickRect(base, close)
 }
 
+async function dragTitlebar(base: string, windowId: number, dx: number, dy: number): Promise<void> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const controls = windowControls(shell, windowId)
+  const titlebar = controls?.titlebar
+  assert(titlebar && titlebar.width >= 80 && titlebar.height >= 16, 'window titlebar has usable drag rect')
+  const startX = Math.round(titlebar.x + Math.min(160, Math.max(32, titlebar.width * 0.35)))
+  const startY = Math.round(titlebar.y + titlebar.height / 2)
+  await dragBetweenPoints(base, startX, startY, startX + dx, startY + dy, 14)
+}
+
 async function cleanupFileBrowserFootReproWindows(base: string): Promise<void> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const fileBrowserIds = shell.windows
@@ -496,6 +508,61 @@ async function runNativeCloseDecorationClearsScenario(harness: HarnessState): Pr
   return { ...summary, summary: summaryPath }
 }
 
+async function runDragFileBrowserNoReloadScenario(harness: HarnessState): Promise<Record<string, unknown>> {
+  const { base, state } = harness
+  await cleanupFileBrowserFootReproWindows(base)
+  const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
+  await waitForWindowRaised(base, opened.windowId)
+  const beforeReady = await waitFor(
+    'wait for file browser ready before drag',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const fileBrowser = fileBrowserSnapshot(shell, opened.windowId)
+      return fileBrowser?.list_state === 'ready' && fileBrowser.active_path ? { shell, fileBrowser } : null
+    },
+    5000,
+    50,
+  )
+  const before = await saveSnapshot(base, 'harness-drag-file-browser-before', true, true)
+  await dragTitlebar(base, opened.windowId, 240, 80)
+  const afterReady = await waitFor(
+    'wait for file browser ready after drag',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const window = shellWindowById(shell, opened.windowId)
+      const fileBrowser = fileBrowserSnapshot(shell, opened.windowId)
+      const beforeWindow = shellWindowById(beforeReady.shell, opened.windowId)
+      if (!window || !beforeWindow || !fileBrowser || fileBrowser.list_state !== 'ready') return null
+      if (window.x === beforeWindow.x && window.y === beforeWindow.y) return null
+      return { shell, window, fileBrowser }
+    },
+    5000,
+    50,
+  )
+  const after = await saveSnapshot(base, 'harness-drag-file-browser-after', true, true)
+  const beforeMountSeq = beforeReady.fileBrowser.mount_seq ?? null
+  const afterMountSeq = afterReady.fileBrowser.mount_seq ?? null
+  const beforeLoadCount = beforeReady.fileBrowser.load_count ?? null
+  const afterLoadCount = afterReady.fileBrowser.load_count ?? null
+  const remounted = beforeMountSeq !== afterMountSeq
+  const reloaded = beforeLoadCount !== afterLoadCount
+  const ok = !remounted && !reloaded
+  const summary = {
+    ok,
+    windowId: opened.windowId,
+    remounted,
+    reloaded,
+    beforeMountSeq,
+    afterMountSeq,
+    beforeLoadCount,
+    afterLoadCount,
+    before,
+    after,
+  }
+  const summaryPath = await writeJsonArtifact('harness-drag-file-browser-no-reload-summary.json', summary)
+  return { ...summary, summary: summaryPath }
+}
+
 async function executeCommand(harness: HarnessState, command: HarnessCommand): Promise<unknown> {
   const { base } = harness
   switch (command.op) {
@@ -530,7 +597,8 @@ async function executeCommand(harness: HarnessState, command: HarnessCommand): P
     case 'scenario':
       if (command.name === 'maximize-native-behind-shell') return runMaximizeNativeBehindShellScenario(harness)
       if (command.name === 'maximize-file-browser-then-foot') return runMaximizeFileBrowserThenFootScenario(harness)
-      return runNativeCloseDecorationClearsScenario(harness)
+      if (command.name === 'native-close-decoration-clears') return runNativeCloseDecorationClearsScenario(harness)
+      return runDragFileBrowserNoReloadScenario(harness)
   }
 }
 

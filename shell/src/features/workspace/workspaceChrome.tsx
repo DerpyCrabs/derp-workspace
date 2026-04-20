@@ -524,10 +524,12 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function WorkspaceGroupFrame(props: { groupId: string }) {
     const group = createMemo(() => options.workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
-    const shellHostedMemberWindows = createMemo(() => {
+    const shellHostedMemberWindowIds = createMemo(() => {
       const g = group()
-      if (!g) return [] as readonly DerpWindow[]
-      return g.members.filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
+      if (!g) return [] as readonly number[]
+      return g.members
+        .filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
+        .map((w) => w.window_id)
     })
     const splitLayout = createMemo(() => {
       const currentGroup = group()
@@ -727,9 +729,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
         >
           <Show when={!splitLayout() && visibleWindowId() !== null}>
-            <For each={shellHostedMemberWindows()}>
-              {(member) => {
-                const visible = () => member.window_id === visibleWindowId()!
+            <For each={shellHostedMemberWindowIds()}>
+              {(memberWindowId) => {
+                const visible = () => memberWindowId === visibleWindowId()!
                 return (
                   <div
                     class={
@@ -738,7 +740,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                         : 'pointer-events-none hidden h-full min-h-0 min-w-0 overflow-auto'
                     }
                   >
-                    {options.renderShellWindowContent(member.window_id)}
+                    {options.renderShellWindowContent(memberWindowId)}
                   </div>
                 )
               }}

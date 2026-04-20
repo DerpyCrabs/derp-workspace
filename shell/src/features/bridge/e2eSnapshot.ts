@@ -237,6 +237,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
   const dialogConfirmEl = queryWithin(root, '[data-file-browser-dialog-confirm]')
   return {
     list_state: fileBrowserListStateEl?.getAttribute('data-file-browser-list-state') ?? null,
+    mount_seq: Number(fileBrowserListStateEl?.getAttribute('data-file-browser-mount-seq') ?? 0),
+    load_count: Number(fileBrowserListStateEl?.getAttribute('data-file-browser-load-count') ?? 0),
     active_path:
       fileBrowserActivePathEl?.getAttribute('data-file-browser-active-path') ??
       fileBrowserActivePathEl?.textContent?.trim() ??

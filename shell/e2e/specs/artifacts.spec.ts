@@ -140,6 +140,59 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('harness-native-close-decoration-clears-result.json', result)
   })
 
+  test('debug harness verifies dragging file browser does not reload content', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      'shell/e2e/harness.mjs',
+      'scenario',
+      'drag-file-browser-no-reload',
+    ])
+    const result = JSON.parse(stdout) as {
+      ok?: boolean
+      results?: Array<{
+        ok?: boolean
+        remounted?: boolean
+        reloaded?: boolean
+        beforeMountSeq?: number | null
+        afterMountSeq?: number | null
+        beforeLoadCount?: number | null
+        afterLoadCount?: number | null
+        summary?: string
+        before?: {
+          compositor?: string
+          shell?: string
+          html?: string
+          screenshot?: { path?: string; manifest?: string }
+        }
+        after?: {
+          compositor?: string
+          shell?: string
+          html?: string
+          screenshot?: { path?: string; manifest?: string }
+        }
+      }>
+    }
+    assert(result.ok, 'drag file browser harness should return ok')
+    const scenario = result.results?.[0]
+    assert(scenario?.ok, 'dragging a file browser should not remount or reload it')
+    assert(!scenario.remounted, 'file browser should stay mounted while its window moves')
+    assert(!scenario.reloaded, 'file browser should not reload its directory while its window moves')
+    assert(
+      scenario.beforeMountSeq === scenario.afterMountSeq,
+      'file browser mount sequence should stay stable during drag',
+    )
+    assert(
+      scenario.beforeLoadCount === scenario.afterLoadCount,
+      'file browser load count should stay stable during drag',
+    )
+    assert(scenario.summary, 'drag file browser harness missing summary artifact')
+    assert(scenario.before?.html, 'drag file browser harness missing before html artifact')
+    assert(scenario.after?.html, 'drag file browser harness missing after html artifact')
+    await access(scenario.summary)
+    await access(scenario.before.html)
+    await access(scenario.after.html)
+    await writeJsonArtifact('harness-drag-file-browser-no-reload-result.json', result)
+  })
+
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {
     state.crashProbe = await ensureNativeWindow(base, state, 'crashProbe', {
       title: CRASH_NATIVE_TITLE,
