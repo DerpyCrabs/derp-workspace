@@ -1,6 +1,8 @@
 import type { Accessor } from 'solid-js'
 import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
+import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
+import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import type { WorkspaceState } from './workspaceState'
 import {
   cycleWorkspaceTab,
@@ -24,7 +26,7 @@ type WorkspaceActionsOptions = {
   activateWindowViaShell: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   moveWindowUnderPointer: (windowId: number, clientX: number, clientY: number) => void
-  shellWireSend: (op: 'minimize' | 'close' | 'workspace_mutation', arg?: number | string) => boolean
+  shellWireSend: ShellCompositorWireSend
 }
 
 export function createWorkspaceActions(options: WorkspaceActionsOptions) {
@@ -174,10 +176,44 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   const exitSplitGroupWindow = (windowId: number) => {
     const groupId = options.groupIdForWindow(windowId)
     if (!groupId) return false
-    return sendWorkspaceMutation({
+    const group = options.groupForWindow(windowId)
+    const split = getWorkspaceGroupSplit(options.workspaceState(), groupId)
+    const leftWindow = group?.splitLeftWindow ?? null
+    const rightWindow = group?.visibleWindow ?? null
+    const restoreRect =
+      split?.leftWindowId === windowId && leftWindow && rightWindow
+        ? {
+            x: Math.min(leftWindow.x, rightWindow.x),
+            y: Math.min(leftWindow.y, rightWindow.y),
+            width:
+              Math.max(leftWindow.x + leftWindow.width, rightWindow.x + rightWindow.width) -
+              Math.min(leftWindow.x, rightWindow.x),
+            height:
+              Math.max(leftWindow.y + leftWindow.height, rightWindow.y + rightWindow.height) -
+              Math.min(leftWindow.y, rightWindow.y),
+          }
+        : null
+    const ok = sendWorkspaceMutation({
       type: 'exit_split',
       groupId,
     })
+    if (!ok || !restoreRect) return ok
+    sendWorkspaceMutation({
+      type: 'select_tab',
+      groupId,
+      windowId,
+    })
+    options.shellWireSend(
+      'set_geometry',
+      windowId,
+      restoreRect.x,
+      restoreRect.y,
+      Math.max(1, restoreRect.width),
+      Math.max(1, restoreRect.height),
+      SHELL_LAYOUT_FLOATING,
+    )
+    options.activateWindowViaShell(windowId)
+    return ok
   }
 
   const setSplitGroupFraction = (groupId: string, fraction: number) => {

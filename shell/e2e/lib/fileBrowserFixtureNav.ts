@@ -189,9 +189,13 @@ export async function navigateToFixtureRoot(
   let relativeSegments = path.posix.relative(walkPath, fixtures.root_path).split('/').filter(Boolean)
   for (let guard = 0; guard < 32 && relativeSegments[0] === '..'; guard += 1) {
     const shellUp = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    const upAction = fileBrowserAction(shellUp, 'up', opened.windowId)
-    assert(upAction?.rect, 'file browser up action')
-    await clickRect(base, assertRectMinSize('file browser up', upAction.rect, 28, 20))
+    const currentPath = fileBrowserSnapshot(shellUp, opened.windowId)?.active_path ?? ''
+    const parentPath = path.posix.dirname(currentPath)
+    const parentCrumb = fileBrowserSnapshot(shellUp, opened.windowId)?.breadcrumbs.find(
+      (crumb) => crumb.path === parentPath,
+    )
+    assert(parentCrumb?.rect, 'file browser parent breadcrumb')
+    await clickRect(base, assertRectMinSize('file browser parent breadcrumb', parentCrumb.rect, 24, 18))
     const settledUp = await waitFor(
       'file browser path after up',
       async () => {

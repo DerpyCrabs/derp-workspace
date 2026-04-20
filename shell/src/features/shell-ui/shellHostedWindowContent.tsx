@@ -37,6 +37,16 @@ export type ShellHostedWindowContentEnv = {
   onOpenTextFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenPdfFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenPathExternally: (path: string) => void
+  onOpenPathInTab: (
+    sourceWindowId: number,
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ) => void
+  onOpenPathInSplitView: (
+    sourceWindowId: number,
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ) => void
   reportShellActionIssue: (message: string) => void
   copyDebugHudSnapshot: () => void
   shellBuildLabel: string
@@ -185,6 +195,8 @@ export function renderShellHostedWindowContent(
               env.onOpenPathExternally(path)
             }}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
+            onOpenInTab={(path, context) => env.onOpenPathInTab(id, path, context)}
+            onOpenInSplitView={(path, context) => env.onOpenPathInSplitView(id, path, context)}
           />
         )}
       </Show>

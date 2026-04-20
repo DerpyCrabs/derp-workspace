@@ -233,6 +233,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
     rect: snapshotRect(actionEl, origin),
   }))
+  const breadcrumbBarEl = queryWithin(root, '[data-file-browser-breadcrumb-bar]')
+  const breadcrumbEllipsisEl = queryWithin(root, '[data-file-browser-breadcrumb-ellipsis]')
   const dialogInputEl = queryWithin(root, '[data-file-browser-dialog-input]')
   const dialogConfirmEl = queryWithin(root, '[data-file-browser-dialog-confirm]')
   return {
@@ -245,6 +247,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
       null,
     rows: fileBrowserRows,
     breadcrumbs: fileBrowserBreadcrumbs,
+    breadcrumb_bar_rect: snapshotRect(breadcrumbBarEl, origin),
+    breadcrumb_ellipsis_rect: snapshotRect(breadcrumbEllipsisEl, origin),
     viewer_editor_title:
       fileBrowserViewerTitleEl?.getAttribute('data-file-browser-document-title') ??
       fileBrowserViewerTitleEl?.textContent?.trim() ??
@@ -315,6 +319,10 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     maximize: snapshotRect(cache.queryAttr('data-shell-maximize-trigger', window.window_id), args.origin),
     close: snapshotRect(cache.queryAttr('data-shell-close-trigger', window.window_id), args.origin),
     snap_picker: snapshotRect(cache.queryAttr('data-shell-snap-picker-trigger', window.window_id), args.origin),
+    resize_left: snapshotRect(cache.queryAttr('data-shell-resize-left', window.window_id), args.origin),
+    resize_right: snapshotRect(cache.queryAttr('data-shell-resize-right', window.window_id), args.origin),
+    resize_bottom_left: snapshotRect(cache.queryAttr('data-shell-resize-bottom-left', window.window_id), args.origin),
+    resize_bottom_right: snapshotRect(cache.queryAttr('data-shell-resize-bottom-right', window.window_id), args.origin),
   }))
   const tabGroups = args.workspaceGroups.map((group) => ({
     group_id: group.id,
@@ -485,7 +493,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
 
   const fileBrowserContextMenu = cache.queryAll('[data-file-browser-context-action]').map((el) => ({
     id: el.getAttribute('data-file-browser-context-action') ?? '',
-    label: (el.querySelector('span')?.textContent ?? el.textContent ?? '').trim(),
+    label: (
+      el.querySelector('[data-file-browser-context-label]')?.textContent ??
+      el.textContent ??
+      ''
+    ).trim(),
     rect: snapshotRect(el, args.origin),
   }))
 

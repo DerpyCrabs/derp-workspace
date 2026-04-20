@@ -77,32 +77,40 @@ export function FileBrowserContextMenu(props: {
             <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
               <For each={props.items()}>
                 {(item, idx) => (
-                  <ContextMenuItem
-                    title={item.title}
-                    disabled={!!item.disabled}
-                    classList={{
-                      'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
-                    }}
-                    data-file-browser-context-idx={idx()}
-                    {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                    }}
-                    onClick={() => {
-                      if (item.disabled) return
-                      item.action()
-                      props.onRequestClose()
-                    }}
+                  <Show
+                    when={!item.separator}
+                    fallback={<div class="my-1 h-px bg-(--shell-overlay-border)" role="separator" />}
                   >
-                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
-                    <Show when={item.badge} keyed>
-                      {(badge) => (
-                        <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
-                          {badge}
-                        </span>
-                      )}
-                    </Show>
-                  </ContextMenuItem>
+                    <ContextMenuItem
+                      title={item.title}
+                      disabled={!!item.disabled}
+                      classList={{
+                        'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                      }}
+                      data-file-browser-context-idx={idx()}
+                      {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                      }}
+                      onClick={() => {
+                        if (item.disabled) return
+                        item.action()
+                        props.onRequestClose()
+                      }}
+                    >
+                      <Show when={item.icon} keyed>
+                        {(icon) => <span class="shrink-0 text-(--shell-text-dim)">{icon}</span>}
+                      </Show>
+                      <span data-file-browser-context-label class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
+                      <Show when={item.badge} keyed>
+                        {(badge) => (
+                          <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
+                            {badge}
+                          </span>
+                        )}
+                      </Show>
+                    </ContextMenuItem>
+                  </Show>
                 )}
               </For>
             </div>

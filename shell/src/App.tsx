@@ -88,6 +88,10 @@ import {
 import { createWorkspaceSelectors } from '@/features/workspace/workspaceSelectors'
 import { createWorkspaceChrome } from '@/features/workspace/workspaceChrome'
 import { createWorkspaceLayoutBridge } from '@/features/workspace/workspaceLayoutBridge'
+import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
+import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
+import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
+import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 
 declare global {
   interface Window {
@@ -808,6 +812,90 @@ function App() {
     shellWireSend,
   })
 
+  function openFileBrowserEntryBackedWindowId(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ): number | null {
+    if (context.isDirectory) return backedShellWindowActions.openFileBrowserWindowWithId(path)
+    const detail = { path, directory: context.directory, showHidden: context.showHidden }
+    if (isImageFilePath(path)) return backedShellWindowActions.openImageViewerWindowWithId(detail)
+    if (isVideoFilePath(path)) return backedShellWindowActions.openVideoViewerWindowWithId(detail)
+    if (isTextEditorFilePath(path)) return backedShellWindowActions.openTextEditorWindowWithId(detail)
+    if (isPdfFilePath(path)) return backedShellWindowActions.openPdfViewerWindowWithId(detail)
+    return null
+  }
+
+  function placeOpenedWindowInSourceGroup(
+    sourceWindowId: number,
+    openedWindowId: number,
+    mode: 'tab' | 'split',
+  ) {
+    const targetGroupId = workspaceGroupIdForWindow(sourceWindowId)
+    if (!targetGroupId) return
+    let mergeFrames = 0
+    const waitForOpenedGroup = () => {
+      mergeFrames += 1
+      const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
+      const targetGroup = workspaceState().groups.find((group) => group.id === targetGroupId)
+      if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
+        if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
+        return
+      }
+      if (openedGroupId !== targetGroupId) {
+        shellWireSend(
+          'workspace_mutation',
+          JSON.stringify({
+            type: 'move_window_to_group',
+            windowId: openedWindowId,
+            targetGroupId,
+            insertIndex: targetGroup.windowIds.length,
+          }),
+        )
+      }
+      let selectFrames = 0
+      const waitForMergedGroup = () => {
+        selectFrames += 1
+        const group = workspaceState().groups.find((entry) => entry.id === targetGroupId)
+        if (!group?.windowIds.includes(openedWindowId)) {
+          if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
+          return
+        }
+        if (mode === 'tab') {
+          shellWireSend(
+            'workspace_mutation',
+            JSON.stringify({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId }),
+          )
+          return
+        }
+        shellWireSend(
+          'workspace_mutation',
+          JSON.stringify({
+            type: 'enter_split',
+            groupId: targetGroupId,
+            leftWindowId: sourceWindowId,
+            leftPaneFraction: 0.5,
+          }),
+        )
+      }
+      waitForMergedGroup()
+    }
+    waitForOpenedGroup()
+  }
+
+  function openFileBrowserEntryInWorkspaceGroup(
+    sourceWindowId: number,
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    mode: 'tab' | 'split',
+  ) {
+    const openedWindowId = openFileBrowserEntryBackedWindowId(path, context)
+    if (openedWindowId === null) {
+      void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
+      return
+    }
+    placeOpenedWindowInSourceGroup(sourceWindowId, openedWindowId, mode)
+  }
+
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
     return renderShellHostedWindowContent(windowId, {
       allWindowsMap,
@@ -820,6 +908,12 @@ function App() {
       onOpenPdfFile: (detail) => backedShellWindowActions.openPdfViewerWindow(detail),
       onOpenPathExternally: (path) => {
         void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
+      },
+      onOpenPathInTab: (sourceWindowId, path, context) => {
+        openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'tab')
+      },
+      onOpenPathInSplitView: (sourceWindowId, path, context) => {
+        openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'split')
       },
       reportShellActionIssue,
       copyDebugHudSnapshot,

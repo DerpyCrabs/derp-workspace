@@ -2,22 +2,18 @@ import type { Accessor } from 'solid-js'
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import {
-  copyFileBrowserFile,
   listFileBrowserDirectory,
   listFileBrowserRoots,
   mkdirFileBrowserEntry,
   removeFileBrowserPath,
   renameFileBrowserPath,
-  statFileBrowserPath,
   touchFileBrowserFile,
   type FileBrowserEntry,
   type FileBrowserRoot,
 } from './fileBrowserBridge'
 import {
-  fileBrowserFsClipClear,
   fileBrowserFsClipCopy,
   fileBrowserFsClipCut,
-  fileBrowserFsClipState,
 } from './fileBrowserFsClipboard'
 import { loadFileBrowserPrefs, setFileBrowserShowHidden } from './fileBrowserPrefs'
 import {
@@ -37,6 +33,35 @@ import {
 } from '@/features/shell-ui/shellWindowState'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
 import { FileBrowserContextMenu } from './FileBrowserContextMenu'
+import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
+import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
+import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
+import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
+import Archive from 'lucide-solid/icons/archive'
+import Columns2 from 'lucide-solid/icons/columns-2'
+import ArrowLeft from 'lucide-solid/icons/arrow-left'
+import Clipboard from 'lucide-solid/icons/clipboard'
+import Copy from 'lucide-solid/icons/copy'
+import ExternalLink from 'lucide-solid/icons/external-link'
+import Eye from 'lucide-solid/icons/eye'
+import EyeOff from 'lucide-solid/icons/eye-off'
+import File from 'lucide-solid/icons/file'
+import FilePlus from 'lucide-solid/icons/file-plus'
+import FileText from 'lucide-solid/icons/file-text'
+import Folder from 'lucide-solid/icons/folder'
+import FolderOpen from 'lucide-solid/icons/folder-open'
+import FolderPlus from 'lucide-solid/icons/folder-plus'
+import HardDrive from 'lucide-solid/icons/hard-drive'
+import Home from 'lucide-solid/icons/home'
+import Image from 'lucide-solid/icons/image'
+import MoreHorizontal from 'lucide-solid/icons/more-horizontal'
+import Music from 'lucide-solid/icons/music'
+import Pencil from 'lucide-solid/icons/pencil'
+import RefreshCw from 'lucide-solid/icons/refresh-cw'
+import Scissors from 'lucide-solid/icons/scissors'
+import Trash2 from 'lucide-solid/icons/trash-2'
+import Video from 'lucide-solid/icons/video'
+import Workflow from 'lucide-solid/icons/workflow'
 
 type FileBrowserWindowProps = {
   windowId: number
@@ -47,6 +72,14 @@ type FileBrowserWindowProps = {
     context: { directory: string; showHidden: boolean },
   ) => void
   onOpenInNewWindow?: (path: string) => void
+  onOpenInTab?: (
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ) => void
+  onOpenInSplitView?: (
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ) => void
   onOpenPathExternally: (path: string) => void
 }
 
@@ -54,6 +87,10 @@ type Breadcrumb = {
   path: string
   label: string
 }
+
+type BreadcrumbRow =
+  | { kind: 'crumb'; crumb: Breadcrumb; index: number; current: boolean }
+  | { kind: 'ellipsis'; hidden: Breadcrumb[] }
 
 const dateFormatter = new Intl.DateTimeFormat([], {
   month: 'short',
@@ -91,6 +128,36 @@ function formatEntryModified(modifiedMs: number | null): string {
 
 function normalizeDisplayName(entry: FileBrowserEntry): string {
   return entry.name || entry.path
+}
+
+function fileBrowserEntryCanOpenInShell(entry: FileBrowserEntry): boolean {
+  if (fileBrowserEntryIsDirectory(entry)) return true
+  return (
+    isImageFilePath(entry.path) ||
+    isVideoFilePath(entry.path) ||
+    isTextEditorFilePath(entry.path) ||
+    isPdfFilePath(entry.path)
+  )
+}
+
+function fileBrowserIconForEntry(entry: FileBrowserEntry) {
+  if (fileBrowserEntryIsDirectory(entry)) return <Folder class="h-4 w-4" stroke-width={2} />
+  const name = normalizeDisplayName(entry).toLowerCase()
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name)) return <Image class="h-4 w-4" stroke-width={2} />
+  if (/\.(mp4|webm|mov|mkv|avi|m4v)$/.test(name)) return <Video class="h-4 w-4" stroke-width={2} />
+  if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/.test(name)) return <Music class="h-4 w-4" stroke-width={2} />
+  if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(name)) return <Archive class="h-4 w-4" stroke-width={2} />
+  if (/\.(txt|md|json|toml|yaml|yml|rs|ts|tsx|js|jsx|css|html|pdf)$/.test(name)) return <FileText class="h-4 w-4" stroke-width={2} />
+  return <File class="h-4 w-4" stroke-width={2} />
+}
+
+function menuSeparator(): ShellContextMenuItem {
+  return { separator: true, label: '', action: () => undefined }
+}
+
+function tinyIcon(icon: typeof Folder) {
+  const Icon = icon
+  return <Icon class="h-4 w-4" stroke-width={2} />
 }
 
 function rootLabelForPath(path: string, roots: readonly FileBrowserRoot[]): string | null {
@@ -144,18 +211,6 @@ function posixBasename(p: string): string {
   return norm.slice(i + 1) || norm
 }
 
-function pickCopyDestName(sourcePath: string, existingNames: ReadonlySet<string>): string {
-  const base = posixBasename(sourcePath)
-  const dot = base.lastIndexOf('.')
-  const stem = dot > 0 ? base.slice(0, dot) : base
-  const ext = dot > 0 ? base.slice(dot) : ''
-  for (let n = 0; n < 600; n += 1) {
-    const candidate = n === 0 ? `${stem} (copy)${ext}` : `${stem} (copy ${n + 1})${ext}`
-    if (!existingNames.has(candidate)) return candidate
-  }
-  return `${stem} (copy ${Date.now()})${ext}`
-}
-
 type FileBrowserUiDialog =
   | { kind: 'closed' }
   | { kind: 'mkdir'; draft: string }
@@ -205,24 +260,26 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const [dropTargetPath, setDropTargetPath] = createSignal<string | null>(null)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
+  const breadcrumbRows = createMemo((): BreadcrumbRow[] => {
+    const list = breadcrumbs()
+    if (list.length <= 3) {
+      return list.map((crumb, index) => ({
+        kind: 'crumb',
+        crumb,
+        index,
+        current: index === list.length - 1,
+      }))
+    }
+    return [
+      { kind: 'crumb', crumb: list[0], index: 0, current: false },
+      { kind: 'ellipsis', hidden: list.slice(1, -2) },
+      { kind: 'crumb', crumb: list[list.length - 2], index: list.length - 2, current: false },
+      { kind: 'crumb', crumb: list[list.length - 1], index: list.length - 1, current: true },
+    ]
+  })
   const selectedEntry = createMemo(
     () => state.entries.find((entry) => entry.path === state.selectedPath) ?? null,
   )
-  const canPasteHere = createMemo(() => {
-    const c = fileBrowserFsClipState()
-    const ap = state.activePath
-    if (!ap || c.mode === 'none' || !c.path) return false
-    if (c.mode === 'cut') {
-      const destDir = ap.replace(/\/+$/, '') || '/'
-      const srcDir = posixDirname(c.path).replace(/\/+$/, '') || '/'
-      const destPath = ap === '/' ? `/${posixBasename(c.path)}` : `${ap.replace(/\/+$/, '')}/${posixBasename(c.path)}`
-      if (destPath === c.path) return false
-      if (destDir === srcDir) return destPath !== c.path
-      return true
-    }
-    return true
-  })
-
   async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
     const base = shellHttpBase()
     const runId = ++requestSeq
@@ -428,10 +485,17 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     const writable = entry.writable === true
     const isDir = fileBrowserEntryIsDirectory(entry)
     const isFile = !isDir && entry.kind === 'file'
+    const canOpenInWorkspace = fileBrowserEntryCanOpenInShell(entry)
+    const openContext = () => ({
+      directory: state.activePath ?? '',
+      showHidden: state.showHidden,
+      isDirectory: isDir,
+    })
     const items: ShellContextMenuItem[] = [
       {
         actionId: 'open',
         label: 'Open',
+        icon: tinyIcon(isDir ? FolderOpen : File),
         action: () => {
           openEntry(entry)
         },
@@ -442,8 +506,31 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       items.push({
         actionId: 'open-new',
         label: 'Open in new window',
+        icon: tinyIcon(FolderPlus),
         action: () => {
           openNew(entry.path)
+        },
+      })
+    }
+    if (canOpenInWorkspace && props.onOpenInTab) {
+      const openTab = props.onOpenInTab
+      items.push({
+        actionId: 'open-tab',
+        label: 'Open in tab',
+        icon: tinyIcon(Workflow),
+        action: () => {
+          openTab(entry.path, openContext())
+        },
+      })
+    }
+    if (canOpenInWorkspace && props.onOpenInSplitView) {
+      const openSplit = props.onOpenInSplitView
+      items.push({
+        actionId: 'open-split-view',
+        label: 'Open in split view',
+        icon: tinyIcon(Columns2),
+        action: () => {
+          openSplit(entry.path, openContext())
         },
       })
     }
@@ -451,16 +538,19 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       items.push({
         actionId: 'open-external',
         label: 'Open with default application',
+        icon: tinyIcon(ExternalLink),
         action: () => {
           props.onOpenPathExternally(entry.path)
         },
       })
     }
     if (writable) {
+      items.push(menuSeparator())
       if (isFile) {
         items.push({
           actionId: 'fs-cut',
           label: 'Cut',
+          icon: tinyIcon(Scissors),
           action: () => {
             fileBrowserFsClipCut(entry.path)
           },
@@ -468,6 +558,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         items.push({
           actionId: 'fs-copy',
           label: 'Copy',
+          icon: tinyIcon(Copy),
           action: () => {
             fileBrowserFsClipCopy(entry.path)
           },
@@ -476,6 +567,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         items.push({
           actionId: 'fs-cut-dir',
           label: 'Cut',
+          icon: tinyIcon(Scissors),
           action: () => {
             fileBrowserFsClipCut(entry.path)
           },
@@ -484,6 +576,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       items.push({
         actionId: 'rename',
         label: 'Rename…',
+        icon: tinyIcon(Pencil),
         action: () => {
           setDialog({ kind: 'rename', path: entry.path, draft: posixBasename(entry.path) })
         },
@@ -491,6 +584,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       items.push({
         actionId: 'delete',
         label: 'Delete…',
+        icon: tinyIcon(Trash2),
         action: () => {
           setDialog({
             kind: 'delete',
@@ -500,9 +594,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       })
     }
+    items.push(menuSeparator())
     items.push({
       actionId: 'copy-path',
       label: 'Copy path',
+      icon: tinyIcon(Clipboard),
       disabled: !clip,
       title: clip ? undefined : 'Clipboard unavailable',
       action: () => {
@@ -518,6 +614,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       {
         actionId: 'open',
         label: 'Open',
+        icon: tinyIcon(FolderOpen),
         action: () => {
           setState('selectedPath', null)
           void loadDirectory(root.path)
@@ -529,14 +626,17 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       items.push({
         actionId: 'open-new',
         label: 'Open in new window',
+        icon: tinyIcon(FolderPlus),
         action: () => {
           openNew(root.path)
         },
       })
     }
+    items.push(menuSeparator())
     items.push({
       actionId: 'copy-path',
       label: 'Copy path',
+      icon: tinyIcon(Clipboard),
       disabled: !clip,
       title: clip ? undefined : 'Clipboard unavailable',
       action: () => {
@@ -587,34 +687,6 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         await removeFileBrowserPath(d.path, base)
       }
       closeFileDialog()
-      await loadDirectory(state.activePath, true)
-    } catch (e) {
-      setOpError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  async function runPasteFromClip() {
-    const base = shellHttpBase()
-    const ap = state.activePath
-    const c = fileBrowserFsClipState()
-    if (!ap || c.mode === 'none' || !c.path) return
-    setOpError(null)
-    try {
-      const baseName = posixBasename(c.path)
-      const destPath = ap === '/' ? `/${baseName}` : `${ap.replace(/\/+$/, '')}/${baseName}`
-      if (c.mode === 'cut') {
-        if (destPath === c.path) return
-        await renameFileBrowserPath(c.path, destPath, base)
-        fileBrowserFsClipClear()
-      } else {
-        const st = await statFileBrowserPath(c.path, base)
-        if (st.entry.kind !== 'file') {
-          throw new Error('Copying folders is not supported yet.')
-        }
-        const names = new Set(state.entries.map((e) => e.name))
-        const destName = pickCopyDestName(c.path, names)
-        await copyFileBrowserFile(c.path, ap, destName, base)
-      }
       await loadDirectory(state.activePath, true)
     } catch (e) {
       setOpError(e instanceof Error ? e.message : String(e))
@@ -852,15 +924,12 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       }}
     >
       <aside class="flex w-56 shrink-0 flex-col border-r border-(--shell-border) bg-(--shell-surface-panel)">
-        <div class="border-b border-(--shell-border) px-3 py-2 text-xs font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
-          Places
-        </div>
-        <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <div class="min-h-0 flex-1 overflow-y-auto p-2">
           <div class="flex flex-col gap-1">
             {state.roots.map((root) => (
               <button
                 type="button"
-                class="flex w-full items-center justify-between rounded px-2 py-2 text-left text-sm hover:bg-(--shell-control-muted-hover)"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-(--shell-control-muted-hover)"
                 classList={{
                   'bg-(--shell-accent-soft) text-(--shell-accent-soft-text)':
                     pathWithinRoot(state.activePath, root.path),
@@ -876,97 +945,156 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                   setCtxMenu({ x: e.clientX, y: e.clientY, items: placeContextItems(root) })
                 }}
               >
-                <span class="min-w-0 truncate">{root.label}</span>
-                <span class="shrink-0 text-[11px] uppercase text-(--shell-text-dim)">{root.kind}</span>
+                <span class="shrink-0 text-(--shell-text-dim)">
+                  <HardDrive class="h-4 w-4" stroke-width={2} />
+                </span>
+                <span class="min-w-0 flex-1 truncate">{root.label}</span>
+                <span class="shrink-0 rounded border border-(--shell-border) px-1.5 py-0.5 text-[10px] uppercase text-(--shell-text-dim)">{root.kind}</span>
               </button>
             ))}
           </div>
         </div>
       </aside>
       <section class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div class="flex items-center gap-2 border-b border-(--shell-border) px-3 py-2">
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
-            data-file-browser-primary-action="up"
-            aria-label="Go to parent folder"
-            disabled={!state.parentPath}
-            onClick={() => state.parentPath && void loadDirectory(state.parentPath)}
-          >
-            Up
-          </button>
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
-            data-file-browser-primary-action="new-folder"
-            aria-label="New folder"
-            disabled={!state.activePath}
-            onClick={() => setDialog({ kind: 'mkdir', draft: '' })}
-          >
-            New Folder
-          </button>
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
-            data-file-browser-primary-action="new-file"
-            aria-label="New file"
-            disabled={!state.activePath}
-            onClick={() => setDialog({ kind: 'touch', draft: '' })}
-          >
-            New File
-          </button>
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
-            data-file-browser-primary-action="paste"
-            aria-label="Paste"
-            disabled={!canPasteHere()}
-            onClick={() => void runPasteFromClip()}
-          >
-            Paste
-          </button>
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover)"
-            data-file-browser-primary-action="refresh"
-            aria-label="Refresh file browser"
-            onClick={() => void loadDirectory(state.activePath, true)}
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover)"
-            data-file-browser-primary-action={state.showHidden ? 'hide-hidden' : 'show-hidden'}
-            aria-label={state.showHidden ? 'Hide hidden files' : 'Show hidden files'}
-            onClick={toggleHidden}
-          >
-            {state.showHidden ? 'Hide Hidden' : 'Show Hidden'}
-          </button>
-          <div class="min-w-0 flex-1" data-file-browser-active-path={state.activePath ?? ''}>
-            <div class="flex min-w-0 flex-wrap items-center gap-1">
-              {breadcrumbs().map((crumb, index) => (
-                <>
-                  {index > 0 ? <span class="text-(--shell-text-dim)">/</span> : null}
-                  <button
-                    type="button"
-                    class="max-w-full truncate rounded px-1 py-0.5 text-sm hover:bg-(--shell-control-muted-hover)"
-                    data-file-browser-breadcrumb
-                    data-file-browser-path={crumb.path}
-                    data-file-browser-label={crumb.label}
-                    onClick={() => void loadDirectory(crumb.path)}
-                  >
-                    {crumb.label}
-                  </button>
-                </>
+        <div class="flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b border-(--shell-border) bg-(--shell-surface-panel) px-3 py-2">
+          <div class="min-w-0 flex-1 basis-0" data-file-browser-active-path={state.activePath ?? ''}>
+            <div class="flex h-8 min-h-8 min-w-0 flex-nowrap items-center gap-1 overflow-hidden rounded-md border border-(--shell-border) bg-(--shell-surface-inset) px-1" data-file-browser-breadcrumb-bar>
+              {breadcrumbRows().map((row, rowIndex) => (
+                <Show
+                  when={row.kind === 'crumb' ? row : false}
+                  fallback={
+                    <button
+                      type="button"
+                      class="inline-flex h-6 min-h-6 shrink-0 items-center justify-center rounded-md px-2 text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+                      aria-label="Show hidden path segments"
+                      data-file-browser-breadcrumb-ellipsis
+                      data-testid="breadcrumb-ellipsis"
+                      onClick={(e) => {
+                        const r = row as BreadcrumbRow
+                        if (r.kind !== 'ellipsis') return
+                        setCtxMenu({
+                          x: e.currentTarget.getBoundingClientRect().left,
+                          y: e.currentTarget.getBoundingClientRect().bottom + 2,
+                          items: r.hidden.map((crumb) => ({
+                            actionId: 'breadcrumb-open',
+                            label: crumb.label,
+                            icon: tinyIcon(Folder),
+                            action: () => void loadDirectory(crumb.path),
+                          })),
+                        })
+                      }}
+                    >
+                      <MoreHorizontal class="h-4 w-4" stroke-width={2} />
+                    </button>
+                  }
+                >
+                  {(crumbRow) => (
+                    <>
+                      {rowIndex > 0 ? <ArrowLeft class="h-3.5 w-3.5 rotate-180 shrink-0 text-(--shell-text-dim)" stroke-width={2} /> : null}
+                      <button
+                        type="button"
+                        class="inline-flex h-6 min-h-6 min-w-0 max-w-48 shrink items-center gap-1.5 truncate rounded-md px-2 text-sm font-medium hover:bg-(--shell-control-muted-hover)"
+                        classList={{
+                          'bg-(--shell-accent) text-(--shell-accent-text) hover:bg-(--shell-accent)': crumbRow().current,
+                        }}
+                        data-file-browser-breadcrumb
+                        data-file-browser-path={crumbRow().crumb.path}
+                        data-file-browser-label={crumbRow().crumb.label}
+                        onClick={() => void loadDirectory(crumbRow().crumb.path)}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setCtxMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            items: [
+                              {
+                                actionId: 'open',
+                                label: 'Open',
+                                icon: tinyIcon(FolderOpen),
+                                action: () => void loadDirectory(crumbRow().crumb.path),
+                              },
+                              ...(props.onOpenInNewWindow
+                                ? [
+                                    {
+                                      actionId: 'open-new',
+                                      label: 'Open in new window',
+                                      icon: tinyIcon(FolderPlus),
+                                      action: () => props.onOpenInNewWindow?.(crumbRow().crumb.path),
+                                    } satisfies ShellContextMenuItem,
+                                  ]
+                                : []),
+                              menuSeparator(),
+                              {
+                                actionId: 'copy-path',
+                                label: 'Copy path',
+                                icon: tinyIcon(Clipboard),
+                                disabled: !clipboardCanWritePath(),
+                                title: clipboardCanWritePath() ? undefined : 'Clipboard unavailable',
+                                action: () => {
+                                  if (clipboardCanWritePath()) void navigator.clipboard.writeText(crumbRow().crumb.path)
+                                },
+                              },
+                            ],
+                          })
+                        }}
+                      >
+                        {crumbRow().index === 0 ? <Home class="h-4 w-4 shrink-0" stroke-width={2} /> : null}
+                        <span class="min-w-0 truncate">{crumbRow().crumb.label}</span>
+                      </button>
+                    </>
+                  )}
+                </Show>
               ))}
             </div>
           </div>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="new-folder"
+            aria-label="New folder"
+            title="New folder"
+            disabled={!state.activePath}
+            onClick={() => setDialog({ kind: 'mkdir', draft: '' })}
+          >
+            <FolderPlus class="h-4 w-4" stroke-width={2} />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="new-file"
+            aria-label="New file"
+            title="New file"
+            disabled={!state.activePath}
+            onClick={() => setDialog({ kind: 'touch', draft: '' })}
+          >
+            <FilePlus class="h-4 w-4" stroke-width={2} />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+            data-file-browser-primary-action="refresh"
+            aria-label="Refresh file browser"
+            title="Refresh"
+            onClick={() => void loadDirectory(state.activePath, true)}
+          >
+            <RefreshCw class="h-4 w-4" stroke-width={2} />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+            data-file-browser-primary-action={state.showHidden ? 'hide-hidden' : 'show-hidden'}
+            aria-label={state.showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            title={state.showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            onClick={toggleHidden}
+          >
+            {state.showHidden ? <EyeOff class="h-4 w-4" stroke-width={2} /> : <Eye class="h-4 w-4" stroke-width={2} />}
+          </button>
         </div>
         <Show when={opError()}>
           <div class="border-b border-(--shell-border) px-3 py-2 text-xs text-red-300">{opError()}</div>
         </Show>
-        <div class="grid grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 border-b border-(--shell-border) px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
+        <div class="grid grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 border-b border-(--shell-border) bg-(--shell-surface-panel) px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
           <div>Name</div>
           <div>Kind</div>
           <div>Modified</div>
@@ -999,7 +1127,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                 const selected = () => state.selectedPath === entry.path
                 return (
                   <div
-                    class="grid cursor-default grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover)"
+                    class="group grid cursor-default grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover)"
                     classList={{
                       'bg-(--shell-accent-soft) text-(--shell-accent-soft-text)': selected(),
                       'outline outline-2 outline-(--shell-accent)': dropTargetPath() === entry.path,
@@ -1043,7 +1171,17 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                       setCtxMenu({ x: e.clientX, y: e.clientY, items: entryContextItems(entry) })
                     }}
                   >
-                    <div class="min-w-0 truncate font-medium">{normalizeDisplayName(entry)}</div>
+                    <div class="flex min-w-0 items-center gap-2 truncate font-medium">
+                      <span
+                        class="shrink-0 text-(--shell-text-dim)"
+                        classList={{
+                          'text-(--shell-accent-soft-text)': selected(),
+                        }}
+                      >
+                        {fileBrowserIconForEntry(entry)}
+                      </span>
+                      <span class="min-w-0 truncate">{normalizeDisplayName(entry)}</span>
+                    </div>
                     <div class="truncate text-(--shell-text-dim)">{entry.kind}</div>
                     <div class="truncate text-(--shell-text-dim)">{formatEntryModified(entry.modified_ms)}</div>
                     <div class="truncate text-(--shell-text-dim)">{formatEntrySize(entry.size)}</div>

@@ -13,6 +13,7 @@ import {
   waitForDirectoryRowRect,
 } from '../lib/fileBrowserFixtureNav.ts'
 import {
+  BTN_LEFT,
   KEY,
   assertRectMinSize,
   assert,
@@ -21,15 +22,20 @@ import {
   defineGroup,
   getJson,
   getShellHtml,
+  movePoint,
   prepareFileBrowserFixtures,
+  pointerButton,
   rectCenter,
   resetFileBrowserFixtures,
   rightClickRect,
+  shellWindowById,
+  tabGroupByWindow,
   tapKey,
   typeText,
   waitFor,
   waitForShellUiFocus,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -160,6 +166,130 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
+  test('file browser breadcrumb ellipsis opens hidden path segments and crumb context menu', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const nestedPath = path.posix.join(fixtures.root_path, 'nested')
+    const alphaPath = path.posix.join(nestedPath, 'alpha')
+    await openDirectoryRow(base, nestedPath, 'nested', navigated.windowId)
+    await openDirectoryRow(base, alphaPath, 'alpha', navigated.windowId)
+    await openDirectoryRow(base, fixtures.nested_dir, 'beta', navigated.windowId)
+    const deepShell = await waitForActivePath(base, fixtures.nested_dir, navigated.windowId)
+    const fb = fileBrowserSnapshot(deepShell, navigated.windowId)
+    assert(fb?.breadcrumb_ellipsis_rect, 'missing breadcrumb ellipsis rect')
+    await clickRect(base, assertRectMinSize('breadcrumb ellipsis', fb.breadcrumb_ellipsis_rect, 16, 16))
+    const nestedMenuItem = await waitFor(
+      'wait for hidden breadcrumb menu item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find(
+          (entry) => entry.id === 'breadcrumb-open' && entry.label === 'nested',
+        )
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('hidden breadcrumb nested item', nestedMenuItem.rect!, 24, 18))
+    const atNested = await waitForActivePath(base, nestedPath, navigated.windowId)
+    const rootBreadcrumb = fileBrowserSnapshot(atNested, navigated.windowId)?.breadcrumbs.find(
+      (crumb) => crumb.path === fixtures.root_path,
+    )
+    assert(rootBreadcrumb?.rect, 'missing breadcrumb context target')
+    await rightClickRect(base, assertRectMinSize('breadcrumb context target', rootBreadcrumb.rect, 24, 18))
+    const copyPathItem = await waitFor(
+      'wait for breadcrumb copy path item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find(
+          (entry) => entry.id === 'copy-path' && entry.label === 'Copy path',
+        )
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    assert(copyPathItem.rect, 'missing breadcrumb copy path rect')
+  })
+
+  test('file browser breadcrumbs keep height while resizing window', async ({ base, state }) => {
+    const fixtures = await resetFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const startShell = await waitFor(
+      'wait for file browser resize handle and breadcrumbs',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fb = fileBrowserSnapshot(shell, navigated.windowId)
+        const controls = shell.window_controls?.find((entry) => entry.window_id === navigated.windowId)
+        const window = shellWindowById(shell, navigated.windowId)
+        if (!fb?.breadcrumb_bar_rect || (!controls?.resize_bottom_left && !controls?.resize_bottom_right) || !window) return null
+        if (fb.breadcrumb_bar_rect.height < 28) return null
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        return { shell, fb, controls, window, compositor }
+      },
+      5000,
+      100,
+    )
+    const output =
+      startShell.compositor.outputs.find(
+        (entry) =>
+          startShell.window.x + startShell.window.width / 2 >= entry.x &&
+          startShell.window.x + startShell.window.width / 2 <= entry.x + entry.width,
+      ) ?? startShell.compositor.outputs[0]
+    assert(output, 'missing output for file browser resize test')
+    const leftRoom = startShell.window.x - output.x
+    const rightRoom = output.x + output.width - (startShell.window.x + startShell.window.width)
+    const useLeft = leftRoom > rightRoom
+    const handle = assertRectMinSize(
+      useLeft ? 'file browser bottom-left resize handle' : 'file browser bottom-right resize handle',
+      useLeft ? startShell.controls.resize_bottom_left! : startShell.controls.resize_bottom_right!,
+      6,
+      6,
+    )
+    const start = useLeft
+      ? { x: handle.global_x + 2, y: handle.global_y + handle.height - 2 }
+      : { x: handle.global_x + handle.width - 2, y: handle.global_y + handle.height - 2 }
+    const available = useLeft ? leftRoom : rightRoom
+    assert(available >= 64, `not enough room to resize file browser, left=${leftRoom}, right=${rightRoom}`)
+    const delta = Math.min(220, available - 16)
+    const targetX = useLeft ? start.x - delta : start.x + delta
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    const samples: { width: number; height: number }[] = []
+    for (let index = 1; index <= 16; index += 1) {
+      const t = index / 16
+      await movePoint(base, start.x + (targetX - start.x) * t, start.y)
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = fileBrowserSnapshot(shell, navigated.windowId)?.breadcrumb_bar_rect
+      assert(rect, 'missing breadcrumb bar while resizing')
+      samples.push({ width: rect.width, height: rect.height })
+      assert(rect.height >= 28, `breadcrumb bar collapsed while resizing: ${rect.height}`)
+      assert(rect.width >= 24, `breadcrumb bar became too narrow while resizing: ${rect.width}`)
+    }
+    await pointerButton(base, BTN_LEFT, 'release')
+    const resized = await waitFor(
+      'wait for file browser resized wider',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = shellWindowById(shell, navigated.windowId)
+        const rect = fileBrowserSnapshot(shell, navigated.windowId)?.breadcrumb_bar_rect
+        if (!window || !rect) return null
+        if (window.width <= startShell.window.width + 40) return null
+        if (rect.height < 28 || rect.width < 24) return null
+        return { shell, window, rect }
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('file-browser-breadcrumb-resize.json', {
+      windowId: navigated.windowId,
+      before: startShell.window,
+      after: resized.window,
+      samples,
+      breadcrumbBar: resized.rect,
+    })
+  })
+
   test('file browser keyboard navigation selects rows and Enter opens a directory', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
@@ -221,6 +351,140 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(newEntry, 'expected a second file browser window at the media directory path')
     state.spawnedShellWindowIds.add(newEntry.window_id)
+  })
+
+  test('file browser context menu opens supported files in tabs and split view', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const tabNav = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', tabNav.windowId)
+    const tabMediaShell = await waitForActivePath(base, mediaPath, tabNav.windowId)
+    const blueTabRow = fileBrowserRow(tabMediaShell, 'blue-image.png', tabNav.windowId)
+    assert(blueTabRow?.rect, 'missing blue-image row for tab')
+    await rightClickRect(base, assertRectMinSize('blue-image tab context target', blueTabRow.rect, 32, 24))
+    const openTabItem = await waitFor(
+      'wait for open in tab context menu item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'open-tab')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('open in tab menu item', openTabItem.rect!, 24, 18))
+    const tabOpened = await waitFor(
+      'wait for image viewer tab in file browser group',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const imageWindow = shell.windows.find(
+          (entry) => entry.shell_hosted && entry.app_id === IMAGE_VIEWER_APP_ID && !entry.minimized,
+        )
+        if (!imageWindow) return null
+        const group = shell.tab_groups?.find(
+          (entry) =>
+            entry.member_window_ids.includes(tabNav.windowId) &&
+            entry.member_window_ids.includes(imageWindow.window_id),
+        )
+        if (!group || group.visible_window_id !== imageWindow.window_id) return null
+        return { shell, imageWindowId: imageWindow.window_id }
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(tabOpened.imageWindowId)
+
+    const splitNav = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    await openDirectoryRow(base, mediaPath, 'media', splitNav.windowId)
+    const splitMediaShell = await waitForActivePath(base, mediaPath, splitNav.windowId)
+    const greenSplitRow = fileBrowserRow(splitMediaShell, 'green-dot.png', splitNav.windowId)
+    assert(greenSplitRow?.rect, 'missing green-dot row for split')
+    await rightClickRect(base, assertRectMinSize('green-dot split context target', greenSplitRow.rect, 32, 24))
+    const openSplitItem = await waitFor(
+      'wait for open in split view context menu item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'open-split-view')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('open in split view menu item', openSplitItem.rect!, 24, 18))
+    const splitOpened = await waitFor(
+      'wait for image viewer split beside file browser',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const imageWindow = shell.windows.find(
+          (entry) =>
+            entry.shell_hosted &&
+            entry.app_id === IMAGE_VIEWER_APP_ID &&
+            !entry.minimized &&
+            entry.window_id !== tabOpened.imageWindowId,
+        )
+        if (!imageWindow) return null
+        const group = shell.tab_groups?.find(
+          (entry) =>
+            entry.member_window_ids.includes(splitNav.windowId) &&
+            entry.member_window_ids.includes(imageWindow.window_id),
+        )
+        if (!group || group.split_left_window_id !== splitNav.windowId) return null
+        if (group.visible_window_id !== imageWindow.window_id) return null
+        if (!group.split_left_rect || !group.split_right_rect) return null
+        return { shell, imageWindowId: imageWindow.window_id, group }
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(splitOpened.imageWindowId)
+    const splitUnion = {
+      x: Math.min(splitOpened.group.split_left_rect!.x, splitOpened.group.split_right_rect!.x),
+      y: Math.min(splitOpened.group.split_left_rect!.y, splitOpened.group.split_right_rect!.y),
+      width:
+        Math.max(
+          splitOpened.group.split_left_rect!.x + splitOpened.group.split_left_rect!.width,
+          splitOpened.group.split_right_rect!.x + splitOpened.group.split_right_rect!.width,
+        ) -
+        Math.min(splitOpened.group.split_left_rect!.x, splitOpened.group.split_right_rect!.x),
+      height:
+        Math.max(
+          splitOpened.group.split_left_rect!.y + splitOpened.group.split_left_rect!.height,
+          splitOpened.group.split_right_rect!.y + splitOpened.group.split_right_rect!.height,
+        ) -
+        Math.min(splitOpened.group.split_left_rect!.y, splitOpened.group.split_right_rect!.y),
+    }
+    const leftTab = splitOpened.group.tabs.find((entry) => entry.window_id === splitNav.windowId)
+    assert(leftTab?.rect, 'missing split left file browser tab')
+    await rightClickRect(base, assertRectMinSize('split left file browser tab', leftTab.rect, 24, 18))
+    const exitSplitItem = await waitFor(
+      'wait for exit split item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.controls?.tab_menu_exit_split ? shell.controls.tab_menu_exit_split : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('exit split item', exitSplitItem, 24, 18))
+    await waitFor(
+      'wait for split exit preserving left window size',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const group = tabGroupByWindow(shell, splitNav.windowId)
+        const leftWindow = shellWindowById(shell, splitNav.windowId)
+        if (!group || !leftWindow) return null
+        if (group.split_left_rect || group.split_right_rect) return null
+        if (group.visible_window_id !== splitNav.windowId) return null
+        const closeEnough =
+          Math.abs(leftWindow.x - splitUnion.x) <= 2 &&
+          Math.abs(leftWindow.y - splitUnion.y) <= 2 &&
+          Math.abs(leftWindow.width - splitUnion.width) <= 2 &&
+          Math.abs(leftWindow.height - splitUnion.height) <= 2
+        return closeEnough ? shell : null
+      },
+      5000,
+      100,
+    )
   })
 
   test('file browser drags a writable file into a folder', async ({ base, state }) => {

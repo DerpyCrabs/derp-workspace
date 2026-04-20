@@ -312,6 +312,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         </div>
       </div>
       <div
+        data-shell-resize-bottom-left={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
@@ -338,6 +339,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
+        data-shell-resize-bottom-right={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize"
@@ -364,6 +366,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
+        data-shell-resize-bottom={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize height"
@@ -390,6 +393,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
+        data-shell-resize-left={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"
@@ -416,6 +420,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         }}
       />
       <div
+        data-shell-resize-right={model()?.window_id ?? 0}
         class="pointer-events-auto touch-none z-3 box-border"
         classList={{ hidden: !layout().showBorderChrome }}
         title="Resize width"

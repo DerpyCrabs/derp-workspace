@@ -1,7 +1,10 @@
+import type { JSX } from 'solid-js'
+
 export type ShellContextMenuItem = {
   actionId?: string
   label: string
   action: () => void
+  icon?: JSX.Element
   badge?: string
   disabled?: boolean
   title?: string

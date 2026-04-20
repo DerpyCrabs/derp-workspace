@@ -200,6 +200,10 @@ export interface ShellWindowControls {
   maximize?: Rect | null
   close?: Rect | null
   snap_picker?: Rect | null
+  resize_left?: Rect | null
+  resize_right?: Rect | null
+  resize_bottom_left?: Rect | null
+  resize_bottom_right?: Rect | null
 }
 
 export interface AssistSpanSnapshot {
@@ -286,6 +290,8 @@ export interface FileBrowserSnapshot {
   active_path: string | null
   rows: FileBrowserSnapshotRow[]
   breadcrumbs: FileBrowserSnapshotBreadcrumb[]
+  breadcrumb_bar_rect?: Rect | null
+  breadcrumb_ellipsis_rect?: Rect | null
   viewer_editor_title: string | null
   primary_actions: FileBrowserSnapshotAction[]
   dialog_input_rect?: Rect | null

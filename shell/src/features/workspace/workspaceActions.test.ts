@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import type { DerpWindow } from '@/host/appWindowState'
 import { createWorkspaceActions } from '@/features/workspace/workspaceActions'
 import { createEmptyWorkspaceState } from '@/features/workspace/workspaceState'
@@ -62,10 +63,7 @@ function actionsFor(
     activateWindowViaShell: activateWindowViaShell as (windowId: number) => void,
     activateTaskbarWindowViaShell: activateTaskbarWindowViaShell as (windowId: number) => void,
     moveWindowUnderPointer: vi.fn() as (windowId: number, clientX: number, clientY: number) => void,
-    shellWireSend: shellWireSend as (
-      op: 'minimize' | 'close' | 'workspace_mutation',
-      arg?: number | string,
-    ) => boolean,
+    shellWireSend: shellWireSend as ShellCompositorWireSend,
   })
 }
 
