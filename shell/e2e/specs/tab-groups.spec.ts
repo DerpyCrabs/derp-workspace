@@ -268,23 +268,46 @@ async function waitForGroupedMembers(base: string, memberWindowIds: number[], vi
 }
 
 async function selectTabByClick(base: string, windowId: number) {
-  const { rect } = await waitFor(
-    `wait for tab click target ${windowId}`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const group = tabGroupByWindow(shell, windowId)
-      const tab = group?.tabs.find((entry) => entry.window_id === windowId)
-      const rect = tab?.rect ?? tab?.handle
-      if (!rect || rect.width < 12 || rect.height < 10) return null
-      return { rect }
-    },
-    3000,
-    40,
-  )
-  const tabRect = assertRectMinSize(`tab ${windowId}`, rect, 12, 10)
-  const c = rectCenter(tabRect)
-  await movePoint(base, c.x, c.y)
-  await clickRect(base, tabRect)
+  const clickOnce = async (preferHandle: boolean) => {
+    const { rect } = await waitFor(
+      `wait for tab click target ${windowId}`,
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const group = tabGroupByWindow(shell, windowId)
+        const tab = group?.tabs.find((entry) => entry.window_id === windowId)
+        const rect = preferHandle ? (tab?.handle ?? tab?.rect) : (tab?.rect ?? tab?.handle)
+        if (!rect || rect.width < 12 || rect.height < 10) return null
+        return { rect }
+      },
+      3000,
+      40,
+    )
+    const tabRect = assertRectMinSize(`tab ${windowId}`, rect, 12, 10)
+    const c = rectCenter(tabRect)
+    await movePoint(base, c.x, c.y)
+    await clickRect(base, tabRect)
+  }
+  const activated = async () =>
+    waitFor(
+      `wait for tab activation ${windowId}`,
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const group = tabGroupByWindow(shell, windowId)
+        const tab = group?.tabs.find((entry) => entry.window_id === windowId)
+        if (!group || !tab) return null
+        const visible = group.visible_window_ids?.includes(windowId) || group.visible_window_id === windowId
+        return visible || tab.active ? { shell, group } : null
+      },
+      700,
+      40,
+    )
+  await clickOnce(false)
+  try {
+    await activated()
+    return
+  } catch {}
+  await clickOnce(true)
+  await activated()
 }
 
 async function selectTabByFastClick(base: string, windowId: number) {

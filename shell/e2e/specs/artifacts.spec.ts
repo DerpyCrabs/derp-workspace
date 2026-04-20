@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import { access } from 'node:fs/promises'
+import { promisify } from 'node:util'
 
 import {
   CRASH_NATIVE_TITLE,
@@ -15,12 +17,46 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
+const execFileAsync = promisify(execFile)
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('capture workspace screenshot', async ({ base, state }) => {
     state.screenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {})
     assert(state.screenshot?.path, 'screenshot response missing path')
     await access(state.screenshot.path)
     await writeJsonArtifact('workspace-screenshot-result.json', state.screenshot)
+  })
+
+  test('debug harness captures snapshots and screenshot artifacts', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      'shell/e2e/harness.mjs',
+      'snapshot',
+      'e2e-harness-smoke',
+      '--html',
+      '--screenshot',
+    ])
+    const result = JSON.parse(stdout) as {
+      ok?: boolean
+      results?: Array<{
+        compositor?: string
+        shell?: string
+        html?: string
+        screenshot?: { path?: string; manifest?: string }
+      }>
+    }
+    assert(result.ok, 'harness smoke should return ok')
+    const capture = result.results?.[0]
+    assert(capture?.compositor, 'harness smoke missing compositor artifact')
+    assert(capture.shell, 'harness smoke missing shell artifact')
+    assert(capture.html, 'harness smoke missing html artifact')
+    assert(capture.screenshot?.path, 'harness smoke missing screenshot path')
+    assert(capture.screenshot.manifest, 'harness smoke missing screenshot manifest')
+    await access(capture.compositor)
+    await access(capture.shell)
+    await access(capture.html)
+    await access(capture.screenshot.path)
+    await access(capture.screenshot.manifest)
+    await writeJsonArtifact('harness-smoke-result.json', result)
   })
 
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {

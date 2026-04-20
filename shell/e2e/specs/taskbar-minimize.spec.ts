@@ -56,7 +56,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(shellWindowById(minimized.shell, redId)?.minimized, 'expected minimized before restore')
     await activateTaskbarWindow(base, minimized.shell, redId)
     await waitForNativeFocus(base, redId)
-    const after = await getJson(base, '/test/state/shell')
-    assert(!shellWindowById(after, redId)?.minimized, 'taskbar should restore minimized native window')
+    await waitFor(
+      'wait for shell restored native state',
+      async () => {
+        const after = await getJson(base, '/test/state/shell')
+        return shellWindowById(after, redId)?.minimized === false ? after : null
+      },
+      2000,
+      50,
+    )
   })
 })

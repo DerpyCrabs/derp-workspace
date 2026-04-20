@@ -1,14 +1,11 @@
 import {
-  activateTaskbarWindow,
   assert,
-  clickPoint,
-  compositorWindowById,
   defineGroup,
   dragBetweenPoints,
   getJson,
   getPerfCounters,
-  movePoint,
   printNote,
+  raiseTaskbarWindow,
   rectCenter,
   resetPerfCounters,
   spawnNativeWindow,
@@ -16,7 +13,6 @@ import {
   waitForTaskbarEntry,
   windowControls,
   writeJsonArtifact,
-  type CompositorSnapshot,
   type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -54,16 +50,7 @@ function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapsho
 }
 
 async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  await activateTaskbarWindow(base, shell, windowId)
-  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
-  const w = compositorWindowById(compositor, windowId)
-  if (w) {
-    const cx = w.x + Math.floor(w.width / 2)
-    const cy = w.y + Math.floor(w.height / 2)
-    await movePoint(base, cx, cy)
-    await clickPoint(base, cx, cy)
-  }
+  await raiseTaskbarWindow(base, windowId)
   return waitFor(
     `wait for native titlebar rects ${windowId}`,
     async () => {
