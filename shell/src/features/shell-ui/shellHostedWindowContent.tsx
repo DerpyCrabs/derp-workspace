@@ -17,15 +17,19 @@ import {
   isVideoViewerWindowId,
   SHELL_UI_TEST_APP_ID,
 } from '@/features/shell-ui/backedShellWindows'
-import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
-import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
-import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
-import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import { windowLabel as groupedWindowLabel } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
+import {
+  fileOpenCategoryForPath,
+  openWithOptionsForCategory,
+  optionById,
+  type DefaultApplicationsController,
+  type OpenWithOption,
+} from '@/apps/default-applications/defaultApplications'
+import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 
 export type ShellHostedWindowContentEnv = {
   allWindowsMap: () => Map<number, DerpWindow>
@@ -36,7 +40,7 @@ export type ShellHostedWindowContentEnv = {
   onOpenVideoFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenTextFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenPdfFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
-  onOpenPathExternally: (path: string) => void
+  onOpenFileWith: (option: OpenWithOption, path: string, context: { directory: string; showHidden: boolean }) => void
   onOpenPathInTab: (
     sourceWindowId: number,
     path: string,
@@ -83,6 +87,8 @@ export type ShellHostedWindowContentEnv = {
   setDesktopBackgroundJson: (json: string) => void
   sessionAutoSaveEnabled: Accessor<boolean>
   setSessionAutoSaveEnabled: (enabled: boolean) => void
+  defaultApps: DefaultApplicationsController
+  desktopApps: DesktopApplicationsController
 }
 
 export function renderShellHostedWindowContent(
@@ -135,6 +141,8 @@ export function renderShellHostedWindowContent(
         setDesktopBackgroundJson={(json) => env.setDesktopBackgroundJson(json)}
         sessionAutoSaveEnabled={env.sessionAutoSaveEnabled}
         setSessionAutoSaveEnabled={env.setSessionAutoSaveEnabled}
+        defaultApps={env.defaultApps}
+        desktopApps={env.desktopApps}
       />
     )
   }
@@ -158,42 +166,27 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            onOpenPathExternally={env.onOpenPathExternally}
             onOpenFile={(path, context) => {
-              if (isImageFilePath(path) && context.directory.length > 0) {
-                env.onOpenImageFile({
-                  path,
-                  directory: context.directory,
-                  showHidden: context.showHidden,
-                })
-                return
-              }
-              if (isVideoFilePath(path) && context.directory.length > 0) {
-                env.onOpenVideoFile({
-                  path,
-                  directory: context.directory,
-                  showHidden: context.showHidden,
-                })
-                return
-              }
-              if (isTextEditorFilePath(path) && context.directory.length > 0) {
-                env.onOpenTextFile({
-                  path,
-                  directory: context.directory,
-                  showHidden: context.showHidden,
-                })
-                return
-              }
-              if (isPdfFilePath(path) && context.directory.length > 0) {
-                env.onOpenPdfFile({
-                  path,
-                  directory: context.directory,
-                  showHidden: context.showHidden,
-                })
-                return
-              }
-              env.onOpenPathExternally(path)
+              const category = fileOpenCategoryForPath(path)
+              const option = env.defaultApps.settings()[category]
+              const resolved = env.defaultApps.loaded()
+                ? option
+                : category === 'image'
+                  ? 'shell:image_viewer'
+                  : category === 'video'
+                    ? 'shell:video_viewer'
+                    : category === 'text'
+                      ? 'shell:text_editor'
+                      : category === 'pdf'
+                        ? 'shell:pdf_viewer'
+                        : 'xdg-open'
+              env.onOpenFileWith(optionById(resolved, category, env.desktopApps.items()), path, context)
             }}
+            openWithOptions={(path) => {
+              const category = fileOpenCategoryForPath(path)
+              return openWithOptionsForCategory(category, env.desktopApps.items())
+            }}
+            onOpenFileWith={(option, path, context) => env.onOpenFileWith(option, path, context)}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenInTab={(path, context) => env.onOpenPathInTab(id, path, context)}
             onOpenInSplitView={(path, context) => env.onOpenPathInSplitView(id, path, context)}

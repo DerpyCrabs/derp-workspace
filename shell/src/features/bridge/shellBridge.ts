@@ -5,6 +5,7 @@ export type DesktopAppEntry = {
   generic_name?: string
   full_name?: string
   keywords?: string[]
+  mime_types?: string[]
   icon?: string
   terminal: boolean
   desktop_id: string
@@ -54,6 +55,13 @@ function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
         ? row.keywords
         : null
   if (keywords === null) return null
+  const mimeTypes =
+    row.mime_types === undefined
+      ? []
+      : Array.isArray(row.mime_types) && row.mime_types.every((value) => typeof value === 'string')
+        ? row.mime_types
+        : null
+  if (mimeTypes === null) return null
   return {
     name: row.name,
     exec: row.exec,
@@ -61,6 +69,7 @@ function asDesktopAppEntry(value: unknown): DesktopAppEntry | null {
     generic_name: typeof row.generic_name === 'string' ? row.generic_name : undefined,
     full_name: typeof row.full_name === 'string' ? row.full_name : undefined,
     keywords,
+    mime_types: mimeTypes,
     icon: typeof row.icon === 'string' ? row.icon : undefined,
     terminal: row.terminal === true,
     desktop_id: typeof row.desktop_id === 'string' ? row.desktop_id : '',

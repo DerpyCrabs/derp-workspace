@@ -4,12 +4,15 @@ import type { SetStoreFunction } from 'solid-js/store'
 import { SettingsAppearancePage } from './SettingsAppearancePage'
 import { SettingsBluetoothPage } from './SettingsBluetoothPage'
 import { SettingsDisplaysPage } from './SettingsDisplaysPage'
+import { SettingsDefaultApplicationsPage } from './SettingsDefaultApplicationsPage'
 import { SettingsKeyboardPage } from './SettingsKeyboardPage'
 import { SettingsSoundPage } from './SettingsSoundPage'
 import { SettingsTilingPage } from './SettingsTilingPage'
 import { SettingsUserPage } from './SettingsUserPage'
 import { SettingsWifiPage } from './SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settingsTypes'
+import type { DefaultApplicationsController } from '@/apps/default-applications/defaultApplications'
+import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 
 export type { SettingsLayoutScreen }
 
@@ -22,6 +25,7 @@ type SettingsPageId =
   | 'wifi'
   | 'bluetooth'
   | 'appearance'
+  | 'default-applications'
 
 const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'user', label: 'User' },
@@ -32,6 +36,7 @@ const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'wifi', label: 'Wi-Fi' },
   { id: 'bluetooth', label: 'Bluetooth' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'default-applications', label: 'Default apps' },
 ]
 
 export type SettingsPanelProps = {
@@ -55,6 +60,8 @@ export type SettingsPanelProps = {
   setDesktopBackgroundJson: (json: string) => void
   sessionAutoSaveEnabled: Accessor<boolean>
   setSessionAutoSaveEnabled: (enabled: boolean) => void
+  defaultApps: DefaultApplicationsController
+  desktopApps: DesktopApplicationsController
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -143,6 +150,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </Show>
         <Show when={activePage() === 'appearance'}>
           <SettingsAppearancePage setDesktopBackgroundJson={props.setDesktopBackgroundJson} />
+        </Show>
+        <Show when={activePage() === 'default-applications'}>
+          <SettingsDefaultApplicationsPage defaultApps={props.defaultApps} desktopApps={props.desktopApps} />
         </Show>
       </div>
     </div>

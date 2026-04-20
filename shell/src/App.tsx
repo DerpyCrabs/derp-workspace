@@ -56,6 +56,7 @@ import {
   windowIsShellHosted,
 } from '@/host/appWindowState'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
+import { useDefaultApplicationsState, type OpenWithOption } from '@/apps/default-applications/defaultApplications'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import {
   nativeWindowRef,
@@ -246,6 +247,7 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
 function App() {
   const shellBuildLabel = shellBuildLabelText()
   const desktopApps = useDesktopApplicationsState()
+  const defaultApps = useDefaultApplicationsState()
   const {
     allWindowsMap: compositorWindowsMap,
     windowsListIds: compositorWindowsListIds,
@@ -896,6 +898,31 @@ function App() {
     placeOpenedWindowInSourceGroup(sourceWindowId, openedWindowId, mode)
   }
 
+  function openFileWithOption(
+    option: OpenWithOption,
+    path: string,
+    context: { directory: string; showHidden: boolean },
+  ) {
+    const detail = { path, directory: context.directory, showHidden: context.showHidden }
+    if (option.kind === 'shell') {
+      if (option.shellKind === 'image_viewer') backedShellWindowActions.openImageViewerWindow(detail)
+      else if (option.shellKind === 'video_viewer') backedShellWindowActions.openVideoViewerWindow(detail)
+      else if (option.shellKind === 'text_editor') backedShellWindowActions.openTextEditorWindow(detail)
+      else if (option.shellKind === 'pdf_viewer') backedShellWindowActions.openPdfViewerWindow(detail)
+      return
+    }
+    if (option.kind === 'desktop') {
+      const command = `${option.app.exec} ${shSingleQuotedForSpawn(path)}`
+      void spawnInCompositor(command, {
+        command,
+        desktopId: option.app.desktop_id || null,
+        appName: option.app.name || null,
+      })
+      return
+    }
+    void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
+  }
+
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
     return renderShellHostedWindowContent(windowId, {
       allWindowsMap,
@@ -906,9 +933,7 @@ function App() {
       onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
       onOpenTextFile: (detail) => backedShellWindowActions.openTextEditorWindow(detail),
       onOpenPdfFile: (detail) => backedShellWindowActions.openPdfViewerWindow(detail),
-      onOpenPathExternally: (path) => {
-        void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
-      },
+      onOpenFileWith: openFileWithOption,
       onOpenPathInTab: (sourceWindowId, path, context) => {
         openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'tab')
       },
@@ -959,6 +984,8 @@ function App() {
       setDesktopBackgroundJson: (json) => shellWireSend('set_desktop_background', json),
       sessionAutoSaveEnabled: sessionPersistenceRuntime.sessionAutoSaveEnabled,
       setSessionAutoSaveEnabled: sessionPersistenceRuntime.updateSessionAutoSavePreference,
+      defaultApps,
+      desktopApps,
     })
   }
 
@@ -1231,6 +1258,7 @@ function App() {
       onShellWindowStateChanged: sessionPersistenceRuntime.bumpShellWindowStateRev,
       refreshThemeSettingsFromRemote,
       warmDesktopApps: () => desktopApps.warm(),
+      warmDefaultApps: () => defaultApps.warm(),
       warmProgramsMenuItems: () => shellContextMenus.warmProgramsMenuItems(),
       bootstrapSessionState: () => sessionPersistenceRuntime.bootstrapSessionState(),
       disposeBackedShellWindowActions: () => backedShellWindowActions.dispose(),

@@ -4,6 +4,7 @@ import {
   assertRectMinSize,
   assert,
   clickRect,
+  doubleClickRect,
   getJson,
   openProgramsMenu,
   waitFor,
@@ -155,7 +156,7 @@ export async function openDirectoryRow(base: string, expectedPath: string, rowNa
   )
   if (fileBrowserSnapshot(afterFirst, windowId)?.active_path === expectedPath) return afterFirst
   const rect2 = fileBrowserRow(afterFirst, rowName, windowId)?.rect ?? rect1
-  await clickRect(base, assertRectMinSize(`file browser row open ${rowName}`, rect2, 32, 24))
+  await doubleClickRect(base, assertRectMinSize(`file browser row open ${rowName}`, rect2, 32, 24))
   return waitForActivePath(base, expectedPath, windowId)
 }
 

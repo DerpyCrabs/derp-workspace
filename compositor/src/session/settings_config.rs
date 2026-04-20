@@ -33,6 +33,28 @@ pub struct KeyboardSettingsFile {
     pub repeat_delay_ms: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DefaultApplicationsFile {
+    pub image: String,
+    pub video: String,
+    pub text: String,
+    pub pdf: String,
+    pub other: String,
+}
+
+impl Default for DefaultApplicationsFile {
+    fn default() -> Self {
+        Self {
+            image: "shell:image_viewer".into(),
+            video: "shell:video_viewer".into(),
+            text: "shell:text_editor".into(),
+            pdf: "shell:pdf_viewer".into(),
+            other: "xdg-open".into(),
+        }
+    }
+}
+
 impl Default for KeyboardSettingsFile {
     fn default() -> Self {
         Self {
@@ -58,6 +80,7 @@ pub struct SettingsFile {
     pub version: u32,
     pub theme: ThemeSettingsFile,
     pub keyboard: KeyboardSettingsFile,
+    pub default_applications: DefaultApplicationsFile,
 }
 
 impl Default for SettingsFile {
@@ -66,6 +89,7 @@ impl Default for SettingsFile {
             version: 1,
             theme: ThemeSettingsFile::default(),
             keyboard: KeyboardSettingsFile::default(),
+            default_applications: DefaultApplicationsFile::default(),
         }
     }
 }
@@ -128,6 +152,45 @@ pub fn sanitize_keyboard_settings(keyboard: KeyboardSettingsFile) -> KeyboardSet
         layouts,
         repeat_rate: keyboard.repeat_rate.clamp(1, 60),
         repeat_delay_ms: keyboard.repeat_delay_ms.clamp(100, 1000),
+    }
+}
+
+fn sanitize_default_app_token(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed == "xdg-open" {
+        return trimmed.to_string();
+    }
+    if let Some(rest) = trimmed.strip_prefix("shell:") {
+        if matches!(
+            rest,
+            "image_viewer" | "video_viewer" | "text_editor" | "pdf_viewer"
+        ) {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("desktop:") {
+        if !rest.is_empty()
+            && rest.len() <= 256
+            && rest
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '+'))
+        {
+            return trimmed.to_string();
+        }
+    }
+    fallback.to_string()
+}
+
+pub fn sanitize_default_applications_settings(
+    settings: DefaultApplicationsFile,
+) -> DefaultApplicationsFile {
+    let defaults = DefaultApplicationsFile::default();
+    DefaultApplicationsFile {
+        image: sanitize_default_app_token(&settings.image, &defaults.image),
+        video: sanitize_default_app_token(&settings.video, &defaults.video),
+        text: sanitize_default_app_token(&settings.text, &defaults.text),
+        pdf: sanitize_default_app_token(&settings.pdf, &defaults.pdf),
+        other: sanitize_default_app_token(&settings.other, &defaults.other),
     }
 }
 
@@ -242,6 +305,8 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
         Ok(mut cfg) => {
             cfg.theme = sanitize_theme_settings(cfg.theme);
             cfg.keyboard = sanitize_keyboard_settings(cfg.keyboard);
+            cfg.default_applications =
+                sanitize_default_applications_settings(cfg.default_applications);
             if cfg.version == 0 {
                 cfg.version = 1;
             }
@@ -282,6 +347,43 @@ pub fn write_theme_settings(theme: ThemeSettingsFile) -> Result<(), String> {
     }
     cfg.version = 1;
     cfg.theme = theme;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
+}
+
+pub fn read_default_applications_settings() -> DefaultApplicationsFile {
+    let Some(path) = settings_config_path() else {
+        return DefaultApplicationsFile::default();
+    };
+    read_settings_file_from_path(&path).default_applications
+}
+
+pub fn read_default_applications_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_default_applications_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_default_applications_settings(
+    default_applications: DefaultApplicationsFile,
+) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let default_applications = sanitize_default_applications_settings(default_applications);
+    if cfg.version == 1 && cfg.default_applications == default_applications {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.default_applications = default_applications;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(

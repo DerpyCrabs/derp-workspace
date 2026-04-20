@@ -23,6 +23,7 @@ describe('parseDesktopApplicationsResponse', () => {
               generic_name: 'Terminal',
               full_name: 'GNOME Console',
               keywords: ['tty', 'shell'],
+              mime_types: ['text/plain'],
               icon: 'org.gnome.Console',
               terminal: true,
               desktop_id: 'foot.desktop',
@@ -39,11 +40,12 @@ describe('parseDesktopApplicationsResponse', () => {
         generic_name: 'Terminal',
         full_name: 'GNOME Console',
         keywords: ['tty', 'shell'],
+        mime_types: ['text/plain'],
         icon: 'org.gnome.Console',
         terminal: true,
         desktop_id: 'foot.desktop',
       },
-      { name: 'Files', exec: 'nautilus', keywords: [], terminal: false, desktop_id: '' },
+      { name: 'Files', exec: 'nautilus', keywords: [], mime_types: [], terminal: false, desktop_id: '' },
     ])
   })
 

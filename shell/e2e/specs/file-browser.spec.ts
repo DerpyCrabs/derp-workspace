@@ -18,6 +18,7 @@ import {
   assertRectMinSize,
   assert,
   clickRect,
+  doubleClickRect,
   dragBetweenPoints,
   defineGroup,
   getJson,
@@ -42,6 +43,7 @@ import {
 const IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
 const VIDEO_VIEWER_APP_ID = 'derp.video-viewer'
 const PDF_VIEWER_APP_ID = 'derp.pdf-viewer'
+const TEXT_EDITOR_APP_ID = 'derp.text-editor'
 const WRITABLE_TEXT = 'Phase 1 writable fixture\nThis file should reset between runs.\n'
 const READ_ONLY_TEXT = 'Phase 1 read-only fixture\nThis file should refuse direct writes.\n'
 const READ_ONLY_MD = '# Read only doc\n\nbody\n'
@@ -499,6 +501,64 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
   })
 
+  test('file browser open with can pick a shell app for a file', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const notesPath = path.posix.join(fixtures.root_path, 'notes')
+    await openDirectoryRow(base, notesPath, 'notes', navigated.windowId)
+    const shell = await waitForActivePath(base, notesPath, navigated.windowId)
+    const textRow = fileBrowserRow(shell, 'writable-note.txt', navigated.windowId)
+    assert(textRow?.rect, 'missing writable text row')
+    await rightClickRect(base, assertRectMinSize('writable text context target', textRow.rect, 32, 24))
+    const menuWithoutLegacyOpen = await waitFor(
+      'wait for file context menu without legacy open actions',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const menu = shell.file_browser_context_menu
+        if (!menu?.some((entry) => entry.id === 'open-with')) return null
+        return menu.every((entry) => entry.id !== 'open' && entry.id !== 'open-external') ? menu : null
+      },
+      2000,
+      100,
+    )
+    assert(menuWithoutLegacyOpen.length > 0, 'expected file context menu items')
+    const openWithItem = await waitFor(
+      'wait for open with context item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'open-with')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('open with menu item', openWithItem.rect!, 24, 18))
+    const option = await waitFor(
+      'wait for text editor open with option',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fb = fileBrowserSnapshot(shell, navigated.windowId)
+        return fb?.open_with_options?.find((entry) => entry.id === 'shell:text_editor' && entry.rect) ?? null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('text editor open with option', option.rect!, 24, 18))
+    const editorWindow = await waitFor(
+      'wait for text editor from open with',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const w = shell.windows.find(
+          (entry) => entry.shell_hosted && entry.app_id === TEXT_EDITOR_APP_ID && !entry.minimized,
+        )
+        return w ? { shell, windowId: w.window_id } : null
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(editorWindow.windowId)
+  })
+
   test('file browser drags a writable file into a folder', async ({ base, state }) => {
     const fixtures = await resetFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
@@ -562,7 +622,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const blueSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'blue-image.png', navigated.windowId)
     assert(blueSelected?.rect, 'missing blue-image row rect after selection')
-    await clickRect(base, assertRectMinSize('open blue-image second click', blueSelected.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open blue-image double click', blueSelected.rect, 32, 24))
     const viewerWindow = await waitFor(
       'wait for image viewer window',
       async () => {
@@ -664,7 +724,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const videoSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'test-pattern.webm', navigated.windowId)
     assert(videoSelected?.rect, 'missing test-pattern row rect after selection')
-    await clickRect(base, assertRectMinSize('open test-pattern second click', videoSelected.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open test-pattern double click', videoSelected.rect, 32, 24))
     const viewerWindow = await waitFor(
       'wait for video viewer window',
       async () => {
@@ -713,7 +773,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const pdfSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'derp-doc.pdf', navigated.windowId)
     assert(pdfSelected?.rect, 'missing derp-doc row rect after selection')
-    await clickRect(base, assertRectMinSize('open derp-doc second click', pdfSelected.rect, 32, 24))
+    await doubleClickRect(base, assertRectMinSize('open derp-doc double click', pdfSelected.rect, 32, 24))
     const viewerWindow = await waitFor(
       'wait for pdf viewer window',
       async () => {
@@ -860,7 +920,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
   })
 
-  test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {
+  test('file browser opens a directory when double-clicking a row', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     const targetRow =
@@ -874,7 +934,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(
       fileBrowserSnapshot(openedDirectory, navigated.windowId)?.active_path === targetRow.path,
-      'expected directory path after second click',
+      'expected directory path after double click',
     )
     assert(
       openedDirectory.windows.some((window) => window.window_id === navigated.windowId),

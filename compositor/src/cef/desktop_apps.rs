@@ -19,6 +19,8 @@ pub struct DesktopApp {
     pub full_name: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub keywords: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub mime_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub terminal: bool,
@@ -51,6 +53,7 @@ struct DesktopEntryRaw {
     full_name_locale: HashMap<String, String>,
     keywords: Vec<String>,
     keywords_locale: HashMap<String, Vec<String>>,
+    mime_types: Vec<String>,
     exec: Option<String>,
     icon: Option<String>,
     terminal: bool,
@@ -109,6 +112,7 @@ pub fn scan_applications() -> Result<Vec<DesktopApp>, String> {
                 generic_name: pick_generic_name(&raw),
                 full_name: pick_full_name(&raw),
                 keywords: pick_keywords(&raw),
+                mime_types: raw.mime_types.clone(),
                 icon: raw.icon.clone().filter(|s| !s.is_empty()),
                 terminal: raw.terminal,
                 desktop_id,
@@ -319,6 +323,8 @@ fn parse_desktop_contents(raw: &str) -> Option<DesktopEntryRaw> {
         {
             e.keywords_locale
                 .insert(loc.to_string(), split_keywords(val));
+        } else if key == "MimeType" {
+            e.mime_types = split_keywords(val);
         } else if key == "Exec" {
             e.exec = Some(val.to_string());
         } else if key == "Icon" {

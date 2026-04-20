@@ -7,6 +7,7 @@ type AppRuntimeBootstrapOptions = {
   onShellWindowStateChanged: () => void
   refreshThemeSettingsFromRemote: () => Promise<unknown>
   warmDesktopApps: () => Promise<unknown>
+  warmDefaultApps: () => Promise<unknown>
   warmProgramsMenuItems: () => Promise<unknown>
   bootstrapSessionState: () => Promise<unknown>
   disposeBackedShellWindowActions: () => void
@@ -59,6 +60,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   })
   void options.refreshThemeSettingsFromRemote()
   void options.warmDesktopApps()
+  void options.warmDefaultApps()
   void options.warmProgramsMenuItems()
   void options.bootstrapSessionState()
   console.log(

@@ -840,6 +840,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_default_applications" {
+        let json = crate::session::settings_config::read_default_applications_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_user" {
         let json = crate::session::gdm_settings::read_gdm_autologin_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -1309,6 +1315,15 @@ fn handle_one(
                 serde_json::from_value::<crate::session::settings_config::KeyboardSettingsFile>(v)
                     .map_err(|e| format!("invalid keyboard settings: {e}"))?;
             uplink.settings_keyboard_apply(keyboard)?;
+        }
+        "/settings_default_applications" => {
+            let default_applications = serde_json::from_value::<
+                crate::session::settings_config::DefaultApplicationsFile,
+            >(v)
+            .map_err(|e| format!("invalid default applications settings: {e}"))?;
+            crate::session::settings_config::write_default_applications_settings(
+                default_applications,
+            )?;
         }
         "/settings_user" => {
             let update =

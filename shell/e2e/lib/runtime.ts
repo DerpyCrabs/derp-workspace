@@ -283,6 +283,12 @@ export interface FileBrowserSnapshotAction {
   rect?: Rect | null
 }
 
+export interface FileBrowserOpenWithOptionSnapshot {
+  id: string
+  label: string
+  rect?: Rect | null
+}
+
 export interface FileBrowserSnapshot {
   list_state?: string | null
   mount_seq?: number
@@ -296,6 +302,7 @@ export interface FileBrowserSnapshot {
   primary_actions: FileBrowserSnapshotAction[]
   dialog_input_rect?: Rect | null
   dialog_confirm_rect?: Rect | null
+  open_with_options?: FileBrowserOpenWithOptionSnapshot[]
 }
 
 export interface FileBrowserContextMenuActionSnapshot {
@@ -1254,6 +1261,12 @@ export async function syncTest(base: string): Promise<{ compositor: CompositorSn
 
 export async function clickRect(base: string, rect: Rect): Promise<void> {
   const point = rectCenter(rect)
+  await clickPoint(base, point.x, point.y)
+}
+
+export async function doubleClickRect(base: string, rect: Rect): Promise<void> {
+  const point = rectCenter(rect)
+  await clickPoint(base, point.x, point.y)
   await clickPoint(base, point.x, point.y)
 }
 

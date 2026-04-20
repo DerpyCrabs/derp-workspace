@@ -237,6 +237,11 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
   const breadcrumbEllipsisEl = queryWithin(root, '[data-file-browser-breadcrumb-ellipsis]')
   const dialogInputEl = queryWithin(root, '[data-file-browser-dialog-input]')
   const dialogConfirmEl = queryWithin(root, '[data-file-browser-dialog-confirm]')
+  const openWithOptions = queryAllWithin(root, '[data-file-browser-open-with-option]').map((optionEl) => ({
+    id: optionEl.getAttribute('data-file-browser-open-with-option') ?? '',
+    label: optionEl.textContent?.trim() ?? '',
+    rect: snapshotRect(optionEl, origin),
+  }))
   return {
     list_state: fileBrowserListStateEl?.getAttribute('data-file-browser-list-state') ?? null,
     mount_seq: Number(fileBrowserListStateEl?.getAttribute('data-file-browser-mount-seq') ?? 0),
@@ -256,6 +261,7 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     primary_actions: fileBrowserPrimaryActions,
     dialog_input_rect: snapshotRect(dialogInputEl, origin),
     dialog_confirm_rect: snapshotRect(dialogConfirmEl, origin),
+    open_with_options: openWithOptions,
   }
 }
 
@@ -646,6 +652,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_displays: queryRect(cache, '[data-settings-tab="displays"]', args.origin),
       settings_tab_tiling: queryRect(cache, '[data-settings-tab="tiling"]', args.origin),
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
+      settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
+      settings_default_app_image: queryRect(cache, '[data-default-app-select="image"]', args.origin),
       settings_session_autosave_enable: queryRect(cache, '[data-settings-session-autosave-enable]', args.origin),
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
       power_menu_save_session: powerMenuRect('[data-power-menu-action="save-session"]'),

@@ -106,8 +106,9 @@ async function switchSettingsPage(
     | 'settings_tab_user'
     | 'settings_tab_displays'
     | 'settings_tab_tiling'
-    | 'settings_tab_keyboard',
-  pageId: 'user' | 'displays' | 'tiling' | 'keyboard',
+    | 'settings_tab_keyboard'
+    | 'settings_tab_default_applications',
+  pageId: 'user' | 'displays' | 'tiling' | 'keyboard' | 'default-applications',
   marker: string,
 ): Promise<string> {
   return waitFor(
@@ -325,6 +326,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_displays, 'missing settings displays tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_keyboard, 'missing settings keyboard tab rect')
+    assert(settingsOpen.shell.controls?.settings_tab_default_applications, 'missing default applications tab rect')
     await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     await clickRect(base, settingsOpen.shell.controls.settings_tab_user)
     const userHtml = await switchSettingsPage(base, 'settings_tab_user', 'user', 'data-settings-user-page')
@@ -335,6 +337,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'Apply keyboard settings',
     )
     await switchSettingsPage(base, 'settings_tab_tiling', 'tiling', 'data-settings-active-page="tiling"')
+    const defaultAppsHtml = await switchSettingsPage(
+      base,
+      'settings_tab_default_applications',
+      'default-applications',
+      'data-settings-default-applications',
+    )
+    assert(defaultAppsHtml.includes('Image Viewer'), 'expected shell image viewer default option')
+    assert(defaultAppsHtml.includes('Text Editor'), 'expected shell text editor default option')
     const settingsHtml = await switchSettingsPage(
       base,
       'settings_tab_displays',
@@ -343,11 +353,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const keyboardSettings = await getJson(base, '/settings_keyboard')
     const userSettings = await getJson(base, '/settings_user')
+    const defaultApplicationSettings = await getJson(base, '/settings_default_applications')
     await writeTextArtifact('settings-root.html', settingsHtml)
     await writeTextArtifact('settings-user-page.html', userHtml)
     await writeTextArtifact('settings-keyboard-page.html', keyboardHtml)
+    await writeTextArtifact('settings-default-applications-page.html', defaultAppsHtml)
     await writeJsonArtifact('settings-keyboard.json', keyboardSettings)
     await writeJsonArtifact('settings-user.json', userSettings)
+    await writeJsonArtifact('settings-default-applications.json', defaultApplicationSettings)
     const shellBeforeClose = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shellBeforeClose, SHELL_UI_SETTINGS_WINDOW_ID)
     await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)

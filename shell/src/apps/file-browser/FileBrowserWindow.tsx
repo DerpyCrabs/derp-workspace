@@ -37,6 +37,7 @@ import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
 import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
 import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
 import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
+import type { OpenWithOption } from '@/apps/default-applications/defaultApplications'
 import Archive from 'lucide-solid/icons/archive'
 import Columns2 from 'lucide-solid/icons/columns-2'
 import ArrowLeft from 'lucide-solid/icons/arrow-left'
@@ -49,7 +50,6 @@ import File from 'lucide-solid/icons/file'
 import FilePlus from 'lucide-solid/icons/file-plus'
 import FileText from 'lucide-solid/icons/file-text'
 import Folder from 'lucide-solid/icons/folder'
-import FolderOpen from 'lucide-solid/icons/folder-open'
 import FolderPlus from 'lucide-solid/icons/folder-plus'
 import HardDrive from 'lucide-solid/icons/hard-drive'
 import Home from 'lucide-solid/icons/home'
@@ -71,6 +71,12 @@ type FileBrowserWindowProps = {
     path: string,
     context: { directory: string; showHidden: boolean },
   ) => void
+  onOpenFileWith: (
+    option: OpenWithOption,
+    path: string,
+    context: { directory: string; showHidden: boolean },
+  ) => void
+  openWithOptions: (path: string) => OpenWithOption[]
   onOpenInNewWindow?: (path: string) => void
   onOpenInTab?: (
     path: string,
@@ -80,7 +86,6 @@ type FileBrowserWindowProps = {
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
   ) => void
-  onOpenPathExternally: (path: string) => void
 }
 
 type Breadcrumb = {
@@ -223,6 +228,7 @@ type FileBrowserUiDialog =
   | { kind: 'touch'; draft: string }
   | { kind: 'rename'; path: string; draft: string }
   | { kind: 'delete'; path: string; label: string }
+  | { kind: 'open-with'; path: string; label: string; options: OpenWithOption[] }
 
 type FileBrowserDragPayload = {
   path: string
@@ -259,6 +265,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let rootRef: HTMLDivElement | undefined
   let pointerDrag: FileBrowserPointerDrag | null = null
   let suppressClickAfterPointerDrag = false
+  let lastRowClick: { path: string; timeStamp: number; x: number; y: number } | null = null
 
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
   const [dialog, setDialog] = createSignal<FileBrowserUiDialog>({ kind: 'closed' })
@@ -325,14 +332,6 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     setState('selectedPath', path)
   }
 
-  function clickEntry(entry: FileBrowserEntry) {
-    const alreadySelected = state.selectedPath === entry.path
-    selectEntry(entry.path)
-    if (alreadySelected) {
-      openEntry(entry)
-    }
-  }
-
   function openEntry(entry: FileBrowserEntry | null | undefined) {
     if (!entry) return
     if (fileBrowserEntryIsDirectory(entry)) {
@@ -341,6 +340,26 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     }
     const directory = state.activePath ?? ''
     props.onOpenFile(entry.path, { directory, showHidden: state.showHidden })
+  }
+
+  function openEntryWith(entryPath: string, option: OpenWithOption) {
+    const directory = state.activePath ?? ''
+    props.onOpenFileWith(option, entryPath, { directory, showHidden: state.showHidden })
+  }
+
+  function clickEntry(event: MouseEvent, entry: FileBrowserEntry) {
+    if (suppressClickAfterPointerDrag) return
+    const previous = lastRowClick
+    const doubleClick =
+      event.detail >= 2 ||
+      (previous?.path === entry.path &&
+        event.timeStamp - previous.timeStamp <= 500 &&
+        Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 8)
+    lastRowClick = doubleClick
+      ? null
+      : { path: entry.path, timeStamp: event.timeStamp, x: event.clientX, y: event.clientY }
+    selectEntry(entry.path)
+    if (doubleClick) openEntry(entry)
   }
 
   function parseDragPayload(event: DragEvent): FileBrowserDragPayload | null {
@@ -497,16 +516,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       showHidden: state.showHidden,
       isDirectory: isDir,
     })
-    const items: ShellContextMenuItem[] = [
-      {
-        actionId: 'open',
-        label: 'Open',
-        icon: tinyIcon(isDir ? FolderOpen : File),
-        action: () => {
-          openEntry(entry)
-        },
-      },
-    ]
+    const items: ShellContextMenuItem[] = []
     if (isDir && props.onOpenInNewWindow) {
       const openNew = props.onOpenInNewWindow
       items.push({
@@ -542,16 +552,21 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     }
     if (isFile) {
       items.push({
-        actionId: 'open-external',
-        label: 'Open with default application',
+        actionId: 'open-with',
+        label: 'Open with…',
         icon: tinyIcon(ExternalLink),
         action: () => {
-          props.onOpenPathExternally(entry.path)
+          setDialog({
+            kind: 'open-with',
+            path: entry.path,
+            label: normalizeDisplayName(entry),
+            options: props.openWithOptions(entry.path),
+          })
         },
       })
     }
     if (writable) {
-      items.push(menuSeparator())
+      if (items.length > 0) items.push(menuSeparator())
       if (isFile) {
         items.push({
           actionId: 'fs-cut',
@@ -600,7 +615,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       })
     }
-    items.push(menuSeparator())
+    if (items.length > 0) items.push(menuSeparator())
     items.push({
       actionId: 'copy-path',
       label: 'Copy path',
@@ -616,17 +631,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
 
   function placeContextItems(root: FileBrowserRoot): ShellContextMenuItem[] {
     const clip = clipboardCanWritePath()
-    const items: ShellContextMenuItem[] = [
-      {
-        actionId: 'open',
-        label: 'Open',
-        icon: tinyIcon(FolderOpen),
-        action: () => {
-          setState('selectedPath', null)
-          void loadDirectory(root.path)
-        },
-      },
-    ]
+    const items: ShellContextMenuItem[] = []
     if (props.onOpenInNewWindow) {
       const openNew = props.onOpenInNewWindow
       items.push({
@@ -638,7 +643,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       })
     }
-    items.push(menuSeparator())
+    if (items.length > 0) items.push(menuSeparator())
     items.push({
       actionId: 'copy-path',
       label: 'Copy path',
@@ -1031,12 +1036,6 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                             x: e.clientX,
                             y: e.clientY,
                             items: [
-                              {
-                                actionId: 'open',
-                                label: 'Open',
-                                icon: tinyIcon(FolderOpen),
-                                action: () => void loadDirectory(crumbRow().crumb.path),
-                              },
                               ...(props.onOpenInNewWindow
                                 ? [
                                     {
@@ -1047,7 +1046,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                                     } satisfies ShellContextMenuItem,
                                   ]
                                 : []),
-                              menuSeparator(),
+                              ...(props.onOpenInNewWindow ? [menuSeparator()] : []),
                               {
                                 actionId: 'copy-path',
                                 label: 'Copy path',
@@ -1164,10 +1163,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                     data-file-browser-kind={entry.kind}
                     data-file-browser-selected={selected() ? 'true' : 'false'}
                     data-file-browser-draggable={entry.writable === true ? 'true' : 'false'}
-                    onClick={() => {
-                      if (suppressClickAfterPointerDrag) return
-                      clickEntry(entry)
-                    }}
+                    onClick={(event) => clickEntry(event, entry)}
                     onPointerDown={(e) => beginPointerDrag(e, entry)}
                     onDragStart={(e) => {
                       selectEntry(entry.path)
@@ -1268,6 +1264,47 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                       onClick={() => void submitFileDialog()}
                     >
                       Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show
+              when={(() => {
+                const row = dialog()
+                return row.kind === 'open-with' ? row : false
+              })()}
+            >
+              {(d) => (
+                <>
+                  <div class="mb-1 text-sm font-medium">Open {d().label} with</div>
+                  <div class="mb-3 text-xs text-(--shell-text-dim)">Choose an application for this file.</div>
+                  <div class="max-h-80 overflow-y-auto rounded border border-(--shell-border)">
+                    {d().options.map((option) => (
+                      <button
+                        type="button"
+                        class="flex w-full items-center justify-between gap-3 border-b border-(--shell-border) px-3 py-2 text-left text-sm last:border-b-0 hover:bg-(--shell-control-muted-hover)"
+                        data-file-browser-open-with-option={option.id}
+                        onClick={() => {
+                          openEntryWith(d().path, option)
+                          closeFileDialog()
+                        }}
+                      >
+                        <span class="min-w-0 truncate">{option.label}</span>
+                        <span class="shrink-0 text-xs text-(--shell-text-dim)">
+                          {option.kind === 'shell' ? 'Shell' : option.kind === 'desktop' ? 'App' : 'System'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <div class="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-cancel
+                      onClick={closeFileDialog}
+                    >
+                      Cancel
                     </button>
                   </div>
                 </>
