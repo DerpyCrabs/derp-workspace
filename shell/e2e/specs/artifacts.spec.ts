@@ -98,6 +98,48 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('harness-maximize-file-browser-then-foot-result.json', result)
   })
 
+  test('debug harness verifies native close clears decoration', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      'shell/e2e/harness.mjs',
+      'scenario',
+      'native-close-decoration-clears',
+    ])
+    const result = JSON.parse(stdout) as {
+      ok?: boolean
+      results?: Array<{
+        ok?: boolean
+        compositorHasDecor?: boolean
+        shellFocusedClosedWindow?: boolean
+        summary?: string
+        immediateScreenshot?: { path?: string; manifest?: string }
+        after?: {
+          compositor?: string
+          shell?: string
+          html?: string
+          screenshot?: { path?: string; manifest?: string }
+        }
+      }>
+    }
+    assert(result.ok, 'native close harness should return ok')
+    const scenario = result.results?.[0]
+    assert(scenario?.ok, 'native close should remove compositor window and shell decoration')
+    assert(!scenario.compositorHasDecor, 'closed native window decoration should not remain registered')
+    assert(!scenario.shellFocusedClosedWindow, 'closed native window should not remain shell-focused')
+    assert(scenario.summary, 'native close harness missing summary artifact')
+    assert(scenario.immediateScreenshot?.path, 'native close harness missing immediate screenshot')
+    assert(scenario.after?.compositor, 'native close harness missing after compositor artifact')
+    assert(scenario.after.shell, 'native close harness missing after shell artifact')
+    assert(scenario.after.html, 'native close harness missing after html artifact')
+    assert(scenario.after.screenshot?.path, 'native close harness missing after screenshot')
+    await access(scenario.summary)
+    await access(scenario.immediateScreenshot.path)
+    await access(scenario.after.compositor)
+    await access(scenario.after.shell)
+    await access(scenario.after.html)
+    await access(scenario.after.screenshot.path)
+    await writeJsonArtifact('harness-native-close-decoration-clears-result.json', result)
+  })
+
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {
     state.crashProbe = await ensureNativeWindow(base, state, 'crashProbe', {
       title: CRASH_NATIVE_TITLE,

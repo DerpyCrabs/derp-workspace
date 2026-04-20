@@ -42,12 +42,7 @@ impl LatestShellDmabuf {
 
     pub fn finish_dispatch(&self) -> bool {
         self.notified.store(false, Ordering::Release);
-        if self
-            .frame
-            .lock()
-            .expect("latest_shell_dmabuf")
-            .is_none()
-        {
+        if self.frame.lock().expect("latest_shell_dmabuf").is_none() {
             return false;
         }
         !self.notified.swap(true, Ordering::AcqRel)

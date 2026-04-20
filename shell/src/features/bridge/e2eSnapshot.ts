@@ -309,7 +309,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const windowControls = args.windows.map((window) => ({
     window_id: window.window_id,
     titlebar: snapshotRect(cache.queryAttr('data-shell-titlebar', window.window_id), args.origin),
+    minimize: snapshotRect(cache.queryAttr('data-shell-minimize-trigger', window.window_id), args.origin),
     maximize: snapshotRect(cache.queryAttr('data-shell-maximize-trigger', window.window_id), args.origin),
+    close: snapshotRect(cache.queryAttr('data-shell-close-trigger', window.window_id), args.origin),
     snap_picker: snapshotRect(cache.queryAttr('data-shell-snap-picker-trigger', window.window_id), args.origin),
   }))
   const tabGroups = args.workspaceGroups.map((group) => ({

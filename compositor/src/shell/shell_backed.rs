@@ -44,7 +44,11 @@ impl CompositorState {
         let th = self.shell_chrome_titlebar_h.max(0);
         let bd = self.shell_chrome_border_w.max(0);
         let inset_side = if info.maximized { 0 } else { bd };
-        let inset_top = if info.maximized { 0 } else { SHELL_BORDER_TOP_THICKNESS };
+        let inset_top = if info.maximized {
+            0
+        } else {
+            SHELL_BORDER_TOP_THICKNESS
+        };
         let c = Self::shell_hosted_client_global_rect(info);
         let ox = c.loc.x.saturating_sub(inset_side);
         let oy = c.loc.y.saturating_sub(th.saturating_add(inset_top));

@@ -196,7 +196,9 @@ export interface ShellTabGroup {
 export interface ShellWindowControls {
   window_id: number
   titlebar?: Rect | null
+  minimize?: Rect | null
   maximize?: Rect | null
+  close?: Rect | null
   snap_picker?: Rect | null
 }
 

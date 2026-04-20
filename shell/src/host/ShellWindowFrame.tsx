@@ -241,6 +241,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div class="flex shrink-0 items-center gap-1 self-stretch py-0" data-shell-titlebar-controls>
           <button
             type="button"
+            data-shell-minimize-trigger={model()?.window_id ?? 0}
             class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-base leading-none font-bold text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title="Minimize window"
             onPointerDown={(e) => {
@@ -296,6 +297,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
+            data-shell-close-trigger={model()?.window_id ?? 0}
             class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-lg leading-none text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text)"
             title="Close window"
             onPointerDown={(e) => {

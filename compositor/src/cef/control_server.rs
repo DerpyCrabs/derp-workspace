@@ -771,10 +771,14 @@ fn handle_one(
         let p_enc =
             query_param_raw(q, "p").ok_or_else(|| "file_browser/stream: missing p".to_string())?;
         let path = percent_decode_component(p_enc)?;
-        match crate::cef::file_browser::file_browser_open_video_stream(&path, range_header.as_deref())
-        {
+        match crate::cef::file_browser::file_browser_open_video_stream(
+            &path,
+            range_header.as_deref(),
+        ) {
             Ok(vs) => write_http_video_stream(stream, vs).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -926,7 +930,9 @@ fn handle_one(
         };
         match crate::cef::file_browser::file_browser_write_file_utf8(path, content) {
             Ok(()) => write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -936,7 +942,9 @@ fn handle_one(
         let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
         match crate::cef::file_browser::file_browser_mkdir_json(parent, name) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -946,7 +954,9 @@ fn handle_one(
         let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
         match crate::cef::file_browser::file_browser_touch_file_json(parent, name) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -955,7 +965,9 @@ fn handle_one(
         let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
         match crate::cef::file_browser::file_browser_remove_path_json(path) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -965,7 +977,9 @@ fn handle_one(
         let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("");
         match crate::cef::file_browser::file_browser_rename_path_json(from, to) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -979,7 +993,9 @@ fn handle_one(
             .filter(|s| !s.is_empty());
         match crate::cef::file_browser::file_browser_copy_file_json(from, to_dir, dest_name) {
             Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
-            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
         }
         return Ok(());
     }
@@ -1395,11 +1411,12 @@ mod normalize_http_request_origin_form_tests {
 
     #[test]
     fn strips_absolute_form_http_host() {
-        let t = normalize_http_request_origin_form("http://127.0.0.1:9123/test/window/minimize?window_id=3");
+        let t = normalize_http_request_origin_form(
+            "http://127.0.0.1:9123/test/window/minimize?window_id=3",
+        );
         assert_eq!(t, "/test/window/minimize?window_id=3");
         let (p, q) = split_path_query(t);
         assert_eq!(p, "/test/window/minimize");
         assert_eq!(q, Some("window_id=3"));
     }
 }
-

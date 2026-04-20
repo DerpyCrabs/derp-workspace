@@ -334,10 +334,8 @@ impl CompositorState {
         let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
         let native_hit = self.native_surface_under_no_shell_exclusion(pos);
         let under_native = native_hit.is_some();
-        let force_native_buttons = under_native
-            && !in_excl
-            && !in_shell_ui
-            && !self.shell_ui_pointer_grab_active();
+        let force_native_buttons =
+            under_native && !in_excl && !in_shell_ui && !self.shell_ui_pointer_grab_active();
         let take_shell_base = shell_px.is_some()
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()

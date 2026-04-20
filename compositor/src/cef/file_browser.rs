@@ -453,7 +453,9 @@ fn content_type_for_file_path(path: &Path) -> &'static str {
     }
 }
 
-pub(crate) fn file_browser_read_file_bytes(raw_path: &str) -> Result<(Vec<u8>, &'static str), FileBrowserHttpError> {
+pub(crate) fn file_browser_read_file_bytes(
+    raw_path: &str,
+) -> Result<(Vec<u8>, &'static str), FileBrowserHttpError> {
     let canonical = canonicalize_existing_path(raw_path)?;
     let metadata = fs::metadata(&canonical).map_err(|error| {
         let code = match error.kind() {
@@ -511,7 +513,10 @@ pub(crate) fn file_browser_read_file_bytes(raw_path: &str) -> Result<(Vec<u8>, &
     Ok((bytes, content_type))
 }
 
-pub(crate) fn file_browser_write_file_utf8(raw_path: &str, content: &str) -> Result<(), FileBrowserHttpError> {
+pub(crate) fn file_browser_write_file_utf8(
+    raw_path: &str,
+    content: &str,
+) -> Result<(), FileBrowserHttpError> {
     let canonical = canonicalize_existing_path(raw_path)?;
     let entry = build_entry(&canonical)?;
     if entry.kind != "file" {
@@ -675,10 +680,7 @@ fn sanitize_new_name_segment(name: &str) -> Result<String, FileBrowserHttpError>
             None,
         ));
     }
-    if trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.as_bytes().contains(&0)
-    {
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.as_bytes().contains(&0) {
         return Err(http_error(
             400,
             "invalid_name",
@@ -710,7 +712,10 @@ fn require_writable_directory(path: &Path) -> Result<(), FileBrowserHttpError> {
     Ok(())
 }
 
-pub(crate) fn file_browser_mkdir_json(parent_raw: &str, name: &str) -> Result<String, FileBrowserHttpError> {
+pub(crate) fn file_browser_mkdir_json(
+    parent_raw: &str,
+    name: &str,
+) -> Result<String, FileBrowserHttpError> {
     let parent = canonicalize_existing_path(parent_raw)?;
     require_writable_directory(&parent)?;
     let seg = sanitize_new_name_segment(name)?;
@@ -762,7 +767,10 @@ pub(crate) fn file_browser_mkdir_json(parent_raw: &str, name: &str) -> Result<St
     })
 }
 
-pub(crate) fn file_browser_touch_file_json(parent_raw: &str, name: &str) -> Result<String, FileBrowserHttpError> {
+pub(crate) fn file_browser_touch_file_json(
+    parent_raw: &str,
+    name: &str,
+) -> Result<String, FileBrowserHttpError> {
     let parent = canonicalize_existing_path(parent_raw)?;
     require_writable_directory(&parent)?;
     let seg = sanitize_new_name_segment(name)?;
@@ -814,7 +822,9 @@ pub(crate) fn file_browser_touch_file_json(parent_raw: &str, name: &str) -> Resu
     })
 }
 
-pub(crate) fn file_browser_remove_path_json(raw_path: &str) -> Result<String, FileBrowserHttpError> {
+pub(crate) fn file_browser_remove_path_json(
+    raw_path: &str,
+) -> Result<String, FileBrowserHttpError> {
     let canonical = canonicalize_existing_path(raw_path)?;
     if canonical == Path::new("/") {
         return Err(http_error(
@@ -855,7 +865,10 @@ pub(crate) fn file_browser_remove_path_json(raw_path: &str) -> Result<String, Fi
             http_error(
                 status,
                 code,
-                format!("failed to remove directory {}: {error}", canonical.display()),
+                format!(
+                    "failed to remove directory {}: {error}",
+                    canonical.display()
+                ),
                 Some(&canonical),
             )
         })?;
@@ -881,7 +894,10 @@ pub(crate) fn file_browser_remove_path_json(raw_path: &str) -> Result<String, Fi
     Ok(r#"{"ok":true}"#.to_string())
 }
 
-pub(crate) fn file_browser_rename_path_json(from_raw: &str, to_raw: &str) -> Result<String, FileBrowserHttpError> {
+pub(crate) fn file_browser_rename_path_json(
+    from_raw: &str,
+    to_raw: &str,
+) -> Result<String, FileBrowserHttpError> {
     let from = canonicalize_existing_path(from_raw)?;
     if from == Path::new("/") {
         return Err(http_error(
@@ -902,7 +918,12 @@ pub(crate) fn file_browser_rename_path_json(from_raw: &str, to_raw: &str) -> Res
     }
     let trimmed = to_raw.trim();
     if trimmed.is_empty() {
-        return Err(http_error(400, "invalid_path", "destination path is required", None));
+        return Err(http_error(
+            400,
+            "invalid_path",
+            "destination path is required",
+            None,
+        ));
     }
     let to_path = PathBuf::from(trimmed);
     if !to_path.is_absolute() {
@@ -975,7 +996,11 @@ pub(crate) fn file_browser_rename_path_json(from_raw: &str, to_raw: &str) -> Res
     })
 }
 
-pub(crate) fn file_browser_copy_file_json(from_raw: &str, to_dir_raw: &str, dest_name: Option<&str>) -> Result<String, FileBrowserHttpError> {
+pub(crate) fn file_browser_copy_file_json(
+    from_raw: &str,
+    to_dir_raw: &str,
+    dest_name: Option<&str>,
+) -> Result<String, FileBrowserHttpError> {
     let from = canonicalize_existing_path(from_raw)?;
     let from_meta = fs::metadata(&from).map_err(|error| {
         http_error(
@@ -1131,11 +1156,7 @@ pub(crate) fn file_browser_open_video_stream(
             content_type,
             total_len,
             send_start: 0,
-            send_end_inclusive: if total_len == 0 {
-                0
-            } else {
-                total_len - 1
-            },
+            send_end_inclusive: if total_len == 0 { 0 } else { total_len - 1 },
             file,
         }),
         ParsedVideoRange::Partial {

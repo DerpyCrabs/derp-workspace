@@ -64,7 +64,10 @@ pub(crate) fn wait_for_shell_test_window_open(
             return if ok {
                 Ok(())
             } else {
-                Err("shell refused openShellTestWindow (queue full or no monitor context)".to_string())
+                Err(
+                    "shell refused openShellTestWindow (queue full or no monitor context)"
+                        .to_string(),
+                )
             };
         }
         let now = Instant::now();

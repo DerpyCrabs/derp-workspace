@@ -383,12 +383,13 @@ impl UplinkToCompositor {
         })
     }
 
-    pub fn test_super_keybind(&self, action: String, target_window_id: Option<u32>) -> Result<(), String> {
+    pub fn test_super_keybind(
+        &self,
+        action: String,
+        target_window_id: Option<u32>,
+    ) -> Result<(), String> {
         self.run_result(move |s| {
-            match (
-                action.as_str(),
-                target_window_id,
-            ) {
+            match (action.as_str(), target_window_id) {
                 ("move_monitor_left" | "move_monitor_right", Some(wid)) => {
                     let move_right = action == "move_monitor_right";
                     match s.super_move_window_to_adjacent_monitor(wid, move_right) {

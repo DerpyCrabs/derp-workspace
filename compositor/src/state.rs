@@ -1658,6 +1658,7 @@ impl CompositorState {
         }
         if js_changed {
             self.shell_exclusion_zones_need_full_damage = true;
+            self.shell_dmabuf_dirty_force_full = true;
         }
     }
 
@@ -1777,12 +1778,14 @@ impl CompositorState {
             if payload.len() < base_len + 8 {
                 return;
             }
-            let fc = u32::from_le_bytes(payload[base_len + 4..base_len + 8].try_into().unwrap()) as usize;
+            let fc = u32::from_le_bytes(payload[base_len + 4..base_len + 8].try_into().unwrap())
+                as usize;
             let expected = base_len + 8 + fc.saturating_mul(20);
             if expected != payload.len() {
                 return;
             }
-            overlay_open = u32::from_le_bytes(payload[base_len..base_len + 4].try_into().unwrap()) != 0;
+            overlay_open =
+                u32::from_le_bytes(payload[base_len..base_len + 4].try_into().unwrap()) != 0;
             let mut fo = base_len + 8;
             for _ in 0..fc {
                 let x = i32::from_le_bytes(payload[fo..fo + 4].try_into().unwrap());
@@ -1859,6 +1862,7 @@ impl CompositorState {
             }
         });
         let global_changed = next_global != self.shell_exclusion_global;
+        let decor_changed = next_decor != self.shell_exclusion_decor;
         let tray_changed = next_tray_strip != self.shell_tray_strip_global;
         let floating_changed = next_floating != self.shell_exclusion_floating;
         let overlay_changed = overlay_open != self.shell_exclusion_overlay_open;
@@ -1867,7 +1871,7 @@ impl CompositorState {
         self.shell_exclusion_floating = next_floating;
         self.shell_exclusion_overlay_open = overlay_open;
         self.shell_tray_strip_global = next_tray_strip;
-        if global_changed || tray_changed || floating_changed || overlay_changed {
+        if global_changed || decor_changed || tray_changed || floating_changed || overlay_changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }
@@ -3651,9 +3655,8 @@ impl CompositorState {
             .as_ref()
             .and_then(Output::from_resource)
             .or_else(|| {
-                self.wayland_window_shell_rect_and_deco(window).and_then(|(gx, gy, gw, gh)| {
-                    self.output_for_global_xywh(gx, gy, gw, gh)
-                })
+                self.wayland_window_shell_rect_and_deco(window)
+                    .and_then(|(gx, gy, gw, gh)| self.output_for_global_xywh(gx, gy, gw, gh))
             })
             .or_else(|| self.leftmost_output())
         else {
@@ -4354,10 +4357,8 @@ impl CompositorState {
         if geos.is_empty() {
             return None;
         }
-        let pairs: Vec<(String, Rectangle<i32, Logical>)> = geos
-            .iter()
-            .map(|(n, g)| (n.clone(), *g))
-            .collect();
+        let pairs: Vec<(String, Rectangle<i32, Logical>)> =
+            geos.iter().map(|(n, g)| (n.clone(), *g)).collect();
         pick_output_name_for_global_window_rect_from_output_rects(&pairs, x, y, w, h)
     }
 
@@ -5272,7 +5273,13 @@ impl CompositorState {
             .output_for_window_position(location.x, location.y, width, height)
             .unwrap_or_else(|| prev.output_name.clone());
         let (x, y, width, height, output_name) = if skip_x11_geometry {
-            (prev.x, prev.y, prev.width, prev.height, prev.output_name.clone())
+            (
+                prev.x,
+                prev.y,
+                prev.width,
+                prev.height,
+                prev.output_name.clone(),
+            )
         } else {
             (location.x, location.y, width, height, output_name)
         };
@@ -6347,7 +6354,11 @@ impl CompositorState {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
             return;
         };
-        let Some(window_id) = v.get("window_id").and_then(|x| x.as_u64()).map(|u| u as u32) else {
+        let Some(window_id) = v
+            .get("window_id")
+            .and_then(|x| x.as_u64())
+            .map(|u| u as u32)
+        else {
             return;
         };
         let Some(kind) = v.get("kind").and_then(|x| x.as_str()) else {
@@ -6601,8 +6612,14 @@ impl CompositorState {
             .x
             .saturating_add((tgt_work.size.w.saturating_sub(gw)).saturating_div(2));
         let mut ny = tgt_work.loc.y.saturating_add(rel_y);
-        let max_x = tgt_work.loc.x.saturating_add(tgt_work.size.w.saturating_sub(gw));
-        let max_y = tgt_work.loc.y.saturating_add(tgt_work.size.h.saturating_sub(gh));
+        let max_x = tgt_work
+            .loc
+            .x
+            .saturating_add(tgt_work.size.w.saturating_sub(gw));
+        let max_y = tgt_work
+            .loc
+            .y
+            .saturating_add(tgt_work.size.h.saturating_sub(gh));
         nx = nx.max(tgt_work.loc.x).min(max_x);
         ny = ny.max(tgt_work.loc.y).min(max_y);
         self.shell_set_window_geometry(
@@ -6699,7 +6716,12 @@ impl CompositorState {
                         let geometry = x11.geometry();
                         self.toplevel_floating_restore.insert(
                             window_id,
-                            (geometry.loc.x, geometry.loc.y, geometry.size.w, geometry.size.h),
+                            (
+                                geometry.loc.x,
+                                geometry.loc.y,
+                                geometry.size.w,
+                                geometry.size.h,
+                            ),
                         );
                     }
                 }
@@ -6877,9 +6899,9 @@ impl CompositorState {
                 window_id,
                 "shell_close_window: no registry entry; prune shell + resync"
             );
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
-                window_id,
-            });
+            self.shell_send_to_cef(
+                shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id },
+            );
             self.shell_reply_window_list();
             tracing::warn!(
                 target: "derp_shell_close",
@@ -8667,14 +8689,9 @@ mod output_name_pick_tests {
             ("HDMI-A-1".to_string(), rect(0, 0, 1920, 1080)),
             ("DP-1".to_string(), rect(1920, 0, 1920, 1080)),
         ];
-        let got = pick_output_name_for_global_window_rect_from_output_rects(
-            &pairs,
-            200,
-            680,
-            3500,
-            400,
-        )
-        .unwrap();
+        let got =
+            pick_output_name_for_global_window_rect_from_output_rects(&pairs, 200, 680, 3500, 400)
+                .unwrap();
         assert_eq!(got, "DP-1");
     }
 

@@ -109,6 +109,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
     return out
   })
+  const liveFocusedWindowId = createMemo(() => {
+    const windowId = focusedWindowId()
+    return windowId !== null && windows().has(windowId) ? windowId : null
+  })
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
     const authoritative = collectSnapshotAuthoritativeState(details)
@@ -279,7 +283,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     windowsList,
     workspaceState,
     setWorkspaceState,
-    focusedWindowId,
+    focusedWindowId: liveFocusedWindowId,
     setFocusedWindowId,
     shellHostedAppByWindow,
     applyCompositorSnapshot,

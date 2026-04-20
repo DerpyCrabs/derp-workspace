@@ -48,7 +48,7 @@ type HarnessCommand =
   | { op: 'keybind'; action: string; window_id?: number }
   | { op: 'spawn'; command: string }
   | { op: 'open-shell-test-window' }
-  | { op: 'scenario'; name: 'maximize-native-behind-shell' | 'maximize-file-browser-then-foot' }
+  | { op: 'scenario'; name: 'maximize-native-behind-shell' | 'maximize-file-browser-then-foot' | 'native-close-decoration-clears' }
 
 type SnapshotRect = { x: number; y: number; width: number; height: number }
 
@@ -104,6 +104,7 @@ function usage(): string {
     '  open-shell-test-window',
     '  scenario maximize-native-behind-shell',
     '  scenario maximize-file-browser-then-foot',
+    '  scenario native-close-decoration-clears',
     '  run-json <file>',
     '',
     `Artifacts: ${artifactDir()}`,
@@ -211,7 +212,8 @@ function parseCli(argv: string[]): HarnessCommand[] {
     case 'scenario':
       if (
         rest[0] !== 'maximize-native-behind-shell' &&
-        rest[0] !== 'maximize-file-browser-then-foot'
+        rest[0] !== 'maximize-file-browser-then-foot' &&
+        rest[0] !== 'native-close-decoration-clears'
       ) {
         throw new Error(`unknown scenario ${rest[0] ?? ''}`)
       }
@@ -353,6 +355,13 @@ async function clickMaximizeButton(base: string, windowId: number, label: string
   await clickRect(base, maximize)
 }
 
+async function clickCloseButton(base: string, windowId: number, label: string): Promise<void> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const controls = windowControls(shell, windowId)
+  const close = assertRectMinSize(`${label} close button`, controls?.close, 12)
+  await clickRect(base, close)
+}
+
 async function cleanupFileBrowserFootReproWindows(base: string): Promise<void> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const fileBrowserIds = shell.windows
@@ -441,6 +450,52 @@ async function runMaximizeFileBrowserThenFootScenario(harness: HarnessState): Pr
   return { ...summary, summary: summaryPath }
 }
 
+async function runNativeCloseDecorationClearsScenario(harness: HarnessState): Promise<Record<string, unknown>> {
+  const { base, state } = harness
+  await cleanupFileBrowserFootReproWindows(base)
+  const beforeFoot = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const knownIds = new Set(beforeFoot.windows.map((window) => window.window_id))
+  await postJson(base, '/spawn', { command: 'foot' })
+  const foot = await waitFor(
+    'wait for close repro foot window',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shell.windows.find(
+        (entry) => !entry.shell_hosted && !knownIds.has(entry.window_id) && entry.app_id === 'foot' && !entry.minimized,
+      )
+      if (!window) return null
+      return { compositor, shell, window }
+    },
+    5000,
+    50,
+  )
+  state.spawnedNativeWindowIds.add(foot.window.window_id)
+  await waitForWindowRaised(base, foot.window.window_id)
+  const before = await saveSnapshot(base, 'harness-native-close-before', true, true)
+  await clickCloseButton(base, foot.window.window_id, 'foot')
+  const immediateScreenshot = await takeScreenshot(base, 'harness-native-close-immediate-after-click')
+  const gone = await waitForWindowGone(base, foot.window.window_id, 5000)
+  const after = await saveSnapshot(base, 'harness-native-close-after', true, true)
+  const shellHasWindow = gone.shell.windows.some((window) => window.window_id === foot.window.window_id)
+  const compositorHasWindow = gone.compositor.windows.some((window) => window.window_id === foot.window.window_id)
+  const compositorHasDecor = gone.compositor.shell_ui_windows?.some((window) => window.id === foot.window.window_id) ?? false
+  const shellFocusedClosedWindow = gone.shell.focused_window_id === foot.window.window_id
+  const ok = !shellHasWindow && !compositorHasWindow && !compositorHasDecor && !shellFocusedClosedWindow
+  const summary = {
+    ok,
+    footWindowId: foot.window.window_id,
+    shellHasWindow,
+    compositorHasWindow,
+    compositorHasDecor,
+    shellFocusedClosedWindow,
+    before,
+    immediateScreenshot,
+    after,
+  }
+  const summaryPath = await writeJsonArtifact('harness-native-close-decoration-clears-summary.json', summary)
+  return { ...summary, summary: summaryPath }
+}
+
 async function executeCommand(harness: HarnessState, command: HarnessCommand): Promise<unknown> {
   const { base } = harness
   switch (command.op) {
@@ -474,7 +529,8 @@ async function executeCommand(harness: HarnessState, command: HarnessCommand): P
       return openShellTestWindow(base, harness.state)
     case 'scenario':
       if (command.name === 'maximize-native-behind-shell') return runMaximizeNativeBehindShellScenario(harness)
-      return runMaximizeFileBrowserThenFootScenario(harness)
+      if (command.name === 'maximize-file-browser-then-foot') return runMaximizeFileBrowserThenFootScenario(harness)
+      return runNativeCloseDecorationClearsScenario(harness)
   }
 }
 
