@@ -8,6 +8,7 @@ import VolumeX from 'lucide-solid/icons/volume-x'
 import X from 'lucide-solid/icons/x'
 import Settings from 'lucide-solid/icons/settings'
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { PowerContextMenu } from '@/host/PowerContextMenu'
 import { ProgramsContextMenu } from '@/host/ProgramsContextMenu'
 import {
@@ -18,6 +19,7 @@ import {
   VolumeTaskbarMenu,
 } from '@/host/TaskbarContextMenu'
 import { VolumeContextMenu } from '@/host/VolumeContextMenu'
+import { taskbarRowTooltip, taskbarWindowLabel } from '@/features/taskbar/taskbarRowTooltip'
 import { TaskbarWindowIcon } from './taskbarIcons'
 
 export type TaskbarWindowRow = {
@@ -27,6 +29,7 @@ export type TaskbarWindowRow = {
   app_id: string
   desktop_id?: string | null
   desktop_icon?: string | null
+  app_display_name?: string | null
   minimized: boolean
   output_name: string
   tab_count: number
@@ -69,10 +72,7 @@ const clockDateFormatter = new Intl.DateTimeFormat([], {
   day: 'numeric',
 })
 
-function windowLabel(w: TaskbarWindowRow) {
-  const label = w.title || w.app_id || `Window ${w.window_id}`
-  return w.tab_count > 1 ? `${label} (+${w.tab_count - 1})` : label
-}
+type TaskbarRowHoverTip = { text: string; left: number; top: number }
 
 function keyboardIndicator(label: string) {
   const compact = label.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -85,6 +85,7 @@ function TaskbarWindowRows(props: {
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
+  reportRowHoverTip: (payload: { text: string; rowEl: HTMLElement } | null) => void
 }) {
   const windowsByGroupId = createMemo(() => {
     const map = new Map<string, TaskbarWindowRow>()
@@ -112,7 +113,17 @@ function TaskbarWindowRows(props: {
               'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
               'min-w-[52px] flex-[1_1_64px] justify-center px-1': props.compactMode === 'tight',
             }}
-            title={[windowLabel(w()!), w()?.minimized ? '(minimized)' : ''].filter(Boolean).join(' ')}
+            onPointerEnter={(e) => {
+              const win = w()
+              if (!win) return
+              props.reportRowHoverTip({ text: taskbarRowTooltip(win), rowEl: e.currentTarget })
+            }}
+            onPointerMove={(e) => {
+              const win = w()
+              if (!win) return
+              props.reportRowHoverTip({ text: taskbarRowTooltip(win), rowEl: e.currentTarget })
+            }}
+            onPointerLeave={() => props.reportRowHoverTip(null)}
           >
             <button
               type="button"
@@ -137,7 +148,7 @@ function TaskbarWindowRows(props: {
                 compact={props.compactMode !== 'normal'}
               />
               <Show when={props.compactMode !== 'tight'}>
-                <span class="min-w-0 truncate">{windowLabel(w()!)}</span>
+                <span class="min-w-0 truncate">{taskbarWindowLabel(w()!)}</span>
               </Show>
             </button>
             <Show when={props.compactMode !== 'tight'}>
@@ -145,8 +156,8 @@ function TaskbarWindowRows(props: {
                 type="button"
                 class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
                 data-shell-taskbar-window-close={w()!.window_id}
-                aria-label={`Close ${windowLabel(w()!)}`}
-                title={`Close ${windowLabel(w()!)}`}
+                aria-label={`Close ${taskbarWindowLabel(w()!)}`}
+                title={`Close ${taskbarWindowLabel(w()!)}`}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation()
@@ -166,6 +177,7 @@ function TaskbarWindowRows(props: {
 export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
   const [windowRailWidth, setWindowRailWidth] = createSignal(0)
+  const [rowHoverTip, setRowHoverTip] = createSignal<TaskbarRowHoverTip | null>(null)
   let windowRailRef: HTMLDivElement | undefined
   let suppressSettingsClick = false
   let suppressDebugClick = false
@@ -199,7 +211,19 @@ export function Taskbar(props: TaskbarProps) {
     onCleanup(() => observer.disconnect())
   })
 
+  function reportRowHoverTip(payload: { text: string; rowEl: HTMLElement } | null) {
+    if (!payload) {
+      setRowHoverTip(null)
+      return
+    }
+    const r = payload.rowEl.getBoundingClientRect()
+    setRowHoverTip({ text: payload.text, left: r.left + r.width / 2, top: r.top - 8 })
+  }
+
+  onCleanup(() => setRowHoverTip(null))
+
   return (
+    <>
     <div
       class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
       data-shell-taskbar-monitor={props.monitorName}
@@ -221,6 +245,7 @@ export function Taskbar(props: TaskbarProps) {
               compactMode={compactMode()}
               onTaskbarActivate={props.onTaskbarActivate}
               onTaskbarClose={props.onTaskbarClose}
+              reportRowHoverTip={reportRowHoverTip}
             />
           </div>
         }
@@ -267,6 +292,7 @@ export function Taskbar(props: TaskbarProps) {
             compactMode={compactMode()}
             onTaskbarActivate={props.onTaskbarActivate}
             onTaskbarClose={props.onTaskbarClose}
+            reportRowHoverTip={reportRowHoverTip}
           />
         </div>
         <div
@@ -423,5 +449,22 @@ export function Taskbar(props: TaskbarProps) {
         </div>
       </Show>
     </div>
+    <Show when={rowHoverTip() !== null && typeof document !== 'undefined'}>
+      <Portal mount={document.body}>
+        <div
+          data-shell-taskbar-row-tooltip
+          class="pointer-events-none fixed z-430000 max-w-[min(28rem,calc(100vw-1rem))] rounded-md border border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-2.5 py-1.5 text-left text-xs leading-snug text-(--shell-text) shadow-lg"
+          style={{
+            left: `${rowHoverTip()!.left}px`,
+            top: `${rowHoverTip()!.top}px`,
+            transform: 'translate(-50%, -100%)',
+          }}
+          role="tooltip"
+        >
+          {rowHoverTip()!.text}
+        </div>
+      </Portal>
+    </Show>
+    </>
   )
 }

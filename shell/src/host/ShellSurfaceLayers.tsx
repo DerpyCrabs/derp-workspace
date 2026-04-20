@@ -113,7 +113,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           return (
             <Show when={!props.screenTaskbarHiddenForFullscreen(screen)}>
               <div
-                class="pointer-events-none absolute z-401000"
+                class="pointer-events-auto absolute z-401000"
                 style={{
                   left: `${loc.x}px`,
                   top: `${loc.y + loc.height - props.taskbarHeight}px`,

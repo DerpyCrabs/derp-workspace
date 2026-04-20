@@ -1,6 +1,7 @@
 import {
   KEY,
   ensureNativePair,
+  RED_NATIVE_TITLE,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
   assert,
@@ -36,6 +37,7 @@ import {
   waitForCompositorShellUiFocus,
   waitForNativeFocus,
   waitForShellUiFocus,
+  waitForTaskbarEntry,
   waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
@@ -797,6 +799,39 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('tray-volume-audio-state.json', audioAfterOutputSlide)
     await writeJsonArtifact('tray-volume-shell.json', afterOutputPick)
     await writeJsonArtifact('tray-volume-overlay.json', overlayOpen)
+  })
+
+  test('taskbar window row hover mounts tooltip dom above menu layer host', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const shell = await waitForTaskbarEntry(base, redId)
+    const row = taskbarEntry(shell, redId)
+    assert(row?.activate, 'taskbar activate rect required')
+    const c = rectCenter(row.activate)
+    await movePoint(base, c.x, c.y)
+    await waitFor(
+      'taskbar row tooltip mounts',
+      async () => {
+        const html = await getShellHtml(base, '[data-shell-taskbar-row-tooltip]')
+        return html.length > 0 && html.includes(RED_NATIVE_TITLE) ? html : null
+      },
+      3000,
+      40,
+    )
+    const { compositor } = await getSnapshots(base)
+    const output = compositor.outputs[0]
+    assert(output, 'expected at least one output')
+    await movePoint(base, output.x + Math.floor(output.width / 2), output.y + 48)
+    await waitFor(
+      'taskbar row tooltip clears after pointer leave',
+      async () => {
+        const html = await getShellHtml(base, '[data-shell-taskbar-row-tooltip]')
+        return html.length === 0 ? true : null
+      },
+      3000,
+      40,
+    )
+    await cleanupNativeWindows(base, new Set([redId, green.window.window_id]))
   })
 
   test('tray volume panel stays on the compositor overlay while native windows exist', async ({ base, state }) => {

@@ -20,6 +20,7 @@ export type WorkspaceGroupModel = {
 export type TaskbarWorkspaceRow = TaskbarGroupRow & {
   desktop_id: string | null
   desktop_icon: string | null
+  app_display_name: string | null
 }
 
 function sameWindowMembers(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
@@ -145,10 +146,12 @@ export function buildTaskbarRowsByMonitor(
         app_id: row.app_id,
       })
       const previousRow = previousRowsByGroupId.get(row.group_id)
+      const appDisplayName = match?.full_name?.trim() || match?.name?.trim() || null
       const nextRow = {
         ...row,
         desktop_id: match?.desktop_id ?? null,
         desktop_icon: match?.icon ?? null,
+        app_display_name: appDisplayName,
       }
       if (
         previousRow &&
@@ -159,7 +162,8 @@ export function buildTaskbarRowsByMonitor(
         previousRow.output_name === nextRow.output_name &&
         previousRow.tab_count === nextRow.tab_count &&
         previousRow.desktop_id === nextRow.desktop_id &&
-        previousRow.desktop_icon === nextRow.desktop_icon
+        previousRow.desktop_icon === nextRow.desktop_icon &&
+        previousRow.app_display_name === nextRow.app_display_name
       ) {
         return previousRow
       }
