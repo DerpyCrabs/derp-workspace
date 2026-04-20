@@ -670,9 +670,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
               options.focusShellUiWindow(currentVisibleWindowId)
               return
             }
-            if (!rowFocused()) {
-              options.activateTaskbarWindowViaShell(currentVisibleWindowId)
-            }
+            options.focusWindowViaShell(currentVisibleWindowId)
           }}
           onTitlebarPointerDown={(pointerId, clientX, clientY) => {
             if (splitLayout() && beginSplitGroupGesture(props.groupId, pointerId, 'move', 0, clientX, clientY)) return
@@ -699,23 +697,33 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             if (splitLayout()) {
               const leftWindowId = group()?.splitLeftWindowId
               const rightWindowId = visibleWindowId()
+              if (rightWindowId != null) options.focusWindowViaShell(rightWindowId)
               if (leftWindowId != null) options.shellWireSend('minimize', leftWindowId)
               if (rightWindowId != null) options.shellWireSend('minimize', rightWindowId)
               return
             }
             const currentVisibleWindowId = visibleWindowId()
-            if (currentVisibleWindowId != null) options.shellWireSend('minimize', currentVisibleWindowId)
+            if (currentVisibleWindowId != null) {
+              options.focusWindowViaShell(currentVisibleWindowId)
+              options.shellWireSend('minimize', currentVisibleWindowId)
+            }
           }}
           onMaximize={() => {
             const currentVisibleWindowId = visibleWindowId()
-            if (currentVisibleWindowId != null) options.toggleShellMaximizeForWindow(currentVisibleWindowId)
+            if (currentVisibleWindowId != null) {
+              options.focusWindowViaShell(currentVisibleWindowId)
+              options.toggleShellMaximizeForWindow(currentVisibleWindowId)
+            }
           }}
           onClose={() => {
             const focusedGroupWindowId =
               group()?.members.some((member) => member.window_id === options.focusedWindowId())
                 ? options.focusedWindowId()
                 : visibleWindowId()
-            if (focusedGroupWindowId != null) options.closeGroupWindow(focusedGroupWindowId)
+            if (focusedGroupWindowId != null) {
+              options.focusWindowViaShell(focusedGroupWindowId)
+              options.closeGroupWindow(focusedGroupWindowId)
+            }
           }}
         >
           <Show when={!splitLayout() && visibleWindowId() !== null}>

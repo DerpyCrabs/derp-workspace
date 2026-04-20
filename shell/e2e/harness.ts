@@ -4,8 +4,12 @@ import {
   BTN_RIGHT,
   SHELL_TEST_APP_ID,
   assert,
+  assertRectMinSize,
   artifactDir,
   captureFailureArtifacts,
+  clickRect,
+  cleanupShellWindows,
+  closeWindow,
   compositorWindowById,
   discoverReadyBase,
   dragBetweenPoints,
@@ -21,13 +25,17 @@ import {
   spawnNativeWindow,
   waitFor,
   waitForNativeFocus,
+  waitForWindowGone,
   waitForWindowRaised,
+  windowControls,
   writeJsonArtifact,
   writeTextArtifact,
+  type CompositorSnapshot,
   type E2eState,
   type ShellSnapshot,
   type WindowSnapshot,
 } from './lib/runtime.ts'
+import { fileBrowserSnapshot, openFileBrowserFromLauncher } from './lib/fileBrowserFixtureNav.ts'
 
 type HarnessCommand =
   | { op: 'snapshot'; label?: string; html?: boolean; screenshot?: boolean; selector?: string }
@@ -40,7 +48,7 @@ type HarnessCommand =
   | { op: 'keybind'; action: string; window_id?: number }
   | { op: 'spawn'; command: string }
   | { op: 'open-shell-test-window' }
-  | { op: 'scenario'; name: 'maximize-native-behind-shell' }
+  | { op: 'scenario'; name: 'maximize-native-behind-shell' | 'maximize-file-browser-then-foot' }
 
 type SnapshotRect = { x: number; y: number; width: number; height: number }
 
@@ -95,6 +103,7 @@ function usage(): string {
     '  spawn <command...>',
     '  open-shell-test-window',
     '  scenario maximize-native-behind-shell',
+    '  scenario maximize-file-browser-then-foot',
     '  run-json <file>',
     '',
     `Artifacts: ${artifactDir()}`,
@@ -200,7 +209,12 @@ function parseCli(argv: string[]): HarnessCommand[] {
     case 'open-shell-test-window':
       return [{ op: 'open-shell-test-window' }]
     case 'scenario':
-      if (rest[0] !== 'maximize-native-behind-shell') throw new Error(`unknown scenario ${rest[0] ?? ''}`)
+      if (
+        rest[0] !== 'maximize-native-behind-shell' &&
+        rest[0] !== 'maximize-file-browser-then-foot'
+      ) {
+        throw new Error(`unknown scenario ${rest[0] ?? ''}`)
+      }
       return [{ op: 'scenario', name: rest[0] }]
     case 'run-json':
       return readJsonCommandsPlaceholder(rest[0])
@@ -314,6 +328,119 @@ async function runMaximizeNativeBehindShellScenario(harness: HarnessState): Prom
   return { ...summary, summary: summaryPath }
 }
 
+async function waitForFileBrowserMaximized(
+  base: string,
+  windowId: number,
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  return waitFor(
+    'wait for file browser maximized',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shellWindowById(shell, windowId)
+      const fileBrowser = fileBrowserSnapshot(shell, windowId)
+      if (!window?.maximized || !fileBrowser?.active_path) return null
+      return { compositor, shell, window }
+    },
+    5000,
+    50,
+  )
+}
+
+async function clickMaximizeButton(base: string, windowId: number, label: string): Promise<void> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const controls = windowControls(shell, windowId)
+  const maximize = assertRectMinSize(`${label} maximize button`, controls?.maximize, 12)
+  await clickRect(base, maximize)
+}
+
+async function cleanupFileBrowserFootReproWindows(base: string): Promise<void> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const fileBrowserIds = shell.windows
+    .filter((window) => window.shell_hosted && window.app_id === 'derp.files')
+    .map((window) => window.window_id)
+  await cleanupShellWindows(base, fileBrowserIds)
+  const afterShellCleanup = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const footIds = afterShellCleanup.windows
+    .filter((window) => !window.shell_hosted && window.app_id === 'foot')
+    .map((window) => window.window_id)
+  for (const windowId of footIds) {
+    try {
+      await closeWindow(base, windowId)
+      await waitForWindowGone(base, windowId, 3000)
+    } catch {}
+  }
+}
+
+async function runMaximizeFileBrowserThenFootScenario(harness: HarnessState): Promise<Record<string, unknown>> {
+  const { base, state } = harness
+  await cleanupFileBrowserFootReproWindows(base)
+  const before = await saveSnapshot(base, 'harness-file-browser-foot-before', true, true)
+  const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
+  await waitForWindowRaised(base, opened.windowId)
+  await clickMaximizeButton(base, opened.windowId, 'file browser')
+  await waitForFileBrowserMaximized(base, opened.windowId)
+  const afterFileBrowser = await saveSnapshot(base, 'harness-file-browser-foot-file-browser-maximized', true, true)
+  const beforeFoot = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const knownIds = new Set(beforeFoot.windows.map((window) => window.window_id))
+  await postJson(base, '/spawn', { command: 'foot' })
+  const foot = await waitFor(
+    'wait for foot window',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const window = shell.windows.find(
+        (entry) => !entry.shell_hosted && !knownIds.has(entry.window_id) && entry.app_id === 'foot' && !entry.minimized,
+      )
+      if (!window) return null
+      return { compositor, shell, window }
+    },
+    5000,
+    50,
+  )
+  state.spawnedNativeWindowIds.add(foot.window.window_id)
+  await waitForWindowRaised(base, foot.window.window_id)
+  const afterFootOpened = await saveSnapshot(base, 'harness-file-browser-foot-foot-opened', true, true)
+  await clickMaximizeButton(base, foot.window.window_id, 'foot')
+  const result = await waitFor(
+    'wait for file browser and foot maximize result',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const fileBrowserWindow = shellWindowById(shell, opened.windowId)
+      const footWindow = shellWindowById(shell, foot.window.window_id)
+      if (!fileBrowserWindow?.maximized || !footWindow?.maximized) return null
+      const shellStack = shell.window_stack_order ?? []
+      const compositorStack = compositor.window_stack_order ?? []
+      if (shellStack[0] !== foot.window.window_id || compositorStack[0] !== foot.window.window_id) return null
+      if (compositor.focused_window_id !== foot.window.window_id) return null
+      return { compositor, shell, fileBrowserWindow, footWindow }
+    },
+    5000,
+    50,
+  )
+  const after = await saveSnapshot(base, 'harness-file-browser-foot-after', true, true)
+  const shellStack = result.shell.window_stack_order ?? []
+  const compositorStack = result.compositor.window_stack_order ?? []
+  const footTop = shellStack[0] === foot.window.window_id && compositorStack[0] === foot.window.window_id
+  const focusOk = result.compositor.focused_window_id === foot.window.window_id
+  const fileBrowserFocused = result.compositor.focused_window_id === opened.windowId
+  const summary = {
+    ok: footTop && focusOk,
+    footTop,
+    focusOk,
+    fileBrowserFocused,
+    fileBrowserWindowId: opened.windowId,
+    footWindowId: foot.window.window_id,
+    shellStack,
+    compositorStack,
+    focusedWindowId: result.compositor.focused_window_id,
+    before,
+    afterFileBrowser,
+    afterFootOpened,
+    after,
+  }
+  const summaryPath = await writeJsonArtifact('harness-maximize-file-browser-then-foot-summary.json', summary)
+  return { ...summary, summary: summaryPath }
+}
+
 async function executeCommand(harness: HarnessState, command: HarnessCommand): Promise<unknown> {
   const { base } = harness
   switch (command.op) {
@@ -346,7 +473,8 @@ async function executeCommand(harness: HarnessState, command: HarnessCommand): P
     case 'open-shell-test-window':
       return openShellTestWindow(base, harness.state)
     case 'scenario':
-      return runMaximizeNativeBehindShellScenario(harness)
+      if (command.name === 'maximize-native-behind-shell') return runMaximizeNativeBehindShellScenario(harness)
+      return runMaximizeFileBrowserThenFootScenario(harness)
   }
 }
 

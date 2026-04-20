@@ -59,6 +59,45 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('harness-smoke-result.json', result)
   })
 
+  test('debug harness reproduces native maximize over shell file browser', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      'shell/e2e/harness.mjs',
+      'scenario',
+      'maximize-file-browser-then-foot',
+    ])
+    const result = JSON.parse(stdout) as {
+      ok?: boolean
+      results?: Array<{
+        ok?: boolean
+        footTop?: boolean
+        focusOk?: boolean
+        summary?: string
+        after?: {
+          compositor?: string
+          shell?: string
+          html?: string
+          screenshot?: { path?: string; manifest?: string }
+        }
+      }>
+    }
+    assert(result.ok, 'harness scenario should return ok')
+    const scenario = result.results?.[0]
+    assert(scenario?.ok, 'foot should be topmost and focused after maximize')
+    assert(scenario.footTop, 'harness scenario should report foot topmost')
+    assert(scenario.focusOk, 'harness scenario should report foot focused')
+    assert(scenario.summary, 'harness scenario missing summary artifact')
+    assert(scenario.after?.compositor, 'harness scenario missing after compositor artifact')
+    assert(scenario.after.shell, 'harness scenario missing after shell artifact')
+    assert(scenario.after.html, 'harness scenario missing after html artifact')
+    assert(scenario.after.screenshot?.path, 'harness scenario missing after screenshot')
+    await access(scenario.summary)
+    await access(scenario.after.compositor)
+    await access(scenario.after.shell)
+    await access(scenario.after.html)
+    await access(scenario.after.screenshot.path)
+    await writeJsonArtifact('harness-maximize-file-browser-then-foot-result.json', result)
+  })
+
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {
     state.crashProbe = await ensureNativeWindow(base, state, 'crashProbe', {
       title: CRASH_NATIVE_TITLE,

@@ -19,7 +19,11 @@ if [[ -z "${DERP_E2E_NATIVE_BIN:-}" ]]; then
 fi
 
 remote_args=()
+SESSION_RESTORE=0
 for arg in "$@"; do
+  if [[ "$arg" == "--session-restore" ]]; then
+    SESSION_RESTORE=1
+  fi
   remote_args+=("$(printf '%q' "$arg")")
 done
 remote_args_str="${remote_args[*]:-}"
@@ -131,6 +135,15 @@ EOF
 fi
 
 echo "=== SIGUSR2 compositor (before e2e) ==="
+if [[ "$SESSION_RESTORE" -eq 0 ]]; then
+  echo "=== disable saved session restore for e2e ==="
+  ssh_base bash -s <<'REMOTE'
+set -euo pipefail
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/derp"
+mkdir -p "$state_dir"
+printf '{"version":1,"shell":{}}\n' >"$state_dir/session-state.json"
+REMOTE
+fi
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)

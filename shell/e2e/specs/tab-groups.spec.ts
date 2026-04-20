@@ -301,12 +301,12 @@ async function selectTabByClick(base: string, windowId: number) {
       700,
       40,
     )
-  await clickOnce(false)
+  await clickOnce(true)
   try {
     await activated()
     return
   } catch {}
-  await clickOnce(true)
+  await clickOnce(false)
   await activated()
 }
 

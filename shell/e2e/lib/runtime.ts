@@ -456,6 +456,10 @@ export interface TestGroup {
   tests: TestEntry[]
 }
 
+export type PrimeStateOptions = {
+  sessionRestore?: boolean
+}
+
 export type TimingEvent = {
   kind: 'wait' | 'step' | 'mark'
   label: string
@@ -824,7 +828,44 @@ function syncTrackedWindows(state: E2eState, compositor: CompositorSnapshot): vo
   }
 }
 
-export async function primeState(base: string, state: E2eState): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+function emptySessionStateBody(): Record<string, unknown> {
+  return { version: 1, shell: {} }
+}
+
+export async function disableSessionRestoreForE2e(base: string, state?: E2eState): Promise<string> {
+  await postJson(base, '/session_state', emptySessionStateBody())
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (!shell.session_restore_active) return base
+  await postJson(base, '/session_reload', emptySessionStateBody())
+  await waitFor(
+    'wait for shell http restart',
+    async () => {
+      try {
+        await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        return null
+      } catch {
+        return true
+      }
+    },
+    5000,
+    100,
+  )
+  const nextBase = await discoverReadyBase(45000)
+  if (state) {
+    state.base = nextBase
+    state.knownWindowIds = new Set()
+  }
+  return nextBase
+}
+
+export async function primeState(
+  base: string,
+  state: E2eState,
+  options: PrimeStateOptions = {},
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  if (!options.sessionRestore) {
+    base = await disableSessionRestoreForE2e(base, state)
+  }
   await cleanupNativeWindows(base, state.spawnedNativeWindowIds)
   await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
   state.spawnedShellWindowIds.clear()
@@ -854,7 +895,11 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
     }
   }
   await ensureDesktopApps(base, state)
-  shell = await waitForSessionRestoreIdle(base)
+  if (options.sessionRestore) {
+    shell = await waitForSessionRestoreIdle(base)
+  } else {
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
   syncTrackedWindows(state, compositor)
   for (const windowId of [...state.nativeLaunchByWindowId.keys()]) {

@@ -243,7 +243,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             type="button"
             class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-base leading-none font-bold text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title="Minimize window"
-            onPointerDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              requestFocus()
+              e.stopPropagation()
+            }}
             onClick={() => props.onMinimize()}
           >
             −
@@ -254,6 +257,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-sm leading-none text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => {
+              requestFocus()
               e.stopPropagation()
               if (e.button !== 2) return
               e.preventDefault()
@@ -294,7 +298,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             type="button"
             class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-lg leading-none text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text)"
             title="Close window"
-            onPointerDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              requestFocus()
+              e.stopPropagation()
+            }}
             onClick={() => props.onClose()}
           >
             ×

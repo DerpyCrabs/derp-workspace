@@ -29,4 +29,6 @@ export const defaultGroups = [
   artifactsGroup,
 ]
 
-export const allGroups = [...defaultGroups, restartPersistenceGroup, restartInputGroup, shellChromeSessionGroup]
+export const sessionRestoreGroups = [restartPersistenceGroup, restartInputGroup, shellChromeSessionGroup]
+
+export const allGroups = [...defaultGroups, ...sessionRestoreGroups]
