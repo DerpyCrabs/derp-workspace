@@ -17,10 +17,12 @@ import {
   assertRectMinSize,
   assert,
   clickRect,
+  dragBetweenPoints,
   defineGroup,
   getJson,
   getShellHtml,
   prepareFileBrowserFixtures,
+  rectCenter,
   resetFileBrowserFixtures,
   rightClickRect,
   tapKey,
@@ -218,6 +220,49 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(newEntry, 'expected a second file browser window at the media directory path')
     state.spawnedShellWindowIds.add(newEntry.window_id)
+  })
+
+  test('file browser drags a writable file into a folder', async ({ base, state }) => {
+    const fixtures = await resetFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const emptyName = 'empty-folder'
+    const ready = await waitFor(
+      'wait for source and target rows',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const sourceRow = fileBrowserRow(shell, '.hidden-file.txt', navigated.windowId)
+        const targetRow = fileBrowserRow(shell, emptyName, navigated.windowId)
+        return sourceRow?.rect && targetRow?.rect ? { shell, sourceRow, targetRow } : null
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(assertRectMinSize('hidden file drag source', ready.sourceRow.rect, 32, 24))
+    const target = rectCenter(assertRectMinSize('empty-folder drop target', ready.targetRow.rect, 32, 24))
+    await dragBetweenPoints(base, start.x, start.y, target.x, target.y, 18)
+    const moved = await waitFor(
+      'wait for file move after drop',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (fileBrowserRow(shell, '.hidden-file.txt', navigated.windowId)) return null
+        return shell
+      },
+      5000,
+      100,
+    )
+    await access(path.posix.join(fixtures.empty_dir, '.hidden-file.txt'))
+    let sourceStillExists = true
+    try {
+      await access(fixtures.hidden_file)
+    } catch {
+      sourceStillExists = false
+    }
+    assert(!sourceStillExists, 'expected hidden file to move out of source directory')
+    await writeJsonArtifact('file-browser-dnd-move.json', {
+      windowId: navigated.windowId,
+      targetPath: fixtures.empty_dir,
+      shell: moved,
+    })
   })
 
   test('image viewer opens from file browser and arrow keys switch images', async ({ base, state }) => {

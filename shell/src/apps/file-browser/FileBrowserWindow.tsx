@@ -163,6 +163,22 @@ type FileBrowserUiDialog =
   | { kind: 'rename'; path: string; draft: string }
   | { kind: 'delete'; path: string; label: string }
 
+type FileBrowserDragPayload = {
+  path: string
+}
+
+type FileBrowserPointerDrag = {
+  path: string
+  pointerId: number
+  startX: number
+  startY: number
+  dragging: boolean
+  dropDir: string | null
+}
+
+const FILE_BROWSER_DRAG_MIME = 'application/x-derp-file-browser-path'
+const FILE_BROWSER_MUTATED_EVENT = 'derp-file-browser-mutated'
+
 let nextFileBrowserMountSeq = 0
 
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
@@ -180,10 +196,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let applyingFromCompositor = false
   let lastCompositorMementoJson = ''
   let rootRef: HTMLDivElement | undefined
+  let pointerDrag: FileBrowserPointerDrag | null = null
+  let suppressClickAfterPointerDrag = false
 
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
   const [dialog, setDialog] = createSignal<FileBrowserUiDialog>({ kind: 'closed' })
   const [opError, setOpError] = createSignal<string | null>(null)
+  const [dropTargetPath, setDropTargetPath] = createSignal<string | null>(null)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
   const selectedEntry = createMemo(
@@ -259,6 +278,145 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     }
     const directory = state.activePath ?? ''
     props.onOpenFile(entry.path, { directory, showHidden: state.showHidden })
+  }
+
+  function parseDragPayload(event: DragEvent): FileBrowserDragPayload | null {
+    const dt = event.dataTransfer
+    if (!dt) return null
+    const raw = dt.getData(FILE_BROWSER_DRAG_MIME) || dt.getData('text/plain')
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (!parsed || typeof parsed !== 'object') return null
+      const path = (parsed as { path?: unknown }).path
+      return typeof path === 'string' && path.length > 0 ? { path } : null
+    } catch {
+      return raw.startsWith('/') ? { path: raw } : null
+    }
+  }
+
+  function setDragPayload(event: DragEvent, entry: FileBrowserEntry) {
+    const dt = event.dataTransfer
+    if (!dt) return
+    const payload = JSON.stringify({ path: entry.path } satisfies FileBrowserDragPayload)
+    dt.effectAllowed = entry.writable === true ? 'move' : 'copyMove'
+    dt.setData(FILE_BROWSER_DRAG_MIME, payload)
+    dt.setData('text/plain', entry.path)
+  }
+
+  function canDropPathInto(sourcePath: string, targetDir: string): boolean {
+    if (!sourcePath || !targetDir) return false
+    const source = sourcePath.replace(/\/+$/, '') || '/'
+    const target = targetDir.replace(/\/+$/, '') || '/'
+    if (source === target) return false
+    const sourceParent = posixDirname(source).replace(/\/+$/, '') || '/'
+    if (sourceParent === target) return false
+    return !(target.startsWith(`${source}/`))
+  }
+
+  function notifyFileBrowserMutated() {
+    window.dispatchEvent(new CustomEvent(FILE_BROWSER_MUTATED_EVENT))
+  }
+
+  async function moveDraggedPathInto(sourcePath: string, targetDir: string) {
+    if (!canDropPathInto(sourcePath, targetDir)) return
+    const base = shellHttpBase()
+    const destPath = targetDir === '/' ? `/${posixBasename(sourcePath)}` : `${targetDir.replace(/\/+$/, '')}/${posixBasename(sourcePath)}`
+    setOpError(null)
+    try {
+      await renameFileBrowserPath(sourcePath, destPath, base)
+      setDropTargetPath(null)
+      notifyFileBrowserMutated()
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function dragOverDirectory(event: DragEvent, targetDir: string) {
+    const payload = parseDragPayload(event)
+    if (!payload || !canDropPathInto(payload.path, targetDir)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    setDropTargetPath(targetDir)
+  }
+
+  function dropOnDirectory(event: DragEvent, targetDir: string) {
+    const payload = parseDragPayload(event)
+    if (!payload) return
+    event.preventDefault()
+    event.stopPropagation()
+    void moveDraggedPathInto(payload.path, targetDir)
+  }
+
+  function pointerDropDirAt(clientX: number, clientY: number): string | null {
+    const el = document.elementFromPoint(clientX, clientY)
+    if (!(el instanceof HTMLElement)) return null
+    const row = el.closest('[data-file-browser-row]')
+    if (row instanceof HTMLElement && row.getAttribute('data-file-browser-kind') === 'directory') {
+      const path = row.getAttribute('data-file-browser-path')
+      return path && path.length > 0 ? path : null
+    }
+    const root = el.closest('[data-file-browser-list-state]')
+    if (root instanceof HTMLElement) {
+      const active = root.querySelector('[data-file-browser-active-path]')
+      if (active instanceof HTMLElement) {
+        const path = active.getAttribute('data-file-browser-active-path')
+        return path && path.length > 0 ? path : null
+      }
+    }
+    return null
+  }
+
+  function clearPointerDragListeners() {
+    window.removeEventListener('pointermove', onWindowPointerDragMove, true)
+    window.removeEventListener('pointerup', onWindowPointerDragEnd, true)
+    window.removeEventListener('pointercancel', onWindowPointerDragEnd, true)
+  }
+
+  function onWindowPointerDragMove(event: PointerEvent) {
+    const drag = pointerDrag
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY)
+    if (!drag.dragging && distance < 8) return
+    event.preventDefault()
+    drag.dragging = true
+    const dir = pointerDropDirAt(event.clientX, event.clientY)
+    drag.dropDir = dir && canDropPathInto(drag.path, dir) ? dir : null
+    setDropTargetPath(drag.dropDir)
+  }
+
+  function onWindowPointerDragEnd(event: PointerEvent) {
+    const drag = pointerDrag
+    if (!drag || drag.pointerId !== event.pointerId) return
+    clearPointerDragListeners()
+    pointerDrag = null
+    setDropTargetPath(null)
+    if (!drag.dragging) return
+    event.preventDefault()
+    suppressClickAfterPointerDrag = true
+    window.setTimeout(() => {
+      suppressClickAfterPointerDrag = false
+    }, 0)
+    const dir = drag.dropDir ?? pointerDropDirAt(event.clientX, event.clientY)
+    if (dir && canDropPathInto(drag.path, dir)) {
+      void moveDraggedPathInto(drag.path, dir)
+    }
+  }
+
+  function beginPointerDrag(event: PointerEvent, entry: FileBrowserEntry) {
+    if (event.button !== 0 || entry.writable !== true) return
+    pointerDrag = {
+      path: entry.path,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      dragging: false,
+      dropDir: null,
+    }
+    window.addEventListener('pointermove', onWindowPointerDragMove, true)
+    window.addEventListener('pointerup', onWindowPointerDragEnd, true)
+    window.addEventListener('pointercancel', onWindowPointerDragEnd, true)
   }
 
   function closeCtxMenu() {
@@ -515,6 +673,16 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   })
   onCleanup(unsubscribeShellWindowState)
 
+  const onFileBrowserMutated = () => {
+    if (state.status !== 'ready') return
+    void loadDirectory(state.activePath, true)
+  }
+  window.addEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
+  onCleanup(() => {
+    window.removeEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
+    clearPointerDragListeners()
+  })
+
   createEffect(() => {
     const raw = props.compositorAppState()
     void state.activePath
@@ -670,6 +838,18 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           void loadDirectory(state.parentPath)
         }
       }}
+      onDragOver={(event) => {
+        if (!state.activePath) return
+        dragOverDirectory(event, state.activePath)
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDropTargetPath(null)
+      }}
+      onDrop={(event) => {
+        if (!state.activePath) return
+        dropOnDirectory(event, state.activePath)
+      }}
     >
       <aside class="flex w-56 shrink-0 flex-col border-r border-(--shell-border) bg-(--shell-surface-panel)">
         <div class="border-b border-(--shell-border) px-3 py-2 text-xs font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
@@ -822,7 +1002,9 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                     class="grid cursor-default grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover)"
                     classList={{
                       'bg-(--shell-accent-soft) text-(--shell-accent-soft-text)': selected(),
+                      'outline outline-2 outline-(--shell-accent)': dropTargetPath() === entry.path,
                     }}
+                    draggable={entry.writable === true}
                     role="row"
                     aria-selected={selected() ? 'true' : undefined}
                     data-file-browser-row
@@ -830,7 +1012,30 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                     data-file-browser-name={normalizeDisplayName(entry)}
                     data-file-browser-kind={entry.kind}
                     data-file-browser-selected={selected() ? 'true' : 'false'}
-                    onClick={() => clickEntry(entry)}
+                    data-file-browser-draggable={entry.writable === true ? 'true' : 'false'}
+                    onClick={() => {
+                      if (suppressClickAfterPointerDrag) return
+                      clickEntry(entry)
+                    }}
+                    onPointerDown={(e) => beginPointerDrag(e, entry)}
+                    onDragStart={(e) => {
+                      selectEntry(entry.path)
+                      setDragPayload(e, entry)
+                    }}
+                    onDragEnd={() => setDropTargetPath(null)}
+                    onDragOver={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      dragOverDirectory(e, entry.path)
+                    }}
+                    onDragLeave={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                      setDropTargetPath((current) => (current === entry.path ? null : current))
+                    }}
+                    onDrop={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      dropOnDirectory(e, entry.path)
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
