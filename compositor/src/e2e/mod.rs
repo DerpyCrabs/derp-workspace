@@ -265,10 +265,16 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
-            if self.shell_move_is_active() {
+            let move_hosted = self
+                .shell_move_window_id
+                .is_some_and(|wid| self.window_registry.is_shell_hosted(wid));
+            let resize_hosted = self
+                .shell_resize_window_id
+                .is_some_and(|wid| self.window_registry.is_shell_hosted(wid));
+            if self.shell_move_is_active() && !move_hosted {
                 self.shell_move_delta(dx, dy);
             }
-            if self.shell_resize_is_active() {
+            if self.shell_resize_is_active() && !resize_hosted {
                 self.shell_resize_delta(dx, dy);
             }
         }

@@ -151,18 +151,6 @@ impl CompositorState {
                     }
                 }
             }
-            if self
-                .shell_move_window_id
-                .is_some_and(|window_id| self.window_registry.is_shell_hosted(window_id))
-            {
-                self.shell_move_delta(dx, dy);
-            }
-            if self
-                .shell_resize_window_id
-                .is_some_and(|window_id| self.window_registry.is_shell_hosted(window_id))
-            {
-                self.shell_resize_delta(dx, dy);
-            }
         }
 
         pointer.motion(
