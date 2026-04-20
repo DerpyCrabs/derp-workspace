@@ -92,13 +92,19 @@ export function ProgramsContextMenu() {
               tabIndex={-1}
               title={item.title}
               data-programs-menu-idx={idx()}
+              onPointerDown={(e) => {
+                if (!e.isPrimary || e.button !== 0) return
+                e.preventDefault()
+                e.stopPropagation()
+                if (item.disabled) return
+                item.action()
+                props.closeContextMenu()
+              }}
               onMouseDown={(e) => {
                 e.preventDefault()
               }}
-              onFocus={(e) => {
-                if (e.target !== searchRef) queueMicrotask(() => searchRef?.focus())
-              }}
-              onClick={() => {
+              onClick={(e) => {
+                if (e.detail !== 0) return
                 if (item.disabled) return
                 item.action()
                 props.closeContextMenu()
