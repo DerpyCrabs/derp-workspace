@@ -1,7 +1,7 @@
 import type { SnapZone } from '@/features/tiling/tileZones'
 import type { TilingConfig } from '@/features/tiling/tilingConfig'
 import { getShellJson, postShellJson } from './shellBridge'
-import { shellHttpBase } from './shellHttp'
+import { waitForShellHttpBase } from './shellHttp'
 import { clampWorkspaceSplitPaneFraction } from '@/features/workspace/workspaceState'
 
 export type SessionWindowRef = string
@@ -406,19 +406,6 @@ export function sanitizeSessionSnapshot(value: unknown): SessionSnapshot {
     shellWindows,
     nativeWindows,
   }
-}
-
-async function waitForShellHttpBase(timeoutMs: number = 2000): Promise<string | null> {
-  const ready = shellHttpBase()
-  if (ready) return ready
-  if (typeof window === 'undefined') return null
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-    const next = shellHttpBase()
-    if (next) return next
-  }
-  return null
 }
 
 export async function loadSessionSnapshot(): Promise<SessionSnapshot> {

@@ -71,33 +71,12 @@ derp_remote_list_shell_paths() {
   ) | LC_ALL=C sort -u
 }
 
-derp_remote_hash_path_list() {
-  local tmp out
-  tmp=$(mktemp)
-  "$@" >"$tmp"
-  if [[ ! -s "$tmp" ]]; then
-    rm -f "$tmp"
-    printf 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-    return
-  fi
-  out=$( (
-    cd "$REPO_ROOT" || exit 1
-    while IFS= read -r rel; do
-      [[ -z "$rel" ]] && continue
-      [[ -f "$rel" ]] || continue
-      sha256sum "$rel"
-    done <"$tmp"
-  ) | sha256sum | awk '{print $1}' )
-  rm -f "$tmp"
-  printf '%s' "$out"
-}
-
 derp_remote_digest_full() {
-  derp_remote_hash_path_list derp_remote_list_full_paths
+  remote_repo_hash_path_list derp_remote_list_full_paths
 }
 
 derp_remote_digest_shell() {
-  derp_remote_hash_path_list derp_remote_list_shell_paths
+  remote_repo_hash_path_list derp_remote_list_shell_paths
 }
 
 derp_remote_read_snapshot() {
@@ -214,7 +193,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Update class: $UPDATE_CLASS (QUICK_SHELL=$QUICK_SHELL SYNC_ONLY=$SYNC_ONLY SKIP_REMOTE_INSTALL=$SKIP_REMOTE_INSTALL)"
   echo "Snapshot: $DERP_REMOTE_SNAPSHOT (content digests vs working tree, not git)"
   echo "Would: ssh ${REMOTE_USER}@${REMOTE_HOST} mkdir -p $(printf '%q' "$REMOTE_REPO")"
-  echo "Would: ( cd $(printf '%q' "$REPO_ROOT") && tar czf - --exclude=target --exclude=shell/node_modules --exclude=.git . ) | ssh … wipe compositor/shell/…/scripts then tar xzf - in $(printf '%q' "$REMOTE_REPO")"
+  echo "Would: run shared tar sync excludes (build outputs, git data, artifacts, local env files), wipe compositor/shell/…/scripts, then tar xzf - in $(printf '%q' "$REMOTE_REPO")"
   if [[ "$SKIP_REMOTE_INSTALL" -eq 1 ]]; then
     if [[ "$SYNC_ONLY" -eq 1 ]]; then
       echo "Would: skip remote install-system-run.sh (sync_only)"

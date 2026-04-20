@@ -6,6 +6,7 @@ const SHELL_WIRE_DEGRADED_WITH_HTTP =
   'Shell wire is unavailable. Window controls stay limited until cef_host reconnects.'
 const SHELL_WIRE_DEGRADED_NO_HTTP =
   'Shell bridge is unavailable. Window controls and session actions stay limited until cef_host reconnects.'
+const DERP_SHELL_WIRE_READY_EVENT = 'derp-shell-wire-ready'
 
 type ShellTransportBridgeOptions = {
   shellWireSend: (
@@ -25,7 +26,6 @@ export function createShellTransportBridge(options: ShellTransportBridgeOptions)
   let compositorSyncAttempts = 0
   let compositorSyncRaf = 0
   let nativeWireHadBeenReady = false
-  let wireWatchPoll: ReturnType<typeof setInterval> | undefined
 
   function shellWireIssueMessage(): string {
     return shellHttpBase() !== null ? SHELL_WIRE_DEGRADED_WITH_HTTP : SHELL_WIRE_DEGRADED_NO_HTTP
@@ -89,24 +89,19 @@ export function createShellTransportBridge(options: ShellTransportBridgeOptions)
     })
   }
 
+  function handleShellWireReady() {
+    compositorSyncAttempts = 0
+    requestCompositorSync()
+  }
+
   function start() {
+    window.addEventListener(DERP_SHELL_WIRE_READY_EVENT, handleShellWireReady)
     queueMicrotask(requestCompositorSync)
     queueMicrotask(() => {
       options.shellWireSend('set_chrome_metrics', options.chromeTitlebarPx, options.chromeBorderPx)
     })
-    wireWatchPoll = setInterval(() => {
-      if (!nativeWireHadBeenReady) return
-      if (typeof window.__derpShellWireSend === 'function') {
-        clearShellWireIssue()
-        return
-      }
-      reportShellWireIssue(shellWireIssueMessage())
-      nativeWireHadBeenReady = false
-      compositorSyncAttempts = 0
-      requestCompositorSync()
-    }, 750)
     onCleanup(() => {
-      if (wireWatchPoll !== undefined) clearInterval(wireWatchPoll)
+      window.removeEventListener(DERP_SHELL_WIRE_READY_EVENT, handleShellWireReady)
       if (compositorSyncRaf !== 0) cancelAnimationFrame(compositorSyncRaf)
     })
   }

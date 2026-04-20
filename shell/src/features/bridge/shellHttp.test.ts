@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { shellHttpBase } from './shellHttp'
+import { shellHttpBase, waitForShellHttpBase } from './shellHttp'
 
 describe('shellHttpBase', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -34,5 +35,20 @@ describe('shellHttpBase', () => {
       location: { origin: 'https://example.com' },
     })
     expect(shellHttpBase()).toBeNull()
+  })
+
+  it('waits for injected shell http base', async () => {
+    vi.useFakeTimers()
+    const fakeWindow = {} as Window & typeof globalThis
+    vi.stubGlobal('window', fakeWindow)
+
+    const promise = waitForShellHttpBase()
+    setTimeout(() => {
+      ;(fakeWindow as typeof fakeWindow & { __DERP_SHELL_HTTP?: string }).__DERP_SHELL_HTTP =
+        'http://127.0.0.1:7777/'
+    }, 75)
+
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(promise).resolves.toBe('http://127.0.0.1:7777')
   })
 })

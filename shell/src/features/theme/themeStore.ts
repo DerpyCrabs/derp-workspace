@@ -1,5 +1,5 @@
 import { postShellJson } from '@/features/bridge/shellBridge'
-import { shellHttpBase } from '@/features/bridge/shellHttp'
+import { waitForShellHttpBase } from '@/features/bridge/shellHttp'
 
 export type ThemePalette = 'default' | 'caffeine' | 'cosmic-night'
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -71,19 +71,6 @@ async function readThemeSettingsViaShellHttp(base: string): Promise<ThemeSetting
     throw new Error(`Theme settings load failed (${res.status}): ${text || 'empty response'}`)
   }
   return parseThemeSettingsResponse(text)
-}
-
-async function waitForShellHttpBase(timeoutMs: number = 2000): Promise<string | null> {
-  const ready = shellHttpBase()
-  if (ready) return ready
-  if (typeof window === 'undefined') return null
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-    const next = shellHttpBase()
-    if (next) return next
-  }
-  return null
 }
 
 async function persistThemeSettings(next: ThemeSettings): Promise<void> {

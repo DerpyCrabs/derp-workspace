@@ -51,7 +51,6 @@ type SessionPersistenceBridgeOptions = {
 export function createSessionPersistenceBridge(options: SessionPersistenceBridgeOptions) {
   let sessionPersistTimer: ReturnType<typeof setTimeout> | undefined
   let sessionRestoreStopTimer: ReturnType<typeof setTimeout> | undefined
-  let sessionPersistPoll: ReturnType<typeof setInterval> | undefined
   let sessionPersistGeneration = 0
   let lastPersistedSessionJson = ''
   let lastAppliedRestoreSignature = ''
@@ -227,15 +226,9 @@ export function createSessionPersistenceBridge(options: SessionPersistenceBridge
     }, 150)
   })
 
-  sessionPersistPoll = setInterval(() => {
-    if (!sessionAutoSaveReady()) return
-    void persistLiveSessionSnapshotSoon('auto', sessionPersistGeneration)
-  }, 1000)
-
   onCleanup(() => {
     if (sessionPersistTimer !== undefined) clearTimeout(sessionPersistTimer)
     if (sessionRestoreStopTimer !== undefined) clearTimeout(sessionRestoreStopTimer)
-    if (sessionPersistPoll !== undefined) clearInterval(sessionPersistPoll)
   })
 
   return {

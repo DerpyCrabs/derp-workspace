@@ -142,6 +142,29 @@ pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
 pub const DMABUF_FLAG_Y_INVERT: u32 = 1;
 
+pub struct WireCursor<'a> {
+    payload: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> WireCursor<'a> {
+    pub fn new(payload: &'a [u8]) -> Self {
+        Self { payload, offset: 0 }
+    }
+
+    pub fn read_u32(&mut self) -> Option<u32> {
+        let bytes = self.payload.get(self.offset..self.offset.checked_add(4)?)?;
+        self.offset += 4;
+        Some(u32::from_le_bytes(bytes.try_into().ok()?))
+    }
+
+    pub fn read_i32(&mut self) -> Option<i32> {
+        let bytes = self.payload.get(self.offset..self.offset.checked_add(4)?)?;
+        self.offset += 4;
+        Some(i32::from_le_bytes(bytes.try_into().ok()?))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedSnapshotHeader {
     pub magic: u32,
@@ -2360,6 +2383,18 @@ mod tests {
 
         assert_eq!(pop_message(&mut buf), Err(DecodeError::BodyTooLarge));
     }
+
+    #[test]
+    fn wire_cursor_reads_checked_little_endian_scalars() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        payload.extend_from_slice(&(-12i32).to_le_bytes());
+        let mut cursor = WireCursor::new(&payload);
+
+        assert_eq!(cursor.read_u32(), Some(7));
+        assert_eq!(cursor.read_i32(), Some(-12));
+        assert_eq!(cursor.read_u32(), None);
+    }
 }
 
 fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, DecodeError> {
@@ -2538,8 +2573,13 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
             if body.len() < 12 {
                 return Err(DecodeError::BadShellWindowsPayload);
             }
-            let generation = u32::from_le_bytes(body[4..8].try_into().unwrap());
-            let count = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            let mut cursor = WireCursor::new(&body[4..]);
+            let generation = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadShellWindowsPayload)?;
+            let count = cursor
+                .read_u32()
+                .ok_or(DecodeError::BadShellWindowsPayload)?;
             if count > MAX_SHELL_UI_WINDOWS {
                 return Err(DecodeError::BadShellWindowsPayload);
             }
@@ -2554,16 +2594,28 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 return Err(DecodeError::BadShellWindowsPayload);
             }
             let mut windows = Vec::with_capacity(count as usize);
-            let mut off = 12usize;
             for _ in 0..count {
-                let id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
-                let gx = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
-                let gy = i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
-                let gw = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
-                let gh = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
-                let z = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-                let flags = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-                off += 28;
+                let id = cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let gx = cursor
+                    .read_i32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let gy = cursor
+                    .read_i32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let gw = cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let gh = cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let z = cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
+                let flags = cursor
+                    .read_u32()
+                    .ok_or(DecodeError::BadShellWindowsPayload)?;
                 if id == 0 || gw == 0 || gh == 0 {
                     return Err(DecodeError::BadShellWindowsPayload);
                 }

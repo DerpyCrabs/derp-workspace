@@ -1587,9 +1587,16 @@ impl CompositorState {
         if payload.len() < 8 {
             return;
         }
-        let generation = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        let count = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
-        let need = 8usize.checked_add(count.checked_mul(28).unwrap_or(usize::MAX));
+        let mut cursor = shell_wire::WireCursor::new(payload);
+        let Some(generation) = cursor.read_u32() else {
+            return;
+        };
+        let Some(count) = cursor.read_u32().map(|count| count as usize) else {
+            return;
+        };
+        let need = count
+            .checked_mul(28)
+            .and_then(|count_len| 8usize.checked_add(count_len));
         if need != Some(payload.len()) {
             return;
         }
@@ -1598,15 +1605,28 @@ impl CompositorState {
             return;
         };
         let mut rows = Vec::new();
-        let mut offset = 8usize;
         for _ in 0..count {
-            let id = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-            let gx = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
-            let gy = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
-            let gw = u32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
-            let gh = u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
-            let _z = u32::from_le_bytes(payload[offset + 20..offset + 24].try_into().unwrap());
-            offset += 28;
+            let Some(id) = cursor.read_u32() else {
+                return;
+            };
+            let Some(gx) = cursor.read_i32() else {
+                return;
+            };
+            let Some(gy) = cursor.read_i32() else {
+                return;
+            };
+            let Some(gw) = cursor.read_u32() else {
+                return;
+            };
+            let Some(gh) = cursor.read_u32() else {
+                return;
+            };
+            let Some(_) = cursor.read_u32() else {
+                return;
+            };
+            let Some(_) = cursor.read_u32() else {
+                return;
+            };
             if id == 0 || gw == 0 || gh == 0 {
                 continue;
             }
@@ -1761,8 +1781,13 @@ impl CompositorState {
         if payload.len() < 8 {
             return;
         }
-        let rect_count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-        let has_tray_strip = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+        let mut cursor = shell_wire::WireCursor::new(payload);
+        let Some(rect_count) = cursor.read_u32().map(|count| count as usize) else {
+            return;
+        };
+        let Some(has_tray_strip) = cursor.read_u32() else {
+            return;
+        };
         if has_tray_strip > 1 {
             return;
         }
@@ -1778,25 +1803,38 @@ impl CompositorState {
             if payload.len() < base_len + 8 {
                 return;
             }
-            let fc = u32::from_le_bytes(payload[base_len + 4..base_len + 8].try_into().unwrap())
-                as usize;
+            let mut floating_cursor = shell_wire::WireCursor::new(&payload[base_len..]);
+            let Some(next_overlay_open) = floating_cursor.read_u32().map(|open| open != 0) else {
+                return;
+            };
+            let Some(fc) = floating_cursor.read_u32().map(|count| count as usize) else {
+                return;
+            };
             let expected = base_len + 8 + fc.saturating_mul(20);
             if expected != payload.len() {
                 return;
             }
-            overlay_open =
-                u32::from_le_bytes(payload[base_len..base_len + 4].try_into().unwrap()) != 0;
-            let mut fo = base_len + 8;
+            overlay_open = next_overlay_open;
             for _ in 0..fc {
-                let x = i32::from_le_bytes(payload[fo..fo + 4].try_into().unwrap());
-                let y = i32::from_le_bytes(payload[fo + 4..fo + 8].try_into().unwrap());
-                let w = i32::from_le_bytes(payload[fo + 8..fo + 12].try_into().unwrap());
-                let h = i32::from_le_bytes(payload[fo + 12..fo + 16].try_into().unwrap());
+                let Some(x) = floating_cursor.read_i32() else {
+                    return;
+                };
+                let Some(y) = floating_cursor.read_i32() else {
+                    return;
+                };
+                let Some(w) = floating_cursor.read_i32() else {
+                    return;
+                };
+                let Some(h) = floating_cursor.read_i32() else {
+                    return;
+                };
+                let Some(_) = floating_cursor.read_u32() else {
+                    return;
+                };
                 let r = Rectangle::new(
                     Point::<i32, Logical>::from((x, y)),
                     Size::<i32, Logical>::from((w.max(1), h.max(1))),
                 );
-                fo += 20;
                 next_floating.push(r);
             }
         } else if payload.len() != base_len {
@@ -1814,15 +1852,22 @@ impl CompositorState {
         };
         let mut next_global: Vec<Rectangle<i32, Logical>> = Vec::new();
         let mut next_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>> = HashMap::new();
-        let mut offset = 8usize;
         for _ in 0..rect_count {
-            let x = i32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-            let y = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
-            let w = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
-            let h = i32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
-            let window_id =
-                u32::from_le_bytes(payload[offset + 16..offset + 20].try_into().unwrap());
-            offset += 20;
+            let Some(x) = cursor.read_i32() else {
+                return;
+            };
+            let Some(y) = cursor.read_i32() else {
+                return;
+            };
+            let Some(w) = cursor.read_i32() else {
+                return;
+            };
+            let Some(h) = cursor.read_i32() else {
+                return;
+            };
+            let Some(window_id) = cursor.read_u32() else {
+                return;
+            };
             let r = Rectangle::new(
                 Point::<i32, Logical>::from((x, y)),
                 Size::<i32, Logical>::from((w.max(1), h.max(1))),
@@ -1839,10 +1884,18 @@ impl CompositorState {
         let next_tray_strip = if has_tray_strip == 0 {
             None
         } else {
-            let x = i32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-            let y = i32::from_le_bytes(payload[offset + 4..offset + 8].try_into().unwrap());
-            let w = i32::from_le_bytes(payload[offset + 8..offset + 12].try_into().unwrap());
-            let h = i32::from_le_bytes(payload[offset + 12..offset + 16].try_into().unwrap());
+            let Some(x) = cursor.read_i32() else {
+                return;
+            };
+            let Some(y) = cursor.read_i32() else {
+                return;
+            };
+            let Some(w) = cursor.read_i32() else {
+                return;
+            };
+            let Some(h) = cursor.read_i32() else {
+                return;
+            };
             if w < 1 || h < 1 {
                 None
             } else {

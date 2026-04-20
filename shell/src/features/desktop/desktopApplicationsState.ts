@@ -1,5 +1,5 @@
 import { createSignal, type Accessor } from 'solid-js'
-import { shellHttpBase } from '@/features/bridge/shellHttp'
+import { shellHttpBase, waitForShellHttpBase } from '@/features/bridge/shellHttp'
 import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '@/features/bridge/shellBridge'
 
 export type DesktopApplicationsController = {
@@ -241,12 +241,7 @@ async function refreshDesktopApplications(): Promise<void> {
 }
 
 async function warmDesktopApplications() {
-  const startedAt = Date.now()
-  let base = shellHttpBase()
-  while (!base && Date.now() - startedAt < 4000) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-    base = shellHttpBase()
-  }
+  const base = await waitForShellHttpBase(4000)
   if (!base) return
   await refreshDesktopApplications()
 }

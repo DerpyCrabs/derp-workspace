@@ -146,6 +146,9 @@ REMOTE
 fi
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
+artifact_dir="${DERP_E2E_ARTIFACT_DIR:-$HOME/.local/state/derp/e2e/artifacts}"
+rm -rf "$artifact_dir"
+mkdir -p "$artifact_dir"
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
   echo "e2e-remote: no compositor process for user $(id -un); skipping SIGUSR2." >&2
@@ -166,7 +169,6 @@ for pid in "${roots[@]}"; do
   kill -USR2 "$pid"
 done
 REMOTE
-sleep 2
 
 echo "=== remote shell/e2e/run.mjs ==="
 ssh_base bash -s <<EOF

@@ -2,6 +2,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$REPO_ROOT/scripts"
+
+case "$(uname -s)" in
+  Linux*) ;;
+  *) exec bash "$SCRIPT_DIR/remote-verify.sh" "$@" ;;
+esac
 
 cd "$REPO_ROOT"
 cargo test

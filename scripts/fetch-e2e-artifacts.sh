@@ -7,7 +7,11 @@ remote_common_init "fetch-e2e-artifacts"
 
 require_remote_sync_tools
 
-LOCAL_DIR="${1:-$REPO_ROOT/.artifacts/e2e}"
+DEFAULT_LOCAL_DIR="$REPO_ROOT/.artifacts/e2e"
+LOCAL_DIR="${1:-$DEFAULT_LOCAL_DIR}"
+if [[ "$LOCAL_DIR" == "$DEFAULT_LOCAL_DIR" ]]; then
+  rm -rf "$LOCAL_DIR"
+fi
 mkdir -p "$LOCAL_DIR"
 
 echo "=== fetch remote e2e artifacts -> $LOCAL_DIR ==="

@@ -21,13 +21,51 @@ ssh_base() {
   ssh "${SSH_TTY[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "$@"
 }
 
+remote_repo_should_sync_path() {
+  local rel="$1"
+  case "$rel" in
+    target|target/*|*/target|*/target/*) return 1 ;;
+    shell/node_modules|shell/node_modules/*) return 1 ;;
+    shell/dist|shell/dist/*) return 1 ;;
+    .git|.git/*) return 1 ;;
+    .artifacts|.artifacts/*) return 1 ;;
+    tmp/e2e-artifacts|tmp/e2e-artifacts/*) return 1 ;;
+    scripts/remote-install.env) return 1 ;;
+    scripts/remote-install.local.md) return 1 ;;
+    scripts/derp-session.local.env) return 1 ;;
+    scripts/.derp-remote-update-snapshot) return 1 ;;
+    scripts/.derp-e2e-remote-snapshot) return 1 ;;
+  esac
+  return 0
+}
+
+remote_tar_exclude_args() {
+  printf '%s\0' \
+    --exclude=target \
+    --exclude='*/target' \
+    --exclude=shell/node_modules \
+    --exclude=shell/dist \
+    --exclude=.git \
+    --exclude=.artifacts \
+    --exclude=tmp/e2e-artifacts \
+    --exclude=scripts/remote-install.env \
+    --exclude=scripts/remote-install.local.md \
+    --exclude=scripts/derp-session.local.env \
+    --exclude=scripts/.derp-remote-update-snapshot \
+    --exclude=scripts/.derp-e2e-remote-snapshot
+}
+
 run_tar_sync() {
   local remote_sh remote_cmd
+  local tar_excludes=()
+  while IFS= read -r -d '' arg; do
+    tar_excludes+=("$arg")
+  done < <(remote_tar_exclude_args)
   remote_sh=$(printf 'set -euo pipefail; mkdir -p %q && cd %q && backup="" && if [[ -f scripts/derp-session.local.env ]]; then backup=$(mktemp) && cp -a scripts/derp-session.local.env "$backup"; fi && rm -rf compositor shell_wire e2e-test-client resources scripts && if [[ -d shell ]]; then find shell -mindepth 1 -maxdepth 1 ! -name node_modules ! -name dist -exec rm -rf {} +; fi && tar xzf - && if [[ -n "$backup" ]] && [[ -f "$backup" ]]; then mkdir -p scripts && cp -a "$backup" scripts/derp-session.local.env && rm -f "$backup"; fi' "$REMOTE_REPO" "$REMOTE_REPO")
   remote_cmd=$(printf 'exec /usr/bin/env bash -c %q' "$remote_sh")
   (
     cd "$REPO_ROOT"
-    tar czf - --exclude=target --exclude=shell/node_modules --exclude=shell/dist --exclude=.git --exclude=.artifacts .
+    tar czf - "${tar_excludes[@]}" .
   ) | ssh "${REMOTE_USER}@${REMOTE_HOST}" "$remote_cmd" >/dev/null
 }
 
@@ -45,6 +83,7 @@ remote_repo_hash_path_list() {
     while IFS= read -r rel; do
       [[ -z "$rel" ]] && continue
       [[ -f "$rel" ]] || continue
+      remote_repo_should_sync_path "$rel" || continue
       sha256sum "$rel"
     done <"$tmp"
   ) | sha256sum | awk '{print $1}' )

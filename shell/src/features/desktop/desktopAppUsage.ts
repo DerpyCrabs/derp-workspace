@@ -1,5 +1,5 @@
 import { postShellJson } from '@/features/bridge/shellBridge'
-import { shellHttpBase } from '@/features/bridge/shellHttp'
+import { waitForShellHttpBase } from '@/features/bridge/shellHttp'
 import type { DesktopAppEntry } from '@/features/bridge/shellBridge'
 
 export type DesktopAppUsageCounts = Record<string, number>
@@ -38,19 +38,6 @@ export function desktopAppUsageKey(app: DesktopAppEntry): string {
   const exec = app.exec.trim()
   if (exec.length > 0) return `exec:${exec}`
   return `name:${app.name.trim().toLocaleLowerCase()}`
-}
-
-async function waitForShellHttpBase(timeoutMs: number = 2000): Promise<string | null> {
-  const ready = shellHttpBase()
-  if (ready) return ready
-  if (typeof window === 'undefined') return null
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50))
-    const next = shellHttpBase()
-    if (next) return next
-  }
-  return null
 }
 
 async function readDesktopAppUsageViaShellHttp(base: string): Promise<DesktopAppUsageCounts> {

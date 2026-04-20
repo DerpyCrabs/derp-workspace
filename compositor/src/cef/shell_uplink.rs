@@ -1237,6 +1237,15 @@ wrap_render_process_handler! {
                 is_main,
                 "cef: __derpShellWireSend bound"
             );
+            if is_main == 1 {
+                frame.execute_java_script(
+                    Some(&CefString::from(
+                        "window.dispatchEvent(new Event('derp-shell-wire-ready'));",
+                    )),
+                    None,
+                    0,
+                );
+            }
         }
     }
 }
