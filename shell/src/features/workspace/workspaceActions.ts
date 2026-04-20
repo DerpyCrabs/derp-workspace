@@ -1,5 +1,4 @@
 import type { Accessor } from 'solid-js'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { WorkspaceState } from './workspaceState'
@@ -154,16 +153,8 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
       options.activateTaskbarWindowViaShell(visibleWindow.window_id)
       return
     }
-    if (options.activeWorkspaceGroupId() === group.id) {
-      if (group.members.length > 1) {
-        options.activateWindowViaShell(visibleWindow.window_id)
-        return
-      }
-      if ((visibleWindow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
-        options.activateTaskbarWindowViaShell(visibleWindow.window_id)
-      } else {
-        options.shellWireSend('minimize', visibleWindow.window_id)
-      }
+    if (options.activeWorkspaceGroupId() === group.id && group.members.length > 1) {
+      options.activateWindowViaShell(visibleWindow.window_id)
       return
     }
     options.activateTaskbarWindowViaShell(visibleWindow.window_id)

@@ -337,7 +337,7 @@ impl CompositorState {
             self.shell_focus_shell_ui_window(window_id);
             return true;
         }
-        if self.logical_focused_window_id() == Some(window_id) {
+        if self.shell_taskbar_should_toggle_minimize(window_id) {
             let _ = self.shell_backed_minimize_if_any(window_id);
         } else {
             self.shell_focus_shell_ui_window(window_id);

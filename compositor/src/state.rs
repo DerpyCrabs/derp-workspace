@@ -718,6 +718,16 @@ impl CompositorState {
         self.keyboard_focused_window_id()
     }
 
+    pub(crate) fn shell_taskbar_should_toggle_minimize(&self, window_id: u32) -> bool {
+        if self.logical_focused_window_id() == Some(window_id) {
+            return true;
+        }
+        if self.keyboard_focused_window_id() == Some(window_id) {
+            return true;
+        }
+        self.pick_next_logical_focus_target(None, true) == Some(window_id)
+    }
+
     fn logical_focus_target_is_valid(&self, window_id: u32) -> bool {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return false;
@@ -7516,7 +7526,7 @@ impl CompositorState {
             return;
         }
 
-        let should_minimize = self.logical_focused_window_id() == Some(window_id);
+        let should_minimize = self.shell_taskbar_should_toggle_minimize(window_id);
         if should_minimize {
             self.shell_minimize_window(window_id);
         } else {

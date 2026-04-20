@@ -96,6 +96,7 @@ function TaskbarWindowRows(props: {
   return (
     <For each={groupIds()}>
       {(groupId) => {
+        let suppressClickAfterPointer = false
         const w = () => windowsByGroupId().get(groupId)
         const active = () => {
           const window = w()
@@ -136,7 +137,29 @@ function TaskbarWindowRows(props: {
                 data-shell-taskbar-group={w()!.group_id}
                 data-shell-taskbar-window-activate={w()!.window_id}
                 aria-current={active() ? 'true' : undefined}
-                onClick={() => props.onTaskbarActivate(w()!.window_id)}
+                onPointerUp={(e) => {
+                  if (e.button !== 0) return
+                  const win = w()
+                  if (!win) return
+                  suppressClickAfterPointer = true
+                  window.setTimeout(() => {
+                    suppressClickAfterPointer = false
+                  }, 0)
+                  props.onTaskbarActivate(win.window_id)
+                }}
+                onClick={() => {
+                  if (suppressClickAfterPointer) return
+                  const win = w()
+                  if (!win) return
+                  props.onTaskbarActivate(win.window_id)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.preventDefault()
+                  const win = w()
+                  if (!win) return
+                  props.onTaskbarActivate(win.window_id)
+                }}
               >
                 <TaskbarWindowIcon
                   meta={{
