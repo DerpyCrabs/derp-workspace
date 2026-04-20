@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -9,6 +10,7 @@ use serde::Serialize;
 pub(crate) struct FileBrowserHttpError {
     pub status: u16,
     pub body: String,
+    pub content_range_total: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -77,7 +79,11 @@ fn http_error(
             r#"{{"error":{{"code":"{code}","message":"failed to serialize error","path":null}}}}"#
         )
     });
-    FileBrowserHttpError { status, body }
+    FileBrowserHttpError {
+        status,
+        body,
+        content_range_total: None,
+    }
 }
 
 fn canonicalize_existing_path(raw_path: &str) -> Result<PathBuf, FileBrowserHttpError> {
@@ -503,4 +509,264 @@ pub(crate) fn file_browser_read_file_bytes(raw_path: &str) -> Result<(Vec<u8>, &
     })?;
     let content_type = content_type_for_file_path(&canonical);
     Ok((bytes, content_type))
+}
+
+fn video_content_type_for_path(path: &Path) -> Option<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "mp4" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
+        "ogg" => Some("video/ogg"),
+        "mov" => Some("video/quicktime"),
+        "avi" => Some("video/x-msvideo"),
+        "mkv" => Some("video/x-matroska"),
+        "m4v" => Some("video/x-m4v"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedVideoRange {
+    Full,
+    Partial { start: u64, end_inclusive: u64 },
+    Unsatisfiable,
+}
+
+fn parse_video_range_header(range_header: Option<&str>, total: u64) -> ParsedVideoRange {
+    let Some(raw) = range_header.map(str::trim).filter(|s| !s.is_empty()) else {
+        return ParsedVideoRange::Full;
+    };
+    let lower = raw.to_ascii_lowercase();
+    if !lower.starts_with("bytes=") {
+        return ParsedVideoRange::Full;
+    }
+    let spec = raw.get(6..).unwrap_or("").trim();
+    let first = spec.split(',').next().unwrap_or("").trim();
+    if first.is_empty() {
+        return ParsedVideoRange::Full;
+    }
+    let Some((left, right)) = first.split_once('-') else {
+        return ParsedVideoRange::Full;
+    };
+    let left = left.trim();
+    let right = right.trim();
+    if total == 0 {
+        return ParsedVideoRange::Unsatisfiable;
+    }
+    let last = total - 1;
+    if left.is_empty() {
+        let Ok(suffix_len) = right.parse::<u64>() else {
+            return ParsedVideoRange::Full;
+        };
+        if suffix_len == 0 {
+            return ParsedVideoRange::Full;
+        }
+        let start = total.saturating_sub(suffix_len);
+        return ParsedVideoRange::Partial {
+            start,
+            end_inclusive: last,
+        };
+    }
+    let Ok(start) = left.parse::<u64>() else {
+        return ParsedVideoRange::Full;
+    };
+    if start >= total {
+        return ParsedVideoRange::Unsatisfiable;
+    }
+    let end_inclusive = if right.is_empty() {
+        last
+    } else {
+        let Ok(end) = right.parse::<u64>() else {
+            return ParsedVideoRange::Full;
+        };
+        end.min(last)
+    };
+    if end_inclusive < start {
+        return ParsedVideoRange::Unsatisfiable;
+    }
+    ParsedVideoRange::Partial {
+        start,
+        end_inclusive,
+    }
+}
+
+pub(crate) struct FileBrowserVideoStream {
+    pub status: u16,
+    pub content_type: &'static str,
+    pub total_len: u64,
+    pub send_start: u64,
+    pub send_end_inclusive: u64,
+    pub file: File,
+}
+
+impl FileBrowserVideoStream {
+    pub fn body_len(&self) -> u64 {
+        if self.total_len == 0 {
+            return 0;
+        }
+        self.send_end_inclusive
+            .saturating_sub(self.send_start)
+            .saturating_add(1)
+    }
+}
+
+pub(crate) fn file_browser_open_video_stream(
+    raw_path: &str,
+    range_header: Option<&str>,
+) -> Result<FileBrowserVideoStream, FileBrowserHttpError> {
+    let canonical = canonicalize_existing_path(raw_path)?;
+    let symlink_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => "not_found",
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = match error.kind() {
+            std::io::ErrorKind::NotFound => 404,
+            std::io::ErrorKind::PermissionDenied => 403,
+            _ => 500,
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to stat {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    if !symlink_metadata.is_file() {
+        return Err(http_error(
+            400,
+            "not_file",
+            format!("path is not a regular file: {}", canonical.display()),
+            Some(&canonical),
+        ));
+    }
+    let Some(content_type) = video_content_type_for_path(&canonical) else {
+        return Err(http_error(
+            415,
+            "not_video",
+            "file extension is not a supported video type",
+            Some(&canonical),
+        ));
+    };
+    let total_len = symlink_metadata.len();
+    let parsed = parse_video_range_header(range_header, total_len);
+    let file = File::open(&canonical).map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to open {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    match parsed {
+        ParsedVideoRange::Unsatisfiable => {
+            let body = serde_json::to_string(&FileBrowserErrorResponse {
+                error: FileBrowserErrorDetail {
+                    code: "range_not_satisfiable",
+                    message: "range not satisfiable".into(),
+                    path: Some(canonical.to_string_lossy().into_owned()),
+                },
+            })
+            .unwrap_or_else(|_| {
+                r#"{"error":{"code":"range_not_satisfiable","message":"range not satisfiable","path":null}}"#
+                    .into()
+            });
+            return Err(FileBrowserHttpError {
+                status: 416,
+                body,
+                content_range_total: Some(total_len),
+            });
+        }
+        ParsedVideoRange::Full => Ok(FileBrowserVideoStream {
+            status: 200,
+            content_type,
+            total_len,
+            send_start: 0,
+            send_end_inclusive: if total_len == 0 {
+                0
+            } else {
+                total_len - 1
+            },
+            file,
+        }),
+        ParsedVideoRange::Partial {
+            start,
+            end_inclusive,
+        } => Ok(FileBrowserVideoStream {
+            status: 206,
+            content_type,
+            total_len,
+            send_start: start,
+            send_end_inclusive: end_inclusive,
+            file,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod video_stream_tests {
+    use super::*;
+
+    #[test]
+    fn parse_range_full_when_missing() {
+        assert!(matches!(
+            parse_video_range_header(None, 100),
+            ParsedVideoRange::Full
+        ));
+    }
+
+    #[test]
+    fn parse_range_suffix() {
+        match parse_video_range_header(Some("bytes=-10"), 100) {
+            ParsedVideoRange::Partial {
+                start,
+                end_inclusive,
+            } => {
+                assert_eq!(start, 90);
+                assert_eq!(end_inclusive, 99);
+            }
+            _ => panic!("expected partial"),
+        }
+    }
+
+    #[test]
+    fn parse_range_open_end() {
+        match parse_video_range_header(Some("bytes=10-"), 100) {
+            ParsedVideoRange::Partial {
+                start,
+                end_inclusive,
+            } => {
+                assert_eq!(start, 10);
+                assert_eq!(end_inclusive, 99);
+            }
+            _ => panic!("expected partial"),
+        }
+    }
+
+    #[test]
+    fn parse_range_closed() {
+        match parse_video_range_header(Some("bytes=0-9"), 100) {
+            ParsedVideoRange::Partial {
+                start,
+                end_inclusive,
+            } => {
+                assert_eq!(start, 0);
+                assert_eq!(end_inclusive, 9);
+            }
+            _ => panic!("expected partial"),
+        }
+    }
+
+    #[test]
+    fn parse_range_unsat_when_start_past_end() {
+        assert!(matches!(
+            parse_video_range_header(Some("bytes=1000-"), 100),
+            ParsedVideoRange::Unsatisfiable
+        ));
+    }
 }

@@ -2,6 +2,7 @@ import { Show, type Accessor, type JSX, type Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
 import { FileBrowserWindow } from '@/apps/file-browser/FileBrowserWindow'
 import { ImageViewerWindow } from '@/apps/image-viewer/ImageViewerWindow'
+import { VideoViewerWindow } from '@/apps/video-viewer/VideoViewerWindow'
 import { ShellDebugHudContent } from '@/apps/debug/ShellDebugHudContent'
 import { ShellTestWindowContent } from '@/apps/debug/ShellTestWindowContent'
 import { SettingsPanel } from '@/apps/settings/SettingsPanel'
@@ -9,9 +10,11 @@ import {
   isFileBrowserWindowId,
   isImageViewerWindowId,
   isShellTestWindowId,
+  isVideoViewerWindowId,
   SHELL_UI_TEST_APP_ID,
 } from '@/features/shell-ui/backedShellWindows'
 import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
+import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import { windowLabel as groupedWindowLabel } from '@/features/workspace/tabGroupOps'
@@ -24,6 +27,7 @@ export type ShellHostedWindowContentEnv = {
   shellWireSend: ShellCompositorWireSend
   onOpenFileBrowserInNewWindow: (path: string) => void
   onOpenImageFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
+  onOpenVideoFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   reportShellActionIssue: (message: string) => void
   copyDebugHudSnapshot: () => void
   shellBuildLabel: string
@@ -144,7 +148,15 @@ export function renderShellHostedWindowContent(
                 })
                 return
               }
-              env.reportShellActionIssue(`File viewers land in a later phase: ${path}`)
+              if (isVideoFilePath(path) && context.directory.length > 0) {
+                env.onOpenVideoFile({
+                  path,
+                  directory: context.directory,
+                  showHidden: context.showHidden,
+                })
+                return
+              }
+              env.reportShellActionIssue(`No viewer for this file type: ${path}`)
             }}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
           />
@@ -157,6 +169,20 @@ export function renderShellHostedWindowContent(
       <Show when={windowId} keyed>
         {(id) => (
           <ImageViewerWindow
+            windowId={id}
+            compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
+            shellWireSend={env.shellWireSend}
+            allWindowsMap={env.allWindowsMap}
+          />
+        )}
+      </Show>
+    )
+  }
+  if (isVideoViewerWindowId(windowId)) {
+    return (
+      <Show when={windowId} keyed>
+        {(id) => (
+          <VideoViewerWindow
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}

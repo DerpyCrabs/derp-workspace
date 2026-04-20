@@ -6314,7 +6314,7 @@ impl CompositorState {
             let (Some(wid), Some(kind)) = (wid, kind) else {
                 continue;
             };
-            if kind != "file_browser" && kind != "image_viewer" {
+            if kind != "file_browser" && kind != "image_viewer" && kind != "video_viewer" {
                 continue;
             }
             let Some(st) = obj.get("state") else {
@@ -6337,7 +6337,7 @@ impl CompositorState {
         let Some(kind) = v.get("kind").and_then(|x| x.as_str()) else {
             return;
         };
-        if kind != "file_browser" && kind != "image_viewer" {
+        if kind != "file_browser" && kind != "image_viewer" && kind != "video_viewer" {
             return;
         }
         if !self.window_registry.is_shell_hosted(window_id) {

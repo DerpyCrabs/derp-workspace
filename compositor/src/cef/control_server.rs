@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -131,6 +131,60 @@ fn write_http_json(
         json
     );
     stream.write_all(head.as_bytes())?;
+    stream.flush()
+}
+
+fn write_file_browser_http_error(
+    stream: &mut std::net::TcpStream,
+    error: &crate::cef::file_browser::FileBrowserHttpError,
+) -> std::io::Result<()> {
+    if error.status == 416 {
+        if let Some(total) = error.content_range_total {
+            let head = format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\n{}Content-Range: bytes */{}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                cors_headers(),
+                total,
+                error.body.len(),
+            );
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(error.body.as_bytes())?;
+            return stream.flush();
+        }
+    }
+    write_http_json(stream, error.status, &error.body)
+}
+
+fn write_http_video_stream(
+    stream: &mut std::net::TcpStream,
+    mut vs: crate::cef::file_browser::FileBrowserVideoStream,
+) -> std::io::Result<()> {
+    let body_len = vs.body_len();
+    let status_text = if vs.status == 206 {
+        "Partial Content"
+    } else {
+        "OK"
+    };
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\n{}Content-Type: {}\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\nCache-Control: public, max-age=31536000\r\n",
+        vs.status,
+        status_text,
+        cors_headers(),
+        vs.content_type,
+        body_len
+    );
+    if vs.status == 206 {
+        head.push_str(&format!(
+            "Content-Range: bytes {}-{}/{}\r\n",
+            vs.send_start, vs.send_end_inclusive, vs.total_len
+        ));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    stream.write_all(head.as_bytes())?;
+    if body_len > 0 {
+        vs.file.seek(SeekFrom::Start(vs.send_start))?;
+        let mut take = vs.file.take(body_len);
+        std::io::copy(&mut take, stream)?;
+    }
     stream.flush()
 }
 
@@ -589,6 +643,7 @@ fn handle_one(
     let (req_path, query_str) = split_path_query(request_target);
 
     let mut content_length: usize = 0;
+    let mut range_header: Option<String> = None;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -597,8 +652,12 @@ fn handle_one(
         }
         let l = line.trim_end_matches(['\r', '\n']);
         if let Some(idx) = l.find(':') {
-            if l[..idx].trim().eq_ignore_ascii_case("content-length") {
-                content_length = l[idx + 1..].trim().parse().unwrap_or(0);
+            let name = l[..idx].trim();
+            let value = l[idx + 1..].trim();
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse().unwrap_or(0);
+            } else if name.eq_ignore_ascii_case("range") {
+                range_header = Some(value.to_string());
             }
         }
     }
@@ -703,6 +762,19 @@ fn handle_one(
             Err(error) => {
                 write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?
             }
+        }
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/stream" {
+        let q = query_str.ok_or_else(|| "file_browser/stream: missing query".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "file_browser/stream: missing p".to_string())?;
+        let path = percent_decode_component(p_enc)?;
+        match crate::cef::file_browser::file_browser_open_video_stream(&path, range_header.as_deref())
+        {
+            Ok(vs) => write_http_video_stream(stream, vs).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
         }
         return Ok(());
     }

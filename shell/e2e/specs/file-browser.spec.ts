@@ -25,6 +25,7 @@ import {
 
 const FILE_BROWSER_APP_ID = 'derp.files'
 const IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
+const VIDEO_VIEWER_APP_ID = 'derp.video-viewer'
 const WRITABLE_TEXT = 'Phase 1 writable fixture\nThis file should reset between runs.\n'
 const READ_ONLY_TEXT = 'Phase 1 read-only fixture\nThis file should refuse direct writes.\n'
 
@@ -500,6 +501,55 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html2.includes('data-image-viewer-counter'), 'expected counter after previous')
+  })
+
+  test('video viewer opens from file browser and shows video element', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', navigated.windowId)
+    const mediaShell = await waitForActivePath(base, mediaPath, navigated.windowId)
+    const videoRow = fileBrowserRow(mediaShell, 'test-pattern.webm', navigated.windowId)
+    assert(videoRow?.rect, 'missing test-pattern.webm row')
+    await clickRect(base, assertRectMinSize('select test-pattern.webm', videoRow.rect, 32, 24))
+    await waitFor(
+      'wait for test-pattern row selected',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return fileBrowserRow(shell, 'test-pattern.webm', navigated.windowId)?.selected ? shell : null
+      },
+      5000,
+      100,
+    )
+    const videoSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'test-pattern.webm', navigated.windowId)
+    assert(videoSelected?.rect, 'missing test-pattern row rect after selection')
+    await clickRect(base, assertRectMinSize('open test-pattern second click', videoSelected.rect, 32, 24))
+    const viewerWindow = await waitFor(
+      'wait for video viewer window',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const w = shell.windows.find(
+          (entry) => entry.shell_hosted && entry.app_id === VIDEO_VIEWER_APP_ID && !entry.minimized,
+        )
+        return w ? { shell, windowId: w.window_id } : null
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(viewerWindow.windowId)
+    const frameSelector = `[data-shell-window-frame="${viewerWindow.windowId}"]`
+    const html = await waitFor(
+      'wait for video viewer markup',
+      async () => {
+        const h = await getShellHtml(base, frameSelector)
+        return h.includes('data-video-viewer-element') && h.includes('data-video-viewer-counter') && h.includes('1 of 1')
+          ? h
+          : null
+      },
+      5000,
+      100,
+    )
+    assert(html.includes('file_browser/stream'), 'expected video src to use stream endpoint')
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

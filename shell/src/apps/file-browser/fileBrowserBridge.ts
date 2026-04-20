@@ -166,3 +166,9 @@ export function fileBrowserReadUrl(path: string, base: string | null): string {
   if (!origin) return ''
   return `${origin}/file_browser/read?p=${encodeURIComponent(path)}`
 }
+
+export function fileBrowserStreamUrl(path: string, base: string | null): string {
+  const origin = (base ?? shellHttpBase() ?? '').replace(/\/$/, '')
+  if (!origin) return ''
+  return `${origin}/file_browser/stream?p=${encodeURIComponent(path)}`
+}

@@ -804,6 +804,7 @@ function App() {
       shellWireSend,
       onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
       onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
+      onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
       reportShellActionIssue,
       copyDebugHudSnapshot,
       shellBuildLabel,
