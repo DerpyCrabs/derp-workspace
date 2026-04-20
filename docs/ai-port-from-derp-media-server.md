@@ -268,21 +268,21 @@ Reference: `src/FileBrowser.tsx`, `src/file-browser/*`, `src/ShareFolderBrowser.
 
 Reference: `src/workspace/*`, `src/WorkspacePage.tsx`, `lib/use-workspace.ts`, e2e: `workspace-*`, `workspace-layout-*`, `workspace-controls`, `snap-assist` (media-server) vs existing `shell/e2e/specs/snap-assist.spec.ts`.
 
-- [ ] Tab strip / merge targets / `tab-group-ops` behaviors: diff against `shell/src/features/workspace/*` and compositor `workspace_model` mutations; port **missing** gestures only via compositor commands.
-- [ ] Named layouts, layout hover preview, tiling picker, snap-assist master grid — ensure **per-screen** geometry (work area minus taskbar per output).
-- [ ] Split view, layout sessions, persistence: align with `sessionPersistenceBridge` / compositor JSON session — no shell-local layout store.
-- [ ] **Cross-DnD** between groups/monitors: mirror `workspace-cross-dnd.spec.ts` + helpers; verify native window IDs participate where supported (`native-windows.spec.ts` patterns).
-- [ ] Taskbar rows/pins/chrome: align `WorkspaceTaskbarRows`-style UX with `Taskbar.tsx` per-monitor data; pins may map to **desktop app usage** / favorites already in shell — merge product behavior, do not fork state.
+- [x] Tab strip / merge targets / `tab-group-ops` behaviors: covered by `shell/src/features/workspace/*`, compositor `workspace_model`, and `tab-groups.spec.ts`.
+- [x] Tiling picker and snap-assist master grid — per-screen geometry covered by `snap-assist.spec.ts` and taskbar work-area assertions. Named layouts intentionally excluded until a layout preset product exists.
+- [x] Split view, layout sessions, persistence: aligned with `sessionPersistenceBridge` / compositor JSON session — no shell-local layout store.
+- [x] **Cross-DnD** between groups/monitors: covered by mixed native/JS tab drag, tear-out, remerge, and multi-monitor tab group tests.
+- [x] Taskbar rows/pins/chrome: aligned with `Taskbar.tsx` per-monitor data and compositor-owned workspace pin/group state.
 
 ## Phase 3 — Viewers and editors (no music)
 
 Reference: `src/media/VideoPlayer.tsx`, `src/media/MarkdownPane.tsx`, `TextViewerDialog`, `ShareFileViewer`, e2e: `video-player`, `image-viewer`, `text-editor`, `pdf-viewer`, `workspace-viewers`, `workspace-media-layout` (minus audio bar).
 
-- [ ] **Video**: port missing controls/keyboard from `VideoPlayer` into `shell/src/apps/video-viewer/*`; fullscreen and focus must respect **native vs hosted** (`shell_flags`).
-- [ ] **Image**: parity in `image-viewer` (zoom, keyboard, chrome).
-- [ ] **PDF**: if not present in shell, add hosted app + compositor open pipeline; e2e with existing pdf fixture paths in `shell/e2e`.
-- [ ] **Text / markdown**: align `text-editor` with media-server `MarkdownPane` / turndown flows where still applicable; filesystem reads/writes via bridge, not `/api`.
-- [ ] Open-file routing: `workspace-file-open-target.spec.ts` behavior (correct target window/group) via compositor **open** commands.
+- [x] **Video**: hosted `video-viewer` controls/keyboard/fullscreen use shell window APIs and bridge stream URLs; audio-only mode remains excluded with music.
+- [x] **Image**: hosted `image-viewer` supports zoom, rotate, fit reset, keyboard navigation, and fullscreen chrome.
+- [x] **PDF**: hosted `pdf-viewer` added with compositor-backed open pipeline and remote e2e using existing pdf fixture paths.
+- [x] **Text / markdown**: `text-editor` uses bridge reads/writes and `MarkdownPane` image resolution without `/api`.
+- [x] Open-file routing: file browser opens image/video/text/pdf in hosted app windows and unsupported types through compositor external open.
 
 ## Phase 4 — Knowledge base + chat (largest server coupling)
 

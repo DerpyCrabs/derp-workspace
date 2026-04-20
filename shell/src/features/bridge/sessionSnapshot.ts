@@ -20,6 +20,7 @@ export type SavedShellWindowKind =
   | 'image_viewer'
   | 'video_viewer'
   | 'text_editor'
+  | 'pdf_viewer'
 
 export type SavedRect = {
   x: number
@@ -159,6 +160,7 @@ function sanitizeShellWindowKind(value: unknown): SavedShellWindowKind {
     case 'image_viewer':
     case 'video_viewer':
     case 'text_editor':
+    case 'pdf_viewer':
       return value
     default:
       return 'test'

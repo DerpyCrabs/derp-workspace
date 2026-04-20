@@ -2,6 +2,7 @@ import type { Accessor } from 'solid-js'
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import Expand from 'lucide-solid/icons/expand'
+import RotateCw from 'lucide-solid/icons/rotate-cw'
 import Shrink from 'lucide-solid/icons/shrink'
 import ZoomIn from 'lucide-solid/icons/zoom-in'
 import ZoomOut from 'lucide-solid/icons/zoom-out'
@@ -59,6 +60,7 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
   )
 
   const [zoom, setZoom] = createSignal<number | 'fit'>('fit')
+  const [rotationDeg, setRotationDeg] = createSignal(0)
 
   let applyingFromCompositor = false
   let lastCompositorMementoJson = ''
@@ -157,6 +159,7 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
   createEffect(() => {
     state.viewingPath
     setZoom('fit')
+    setRotationDeg(0)
   })
 
   const windowModel = createMemo(() => props.allWindowsMap().get(props.windowId))
@@ -206,7 +209,7 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
     const scale = z === 'fit' ? 1 : z / 100
     return {
       ...base,
-      transform: `scale(${scale})`,
+      transform: `scale(${scale}) rotate(${rotationDeg()}deg)`,
     }
   })
 
@@ -295,7 +298,12 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
               <button
                 type="button"
                 class="min-w-12 rounded px-1 text-center text-xs text-white/80 hover:bg-white/10 hover:text-white/90"
-                onClick={() => setZoom('fit')}
+                title="Fit to screen"
+                data-image-viewer-fit
+                onClick={() => {
+                  setZoom('fit')
+                  setRotationDeg(0)
+                }}
               >
                 {zoom() === 'fit' ? 'Fit' : `${zoom()}%`}
               </button>
@@ -310,6 +318,15 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
                 }
               >
                 <ZoomIn class="h-3.5 w-3.5" stroke-width={2} />
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center rounded-md text-white hover:bg-white/10"
+                title="Rotate clockwise"
+                onClick={() => setRotationDeg((prev) => (prev + 90) % 360)}
+                data-image-viewer-rotate
+              >
+                <RotateCw class="h-3.5 w-3.5" stroke-width={2} />
               </button>
               <button
                 type="button"

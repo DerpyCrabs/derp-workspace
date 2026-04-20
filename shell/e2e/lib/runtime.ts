@@ -311,6 +311,20 @@ export interface TextEditorWindowSnapshot {
   textarea_rect: Rect | null
 }
 
+export interface ImageViewerWindowSnapshot {
+  window_id: number
+  img_rect: Rect | null
+  img_transform: string
+  rotate_rect: Rect | null
+  fit_rect: Rect | null
+}
+
+export interface PdfViewerWindowSnapshot {
+  window_id: number
+  document_rect: Rect | null
+  title: string
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -349,7 +363,9 @@ export interface ShellSnapshot {
   focused_window_id?: number | null
   file_browser?: FileBrowserSnapshot | null
   file_browser_windows?: FileBrowserWindowSnapshot[]
+  image_viewer_windows?: ImageViewerWindowSnapshot[]
   text_editor_windows?: TextEditorWindowSnapshot[]
+  pdf_viewer_windows?: PdfViewerWindowSnapshot[]
   file_browser_context_menu?: FileBrowserContextMenuActionSnapshot[]
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null

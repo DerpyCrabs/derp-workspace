@@ -6337,6 +6337,7 @@ impl CompositorState {
                 && kind != "image_viewer"
                 && kind != "video_viewer"
                 && kind != "text_editor"
+                && kind != "pdf_viewer"
             {
                 continue;
             }
@@ -6368,6 +6369,7 @@ impl CompositorState {
             && kind != "image_viewer"
             && kind != "video_viewer"
             && kind != "text_editor"
+            && kind != "pdf_viewer"
         {
             return;
         }

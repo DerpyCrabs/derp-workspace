@@ -427,6 +427,59 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         textarea_rect: ReturnType<typeof snapshotRect>
       } => entry !== null,
     )
+  const imageViewerWindows = cache
+    .queryAllAttr('data-image-viewer-root')
+    .map((el) => {
+      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
+      if (!frameEl) return null
+      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
+      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const img = el.querySelector('[data-image-viewer-img]')
+      const rotate = el.querySelector('[data-image-viewer-rotate]')
+      const fit = el.querySelector('[data-image-viewer-fit]')
+      return {
+        window_id: rawWindowId,
+        img_rect: img instanceof HTMLElement ? snapshotRect(img, args.origin) : null,
+        img_transform: img instanceof HTMLElement ? img.style.transform : '',
+        rotate_rect: rotate instanceof HTMLElement ? snapshotRect(rotate, args.origin) : null,
+        fit_rect: fit instanceof HTMLElement ? snapshotRect(fit, args.origin) : null,
+      }
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        window_id: number
+        img_rect: ReturnType<typeof snapshotRect>
+        img_transform: string
+        rotate_rect: ReturnType<typeof snapshotRect>
+        fit_rect: ReturnType<typeof snapshotRect>
+      } => entry !== null,
+    )
+  const pdfViewerWindows = cache
+    .queryAllAttr('data-pdf-viewer-root')
+    .map((el) => {
+      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
+      if (!frameEl) return null
+      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
+      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const doc = el.querySelector('[data-pdf-viewer-document]')
+      const title = el.querySelector('[data-pdf-viewer-title]')
+      return {
+        window_id: rawWindowId,
+        document_rect: doc instanceof HTMLElement ? snapshotRect(doc, args.origin) : null,
+        title: title instanceof HTMLElement ? title.textContent?.trim() ?? '' : '',
+      }
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        window_id: number
+        document_rect: ReturnType<typeof snapshotRect>
+        title: string
+      } => entry !== null,
+    )
   const globalFileBrowserWindow =
     fileBrowserWindows.find((entry) => entry.window_id === args.focusedWindowId) ?? fileBrowserWindows[0] ?? null
 
@@ -512,7 +565,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     snap_hover_span: args.assistOverlayHoverSpan,
     file_browser: globalFileBrowserWindow,
     file_browser_windows: fileBrowserWindows,
+    image_viewer_windows: imageViewerWindows,
     text_editor_windows: textEditorWindows,
+    pdf_viewer_windows: pdfViewerWindows,
     file_browser_context_menu: fileBrowserContextMenu,
     programs_menu_query: args.programsMenuQuery,
     session_snapshot: args.sessionSnapshot,

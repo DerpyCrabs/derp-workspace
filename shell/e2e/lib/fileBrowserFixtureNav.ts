@@ -1,13 +1,11 @@
 import path from 'node:path'
 
 import {
-  KEY,
   assertRectMinSize,
   assert,
   clickRect,
   getJson,
   openProgramsMenu,
-  tapKey,
   waitFor,
   type FileBrowserFixturePaths,
   type FileBrowserSnapshot,
@@ -60,7 +58,7 @@ export async function openFileBrowserFromLauncher(
   )
   const readyMenu = await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
   assert(readyMenu.controls?.programs_menu_first_item, 'missing first launcher item')
-  await tapKey(base, KEY.enter)
+  await clickRect(base, assertRectMinSize('launcher first item', readyMenu.controls.programs_menu_first_item, 24, 18))
   const opened = await waitFor(
     'wait for file browser window',
     async () => {

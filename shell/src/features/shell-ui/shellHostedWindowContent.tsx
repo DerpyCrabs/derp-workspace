@@ -2,6 +2,7 @@ import { Show, type Accessor, type JSX, type Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
 import { FileBrowserWindow } from '@/apps/file-browser/FileBrowserWindow'
 import { ImageViewerWindow } from '@/apps/image-viewer/ImageViewerWindow'
+import { PdfViewerWindow } from '@/apps/pdf-viewer/PdfViewerWindow'
 import { TextEditorWindow } from '@/apps/text-editor/TextEditorWindow'
 import { VideoViewerWindow } from '@/apps/video-viewer/VideoViewerWindow'
 import { ShellDebugHudContent } from '@/apps/debug/ShellDebugHudContent'
@@ -10,12 +11,14 @@ import { SettingsPanel } from '@/apps/settings/SettingsPanel'
 import {
   isFileBrowserWindowId,
   isImageViewerWindowId,
+  isPdfViewerWindowId,
   isShellTestWindowId,
   isTextEditorWindowId,
   isVideoViewerWindowId,
   SHELL_UI_TEST_APP_ID,
 } from '@/features/shell-ui/backedShellWindows'
 import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
+import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
 import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
 import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
@@ -32,6 +35,7 @@ export type ShellHostedWindowContentEnv = {
   onOpenImageFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenVideoFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenTextFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
+  onOpenPdfFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenPathExternally: (path: string) => void
   reportShellActionIssue: (message: string) => void
   copyDebugHudSnapshot: () => void
@@ -170,6 +174,14 @@ export function renderShellHostedWindowContent(
                 })
                 return
               }
+              if (isPdfFilePath(path) && context.directory.length > 0) {
+                env.onOpenPdfFile({
+                  path,
+                  directory: context.directory,
+                  showHidden: context.showHidden,
+                })
+                return
+              }
               env.onOpenPathExternally(path)
             }}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
@@ -211,6 +223,20 @@ export function renderShellHostedWindowContent(
       <Show when={windowId} keyed>
         {(id) => (
           <TextEditorWindow
+            windowId={id}
+            compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
+            shellWireSend={env.shellWireSend}
+            allWindowsMap={env.allWindowsMap}
+          />
+        )}
+      </Show>
+    )
+  }
+  if (isPdfViewerWindowId(windowId)) {
+    return (
+      <Show when={windowId} keyed>
+        {(id) => (
+          <PdfViewerWindow
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}

@@ -2,6 +2,7 @@ import {
   buildBackedWindowOpenPayload,
   buildFileBrowserWindowOpenPayload,
   buildImageViewerWindowOpenPayload,
+  buildPdfViewerWindowOpenPayload,
   buildShellTestWindowOpenPayload,
   buildTextEditorWindowOpenPayload,
   buildVideoViewerWindowOpenPayload,
@@ -11,9 +12,12 @@ import {
   imageViewerWindowTitle,
   isFileBrowserWindowId,
   isImageViewerWindowId,
+  isPdfViewerWindowId,
   isShellTestWindowId,
   isTextEditorWindowId,
   isVideoViewerWindowId,
+  pdfViewerWindowId,
+  pdfViewerWindowTitle,
   shellTestWindowId,
   shellTestWindowTitle,
   textEditorWindowId,
@@ -22,6 +26,7 @@ import {
   videoViewerWindowTitle,
   SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_IMAGE_VIEWER_APP_ID,
+  SHELL_UI_PDF_VIEWER_APP_ID,
   SHELL_UI_TEST_APP_ID,
   SHELL_UI_TEXT_EDITOR_APP_ID,
   SHELL_UI_VIDEO_VIEWER_APP_ID,
@@ -292,6 +297,40 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     return true
   }
 
+  const openPdfViewerWindow = (detail: { path: string; directory: string; showHidden: boolean }) => {
+    const context = resolveMonitorContext()
+    if (!context) return false
+    pruneReservedBackedWindowIds()
+    const windowId = nextWindowId(
+      options.getWindows(),
+      pendingBackedWindowOpens.keys(),
+      reservedBackedWindowIds,
+      isPdfViewerWindowId,
+      SHELL_UI_PDF_VIEWER_APP_ID,
+      pdfViewerWindowId,
+    )
+    if (windowId === null) return false
+    reservedBackedWindowIds.add(windowId)
+    const baseTitle = detail.path.split('/').filter(Boolean).pop() ?? pdfViewerWindowTitle(0)
+    const title = baseTitle.length > 0 ? baseTitle : pdfViewerWindowTitle(windowId - pdfViewerWindowId(0))
+    primeShellWindowState(windowId, {
+      viewingPath: detail.path,
+      directory: detail.directory,
+      showHidden: detail.showHidden,
+    })
+    queueBackedWindowOpen(
+      buildPdfViewerWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        windowId,
+        title,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+    return true
+  }
+
   const openFileBrowserWindow = (path?: string | null) => {
     const context = resolveMonitorContext()
     if (!context) return false
@@ -342,7 +381,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     }
     if (kind === 'test') return openShellTestWindow()
     if (kind === 'file_browser') return openFileBrowserWindow()
-    if (kind === 'image_viewer' || kind === 'video_viewer' || kind === 'text_editor') return false
+    if (kind === 'image_viewer' || kind === 'video_viewer' || kind === 'text_editor' || kind === 'pdf_viewer') return false
     return false
   }
 
@@ -354,6 +393,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     openImageViewerWindow,
     openVideoViewerWindow,
     openTextEditorWindow,
+    openPdfViewerWindow,
     openShellHostedApp,
     dispose,
   }

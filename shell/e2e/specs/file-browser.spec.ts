@@ -35,6 +35,7 @@ import {
 
 const IMAGE_VIEWER_APP_ID = 'derp.image-viewer'
 const VIDEO_VIEWER_APP_ID = 'derp.video-viewer'
+const PDF_VIEWER_APP_ID = 'derp.pdf-viewer'
 const WRITABLE_TEXT = 'Phase 1 writable fixture\nThis file should reset between runs.\n'
 const READ_ONLY_TEXT = 'Phase 1 read-only fixture\nThis file should refuse direct writes.\n'
 const READ_ONLY_MD = '# Read only doc\n\nbody\n'
@@ -310,6 +311,39 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html0.includes('alt="blue-image.png"'), 'expected blue image alt')
+    const imageControls = await waitFor(
+      'wait for image rotate control',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = shell.image_viewer_windows?.find((entry) => entry.window_id === viewerWindow.windowId)
+        return row?.rotate_rect && row.fit_rect ? row : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('image rotate', imageControls.rotate_rect, 8, 8))
+    const rotated = await waitFor(
+      'wait for image rotation',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = shell.image_viewer_windows?.find((entry) => entry.window_id === viewerWindow.windowId)
+        return row?.img_transform.includes('rotate(90deg)') ? row : null
+      },
+      2000,
+      100,
+    )
+    assert(rotated.img_transform.includes('rotate(90deg)'), 'expected rotated image transform')
+    await clickRect(base, assertRectMinSize('image fit reset', imageControls.fit_rect, 8, 8))
+    await waitFor(
+      'wait for image rotation reset',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = shell.image_viewer_windows?.find((entry) => entry.window_id === viewerWindow.windowId)
+        return row?.img_transform.includes('rotate(0deg)') ? row : null
+      },
+      2000,
+      100,
+    )
     await tapKey(base, KEY.right)
     const html1 = await waitFor(
       'wait for second image',
@@ -381,6 +415,56 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html.includes('file_browser/stream'), 'expected video src to use stream endpoint')
+  })
+
+  test('pdf viewer opens from file browser and streams document', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', navigated.windowId)
+    const mediaShell = await waitForActivePath(base, mediaPath, navigated.windowId)
+    const pdfRow = fileBrowserRow(mediaShell, 'derp-doc.pdf', navigated.windowId)
+    assert(pdfRow?.rect, 'missing derp-doc.pdf row')
+    await clickRect(base, assertRectMinSize('select derp-doc.pdf', pdfRow.rect, 32, 24))
+    await waitFor(
+      'wait for derp-doc row selected',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return fileBrowserRow(shell, 'derp-doc.pdf', navigated.windowId)?.selected ? shell : null
+      },
+      5000,
+      100,
+    )
+    const pdfSelected = fileBrowserRow(await getJson<ShellSnapshot>(base, '/test/state/shell'), 'derp-doc.pdf', navigated.windowId)
+    assert(pdfSelected?.rect, 'missing derp-doc row rect after selection')
+    await clickRect(base, assertRectMinSize('open derp-doc second click', pdfSelected.rect, 32, 24))
+    const viewerWindow = await waitFor(
+      'wait for pdf viewer window',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const w = shell.windows.find(
+          (entry) => entry.shell_hosted && entry.app_id === PDF_VIEWER_APP_ID && !entry.minimized,
+        )
+        const row = w ? shell.pdf_viewer_windows?.find((entry) => entry.window_id === w.window_id) : null
+        return w && row?.document_rect ? { shell, windowId: w.window_id, row } : null
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(viewerWindow.windowId)
+    const frameSelector = `[data-shell-window-frame="${viewerWindow.windowId}"]`
+    const html = await waitFor(
+      'wait for pdf viewer markup',
+      async () => {
+        const h = await getShellHtml(base, frameSelector)
+        return h.includes('data-pdf-viewer-document') && h.includes('derp-doc.pdf') ? h : null
+      },
+      5000,
+      100,
+    )
+    assert(html.includes('application/pdf'), 'expected pdf object type')
+    assert(html.includes('file_browser/stream'), 'expected pdf object to use stream endpoint')
+    await writeJsonArtifact('file-browser-pdf-viewer.json', viewerWindow)
   })
 
   test('file browser mkdir rename delete via dialogs', async ({ base, state }) => {

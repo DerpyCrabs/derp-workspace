@@ -817,6 +817,7 @@ function App() {
       onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
       onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
       onOpenTextFile: (detail) => backedShellWindowActions.openTextEditorWindow(detail),
+      onOpenPdfFile: (detail) => backedShellWindowActions.openPdfViewerWindow(detail),
       onOpenPathExternally: (path) => {
         void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
       },
