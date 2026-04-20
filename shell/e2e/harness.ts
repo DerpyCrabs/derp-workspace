@@ -351,9 +351,18 @@ async function waitForFileBrowserMaximized(
 }
 
 async function clickMaximizeButton(base: string, windowId: number, label: string): Promise<void> {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const controls = windowControls(shell, windowId)
-  const maximize = assertRectMinSize(`${label} maximize button`, controls?.maximize, 12)
+  const maximize = await waitFor(
+    `${label} maximize button`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const controls = windowControls(shell, windowId)
+      const rect = controls?.maximize
+      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
+    },
+    5000,
+    50,
+  )
+  assertRectMinSize(`${label} maximize button`, maximize, 12)
   await clickRect(base, maximize)
 }
 
@@ -419,8 +428,9 @@ async function runMaximizeFileBrowserThenFootScenario(harness: HarnessState): Pr
   )
   state.spawnedNativeWindowIds.add(foot.window.window_id)
   await waitForWindowRaised(base, foot.window.window_id)
+  await waitForNativeFocus(base, foot.window.window_id)
   const afterFootOpened = await saveSnapshot(base, 'harness-file-browser-foot-foot-opened', true, true)
-  await clickMaximizeButton(base, foot.window.window_id, 'foot')
+  await runKeybind(base, 'toggle_maximize', foot.window.window_id)
   const result = await waitFor(
     'wait for file browser and foot maximize result',
     async () => {
@@ -486,7 +496,19 @@ async function runNativeCloseDecorationClearsScenario(harness: HarnessState): Pr
   const before = await saveSnapshot(base, 'harness-native-close-before', true, true)
   await clickCloseButton(base, foot.window.window_id, 'foot')
   const immediateScreenshot = await takeScreenshot(base, 'harness-native-close-immediate-after-click')
-  const gone = await waitForWindowGone(base, foot.window.window_id, 5000)
+  const gone = await waitFor(
+    'wait for native close to clear shell decoration',
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const shellHasWindow = shell.windows.some((window) => window.window_id === foot.window.window_id)
+      const compositorHasWindow = compositor.windows.some((window) => window.window_id === foot.window.window_id)
+      const compositorHasDecor = compositor.shell_ui_windows?.some((window) => window.id === foot.window.window_id) ?? false
+      if (shellHasWindow || compositorHasWindow || compositorHasDecor) return null
+      return { compositor, shell }
+    },
+    5000,
+    50,
+  )
   const after = await saveSnapshot(base, 'harness-native-close-after', true, true)
   const shellHasWindow = gone.shell.windows.some((window) => window.window_id === foot.window.window_id)
   const compositorHasWindow = gone.compositor.windows.some((window) => window.window_id === foot.window.window_id)

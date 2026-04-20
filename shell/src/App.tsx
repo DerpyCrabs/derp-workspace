@@ -33,6 +33,7 @@ import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRunti
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
+import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
 import {
   spawnViaShellHttp,
 } from '@/features/bridge/shellBridge'
@@ -194,7 +195,7 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     op === 'resize_shell_grab_end'
   ) {
     fn(op)
-  } else if (op === 'backed_window_open' && typeof arg === 'string') {
+  } else if ((op === 'hosted_window_open' || op === 'backed_window_open') && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_output_layout' && typeof arg === 'string') {
     fn(op, arg)
@@ -539,7 +540,7 @@ function App() {
       return name && name.length > 0 ? name : null
     },
     reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
-    sendBackedWindowOpen: (payload) => shellWireSend('backed_window_open', JSON.stringify(payload)),
+    sendHostedWindowOpen: (payload) => shellWireSend('hosted_window_open', JSON.stringify(payload)),
   })
 
   const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(screenDraft.rows))
@@ -1277,6 +1278,7 @@ function App() {
   }
 
   const shellFloatingRegistry: ShellFloatingRegistry = {
+    openOverlay: createShellOverlayRegistry(floatingLayers).openOverlay,
     openLayer: floatingLayers.openLayer,
     closeBranch: floatingLayers.closeBranch,
     closeAll: floatingLayers.closeAll,

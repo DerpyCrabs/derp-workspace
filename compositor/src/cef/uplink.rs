@@ -96,43 +96,43 @@ impl UplinkToCompositor {
 
     pub fn shell_close(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_close_window(window_id);
+            s.window_op_close(window_id);
         });
     }
 
     pub fn shell_move_begin(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_move_begin(window_id);
+            s.window_op_begin_move(window_id);
         });
     }
 
     pub fn shell_move_delta(&self, dx: i32, dy: i32) {
         self.run(move |s| {
-            s.shell_move_delta(dx, dy);
+            s.window_op_move_delta(dx, dy);
         });
     }
 
     pub fn shell_move_end(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_move_end(window_id);
+            s.window_op_end_move(window_id);
         });
     }
 
     pub fn shell_resize_begin(&self, window_id: u32, edges: u32) {
         self.run(move |s| {
-            s.shell_resize_begin(window_id, edges);
+            s.window_op_begin_resize(window_id, edges);
         });
     }
 
     pub fn shell_resize_delta(&self, dx: i32, dy: i32) {
         self.run(move |s| {
-            s.shell_resize_delta(dx, dy);
+            s.window_op_resize_delta(dx, dy);
         });
     }
 
     pub fn shell_resize_end(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_resize_end(window_id);
+            s.window_op_end_resize(window_id);
         });
     }
 
@@ -156,7 +156,7 @@ impl UplinkToCompositor {
 
     pub fn shell_activate_window(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_activate_window(window_id);
+            s.window_op_focus(window_id);
         });
     }
 
@@ -186,19 +186,19 @@ impl UplinkToCompositor {
 
     pub fn shell_minimize(&self, window_id: u32) {
         self.run(move |s| {
-            s.shell_minimize_window(window_id);
+            s.window_op_minimize(window_id);
         });
     }
 
     pub fn shell_set_fullscreen(&self, window_id: u32, enabled: bool) {
         self.run(move |s| {
-            s.shell_set_window_fullscreen(window_id, enabled);
+            s.window_op_set_fullscreen(window_id, enabled);
         });
     }
 
     pub fn shell_set_maximized(&self, window_id: u32, enabled: bool) {
         self.run(move |s| {
-            s.shell_set_window_maximized(window_id, enabled);
+            s.window_op_set_maximized(window_id, enabled);
         });
     }
 
@@ -212,7 +212,12 @@ impl UplinkToCompositor {
         layout: u32,
     ) {
         self.run(move |s| {
-            s.shell_set_window_geometry(window_id, vx, vy, vw, vh, layout);
+            let mode = if layout == 1 {
+                crate::window_ops::WindowLayoutMode::Maximized
+            } else {
+                crate::window_ops::WindowLayoutMode::Floating
+            };
+            s.window_op_set_geometry(window_id, vx, vy, vw, vh, mode);
         });
     }
 
@@ -271,6 +276,12 @@ impl UplinkToCompositor {
     }
 
     pub fn shell_backed_window_open(&self, json: String) {
+        self.run(move |s| {
+            s.shell_backed_try_open_json(&json);
+        });
+    }
+
+    pub fn shell_hosted_window_open(&self, json: String) {
         self.run(move |s| {
             s.shell_backed_try_open_json(&json);
         });
@@ -427,6 +438,19 @@ impl UplinkToCompositor {
 
     pub fn test_compositor_snapshot_json(&self) -> Result<String, String> {
         self.run_result(move |s| s.e2e_compositor_snapshot_json())
+    }
+
+    pub fn test_sync_json(&self) -> Result<String, String> {
+        self.run_result(move |s| {
+            let compositor =
+                serde_json::from_str::<serde_json::Value>(&s.e2e_compositor_snapshot_json()?)
+                    .map_err(|e| format!("parse compositor sync snapshot: {e}"))?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "compositor": compositor,
+            })
+            .to_string())
+        })
     }
 
     pub fn test_request_screenshot(

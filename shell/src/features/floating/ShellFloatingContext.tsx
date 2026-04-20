@@ -6,9 +6,11 @@ import type {
   FloatingLayerRecord,
   FloatingLayerStoreRecord,
 } from './floatingLayers'
+import type { ShellOverlayOpenArgs } from './shellOverlay'
 import type { ShellFloatingScreenLike } from './shellFloatingPlacement'
 
 export type ShellFloatingRegistry = {
+  openOverlay: (args: ShellOverlayOpenArgs) => void
   openLayer: (args: {
     id: string
     parentId?: string | null

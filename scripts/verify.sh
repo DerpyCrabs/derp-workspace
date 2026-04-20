@@ -8,4 +8,5 @@ cargo test
 
 cd "$REPO_ROOT/shell"
 npm run check
+npm run e2e:guard
 npm run test

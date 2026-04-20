@@ -690,6 +690,21 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/sync" {
+        let compositor = uplink.test_sync_json()?;
+        let shell = request_shell_snapshot_json(browser)?;
+        let json = serde_json::json!({
+            "ok": true,
+            "compositor": serde_json::from_str::<serde_json::Value>(&compositor)
+                .map_err(|e| format!("parse compositor sync json: {e}"))?,
+            "shell": serde_json::from_str::<serde_json::Value>(&shell)
+                .map_err(|e| format!("parse shell sync json: {e}"))?,
+        })
+        .to_string();
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/test/window/minimize" {
         let q = query_str.ok_or_else(|| "minimize: missing query".to_string())?;
         let window_id = query_param_raw(q, "window_id")

@@ -45,7 +45,7 @@ type BackedShellWindowActionsOptions = {
   getPrimaryMonitorName: () => string
   getHostedWindowSpawnMonitorName?: () => string | null
   reserveTaskbarForMon: (screen: ReturnType<typeof screensListForLayout>[number]) => boolean
-  sendBackedWindowOpen: (payload: BackedWindowOpenPayload) => boolean
+  sendHostedWindowOpen: (payload: BackedWindowOpenPayload) => boolean
 }
 
 function hostedWindowStaggerIndex(
@@ -122,7 +122,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     const trySend = () => {
       backedWindowOpenRaf = 0
       for (const [windowId, payload] of pendingBackedWindowOpens) {
-        if (options.sendBackedWindowOpen(payload)) {
+        if (options.sendHostedWindowOpen(payload)) {
           pendingBackedWindowOpens.delete(windowId)
         }
       }

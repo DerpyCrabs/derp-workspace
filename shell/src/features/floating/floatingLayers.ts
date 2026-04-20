@@ -1,6 +1,6 @@
 import { createMemo, createSignal, type Accessor } from 'solid-js'
 
-export type FloatingLayerKind = 'context_menu' | 'select'
+export type FloatingLayerKind = 'context_menu' | 'dropdown' | 'tooltip' | 'select'
 
 export type FloatingLayerPlacement = {
   bx: number

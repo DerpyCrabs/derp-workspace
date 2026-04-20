@@ -1196,13 +1196,19 @@ export async function captureFailureArtifacts(base: string, label: string): Prom
   }
 }
 
+export async function syncTest(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return getJson<{ compositor: CompositorSnapshot; shell: ShellSnapshot }>(base, '/test/sync')
+}
+
 export async function clickRect(base: string, rect: Rect): Promise<void> {
   const point = rectCenter(rect)
   await clickPoint(base, point.x, point.y)
 }
 
 export async function rightClickPoint(base: string, x: number, y: number): Promise<void> {
-  await postJson(base, '/test/input/click', { x, y, button: BTN_RIGHT })
+  await movePoint(base, x, y)
+  await pointerButton(base, BTN_RIGHT, 'press')
+  await pointerButton(base, BTN_RIGHT, 'release')
 }
 
 export async function rightClickRect(base: string, rect: Rect): Promise<void> {
@@ -1226,23 +1232,35 @@ export function assertRectMinSize(
 }
 
 export async function clickPoint(base: string, x: number, y: number): Promise<void> {
-  await postJson(base, '/test/input/click', { x, y, button: BTN_LEFT })
+  await movePoint(base, x, y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await pointerButton(base, BTN_LEFT, 'release')
 }
 
 export async function movePoint(base: string, x: number, y: number): Promise<void> {
   await postJson(base, '/test/input/pointer_move', { x, y })
+  await syncTest(base)
 }
 
 export async function pointerWheel(base: string, deltaX: number, deltaY: number): Promise<void> {
   await postJson(base, '/test/input/pointer_wheel', { delta_x: deltaX, delta_y: deltaY })
+  await syncTest(base)
 }
 
 export async function pointerButton(base: string, button: number, action: 'press' | 'release'): Promise<void> {
   await postJson(base, '/test/input/pointer_button', { button, action })
+  await syncTest(base)
 }
 
 export async function dragBetweenPoints(base: string, x0: number, y0: number, x1: number, y1: number, steps = 12): Promise<void> {
-  await postJson(base, '/test/input/drag', { x0, y0, x1, y1, button: BTN_LEFT, steps })
+  const count = Math.max(1, steps)
+  await movePoint(base, x0, y0)
+  await pointerButton(base, BTN_LEFT, 'press')
+  for (let index = 1; index <= count; index += 1) {
+    const t = index / count
+    await movePoint(base, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+  }
+  await pointerButton(base, BTN_LEFT, 'release')
 }
 
 export async function dragRectToRect(base: string, from: Rect, to: Rect, steps = 16): Promise<void> {
@@ -1253,6 +1271,7 @@ export async function dragRectToRect(base: string, from: Rect, to: Rect, steps =
 
 export async function tapKey(base: string, keycode: number): Promise<void> {
   await postJson(base, '/test/input/key', { keycode, action: 'tap' })
+  await syncTest(base)
 }
 
 export async function typeText(base: string, text: string): Promise<void> {
@@ -1266,6 +1285,7 @@ export async function typeText(base: string, text: string): Promise<void> {
     return
   }
   await postJson(base, '/test/input/keys', { keycodes, action: 'tap' })
+  await syncTest(base)
 }
 
 export async function runKeybind(base: string, action: string, windowId?: number): Promise<void> {
@@ -1274,6 +1294,7 @@ export async function runKeybind(base: string, action: string, windowId?: number
     body.window_id = windowId
   }
   await postJson(base, '/test/keybind', body)
+  await syncTest(base)
 }
 
 export function findWindow(snapshot: { windows: WindowSnapshot[] }, predicate: (window: WindowSnapshot) => boolean): WindowSnapshot | null {

@@ -12,12 +12,14 @@ import tabGroupsGroup from './tab-groups.spec.ts'
 import taskbarMinimizeGroup from './taskbar-minimize.spec.ts'
 import taskbarCloseGroup from './taskbar-close.spec.ts'
 import textEditorGroup from './text-editor.spec.ts'
+import windowParityGroup from './window-parity.spec.ts'
 import x11WindowsGroup from './x11-windows.spec.ts'
 
 export const defaultGroups = [
   shellChromeGroup,
   perfSmokeGroup,
   nativeWindowsGroup,
+  windowParityGroup,
   x11WindowsGroup,
   snapAssistGroup,
   tabGroupsGroup,

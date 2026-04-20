@@ -6,6 +6,7 @@ pub use api::chrome_bridge;
 pub use api::derp_space;
 pub use api::layout;
 pub use api::sidecar;
+pub use api::window_ops;
 pub use api::window_registry;
 
 pub mod cef;
