@@ -233,6 +233,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     label: actionEl.getAttribute('aria-label') ?? actionEl.textContent?.trim() ?? '',
     rect: snapshotRect(actionEl, origin),
   }))
+  const dialogInputEl = queryWithin(root, '[data-file-browser-dialog-input]')
+  const dialogConfirmEl = queryWithin(root, '[data-file-browser-dialog-confirm]')
   return {
     list_state: fileBrowserListStateEl?.getAttribute('data-file-browser-list-state') ?? null,
     active_path:
@@ -246,6 +248,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
       fileBrowserViewerTitleEl?.textContent?.trim() ??
       null,
     primary_actions: fileBrowserPrimaryActions,
+    dialog_input_rect: snapshotRect(dialogInputEl, origin),
+    dialog_confirm_rect: snapshotRect(dialogConfirmEl, origin),
   }
 }
 
@@ -397,9 +401,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       const editBtn = el.querySelector('[data-text-editor-edit]')
       const saveBtn = el.querySelector('[data-text-editor-save]')
       const ta = el.querySelector('[data-text-editor-textarea]')
+      const zoomDlg = el.querySelector('[data-text-editor-markdown-image-dialog="1"]')
       return {
         window_id: rawWindowId,
         markdown_img_rect: img instanceof HTMLElement ? snapshotRect(img, args.origin) : null,
+        markdown_img_dialog_open: zoomDlg instanceof HTMLElement,
         edit_rect: editBtn instanceof HTMLElement ? snapshotRect(editBtn, args.origin) : null,
         save_rect: saveBtn instanceof HTMLElement ? snapshotRect(saveBtn, args.origin) : null,
         textarea_rect: ta instanceof HTMLElement ? snapshotRect(ta, args.origin) : null,
@@ -411,6 +417,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ): entry is {
         window_id: number
         markdown_img_rect: ReturnType<typeof snapshotRect>
+        markdown_img_dialog_open: boolean
         edit_rect: ReturnType<typeof snapshotRect>
         save_rect: ReturnType<typeof snapshotRect>
         textarea_rect: ReturnType<typeof snapshotRect>

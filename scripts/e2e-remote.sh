@@ -113,8 +113,25 @@ cd $(printf '%q' "$REMOTE_REPO")
 sudo install -Dm755 target/release/compositor /usr/local/bin/compositor
 sudo install -Dm755 target/release/derp-test-client /usr/local/bin/derp-test-client
 EOF
-  echo "=== SIGUSR2 compositor (reload after install) ==="
-  ssh_base bash -s <<'REMOTE'
+fi
+
+if [[ "$SKIP_SYNC" -eq 1 ]]; then
+  echo "=== skip remote npm shell -> dist/ ==="
+else
+  echo "=== remote npm shell -> dist/ ==="
+  ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+if [[ -f shell/package.json ]]; then
+  cd shell
+  bash ../scripts/ensure-shell-node-modules.sh .
+  exec npm run build
+fi
+EOF
+fi
+
+echo "=== SIGUSR2 compositor (before e2e) ==="
+ssh_base bash -s <<'REMOTE'
 set -euo pipefail
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
@@ -136,23 +153,7 @@ for pid in "${roots[@]}"; do
   kill -USR2 "$pid"
 done
 REMOTE
-  sleep 1
-fi
-
-if [[ "$SKIP_SYNC" -eq 1 ]]; then
-  echo "=== skip remote npm shell -> dist/ ==="
-else
-  echo "=== remote npm shell -> dist/ ==="
-  ssh_base bash -s <<EOF
-set -euo pipefail
-cd $(printf '%q' "$REMOTE_REPO")
-if [[ -f shell/package.json ]]; then
-  cd shell
-  bash ../scripts/ensure-shell-node-modules.sh .
-  exec npm run build
-fi
-EOF
-fi
+sleep 2
 
 echo "=== remote shell/e2e/run.mjs ==="
 ssh_base bash -s <<EOF

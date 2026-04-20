@@ -257,11 +257,12 @@ Tag legend: **port** = ship in workspace with local/bridge semantics · **skip**
 
 Reference: `src/FileBrowser.tsx`, `src/file-browser/*`, `src/ShareFolderBrowser.tsx` (UI patterns only if share deferred), e2e: `file-browser-*.spec.ts`, `drag-drop`, `upload`, `download`, `breadcrumbs-adaptive`, `editable-folders`, `navigation`.
 
-- [ ] Dialog parity: create/rename/delete/move/paste/share UI from media-server → shell file browser only where **local** semantics match; strip or gate **share-token** flows until share product exists.
-- [ ] Context menus, breadcrumbs, directory feedback, upload toasts, keyboard search hooks — port UX; wire to **compositor file browser / bridge** (`fileBrowserBridge`, CEF file APIs) instead of `/api/files`.
-- [ ] **Multi-monitor**: open-location and “default monitor” for new file-browser windows; drag between outputs if compositor supports cross-output DnD (align with `workspace-cross-dnd` intent).
-- [ ] **Native windows**: opening paths in native apps vs hosted apps — follow `desktopApplicationsState` / launcher rules; e2e coverage alongside JS windows.
-- [ ] Migrate or rewrite e2e: `shell/e2e/specs/file-browser.spec.ts` extension + new specs per media-server file, using **real pointer** APIs from `shell/e2e/lib/runtime.ts`.
+- [x] Dialog parity: create/rename/delete/move/paste/share UI from media-server → shell file browser only where **local** semantics match; strip or gate **share-token** flows until share product exists.
+- [x] Context menus, breadcrumbs, directory listing UX wired to compositor **file browser HTTP bridge** (no `/api/files`). **Upload toast stack** + **type-to-search** not ported yet.
+- [x] **Multi-monitor**: new hosted windows (file browser, viewers, editors) open on the focused window’s output when known, otherwise primary.
+- [ ] **Cross-output file-browser DnD**: not implemented; defer to compositor/workspace DnD work (`workspace-cross-dnd`).
+- [x] **Native windows**: default-app spawn (`xdg-open`) for unsupported file types and context menu; dedicated “open with app picker” + more e2e deferred.
+- [x] Migrate or rewrite e2e: `shell/e2e/specs/file-browser.spec.ts` extension + new specs per media-server file, using **real pointer** APIs from `shell/e2e/lib/runtime.ts`.
 
 ## Phase 2 — Workspace chrome and layout (tabs, tiling, snap)
 

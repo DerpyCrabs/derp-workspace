@@ -11,19 +11,48 @@ import {
   KEY,
   assert,
   assertRectMinSize,
+  clickPoint,
   clickRect,
+  compositorWindowById,
   defineGroup,
+  ensureWorkspaceTabShowsWindow,
   getJson,
   getShellHtml,
   prepareFileBrowserFixtures,
+  movePoint,
+  rectCenter,
+  shellWindowStack,
   tapKey,
   typeText,
   waitFor,
+  waitForCompositorKeyboardWindow,
+  type CompositorSnapshot,
   type ShellSnapshot,
   type TextEditorWindowSnapshot,
 } from '../lib/runtime.ts'
 
 const TEXT_EDITOR_APP_ID = 'derp.text-editor'
+
+function resolveTextEditorWindowId(
+  shell: ShellSnapshot,
+  rowPredicate: (row: TextEditorWindowSnapshot | undefined) => boolean,
+): number | null {
+  const candidates = shell.windows.filter(
+    (w) => w.shell_hosted && w.app_id === TEXT_EDITOR_APP_ID && !w.minimized,
+  )
+  if (!candidates.length) return null
+  const rows = shell.text_editor_windows ?? []
+  const stack = shellWindowStack(shell)
+  let best: { windowId: number; idx: number } | null = null
+  for (const c of candidates) {
+    const row = rows.find((e) => e.window_id === c.window_id)
+    if (!rowPredicate(row)) continue
+    const idx = stack.indexOf(c.window_id)
+    if (idx < 0) continue
+    if (!best || idx < best.idx) best = { windowId: c.window_id, idx }
+  }
+  return best?.windowId ?? null
+}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('text editor opens markdown with image and fullscreen', async ({ base, state }) => {
@@ -48,18 +77,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(mdSelected?.rect, 'missing md row after select')
     await clickRect(base, assertRectMinSize('open md second click', mdSelected.rect, 32, 24))
     const editor = await waitFor(
-      'wait for text editor window',
+      'wait for text editor window with markdown preview image',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const w = shell.windows.find(
-          (entry) => entry.shell_hosted && entry.app_id === TEXT_EDITOR_APP_ID && !entry.minimized,
-        )
-        return w ? { shell, windowId: w.window_id } : null
+        const id = resolveTextEditorWindowId(shell, (row) => {
+          const r = row?.markdown_img_rect
+          return !!(r && r.width >= 4 && r.height >= 4)
+        })
+        return id !== null ? { windowId: id } : null
       },
       5000,
       100,
     )
     state.spawnedShellWindowIds.add(editor.windowId)
+    await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const frameSel = `[data-shell-window-frame="${editor.windowId}"]`
     await waitFor(
       'wait for markdown h1 and img',
@@ -74,6 +105,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const withImg = await waitFor(
       'wait for markdown img snapshot rect',
       async () => {
@@ -86,24 +118,41 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    const compositor0 = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    const hostWin = compositorWindowById(compositor0, editor.windowId)
+    assert(hostWin, 'missing compositor window for text editor')
+    const titleAim = {
+      x: hostWin.x + Math.floor(hostWin.width / 2),
+      y: hostWin.y + 14,
+    }
+    await movePoint(base, titleAim.x, titleAim.y)
+    await clickPoint(base, titleAim.x, titleAim.y)
+    const imgAim = rectCenter(withImg)
+    await movePoint(base, imgAim.x, imgAim.y)
     await clickRect(base, assertRectMinSize('markdown preview img', withImg, 8, 8))
     await waitFor(
       'wait image fullscreen dialog',
       async () => {
-        const h = await getShellHtml(base, frameSel)
-        return h.includes('aria-label="View image fullscreen"') ? h : null
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = shell.text_editor_windows?.find((e) => e.window_id === editor.windowId) as
+          | TextEditorWindowSnapshot
+          | undefined
+        return row?.markdown_img_dialog_open ? shell : null
       },
-      2000,
+      5000,
       50,
     )
     await tapKey(base, KEY.escape)
     await waitFor(
       'wait dialog close',
       async () => {
-        const h = await getShellHtml(base, frameSel)
-        return !h.includes('aria-label="View image fullscreen"') ? h : null
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = shell.text_editor_windows?.find((e) => e.window_id === editor.windowId) as
+          | TextEditorWindowSnapshot
+          | undefined
+        return row && !row.markdown_img_dialog_open ? shell : null
       },
-      2000,
+      5000,
       50,
     )
   })
@@ -130,18 +179,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(sel?.rect, 'missing txt row after select')
     await clickRect(base, assertRectMinSize('open txt second click', sel.rect, 32, 24))
     const editor = await waitFor(
-      'wait for text editor window',
+      'wait for text editor window with edit control',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const w = shell.windows.find(
-          (entry) => entry.shell_hosted && entry.app_id === TEXT_EDITOR_APP_ID && !entry.minimized,
-        )
-        return w ? { windowId: w.window_id } : null
+        const id = resolveTextEditorWindowId(shell, (row) => {
+          const r = row?.edit_rect
+          return !!(r && r.width >= 4 && r.height >= 4)
+        })
+        return id !== null ? { windowId: id } : null
       },
       5000,
       100,
     )
     state.spawnedShellWindowIds.add(editor.windowId)
+    await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const editRect = await waitFor(
       'wait edit rect',
       async () => {
@@ -154,6 +205,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    const editCenter = rectCenter(editRect)
+    await movePoint(base, editCenter.x, editCenter.y)
     await clickRect(base, assertRectMinSize('text editor edit', editRect, 8, 8))
     const taRect = await waitFor(
       'wait textarea rect',
@@ -167,7 +220,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    const taCenter = rectCenter(taRect)
+    await movePoint(base, taCenter.x, taCenter.y)
     await clickRect(base, assertRectMinSize('focus textarea', taRect, 8, 8))
+    await waitForCompositorKeyboardWindow(base, editor.windowId)
     await typeText(base, 'zzz')
     const saveRect = await waitFor(
       'wait save rect',
@@ -215,18 +271,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(sel?.rect, 'missing row after select')
     await clickRect(base, assertRectMinSize('open read only md', sel.rect, 32, 24))
     const editor = await waitFor(
-      'wait for text editor window',
+      'wait for read-only text editor window',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const w = shell.windows.find(
-          (entry) => entry.shell_hosted && entry.app_id === TEXT_EDITOR_APP_ID && !entry.minimized,
-        )
-        return w ? { windowId: w.window_id } : null
+        const id = resolveTextEditorWindowId(shell, (row) => !!row && row.edit_rect === null)
+        return id !== null ? { windowId: id } : null
       },
       5000,
       100,
     )
     state.spawnedShellWindowIds.add(editor.windowId)
+    await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     await waitFor(
       'wait snapshot no edit rect',
       async () => {

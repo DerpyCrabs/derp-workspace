@@ -79,7 +79,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
         />
       </Show>
       <div
-        class="group flex min-w-0 max-w-[240px] flex-[0_1_auto] items-center overflow-hidden border-r border-(--shell-border) transition-colors"
+        class="group flex min-h-0 min-w-0 max-w-[240px] flex-[0_1_auto] items-stretch overflow-hidden border-r border-(--shell-border) transition-colors"
         classList={{
           'bg-(--shell-control-muted-bg) text-(--shell-text)': tab().active,
           'bg-transparent text-(--shell-text-muted) hover:bg-[color-mix(in_srgb,var(--shell-control-muted-bg)_42%,transparent)] hover:text-(--shell-text)':
@@ -92,7 +92,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
       >
         <button
           type="button"
-          class="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 truncate px-2.5 py-1.5 text-left text-[11px] font-medium active:cursor-grabbing"
+          class="flex h-full min-h-0 min-w-0 flex-1 cursor-grab items-center gap-1.5 truncate px-2.5 py-1 text-left text-[11px] font-medium active:cursor-grabbing"
           classList={{
             'cursor-pointer active:cursor-pointer': splitLeft,
             'pr-2': tab().pinned,
@@ -153,7 +153,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
         <Show when={props.tabs.length > 1}>
           <button
             type="button"
-            class="mr-1 flex h-4.5 w-4.5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-(--shell-text-dim) opacity-70 transition-opacity hover:text-(--shell-text) hover:opacity-100"
+            class="mr-1 flex h-4.5 w-4.5 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-(--shell-text-dim) opacity-70 transition-opacity hover:text-(--shell-text) hover:opacity-100"
             data-workspace-tab-close={tab().window_id}
             aria-label={`Close ${windowLabel(tab())}`}
             title={`Close ${windowLabel(tab())}`}

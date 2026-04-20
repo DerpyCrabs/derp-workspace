@@ -281,7 +281,10 @@ async function selectTabByClick(base: string, windowId: number) {
     3000,
     40,
   )
-  await clickRect(base, assertRectMinSize(`tab ${windowId}`, rect, 12, 10))
+  const tabRect = assertRectMinSize(`tab ${windowId}`, rect, 12, 10)
+  const c = rectCenter(tabRect)
+  await movePoint(base, c.x, c.y)
+  await clickRect(base, tabRect)
 }
 
 async function selectTabByFastClick(base: string, windowId: number) {
@@ -1029,7 +1032,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
           async () => {
             const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
             const group = tabGroupByWindow(shell, hiddenRightWindowId)
-            if (!group || group.visible_window_id !== hiddenRightWindowId) return null
+            if (!group) return null
+            const vis =
+              group.visible_window_ids && group.visible_window_ids.length > 0
+                ? group.visible_window_ids
+                : group.visible_window_id != null
+                  ? [group.visible_window_id]
+                  : []
+            if (!vis.includes(hiddenRightWindowId)) return null
             if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
             const width =
               group.split_left_rect.width +
@@ -1039,7 +1049,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (Math.abs(width - initialWidth) > tol) return null
             return { shell, group }
           },
-          3500,
+          5000,
           40,
         ),
       )

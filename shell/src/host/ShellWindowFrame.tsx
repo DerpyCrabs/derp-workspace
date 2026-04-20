@@ -82,6 +82,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         bd: CHROME_BORDER_PX,
         rh: CHROME_RESIZE_HANDLE_PX,
         inset: 0,
+        insetTop: 0,
         outerW: 1,
         showBorderChrome: false,
         ox: 0,
@@ -93,8 +94,6 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     const bd = CHROME_BORDER_PX
     const rh = CHROME_RESIZE_HANDLE_PX
     const noTilingChrome = w.maximized || w.fullscreen
-    const snapTiled = !!w.snap_tiled && !noTilingChrome
-    const inset = noTilingChrome || snapTiled ? 0 : bd
     const o = shellOuterFrameFromClient({
       x: w.x,
       y: w.y,
@@ -106,9 +105,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       snap_tiled: w.snap_tiled,
     })
     const th = o.th
+    const inset = o.inset
+    const insetTop = o.insetTop
     const outerW = w.width + inset * 2
     const showBorderChrome = !noTilingChrome
-    return { th, bd, rh, inset, outerW, showBorderChrome, ox: o.x, oy: o.y, ow: o.w, oh: o.h }
+    return { th, bd, rh, inset, insetTop, outerW, showBorderChrome, ox: o.x, oy: o.y, ow: o.w, oh: o.h }
   })
   const chromeBg = createMemo(() =>
     readAcc(props.focused)
@@ -173,7 +174,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
           style={{
             left: `${layout().inset}px`,
-            top: `${layout().inset + layout().th}px`,
+            top: `${layout().insetTop + layout().th}px`,
             width: `${model()?.width ?? 0}px`,
             height: `${model()?.height ?? 0}px`,
           }}
@@ -190,10 +191,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       </Show>
       <div
         data-shell-titlebar={model()?.window_id ?? 0}
-        class="absolute right-0 left-0 box-border flex items-center gap-1.5 border-b border-(--shell-border) py-0 pr-1.5 pl-2.5 select-none touch-none"
+        class="absolute right-0 left-0 top-0 box-border flex flex-col overflow-hidden py-0 select-none touch-none"
         style={{
-          top: `${layout().inset}px`,
-          height: `${layout().th}px`,
+          height: `${layout().insetTop + layout().th}px`,
+          'box-sizing': 'border-box',
           'z-index': 6,
           background: 'var(--shell-chrome-bg)',
           'pointer-events': 'auto',
@@ -217,11 +218,15 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           props.onTitlebarPointerDown(-1, t.clientX, t.clientY)
         }}
       >
+        <Show when={layout().insetTop > 0}>
+          <div class="shrink-0" style={{ height: `${layout().insetTop}px` }} />
+        </Show>
+        <div class="flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden border-b border-(--shell-border) py-0 pr-1.5 pl-2.5">
         <Show
           when={props.tabStrip}
           fallback={
             <span
-              class="min-w-0 flex-1 overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
+              class="flex min-h-0 min-w-0 flex-1 items-center overflow-hidden text-[13px] font-semibold text-ellipsis whitespace-nowrap"
               classList={{
                 'text-(--shell-text-muted)': !readAcc(props.focused),
                 'text-(--shell-text)': readAcc(props.focused),
@@ -231,12 +236,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             </span>
           }
         >
-          <div class="min-w-0 flex-1 overflow-hidden">{props.tabStrip}</div>
+          <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">{props.tabStrip}</div>
         </Show>
-        <div class="flex shrink-0 items-center gap-1" data-shell-titlebar-controls>
+        <div class="flex shrink-0 items-center gap-1 self-stretch py-0" data-shell-titlebar-controls>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-base leading-none font-bold text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
+            class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-base leading-none font-bold text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title="Minimize window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onMinimize()}
@@ -246,7 +251,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           <button
             type="button"
             data-shell-maximize-trigger={model()?.window_id ?? 0}
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-sm leading-none text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
+            class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-sm leading-none text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-bg) hover:text-(--shell-text)"
             title={model()?.maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => {
               e.stopPropagation()
@@ -287,13 +292,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           </button>
           <button
             type="button"
-            class="m-0 flex h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-lg leading-none text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text)"
+            class="m-0 flex h-full min-h-[22px] w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-transparent bg-transparent p-0 text-lg leading-none text-(--shell-control-muted-text) hover:bg-[color-mix(in_srgb,var(--shell-warning-bg)_70%,var(--shell-accent)_30%)] hover:text-(--shell-text)"
             title="Close window"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onClose()}
           >
             ×
           </button>
+        </div>
         </div>
       </div>
       <div
@@ -381,7 +387,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         style={{
           position: 'absolute',
           left: '0',
-          top: `${layout().inset + layout().th}px`,
+          top: `${layout().insetTop + layout().th}px`,
           width: `${layout().rh}px`,
           bottom: `${layout().rh}px`,
           cursor: 'ew-resize',
@@ -407,7 +413,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         style={{
           position: 'absolute',
           right: '0',
-          top: `${layout().inset + layout().th}px`,
+          top: `${layout().insetTop + layout().th}px`,
           width: `${layout().rh}px`,
           bottom: `${layout().rh}px`,
           cursor: 'ew-resize',

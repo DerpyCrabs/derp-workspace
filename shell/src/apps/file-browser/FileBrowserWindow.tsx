@@ -1,12 +1,24 @@
 import type { Accessor } from 'solid-js'
-import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import {
+  copyFileBrowserFile,
   listFileBrowserDirectory,
   listFileBrowserRoots,
+  mkdirFileBrowserEntry,
+  removeFileBrowserPath,
+  renameFileBrowserPath,
+  statFileBrowserPath,
+  touchFileBrowserFile,
   type FileBrowserEntry,
   type FileBrowserRoot,
 } from './fileBrowserBridge'
+import {
+  fileBrowserFsClipClear,
+  fileBrowserFsClipCopy,
+  fileBrowserFsClipCut,
+  fileBrowserFsClipState,
+} from './fileBrowserFsClipboard'
 import { loadFileBrowserPrefs, setFileBrowserShowHidden } from './fileBrowserPrefs'
 import {
   clampFileBrowserSelection,
@@ -35,6 +47,7 @@ type FileBrowserWindowProps = {
     context: { directory: string; showHidden: boolean },
   ) => void
   onOpenInNewWindow?: (path: string) => void
+  onOpenPathExternally: (path: string) => void
 }
 
 type Breadcrumb = {
@@ -118,6 +131,38 @@ function clipboardCanWritePath(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
 }
 
+function posixDirname(p: string): string {
+  const norm = p.replace(/\/+$/, '') || '/'
+  const i = norm.lastIndexOf('/')
+  if (i <= 0) return '/'
+  return norm.slice(0, i) || '/'
+}
+
+function posixBasename(p: string): string {
+  const norm = p.replace(/\/+$/, '') || '/'
+  const i = norm.lastIndexOf('/')
+  return norm.slice(i + 1) || norm
+}
+
+function pickCopyDestName(sourcePath: string, existingNames: ReadonlySet<string>): string {
+  const base = posixBasename(sourcePath)
+  const dot = base.lastIndexOf('.')
+  const stem = dot > 0 ? base.slice(0, dot) : base
+  const ext = dot > 0 ? base.slice(dot) : ''
+  for (let n = 0; n < 600; n += 1) {
+    const candidate = n === 0 ? `${stem} (copy)${ext}` : `${stem} (copy ${n + 1})${ext}`
+    if (!existingNames.has(candidate)) return candidate
+  }
+  return `${stem} (copy ${Date.now()})${ext}`
+}
+
+type FileBrowserUiDialog =
+  | { kind: 'closed' }
+  | { kind: 'mkdir'; draft: string }
+  | { kind: 'touch'; draft: string }
+  | { kind: 'rename'; path: string; draft: string }
+  | { kind: 'delete'; path: string; label: string }
+
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const initialPrefs = loadFileBrowserPrefs()
   const [state, setState] = createStore(
@@ -133,11 +178,27 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let rootRef: HTMLDivElement | undefined
 
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
+  const [dialog, setDialog] = createSignal<FileBrowserUiDialog>({ kind: 'closed' })
+  const [opError, setOpError] = createSignal<string | null>(null)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
   const selectedEntry = createMemo(
     () => state.entries.find((entry) => entry.path === state.selectedPath) ?? null,
   )
+  const canPasteHere = createMemo(() => {
+    const c = fileBrowserFsClipState()
+    const ap = state.activePath
+    if (!ap || c.mode === 'none' || !c.path) return false
+    if (c.mode === 'cut') {
+      const destDir = ap.replace(/\/+$/, '') || '/'
+      const srcDir = posixDirname(c.path).replace(/\/+$/, '') || '/'
+      const destPath = ap === '/' ? `/${posixBasename(c.path)}` : `${ap.replace(/\/+$/, '')}/${posixBasename(c.path)}`
+      if (destPath === c.path) return false
+      if (destDir === srcDir) return destPath !== c.path
+      return true
+    }
+    return true
+  })
 
   async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
     const base = shellHttpBase()
@@ -161,6 +222,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       setState('entries', listing.entries)
       setState('selectedPath', clampFileBrowserSelection(listing.entries, state.selectedPath))
       setState('status', 'ready')
+      setOpError(null)
     } catch (error) {
       if (runId !== requestSeq) return
       setState('entries', [])
@@ -200,6 +262,9 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
 
   function entryContextItems(entry: FileBrowserEntry): ShellContextMenuItem[] {
     const clip = clipboardCanWritePath()
+    const writable = entry.writable === true
+    const isDir = fileBrowserEntryIsDirectory(entry)
+    const isFile = !isDir && entry.kind === 'file'
     const items: ShellContextMenuItem[] = [
       {
         actionId: 'open',
@@ -209,13 +274,66 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       },
     ]
-    if (fileBrowserEntryIsDirectory(entry) && props.onOpenInNewWindow) {
+    if (isDir && props.onOpenInNewWindow) {
       const openNew = props.onOpenInNewWindow
       items.push({
         actionId: 'open-new',
         label: 'Open in new window',
         action: () => {
           openNew(entry.path)
+        },
+      })
+    }
+    if (isFile) {
+      items.push({
+        actionId: 'open-external',
+        label: 'Open with default application',
+        action: () => {
+          props.onOpenPathExternally(entry.path)
+        },
+      })
+    }
+    if (writable) {
+      if (isFile) {
+        items.push({
+          actionId: 'fs-cut',
+          label: 'Cut',
+          action: () => {
+            fileBrowserFsClipCut(entry.path)
+          },
+        })
+        items.push({
+          actionId: 'fs-copy',
+          label: 'Copy',
+          action: () => {
+            fileBrowserFsClipCopy(entry.path)
+          },
+        })
+      } else if (isDir) {
+        items.push({
+          actionId: 'fs-cut-dir',
+          label: 'Cut',
+          action: () => {
+            fileBrowserFsClipCut(entry.path)
+          },
+        })
+      }
+      items.push({
+        actionId: 'rename',
+        label: 'Rename…',
+        action: () => {
+          setDialog({ kind: 'rename', path: entry.path, draft: posixBasename(entry.path) })
+        },
+      })
+      items.push({
+        actionId: 'delete',
+        label: 'Delete…',
+        action: () => {
+          setDialog({
+            kind: 'delete',
+            path: entry.path,
+            label: normalizeDisplayName(entry),
+          })
         },
       })
     }
@@ -274,6 +392,70 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     setFileBrowserShowHidden(nextShowHidden)
     setState('showHidden', nextShowHidden)
     void loadDirectory(state.activePath, false, nextShowHidden)
+  }
+
+  function closeFileDialog() {
+    setDialog({ kind: 'closed' })
+  }
+
+  async function submitFileDialog() {
+    const d = dialog()
+    const base = shellHttpBase()
+    if (d.kind === 'closed') return
+    setOpError(null)
+    try {
+      const ap = state.activePath
+      if (!ap) throw new Error('No folder selected.')
+      if (d.kind === 'mkdir') {
+        await mkdirFileBrowserEntry(ap, d.draft.trim(), base)
+      } else if (d.kind === 'touch') {
+        await touchFileBrowserFile(ap, d.draft.trim(), base)
+      } else if (d.kind === 'rename') {
+        const name = d.draft.trim()
+        if (!name || name.includes('/') || name.includes('\\')) throw new Error('Invalid name.')
+        const parent = posixDirname(d.path)
+        const to = parent === '/' ? `/${name}` : `${parent}/${name}`
+        if (to === d.path) {
+          closeFileDialog()
+          return
+        }
+        await renameFileBrowserPath(d.path, to, base)
+      } else if (d.kind === 'delete') {
+        await removeFileBrowserPath(d.path, base)
+      }
+      closeFileDialog()
+      await loadDirectory(state.activePath, true)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function runPasteFromClip() {
+    const base = shellHttpBase()
+    const ap = state.activePath
+    const c = fileBrowserFsClipState()
+    if (!ap || c.mode === 'none' || !c.path) return
+    setOpError(null)
+    try {
+      const baseName = posixBasename(c.path)
+      const destPath = ap === '/' ? `/${baseName}` : `${ap.replace(/\/+$/, '')}/${baseName}`
+      if (c.mode === 'cut') {
+        if (destPath === c.path) return
+        await renameFileBrowserPath(c.path, destPath, base)
+        fileBrowserFsClipClear()
+      } else {
+        const st = await statFileBrowserPath(c.path, base)
+        if (st.entry.kind !== 'file') {
+          throw new Error('Copying folders is not supported yet.')
+        }
+        const names = new Set(state.entries.map((e) => e.name))
+        const destName = pickCopyDestName(c.path, names)
+        await copyFileBrowserFile(c.path, ap, destName, base)
+      }
+      await loadDirectory(state.activePath, true)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   function pushFileBrowserStateToCompositor() {
@@ -417,6 +599,12 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.defaultPrevented) return
+        if (dialog().kind !== 'closed') {
+          const t = event.target
+          if (t instanceof HTMLElement && t.closest('[data-file-browser-dialog="1"]')) {
+            return
+          }
+        }
         if (ctxMenu()) {
           if (
             event.key === 'ArrowDown' ||
@@ -522,6 +710,36 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           </button>
           <button
             type="button"
+            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="new-folder"
+            aria-label="New folder"
+            disabled={!state.activePath}
+            onClick={() => setDialog({ kind: 'mkdir', draft: '' })}
+          >
+            New Folder
+          </button>
+          <button
+            type="button"
+            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="new-file"
+            aria-label="New file"
+            disabled={!state.activePath}
+            onClick={() => setDialog({ kind: 'touch', draft: '' })}
+          >
+            New File
+          </button>
+          <button
+            type="button"
+            class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="paste"
+            aria-label="Paste"
+            disabled={!canPasteHere()}
+            onClick={() => void runPasteFromClip()}
+          >
+            Paste
+          </button>
+          <button
+            type="button"
             class="rounded border border-(--shell-border) px-2 py-1 text-xs hover:bg-(--shell-control-muted-hover)"
             data-file-browser-primary-action="refresh"
             aria-label="Refresh file browser"
@@ -558,6 +776,9 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
             </div>
           </div>
         </div>
+        <Show when={opError()}>
+          <div class="border-b border-(--shell-border) px-3 py-2 text-xs text-red-300">{opError()}</div>
+        </Show>
         <div class="grid grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 border-b border-(--shell-border) px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
           <div>Name</div>
           <div>Kind</div>
@@ -634,6 +855,104 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         items={() => ctxMenu()?.items ?? []}
         onRequestClose={closeCtxMenu}
       />
+      <Show when={dialog().kind !== 'closed'}>
+        <div
+          class="fixed inset-0 z-94000 flex items-center justify-center bg-black/40 p-6"
+          data-file-browser-dialog="1"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeFileDialog()
+          }}
+        >
+          <div
+            class="w-full max-w-md rounded border border-(--shell-border) bg-(--shell-surface-panel) p-4 text-(--shell-text) shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Show
+              when={(() => {
+                const row = dialog()
+                return row.kind === 'delete' ? row : false
+              })()}
+            >
+              {(d) => (
+                <>
+                  <div class="mb-3 text-sm font-medium">Delete {d().label}?</div>
+                  <div class="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-cancel
+                      onClick={closeFileDialog}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded border border-red-500/50 bg-red-500/20 px-3 py-1.5 text-sm text-red-100 hover:bg-red-500/30"
+                      data-file-browser-dialog-confirm
+                      onClick={() => void submitFileDialog()}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show
+              when={(() => {
+                const k = dialog().kind
+                return k === 'mkdir' || k === 'touch' || k === 'rename'
+              })()}
+            >
+              <div class="mb-2 text-sm font-medium text-(--shell-text-dim)">
+                {(() => {
+                  const k = dialog().kind
+                  if (k === 'mkdir') return 'New folder'
+                  if (k === 'touch') return 'New file'
+                  return 'Rename'
+                })()}
+              </div>
+              <input
+                type="text"
+                data-file-browser-dialog-input
+                class="w-full rounded border border-(--shell-border) bg-(--shell-surface-inset) px-2 py-1.5 text-sm text-(--shell-text)"
+                value={(() => {
+                  const row = dialog()
+                  if (row.kind === 'mkdir' || row.kind === 'touch' || row.kind === 'rename') return row.draft
+                  return ''
+                })()}
+                onInput={(e) => {
+                  const v = e.currentTarget.value
+                  const row = dialog()
+                  if (row.kind === 'mkdir') setDialog({ kind: 'mkdir', draft: v })
+                  else if (row.kind === 'touch') setDialog({ kind: 'touch', draft: v })
+                  else if (row.kind === 'rename') setDialog({ kind: 'rename', path: row.path, draft: v })
+                }}
+              />
+              <div class="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                  data-file-browser-dialog-cancel
+                  onClick={closeFileDialog}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                  data-file-browser-dialog-confirm
+                  onClick={() => void submitFileDialog()}
+                >
+                  OK
+                </button>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }

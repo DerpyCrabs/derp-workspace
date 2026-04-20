@@ -1,6 +1,7 @@
-/** Keep in sync with compositor `SHELL_TITLEBAR_HEIGHT` / `SHELL_BORDER_THICKNESS`. */
-export const CHROME_TITLEBAR_PX = 28
+/** Keep in sync with compositor `SHELL_TITLEBAR_HEIGHT` / `SHELL_BORDER_THICKNESS` / `SHELL_BORDER_TOP_THICKNESS`. Matches tab row (py-1.5 + icon row). */
+export const CHROME_TITLEBAR_PX = 26
 export const CHROME_BORDER_PX = 4
+export const CHROME_BORDER_TOP_PX = 0
 /** Reserved width for the three titlebar controls (minimize, maximize, close); compositor does not mirror this. */
 export const CHROME_TITLEBAR_CONTROLS_PX = 120
 

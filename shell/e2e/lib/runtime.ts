@@ -137,6 +137,7 @@ export interface CompositorSnapshot {
   outputs: OutputSnapshot[]
   focused_window_id: number | null
   focused_shell_ui_window_id: number | null
+  shell_keyboard_focus?: boolean
   session_power_action?: string | null
   session_power_requested_at_ms?: number | null
   window_stack_order?: number[]
@@ -283,6 +284,8 @@ export interface FileBrowserSnapshot {
   breadcrumbs: FileBrowserSnapshotBreadcrumb[]
   viewer_editor_title: string | null
   primary_actions: FileBrowserSnapshotAction[]
+  dialog_input_rect?: Rect | null
+  dialog_confirm_rect?: Rect | null
 }
 
 export interface FileBrowserContextMenuActionSnapshot {
@@ -298,6 +301,7 @@ export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
 export interface TextEditorWindowSnapshot {
   window_id: number
   markdown_img_rect: Rect | null
+  markdown_img_dialog_open: boolean
   edit_rect: Rect | null
   save_rect: Rect | null
   textarea_rect: Rect | null
@@ -1249,6 +1253,45 @@ export function tabGroupByWindow(shellSnapshot: ShellSnapshot, windowId: number)
 
 export function tabGroupById(shellSnapshot: ShellSnapshot, groupId: string): ShellTabGroup | null {
   return shellSnapshot.tab_groups?.find((group) => group.group_id === groupId) || null
+}
+
+export async function ensureWorkspaceTabShowsWindow(base: string, windowId: number): Promise<void> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const group = tabGroupByWindow(shell, windowId)
+  if (!group || group.visible_window_id === windowId) return
+  const tab = group.tabs.find((entry) => entry.window_id === windowId)
+  const tabTarget = tab?.rect ?? tab?.handle
+  assert(tabTarget, `missing workspace tab rect for window ${windowId}`)
+  await clickRect(base, assertRectMinSize(`activate workspace tab ${windowId}`, tabTarget, 8, 8))
+  await waitFor(
+    `wait workspace visible tab ${windowId}`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const g = tabGroupByWindow(next, windowId)
+      return g?.visible_window_id === windowId ? next : null
+    },
+    5000,
+    100,
+  )
+}
+
+export async function waitForCompositorKeyboardWindow(base: string, windowId: number, timeoutMs = 5000): Promise<void> {
+  await waitFor(
+    `wait compositor keyboard on window ${windowId}`,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      if (compositor.focused_window_id === windowId) return compositor
+      if (
+        compositor.shell_keyboard_focus === true &&
+        compositor.focused_shell_ui_window_id === windowId
+      ) {
+        return compositor
+      }
+      return null
+    },
+    timeoutMs,
+    50,
+  )
 }
 
 export function windowControls(shellSnapshot: ShellSnapshot, windowId: number): ShellWindowControls | null {

@@ -24,7 +24,9 @@ import {
   resetFileBrowserFixtures,
   rightClickRect,
   tapKey,
+  typeText,
   waitFor,
+  waitForShellUiFocus,
   writeJsonArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -334,6 +336,123 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html.includes('file_browser/stream'), 'expected video src to use stream endpoint')
+  })
+
+  test('file browser mkdir rename delete via dialogs', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    await openDirectoryRow(base, fixtures.empty_dir, 'empty-folder', navigated.windowId)
+    await waitForActivePath(base, fixtures.empty_dir, navigated.windowId)
+    const focused = await waitForShellUiFocus(base, navigated.windowId, 5000)
+    const newFolderBtn = fileBrowserAction(focused.shell, 'new-folder', navigated.windowId)
+    assert(newFolderBtn?.rect, 'new-folder action')
+    await clickRect(base, assertRectMinSize('new-folder', newFolderBtn.rect, 24, 18))
+    await waitFor(
+      'file browser dialog input',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const r = fileBrowserSnapshot(shell, navigated.windowId)?.dialog_input_rect
+        return r && r.width > 4 ? shell : null
+      },
+      5000,
+      100,
+    )
+    const shellDlg = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const inputRect = fileBrowserSnapshot(shellDlg, navigated.windowId)?.dialog_input_rect
+    assert(inputRect && inputRect.width > 4, 'dialog input rect')
+    await clickRect(base, assertRectMinSize('dialog input', inputRect, 40, 20))
+    await typeText(base, 'a')
+    const shellBeforeOk = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const okRect = fileBrowserSnapshot(shellBeforeOk, navigated.windowId)?.dialog_confirm_rect
+    assert(okRect && okRect.width > 4, 'dialog confirm rect')
+    await clickRect(base, assertRectMinSize('dialog ok', okRect, 24, 18))
+    await waitFor(
+      'mkdir row',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return fileBrowserRow(shell, 'a', navigated.windowId) ? shell : null
+      },
+      5000,
+      100,
+    )
+    const shellRow = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const rowA = fileBrowserRow(shellRow, 'a', navigated.windowId)
+    assert(rowA?.rect, 'row a')
+    await rightClickRect(base, assertRectMinSize('row a ctx', rowA.rect, 24, 18))
+    const renameItem = await waitFor(
+      'rename context item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'rename')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('rename', renameItem.rect!, 20, 16))
+    await waitFor(
+      'rename dialog',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const r = fileBrowserSnapshot(shell, navigated.windowId)?.dialog_input_rect
+        return r && r.width > 4 ? shell : null
+      },
+      5000,
+      100,
+    )
+    const shellRen = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const inpRen = fileBrowserSnapshot(shellRen, navigated.windowId)?.dialog_input_rect
+    assert(inpRen, 'rename dialog input rect')
+    await clickRect(base, assertRectMinSize('rename input', inpRen, 40, 20))
+    await tapKey(base, KEY.backspace)
+    await typeText(base, 'b')
+    const okRen = fileBrowserSnapshot(await getJson<ShellSnapshot>(base, '/test/state/shell'), navigated.windowId)?.dialog_confirm_rect
+    assert(okRen, 'rename dialog confirm rect')
+    await clickRect(base, assertRectMinSize('rename ok', okRen, 24, 18))
+    await waitFor(
+      'row b',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return fileBrowserRow(shell, 'b', navigated.windowId) ? shell : null
+      },
+      5000,
+      100,
+    )
+    const shellB = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const rowB = fileBrowserRow(shellB, 'b', navigated.windowId)
+    assert(rowB?.rect, 'row b rect')
+    await rightClickRect(base, assertRectMinSize('row b ctx', rowB.rect, 24, 18))
+    const delItem = await waitFor(
+      'delete context item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'delete')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('delete', delItem.rect!, 20, 16))
+    const delOk = await waitFor(
+      'delete confirm',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const r = fileBrowserSnapshot(shell, navigated.windowId)?.dialog_confirm_rect
+        return r && r.width > 4 ? r : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('delete ok', delOk!, 24, 18))
+    await waitFor(
+      'row b gone',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return !fileBrowserRow(shell, 'b', navigated.windowId) ? shell : null
+      },
+      5000,
+      100,
+    )
   })
 
   test('file browser opens a directory when clicking an already selected row', async ({ base, state }) => {

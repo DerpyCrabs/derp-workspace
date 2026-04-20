@@ -662,6 +662,402 @@ impl FileBrowserVideoStream {
     }
 }
 
+fn sanitize_new_name_segment(name: &str) -> Result<String, FileBrowserHttpError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(http_error(400, "invalid_name", "name is required", None));
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err(http_error(
+            400,
+            "invalid_name",
+            "name must not be . or ..",
+            None,
+        ));
+    }
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.as_bytes().contains(&0)
+    {
+        return Err(http_error(
+            400,
+            "invalid_name",
+            "name must be a single path segment",
+            None,
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn require_writable_directory(path: &Path) -> Result<(), FileBrowserHttpError> {
+    let entry = build_entry(path)?;
+    if entry.kind != "directory" {
+        return Err(http_error(
+            400,
+            "not_directory",
+            "path is not a directory",
+            Some(path),
+        ));
+    }
+    if entry.writable != Some(true) {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "directory is not writable",
+            Some(path),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn file_browser_mkdir_json(parent_raw: &str, name: &str) -> Result<String, FileBrowserHttpError> {
+    let parent = canonicalize_existing_path(parent_raw)?;
+    require_writable_directory(&parent)?;
+    let seg = sanitize_new_name_segment(name)?;
+    let dest = parent.join(&seg);
+    if dest.exists() {
+        return Err(http_error(
+            409,
+            "exists",
+            "destination already exists",
+            Some(&dest),
+        ));
+    }
+    fs::create_dir(&dest).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to create directory {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    let canon = dest.canonicalize().map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to canonicalize {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": canon.to_string_lossy(),
+    }))
+    .map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize mkdir response: {error}"),
+            Some(&canon),
+        )
+    })
+}
+
+pub(crate) fn file_browser_touch_file_json(parent_raw: &str, name: &str) -> Result<String, FileBrowserHttpError> {
+    let parent = canonicalize_existing_path(parent_raw)?;
+    require_writable_directory(&parent)?;
+    let seg = sanitize_new_name_segment(name)?;
+    let dest = parent.join(&seg);
+    if dest.exists() {
+        return Err(http_error(
+            409,
+            "exists",
+            "destination already exists",
+            Some(&dest),
+        ));
+    }
+    fs::write(&dest, []).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to create file {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    let canon = dest.canonicalize().map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to canonicalize {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": canon.to_string_lossy(),
+    }))
+    .map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize touch response: {error}"),
+            Some(&canon),
+        )
+    })
+}
+
+pub(crate) fn file_browser_remove_path_json(raw_path: &str) -> Result<String, FileBrowserHttpError> {
+    let canonical = canonicalize_existing_path(raw_path)?;
+    if canonical == Path::new("/") {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "refusing to remove filesystem root",
+            Some(&canonical),
+        ));
+    }
+    let entry = build_entry(&canonical)?;
+    if entry.writable != Some(true) {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "path is not writable",
+            Some(&canonical),
+        ));
+    }
+    let symlink_metadata = fs::symlink_metadata(&canonical).map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to stat {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    if symlink_metadata.is_dir() {
+        fs::remove_dir_all(&canonical).map_err(|error| {
+            let code = match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "permission_denied",
+                _ => "io_error",
+            };
+            let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+                403
+            } else {
+                500
+            };
+            http_error(
+                status,
+                code,
+                format!("failed to remove directory {}: {error}", canonical.display()),
+                Some(&canonical),
+            )
+        })?;
+    } else {
+        fs::remove_file(&canonical).map_err(|error| {
+            let code = match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "permission_denied",
+                _ => "io_error",
+            };
+            let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+                403
+            } else {
+                500
+            };
+            http_error(
+                status,
+                code,
+                format!("failed to remove file {}: {error}", canonical.display()),
+                Some(&canonical),
+            )
+        })?;
+    }
+    Ok(r#"{"ok":true}"#.to_string())
+}
+
+pub(crate) fn file_browser_rename_path_json(from_raw: &str, to_raw: &str) -> Result<String, FileBrowserHttpError> {
+    let from = canonicalize_existing_path(from_raw)?;
+    if from == Path::new("/") {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "refusing to rename filesystem root",
+            Some(&from),
+        ));
+    }
+    let from_entry = build_entry(&from)?;
+    if from_entry.writable != Some(true) {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "source is not writable",
+            Some(&from),
+        ));
+    }
+    let trimmed = to_raw.trim();
+    if trimmed.is_empty() {
+        return Err(http_error(400, "invalid_path", "destination path is required", None));
+    }
+    let to_path = PathBuf::from(trimmed);
+    if !to_path.is_absolute() {
+        return Err(http_error(
+            400,
+            "invalid_path",
+            "destination must be absolute",
+            None,
+        ));
+    }
+    let Some(to_parent) = to_path.parent() else {
+        return Err(http_error(
+            400,
+            "invalid_path",
+            "destination has no parent directory",
+            Some(&to_path),
+        ));
+    };
+    let parent_canon = canonicalize_existing_path(&to_parent.to_string_lossy())?;
+    require_writable_directory(&parent_canon)?;
+    if to_path.exists() {
+        return Err(http_error(
+            409,
+            "exists",
+            "destination already exists",
+            Some(&to_path),
+        ));
+    }
+    fs::rename(&from, &to_path).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            std::io::ErrorKind::CrossesDevices => "cross_device",
+            _ => "io_error",
+        };
+        let status = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => 403,
+            std::io::ErrorKind::CrossesDevices => 400,
+            _ => 500,
+        };
+        http_error(
+            status,
+            code,
+            format!(
+                "failed to rename {} to {}: {error}",
+                from.display(),
+                to_path.display()
+            ),
+            Some(&from),
+        )
+    })?;
+    let canon = to_path.canonicalize().map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to canonicalize {}: {error}", to_path.display()),
+            Some(&to_path),
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": canon.to_string_lossy(),
+    }))
+    .map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize rename response: {error}"),
+            Some(&canon),
+        )
+    })
+}
+
+pub(crate) fn file_browser_copy_file_json(from_raw: &str, to_dir_raw: &str, dest_name: Option<&str>) -> Result<String, FileBrowserHttpError> {
+    let from = canonicalize_existing_path(from_raw)?;
+    let from_meta = fs::metadata(&from).map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to stat {}: {error}", from.display()),
+            Some(&from),
+        )
+    })?;
+    if !from_meta.is_file() {
+        return Err(http_error(
+            400,
+            "not_file",
+            "source is not a regular file",
+            Some(&from),
+        ));
+    }
+    let dir = canonicalize_existing_path(to_dir_raw)?;
+    require_writable_directory(&dir)?;
+    let base_name = dest_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| sanitize_new_name_segment(s))
+        .transpose()?
+        .unwrap_or_else(|| {
+            from.file_name()
+                .and_then(|v| v.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| "file".to_string())
+        });
+    let dest = dir.join(&base_name);
+    if dest.exists() {
+        return Err(http_error(
+            409,
+            "exists",
+            "destination already exists",
+            Some(&dest),
+        ));
+    }
+    fs::copy(&from, &dest).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!(
+                "failed to copy {} to {}: {error}",
+                from.display(),
+                dest.display()
+            ),
+            Some(&dest),
+        )
+    })?;
+    let canon = dest.canonicalize().map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to canonicalize {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": canon.to_string_lossy(),
+    }))
+    .map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize copy response: {error}"),
+            Some(&canon),
+        )
+    })
+}
+
 pub(crate) fn file_browser_open_video_stream(
     raw_path: &str,
     range_header: Option<&str>,

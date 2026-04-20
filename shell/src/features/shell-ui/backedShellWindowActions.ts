@@ -43,6 +43,7 @@ type BackedShellWindowActionsOptions = {
   getOutputGeom: () => { w: number; h: number } | null
   getLayoutCanvasOrigin: () => { x: number; y: number } | null
   getPrimaryMonitorName: () => string
+  getHostedWindowSpawnMonitorName?: () => string | null
   reserveTaskbarForMon: (screen: ReturnType<typeof screensListForLayout>[number]) => boolean
   sendBackedWindowOpen: (payload: BackedWindowOpenPayload) => boolean
 }
@@ -100,8 +101,12 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     )
     const origin = options.getLayoutCanvasOrigin()
     const primaryMonitorName = options.getPrimaryMonitorName()
+    const hint = options.getHostedWindowSpawnMonitorName?.() ?? null
     const monitor =
-      screens.find((screen) => screen.name === primaryMonitorName) ?? screens[0] ?? null
+      (hint ? screens.find((screen) => screen.name === hint) : undefined) ??
+      screens.find((screen) => screen.name === primaryMonitorName) ??
+      screens[0] ??
+      null
     if (!monitor) return null
     const reserveTaskbar = options.reserveTaskbarForMon(monitor)
     return {

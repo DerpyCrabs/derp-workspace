@@ -132,6 +132,10 @@ const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h
 
 const TASKBAR_HEIGHT = 44
 
+function shSingleQuotedForSpawn(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`
+}
+
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   void msg
   void detail
@@ -528,6 +532,12 @@ function App() {
     getOutputGeom: outputGeom,
     getLayoutCanvasOrigin: layoutCanvasOrigin,
     getPrimaryMonitorName: () => workspacePartition().primary.name,
+    getHostedWindowSpawnMonitorName: () => {
+      const id = focusedWindowId()
+      const row = windowsList().find((w) => w.window_id === id)
+      const name = row?.output_name?.trim()
+      return name && name.length > 0 ? name : null
+    },
     reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
     sendBackedWindowOpen: (payload) => shellWireSend('backed_window_open', JSON.stringify(payload)),
   })
@@ -806,6 +816,9 @@ function App() {
       onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
       onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
       onOpenTextFile: (detail) => backedShellWindowActions.openTextEditorWindow(detail),
+      onOpenPathExternally: (path) => {
+        void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
+      },
       reportShellActionIssue,
       copyDebugHudSnapshot,
       shellBuildLabel,

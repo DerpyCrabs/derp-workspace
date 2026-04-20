@@ -931,6 +931,59 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/file_browser/mkdir" {
+        let parent = v.get("parent").and_then(|x| x.as_str()).unwrap_or("");
+        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        match crate::cef::file_browser::file_browser_mkdir_json(parent, name) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
+    if req_path == "/file_browser/touch" {
+        let parent = v.get("parent").and_then(|x| x.as_str()).unwrap_or("");
+        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        match crate::cef::file_browser::file_browser_touch_file_json(parent, name) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
+    if req_path == "/file_browser/remove" {
+        let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
+        match crate::cef::file_browser::file_browser_remove_path_json(path) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
+    if req_path == "/file_browser/rename" {
+        let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("");
+        let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("");
+        match crate::cef::file_browser::file_browser_rename_path_json(from, to) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
+    if req_path == "/file_browser/copy" {
+        let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("");
+        let to_dir = v.get("to_dir").and_then(|x| x.as_str()).unwrap_or("");
+        let dest_name = v
+            .get("dest_name")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty());
+        match crate::cef::file_browser::file_browser_copy_file_json(from, to_dir, dest_name) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
+
     if req_path == "/test/shell_window/open" {
         match open_shell_test_window(browser) {
             Ok(()) => write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?,

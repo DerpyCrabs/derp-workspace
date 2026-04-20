@@ -1,4 +1,4 @@
-import { CHROME_BORDER_PX, CHROME_TITLEBAR_PX } from '@/lib/chromeConstants'
+import { CHROME_BORDER_PX, CHROME_BORDER_TOP_PX, CHROME_TITLEBAR_PX } from '@/lib/chromeConstants'
 import { type CanvasOrigin, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
 
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
@@ -68,6 +68,7 @@ export function defaultBackedClientAreaGlobal(
 ): { x: number; y: number; w: number; h: number } {
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
+  const bt = CHROME_BORDER_TOP_PX
   let cw: number
   let ch: number
   if (kind === 'debug') {
@@ -93,7 +94,7 @@ export function defaultBackedClientAreaGlobal(
     ch = Math.round(Math.max(240, Math.min(360, work.h * 0.32)))
   }
   const outerW = cw + bd * 2
-  const outerH = ch + th + bd * 2
+  const outerH = ch + th + bt + bd
   const staggerStep = Math.max(0, Math.trunc(staggerIndex)) % SHELL_BACKED_WINDOW_STAGGER_STEPS
   let gx0 = work.x + Math.floor((work.w - outerW) / 2) + staggerStep * SHELL_BACKED_WINDOW_STAGGER_X
   let gy0 = work.y + Math.floor((work.h - outerH) / 2) + staggerStep * SHELL_BACKED_WINDOW_STAGGER_Y
@@ -106,7 +107,7 @@ export function defaultBackedClientAreaGlobal(
     work.y + Math.max(0, work.h - Math.max(1, outerH)),
   )
   const gx = gxOuter + bd
-  const gy = gyOuter + th + bd
+  const gy = gyOuter + th + bt
   return { x: gx, y: gy, w: Math.max(1, cw), h: Math.max(1, ch) }
 }
 

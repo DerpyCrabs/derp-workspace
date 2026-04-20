@@ -1,6 +1,6 @@
 use crate::chrome_bridge::WindowInfo;
 use crate::grabs::resize_grab::ResizeEdge;
-use crate::state::{CompositorState, ShellUiWindowPlacement};
+use crate::state::{CompositorState, ShellUiWindowPlacement, SHELL_BORDER_TOP_THICKNESS};
 use serde::Deserialize;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -43,12 +43,13 @@ impl CompositorState {
     ) -> Rectangle<i32, Logical> {
         let th = self.shell_chrome_titlebar_h.max(0);
         let bd = self.shell_chrome_border_w.max(0);
-        let inset = if info.maximized { 0 } else { bd };
+        let inset_side = if info.maximized { 0 } else { bd };
+        let inset_top = if info.maximized { 0 } else { SHELL_BORDER_TOP_THICKNESS };
         let c = Self::shell_hosted_client_global_rect(info);
-        let ox = c.loc.x.saturating_sub(inset);
-        let oy = c.loc.y.saturating_sub(th + inset);
-        let ow = c.size.w + inset * 2;
-        let oh = c.size.h + th + inset * 2;
+        let ox = c.loc.x.saturating_sub(inset_side);
+        let oy = c.loc.y.saturating_sub(th.saturating_add(inset_top));
+        let ow = c.size.w + inset_side * 2;
+        let oh = c.size.h + th + inset_top + inset_side;
         Rectangle::new(Point::from((ox, oy)), Size::from((ow.max(1), oh.max(1))))
     }
 
@@ -72,12 +73,17 @@ impl CompositorState {
             return None;
         }
         let left = outer.loc.x.saturating_add(border) as f64;
-        let top = outer.loc.y.saturating_add(border) as f64;
+        let top = outer.loc.y as f64;
         let right = outer
             .loc
             .x
             .saturating_add(outer.size.w.saturating_sub(border)) as f64;
-        let bottom = top + titlebar_h as f64;
+        let inset_top = if info.maximized {
+            0
+        } else {
+            SHELL_BORDER_TOP_THICKNESS
+        };
+        let bottom = top + inset_top as f64 + titlebar_h as f64;
         if pos.x >= left && pos.x < right && pos.y >= top && pos.y < bottom {
             Some(placement.id)
         } else {

@@ -29,7 +29,7 @@ import {
   type WindowSnapshot,
 } from '../lib/runtime.ts'
 
-const TITLEBAR_PX = 28
+const TITLEBAR_PX = 26
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   if (window.output_name) return window.output_name

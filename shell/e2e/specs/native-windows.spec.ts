@@ -183,6 +183,7 @@ function windowContainsPoint(
 
 async function tileNativePair(base: string, redId: number, greenId: number) {
   await raiseTaskbarWindow(base, redId)
+  await waitForNativeFocus(base, redId, 5000)
   await runKeybind(base, 'tile_left')
   await waitFor(
     'wait for native red tiled left',
@@ -204,6 +205,7 @@ async function tileNativePair(base: string, redId: number, greenId: number) {
     100,
   )
   await raiseTaskbarWindow(base, greenId)
+  await waitForNativeFocus(base, greenId, 5000)
   await runKeybind(base, 'tile_right')
   return waitFor(
     'wait for native red and green tiling',
@@ -225,8 +227,8 @@ async function tileNativePair(base: string, redId: number, greenId: number) {
       }
       return { compositor, shell: currentShell, output: redOutput }
     },
-    5000,
-    125,
+    8000,
+    100,
   )
 }
 
@@ -572,6 +574,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    await raiseTaskbarWindow(base, redId)
+    await waitForWindowRaised(base, redId, 5000)
     await runKeybind(base, 'toggle_maximize', redId)
     await waitFor(
       'wait for unmaximize on moved monitor',

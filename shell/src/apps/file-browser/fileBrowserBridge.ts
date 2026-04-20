@@ -1,4 +1,4 @@
-import { ShellHttpError, getShellJson, postShellJson } from '@/features/bridge/shellBridge'
+import { ShellHttpError, getShellJson, postShellJson, postShellJsonReturnJson } from '@/features/bridge/shellBridge'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 
 export type FileBrowserRoot = {
@@ -176,6 +176,80 @@ export function fileBrowserStreamUrl(path: string, base: string | null): string 
 export async function writeFileBrowserFile(path: string, content: string, base: string | null): Promise<void> {
   try {
     await postShellJson('/file_browser/write', { path, content }, base)
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
+export type FileBrowserMutationOk = {
+  ok: true
+  path?: string
+}
+
+function parseMutationOk(value: unknown): FileBrowserMutationOk {
+  if (!isObject(value) || value.ok !== true) {
+    throw new FileBrowserBridgeError('Invalid file browser mutation response.')
+  }
+  return {
+    ok: true,
+    path: typeof value.path === 'string' ? value.path : undefined,
+  }
+}
+
+export async function mkdirFileBrowserEntry(
+  parent: string,
+  name: string,
+  base: string | null,
+): Promise<FileBrowserMutationOk> {
+  try {
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/mkdir', { parent, name }, base))
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
+export async function touchFileBrowserFile(
+  parent: string,
+  name: string,
+  base: string | null,
+): Promise<FileBrowserMutationOk> {
+  try {
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/touch', { parent, name }, base))
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
+export async function removeFileBrowserPath(path: string, base: string | null): Promise<FileBrowserMutationOk> {
+  try {
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/remove', { path }, base))
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
+export async function renameFileBrowserPath(
+  from: string,
+  to: string,
+  base: string | null,
+): Promise<FileBrowserMutationOk> {
+  try {
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/rename', { from, to }, base))
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
+export async function copyFileBrowserFile(
+  from: string,
+  toDir: string,
+  destName: string | null,
+  base: string | null,
+): Promise<FileBrowserMutationOk> {
+  try {
+    const body: { from: string; to_dir: string; dest_name?: string } = { from, to_dir: toDir }
+    if (destName != null && destName.length > 0) body.dest_name = destName
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/copy', body, base))
   } catch (error) {
     throw parseBridgeError(error)
   }

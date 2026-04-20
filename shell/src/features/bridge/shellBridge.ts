@@ -86,6 +86,30 @@ export async function postShellJson(path: string, body: object, base: string | n
   }
 }
 
+export async function postShellJsonReturnJson(path: string, body: object, base: string | null): Promise<unknown> {
+  if (!base) {
+    throw new Error('Shell HTTP bridge is unavailable.')
+  }
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    throw new ShellHttpError(
+      `Shell HTTP ${path} failed (${res.status}): ${summarizeBody(text) || 'empty response'}`,
+      res.status,
+      text,
+    )
+  }
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`Shell HTTP ${path} returned invalid JSON: ${error}`)
+  }
+}
+
 export async function getShellJson(path: string, base: string | null): Promise<unknown> {
   if (!base) {
     throw new Error('Shell HTTP bridge is unavailable.')

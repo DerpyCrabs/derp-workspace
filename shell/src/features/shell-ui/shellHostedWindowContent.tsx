@@ -32,6 +32,7 @@ export type ShellHostedWindowContentEnv = {
   onOpenImageFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenVideoFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenTextFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
+  onOpenPathExternally: (path: string) => void
   reportShellActionIssue: (message: string) => void
   copyDebugHudSnapshot: () => void
   shellBuildLabel: string
@@ -143,6 +144,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
+            onOpenPathExternally={env.onOpenPathExternally}
             onOpenFile={(path, context) => {
               if (isImageFilePath(path) && context.directory.length > 0) {
                 env.onOpenImageFile({
@@ -168,7 +170,7 @@ export function renderShellHostedWindowContent(
                 })
                 return
               }
-              env.reportShellActionIssue(`No viewer for this file type: ${path}`)
+              env.onOpenPathExternally(path)
             }}
             onOpenInNewWindow={(path) => env.onOpenFileBrowserInNewWindow(path)}
           />

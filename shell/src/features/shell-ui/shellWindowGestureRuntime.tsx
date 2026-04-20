@@ -1,5 +1,6 @@
 import {
   CHROME_BORDER_PX,
+  CHROME_BORDER_TOP_PX,
   SHELL_LAYOUT_FLOATING,
   SHELL_LAYOUT_MAXIMIZED,
   SHELL_RESIZE_BOTTOM,
@@ -452,7 +453,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
           const grabDx = pointerCanvas.x - window.x
           const grabDy = pointerCanvas.y - window.y
           const nextX = pointerCanvas.x - grabDx + CHROME_BORDER_PX
-          const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_PX
+          const nextY = pointerCanvas.y - grabDy + CHROME_BORDER_TOP_PX
           options.shellWireSend('set_geometry', windowId, nextX, nextY, preTile.w, preTile.h, SHELL_LAYOUT_FLOATING)
         }
         if (!options.sendRemoveMonitorTile(windowId)) return

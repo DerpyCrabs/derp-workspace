@@ -1,4 +1,4 @@
-import { CHROME_BORDER_PX, CHROME_TITLEBAR_PX } from './chromeConstants'
+import { CHROME_BORDER_PX, CHROME_BORDER_TOP_PX, CHROME_TITLEBAR_PX } from './chromeConstants'
 
 export const SHELL_CHROME_BG_FOCUSED_OPAQUE = 'hsl(210, 55%, 48%)'
 export const SHELL_CHROME_BG_UNFOCUSED_OPAQUE = 'hsl(210, 18%, 15%)'
@@ -28,18 +28,21 @@ export function shellOuterFrameFromClient(w: WindowChromeExclusionSource): {
   w: number
   h: number
   inset: number
+  insetTop: number
   th: number
 } {
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
+  const bdTop = CHROME_BORDER_TOP_PX
   const noTilingChrome = w.maximized || w.fullscreen
   const snapTiled = !!w.snap_tiled && !noTilingChrome
   const inset = noTilingChrome || snapTiled ? 0 : bd
+  const insetTop = noTilingChrome || snapTiled ? 0 : bdTop
   const x = w.x - inset
-  const y = w.y - th - inset
+  const y = w.y - th - insetTop
   const ow = w.width + inset * 2
-  const oh = w.height + th + inset * 2
-  return { x, y, w: ow, h: oh, inset, th }
+  const oh = w.height + th + insetTop + inset
+  return { x, y, w: ow, h: oh, inset, insetTop, th }
 }
 
 function rangesTouchOrOverlap(a0: number, a1: number, b0: number, b1: number) {
@@ -97,14 +100,16 @@ export function ssdDecorationExclusionRects(
   if (w.minimized) return []
   const th = CHROME_TITLEBAR_PX
   const bd = CHROME_BORDER_PX
+  const bdTop = CHROME_BORDER_TOP_PX
   const suppressSideStrips = w.maximized || w.fullscreen
   const inset = suppressSideStrips || !!w.snap_tiled ? 0 : bd
+  const insetTop = suppressSideStrips || !!w.snap_tiled ? 0 : bdTop
   const out: Array<{ x: number; y: number; w: number; h: number }> = []
   out.push({
     x: w.x - inset,
-    y: w.y - th - inset,
+    y: w.y - th - insetTop,
     w: w.width + inset * 2,
-    h: th + inset,
+    h: th + insetTop,
   })
   if (!suppressSideStrips) {
     out.push({

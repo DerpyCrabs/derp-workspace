@@ -31,6 +31,7 @@ export function createMarkdownRenderer(
     const resolved = resolveImageUrl(stripped) ?? resolveImageUrl(raw)
     if (resolved === null) return ''
     token.attrSet('src', resolved)
+    token.attrSet('draggable', 'false')
     return defaultImageRender(tokens, idx, options, env, self)
   }
 

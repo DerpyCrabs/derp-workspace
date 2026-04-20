@@ -112,7 +112,7 @@ struct X11SyncResult {
 }
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
-pub const SHELL_TITLEBAR_HEIGHT: i32 = 28;
+pub const SHELL_TITLEBAR_HEIGHT: i32 = 26;
 pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
 /// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
@@ -123,8 +123,10 @@ pub const DEFAULT_XDG_TOPLEVEL_STAGGER_X: i32 = 32;
 pub const DEFAULT_XDG_TOPLEVEL_STAGGER_Y: i32 = 24;
 pub const DEFAULT_XDG_TOPLEVEL_STAGGER_STEPS: i32 = 6;
 pub const GNOME_AUTO_MAXIMIZE_THRESHOLD_PERCENT: i32 = 90;
-/// Border thickness around client for chrome hit-testing; keep in sync with `shell` CSS.
+/// Border thickness around client for chrome hit-testing; keep in sync with `shell` `CHROME_BORDER_PX`.
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
+/// Top border inset above client (shell tabs flush to frame top when 0); keep in sync with `CHROME_BORDER_TOP_PX`.
+pub const SHELL_BORDER_TOP_THICKNESS: i32 = 0;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
 pub const DERP_SOLID_SHELL_APP_ID: &str = "com.derp.solid-shell";
 /// Window title set by `cef_host` (`WindowInfo::window_name`); used with [`DERP_SOLID_SHELL_APP_ID`].
