@@ -31,6 +31,7 @@ export type ShellCompositorWireOp =
   | 'set_desktop_background'
   | 'workspace_mutation'
   | 'shell_hosted_window_state'
+  | 'shell_hosted_window_title'
   | 'hosted_window_open'
   | 'backed_window_open'
   | 'e2e_snapshot_response'

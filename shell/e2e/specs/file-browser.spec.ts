@@ -154,6 +154,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(browserHtml.includes('Modified'), 'file browser html should include modified column')
     assert(browserHtml.includes('Size'), 'file browser html should include size column')
     await openDirectoryRow(base, fixtures.empty_dir, 'empty-folder', navigated.windowId)
+    const titledEmptyFolder = await waitFor(
+      'wait for empty folder window title',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = shellWindowById(shell, navigated.windowId)
+        return window?.title === 'empty-folder' ? shell : null
+      },
+      5000,
+      100,
+    )
+    assert(shellWindowById(titledEmptyFolder, navigated.windowId)?.title === 'empty-folder', 'expected file browser title to follow active folder')
     const emptyHtml = await getShellHtml(base, '[data-file-browser-active-path]')
     assert(emptyHtml.includes(fixtures.empty_dir), 'expected empty folder path marker')
     const emptyWindowHtml = await getShellHtml(base, `[data-shell-window-frame="${navigated.windowId}"]`)
@@ -350,6 +361,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       (w) => w.active_path === expectedMediaPath && w.window_id !== navigated.windowId,
     )
     assert(newEntry, 'expected a second file browser window at the media directory path')
+    assert(shellWindowById(opened, newEntry.window_id)?.title === 'media', 'expected new file browser window title to use folder name')
     state.spawnedShellWindowIds.add(newEntry.window_id)
   })
 

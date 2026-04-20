@@ -299,6 +299,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_hosted_window_title(&self, json: String) {
+        self.run(move |s| {
+            s.shell_backed_set_title_json(&json);
+        });
+    }
+
     pub fn write_session_state_json_with_merge(
         &self,
         mut v: serde_json::Value,

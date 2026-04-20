@@ -301,6 +301,9 @@ impl ShellToCefLink {
         &self,
         kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
     ) {
+        if !self.delivery_ready.load(Ordering::Relaxed) {
+            return;
+        }
         post_external_begin_frame_task(
             self.browser_holder.clone(),
             self.pending_begin_frame.clone(),

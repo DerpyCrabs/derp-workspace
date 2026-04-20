@@ -209,6 +209,14 @@ export function fileBrowserWindowTitle(instance: number): string {
   return instance === 0 ? SHELL_UI_FILE_BROWSER_TITLE : `${SHELL_UI_FILE_BROWSER_TITLE} ${instance + 1}`
 }
 
+export function fileBrowserWindowTitleForPath(path: string | null | undefined, instance: number): string {
+  if (!path) return fileBrowserWindowTitle(instance)
+  const norm = path.replace(/\/+$/, '') || '/'
+  const i = norm.lastIndexOf('/')
+  const base = norm.slice(i + 1) || norm
+  return base === '/' ? SHELL_UI_FILE_BROWSER_TITLE : base
+}
+
 export function imageViewerWindowTitle(instance: number): string {
   return instance === 0 ? SHELL_UI_IMAGE_VIEWER_TITLE : `${SHELL_UI_IMAGE_VIEWER_TITLE} ${instance + 1}`
 }

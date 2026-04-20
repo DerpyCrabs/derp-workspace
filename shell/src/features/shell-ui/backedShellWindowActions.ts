@@ -7,7 +7,7 @@ import {
   buildTextEditorWindowOpenPayload,
   buildVideoViewerWindowOpenPayload,
   fileBrowserWindowId,
-  fileBrowserWindowTitle,
+  fileBrowserWindowTitleForPath,
   imageViewerWindowId,
   imageViewerWindowTitle,
   isFileBrowserWindowId,
@@ -359,7 +359,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     )
     if (windowId === null) return null
     reservedBackedWindowIds.add(windowId)
-    const title = fileBrowserWindowTitle(windowId - fileBrowserWindowId(0))
+    const title = fileBrowserWindowTitleForPath(path, windowId - fileBrowserWindowId(0))
     const prefs = loadFileBrowserPrefs()
     primeShellWindowState(windowId, {
       activePath: path ?? null,

@@ -238,10 +238,14 @@ export async function navigateToFixtureRoot(
       100,
     )
   }
-  for (const segment of relativeSegments) {
+  for (let guard = 0; guard < 32; guard += 1) {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const currentPath = fileBrowserSnapshot(shell, opened.windowId)?.active_path
     assert(typeof currentPath === 'string' && currentPath.length > 0, 'missing file browser path during fixture walk')
+    if (currentPath === fixtures.root_path) break
+    const nextSegments = path.posix.relative(currentPath, fixtures.root_path).split('/').filter(Boolean)
+    assert(nextSegments[0] && nextSegments[0] !== '..', 'fixture root not reachable during file browser walk')
+    const segment = nextSegments[0]
     await ensureHiddenRowVisible(base, currentPath, segment, opened.windowId)
     const expectedPath = path.posix.normalize(path.posix.join(currentPath, segment))
     await openDirectoryRow(base, expectedPath, segment, opened.windowId)

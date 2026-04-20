@@ -16,6 +16,12 @@ pub(crate) struct ShellBackedOpenParams {
     pub(crate) h: i32,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ShellBackedTitleParams {
+    pub(crate) window_id: u32,
+    pub(crate) title: String,
+}
+
 fn truncate_shell_ipc_string(mut s: String) -> String {
     let max = shell_wire::MAX_WINDOW_STRING_BYTES as usize;
     if s.len() <= max {
@@ -233,6 +239,37 @@ impl CompositorState {
         self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
         self.shell_focus_shell_ui_window(id);
+    }
+
+    pub(crate) fn shell_backed_set_title_json(&mut self, json: &str) {
+        let Ok(mut p) = serde_json::from_str::<ShellBackedTitleParams>(json) else {
+            return;
+        };
+        if p.window_id == 0 {
+            return;
+        }
+        p.title = truncate_shell_ipc_string(p.title);
+        let snap = self
+            .window_registry
+            .update_shell_hosted(p.window_id, |info, _| {
+                if info.title == p.title {
+                    return None;
+                }
+                info.title = p.title;
+                Some(info.clone())
+            });
+        let Some(Some(info)) = snap else {
+            return;
+        };
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                window_id: info.window_id,
+                surface_id: info.surface_id,
+                title: info.title,
+                app_id: info.app_id,
+            },
+        );
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn shell_backed_close_if_any(&mut self, window_id: u32) -> bool {

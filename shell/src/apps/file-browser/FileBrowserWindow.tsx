@@ -66,7 +66,7 @@ import Workflow from 'lucide-solid/icons/workflow'
 type FileBrowserWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
-  shellWireSend: (op: 'shell_hosted_window_state', json: string) => boolean
+  shellWireSend: (op: 'shell_hosted_window_state' | 'shell_hosted_window_title', json: string) => boolean
   onOpenFile: (
     path: string,
     context: { directory: string; showHidden: boolean },
@@ -209,6 +209,12 @@ function posixBasename(p: string): string {
   const norm = p.replace(/\/+$/, '') || '/'
   const i = norm.lastIndexOf('/')
   return norm.slice(i + 1) || norm
+}
+
+function fileBrowserTitleForPath(path: string | null): string {
+  if (!path) return 'Files'
+  const base = posixBasename(path)
+  return base === '/' ? 'Files' : base
 }
 
 type FileBrowserUiDialog =
@@ -705,6 +711,16 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     )
   }
 
+  function pushFileBrowserTitleToCompositor(title: string) {
+    props.shellWireSend(
+      'shell_hosted_window_title',
+      JSON.stringify({
+        window_id: props.windowId,
+        title,
+      }),
+    )
+  }
+
   function applyRestoredState(value: unknown) {
     const nextState = sanitizeFileBrowserWindowMemento(value)
     if (!nextState) return
@@ -815,6 +831,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     void state.status
     if (state.status !== 'ready' || applyingFromCompositor) return
     pushFileBrowserStateToCompositor()
+  })
+
+  createEffect(() => {
+    void state.activePath
+    void state.status
+    if (state.status !== 'ready') return
+    pushFileBrowserTitleToCompositor(fileBrowserTitleForPath(state.activePath))
   })
 
   createEffect(() => {
