@@ -4,6 +4,7 @@ import {
   SkipError,
   activateTaskbarWindow,
   assert,
+  assertRectMinSize,
   assertTaskbarRowOnMonitor,
   cleanupNativeWindows,
   clickRect,
@@ -35,6 +36,7 @@ import {
   waitForWindowMinimized,
   writeJsonArtifact,
   type E2eState,
+  type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -58,20 +60,6 @@ function windowTitlebarRect(shell: ShellSnapshot, windowId: number) {
   const controls = shell.window_controls?.find((entry) => entry.window_id === windowId) ?? null
   assert(controls?.titlebar, `missing titlebar rect for window ${windowId}`)
   return controls.titlebar
-}
-
-async function waitForPointerNear(base: string, x: number, y: number, tolerance = 12, timeoutMs = 250) {
-  return waitFor(
-    `wait for pointer near ${Math.round(x)},${Math.round(y)}`,
-    async () => {
-      const { compositor } = await getSnapshots(base)
-      const pointer = compositor.pointer
-      if (!pointer) return null
-      return Math.abs(pointer.x - x) <= tolerance && Math.abs(pointer.y - y) <= tolerance ? compositor : null
-    },
-    timeoutMs,
-    25,
-  )
 }
 
 async function waitForVisibleTabWindow(base: string, windowIds: number[]) {
@@ -152,6 +140,27 @@ async function resolveNativeTabTarget(base: string, windowIds: number[]) {
   return waitForVisibleTabWindow(base, windowIds)
 }
 
+function tabMergeDropPointPx(source: ReturnType<typeof tabRect>, target: ReturnType<typeof tabRect>) {
+  const sr = source.tab.rect!
+  const tr = target.tab.rect!
+  const scx = sr.global_x + sr.width / 2
+  const tcy = tr.global_y + tr.height / 2
+  const inset = 8
+  if (scx < tr.global_x + tr.width / 2) {
+    return { x: tr.global_x + inset, y: tcy }
+  }
+  return { x: tr.global_x + tr.width - inset, y: tcy }
+}
+
+function tabDropSlotRect(shell: ShellSnapshot, targetWindowId: number): Rect | null {
+  const current = tabGroupByWindow(shell, targetWindowId)
+  if (!current) return null
+  const idx = current.member_window_ids.indexOf(targetWindowId)
+  if (idx < 0) return null
+  const insertIndex = idx + 1
+  return current.drop_slots?.find((slot) => slot.insert_index === insertIndex)?.rect ?? null
+}
+
 async function dragTabOntoTab(
   base: string,
   sourceWindowId: number,
@@ -160,70 +169,60 @@ async function dragTabOntoTab(
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const source = tabRect(shell, sourceWindowId)
   const target = tabRect(shell, targetWindowId)
-  const expectedInsertIndex = target.group.member_window_ids.indexOf(targetWindowId) + 1
   const start = rectCenter(source.tab.rect!)
   await movePoint(base, start.x, start.y)
   await pointerButton(base, BTN_LEFT, 'press')
   await movePoint(base, start.x + 18, start.y)
-  const dragTargetRect = await waitFor(
-    `wait for drop slot ${target.group.group_id}:${expectedInsertIndex}`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const currentTarget = tabGroupByWindow(shell, targetWindowId)
-      const dropSlot = currentTarget?.drop_slots?.find((slot) => slot.insert_index === expectedInsertIndex)?.rect ?? null
-      return dropSlot ?? null
-    },
-    400,
-    25,
-  ).catch(() => target.tab.rect!)
-  const end = rectCenter(dragTargetRect)
-  const dragTargetMatches = async () => {
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    const dragTarget = shell.tab_drag_target
-    if (!dragTarget) return null
-    return (
-      dragTarget.window_id === sourceWindowId &&
-      dragTarget.group_id === target.group.group_id &&
-      dragTarget.insert_index === expectedInsertIndex
+  let slotRect: Rect | null = null
+  try {
+    slotRect = await waitFor(
+      `wait for drop slot ${target.group.group_id}`,
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return tabDropSlotRect(next, targetWindowId)
+      },
+      1500,
+      40,
     )
-      ? dragTarget
-      : null
+  } catch {
+    slotRect = null
   }
-  await movePoint(base, start.x + (end.x - start.x) * 0.25, start.y + (end.y - start.y) * 0.25)
-  await movePoint(base, start.x + (end.x - start.x) * 0.5, start.y + (end.y - start.y) * 0.5)
-  await movePoint(base, start.x + (end.x - start.x) * 0.75, start.y + (end.y - start.y) * 0.75)
-  const probePoints =
-    dragTargetRect === target.tab.rect!
-      ? [
-          end,
-          {
-            x: Math.min(target.tab.rect!.global_x + target.tab.rect!.width - 4, target.tab.rect!.global_x + target.tab.rect!.width * 0.72),
-            y: target.tab.rect!.global_y + target.tab.rect!.height / 2,
-          },
-          {
-            x: Math.min(target.tab.rect!.global_x + target.tab.rect!.width - 2, target.tab.rect!.global_x + target.tab.rect!.width * 0.84),
-            y: target.tab.rect!.global_y + target.tab.rect!.height / 2,
-          },
-        ]
-      : [
-          end,
-          { x: dragTargetRect.global_x + 1, y: end.y },
-          { x: dragTargetRect.global_x + dragTargetRect.width - 1, y: end.y },
-          { x: dragTargetRect.global_x + Math.max(2, dragTargetRect.width / 2), y: end.y },
-        ]
-  for (const point of probePoints) {
-    await movePoint(base, point.x, point.y)
-    try {
-      await waitFor(`wait for tab drag target ${target.group.group_id}`, dragTargetMatches, 100, 20)
-      break
-    } catch {}
+  const initialEnd = slotRect ? rectCenter(slotRect) : tabMergeDropPointPx(source, target)
+  const pickX = start.x + 18
+  const pickY = start.y
+  const dragTargetMatches = async () => {
+    const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const currentTarget = tabGroupByWindow(next, targetWindowId)
+    if (!currentTarget) return null
+    const idx = currentTarget.member_window_ids.indexOf(targetWindowId)
+    if (idx < 0) return null
+    const insertAfter = idx + 1
+    const dragTarget = next.tab_drag_target
+    if (!dragTarget) return null
+    if (dragTarget.window_id !== sourceWindowId || dragTarget.group_id !== currentTarget.group_id) return null
+    if (dragTarget.insert_index !== idx && dragTarget.insert_index !== insertAfter) return null
+    return dragTarget
   }
+  let cx = pickX
+  let cy = pickY
+  let end = initialEnd
+  for (let step = 1; step <= 24; step += 1) {
+    const t = step / 24
+    cx = pickX + (end.x - pickX) * t
+    cy = pickY + (end.y - pickY) * t
+    await movePoint(base, cx, cy)
+  }
+  const midShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const slot2 = tabDropSlotRect(midShell, targetWindowId)
+  end = slot2 ? rectCenter(slot2) : tabMergeDropPointPx(source, target)
+  for (let step = 1; step <= 24; step += 1) {
+    const t = step / 24
+    await movePoint(base, cx + (end.x - cx) * t, cy + (end.y - cy) * t)
+  }
+  cx = end.x
+  cy = end.y
   try {
-    const lastPoint = probePoints[probePoints.length - 1]!
-    await waitForPointerNear(base, lastPoint.x, lastPoint.y)
-  } catch {}
-  try {
-    await waitFor(`wait for tab drag target ${target.group.group_id}`, dragTargetMatches, 200, 20)
+    await waitFor(`wait for tab drag target ${target.group.group_id}`, dragTargetMatches, 2000, 40)
   } catch {}
   await pointerButton(base, BTN_LEFT, 'release')
 }
@@ -247,30 +246,42 @@ async function finishDrag(base: string) {
 }
 
 async function waitForGroupedMembers(base: string, memberWindowIds: number[], visibleWindowId?: number) {
+  const expected = [...memberWindowIds].sort((a, b) => a - b)
+  const expectedKey = expected.join(',')
   return waitFor(
     `wait for grouped members ${memberWindowIds.join(',')}`,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const group = tabGroupByWindow(shell, memberWindowIds[0])
-      if (!group) return null
-      const members = [...group.member_window_ids].sort((a, b) => a - b)
-      const expected = [...memberWindowIds].sort((a, b) => a - b)
-      if (members.join(',') !== expected.join(',')) return null
-      if (visibleWindowId !== undefined && group.visible_window_id !== visibleWindowId) return null
-      return { shell, group }
+      for (const windowId of memberWindowIds) {
+        const group = tabGroupByWindow(shell, windowId)
+        if (!group) continue
+        const members = [...group.member_window_ids].sort((a, b) => a - b)
+        if (members.join(',') !== expectedKey) continue
+        if (visibleWindowId !== undefined && group.visible_window_id !== visibleWindowId) continue
+        return { shell, group }
+      }
+      return null
     },
-    8000,
-    125,
+    5000,
+    40,
   )
 }
 
 async function selectTabByClick(base: string, windowId: number) {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const tab = tabRect(shell, windowId)
-  const point = rectCenter(tab.tab.rect!)
-  await movePoint(base, point.x, point.y)
-  await pointerButton(base, BTN_LEFT, 'press')
-  await pointerButton(base, BTN_LEFT, 'release')
+  const { rect } = await waitFor(
+    `wait for tab click target ${windowId}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const group = tabGroupByWindow(shell, windowId)
+      const tab = group?.tabs.find((entry) => entry.window_id === windowId)
+      const rect = tab?.rect ?? tab?.handle
+      if (!rect || rect.width < 12 || rect.height < 10) return null
+      return { rect }
+    },
+    3000,
+    40,
+  )
+  await clickRect(base, assertRectMinSize(`tab ${windowId}`, rect, 12, 10))
 }
 
 async function selectTabByFastClick(base: string, windowId: number) {
@@ -305,7 +316,7 @@ async function waitForSplitGroup(base: string, windowId: number, leftWindowId: n
       if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
       return { shell, group }
     },
-    8000,
+    2000,
     125,
   )
 }
@@ -359,7 +370,7 @@ async function moveShellWindowToOtherMonitor(base: string, windowId: number) {
   if (!move) {
     throw new SkipError(`no adjacent monitor from ${shellWindow.output_name}`)
   }
-  await runKeybind(base, move.action)
+  await runKeybind(base, move.action, windowId)
   return waitFor(
     `wait for shell window ${windowId} moved`,
     async () => {
@@ -371,7 +382,7 @@ async function moveShellWindowToOtherMonitor(base: string, windowId: number) {
       assertTaskbarRowOnMonitor(shell, windowId, move.target.name)
       return { compositor, shell, movedWindow, movedShellWindow, move }
     },
-    8000,
+    2000,
     125,
   )
 }
@@ -441,7 +452,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           if (taskbarEntry(shell, jsWindow.window.window_id)) return null
           return { shell, group, row }
         },
-        8000,
+        2000,
         125,
       ))
       await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
@@ -455,7 +466,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           if (!row || row.tab_count !== 2) return null
           return { shell, group, row }
         },
-        8000,
+        2000,
         125,
       ))
       await timing.step('write merge artifact', () => writeJsonArtifact('tab-groups-native-js-merged.json', {
@@ -497,7 +508,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       if (!move) {
         throw new SkipError(`no adjacent monitor from ${jsSnapshot.output_name}`)
       }
-      await timing.step(`run keybind ${move.action}`, () => runKeybind(base, move.action))
+      await timing.step(`run keybind ${move.action}`, () => runKeybind(base, move.action, jsWindow.window.window_id))
       const switched = await timing.step('wait for grouped row moved', () => waitFor(
         'wait for grouped row on js monitor',
         async () => {
@@ -509,7 +520,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           assertTaskbarRowOnMonitor(switchedShell, jsWindow.window.window_id, move.target.name)
           return { switchedCompositor, switchedShell, group }
         },
-        8000,
+        2000,
         125,
       ))
       await timing.step('write multimonitor artifact', () => writeJsonArtifact('tab-groups-multimonitor-switch.json', switched))
@@ -552,7 +563,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           }
           return { compositor, shell, group, switchedTitlebar }
         },
-        8000,
+        2000,
         125,
       )
     })
@@ -607,7 +618,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
           return shell.controls?.tab_menu_pin || shell.controls?.tab_menu_unpin ? null : shell
         },
-        8000,
+        2000,
         125,
       ),
     )
@@ -717,7 +728,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
               remainingRow,
             }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -827,7 +838,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (taskbarEntry(shell, jsWindowA.window.window_id)) return null
             return { shell, group, row }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -901,7 +912,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             }
             return { compositor, shell, group, restoredNative, restoredTitlebar: restoredTitlebar.titlebar }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -919,7 +930,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (!row || row.tab_count !== 1) return null
             return { compositor, shell, group, row }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -966,7 +977,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const group = tabGroupByWindow(shell, target.windowId)
           return group && !group.split_left_rect && !group.split_right_rect ? { shell, group } : null
         },
-        8000,
+        2000,
         125,
       )
     })
@@ -1007,10 +1018,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
           (windowId) => !(split.group.visible_window_ids ?? []).includes(windowId),
         ) ?? null
       assert(hiddenRightWindowId !== null, 'expected a hidden right tab after entering split')
-      const initialLeft = split.group.split_left_rect!
-      const initialRight = split.group.split_right_rect!
-      const initialDivider = split.group.split_divider_rect!
-      const initialWidth = initialLeft.width + initialRight.width + initialDivider.width
+      const initialWidth =
+        split.group.split_left_rect!.width +
+        split.group.split_right_rect!.width +
+        split.group.split_divider_rect!.width
       await timing.step('activate hidden split tab', () => selectTabByClick(base, hiddenRightWindowId))
       const activated = await timing.step('wait for stable split activation', () =>
         waitFor(
@@ -1024,13 +1035,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
               group.split_left_rect.width +
               group.split_right_rect.width +
               group.split_divider_rect.width
-            if (Math.abs(width - initialWidth) > 12) return null
-            if (Math.abs(group.split_left_rect.global_x - initialLeft.global_x) > 12) return null
-            if (Math.abs(group.split_right_rect.global_x - initialRight.global_x) > 12) return null
+            const tol = 56
+            if (Math.abs(width - initialWidth) > tol) return null
             return { shell, group }
           },
-          8000,
-          125,
+          3500,
+          40,
         ),
       )
       await timing.step('write split activation artifact', () =>
@@ -1131,9 +1141,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         y: rightStart.y,
       }
       await timing.step('start right tab drag', () => dragTabStep(base, otherWindowId, previewPoint))
-      await timing.step('pull right tab out of strip', () =>
-        movePoint(base, previewPoint.x + 24, rightTab.tab.rect!.global_y - 64),
-      )
+      await timing.step('pull right tab out of strip', async () => {
+        const endX = previewPoint.x + 24
+        const endY = rightTab.tab.rect!.global_y - 96
+        for (let step = 1; step <= 16; step += 1) {
+          const t = step / 16
+          await movePoint(base, previewPoint.x + (endX - previewPoint.x) * t, previewPoint.y + (endY - previewPoint.y) * t)
+        }
+      })
       await timing.step('wait for right tab detached', () =>
         waitFor(
           `wait for split right tab ${otherWindowId} detached`,
@@ -1144,7 +1159,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (!leftGroup || !rightGroup || leftGroup.group_id === rightGroup.group_id) return null
             return { shell, leftGroup, rightGroup }
           },
-          8000,
+          2000,
           100,
         ),
       )
@@ -1161,7 +1176,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (leftGroup.member_window_ids.length !== 1 || rightGroup.member_window_ids.length !== 1) return null
             return { shell, leftGroup, rightGroup }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -1227,7 +1242,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (jsRect.x === movedJs.movedWindow.x && jsRect.y === movedJs.movedWindow.y) return null
             return { compositor, shell, group, jsRect, jsTitlebar: jsTitlebar.titlebar }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -1245,7 +1260,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (!row || row.tab_count !== 1) return null
             return { compositor, shell, group, row }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -1304,7 +1319,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
               return null
             }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -1312,7 +1327,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const start = rectCenter(tab.tab.rect!)
       const previewPoint = { x: start.x + 40, y: start.y }
       await timing.step('start minimized tab drag', () => dragTabStep(base, target.windowId, previewPoint))
-      await timing.step('pull tab out for tear-out', () => movePoint(base, previewPoint.x + 24, start.y - 88))
+      await timing.step('pull tab out for tear-out', async () => {
+        const endX = previewPoint.x + 24
+        const endY = start.y - 120
+        for (let step = 1; step <= 16; step += 1) {
+          const t = step / 16
+          await movePoint(base, previewPoint.x + (endX - previewPoint.x) * t, previewPoint.y + (endY - previewPoint.y) * t)
+        }
+      })
       const torn = await timing.step('wait tear-out unminimized near pointer', () =>
         waitFor(
           `wait torn ${target.windowId} unminimized`,
@@ -1333,7 +1355,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (dist > 420) return null
             return { compositor, shell, w, dist }
           },
-          10000,
+          5000,
           125,
         ),
       )

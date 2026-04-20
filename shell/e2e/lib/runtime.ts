@@ -542,6 +542,7 @@ class Reporter {
     if (!timingLogsEnabled) return
     const slow = [...timings]
       .filter((timing) => timing.elapsedMs >= 250)
+      .filter((timing) => !(timing.kind === 'wait' && timing.status === 'timed_out'))
       .sort((a, b) => b.elapsedMs - a.elapsedMs)
       .slice(0, 5)
     for (const timing of slow) {
@@ -725,7 +726,7 @@ export async function normalizeTransientShellState(base: string): Promise<ShellS
     compositorSnapshot.shell_pointer_grab_window_id == null &&
     compositorSnapshot.shell_move_window_id == null &&
     compositorSnapshot.shell_resize_window_id == null
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     if (transientShellStateCleared(shell, compositor)) {
       return shell
     }
@@ -736,6 +737,14 @@ export async function normalizeTransientShellState(base: string): Promise<ShellS
     try {
       await pointerButton(base, BTN_RIGHT, 'release')
     } catch {}
+    for (let quick = 0; quick < 6; quick += 1) {
+      const next = await getSnapshots(base)
+      if (transientShellStateCleared(next.shell, next.compositor)) {
+        return next.shell
+      }
+      shell = next.shell
+      compositor = next.compositor
+    }
     try {
       const cleared = await waitFor(
         'wait for transient shell state to clear',
@@ -743,8 +752,8 @@ export async function normalizeTransientShellState(base: string): Promise<ShellS
           const next = await getSnapshots(base)
           return transientShellStateCleared(next.shell, next.compositor) ? next : null
         },
-        1500,
-        50,
+        700,
+        8,
       )
       shell = cleared.shell
       compositor = cleared.compositor
@@ -814,9 +823,11 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
     await normalizeTransientShellState(base)
     shell = await normalizePersistentShellState(base)
     try {
-      await openSettings(base, 'click')
-      await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
-      shell = await normalizePersistentShellState(base)
+      if (shell.settings_window_visible) {
+        await openSettings(base, 'click')
+        await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
+        shell = await normalizePersistentShellState(base)
+      }
       break
     } catch (error) {
       if (recovered) {
@@ -831,6 +842,8 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
       recovered = true
     }
   }
+  await ensureDesktopApps(base, state)
+  shell = await waitForSessionRestoreIdle(base)
   const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
   syncTrackedWindows(state, compositor)
   for (const windowId of [...state.nativeLaunchByWindowId.keys()]) {
@@ -838,7 +851,6 @@ export async function primeState(base: string, state: E2eState): Promise<{ compo
       state.nativeLaunchByWindowId.delete(windowId)
     }
   }
-  await ensureDesktopApps(base, state)
   return { compositor, shell }
 }
 
@@ -877,7 +889,7 @@ export async function discoverBase(): Promise<string> {
   return base.replace(/\/$/, '')
 }
 
-export async function discoverReadyBase(timeoutMs = 30000): Promise<string> {
+export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
   return waitFor(
     'wait for shell http base',
     async () => {
@@ -890,7 +902,7 @@ export async function discoverReadyBase(timeoutMs = 30000): Promise<string> {
       }
     },
     timeoutMs,
-    250,
+    50,
   )
 }
 
@@ -961,8 +973,8 @@ export async function restartSession(state: E2eState, timeoutMs = 45000): Promis
         return true
       }
     },
-    15000,
-    250,
+    5000,
+    100,
   )
   const nextBase = await discoverReadyBase(timeoutMs)
   state.base = nextBase
@@ -1036,14 +1048,27 @@ export function approxEqual(actual: number, expected: number, tolerance: number,
 }
 
 function waitIntervalMs(intervalMs: number, attempts: number): number {
-  if (intervalMs <= 16) return intervalMs
-  if (attempts <= 1) return Math.min(intervalMs, 16)
-  if (attempts === 2) return Math.min(intervalMs, 32)
-  if (attempts === 3) return Math.min(intervalMs, 64)
+  if (intervalMs <= 8) return intervalMs
+  if (attempts <= 1) return Math.min(intervalMs, 8)
+  if (attempts === 2) return Math.min(intervalMs, 16)
+  if (attempts === 3) return Math.min(intervalMs, 24)
+  if (attempts === 4) return Math.min(intervalMs, 32)
   return intervalMs
 }
 
-export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 100): Promise<T> {
+export async function waitForSessionRestoreIdle(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for session restore idle',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.session_restore_active ? null : shell
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitFor<T>(description: string, fn: () => Promise<T | null>, timeoutMs = 5000, intervalMs = 50): Promise<T> {
   const started = Date.now()
   let lastError: unknown = null
   let attempts = 0
@@ -1183,8 +1208,12 @@ export async function typeText(base: string, text: string): Promise<void> {
   await postJson(base, '/test/input/keys', { keycodes, action: 'tap' })
 }
 
-export async function runKeybind(base: string, action: string): Promise<void> {
-  await postJson(base, '/test/keybind', { action })
+export async function runKeybind(base: string, action: string, windowId?: number): Promise<void> {
+  const body: { action: string; window_id?: number } = { action }
+  if (windowId !== undefined) {
+    body.window_id = windowId
+  }
+  await postJson(base, '/test/keybind', body)
 }
 
 export function findWindow(snapshot: { windows: WindowSnapshot[] }, predicate: (window: WindowSnapshot) => boolean): WindowSnapshot | null {
@@ -1300,7 +1329,15 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = taskbarEntry(shell, windowId)
-    assert(row?.close, `missing taskbar close control for window ${windowId}`)
+    if (!row?.close) {
+      await closeWindow(base, windowId)
+      try {
+        await waitForWindowGone(base, windowId, 4000)
+        return
+      } catch {}
+      shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      continue
+    }
     await clickRect(base, row.close)
     try {
       await waitForWindowGone(base, windowId, 600)
@@ -1332,7 +1369,7 @@ export async function waitForWindowGone(base: string, windowId: number, timeoutM
       return compositorHas || shellHas ? null : { compositor, shell }
     },
     timeoutMs,
-    125,
+    40,
   )
 }
 
@@ -1347,7 +1384,7 @@ export async function waitForWindowMinimized(base: string, windowId: number, tim
       return compositorWindow.minimized && shellWindow.minimized ? { compositor, shell } : null
     },
     timeoutMs,
-    125,
+    40,
   )
 }
 
@@ -1389,6 +1426,34 @@ export async function waitForNativeFocus(base: string, windowId: number, timeout
   )
 }
 
+export async function waitForNativeKeyboardFocus(
+  base: string,
+  windowId: number,
+  timeoutMs = 5000,
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  return waitFor(
+    `wait for native keyboard focus ${windowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      return compositor.focused_window_id === windowId ? { compositor, shell } : null
+    },
+    timeoutMs,
+    50,
+  )
+}
+
+export async function waitForCompositorShellUiFocus(base: string, windowId: number, timeoutMs = 5000): Promise<CompositorSnapshot> {
+  return waitFor(
+    `wait for compositor shell ui focus ${windowId}`,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      return compositor.focused_shell_ui_window_id === windowId ? compositor : null
+    },
+    timeoutMs,
+    50,
+  )
+}
+
 export async function waitForShellUiFocus(base: string, windowId: number, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
   return waitFor(
     `wait for shell ui focus ${windowId}`,
@@ -1401,6 +1466,35 @@ export async function waitForShellUiFocus(base: string, windowId: number, timeou
     timeoutMs,
     100,
   )
+}
+
+export async function raiseTaskbarWindow(
+  base: string,
+  windowId: number,
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const shellWindow = shellWindowById(shell, windowId)
+    if (!(shell.focused_window_id === windowId && shellWindow && !shellWindow.minimized)) {
+      await activateTaskbarWindow(base, shell, windowId)
+    }
+    try {
+      if (windowId === SHELL_UI_SETTINGS_WINDOW_ID || windowId === SHELL_UI_DEBUG_WINDOW_ID) {
+        const focused = await waitForShellUiFocus(base, windowId, 2500)
+        const window = shellWindowById(focused.shell, windowId)
+        assert(window, `missing shell window ${windowId}`)
+        return { ...focused, window }
+      }
+      const focused = await waitForNativeFocus(base, windowId, 2500)
+      const window = shellWindowById(focused.shell, windowId)
+      assert(window, `missing shell window ${windowId}`)
+      return { ...focused, window }
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
 }
 
 export async function waitForSettingsVisible(base: string, timeoutMs = 5000): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot; window: WindowSnapshot }> {
@@ -1566,8 +1660,8 @@ export async function openShellTestWindow(
       )
       return window ? { compositor, shell, window } : null
     },
-    8000,
-    125,
+    5000,
+    40,
   )
   state.spawnedShellWindowIds.add(result.window.window_id)
   state.knownWindowIds.add(result.window.window_id)
@@ -1583,11 +1677,11 @@ export async function resetFileBrowserFixtures(base: string): Promise<FileBrowse
 }
 
 export async function openProgramsMenu(base: string, method: 'click' | 'keybind' = 'click'): Promise<ShellSnapshot> {
-  let lastError: unknown = null
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  const shell0 = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (shell0.programs_menu_open) return waitForProgramsMenuOpen(base)
+
+  const openOnce = async (useKeybind: boolean) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (shell.programs_menu_open) return waitForProgramsMenuOpen(base)
-    const useKeybind = method === 'keybind' || attempt > 0
     if (useKeybind) {
       await runKeybind(base, 'toggle_programs_menu')
     } else {
@@ -1598,20 +1692,18 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
       }
       await clickRect(base, shell.controls.taskbar_programs_toggle)
     }
-    try {
-      return await waitForProgramsMenuOpen(base, 3000)
-    } catch (error) {
-      lastError = error
-      if (attempt === 1) {
-        try {
-          await openSettings(base, 'click')
-          await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
-        } catch {}
-      }
-      await new Promise((resolve) => setTimeout(resolve, 150))
-    }
+    return waitForProgramsMenuOpen(base, 2000)
   }
-  throw lastError
+
+  try {
+    return await openOnce(method === 'keybind')
+  } catch {
+    try {
+      await openSettings(base, 'click')
+      await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
+    } catch {}
+    return openOnce(true)
+  }
 }
 
 export async function openPowerMenu(base: string): Promise<ShellSnapshot> {
@@ -1700,7 +1792,7 @@ export async function waitForSpawnedWindow(
     title,
     appId,
     command,
-    timeoutMs = 10000,
+    timeoutMs = 5000,
   }: { title: string; appId: string; command: string; timeoutMs?: number },
 ): Promise<NativeSpawnResult> {
   const result = await waitFor(
@@ -1719,7 +1811,7 @@ export async function waitForSpawnedWindow(
       return { snapshot, window, command }
     },
     timeoutMs,
-    125,
+    40,
   )
   knownWindowIds.add(result.window.window_id)
   return result
@@ -1758,7 +1850,7 @@ export async function ensureXtermWindow(base: string, state: E2eState, title: st
   return spawnXtermWindow(base, state.knownWindowIds, title)
 }
 
-export async function waitForTaskbarEntry(base: string, windowId: number, timeoutMs = 8000): Promise<ShellSnapshot> {
+export async function waitForTaskbarEntry(base: string, windowId: number, timeoutMs = 2000): Promise<ShellSnapshot> {
   return waitFor(
     `wait for taskbar row ${windowId}`,
     async () => {
@@ -1766,7 +1858,7 @@ export async function waitForTaskbarEntry(base: string, windowId: number, timeou
       return taskbarEntry(shell, windowId) ? shell : null
     },
     timeoutMs,
-    125,
+    40,
   )
 }
 

@@ -88,6 +88,7 @@ fn main() {
         strip_color,
         drop_buffer_after_draw: args.drop_buffer_after_draw,
         buffer_dropped: false,
+        pending_presentation_loops: 0,
     };
 
     while !state.exit {
@@ -116,6 +117,7 @@ struct TestClient {
     strip_color: [u8; 4],
     drop_buffer_after_draw: bool,
     buffer_dropped: bool,
+    pending_presentation_loops: u32,
 }
 
 impl TestClient {
@@ -403,6 +405,14 @@ impl CompositorHandler for TestClient {
         _time: u32,
     ) {
         if self.drop_buffer_after_draw && !self.buffer_dropped {
+            self.pending_presentation_loops = self.pending_presentation_loops.saturating_add(1);
+            if self.pending_presentation_loops < 5 {
+                self.window
+                    .wl_surface()
+                    .frame(qh, self.window.wl_surface().clone());
+                self.window.wl_surface().commit();
+                return;
+            }
             self.drop_buffer();
             return;
         }
@@ -480,6 +490,9 @@ impl WindowHandler for TestClient {
         }
         self.configured = true;
         self.needs_redraw = true;
+        if !(self.drop_buffer_after_draw && !self.buffer_dropped) {
+            self.pending_presentation_loops = 0;
+        }
         self.draw(conn, qh);
     }
 }

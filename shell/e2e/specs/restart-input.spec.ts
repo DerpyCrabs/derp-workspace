@@ -9,22 +9,11 @@ import {
   runKeybind,
   waitFor,
   waitForProgramsMenuClosed,
+  waitForSessionRestoreIdle,
   writeJsonArtifact,
   type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-
-async function waitForSessionRestoreIdle(base: string) {
-  await waitFor(
-    'wait for session restore idle',
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.session_restore_active ? null : shell
-    },
-    20000,
-    100,
-  )
-}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('restart keeps shell keybind and click input responsive', async ({ base, state }) => {

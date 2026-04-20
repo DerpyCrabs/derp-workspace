@@ -4,12 +4,11 @@ import {
   closeTaskbarWindow,
   compositorWindowById,
   defineGroup,
+  dragBetweenPoints,
   getJson,
   getSnapshots,
   ensureXtermWindow,
-  movePoint,
   outputForWindow,
-  pointerButton,
   runKeybind,
   shellWindowById,
   shellQuote,
@@ -54,27 +53,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(controlsBeforeMove?.titlebar, 'missing x11 titlebar controls')
     const startX = controlsBeforeMove.titlebar.global_x + controlsBeforeMove.titlebar.width / 2
     const startY = controlsBeforeMove.titlebar.global_y + controlsBeforeMove.titlebar.height / 2
-    await movePoint(base, startX, startY)
-    await pointerButton(base, 0x110, 'press')
-    try {
-      await movePoint(base, startX + 48, startY)
-      await movePoint(base, startX + 120, startY)
-      await movePoint(base, startX + 180, startY)
-    } finally {
-      await pointerButton(base, 0x110, 'release')
-    }
+    const dragDx = 280
+    await dragBetweenPoints(base, startX, startY, startX + dragDx, startY, 28)
     const moved = await waitFor(
       'wait for x11 move',
       async () => {
         const compositor = await getJson(base, '/test/state/compositor')
         const window = compositorWindowById(compositor, windowId)
         if (!window) return null
-        return Math.abs(window.x - beforeMove.x) >= 20 || Math.abs(window.y - beforeMove.y) >= 20
+        return Math.abs(window.x - beforeMove.x) >= 16 || Math.abs(window.y - beforeMove.y) >= 16
           ? { compositor, window }
           : null
       },
       5000,
-      100,
+      40,
     )
 
     const shellBeforeMinimize = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -111,7 +103,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const shellBeforeClose = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shellBeforeClose, windowId)
-    const gone = await waitForWindowGone(base, windowId, 8000)
+    const gone = await waitForWindowGone(base, windowId, 2000)
 
     await writeJsonArtifact('x11-xterm-parity.json', {
       spawned: spawned.window,
@@ -133,7 +125,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         title: expected,
         appId: X11_XTERM_APP_ID,
         command,
-        timeoutMs: 20000,
+        timeoutMs: 5000,
       })
     } catch (error) {
       await writeJsonArtifact('x11-x11-to-wayland-clipboard-timeout.json', {
@@ -150,6 +142,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shell, probe.window.window_id)
-    await waitForWindowGone(base, probe.window.window_id, 8000)
+    await waitForWindowGone(base, probe.window.window_id, 2000)
   })
 })

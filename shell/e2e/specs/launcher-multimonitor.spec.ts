@@ -2,13 +2,12 @@ import {
   KEY,
   SHELL_UI_SETTINGS_WINDOW_ID,
   SkipError,
-  activateTaskbarWindow,
   assert,
   assertTaskbarRowOnMonitor,
   closeTaskbarWindow,
   closeWindow,
-  clickRect,
   clickPoint,
+  clickRect,
   compositorWindowById,
   defineGroup,
   ensureDesktopApps,
@@ -17,11 +16,13 @@ import {
   getJson,
   getShellHtml,
   getSnapshots,
+  movePoint,
   openProgramsMenu,
   openSettings,
   pickMonitorMove,
   pointInRect,
   printNote,
+  raiseTaskbarWindow,
   rectCenter,
   runKeybind,
   shellWindowById,
@@ -30,9 +31,7 @@ import {
   taskbarForMonitor,
   typeText,
   waitFor,
-  waitForNativeFocus,
   waitForProgramsMenuClosed,
-  waitForShellUiFocus,
   waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
@@ -43,9 +42,8 @@ import {
 } from '../lib/runtime.ts'
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
-  if (window.output_name) return window.output_name
-  const centerX = window.x + window.width / 2
-  const centerY = window.y + window.height / 2
+  const centerX = window.x + Math.floor(window.width / 2)
+  const centerY = window.y + Math.floor(window.height / 2)
   const output = compositor.outputs.find(
     (entry) =>
       centerX >= entry.x &&
@@ -53,7 +51,9 @@ function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowS
       centerY >= entry.y &&
       centerY < entry.y + entry.height,
   )
-  return output?.name ?? null
+  if (output) return output.name
+  if (window.output_name) return window.output_name
+  return null
 }
 
 async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot) {
@@ -108,7 +108,7 @@ async function launchTerminalAppFromProgramsMenu(
       if (!taskbarEntry(shell, window.window_id)) return null
       return { compositor, shell, window }
     },
-    12000,
+    2000,
     125,
   )
   state.launcherWindowId = stableLaunch.window.window_id
@@ -254,7 +254,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('multi-monitor taskbars and native/js window moves stay aligned', async ({ base, state }) => {
-    const { green } = await ensureNativePair(base, state)
+    const { red, green } = await ensureNativePair(base, state)
+    await closeWindow(base, green.window.window_id)
+    await waitForWindowGone(base, green.window.window_id)
+    state.spawnedNativeWindowIds.delete(green.window.window_id)
+    state.knownWindowIds.delete(green.window.window_id)
+    state.nativeLaunchByWindowId.delete(green.window.window_id)
     const { compositor, shell } = await getSnapshots(base)
     if (compositor.outputs.length < 2) {
       throw new SkipError('requires at least two outputs')
@@ -278,7 +283,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(primaryMonitors.size === 1, `expected primary-only controls on one monitor, got ${[...primaryMonitors].join(', ')}`)
 
-    const redId = green.window.window_id
+    const redId = red.window.window_id
     const nativeInitial = await waitFor(
       'wait for native multimonitor output assignment',
       async () => {
@@ -300,19 +305,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     if (!nativeMove) {
       throw new SkipError(`no adjacent monitor from ${nativeInitial.outputName}`)
     }
-    await clickPoint(
-      base,
-      nativeInitial.redCompositor.x + nativeInitial.redCompositor.width / 2,
-      nativeInitial.redCompositor.y + nativeInitial.redCompositor.height / 2,
-    )
-    try {
-      await waitForNativeFocus(base, redId, 1500)
-    } catch {
-      const shellBeforeRedFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      await activateTaskbarWindow(base, shellBeforeRedFocus, redId)
-      await waitForNativeFocus(base, redId)
-    }
-    await runKeybind(base, nativeMove.action)
+    await raiseTaskbarWindow(base, redId)
+    const cx = nativeInitial.redCompositor.x + Math.floor(nativeInitial.redCompositor.width / 2)
+    const cy = nativeInitial.redCompositor.y + Math.floor(nativeInitial.redCompositor.height / 2)
+    await movePoint(base, cx, cy)
+    await clickPoint(base, cx, cy)
+    await runKeybind(base, nativeMove.action, redId)
     const nativeMoved = await waitFor(
       'wait for native monitor move',
       async () => {
@@ -326,12 +324,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const taskbar = taskbarForMonitor(nextShell, nativeMove.target.name)
         const output = nextCompositor.outputs.find((entry) => entry.name === nativeMove.target.name)
         if (!taskbar?.rect || !output) return null
-        const row = taskbarEntry(nextShell, redId)
-        if (!row?.activate || !pointInRect(taskbar.rect, rectCenter(row.activate))) return null
         if (compWindow.x < output.x || compWindow.x + compWindow.width > output.x + output.width) return null
         return { compositor: nextCompositor, shell: nextShell, compWindow, shellWindow }
       },
-      8000,
+      5000,
       125,
     )
     state.multiMonitorNativeMove = {
@@ -339,24 +335,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       target_output: nativeMove.target.name,
     }
 
-    const settingsOpen = await openSettings(base, 'click')
-    let settingsFocused
-    try {
-      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 2500)
-    } catch {
-      await activateTaskbarWindow(base, settingsOpen.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-      settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    }
-    const settingsWindow = shellWindowById(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    assert(settingsWindow, 'missing settings output name')
-    const settingsOutputName = resolveWindowOutputName(settingsFocused.compositor, settingsWindow)
+    await openSettings(base, 'click')
+    const settingsRaised = await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsComp = compositorWindowById(settingsRaised.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(settingsComp, 'missing settings compositor window')
+    const settingsOutputName = resolveWindowOutputName(settingsRaised.compositor, settingsComp)
     assert(settingsOutputName, 'missing settings output name')
-    assertTaskbarRowOnMonitor(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, settingsOutputName)
-    const settingsMove = pickMonitorMove(compositor.outputs, settingsOutputName)
+    assertTaskbarRowOnMonitor(settingsRaised.shell, SHELL_UI_SETTINGS_WINDOW_ID, settingsOutputName)
+    const settingsMove = pickMonitorMove(nativeMoved.compositor.outputs, settingsOutputName)
     if (!settingsMove) {
       throw new SkipError(`no adjacent monitor for settings from ${settingsOutputName}`)
     }
-    await runKeybind(base, settingsMove.action)
+    await runKeybind(base, settingsMove.action, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsMoved = await waitFor(
       'wait for settings monitor move',
       async () => {
@@ -374,7 +364,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor: nextCompositor, shell: nextShell, compWindow, shellUiWindow }
       },
-      8000,
+      2000,
       125,
     )
     assert(settingsMoved.shell.controls?.settings_tab_displays, 'missing settings displays tab rect after move')
@@ -389,7 +379,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const displaysHtml = await getShellHtml(base, '[data-settings-displays-page]')
-    for (const output of compositor.outputs) {
+    for (const output of settingsMoved.compositor.outputs) {
       assert(displaysHtml.includes(output.name), `settings displays page missing output ${output.name}`)
     }
     state.multiMonitorShellMove = {

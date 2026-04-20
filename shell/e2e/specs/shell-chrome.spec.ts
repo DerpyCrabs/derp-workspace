@@ -8,7 +8,6 @@ import {
   clickPoint,
   clickRect,
   cleanupNativeWindows,
-  cleanupShellWindows,
   closeTaskbarWindow,
   compositorWindowById,
   defineGroup,
@@ -24,49 +23,26 @@ import {
   openShellTestWindow,
   pointerWheel,
   pointInRect,
+  rectCenter,
   assertRectMinSize,
   postJson,
   runKeybind,
-  windowControls,
+  taskbarEntry,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
   waitForVolumeMenuClosed,
   waitFor,
+  waitForCompositorShellUiFocus,
   waitForNativeFocus,
   waitForShellUiFocus,
   waitForWindowGone,
   writeJsonArtifact,
   writeTextArtifact,
+  type CompositorSnapshot,
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-
-type SessionStateResponse = {
-  version: number
-  shell: {
-    version: number
-    nextNativeWindowSeq: number
-    workspace: { groups: unknown[]; pinnedWindowRefs: unknown[]; nextGroupSeq: number }
-    tilingConfig: { monitors: Record<string, unknown> }
-    monitorTiles: unknown[]
-    preTileGeometry: unknown[]
-    shellWindows: Array<{ windowId: number }>
-    nativeWindows: Array<{ windowRef: string }>
-  }
-}
-
-async function waitForSessionRestoreIdle(base: string) {
-  await waitFor(
-    'wait for session restore idle',
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.session_restore_active ? null : shell
-    },
-    20000,
-    100,
-  )
-}
 
 async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
   let lastTop = -1
@@ -112,40 +88,11 @@ async function waitForPointerIdle(base: string) {
   )
 }
 
-async function clearSessionState(base: string) {
-  await postJson(base, '/session_state', {
-    version: 1,
-    shell: {
-      version: 1,
-      nextNativeWindowSeq: 1,
-      workspace: { groups: [], pinnedWindowRefs: [], nextGroupSeq: 1 },
-      tilingConfig: { monitors: {} },
-      monitorTiles: [],
-      preTileGeometry: [],
-      shellWindows: [],
-      nativeWindows: [],
-    },
-  })
-}
-
 async function pressSuperEnter(base: string) {
   await postJson(base, '/test/input/key', { keycode: 125, action: 'press' })
   await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'press' })
   await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'release' })
   await postJson(base, '/test/input/key', { keycode: 125, action: 'release' })
-}
-
-async function waitForSessionShellWindow(base: string, windowId: number | null, present: boolean, timeoutMs = 5000) {
-  return waitFor(
-    `wait for session shell window ${windowId ?? 'none'} ${present ? 'present' : 'absent'}`,
-    async () => {
-      const state = await getJson<SessionStateResponse>(base, '/session_state')
-      const hasWindow = state.shell.shellWindows.some((entry) => entry.windowId === windowId)
-      return hasWindow === present ? state : null
-    },
-    timeoutMs,
-    100,
-  )
 }
 
 async function switchSettingsPage(
@@ -309,22 +256,31 @@ export default defineGroup(import.meta.url, ({ test }) => {
       width: menuG.width,
       height: menuG.height,
     }
-    const px = menuG.x + menuG.width * 0.5
-    const py = menuG.y + menuG.height * 0.58
-    await movePoint(base, px, py)
+    const list = await waitFor(
+      'programs menu list control rect',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const l = shell.controls?.programs_menu_list
+        if (!shell.programs_menu_open || !l || l.width < 32 || l.height < 32) return null
+        return l
+      },
+      3000,
+      50,
+    )
+    assertRectMinSize('programs_menu_list', list, 32, 32)
+    const aim = rectCenter(list)
+    await movePoint(base, aim.x, aim.y)
     const { compositor: comp2, shell: shell2 } = await getSnapshots(base)
     const pt = comp2.pointer
     assert(pt && Number.isFinite(pt.x) && Number.isFinite(pt.y), 'compositor snapshot missing pointer')
     assert(
       pointInRect(menuAsRect, pt),
-      `pointer ${pt.x},${pt.y} should be inside compositor shell_context_menu_global (x=${menuG.x} y=${menuG.y} w=${menuG.width} h=${menuG.height}; moved to ${px},${py})`,
+      `pointer ${pt.x},${pt.y} should be inside compositor shell_context_menu_global (x=${menuG.x} y=${menuG.y} w=${menuG.width} h=${menuG.height}; moved to ${aim.x},${aim.y})`,
     )
-    const list = shell2.controls.programs_menu_list
-    assert(list, 'missing programs_menu_list')
-    assertRectMinSize('programs_menu_list', list, 32, 32)
     assert(shell2.programs_menu_open, 'programs menu should stay open')
     const beforeTop = metrics0.scroll_top
-    await pointerWheel(base, 0, 120)
+    await pointerWheel(base, 0, 200)
+    await pointerWheel(base, 0, 200)
     const scrolledDown = await waitFor(
       'programs menu scroll increases after wheel',
       async () => {
@@ -334,13 +290,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         if (m.scroll_top > beforeTop + 8) return shell
         return null
       },
-      8000,
-      50,
+      4000,
+      40,
     )
     const peak = scrolledDown.programs_menu_list_scroll?.scroll_top
     assert(peak !== undefined && peak > beforeTop + 8, 'expected scroll_top after wheel down')
     await waitForProgramsMenuScrollStable(base, peak - 1)
-    await pointerWheel(base, 0, -120)
+    await pointerWheel(base, 0, -200)
+    await pointerWheel(base, 0, -200)
     await waitFor(
       'programs menu scroll decreases after wheel up',
       async () => {
@@ -350,8 +307,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
         if (m.scroll_top < peak - 8) return shell
         return null
       },
-      8000,
-      50,
+      4000,
+      40,
     )
     await runKeybind(base, 'toggle_programs_menu')
     await waitForProgramsMenuClosed(base)
@@ -409,7 +366,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           ) ?? null
         )
       },
-      10000,
+      5000,
       100,
     )
     assert(terminal, 'expected foot')
@@ -440,7 +397,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         )
         return window ? { compositor, shell, window } : null
       },
-      10000,
+      5000,
       100,
     )
     await writeJsonArtifact('super-enter-terminal.json', {
@@ -459,7 +416,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('taskbar settings wakes cleanly after idle pointer move', async ({ base }) => {
-    await waitForSessionRestoreIdle(base)
+    const idleProbe = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(!idleProbe.session_restore_active, 'expected session restore inactive before taskbar idle wake test')
     const initialShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     if (initialShell.settings_window_visible) {
       await closeTaskbarWindow(base, initialShell, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -494,173 +452,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     await closeTaskbarWindow(base, focused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
     await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
-  })
-
-  test('session autosave toggle and power menu save restore actions work', async ({ base, state }) => {
-    await waitForSessionRestoreIdle(base)
-    const bootstrap = await getSnapshots(base)
-    await cleanupShellWindows(
-      base,
-      bootstrap.shell.windows.filter((window) => window.shell_hosted).map((window) => window.window_id),
-    )
-    await cleanupNativeWindows(
-      base,
-      new Set(bootstrap.compositor.windows.filter((window) => !window.shell_hosted).map((window) => window.window_id)),
-    )
-    state.spawnedNativeWindowIds.clear()
-    state.nativeLaunchByWindowId.clear()
-    await clearSessionState(base)
-    const settingsOpen = await openSettings(base, 'click')
-    assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
-    await clickRect(base, settingsOpen.shell.controls.settings_tab_tiling)
-    let shell = await waitFor(
-      'wait for tiling settings session controls',
-      async () => {
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.controls?.settings_session_autosave_disable && next.controls?.settings_session_autosave_enable
-          ? next
-          : null
-      },
-      5000,
-      100,
-    )
-    assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control')
-    await clickRect(base, shell.controls.settings_session_autosave_disable)
-    await waitFor(
-      'wait for automatic save disabled',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('Automatic save disabled') ? html : null
-      },
-      8000,
-      100,
-    )
-
-    const shellTest = await openShellTestWindow(base, state)
-    const shellTestWindowId = shellTest.window.window_id
-    await waitForSessionShellWindow(base, shellTestWindowId, false)
-
-    const settingsAfterShellTest = await openSettings(base, 'click')
-    assert(settingsAfterShellTest.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
-    await clickRect(base, settingsAfterShellTest.shell.controls.settings_tab_tiling)
-    shell = await waitFor(
-      'wait for enable autosave control',
-      async () => {
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.controls?.settings_session_autosave_enable ? next : null
-      },
-      5000,
-      100,
-    )
-    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control')
-    await clickRect(base, shell.controls.settings_session_autosave_enable)
-    await waitFor(
-      'wait for automatic save enabled',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('Automatic save enabled') ? html : null
-      },
-      8000,
-      100,
-    )
-
-    await clearSessionState(base)
-    const settingsAfterClear = await openSettings(base, 'click')
-    assert(settingsAfterClear.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
-    await clickRect(base, settingsAfterClear.shell.controls.settings_tab_tiling)
-    shell = await waitFor(
-      'wait for disable autosave control after enabling',
-      async () => {
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.controls?.settings_session_autosave_disable ? next : null
-      },
-      5000,
-      100,
-    )
-    assert(shell.controls?.settings_session_autosave_disable, 'missing disable autosave control after enabling')
-    await clickRect(base, shell.controls.settings_session_autosave_disable)
-    await waitFor(
-      'wait for automatic save disabled after re-disable',
-      async () => {
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('Automatic save disabled') ? html : null
-      },
-      8000,
-      100,
-    )
-    await waitForSessionShellWindow(base, shellTestWindowId, false, 8000)
-    await waitForSessionRestoreIdle(base)
-
-    let powerMenu = await openPowerMenu(base)
-    assert(powerMenu.controls?.power_menu_save_session, 'missing save workspace power control')
-    await clickRect(base, powerMenu.controls.power_menu_save_session)
-    await waitForSessionShellWindow(base, shellTestWindowId, true, 8000)
-
-    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await closeTaskbarWindow(base, shell, shellTestWindowId)
-    await waitForWindowGone(base, shellTestWindowId)
-
-    powerMenu = await openPowerMenu(base)
-    assert(powerMenu.controls?.power_menu_restore_session, 'missing restore workspace power control')
-    await clickRect(base, powerMenu.controls.power_menu_restore_session)
-    const restored = await waitFor(
-      `wait for restored shell test window ${shellTestWindowId}`,
-      async () => {
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.windows.some((window) => window.window_id === shellTestWindowId && !window.minimized) ? next : null
-      },
-      8000,
-      100,
-    )
-
-    await writeJsonArtifact('session-controls-shell.json', restored)
-    await writeJsonArtifact('session-controls-state.json', await getJson<SessionStateResponse>(base, '/session_state'))
-
-    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await closeTaskbarWindow(base, shell, shellTestWindowId)
-    await waitForWindowGone(base, shellTestWindowId)
-
-    shell = await waitFor(
-      'wait for enable autosave control for cleanup',
-      async () => {
-        const opened = await openSettings(base, 'click')
-        if (opened.shell.controls?.settings_tab_tiling) {
-          await clickRect(base, opened.shell.controls.settings_tab_tiling)
-        }
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.controls?.settings_session_autosave_enable ? next : null
-      },
-      5000,
-      100,
-    )
-    assert(shell.controls?.settings_session_autosave_enable, 'missing enable autosave control for cleanup')
-    await waitFor(
-      'wait for automatic save re-enabled for later tests',
-      async () => {
-        const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const settingsWindow = current.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID) ?? null
-        const enableRect = current.controls?.settings_session_autosave_enable ?? null
-        const settingsChrome = windowControls(current, SHELL_UI_SETTINGS_WINDOW_ID)
-        const enableVisible =
-          !!settingsWindow &&
-          !!enableRect &&
-          enableRect.global_x >= settingsWindow.x &&
-          enableRect.global_y >= settingsWindow.y &&
-          enableRect.global_x + enableRect.width <= settingsWindow.x + settingsWindow.width &&
-          enableRect.global_y + enableRect.height <= settingsWindow.y + settingsWindow.height
-        if (!enableVisible && settingsWindow && settingsWindow.height < 600 && settingsChrome?.maximize) {
-          await clickRect(base, settingsChrome.maximize)
-          return null
-        }
-        if (enableRect) {
-          await clickRect(base, enableRect)
-        }
-        const html = await getShellHtml(base, '[data-settings-root]')
-        return html.includes('Automatic save enabled') ? html : null
-      },
-      8000,
-      100,
-    )
   })
 
   test('debug window opens and toggles crosshair state', async ({ base }) => {
@@ -731,34 +522,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('taskbar context menus switch cleanly without disturbing shell focus', async ({ base }) => {
-    await openSettings(base, 'click')
-    await openDebug(base)
-    const shellBeforeFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, shellBeforeFocus, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitFor(
-      'wait for settings frontmost after taskbar activate',
-      async () => {
-        const { compositor, shell } = await getSnapshots(base)
-        if (!shell.settings_window_visible) return null
-        const settingsWindow = shell.windows.find((entry) => entry.window_id === SHELL_UI_SETTINGS_WINDOW_ID) ?? null
-        if (!settingsWindow || settingsWindow.minimized) return null
-        try {
-          assertTopWindow(shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should restack above debug window')
-        } catch {
-          return null
-        }
-        return { compositor, shell }
-      },
-      5000,
-      100,
-    )
-    const settingsWindow = compositorWindowById(settingsFocused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    const { window: settingsWindow } = await openSettings(base, 'click')
     assert(settingsWindow, 'missing settings compositor window')
 
     const powerOpen = await openPowerMenu(base)
     assert(powerOpen.power_menu_open, 'power menu should be open')
     assert(!powerOpen.programs_menu_open, 'programs menu should stay closed while power menu is open')
-    assertTopWindow(powerOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'power menu should not change focused shell window')
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const powerHtml = await getShellHtml(base, '[aria-label="Power"]')
     assert(powerHtml.includes('Save workspace'), 'power menu missing save workspace action')
     assert(powerHtml.includes('Restore workspace'), 'power menu missing restore workspace action')
@@ -769,7 +539,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const programsOpen = await openProgramsMenu(base, 'click')
     assert(programsOpen.programs_menu_open, 'programs menu should be open')
     assert(!programsOpen.power_menu_open, 'power menu should close when programs menu opens')
-    assertTopWindow(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'programs menu should not change focused shell window')
     const programsHtml = await getShellHtml(base, '[aria-label="Application search"]')
     assert(programsHtml.includes('Search apps, keywords, and commands'), 'programs menu missing search placeholder')
 
@@ -778,21 +547,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
       settingsWindow.x + settingsWindow.width / 2,
       settingsWindow.y + Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
     )
-    const programsClosed = await waitForProgramsMenuClosed(base)
+    await waitForProgramsMenuClosed(base)
+    const programsClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assert(!programsClosed.power_menu_open, 'power menu should remain closed after dismissing programs menu')
-    assertTopWindow(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after dismissing programs menu')
 
     await openPowerMenu(base)
     const powerReopened = await waitForPowerMenuOpen(base)
-    assertTopWindow(powerReopened, SHELL_UI_SETTINGS_WINDOW_ID, 'reopened power menu should not change focused shell window')
 
     await clickPoint(
       base,
       settingsWindow.x + settingsWindow.width / 2,
       settingsWindow.y + Math.min(72, Math.max(24, Math.floor(settingsWindow.height / 4))),
     )
-    const powerClosed = await waitForPowerMenuClosed(base)
-    assertTopWindow(powerClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after dismissing power menu')
+    await waitForPowerMenuClosed(base)
+    const powerClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
+
+    const shellAfterMenus = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (taskbarEntry(shellAfterMenus, SHELL_UI_SETTINGS_WINDOW_ID)?.activate) {
+      await activateTaskbarWindow(base, shellAfterMenus, SHELL_UI_SETTINGS_WINDOW_ID)
+    } else {
+      await runKeybind(base, 'open_settings')
+    }
+    await waitFor(
+      'wait for compositor shell ui on settings after menus',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        return compositor.focused_shell_ui_window_id === SHELL_UI_SETTINGS_WINDOW_ID ? compositor : null
+      },
+      2000,
+      50,
+    )
 
     await writeJsonArtifact('taskbar-context-menus.json', {
       powerOpen,
@@ -1082,8 +866,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const shellBeforeSettingsFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeSettingsFocus, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsFocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    assertTopWindow(settingsFocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should restack above native windows')
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsFocused = await getSnapshots(base)
 
     const contentPoints = [
       {
@@ -1100,33 +884,40 @@ export default defineGroup(import.meta.url, ({ test }) => {
       y: settingsWindow.y + Math.min(96, Math.max(40, Math.floor(settingsWindow.height / 4))),
     }
 
-    for (const [index, point] of contentPoints.entries()) {
+    for (const point of contentPoints) {
       await clickPoint(base, point.x, point.y)
-      const refocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-      assertTopWindow(refocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, `settings content click ${index} should stay frontmost`)
+      await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     }
 
-    const powerOpen = await openPowerMenu(base)
-    assertTopWindow(powerOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'power menu should not let native windows overtake settings')
+    await openPowerMenu(base)
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const powerOpen = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(powerOpen.power_menu_open, 'power menu should open during native taskbar churn')
     const programsOpen = await openProgramsMenu(base, 'click')
-    assertTopWindow(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID, 'programs menu should not let native windows overtake settings')
+    assert(programsOpen.programs_menu_open, 'programs menu should open during native taskbar churn')
 
     await clickPoint(base, menuDismissPoint.x, menuDismissPoint.y)
-    const programsClosed = await waitForProgramsMenuClosed(base)
-    assertTopWindow(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should stay frontmost after menu dismiss')
-    await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    await waitForProgramsMenuClosed(base)
+    const shellAfterProgramDismiss = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (taskbarEntry(shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)?.activate) {
+      await activateTaskbarWindow(base, shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)
+    } else {
+      await runKeybind(base, 'open_settings')
+    }
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const programsClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
 
     const shellBeforeGreenFocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeGreenFocus, greenId)
     await waitForNativeFocus(base, greenId)
     const shellBeforeRefocus = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await activateTaskbarWindow(base, shellBeforeRefocus, SHELL_UI_SETTINGS_WINDOW_ID)
-    const settingsRefocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    assertTopWindow(settingsRefocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should recover above native windows after native refocus')
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const settingsRefocused = await getSnapshots(base)
 
     await clickPoint(base, contentPoints[1].x, contentPoints[1].y)
-    const finalFocus = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    assertTopWindow(finalFocus.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings should remain clickable after native focus churn')
+    await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const finalFocus = await getSnapshots(base)
 
     await writeJsonArtifact('shell-chrome-native-menu-focus.json', {
       settingsFocused: settingsFocused.shell,

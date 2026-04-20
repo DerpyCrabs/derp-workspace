@@ -241,6 +241,26 @@ fn global_point_in_output_rect(cx: i32, cy: i32, g: &Rectangle<i32, Logical>) ->
         && cy < g.loc.y.saturating_add(g.size.h)
 }
 
+fn pick_output_name_for_global_window_center_first(
+    pairs: &[(String, Rectangle<i32, Logical>)],
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Option<String> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let ww = w.max(1);
+    let hh = h.max(1);
+    let cx = x.saturating_add(ww / 2);
+    let cy = y.saturating_add(hh / 2);
+    pairs
+        .iter()
+        .find(|(_, g)| global_point_in_output_rect(cx, cy, g))
+        .map(|(name, _)| name.clone())
+}
+
 fn window_output_fit_challenger_beats_incumbent(
     window_rect: Rectangle<i32, Logical>,
     cx: i32,
@@ -532,6 +552,7 @@ pub struct CompositorState {
     pub(crate) shell_initial_pointer_centered: bool,
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
     pub(crate) shell_last_pointer_ipc_px: Option<(i32, i32)>,
+    pub(crate) shell_last_pointer_ipc_global_logical: Option<(i32, i32)>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
     /// Themed / system default pointer (`left_ptr`); also used for [`CursorImageStatus::Named`].
@@ -987,6 +1008,7 @@ impl CompositorState {
             shell_pointer_norm: None,
             shell_initial_pointer_centered: false,
             shell_last_pointer_ipc_px: None,
+            shell_last_pointer_ipc_global_logical: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
             pointer_cursor_image: CursorImageStatus::default_named(),
@@ -4084,14 +4106,10 @@ impl CompositorState {
         self.shell_ui_scale = scale;
         self.apply_xwayland_client_scale();
         self.apply_shell_ui_scale_to_outputs();
-        if self.display_config_save_suppressed {
-            if self.workspace_logical_bounds().is_some() {
-                self.recompute_shell_canvas_from_outputs();
-            }
-            return;
-        }
         self.send_shell_output_layout();
-        self.display_config_request_save();
+        if !self.display_config_save_suppressed {
+            self.display_config_request_save();
+        }
     }
 
     pub(crate) fn display_config_request_save(&mut self) {
@@ -4702,9 +4720,6 @@ impl CompositorState {
             suppressed = self.display_config_save_suppressed,
             "send_shell_output_layout shell_send_to_cef OutputLayout"
         );
-        if self.display_config_save_suppressed {
-            return;
-        }
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w: lw.max(1),
             canvas_logical_h: lh.max(1),
@@ -5084,6 +5099,13 @@ impl CompositorState {
         }
 
         true
+    }
+
+    pub(crate) fn shell_pointer_should_ipc_to_cef(&self, pos: Point<f64, Logical>) -> bool {
+        if self.shell_pointer_route_to_cef(pos) {
+            return true;
+        }
+        self.shell_exclusion_overlay_open && self.shell_point_in_shell_floating_overlay_global(pos)
     }
 
     pub fn shell_point_in_shell_floating_overlay_global(&self, pos: Point<f64, Logical>) -> bool {
@@ -6447,6 +6469,133 @@ impl CompositorState {
         ))
     }
 
+    pub fn super_move_window_to_adjacent_monitor(
+        &mut self,
+        window_id: u32,
+        move_right: bool,
+    ) -> Result<(), String> {
+        let info = self
+            .window_registry
+            .window_info(window_id)
+            .ok_or_else(|| "missing window".to_string())?;
+        if info.minimized {
+            return Err("minimized".into());
+        }
+        if self.window_info_is_solid_shell_host(&info) {
+            return Err("solid host".into());
+        }
+        let mut pairs: Vec<(String, Rectangle<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter_map(|o| {
+                let g = self.space.output_geometry(o)?;
+                Some((o.name().into(), g))
+            })
+            .collect();
+        if pairs.len() < 2 {
+            return Err("outputs".into());
+        }
+        pairs.sort_by(|a, b| {
+            a.1.loc
+                .x
+                .cmp(&b.1.loc.x)
+                .then_with(|| a.1.loc.y.cmp(&b.1.loc.y))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let cur_idx = pick_output_name_for_global_window_center_first(
+            &pairs,
+            info.x,
+            info.y,
+            info.width,
+            info.height,
+        )
+        .and_then(|picked| pairs.iter().position(|(n, _)| n == picked.as_str()))
+        .or_else(|| {
+            pick_output_name_for_global_window_rect_from_output_rects(
+                &pairs,
+                info.x,
+                info.y,
+                info.width,
+                info.height,
+            )
+            .and_then(|picked| pairs.iter().position(|(n, _)| n == picked.as_str()))
+        })
+        .or_else(|| {
+            if info.output_name.is_empty() {
+                None
+            } else {
+                pairs
+                    .iter()
+                    .position(|(n, _)| n == info.output_name.as_str())
+            }
+        })
+        .ok_or_else(|| "current output".to_string())?;
+        let tgt_idx = if move_right {
+            if cur_idx + 1 >= pairs.len() {
+                return Err("no adjacent right".into());
+            }
+            cur_idx + 1
+        } else if cur_idx == 0 {
+            return Err("no adjacent left".into());
+        } else {
+            cur_idx - 1
+        };
+        let src_name = pairs[cur_idx].0.clone();
+        let tgt_name = pairs[tgt_idx].0.clone();
+        let Some(src_out) = self.space.outputs().find(|o| o.name() == src_name.as_str()) else {
+            return Err("src output".into());
+        };
+        let Some(tgt_out) = self.space.outputs().find(|o| o.name() == tgt_name.as_str()) else {
+            return Err("tgt output".into());
+        };
+        let Some(src_work) = self.shell_maximize_work_area_global_for_output(&src_out) else {
+            return Err("src work".into());
+        };
+        let Some(tgt_work) = self.shell_maximize_work_area_global_for_output(&tgt_out) else {
+            return Err("tgt work".into());
+        };
+        let (ox, oy) = self.shell_canvas_logical_origin;
+        if info.maximized {
+            let gx = tgt_work.loc.x;
+            let gy = tgt_work.loc.y;
+            let gw = tgt_work.size.w.max(1);
+            let gh = tgt_work.size.h.max(1);
+            self.shell_set_window_geometry(
+                window_id,
+                gx.saturating_sub(ox),
+                gy.saturating_sub(oy),
+                gw,
+                gh,
+                1,
+            );
+            return Ok(());
+        }
+        let gy = info.y;
+        let tw = tgt_work.size.w.max(1);
+        let th = tgt_work.size.h.max(1);
+        let gw = info.width.max(1).min(tw);
+        let gh = info.height.max(1).min(th);
+        let rel_y = gy.saturating_sub(src_work.loc.y);
+        let mut nx = tgt_work
+            .loc
+            .x
+            .saturating_add((tgt_work.size.w.saturating_sub(gw)).saturating_div(2));
+        let mut ny = tgt_work.loc.y.saturating_add(rel_y);
+        let max_x = tgt_work.loc.x.saturating_add(tgt_work.size.w.saturating_sub(gw));
+        let max_y = tgt_work.loc.y.saturating_add(tgt_work.size.h.saturating_sub(gh));
+        nx = nx.max(tgt_work.loc.x).min(max_x);
+        ny = ny.max(tgt_work.loc.y).min(max_y);
+        self.shell_set_window_geometry(
+            window_id,
+            nx.saturating_sub(ox),
+            ny.saturating_sub(oy),
+            gw,
+            gh,
+            0,
+        );
+        Ok(())
+    }
+
     /// `layout_state`: 0 = floating; 1 = maximized — bounds are **output-local layout** px from the shell.
     pub fn shell_set_window_geometry(
         &mut self,
@@ -7598,6 +7747,7 @@ impl CompositorState {
         self.shell_dmabuf_dirty_buffer.clear();
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_last_pointer_ipc_px = None;
+        self.shell_last_pointer_ipc_global_logical = None;
         self.touch_routes_to_cef = false;
     }
 
@@ -7842,7 +7992,7 @@ impl CompositorState {
             return;
         }
         self.sync_shell_shared_state_for_input();
-        let route = self.shell_pointer_route_to_cef(pos);
+        let route = self.shell_pointer_should_ipc_to_cef(pos);
         if !route
             && !self.shell_move_is_active()
             && !self.shell_resize_is_active()
@@ -7853,10 +8003,12 @@ impl CompositorState {
         let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) else {
             return;
         };
-        if self.shell_last_pointer_ipc_px == Some((bx, by)) {
+        let global_key = (pos.x.round() as i32, pos.y.round() as i32);
+        if self.shell_last_pointer_ipc_global_logical == Some(global_key) {
             return;
         }
         self.shell_begin_frame_note_shell_input();
+        self.shell_last_pointer_ipc_global_logical = Some(global_key);
         self.shell_last_pointer_ipc_px = Some((bx, by));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
             x: bx,
@@ -7878,7 +8030,7 @@ impl CompositorState {
         };
         let pos = pointer.current_location();
         self.sync_shell_shared_state_for_input();
-        let route = self.shell_pointer_route_to_cef(pos);
+        let route = self.shell_pointer_should_ipc_to_cef(pos);
         if !route
             && !self.shell_move_is_active()
             && !self.shell_resize_is_active()
@@ -8435,11 +8587,28 @@ impl ClientData for ClientState {
 #[cfg(test)]
 mod output_name_pick_tests {
     use super::{
+        pick_output_name_for_global_window_center_first,
         pick_output_name_for_global_window_rect_from_output_rects, Logical, Point, Rectangle, Size,
     };
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn center_first_follows_integer_center_half_open_rects() {
+        let pairs = vec![
+            ("HDMI-A-1".to_string(), rect(0, 0, 1920, 1080)),
+            ("DP-1".to_string(), rect(1920, 0, 1920, 1080)),
+        ];
+        assert_eq!(
+            pick_output_name_for_global_window_center_first(&pairs, 400, 0, 1600, 1080).unwrap(),
+            "HDMI-A-1"
+        );
+        assert_eq!(
+            pick_output_name_for_global_window_center_first(&pairs, 1400, 0, 1600, 1080).unwrap(),
+            "DP-1"
+        );
     }
 
     #[test]

@@ -133,11 +133,21 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
   window.__DERP_E2E_REQUEST_HTML = (requestId: number, selector?: string | null) => {
     publishE2eShellHtml(requestId, selector)
   }
-  window.__DERP_E2E_OPEN_TEST_WINDOW = () => options.openShellTestWindow()
+  window.__DERP_E2E_OPEN_TEST_WINDOW_REQ = (requestId: number) => {
+    const send = window.__derpShellWireSend
+    if (!send) return
+    let ok = false
+    try {
+      ok = options.openShellTestWindow()
+    } catch {
+      ok = false
+    }
+    send('e2e_test_window_open_response', requestId, ok ? 1 : 0)
+  }
 
   return () => {
     delete window.__DERP_E2E_REQUEST_SNAPSHOT
     delete window.__DERP_E2E_REQUEST_HTML
-    delete window.__DERP_E2E_OPEN_TEST_WINDOW
+    delete window.__DERP_E2E_OPEN_TEST_WINDOW_REQ
   }
 }

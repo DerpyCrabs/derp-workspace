@@ -140,6 +140,15 @@ export function windowOnMonitor(
   return p !== null && p.name === mon.name
 }
 
+export function pickLayoutScreenForMove(w: DerpWindow, list: LayoutScreen[], co: CanvasOrigin): LayoutScreen | null {
+  if (list.length === 0) return null
+  if (w.output_name) {
+    const byName = list.find((s) => s.name === w.output_name)
+    if (byName) return byName
+  }
+  return pickScreenForWindow(w, list, co) ?? list[0] ?? null
+}
+
 export function buildWindowsMapFromList(
   raw: unknown,
   prev?: Map<number, DerpWindow>,

@@ -35,7 +35,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         return taskbarEntry(shell, state.crashProbe!.window.window_id) ? shell : null
       },
-      8000,
+      2000,
       125,
     )
     await crashWindow(base, state.crashProbe.window.window_id)

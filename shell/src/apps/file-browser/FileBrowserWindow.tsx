@@ -291,11 +291,15 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   function applyRestoredState(value: unknown) {
     const nextState = sanitizeFileBrowserWindowMemento(value)
     if (!nextState) return
+    const prevActivePath = state.activePath
+    const prevShowHidden = state.showHidden
     setFileBrowserShowHidden(nextState.showHidden)
     setState('showHidden', nextState.showHidden)
     setState('selectedPath', nextState.selectedPath)
-    if (nextState.activePath || nextState.showHidden !== state.showHidden) {
-      void loadDirectory(nextState.activePath ?? state.activePath, true, nextState.showHidden)
+    const nextPath = nextState.activePath ?? null
+    const prevPath = prevActivePath ?? null
+    if (nextPath !== prevPath || nextState.showHidden !== prevShowHidden) {
+      void loadDirectory(nextPath ?? prevPath, true, nextState.showHidden)
     }
   }
 
@@ -339,7 +343,31 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     const next = sanitizeFileBrowserWindowMemento(raw)
     if (!next) return
     const j = JSON.stringify(next)
-    const local = JSON.stringify(snapshotFileBrowserWindowMemento(state))
+    const curSnapshot = snapshotFileBrowserWindowMemento(state)
+    const samePath = (next.activePath ?? null) === (curSnapshot.activePath ?? null)
+    if (
+      (state.status === 'loading' || state.status === 'ready') &&
+      samePath &&
+      next.selectedPath !== curSnapshot.selectedPath
+    ) {
+      return
+    }
+    if (state.status === 'ready') {
+      const na = next.activePath
+      const ca = curSnapshot.activePath
+      if (
+        typeof na === 'string' &&
+        typeof ca === 'string' &&
+        na.length > 0 &&
+        ca.length > 0 &&
+        ca !== na &&
+        pathWithinRoot(ca, na)
+      ) {
+        lastCompositorMementoJson = j
+        return
+      }
+    }
+    const local = JSON.stringify(curSnapshot)
     if (j === local) {
       lastCompositorMementoJson = j
       return
@@ -365,6 +393,18 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   createEffect(() => {
     void state.activePath
     closeCtxMenu()
+  })
+
+  createEffect(() => {
+    void state.activePath
+    void state.status
+    if (state.status !== 'ready' || !rootRef) return
+    queueMicrotask(() => {
+      const root = rootRef
+      if (!root) return
+      const sc = root.querySelector('[data-file-browser-entry-scroll]')
+      if (sc instanceof HTMLElement) sc.scrollTop = 0
+    })
   })
 
   return (
@@ -524,7 +564,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           <div>Modified</div>
           <div>Size</div>
         </div>
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div class="min-h-0 flex-1 overflow-auto" data-file-browser-entry-scroll>
           {state.status === 'loading' ? (
             <div class="flex h-full items-center justify-center px-6 py-10 text-sm text-(--shell-text-dim)">
               Loading files…

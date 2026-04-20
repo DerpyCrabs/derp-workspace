@@ -105,6 +105,40 @@ exec cargo build --release -p compositor -p derp-test-client
 EOF
 fi
 
+if [[ "$SKIP_SYNC" -eq 0 ]]; then
+  echo "=== install compositor + derp-test-client to /usr/local (e2e) ==="
+  ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+sudo install -Dm755 target/release/compositor /usr/local/bin/compositor
+sudo install -Dm755 target/release/derp-test-client /usr/local/bin/derp-test-client
+EOF
+  echo "=== SIGUSR2 compositor (reload after install) ==="
+  ssh_base bash -s <<'REMOTE'
+set -euo pipefail
+mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
+if [[ ${#pids[@]} -eq 0 ]]; then
+  echo "e2e-remote: no compositor process for user $(id -un); skipping SIGUSR2." >&2
+  exit 0
+fi
+roots=()
+for pid in "${pids[@]}"; do
+  ppid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+  if ! printf '%s\n' "${pids[@]}" | grep -qx "$ppid"; then
+    roots+=("$pid")
+  fi
+done
+if [[ ${#roots[@]} -eq 0 ]]; then
+  echo "e2e-remote: no root compositor among PIDs (${pids[*]}); skipping SIGUSR2." >&2
+  exit 0
+fi
+for pid in "${roots[@]}"; do
+  kill -USR2 "$pid"
+done
+REMOTE
+  sleep 1
+fi
+
 if [[ "$SKIP_SYNC" -eq 1 ]]; then
   echo "=== skip remote npm shell -> dist/ ==="
 else

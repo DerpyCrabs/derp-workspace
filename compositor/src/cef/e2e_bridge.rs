@@ -8,6 +8,7 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 struct PendingShellResponseState {
     shell_snapshots: HashMap<u64, String>,
     shell_html: HashMap<u64, String>,
+    shell_test_window_open: HashMap<u64, bool>,
 }
 
 fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
@@ -17,6 +18,7 @@ fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
             Mutex::new(PendingShellResponseState {
                 shell_snapshots: HashMap::new(),
                 shell_html: HashMap::new(),
+                shell_test_window_open: HashMap::new(),
             }),
             Condvar::new(),
         )
@@ -39,6 +41,49 @@ pub(crate) fn publish_shell_html(request_id: u64, html: String) {
     let mut state = lock.lock().expect("e2e shell response state");
     state.shell_html.insert(request_id, html);
     condvar.notify_all();
+}
+
+pub(crate) fn publish_shell_test_window_open(request_id: u64, ok: bool) {
+    let (lock, condvar) = response_state();
+    let mut state = lock.lock().expect("e2e shell response state");
+    state.shell_test_window_open.insert(request_id, ok);
+    condvar.notify_all();
+}
+
+pub(crate) fn wait_for_shell_test_window_open(
+    request_id: u64,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let (lock, condvar) = response_state();
+    let mut state = lock
+        .lock()
+        .map_err(|_| "e2e test window open state poisoned".to_string())?;
+    loop {
+        if let Some(ok) = state.shell_test_window_open.remove(&request_id) {
+            return if ok {
+                Ok(())
+            } else {
+                Err("shell refused openShellTestWindow (queue full or no monitor context)".to_string())
+            };
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!(
+                "timed out waiting for shell test window open ack {request_id}"
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let (next_state, wait_result) = condvar
+            .wait_timeout(state, remaining)
+            .map_err(|_| "e2e test window open wait poisoned".to_string())?;
+        state = next_state;
+        if wait_result.timed_out() && !state.shell_test_window_open.contains_key(&request_id) {
+            return Err(format!(
+                "timed out waiting for shell test window open ack {request_id}"
+            ));
+        }
+    }
 }
 
 pub(crate) fn wait_for_shell_snapshot(

@@ -182,6 +182,9 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function openRootContextMenu(trigger: object) {
+    if (ctxMenuOpen() && activeMenuTrigger() !== trigger) {
+      hideContextMenu()
+    }
     args.floatingLayers.openLayer({
       id: ROOT_CONTEXT_MENU_LAYER_ID,
       kind: 'context_menu',
@@ -358,7 +361,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       hideContextMenu()
       return
     }
-    if (triggerIsOpen(powerMenuTrigger)) hideContextMenu()
     openProgramsMenu(outputName)
   }
 
@@ -367,9 +369,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (triggerIsOpen(programsMenuTrigger)) {
       hideContextMenu()
       return
-    }
-    if (ctxMenuOpen() && activeMenuTrigger() !== programsMenuTrigger) {
-      hideContextMenu()
     }
     const monitorName =
       e.currentTarget.closest('[data-shell-taskbar-monitor]')?.getAttribute('data-shell-taskbar-monitor') ??
@@ -383,9 +382,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       hideContextMenu()
       return
     }
-    if (ctxMenuOpen() && activeMenuTrigger() !== powerMenuTrigger) {
-      hideContextMenu()
-    }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()
     setCtxMenuAnchor({ x: rect.right, y: rect.bottom, alignAboveY: rect.top })
@@ -398,9 +394,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (triggerIsOpen(volumeMenuTrigger)) {
       hideContextMenu()
       return
-    }
-    if (ctxMenuOpen() && activeMenuTrigger() !== volumeMenuTrigger) {
-      hideContextMenu()
     }
     args.closeAllAtlasSelects()
     const rect = e.currentTarget.getBoundingClientRect()

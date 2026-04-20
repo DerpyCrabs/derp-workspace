@@ -201,15 +201,15 @@ async function focusNativeWindow(base: string, windowId: number): Promise<{ comp
   assert(window, `missing compositor window ${windowId}`)
   try {
     await activateTaskbarWindow(base, shell, windowId)
-    return await waitForNativeFocus(base, windowId, 600)
+    return await waitForNativeFocus(base, windowId, 2000)
   } catch {
     await clickPoint(base, window.x + window.width / 2, window.y + window.height / 2)
     try {
-      return await waitForNativeFocus(base, windowId, 600)
+      return await waitForNativeFocus(base, windowId, 2000)
     } catch {
       const nextShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       await activateTaskbarWindow(base, nextShell, windowId)
-      return waitForNativeFocus(base, windowId, 1000)
+      return waitForNativeFocus(base, windowId, 2000)
     }
   }
 }
@@ -222,14 +222,9 @@ async function focusSettingsWindow(base: string) {
       return { compositor, shell }
     } catch {}
   }
-  try {
-    await activateTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
-    return await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 600)
-  } catch {
-    const nextShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    await activateTaskbarWindow(base, nextShell, SHELL_UI_SETTINGS_WINDOW_ID)
-    return waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID, 600)
-  }
+  const nextShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  await activateTaskbarWindow(base, nextShell, SHELL_UI_SETTINGS_WINDOW_ID)
+  return waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
@@ -267,7 +262,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           }
           return { compositor, shell, window }
         },
-        8000,
+        2000,
         125,
       )
       await writeJsonArtifact('snap-assist-drag-native.json', snapped)
@@ -306,7 +301,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             }
             return { compositor, shell, window }
           },
-          8000,
+          2000,
           125,
         ),
       )
@@ -363,7 +358,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window }
       },
-      8000,
+      2000,
       125,
     )
     await writeJsonArtifact('snap-assist-picker-settings.json', snapped)
@@ -394,7 +389,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window }
       },
-      8000,
+      2000,
       125,
     )
     await writeJsonArtifact('snap-assist-picker-settings-top-two-thirds.json', snapped)
@@ -424,7 +419,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     const nativeMove = nativeInitial.nativeMove
     await focusNativeWindow(base, redId)
-    await runKeybind(base, nativeMove.action)
+    await runKeybind(base, nativeMove.action, redId)
     const nativeMoved = await waitFor(
       'wait for native monitor move before picker',
       async () => {
@@ -438,7 +433,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window }
       },
-      12000,
+      2000,
       125,
     )
     const nativeControls = windowControls(nativeMoved.shell, redId)
@@ -470,7 +465,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
           }
           return { compositor, shell, window }
         },
-        8000,
+        2000,
         125,
       )
     } finally {
@@ -485,7 +480,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(settingsOutputName, 'missing settings output assignment')
     const shellMove = pickMonitorMove(settingsFocused.compositor.outputs, settingsOutputName)
     assert(shellMove, `no adjacent monitor from ${settingsOutputName}`)
-    await runKeybind(base, shellMove.action)
+    await runKeybind(base, shellMove.action, SHELL_UI_SETTINGS_WINDOW_ID)
     const settingsMoved = await waitFor(
       'wait for settings monitor move before picker',
       async () => {
@@ -499,7 +494,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window }
       },
-      12000,
+      2000,
       125,
     )
     const settingsPicker = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -531,7 +526,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window }
       },
-      8000,
+      2000,
       125,
     )
 

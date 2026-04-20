@@ -1,21 +1,22 @@
 import {
   activateTaskbarWindow,
   assert,
-  clickRect,
+  clickPoint,
+  compositorWindowById,
   defineGroup,
   dragBetweenPoints,
   getJson,
   getPerfCounters,
+  movePoint,
   printNote,
   rectCenter,
   resetPerfCounters,
   spawnNativeWindow,
   waitFor,
-  waitForWindowRaised,
-  waitForNativeFocus,
   waitForTaskbarEntry,
   windowControls,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -52,22 +53,26 @@ function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapsho
   }
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function focusNativeWindow(base: string, windowId: number): Promise<void> {
+async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const controls = windowControls(shell, windowId)
-  if (controls?.titlebar) {
-    await clickRect(base, controls.titlebar)
-    try {
-      await waitForNativeFocus(base, windowId, 1500)
-      return
-    } catch {}
-  }
   await activateTaskbarWindow(base, shell, windowId)
-  await waitForWindowRaised(base, windowId, 4000)
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const w = compositorWindowById(compositor, windowId)
+  if (w) {
+    const cx = w.x + Math.floor(w.width / 2)
+    const cy = w.y + Math.floor(w.height / 2)
+    await movePoint(base, cx, cy)
+    await clickPoint(base, cx, cy)
+  }
+  return waitFor(
+    `wait for native titlebar rects ${windowId}`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return windowControls(next, windowId)?.titlebar ? next : null
+    },
+    2000,
+    50,
+  )
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
@@ -75,23 +80,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const stamp = Date.now()
     const maxIdleBeginFrames = 96
 
-    await sleep(750)
-    let idleSample: PerfCounterSnapshot | null = null
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await resetPerfCounters(base)
-      await sleep(1000)
-      const sample = await getPerfCounters(base)
-      if (
-        sample.begin_frame.cef_send_external_begin_frame <= maxIdleBeginFrames &&
-        sample.begin_frame.compositor_schedules_idle <= maxIdleBeginFrames &&
-        sample.shell_sync.full_window_list_replies <= 1
-      ) {
-        idleSample = sample
-        break
-      }
-      await sleep(250)
-    }
-    if (!idleSample) idleSample = await getPerfCounters(base)
+    await resetPerfCounters(base)
+    const idleSample = await waitFor(
+      'wait for idle perf counter baseline',
+      async () => {
+        const sample = await getPerfCounters(base)
+        if (
+          sample.begin_frame.cef_send_external_begin_frame <= maxIdleBeginFrames &&
+          sample.begin_frame.compositor_schedules_idle <= maxIdleBeginFrames &&
+          sample.shell_sync.full_window_list_replies <= 1
+        ) {
+          return sample
+        }
+        await resetPerfCounters(base)
+        return null
+      },
+      5000,
+      150,
+    )
 
     assert(
       idleSample.begin_frame.cef_send_external_begin_frame <= maxIdleBeginFrames,
@@ -155,14 +161,23 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(openDelta.shell_sync.snapshot_notifies >= 1, 'window open churn should notify snapshot readers')
 
-    await focusNativeWindow(base, mover.window.window_id)
-    const focusedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    const controls = windowControls(focusedShell, mover.window.window_id)
-    assert(controls?.titlebar, 'missing mover titlebar before perf move')
+    const focusedShell = await focusNativeWindow(base, red.window.window_id)
+    const controls = windowControls(focusedShell, red.window.window_id)
+    assert(controls?.titlebar, 'missing red titlebar before perf move')
     const titlebarCenter = rectCenter(controls.titlebar)
     await dragBetweenPoints(base, titlebarCenter.x, titlebarCenter.y, titlebarCenter.x + 180, titlebarCenter.y + 48, 18)
-    await sleep(250)
-    const movedSample = await getPerfCounters(base)
+    const movedSample = await waitFor(
+      'wait for perf counters after window drag',
+      async () => {
+        const sample = await getPerfCounters(base)
+        const delta = diffPerfCounters(sample, openedSample)
+        if (delta.shell_updates.window_geometry_messages < 1) return null
+        if (delta.begin_frame.cef_send_external_begin_frame < 1) return null
+        return sample
+      },
+      5000,
+      100,
+    )
     const moveDelta = diffPerfCounters(movedSample, openedSample)
 
     assert(

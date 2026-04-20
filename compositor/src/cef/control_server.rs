@@ -353,10 +353,14 @@ fn request_shell_html(
 }
 
 fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
+    let request_id = e2e_bridge::next_request_id();
     execute_shell_bridge_js(
         browser,
-        "window.__DERP_E2E_OPEN_TEST_WINDOW&&window.__DERP_E2E_OPEN_TEST_WINDOW();".to_string(),
-    )
+        format!(
+            "window.__DERP_E2E_OPEN_TEST_WINDOW_REQ&&window.__DERP_E2E_OPEN_TEST_WINDOW_REQ({request_id});"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_test_window_open(request_id, Duration::from_secs(3))
 }
 
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
@@ -832,8 +836,13 @@ fn handle_one(
     };
 
     if req_path == "/test/shell_window/open" {
-        open_shell_test_window(browser)?;
-        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        match open_shell_test_window(browser) {
+            Ok(()) => write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?,
+            Err(err) => {
+                let body = serde_json::json!({ "ok": false, "error": err }).to_string();
+                write_http_json(stream, 500, &body).map_err(|e| e.to_string())?;
+            }
+        }
         return Ok(());
     }
 
@@ -1002,7 +1011,11 @@ fn handle_one(
             | "move_monitor_right" => {}
             _ => return Err("keybind: unsupported action".into()),
         }
-        uplink.test_super_keybind(action.to_string())?;
+        let target_window_id = v
+            .get("window_id")
+            .and_then(|x| x.as_u64())
+            .and_then(|raw| u32::try_from(raw).ok());
+        uplink.test_super_keybind(action.to_string(), target_window_id)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

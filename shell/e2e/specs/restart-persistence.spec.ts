@@ -7,6 +7,7 @@ import {
   activateTaskbarWindow,
   assert,
   assertWindowTiled,
+  clickPoint,
   clickRect,
   cleanupNativeWindows,
   cleanupShellWindows,
@@ -15,6 +16,7 @@ import {
   dragRectToRect,
   getJson,
   getSnapshots,
+  movePoint,
   openProgramsMenu,
   openShellTestWindow,
   outputForWindow,
@@ -27,7 +29,7 @@ import {
   tapKey,
   taskbarForMonitor,
   waitFor,
-  waitForNativeFocus,
+  waitForSessionRestoreIdle,
   waitForTaskbarEntry,
   writeJsonArtifact,
   type FileBrowserFixturePaths,
@@ -101,7 +103,7 @@ async function openFileBrowserFromLauncher(
       if (shell.programs_menu_open) return null
       return { shell, window }
     },
-    10000,
+    5000,
     100,
   )
   spawnedShellWindowIds.add(opened.window.window_id)
@@ -119,19 +121,7 @@ async function waitForActivePath(base: string, expectedPath: string, windowId?: 
           : shell.file_browser_windows?.find((entry) => entry.window_id === windowId) ?? null
       return fileBrowser?.active_path === expectedPath ? shell : null
     },
-    8000,
-    100,
-  )
-}
-
-async function waitForSessionRestoreIdle(base: string) {
-  await waitFor(
-    'wait for session restore idle',
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.session_restore_active ? null : shell
-    },
-    20000,
+    2000,
     100,
   )
 }
@@ -148,7 +138,7 @@ async function openDirectoryRowWithClicks(base: string, expectedPath: string, ro
       if (next.file_browser?.active_path === expectedPath) return next
       return fileBrowserRow(next, rowName)?.selected ? next : null
     },
-    4000,
+    2000,
     100,
   )
   const openedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -181,7 +171,7 @@ async function navigateToFixtureRoot(
         if (!firstSegment) return shell
         return fileBrowserRow(shell, firstSegment) ? shell : null
       },
-      8000,
+      2000,
       100,
     )
   }
@@ -207,7 +197,7 @@ async function waitForGroupedMembers(base: string, memberWindowIds: number[]) {
       const expected = [...memberWindowIds].sort((a, b) => a - b)
       return members.join(',') === expected.join(',') ? { shell, group } : null
     },
-    8000,
+    2000,
     125,
   )
 }
@@ -222,7 +212,7 @@ async function waitForNativeWindowByTitle(base: string, title: string) {
       )
       return window ? { compositor, shell, window } : null
     },
-    15000,
+    5000,
     125,
   )
 }
@@ -246,6 +236,18 @@ async function cleanupConflictingShellWindows(base: string, spawnedShellWindowId
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
+  test('session restart restores file browser directory path from compositor', async ({ base, state }) => {
+    await waitForSessionRestoreIdle(base)
+    await cleanupConflictingShellWindows(base, state.spawnedShellWindowIds)
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const fileBrowser = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRowWithClicks(base, mediaPath, 'media', fileBrowser.window.window_id)
+    await waitForActivePath(base, mediaPath, fileBrowser.window.window_id)
+    const restartedBase = await restartSession(state)
+    await waitForActivePath(restartedBase, mediaPath, fileBrowser.window.window_id)
+  })
+
   test('restart restores shell state native window placement and tab groups', async ({ base, state }) => {
     await waitForSessionRestoreIdle(base)
     await cleanupConflictingShellWindows(base, state.spawnedShellWindowIds)
@@ -273,14 +275,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     state.spawnedNativeWindowIds.add(spawnedNative.window.window_id)
     state.nativeLaunchByWindowId.set(spawnedNative.window.window_id, spawnedNative.command)
-    try {
-      await waitForNativeFocus(base, spawnedNative.window.window_id, 1500)
-    } catch {
-      const shellWithNativeTaskbar = await waitForTaskbarEntry(base, spawnedNative.window.window_id)
-      await activateTaskbarWindow(base, shellWithNativeTaskbar, spawnedNative.window.window_id)
-      await waitForNativeFocus(base, spawnedNative.window.window_id, 5000)
-    }
-    await runKeybind(base, 'tile_left')
+    const shellWithNativeTaskbar = await waitForTaskbarEntry(base, spawnedNative.window.window_id)
+    await activateTaskbarWindow(base, shellWithNativeTaskbar, spawnedNative.window.window_id)
+    const { compositor: compositorAfterActivate } = await getSnapshots(base)
+    const nativeWindow = compositorWindowById(compositorAfterActivate, spawnedNative.window.window_id)
+    assert(nativeWindow, 'missing spawned native compositor window')
+    const ncx = nativeWindow.x + Math.floor(nativeWindow.width / 2)
+    const ncy = nativeWindow.y + Math.floor(nativeWindow.height / 2)
+    await movePoint(base, ncx, ncy)
+    await clickPoint(base, ncx, ncy)
+    await runKeybind(base, 'tile_left', spawnedNative.window.window_id)
     const tiledBeforeRestart = await waitFor(
       'wait for native window tiled left before restart',
       async () => {
@@ -297,7 +301,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         }
         return { compositor, shell, window, output }
       },
-      10000,
+      5000,
       125,
     )
 
