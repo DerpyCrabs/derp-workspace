@@ -10,11 +10,15 @@ import {
   clickRect,
   cleanupNativeWindows,
   closeTaskbarWindow,
+  compositorFloatingLayerContainsPoint,
+  compositorFloatingLayerCount,
+  compositorFloatingLayers,
   compositorWindowById,
   defineGroup,
   getJson,
   getShellHtml,
   getSnapshots,
+  keyAction,
   movePoint,
   openDebug,
   openPowerMenu,
@@ -26,7 +30,6 @@ import {
   pointInRect,
   rectCenter,
   assertRectMinSize,
-  postJson,
   runKeybind,
   taskbarEntry,
   waitForPowerMenuClosed,
@@ -91,10 +94,10 @@ async function waitForPointerIdle(base: string) {
 }
 
 async function pressSuperEnter(base: string) {
-  await postJson(base, '/test/input/key', { keycode: 125, action: 'press' })
-  await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'press' })
-  await postJson(base, '/test/input/key', { keycode: KEY.enter, action: 'release' })
-  await postJson(base, '/test/input/key', { keycode: 125, action: 'release' })
+  await keyAction(base, 125, 'press')
+  await keyAction(base, KEY.enter, 'press')
+  await keyAction(base, KEY.enter, 'release')
+  await keyAction(base, 125, 'release')
 }
 
 async function switchSettingsPage(
@@ -672,12 +675,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const snapshots = await getSnapshots(base)
         if (!snapshots.shell.volume_menu_open) return null
         if (!snapshots.shell.controls.volume_output_option_0) return null
-        return (snapshots.compositor.shell_floating_layers?.length ?? 0) >= 2 ? snapshots : null
+        return compositorFloatingLayerCount(snapshots.compositor) >= 2 ? snapshots : null
       },
       5000,
       100,
     )
-    const floatingLayers = [...(outputExpanded.compositor.shell_floating_layers ?? [])].sort((a, b) => a.z - b.z)
+    const floatingLayers = compositorFloatingLayers(outputExpanded.compositor)
     assert(floatingLayers.length >= 2, `expected nested floating layers for volume selector, got ${floatingLayers.length}`)
     assert(floatingLayers.at(-1)!.z > floatingLayers[0]!.z, 'nested selector should render above the parent volume menu')
     const topLayer = floatingLayers.at(-1)!
@@ -685,15 +688,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       outputExpanded.shell.controls.volume_output_option_0 ?? outputExpanded.shell.controls.volume_output_option_1
     assert(outputOptionRect, 'missing projected output option rect')
     assert(
-      pointInRect(
-        {
-          x: 0,
-          y: 0,
-          global_x: topLayer.global.x,
-          global_y: topLayer.global.y,
-          width: topLayer.global.width,
-          height: topLayer.global.height,
-        },
+      compositorFloatingLayerContainsPoint(
+        topLayer,
         {
           x: outputOptionRect.global_x + outputOptionRect.width / 2,
           y: outputOptionRect.global_y + outputOptionRect.height / 2,
@@ -724,27 +720,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const snapshots = await getSnapshots(base)
         if (!snapshots.shell.volume_menu_open) return null
         if (!snapshots.shell.controls.volume_input_option_0) return null
-        const layers = snapshots.compositor.shell_floating_layers ?? []
-        return layers.length >= 2 ? snapshots : null
+        return compositorFloatingLayerCount(snapshots.compositor) >= 2 ? snapshots : null
       },
       5000,
       100,
     )
-    const inputLayers = [...(inputExpanded.compositor.shell_floating_layers ?? [])].sort((a, b) => a.z - b.z)
+    const inputLayers = compositorFloatingLayers(inputExpanded.compositor)
     assert(inputLayers.length >= 2, 'input selector should keep parent menu plus one nested layer')
     const inputTopLayer = inputLayers.at(-1)!
     const inputOptionRect = inputExpanded.shell.controls.volume_input_option_0 ?? inputExpanded.shell.controls.volume_input_option_1
     assert(inputOptionRect, 'missing projected input option rect')
     assert(
-      pointInRect(
-        {
-          x: 0,
-          y: 0,
-          global_x: inputTopLayer.global.x,
-          global_y: inputTopLayer.global.y,
-          width: inputTopLayer.global.width,
-          height: inputTopLayer.global.height,
-        },
+      compositorFloatingLayerContainsPoint(
+        inputTopLayer,
         {
           x: inputOptionRect.global_x + inputOptionRect.width / 2,
           y: inputOptionRect.global_y + inputOptionRect.height / 2,
@@ -788,12 +776,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for all floating layers dismissed after outside click',
       async () => {
         const snapshots = await getSnapshots(base)
-        return (snapshots.compositor.shell_floating_layers?.length ?? 0) === 0 ? snapshots : null
+        return compositorFloatingLayerCount(snapshots.compositor) === 0 ? snapshots : null
       },
       5000,
       100,
     )
-    assert((dismissedLayers.compositor.shell_floating_layers?.length ?? 0) === 0, 'outside click should dismiss all nested floating layers')
+    assert(compositorFloatingLayerCount(dismissedLayers.compositor) === 0, 'outside click should dismiss all nested floating layers')
 
     await writeTextArtifact('tray-volume-menu.html', volumeHtml)
     await writeJsonArtifact('tray-volume-audio-state.json', audioAfterOutputSlide)

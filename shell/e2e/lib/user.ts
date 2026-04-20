@@ -3,6 +3,7 @@ export {
   clickRect,
   dragBetweenPoints,
   dragRectToRect,
+  keyAction,
   movePoint,
   pointerButton,
   pointerWheel,

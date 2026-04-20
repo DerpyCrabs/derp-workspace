@@ -5,8 +5,10 @@ import {
   assertRectMinSize,
   getJson,
   shellWindowById,
+  taskbarEntry,
   waitFor,
   waitForWindowGone,
+  waitForWindowMinimized,
   waitForWindowRaised,
   windowControls,
   writeJsonArtifact,
@@ -45,6 +47,36 @@ async function clickClose(base: string, windowId: number, label: string) {
     100,
   )
   await clickRect(base, close)
+}
+
+async function clickMinimize(base: string, windowId: number, label: string) {
+  const minimize = await waitFor(
+    `${label} minimize control`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = windowControls(shell, windowId)?.minimize
+      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, minimize)
+}
+
+async function restoreFromTaskbar(base: string, windowId: number, label: string) {
+  const activate = await waitFor(
+    `${label} taskbar activate control`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const row = taskbarEntry(shell, windowId)
+      const rect = row?.activate
+      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, activate)
+  return waitForWindowRaised(base, windowId)
 }
 
 async function dragTitlebarDown(base: string, windowId: number, label: string) {
@@ -108,6 +140,14 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
   const restored = await waitForFloating(base, opened.window_id, parity.label)
   assert(restored.window.width > 100 && restored.window.height > 100, `${parity.label} restore keeps usable size`)
 
+  await clickMinimize(base, opened.window_id, parity.label)
+  const minimized = await waitForWindowMinimized(base, opened.window_id)
+  const minimizedWindow = shellWindowById(minimized.shell, opened.window_id)
+  assert(minimizedWindow?.minimized, `${parity.label} should minimize through chrome click`)
+
+  const taskbarRestored = await restoreFromTaskbar(base, opened.window_id, parity.label)
+  assert(!taskbarRestored.window.minimized, `${parity.label} should restore through taskbar click`)
+
   await clickClose(base, opened.window_id, parity.label)
   await waitForWindowGone(base, opened.window_id, 5000)
   await writeJsonArtifact(`window-parity-${parity.label}.json`, {
@@ -115,6 +155,8 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
     appId: opened.app_id,
     maximized: maximized.window,
     restored: restored.window,
+    minimized: minimizedWindow,
+    taskbarRestored: taskbarRestored.window,
   })
 }
 

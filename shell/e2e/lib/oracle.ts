@@ -5,6 +5,10 @@ export {
   assertTopWindow,
   assertWindowTiled,
   captureFailureArtifacts,
+  compositorFloatingLayerContainsPoint,
+  compositorFloatingLayerCount,
+  compositorFloatingLayerRect,
+  compositorFloatingLayers,
   compositorWindowById,
   getJson,
   getShellHtml,
@@ -31,6 +35,7 @@ export {
   waitForWindowGone,
   waitForWindowMinimized,
   waitForWindowRaised,
+  topmostCompositorFloatingLayer,
   windowControls,
   writeJsonArtifact,
   writeTextArtifact,
@@ -38,6 +43,7 @@ export {
 
 export type {
   CompositorSnapshot,
+  CompositorFloatingLayerSnapshot,
   Rect,
   ShellSnapshot,
   TestContext,

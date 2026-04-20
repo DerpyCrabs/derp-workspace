@@ -2,9 +2,10 @@ import {
   KEY,
   assert,
   clickRect,
+  compositorFloatingLayerCount,
   defineGroup,
   getJson,
-  postJson,
+  keyAction,
   restartSession,
   runKeybind,
   waitFor,
@@ -26,7 +27,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const restartedBase = await restartSession(state)
 
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'press' })
+    await keyAction(restartedBase, 125, 'press')
     const afterSuperPress = await waitFor(
       'wait for launcher stay closed after restart super press',
       async () => {
@@ -36,7 +37,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'release' })
+    await keyAction(restartedBase, 125, 'release')
     const openedBySuperTap = await waitFor(
       'wait for programs menu open after restart super tap',
       async () => {
@@ -46,7 +47,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         ])
         return shell.programs_menu_open &&
           shell.controls?.programs_menu_search &&
-          (compositor.shell_floating_layers?.length ?? 0) > 0
+          compositorFloatingLayerCount(compositor) > 0
           ? { shell, compositor }
           : null
       },
@@ -55,10 +56,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(openedBySuperTap.shell.programs_menu_open, 'programs menu should open on first Super tap after restart')
     assert(
-      (openedBySuperTap.compositor.shell_floating_layers?.length ?? 0) > 0,
+      compositorFloatingLayerCount(openedBySuperTap.compositor) > 0,
       'programs menu floating layer should reach compositor on first Super tap after restart',
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'press' })
+    await keyAction(restartedBase, 125, 'press')
     const whileClosingSuperHeld = await waitFor(
       'wait for launcher stay open while second super press is held',
       async () => {
@@ -68,7 +69,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'release' })
+    await keyAction(restartedBase, 125, 'release')
     const closedBySecondSuperTap = await waitFor(
       'wait for programs menu close after second super tap',
       async () => {
@@ -78,7 +79,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'press' })
+    await keyAction(restartedBase, 125, 'press')
     const whileReopeningSuperHeld = await waitFor(
       'wait for launcher stay closed while third super press is held',
       async () => {
@@ -88,7 +89,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'release' })
+    await keyAction(restartedBase, 125, 'release')
     const reopenedByThirdSuperTap = await waitFor(
       'wait for programs menu reopen after third super tap',
       async () => {
@@ -123,7 +124,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const heldSuperEnterBaselineTerminalCount = compositorBeforeHeldSuperEnter.windows.filter(
       (window) => !window.shell_hosted && window.app_id === 'foot' && !window.minimized,
     ).length
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'press' })
+    await keyAction(restartedBase, 125, 'press')
     const afterSuperEnterSuperPress = await waitFor(
       'wait for launcher stay closed after restart super enter super press',
       async () => {
@@ -133,7 +134,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: KEY.enter, action: 'press' })
+    await keyAction(restartedBase, KEY.enter, 'press')
     const afterSuperEnterPress = await waitFor(
       'wait for launcher stay closed after restart super enter press',
       async () => {
@@ -143,7 +144,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: KEY.enter, action: 'release' })
+    await keyAction(restartedBase, KEY.enter, 'release')
     const afterFirstHeldSuperEnter = await waitFor(
       'wait for first held super enter terminal launch',
       async () => {
@@ -156,7 +157,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: KEY.enter, action: 'press' })
+    await keyAction(restartedBase, KEY.enter, 'press')
     const afterRepeatedSuperEnterPress = await waitFor(
       'wait for launcher stay closed after repeated held super enter press',
       async () => {
@@ -166,7 +167,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: KEY.enter, action: 'release' })
+    await keyAction(restartedBase, KEY.enter, 'release')
     const afterSecondHeldSuperEnter = await waitFor(
       'wait for second held super enter terminal launch',
       async () => {
@@ -179,7 +180,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await postJson(restartedBase, '/test/input/key', { keycode: 125, action: 'release' })
+    await keyAction(restartedBase, 125, 'release')
     const afterSuperEnter = await waitFor(
       'wait for launcher state after restart super enter',
       async () => {
@@ -193,7 +194,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('restart-input-ready.json', {
       super_press_open: afterSuperPress.programs_menu_open,
       super_tap_open: openedBySuperTap.shell.programs_menu_open,
-      super_tap_layers: openedBySuperTap.compositor.shell_floating_layers?.length ?? 0,
+      super_tap_layers: compositorFloatingLayerCount(openedBySuperTap.compositor),
       second_super_press_open: whileClosingSuperHeld.programs_menu_open,
       second_super_tap_open: closedBySecondSuperTap.programs_menu_open,
       third_super_press_open: whileReopeningSuperHeld.programs_menu_open,

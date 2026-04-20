@@ -7,6 +7,7 @@ import {
   assertRectMinSize,
   artifactDir,
   captureFailureArtifacts,
+  clickPoint,
   clickRect,
   cleanupShellWindows,
   closeWindow,
@@ -20,6 +21,8 @@ import {
   movePoint,
   openShellTestWindow,
   postJson,
+  pointerButton,
+  rightClickPoint,
   runKeybind,
   shellWindowById,
   spawnNativeWindow,
@@ -35,6 +38,7 @@ import {
   type ShellSnapshot,
   type WindowSnapshot,
 } from './lib/runtime.ts'
+import { keyAction } from './lib/user.ts'
 import { fileBrowserSnapshot, openFileBrowserFromLauncher } from './lib/fileBrowserFixtureNav.ts'
 
 type HarnessCommand =
@@ -598,13 +602,22 @@ async function executeCommand(harness: HarnessState, command: HarnessCommand): P
       await movePoint(base, command.x, command.y)
       return { ok: true }
     case 'click':
-      await postJson(base, '/test/input/click', { x: command.x, y: command.y, button: command.button ?? BTN_LEFT })
+      const button = command.button ?? BTN_LEFT
+      if (button === BTN_LEFT) {
+        await clickPoint(base, command.x, command.y)
+      } else if (button === BTN_RIGHT) {
+        await rightClickPoint(base, command.x, command.y)
+      } else {
+        await movePoint(base, command.x, command.y)
+        await pointerButton(base, button, 'press')
+        await pointerButton(base, button, 'release')
+      }
       return { ok: true }
     case 'drag':
       await dragBetweenPoints(base, command.x0, command.y0, command.x1, command.y1, command.steps)
       return { ok: true }
     case 'key':
-      await postJson(base, '/test/input/key', { keycode: command.keycode, action: command.action ?? 'tap' })
+      await keyAction(base, command.keycode, command.action ?? 'tap')
       return { ok: true }
     case 'keybind':
       assert(command.action, 'keybind action is required')

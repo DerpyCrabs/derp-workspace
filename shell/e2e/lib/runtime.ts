@@ -1101,6 +1101,36 @@ export function pointInRect(rect: Rect | null | undefined, point: { x: number; y
   )
 }
 
+export function compositorFloatingLayers(snapshot: CompositorSnapshot): CompositorFloatingLayerSnapshot[] {
+  return [...(snapshot.shell_floating_layers ?? [])].sort((a, b) => a.z - b.z)
+}
+
+export function compositorFloatingLayerCount(snapshot: CompositorSnapshot): number {
+  return snapshot.shell_floating_layers?.length ?? 0
+}
+
+export function topmostCompositorFloatingLayer(snapshot: CompositorSnapshot): CompositorFloatingLayerSnapshot | null {
+  return compositorFloatingLayers(snapshot).at(-1) ?? null
+}
+
+export function compositorFloatingLayerRect(layer: CompositorFloatingLayerSnapshot): Rect {
+  return {
+    x: 0,
+    y: 0,
+    global_x: layer.global.x,
+    global_y: layer.global.y,
+    width: layer.global.width,
+    height: layer.global.height,
+  }
+}
+
+export function compositorFloatingLayerContainsPoint(
+  layer: CompositorFloatingLayerSnapshot | null | undefined,
+  point: { x: number; y: number },
+): boolean {
+  return layer ? pointInRect(compositorFloatingLayerRect(layer), point) : false
+}
+
 export function approxEqual(actual: number, expected: number, tolerance: number, label: string): void {
   if (Math.abs(actual - expected) > tolerance) {
     throw new Error(`${label}: expected ${expected} +/- ${tolerance}, got ${actual}`)
@@ -1270,7 +1300,11 @@ export async function dragRectToRect(base: string, from: Rect, to: Rect, steps =
 }
 
 export async function tapKey(base: string, keycode: number): Promise<void> {
-  await postJson(base, '/test/input/key', { keycode, action: 'tap' })
+  await keyAction(base, keycode, 'tap')
+}
+
+export async function keyAction(base: string, keycode: number, action: 'tap' | 'press' | 'release'): Promise<void> {
+  await postJson(base, '/test/input/key', { keycode, action })
   await syncTest(base)
 }
 

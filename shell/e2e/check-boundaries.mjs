@@ -33,6 +33,8 @@ const blocked = new Set([
   'prepareFileBrowserFixtures',
   'resetFileBrowserFixtures',
 ])
+const rawInputEndpoint = /['"]\/test\/input\//
+const rawFloatingLayers = /shell_floating_layers/
 
 function files(dir) {
   const out = []
@@ -64,9 +66,16 @@ for (const file of files(specsDir)) {
   const source = readFileSync(file, 'utf8')
   const names = importedNames(source, '../lib/runtime.ts')
   const bad = [...names].filter((name) => blocked.has(name))
-  if (bad.length === 0) continue
   if (legacySpecs.has(rel)) continue
-  failures.push(`${rel}: import ${bad.join(', ')} from ../lib/runtime.ts via ../lib/user.ts, ../lib/setup.ts, or ../lib/oracle.ts`)
+  if (bad.length > 0) {
+    failures.push(`${rel}: import ${bad.join(', ')} from ../lib/runtime.ts via ../lib/user.ts, ../lib/setup.ts, or ../lib/oracle.ts`)
+  }
+  if (rawInputEndpoint.test(source)) {
+    failures.push(`${rel}: use ../lib/user.ts helpers instead of direct /test/input endpoints`)
+  }
+  if (rawFloatingLayers.test(source)) {
+    failures.push(`${rel}: use floating layer helpers from ../lib/oracle.ts instead of reading shell_floating_layers directly`)
+  }
 }
 
 if (failures.length > 0) {
