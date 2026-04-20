@@ -805,6 +805,7 @@ function App() {
       onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
       onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
       onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
+      onOpenTextFile: (detail) => backedShellWindowActions.openTextEditorWindow(detail),
       reportShellActionIssue,
       copyDebugHudSnapshot,
       shellBuildLabel,

@@ -46,6 +46,10 @@ export const SHELL_HOSTED_APP_REGISTRY: ShellHostedAppRegistryEntry[] = [
     kind: 'video_viewer',
     sessionCaptureCompositorFallback: true,
   },
+  {
+    kind: 'text_editor',
+    sessionCaptureCompositorFallback: true,
+  },
 ]
 
 const registryByKind = new Map<BackedShellWindowKind, ShellHostedAppRegistryEntry>(

@@ -49,6 +49,19 @@
       "text": "# Nested fixture\n\nThis file proves nested traversal works.\n"
     },
     {
+      "id": "markdown_with_image",
+      "path": "notes/markdown-with-image.md",
+      "kind": "text",
+      "text": "# Fixture image md\n\n![photo](../media/blue-image.png)\n"
+    },
+    {
+      "id": "read_only_markdown",
+      "path": "notes/read-only-doc.md",
+      "kind": "text",
+      "text": "# Read only doc\n\nbody\n",
+      "read_only": true
+    },
+    {
       "id": "image_file",
       "path": "media/blue-image.png",
       "kind": "asset",

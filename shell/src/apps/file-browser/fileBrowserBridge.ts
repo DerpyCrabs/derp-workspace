@@ -1,4 +1,4 @@
-import { ShellHttpError, getShellJson } from '@/features/bridge/shellBridge'
+import { ShellHttpError, getShellJson, postShellJson } from '@/features/bridge/shellBridge'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 
 export type FileBrowserRoot = {
@@ -171,4 +171,12 @@ export function fileBrowserStreamUrl(path: string, base: string | null): string 
   const origin = (base ?? shellHttpBase() ?? '').replace(/\/$/, '')
   if (!origin) return ''
   return `${origin}/file_browser/stream?p=${encodeURIComponent(path)}`
+}
+
+export async function writeFileBrowserFile(path: string, content: string, base: string | null): Promise<void> {
+  try {
+    await postShellJson('/file_browser/write', { path, content }, base)
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
 }

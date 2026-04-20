@@ -430,7 +430,7 @@ pub(crate) fn file_browser_stat_path_json(raw_path: &str) -> Result<String, File
     })
 }
 
-const FILE_BROWSER_READ_MAX_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const FILE_BROWSER_READ_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 fn content_type_for_file_path(path: &Path) -> &'static str {
     let ext = path
@@ -509,6 +509,54 @@ pub(crate) fn file_browser_read_file_bytes(raw_path: &str) -> Result<(Vec<u8>, &
     })?;
     let content_type = content_type_for_file_path(&canonical);
     Ok((bytes, content_type))
+}
+
+pub(crate) fn file_browser_write_file_utf8(raw_path: &str, content: &str) -> Result<(), FileBrowserHttpError> {
+    let canonical = canonicalize_existing_path(raw_path)?;
+    let entry = build_entry(&canonical)?;
+    if entry.kind != "file" {
+        return Err(http_error(
+            400,
+            "not_file",
+            format!("path is not a regular file: {}", canonical.display()),
+            Some(&canonical),
+        ));
+    }
+    if entry.writable != Some(true) {
+        return Err(http_error(
+            403,
+            "permission_denied",
+            "file is not writable",
+            Some(&canonical),
+        ));
+    }
+    let byte_len = content.len() as u64;
+    if byte_len > FILE_BROWSER_READ_MAX_BYTES {
+        return Err(http_error(
+            413,
+            "too_large",
+            format!("content exceeds {} bytes", FILE_BROWSER_READ_MAX_BYTES),
+            Some(&canonical),
+        ));
+    }
+    fs::write(&canonical, content.as_bytes()).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to write {}: {error}", canonical.display()),
+            Some(&canonical),
+        )
+    })?;
+    Ok(())
 }
 
 fn video_content_type_for_path(path: &Path) -> Option<&'static str> {

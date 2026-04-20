@@ -295,6 +295,14 @@ export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
   window_id: number
 }
 
+export interface TextEditorWindowSnapshot {
+  window_id: number
+  markdown_img_rect: Rect | null
+  edit_rect: Rect | null
+  save_rect: Rect | null
+  textarea_rect: Rect | null
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -333,6 +341,7 @@ export interface ShellSnapshot {
   focused_window_id?: number | null
   file_browser?: FileBrowserSnapshot | null
   file_browser_windows?: FileBrowserWindowSnapshot[]
+  text_editor_windows?: TextEditorWindowSnapshot[]
   file_browser_context_menu?: FileBrowserContextMenuActionSnapshot[]
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null
@@ -387,6 +396,8 @@ export interface FileBrowserFixturePaths {
   writable_text: string
   read_only_text: string
   nested_text: string
+  markdown_with_image: string
+  read_only_markdown: string
   image_file: string
   image_file_green: string
   pdf_file: string

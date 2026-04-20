@@ -386,6 +386,36 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       }
     })
     .filter((entry): entry is { window_id: number } & ReturnType<typeof buildFileBrowserSnapshot> => entry !== null)
+  const textEditorWindows = cache
+    .queryAllAttr('data-text-editor-root')
+    .map((el) => {
+      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
+      if (!frameEl) return null
+      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
+      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const img = el.querySelector('[data-text-editor-markdown] img')
+      const editBtn = el.querySelector('[data-text-editor-edit]')
+      const saveBtn = el.querySelector('[data-text-editor-save]')
+      const ta = el.querySelector('[data-text-editor-textarea]')
+      return {
+        window_id: rawWindowId,
+        markdown_img_rect: img instanceof HTMLElement ? snapshotRect(img, args.origin) : null,
+        edit_rect: editBtn instanceof HTMLElement ? snapshotRect(editBtn, args.origin) : null,
+        save_rect: saveBtn instanceof HTMLElement ? snapshotRect(saveBtn, args.origin) : null,
+        textarea_rect: ta instanceof HTMLElement ? snapshotRect(ta, args.origin) : null,
+      }
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        window_id: number
+        markdown_img_rect: ReturnType<typeof snapshotRect>
+        edit_rect: ReturnType<typeof snapshotRect>
+        save_rect: ReturnType<typeof snapshotRect>
+        textarea_rect: ReturnType<typeof snapshotRect>
+      } => entry !== null,
+    )
   const globalFileBrowserWindow =
     fileBrowserWindows.find((entry) => entry.window_id === args.focusedWindowId) ?? fileBrowserWindows[0] ?? null
 
@@ -471,6 +501,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     snap_hover_span: args.assistOverlayHoverSpan,
     file_browser: globalFileBrowserWindow,
     file_browser_windows: fileBrowserWindows,
+    text_editor_windows: textEditorWindows,
     file_browser_context_menu: fileBrowserContextMenu,
     programs_menu_query: args.programsMenuQuery,
     session_snapshot: args.sessionSnapshot,

@@ -870,6 +870,8 @@ fn handle_one(
 
     let max_content_length = if req_path == "/session_state" || req_path == "/session_reload" {
         512 * 1024
+    } else if req_path == "/file_browser/write" {
+        (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_add(512 * 1024)
     } else {
         8192
     };
@@ -906,6 +908,28 @@ fn handle_one(
             }
         }
     };
+
+    if req_path == "/file_browser/write" {
+        let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
+        let content = match v.get("content") {
+            None | Some(serde_json::Value::Null) => "",
+            Some(serde_json::Value::String(s)) => s.as_str(),
+            _ => {
+                write_http_json(
+                    stream,
+                    400,
+                    r#"{"error":{"code":"invalid_body","message":"content must be a string","path":null}}"#,
+                )
+                .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        };
+        match crate::cef::file_browser::file_browser_write_file_utf8(path, content) {
+            Ok(()) => write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?,
+            Err(error) => write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?,
+        }
+        return Ok(());
+    }
 
     if req_path == "/test/shell_window/open" {
         match open_shell_test_window(browser) {

@@ -3,6 +3,7 @@ import {
   buildFileBrowserWindowOpenPayload,
   buildImageViewerWindowOpenPayload,
   buildShellTestWindowOpenPayload,
+  buildTextEditorWindowOpenPayload,
   buildVideoViewerWindowOpenPayload,
   fileBrowserWindowId,
   fileBrowserWindowTitle,
@@ -11,14 +12,18 @@ import {
   isFileBrowserWindowId,
   isImageViewerWindowId,
   isShellTestWindowId,
+  isTextEditorWindowId,
   isVideoViewerWindowId,
   shellTestWindowId,
   shellTestWindowTitle,
+  textEditorWindowId,
+  textEditorWindowTitle,
   videoViewerWindowId,
   videoViewerWindowTitle,
   SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_IMAGE_VIEWER_APP_ID,
   SHELL_UI_TEST_APP_ID,
+  SHELL_UI_TEXT_EDITOR_APP_ID,
   SHELL_UI_VIDEO_VIEWER_APP_ID,
   type BackedShellWindowKind,
   type BackedWindowOpenPayload,
@@ -248,6 +253,40 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     return true
   }
 
+  const openTextEditorWindow = (detail: { path: string; directory: string; showHidden: boolean }) => {
+    const context = resolveMonitorContext()
+    if (!context) return false
+    pruneReservedBackedWindowIds()
+    const windowId = nextWindowId(
+      options.getWindows(),
+      pendingBackedWindowOpens.keys(),
+      reservedBackedWindowIds,
+      isTextEditorWindowId,
+      SHELL_UI_TEXT_EDITOR_APP_ID,
+      textEditorWindowId,
+    )
+    if (windowId === null) return false
+    reservedBackedWindowIds.add(windowId)
+    const baseTitle = detail.path.split('/').filter(Boolean).pop() ?? textEditorWindowTitle(0)
+    const title = baseTitle.length > 0 ? baseTitle : textEditorWindowTitle(windowId - textEditorWindowId(0))
+    primeShellWindowState(windowId, {
+      viewingPath: detail.path,
+      directory: detail.directory,
+      showHidden: detail.showHidden,
+    })
+    queueBackedWindowOpen(
+      buildTextEditorWindowOpenPayload(
+        context.monitor.name,
+        context.work,
+        windowId,
+        title,
+        context.origin,
+        context.staggerIndex,
+      ),
+    )
+    return true
+  }
+
   const openFileBrowserWindow = (path?: string | null) => {
     const context = resolveMonitorContext()
     if (!context) return false
@@ -298,7 +337,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     }
     if (kind === 'test') return openShellTestWindow()
     if (kind === 'file_browser') return openFileBrowserWindow()
-    if (kind === 'image_viewer' || kind === 'video_viewer') return false
+    if (kind === 'image_viewer' || kind === 'video_viewer' || kind === 'text_editor') return false
     return false
   }
 
@@ -309,6 +348,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     openFileBrowserWindow,
     openImageViewerWindow,
     openVideoViewerWindow,
+    openTextEditorWindow,
     openShellHostedApp,
     dispose,
   }
