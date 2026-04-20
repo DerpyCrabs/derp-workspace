@@ -176,6 +176,8 @@ const ALL_SNAP_ZONES: SnapZone[] = [
   'left-third',
   'center-third',
   'right-third',
+  'left-two-thirds',
+  'right-two-thirds',
   'top-left-two-thirds',
   'top-center-two-thirds',
   'top-right-two-thirds',

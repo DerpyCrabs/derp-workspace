@@ -93,6 +93,34 @@ function assertTopTwoThirdsThirdWindow(
   )
 }
 
+function assertFullHeightTwoThirdsWindow(
+  window: WindowSnapshot,
+  outputName: string,
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+  side: 'left' | 'right',
+) {
+  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
+  const taskbar = taskbarForMonitor(shell, outputName)
+  assert(output, `missing output ${outputName}`)
+  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
+  const workTop = output.y + TITLEBAR_PX
+  const workHeight = taskbar.rect.global_y - workTop
+  const thirdWidth = Math.floor(output.width / 3)
+  const twoThirdWidth = Math.round((output.width * 2) / 3)
+  const expectedX = side === 'left' ? output.x : output.x + thirdWidth
+  assert(Math.abs(window.x - expectedX) <= 28, `expected ${side} two-thirds x near ${expectedX}, got ${window.x}`)
+  assert(
+    Math.abs(window.width - twoThirdWidth) <= 40,
+    `expected ${side} two-thirds width near ${twoThirdWidth}, got ${window.width}`,
+  )
+  assert(window.y >= output.y && window.y <= output.y + 80, `expected full-height y near ${output.y}, got ${window.y}`)
+  assert(
+    Math.abs(window.height - workHeight) <= 40,
+    `expected full-height two-thirds height near ${workHeight}, got ${window.height}`,
+  )
+}
+
 async function waitForPickerOpen(base: string, windowId: number): Promise<ShellSnapshot> {
   return waitFor(
     `wait for picker open ${windowId}`,
@@ -178,6 +206,22 @@ function assertRectCenteredOnOutput(
   )
 }
 
+function assertNoVerticalGapBetweenRects(
+  label: string,
+  anchor: { global_y: number; height: number },
+  picker: { global_y: number; height: number },
+) {
+  const anchorBottom = anchor.global_y + anchor.height
+  const pickerBottom = picker.global_y + picker.height
+  const gap =
+    picker.global_y >= anchorBottom
+      ? picker.global_y - anchorBottom
+      : anchor.global_y >= pickerBottom
+        ? anchor.global_y - pickerBottom
+        : 0
+  assert(gap <= 1, `${label} expected no vertical gap between trigger and picker, got ${gap}`)
+}
+
 async function openPickerFromMaximizeButton(base: string, windowId: number): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const controls = windowControls(shell, windowId)
@@ -244,7 +288,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       assert(pickerOpen.snap_picker_source === 'strip', 'expected strip drag to open the picker')
       assert(output, 'missing focused output')
-      assertRectCenteredOnOutput(assertRectMinSize('picker root', pickerOpen.controls?.snap_picker_root, 48), output)
+      const pickerRoot = assertRectMinSize('picker root', pickerOpen.controls?.snap_picker_root, 48)
+      assertRectCenteredOnOutput(pickerRoot, output)
+      assertNoVerticalGapBetweenRects(
+        'strip picker',
+        assertRectMinSize('snap strip trigger', pickerOpen.controls?.snap_strip_trigger, 12),
+        pickerRoot,
+      )
       const topCenter = assertRectMinSize('picker top-center cell', pickerOpen.controls?.snap_picker_top_center_cell, 12)
       const hover = await hoverPickerCellWhileDragging(base, 'hover picker top-center cell', topCenter)
       assert(hover.snap_hover_span?.gc0 === 1, 'expected strip drag hover to reach center column')
@@ -340,6 +390,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await focusSettingsWindow(base)
     const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')
+    const controls = windowControls(pickerOpen, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertNoVerticalGapBetweenRects(
+      'maximize button picker',
+      assertRectMinSize('settings maximize button', controls?.maximize, 12),
+      assertRectMinSize('settings picker root', pickerOpen.controls?.snap_picker_root, 48),
+    )
     const firstCell = assertRectMinSize('settings picker first cell', pickerOpen.controls?.snap_picker_first_cell, 12)
     const firstCellCenter = rectGlobalCenter(firstCell)
     await clickPoint(base, firstCellCenter.x, firstCellCenter.y)
@@ -393,6 +449,37 @@ export default defineGroup(import.meta.url, ({ test }) => {
       125,
     )
     await writeJsonArtifact('snap-assist-picker-settings-top-two-thirds.json', snapped)
+  })
+
+  test('maximize button picker snaps a 3x2 two-column span to two-thirds width', async ({ base }) => {
+    await openSettings(base, 'click')
+    await focusSettingsWindow(base)
+    const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')
+    const rightTwoThirds = assertRectMinSize(
+      '3x2 right two-thirds cell',
+      pickerOpen.controls?.snap_picker_right_two_thirds,
+      12,
+    )
+    const rightTwoThirdsCenter = rectGlobalCenter(rightTwoThirds)
+    await clickPoint(base, rightTwoThirdsCenter.x, rightTwoThirdsCenter.y)
+    const snapped = await waitFor(
+      'wait for settings right two-thirds snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (!window) return null
+        try {
+          assertFullHeightTwoThirdsWindow(window, window.output_name, compositor, shell, 'right')
+        } catch {
+          return null
+        }
+        return { compositor, shell, window }
+      },
+      2000,
+      125,
+    )
+    await writeJsonArtifact('snap-assist-picker-settings-right-two-thirds.json', snapped)
   })
 
   test('picker stays monitor-local for native and shell windows on multi-monitor setups', async ({ base, state }) => {

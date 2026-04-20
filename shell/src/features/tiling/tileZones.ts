@@ -9,6 +9,8 @@ export type SnapZone =
   | 'left-third'
   | 'center-third'
   | 'right-third'
+  | 'left-two-thirds'
+  | 'right-two-thirds'
   | 'top-left-two-thirds'
   | 'top-center-two-thirds'
   | 'top-right-two-thirds'
@@ -29,6 +31,7 @@ export const LEFT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-left',
   'bottom-left',
   'left-third',
+  'left-two-thirds',
   'top-left-two-thirds',
   'top-left-third',
   'bottom-left-two-thirds',
@@ -40,6 +43,7 @@ export const RIGHT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-right',
   'bottom-right',
   'right-third',
+  'right-two-thirds',
   'top-right-two-thirds',
   'top-right-third',
   'bottom-right-two-thirds',
@@ -103,6 +107,10 @@ function defaultSnapZoneBoundsLocal(zone: SnapZone, ww: number, wh: number): Rec
       return { x: ox + thirdW, y: oy, width: twoThirdW - thirdW, height: wh }
     case 'right-third':
       return { x: ox + twoThirdW, y: oy, width: ww - twoThirdW, height: wh }
+    case 'left-two-thirds':
+      return { x: ox, y: oy, width: twoThirdW, height: wh }
+    case 'right-two-thirds':
+      return { x: ox + thirdW, y: oy, width: ww - thirdW, height: wh }
     case 'top-left-two-thirds':
       return { x: ox, y: oy, width: thirdW, height: twoThirdH }
     case 'top-center-two-thirds':

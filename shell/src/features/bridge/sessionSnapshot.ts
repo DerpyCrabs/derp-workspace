@@ -259,6 +259,8 @@ function sanitizeZone(value: unknown): SnapZone {
     case 'left-third':
     case 'center-third':
     case 'right-third':
+    case 'left-two-thirds':
+    case 'right-two-thirds':
     case 'top-left-two-thirds':
     case 'top-center-two-thirds':
     case 'top-right-two-thirds':

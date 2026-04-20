@@ -99,8 +99,8 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     } else {
       left = containerRect.left + Math.max(0, (containerRect.width - width) / 2)
     }
-    let top = props.anchorRect.bottom + 6
-    if (top > maxTop) top = props.anchorRect.top - height - 6
+    let top = props.anchorRect.bottom
+    if (top > maxTop) top = props.anchorRect.top - height
     if (maxTop >= minTop) {
       if (top > maxTop) top = maxTop
       if (top < minTop) top = minTop
