@@ -801,11 +801,7 @@ export async function normalizePersistentShellState(base: string): Promise<Shell
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const shellWindow = shellWindowById(shell, windowId)
     if (!shellWindow || shellWindow.minimized) continue
-    if (taskbarEntry(shell, windowId)?.close) {
-      await closeTaskbarWindow(base, shell, windowId)
-    } else {
-      await closeWindow(base, windowId)
-    }
+    await closeTaskbarWindow(base, shell, windowId)
     await waitForWindowGone(base, windowId, 2000)
   }
   return getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -2053,10 +2049,8 @@ export async function cleanupShellWindows(base: string, windowIds: number[]): Pr
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const shellWindow = shellWindowById(shell, windowId)
       if (!shellWindow) continue
-      if (taskbarEntry(shell, windowId)?.close) {
-        await closeTaskbarWindow(base, shell, windowId)
-        await waitForWindowGone(base, windowId, 4000)
-      }
+      await closeTaskbarWindow(base, shell, windowId)
+      await waitForWindowGone(base, windowId, 4000)
     } catch {}
   }
 }

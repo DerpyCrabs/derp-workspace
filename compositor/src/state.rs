@@ -6842,7 +6842,17 @@ impl CompositorState {
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {
+        tracing::warn!(
+            target: "derp_shell_close",
+            window_id,
+            "shell_close_window begin"
+        );
         if self.shell_backed_close_if_any(window_id) {
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id,
+                "shell_close_window done shell_hosted"
+            );
             self.workspace_apply_close_side_effects(window_id);
             return;
         }
@@ -6855,7 +6865,16 @@ impl CompositorState {
             tracing::warn!(
                 target: "derp_toplevel",
                 window_id,
-                "shell_close_window abort: no window_registry.window_info"
+                "shell_close_window: no registry entry; prune shell + resync"
+            );
+            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowUnmapped {
+                window_id,
+            });
+            self.shell_reply_window_list();
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id,
+                "shell_close_window done prune_missing_registry"
             );
             return;
         };
@@ -6914,6 +6933,11 @@ impl CompositorState {
                 "shell_close_window send_close"
             );
             tl.send_close();
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id,
+                "shell_close_window done wayland_send_close"
+            );
             return;
         }
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
@@ -6942,6 +6966,12 @@ impl CompositorState {
             );
             self.shell_close_pending_native_windows.remove(&window_id);
             self.shell_close_refocus_targets.remove(&window_id);
+        } else {
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id,
+                "shell_close_window done x11"
+            );
         }
     }
 

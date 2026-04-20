@@ -1,4 +1,5 @@
 import type { Accessor } from 'solid-js'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { WorkspaceState } from './workspaceState'
@@ -123,7 +124,13 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   }
 
   const closeGroupWindow = (windowId: number) => {
-    options.shellWireSend('close', windowId)
+    if (typeof window !== 'undefined' && typeof window.__derpShellWireSend !== 'function') {
+      console.warn('[derp-shell] closeGroupWindow missing __derpShellWireSend', windowId)
+    }
+    const ok = options.shellWireSend('close', windowId)
+    if (!ok) {
+      console.warn('[derp-shell] closeGroupWindow shellWireSend false', windowId)
+    }
   }
 
   const cycleFocusedWorkspaceGroup = (delta: 1 | -1) => {
@@ -152,7 +159,11 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
         options.activateWindowViaShell(visibleWindow.window_id)
         return
       }
-      options.shellWireSend('minimize', visibleWindow.window_id)
+      if ((visibleWindow.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) {
+        options.activateTaskbarWindowViaShell(visibleWindow.window_id)
+      } else {
+        options.shellWireSend('minimize', visibleWindow.window_id)
+      }
       return
     }
     options.activateTaskbarWindowViaShell(visibleWindow.window_id)

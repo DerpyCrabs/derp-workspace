@@ -76,6 +76,11 @@ fn handle_uplink_list(
     match op.as_str() {
         "close" => {
             let wid = args.int(1) as u32;
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id = wid,
+                "cef_browser_uplink close op"
+            );
             uplink.shell_close(wid);
         }
         "quit" => uplink.quit_compositor(),

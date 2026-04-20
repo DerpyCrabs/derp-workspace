@@ -233,8 +233,18 @@ impl CompositorState {
 
     pub(crate) fn shell_backed_close_if_any(&mut self, window_id: u32) -> bool {
         if !self.window_registry.is_shell_hosted(window_id) {
+            tracing::warn!(
+                target: "derp_shell_close",
+                window_id,
+                "shell_backed_close_if_any skip not_shell_hosted"
+            );
             return false;
         }
+        tracing::warn!(
+            target: "derp_shell_close",
+            window_id,
+            "shell_backed_close_if_any removing shell_hosted"
+        );
         self.cancel_shell_move_resize_for_window(window_id);
         let next_focus = if self.shell_focused_ui_window_id == Some(window_id) {
             self.pick_next_logical_focus_target(Some(window_id), true)

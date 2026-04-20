@@ -104,14 +104,14 @@ function TaskbarWindowRows(props: {
         return (
           <div
             role="listitem"
-            class="relative flex h-full items-center gap-1 border-r border-(--shell-border) bg-(--shell-control-muted-bg) px-1.5 text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+            class="group relative flex h-full min-w-0 items-stretch gap-1 border-r border-(--shell-border) bg-(--shell-control-muted-bg) text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                 active(),
               'text-(--shell-text-dim)': !!w()?.minimized && !active(),
               'min-w-[132px] flex-[0_1_220px] px-2': props.compactMode === 'normal',
               'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
-              'min-w-[52px] flex-[1_1_64px] justify-center px-1': props.compactMode === 'tight',
+              'min-w-[52px] flex-[1_1_64px] px-1': props.compactMode === 'tight',
             }}
             onPointerEnter={(e) => {
               const win = w()
@@ -125,48 +125,55 @@ function TaskbarWindowRows(props: {
             }}
             onPointerLeave={() => props.reportRowHoverTip(null)}
           >
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center overflow-hidden text-left text-xs touch-manipulation"
-              classList={{
-                'gap-1.5': props.compactMode !== 'tight',
-                'justify-center gap-0': props.compactMode === 'tight',
-              }}
-              data-shell-taskbar-group={w()!.group_id}
-              data-shell-taskbar-window-activate={w()!.window_id}
-              aria-current={active() ? 'true' : undefined}
-              onClick={() => props.onTaskbarActivate(w()!.window_id)}
-            >
-              <TaskbarWindowIcon
-                meta={{
-                  title: w()!.title,
-                  appId: w()!.app_id,
-                  desktopId: w()!.desktop_id ?? null,
-                  desktopIcon: w()!.desktop_icon ?? null,
-                }}
-                active={active()}
-                compact={props.compactMode !== 'normal'}
-              />
-              <Show when={props.compactMode !== 'tight'}>
-                <span class="min-w-0 truncate">{taskbarWindowLabel(w()!)}</span>
-              </Show>
-            </button>
-            <Show when={props.compactMode !== 'tight'}>
+            <div class="flex min-h-0 min-w-0 flex-1 items-stretch">
               <button
                 type="button"
-                class="flex h-full w-8 shrink-0 cursor-pointer items-center justify-center text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
-                data-shell-taskbar-window-close={w()!.window_id}
-                aria-label={`Close ${taskbarWindowLabel(w()!)}`}
-                title={`Close ${taskbarWindowLabel(w()!)}`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  props.onTaskbarClose(w()!.window_id)
+                class="flex min-h-0 min-w-0 flex-1 items-center overflow-hidden text-left text-xs touch-manipulation"
+                classList={{
+                  'gap-1.5 px-0.5': props.compactMode !== 'tight',
+                  'justify-center gap-0': props.compactMode === 'tight',
                 }}
+                data-shell-taskbar-group={w()!.group_id}
+                data-shell-taskbar-window-activate={w()!.window_id}
+                aria-current={active() ? 'true' : undefined}
+                onClick={() => props.onTaskbarActivate(w()!.window_id)}
               >
-                <X class="h-4 w-4" stroke-width={2} />
+                <TaskbarWindowIcon
+                  meta={{
+                    title: w()!.title,
+                    appId: w()!.app_id,
+                    desktopId: w()!.desktop_id ?? null,
+                    desktopIcon: w()!.desktop_icon ?? null,
+                  }}
+                  active={active()}
+                  compact={props.compactMode !== 'normal'}
+                />
+                <Show when={props.compactMode !== 'tight'}>
+                  <span class="min-w-0 truncate">{taskbarWindowLabel(w()!)}</span>
+                </Show>
               </button>
-            </Show>
+            </div>
+            <button
+              type="button"
+              class="sticky right-0 z-1 flex h-full shrink-0 cursor-pointer items-center justify-center bg-(--shell-control-muted-bg) text-(--shell-text-dim) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) group-hover:bg-(--shell-control-muted-hover)"
+              classList={{
+                'w-8': props.compactMode !== 'tight',
+                'w-6': props.compactMode === 'tight',
+                'bg-(--shell-control-muted-hover)': active(),
+              }}
+              data-shell-taskbar-window-close={w()!.window_id}
+              aria-label={`Close ${taskbarWindowLabel(w()!)}`}
+              title={`Close ${taskbarWindowLabel(w()!)}`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                e.stopPropagation()
+                props.onTaskbarClose(w()!.window_id)
+              }}
+            >
+              <X class="h-4 w-4" stroke-width={2} />
+            </button>
           </div>
         )
       }}
