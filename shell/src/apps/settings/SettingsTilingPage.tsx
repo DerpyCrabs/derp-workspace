@@ -18,6 +18,8 @@ export type SettingsTilingPageProps = {
 }
 
 export function SettingsTilingPage(props: SettingsTilingPageProps) {
+  const monitorNames = () => props.screenDraftRows.map((row) => row.name)
+
   return (
     <div class="space-y-4" data-settings-tiling-page>
       <h2 class="text-base font-semibold tracking-wide text-(--shell-text)">Tiling and layout</h2>
@@ -31,19 +33,19 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
           <p class="mb-3 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
             Per-monitor layout
           </p>
-          <For each={props.screenDraftRows}>
-            {(row) => (
+          <For each={monitorNames()}>
+            {(monitorName) => (
               <div class="mb-4 flex flex-col gap-3 border-b border-(--shell-border) pb-4 last:mb-0 last:border-0 last:pb-0">
                 <span class="min-w-24 text-[0.82rem] font-mono font-semibold text-(--shell-text-muted)">
-                  {row.name}
+                  {monitorName}
                 </span>
                 <div class="flex flex-wrap items-start gap-x-4 gap-y-3">
                   <LayoutTypePicker
-                    outputName={row.name}
+                    outputName={monitorName}
                     revision={props.tilingCfgRev}
                     onPersisted={() => {
                       props.setTilingCfgRev((n) => n + 1)
-                      const name = row.name
+                      const name = monitorName
                       queueMicrotask(() => {
                         if (getMonitorLayout(name).layout.type === 'manual-snap') {
                           props.clearMonitorTiles(name)
@@ -58,10 +60,10 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                 </div>
                 <Show when={(() => {
                   props.tilingCfgRev()
-                  return getMonitorLayout(row.name).layout.type === 'manual-snap'
+                  return getMonitorLayout(monitorName).layout.type === 'manual-snap'
                 })()}>
                   <EdgeLayoutPicker
-                    outputName={row.name}
+                    outputName={monitorName}
                     revision={props.tilingCfgRev}
                     onPersisted={() => {
                       props.setTilingCfgRev((n) => n + 1)

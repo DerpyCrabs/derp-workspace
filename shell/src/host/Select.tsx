@@ -2,6 +2,7 @@ import {
   For,
   Show,
   createEffect,
+  createMemo,
   createUniqueId,
   createSignal,
   onCleanup,
@@ -25,6 +26,8 @@ export type SelectProps<T> = {
   setOpen?: (v: boolean) => void
   placement?: 'floating' | 'inline'
   contextMenuPolicy?: 'dismiss' | 'preserve'
+  triggerAttrs?: Record<string, string | number | boolean | undefined>
+  optionAttrs?: (value: T, index: number) => Record<string, string | number | boolean | undefined>
 }
 
 const DEFAULT_TRIGGER_CLASS =
@@ -56,9 +59,11 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   let anchorWrap: HTMLDivElement | undefined
   let panelEl: HTMLDivElement | undefined
   let suppressTriggerClick = false
+  let handledTriggerPointerDown = false
   const layerId = `select:${createUniqueId()}`
 
   const [parentLayerId, setParentLayerId] = createSignal<string | null>(null)
+  const [floatingStyle, setFloatingStyle] = createSignal<Record<string, string>>({})
 
   const eq = () => props.equals ?? ((a: unknown, b: unknown) => a === b)
 
@@ -83,6 +88,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
 
   createEffect(() => {
     if (!isOpen() || !floatingPlacement()) {
+      setFloatingStyle({})
       shellFloat.clearLayerPlacement(layerId)
       shellFloat.closeBranch(layerId)
       return
@@ -102,6 +108,38 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
         onClose: () => setIsOpen(false),
       })
     }
+  })
+
+  createEffect(() => {
+    if (!isOpen() || !floatingPlacement() || !anchorWrap || !panelEl) return
+    void shellFloat.layers().length
+    const anchorRect = anchorWrap.getBoundingClientRect()
+    const panelRect = panelEl.getBoundingClientRect()
+    const mainRect = shellFloat.mainEl()?.getBoundingClientRect()
+    const hostRect = shellFloat.menuLayerHostEl()?.getBoundingClientRect()
+    const viewWidth = Math.max(1, hostRect?.width ?? window.innerWidth)
+    const viewHeight = Math.max(1, hostRect?.height ?? window.innerHeight)
+    const width = Math.max(1, Math.round(anchorRect.width))
+    const height = Math.max(1, Math.round(panelRect.height || panelEl.scrollHeight || 1))
+    const left = Math.max(8, Math.min(Math.round(anchorRect.left), Math.max(8, viewWidth - width - 8)))
+    const top = Math.max(8, Math.min(Math.round(anchorRect.bottom), Math.max(8, viewHeight - height - 8)))
+    setFloatingStyle({
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+    })
+    const ox = Math.round(mainRect?.left ?? 0)
+    const oy = Math.round(mainRect?.top ?? 0)
+    shellFloat.setLayerPlacement(layerId, {
+      bx: left,
+      by: top,
+      bw: width,
+      bh: height,
+      gx: left - ox,
+      gy: top - oy,
+      gw: width,
+      gh: height,
+    })
   })
 
   createEffect(() => {
@@ -143,6 +181,11 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   })
 
   const minW = () => Math.max(120, props.minMenuWidthPx ?? 120)
+  const listStyle = createMemo(() =>
+    floatingPlacement()
+      ? floatingStyle()
+      : { 'min-width': `${minW()}px` },
+  )
 
   const openOrToggle = () => {
     if (isOpen()) {
@@ -164,15 +207,24 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
       <button
         type="button"
         class={props.triggerClass ?? DEFAULT_TRIGGER_CLASS}
+        {...(props.triggerAttrs ?? {})}
         onMouseDown={(e) => {
+          if (handledTriggerPointerDown) {
+            handledTriggerPointerDown = false
+            e.preventDefault()
+            e.stopPropagation()
+            return
+          }
           e.preventDefault()
           e.stopPropagation()
           suppressTriggerClick = true
           openOrToggle()
         }}
         onPointerDown={(e) => {
+          if (!e.isPrimary || e.button !== 0) return
           e.preventDefault()
           e.stopPropagation()
+          handledTriggerPointerDown = true
           suppressTriggerClick = true
           openOrToggle()
         }}
@@ -197,7 +249,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
                 props.listClass ??
                 (floatingPlacement() ? DEFAULT_LIST_CLASS : DEFAULT_INLINE_LIST_CLASS)
               }
-              style={{ 'min-width': `${minW()}px` }}
+              style={listStyle()}
               role="listbox"
               data-select-list
               data-select-panel={props.panelDataId}
@@ -206,37 +258,58 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
             >
               <For each={props.options as unknown[]}>
                 {(opt, idx) => (
-                  <button
-                    type="button"
-                    class="bg-transparent hover:bg-(--shell-overlay-hover) block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
-                    classList={{
-                      'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-(--shell-text) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                        eq()(opt, props.value),
-                    }}
-                    role="option"
-                    aria-selected={eq()(opt, props.value)}
-                    data-select-option-idx={idx()}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      props.onChange(opt)
-                      setIsOpen(false)
-                    }}
-                    onPointerDown={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      props.onChange(opt)
-                      setIsOpen(false)
-                    }}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      props.onChange(opt)
-                      setIsOpen(false)
-                    }}
-                  >
-                    {props.itemLabel(opt)}
-                  </button>
+                  (() => {
+                    let handledOptionPointerDown = false
+                    let suppressOptionClick = false
+                    return (
+                      <button
+                        type="button"
+                        class="bg-transparent hover:bg-(--shell-overlay-hover) block w-full cursor-pointer border-0 px-[0.6rem] py-[0.35rem] text-left font-inherit text-[0.78rem]"
+                        classList={{
+                          'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-(--shell-text) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
+                            eq()(opt, props.value),
+                        }}
+                        role="option"
+                        aria-selected={eq()(opt, props.value)}
+                        data-select-option-idx={idx()}
+                        {...(props.optionAttrs?.(opt, idx()) ?? {})}
+                        onMouseDown={(e) => {
+                          if (handledOptionPointerDown) {
+                            handledOptionPointerDown = false
+                            e.preventDefault()
+                            e.stopPropagation()
+                            return
+                          }
+                          e.preventDefault()
+                          e.stopPropagation()
+                          suppressOptionClick = true
+                          props.onChange(opt)
+                          setIsOpen(false)
+                        }}
+                        onPointerDown={(e) => {
+                          if (!e.isPrimary || e.button !== 0) return
+                          e.preventDefault()
+                          e.stopPropagation()
+                          handledOptionPointerDown = true
+                          suppressOptionClick = true
+                          props.onChange(opt)
+                          setIsOpen(false)
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          if (suppressOptionClick) {
+                            suppressOptionClick = false
+                            return
+                          }
+                          props.onChange(opt)
+                          setIsOpen(false)
+                        }}
+                      >
+                        {props.itemLabel(opt)}
+                      </button>
+                    )
+                  })()
                 )}
               </For>
             </div>
