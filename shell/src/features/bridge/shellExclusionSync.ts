@@ -19,7 +19,6 @@ type ShellExclusionSyncOptions = {
 
 export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let exclusionZonesRaf = 0
-  let exclusionZonesRaf2 = 0
   let lastExclusionZonesJson: string | null = null
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
@@ -156,14 +155,10 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   }
 
   function scheduleExclusionZonesSync() {
-    if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
-    if (exclusionZonesRaf2) cancelAnimationFrame(exclusionZonesRaf2)
+    if (exclusionZonesRaf) return
     exclusionZonesRaf = requestAnimationFrame(() => {
       exclusionZonesRaf = 0
-      exclusionZonesRaf2 = requestAnimationFrame(() => {
-        exclusionZonesRaf2 = 0
-        syncExclusionZonesNow()
-      })
+      syncExclusionZonesNow()
     })
   }
 
@@ -202,7 +197,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
 
   onCleanup(() => {
     if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
-    if (exclusionZonesRaf2) cancelAnimationFrame(exclusionZonesRaf2)
   })
 
   return {

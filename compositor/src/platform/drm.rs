@@ -679,6 +679,7 @@ impl DrmSession {
             return;
         }
 
+        state.sync_shell_shared_state_for_input();
         state.space.refresh();
 
         crate::cef::begin_frame_diag::note_drm_render_tick();

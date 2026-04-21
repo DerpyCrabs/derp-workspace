@@ -126,6 +126,7 @@ impl CompositorState {
             return;
         }
 
+        self.sync_shell_shared_state_for_input();
         let grabbed = pointer.is_grabbed();
 
         let under = if grabbed

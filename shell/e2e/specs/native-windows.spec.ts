@@ -1,4 +1,5 @@
 import {
+  BTN_LEFT,
   assertTaskbarRowOnMonitor,
   compositorWindowStack,
   GREEN_NATIVE_TITLE,
@@ -27,13 +28,16 @@ import {
   openDebug,
   openSettings,
   outputForWindow,
+  pointerButton,
   pointInRect,
+  postJson,
   raiseTaskbarWindow,
   resetPerfCounters,
   runKeybind,
   shellWindowStack,
   spawnNativeWindow,
   shellWindowById,
+  syncTest,
   taskbarForMonitor,
   waitFor,
   waitForNativeFocus,
@@ -41,12 +45,17 @@ import {
   waitForWindowRaised,
   waitForWindowGone,
   waitForWindowMinimized,
+  assertRectMinSize,
   windowControls,
   writeJsonArtifact,
   type CompositorSnapshot,
+  type CompositorWorkspaceRect,
   type ShellSnapshot,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
+
+const NATIVE_TITLEBAR_PX = 26
+const NATIVE_BORDER_PX = 4
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   const centerX = window.x + Math.floor(window.width / 2)
@@ -70,6 +79,19 @@ function windowCenterOnOutput(
   const cx = window.x + Math.floor(window.width / 2)
   const cy = window.y + Math.floor(window.height / 2)
   return cx >= output.x && cx < output.x + output.width && cy >= output.y && cy < output.y + output.height
+}
+
+function nativeDecorTopRect(
+  compositor: CompositorSnapshot,
+  windowId: number,
+): CompositorWorkspaceRect | null {
+  const row = compositor.shell_exclusion_decor?.find((entry) => entry.window_id === windowId)
+  if (!row) return null
+  return (
+    row.rects
+      .filter((rect) => rect.height >= NATIVE_TITLEBAR_PX)
+      .sort((a, b) => a.y - b.y || b.width - a.width)[0] ?? null
+  )
 }
 
 function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
@@ -570,6 +592,78 @@ export default defineGroup(import.meta.url, ({ test }) => {
       redId,
       grab: { x: start.x, y: start.y },
       after: { x: w.x, y: w.y, w: w.width, h: w.height, output: w.output_name, centerX },
+    })
+  })
+
+  test('native decoration exclusion keeps up during active drag', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Native Drag Exclusion ${stamp}`,
+      token: `native-drag-exclusion-${stamp}`,
+      strip: 'green',
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const shellReady = await waitFor(
+      'wait for native drag exclusion titlebar',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const controls = windowControls(shell, windowId)
+        return controls?.titlebar ? controls.titlebar : null
+      },
+      5000,
+      100,
+    )
+    const titlebar = assertRectMinSize('native drag exclusion titlebar', shellReady, 80, 16)
+    const startX = Math.round(titlebar.global_x + Math.min(140, Math.max(40, titlebar.width * 0.35)))
+    const startY = Math.round(titlebar.global_y + titlebar.height / 2)
+
+    await movePoint(base, startX, startY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    const dx = 240
+    const dy = 96
+    const steps = 28
+    for (let index = 1; index <= steps; index += 1) {
+      const t = index / steps
+      await postJson(base, '/test/input/pointer_move', {
+        x: startX + dx * t,
+        y: startY + dy * t,
+      })
+    }
+
+    const duringDrag = await waitFor(
+      'wait for native exclusion decor during active drag',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const movedWindow = compositorWindowById(compositor, windowId)
+        const decorTop = nativeDecorTopRect(compositor, windowId)
+        if (!movedWindow || !decorTop) return null
+        const expectedTopX = movedWindow.x - NATIVE_BORDER_PX
+        const expectedTopY = movedWindow.y - NATIVE_TITLEBAR_PX
+        if (Math.abs(decorTop.x - expectedTopX) > 8) return null
+        if (Math.abs(decorTop.y - expectedTopY) > 8) return null
+        return { compositor, movedWindow, decorTop }
+      },
+      1000,
+      20,
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+    await syncTest(base)
+
+    await writeJsonArtifact('native-drag-exclusion-live.json', {
+      windowId,
+      titlebar: {
+        x: titlebar.global_x,
+        y: titlebar.global_y,
+        width: titlebar.width,
+        height: titlebar.height,
+      },
+      movedWindow: duringDrag.movedWindow,
+      decorTop: duringDrag.decorTop,
+      compositorDuringDrag: duringDrag.compositor,
     })
   })
 
