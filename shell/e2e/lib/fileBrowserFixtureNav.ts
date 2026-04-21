@@ -1,12 +1,14 @@
 import path from 'node:path'
 
 import {
+  KEY,
   assertRectMinSize,
   assert,
   clickRect,
   doubleClickRect,
   getJson,
   openProgramsMenu,
+  tapKey,
   waitFor,
   type FileBrowserFixturePaths,
   type FileBrowserSnapshot,
@@ -155,13 +157,38 @@ export async function openDirectoryRow(base: string, expectedPath: string, rowNa
     40,
   )
   if (fileBrowserSnapshot(afterFirst, windowId)?.active_path === expectedPath) return afterFirst
-  const rect2 = fileBrowserRow(afterFirst, rowName, windowId)?.rect ?? rect1
+  await tapKey(base, KEY.enter)
+  try {
+    return await waitForActivePath(base, expectedPath, windowId)
+  } catch {}
+  const afterEnter = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const rect2 = fileBrowserRow(afterEnter, rowName, windowId)?.rect ?? fileBrowserRow(afterFirst, rowName, windowId)?.rect ?? rect1
   await doubleClickRect(base, assertRectMinSize(`file browser row open ${rowName}`, rect2, 32, 24))
   return waitForActivePath(base, expectedPath, windowId)
 }
 
 export async function openDirectoryRowWithClicks(base: string, expectedPath: string, rowName: string, windowId: number) {
-  return openDirectoryRow(base, expectedPath, rowName, windowId)
+  const currentPath = path.posix.dirname(expectedPath)
+  await ensureHiddenRowVisible(base, currentPath, rowName, windowId)
+  const { row } = await waitForDirectoryRowRect(base, currentPath, rowName, windowId)
+  const rect1 = assertRectMinSize(`file browser row ${rowName}`, row.rect, 32, 24)
+  await clickRect(base, rect1)
+  const peek1 = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (fileBrowserSnapshot(peek1, windowId)?.active_path === expectedPath) return peek1
+  const afterFirst = await waitFor(
+    `wait for ${rowName} selection or navigate`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      if (fileBrowserSnapshot(shell, windowId)?.active_path === expectedPath) return shell
+      return fileBrowserRow(shell, rowName, windowId)?.selected ? shell : null
+    },
+    4000,
+    40,
+  )
+  if (fileBrowserSnapshot(afterFirst, windowId)?.active_path === expectedPath) return afterFirst
+  const rect2 = fileBrowserRow(afterFirst, rowName, windowId)?.rect ?? rect1
+  await doubleClickRect(base, assertRectMinSize(`file browser row open ${rowName}`, rect2, 32, 24))
+  return waitForActivePath(base, expectedPath, windowId)
 }
 
 export async function navigateToFixtureRoot(

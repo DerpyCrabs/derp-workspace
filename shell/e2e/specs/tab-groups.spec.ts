@@ -293,20 +293,19 @@ async function selectTabByClick(base: string, windowId: number) {
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         const group = tabGroupByWindow(shell, windowId)
-        const tab = group?.tabs.find((entry) => entry.window_id === windowId)
-        if (!group || !tab) return null
+        if (!group) return null
         const visible = group.visible_window_ids?.includes(windowId) || group.visible_window_id === windowId
-        return visible || tab.active ? { shell, group } : null
+        return visible ? { shell, group } : null
       },
       700,
       40,
     )
-  await clickOnce(true)
+  await clickOnce(false)
   try {
     await activated()
     return
   } catch {}
-  await clickOnce(false)
+  await clickOnce(true)
   await activated()
 }
 

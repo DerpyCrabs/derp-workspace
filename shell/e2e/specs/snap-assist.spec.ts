@@ -9,6 +9,7 @@ import {
   assertTopWindow,
   clickRect,
   clickPoint,
+  closeTaskbarWindow,
   compositorWindowById,
   createTimingMarks,
   defineGroup,
@@ -26,6 +27,7 @@ import {
   waitFor,
   waitForNativeFocus,
   waitForShellUiFocus,
+  waitForWindowGone,
   windowControls,
   writeJsonArtifact,
   type CompositorSnapshot,
@@ -333,6 +335,9 @@ async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
       ? shell.controls?.settings_snap_layout_option_2x2
       : shell.controls?.settings_snap_layout_option_3x2
   await clickRect(base, assertRectMinSize(`settings ${layout} snap layout option`, control, 12))
+  shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+  await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
