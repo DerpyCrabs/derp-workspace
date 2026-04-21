@@ -716,10 +716,12 @@ impl CompositorState {
                                 state.shell_ipc_forward_keyboard_to_cef(
                                     key_state, mods, &keysym, false,
                                 );
+                                state.shell_ipc_refresh_pointer_modifiers();
                                 return FilterResult::Intercept(());
                             }
                             state
                                 .shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
+                            state.shell_ipc_refresh_pointer_modifiers();
                             if CompositorState::shell_cef_sym_should_autorepeat(raw_sym) {
                                 let sr = keysym.modified_sym().raw();
                                 state.shell_cef_repeat_arm(&lh_kbd, keycode, sr);

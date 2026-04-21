@@ -42,6 +42,7 @@ const NAV: { id: SettingsPageId; label: string }[] = [
 export type SettingsPanelProps = {
   screenDraft: { rows: SettingsLayoutScreen[] }
   setScreenDraft: SetStoreFunction<{ rows: SettingsLayoutScreen[] }>
+  currentMonitorName: Accessor<string | null>
   shellChromePrimaryName: Accessor<string | null>
   autoShellChromeMonitorName: Accessor<string | null>
   canSessionControl: Accessor<boolean>
@@ -52,6 +53,7 @@ export type SettingsPanelProps = {
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
   applyAutoLayout: (monitorName: string) => void
+  openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   applyCompositorLayoutFromDraft: () => void
@@ -126,12 +128,14 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <Show when={activePage() === 'tiling'}>
           <SettingsTilingPage
             screenDraftRows={props.screenDraft.rows}
+            currentMonitorName={props.currentMonitorName}
             tilingCfgRev={props.tilingCfgRev}
             setTilingCfgRev={props.setTilingCfgRev}
             clearMonitorTiles={props.clearMonitorTiles}
             bumpSnapChrome={props.bumpSnapChrome}
             scheduleExclusionZonesSync={props.scheduleExclusionZonesSync}
             applyAutoLayout={props.applyAutoLayout}
+            openCustomLayoutOverlay={props.openCustomLayoutOverlay}
             sessionAutoSaveEnabled={props.sessionAutoSaveEnabled}
             setSessionAutoSaveEnabled={props.setSessionAutoSaveEnabled}
           />

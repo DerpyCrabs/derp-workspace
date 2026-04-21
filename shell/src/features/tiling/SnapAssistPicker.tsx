@@ -1,7 +1,14 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount } from 'solid-js'
 import type { AssistGridShape, AssistGridSpan } from './assistGrid'
+import { snapZoneAndPreviewFromAssistSpan } from './assistGrid'
+import { CustomLayoutPreview } from './CustomLayoutPreview'
+import {
+  resolveCustomLayoutZoneBounds,
+  type CustomLayout,
+} from './customLayouts'
 import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import type { SnapAssistPickerAnchorRect } from '@/host/types'
+import type { Rect, SnapZone } from './tileZones'
 import {
   invalidateShellUiWindow,
   registerShellUiWindow,
@@ -11,7 +18,7 @@ import {
 
 const SNAP_ASSIST_SHAPES: AssistGridShape[] = ['3x2', '3x3', '2x2', '2x3']
 const PICKER_APPROX_WIDTH = 360
-const PICKER_APPROX_HEIGHT = 520
+const PICKER_APPROX_HEIGHT = 760
 const PICKER_GUTTER_PX = 18
 const DEFAULT_PICKER_SPAN: AssistGridSpan = {
   gridCols: 3,
@@ -38,14 +45,24 @@ function shapeLabel(shape: AssistGridShape): string {
 export type SnapAssistPickerProps = {
   anchorRect: SnapAssistPickerAnchorRect
   container: HTMLElement
-  hoverSpan: AssistGridSpan | null
+  workArea: { x: number; y: number; w: number; h: number }
+  edgeShape: AssistGridShape
+  customLayouts: CustomLayout[]
+  hoverSelection: SnapPickerSelection | null
   autoHover?: boolean
   shellUiWindowId?: number
   shellUiWindowZ?: number
   getShellUiMeasureEnv?: () => ShellUiMeasureEnv | null
-  onHoverSpanChange: (span: AssistGridSpan | null) => void
-  onSelectSpan: (span: AssistGridSpan) => void
+  onHoverSelectionChange: (selection: SnapPickerSelection | null) => void
+  onSelectSelection: (selection: SnapPickerSelection) => void
   onClose: () => void
+}
+
+export type SnapPickerSelection = {
+  zone: SnapZone
+  previewRect: Rect
+  shape: AssistGridShape | null
+  hoverSpan: AssistGridSpan | null
 }
 
 export function SnapAssistPicker(props: SnapAssistPickerProps) {
@@ -129,7 +146,8 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
       onCleanup(unreg)
     }
     if (props.autoHover !== false) {
-      props.onHoverSpanChange(props.hoverSpan ?? DEFAULT_PICKER_SPAN)
+      const defaultSelection = selectionFromSpan(DEFAULT_PICKER_SPAN, props.edgeShape, props.workArea)
+      props.onHoverSelectionChange(props.hoverSelection ?? defaultSelection)
     }
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target
@@ -145,9 +163,41 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     onCleanup(() => {
       document.removeEventListener('pointerdown', onPointerDown, true)
       document.removeEventListener('keydown', onKeyDown)
-      props.onHoverSpanChange(null)
+      props.onHoverSelectionChange(null)
     })
   })
+
+  const hoverSpan = createMemo(() => props.hoverSelection?.hoverSpan ?? null)
+
+  function selectionFromSpan(
+    span: AssistGridSpan,
+    shape: AssistGridShape,
+    workArea: { x: number; y: number; w: number; h: number },
+  ): SnapPickerSelection {
+    const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, workArea)
+    return {
+      zone,
+      previewRect,
+      shape,
+      hoverSpan: span,
+    }
+  }
+
+  function customSelection(zone: string): SnapPickerSelection | null {
+    const bounds = resolveCustomLayoutZoneBounds(props.customLayouts, zone, {
+      x: props.workArea.x,
+      y: props.workArea.y,
+      width: props.workArea.w,
+      height: props.workArea.h,
+    })
+    if (!bounds) return null
+    return {
+      zone,
+      previewRect: bounds,
+      shape: null,
+      hoverSpan: null,
+    }
+  }
 
   return (
     <div
@@ -156,7 +206,7 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
       }}
       data-shell-snap-picker
       data-tiling-picker
-      class="fixed z-460200 max-h-[min(80vh,520px)] w-[min(360px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-(--shell-border) bg-(--shell-surface-panel) p-3 shadow-2xl"
+      class="fixed z-460200 max-h-[min(88vh,760px)] w-[min(360px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-(--shell-border) bg-(--shell-surface-panel) p-3 shadow-2xl"
       style={{
         left: `${position().left}px`,
         top: `${position().top}px`,
@@ -166,16 +216,46 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
         Snap layouts
       </div>
       <div class="flex flex-col gap-2.5">
+        <For each={props.customLayouts}>
+          {(layout) => (
+            <div class="flex flex-col gap-1.5 rounded-xl border border-(--shell-border) bg-(--shell-surface-panel) p-2">
+              <div class="flex items-center justify-between gap-2 px-1">
+                <span class="truncate text-[0.76rem] font-semibold text-(--shell-text)">{layout.name}</span>
+                <span class="text-[0.68rem] text-(--shell-text-dim)">Custom</span>
+              </div>
+              <CustomLayoutPreview
+                layout={layout}
+                pickMode
+                selectedZoneId={
+                  props.hoverSelection?.shape === null && props.hoverSelection.zone.startsWith(`custom:${layout.id}:`)
+                    ? props.hoverSelection.zone.slice(`custom:${layout.id}:`.length)
+                    : null
+                }
+                zoneAttrs={(zoneId) => ({
+                  'data-snap-picker-custom-layout': layout.id,
+                  'data-snap-picker-custom-zone': zoneId,
+                })}
+                onZoneHover={(zone) => props.onHoverSelectionChange(zone ? customSelection(zone.zone) : null)}
+                onZoneClick={(zone) => {
+                  const selection = customSelection(zone.zone)
+                  if (selection) props.onSelectSelection(selection)
+                }}
+              />
+            </div>
+          )}
+        </For>
         <For each={SNAP_ASSIST_SHAPES}>
           {(shape) => (
             <SnapAssistMasterGrid
               shape={shape}
               gutterPx={PICKER_GUTTER_PX}
               layoutLabel={shapeLabel(shape)}
-              getHoverSpan={() => props.hoverSpan}
+              getHoverSpan={() => hoverSpan()}
               pickMode
-              onHoverSpan={props.onHoverSpanChange}
-              onPickSpan={props.onSelectSpan}
+              onHoverSpan={(span) =>
+                props.onHoverSelectionChange(span ? selectionFromSpan(span, shape, props.workArea) : null)
+              }
+              onPickSpan={(span) => props.onSelectSelection(selectionFromSpan(span, shape, props.workArea))}
             />
           )}
         </For>

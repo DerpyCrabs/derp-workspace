@@ -268,6 +268,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
 export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const cache = createQueryCache(args.document)
   const settingsTilingLayoutTriggerRect = queryRect(cache, '[data-settings-tiling-layout-trigger]', args.origin)
+  const settingsMonitorName =
+    args.windows.find((window) => window.window_id === 9002 && !window.minimized)?.output_name ?? null
 
   const projectFloatingElementRect = (selector: string) => {
     const el = cache.query(selector)
@@ -665,6 +667,47 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         '[data-settings-tiling-layout-option="manual-snap"]',
         args.origin,
       ),
+      settings_custom_layout_add: queryRect(
+        cache,
+        settingsMonitorName
+          ? `[data-settings-custom-layout-open-overlay][data-settings-custom-layout-monitor="${settingsMonitorName}"]`
+          : '[data-settings-custom-layout-open-overlay]',
+        args.origin,
+      ),
+      custom_layout_overlay_root: queryRect(cache, '[data-custom-layout-overlay]', args.origin),
+      custom_layout_overlay_add: queryRect(cache, '[data-custom-layout-overlay-add]', args.origin),
+      custom_layout_overlay_save: queryRect(cache, '[data-custom-layout-overlay-save]', args.origin),
+      custom_layout_overlay_close: queryRect(cache, '[data-custom-layout-overlay-close]', args.origin),
+      settings_custom_layout_split_vertical: queryRect(
+        cache,
+        '[data-custom-layout-overlay-split-vertical]',
+        args.origin,
+      ),
+      settings_custom_layout_split_horizontal: queryRect(
+        cache,
+        '[data-custom-layout-overlay-split-horizontal]',
+        args.origin,
+      ),
+      settings_custom_layout_delete_zone: queryRect(
+        cache,
+        '[data-custom-layout-overlay-delete-zone]',
+        args.origin,
+      ),
+      settings_custom_layout_editor_zone: queryLargestRect(
+        cache,
+        '[data-custom-layout-overlay-zone]',
+        args.origin,
+      ),
+      settings_custom_layout_preview_first: queryRect(
+        cache,
+        '[data-custom-layout-overlay-preview="first"]',
+        args.origin,
+      ),
+      settings_custom_layout_preview_second: queryRect(
+        cache,
+        '[data-custom-layout-overlay-preview="second"]',
+        args.origin,
+      ),
       settings_default_app_image: queryRect(cache, '[data-default-app-select="image"]', args.origin),
       settings_session_autosave_enable: queryRect(cache, '[data-settings-session-autosave-enable]', args.origin),
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
@@ -705,6 +748,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       snap_picker_top_two_thirds_left: queryLargestRect(
         cache,
         '[data-shell-snap-picker] [data-assist-mini-grid="3x3"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="0"][data-gc1="0"][data-gr0="0"][data-gr1="1"]',
+        args.origin,
+      ),
+      snap_picker_custom_zone: queryLargestRect(
+        cache,
+        '[data-shell-snap-picker] [data-snap-picker-custom-zone]',
         args.origin,
       ),
     },

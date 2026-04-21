@@ -170,35 +170,7 @@ function normalizePinnedWindowIds(raw: unknown): number[] {
 }
 
 function isSnapZone(value: unknown): value is SnapZone {
-  switch (value) {
-    case 'auto-fill':
-    case 'left-half':
-    case 'right-half':
-    case 'top-left':
-    case 'top-right':
-    case 'bottom-left':
-    case 'bottom-right':
-    case 'left-third':
-    case 'center-third':
-    case 'right-third':
-    case 'left-two-thirds':
-    case 'right-two-thirds':
-    case 'top-left-two-thirds':
-    case 'top-center-two-thirds':
-    case 'top-right-two-thirds':
-    case 'top-left-third':
-    case 'top-center-third':
-    case 'top-right-third':
-    case 'bottom-left-two-thirds':
-    case 'bottom-center-two-thirds':
-    case 'bottom-right-two-thirds':
-    case 'bottom-left-third':
-    case 'bottom-center-third':
-    case 'bottom-right-third':
-      return true
-    default:
-      return false
-  }
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function normalizeRect(raw: unknown): Rect | null {

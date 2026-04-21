@@ -2,11 +2,13 @@ import { For, Show } from 'solid-js'
 import type { Accessor, Setter } from 'solid-js'
 import { EdgeLayoutPicker } from '@/features/tiling/EdgeLayoutPicker'
 import { LayoutTypePicker } from '@/features/tiling/LayoutTypePicker'
+import { CustomLayoutEditor } from '@/features/tiling/CustomLayoutEditor'
 import { getMonitorLayout } from '@/features/tiling/tilingConfig'
 import type { SettingsLayoutScreen } from './settingsTypes'
 
 export type SettingsTilingPageProps = {
   screenDraftRows: SettingsLayoutScreen[]
+  currentMonitorName: Accessor<string | null>
   tilingCfgRev: Accessor<number>
   setTilingCfgRev: Setter<number>
   sessionAutoSaveEnabled: Accessor<boolean>
@@ -15,10 +17,17 @@ export type SettingsTilingPageProps = {
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
   applyAutoLayout: (monitorName: string) => void
+  openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
 }
 
 export function SettingsTilingPage(props: SettingsTilingPageProps) {
-  const monitorNames = () => props.screenDraftRows.map((row) => row.name)
+  const monitorNames = () => {
+    const currentMonitorName = props.currentMonitorName()
+    if (!currentMonitorName) return props.screenDraftRows.map((row) => row.name)
+    const current = props.screenDraftRows.find((row) => row.name === currentMonitorName)
+    const rest = props.screenDraftRows.filter((row) => row.name !== currentMonitorName)
+    return current ? [current.name, ...rest.map((row) => row.name)] : props.screenDraftRows.map((row) => row.name)
+  }
 
   return (
     <div class="space-y-4" data-settings-tiling-page>
@@ -62,13 +71,20 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                   props.tilingCfgRev()
                   return getMonitorLayout(monitorName).layout.type === 'manual-snap'
                 })()}>
-                  <EdgeLayoutPicker
-                    outputName={monitorName}
-                    revision={props.tilingCfgRev}
-                    onPersisted={() => {
-                      props.setTilingCfgRev((n) => n + 1)
-                    }}
-                  />
+                  <div class="grid gap-3">
+                    <CustomLayoutEditor
+                      outputName={monitorName}
+                      revision={props.tilingCfgRev}
+                      onOpenOverlay={props.openCustomLayoutOverlay}
+                    />
+                    <EdgeLayoutPicker
+                      outputName={monitorName}
+                      revision={props.tilingCfgRev}
+                      onPersisted={() => {
+                        props.setTilingCfgRev((n) => n + 1)
+                      }}
+                    />
+                  </div>
                 </Show>
               </div>
             )}

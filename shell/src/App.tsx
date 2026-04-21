@@ -31,6 +31,8 @@ import { renderShellHostedWindowContent } from '@/features/shell-ui/shellHostedW
 import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
+import { CustomLayoutOverlay, type CustomLayoutOverlayState } from '@/features/tiling/CustomLayoutOverlay'
+import { setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
@@ -359,6 +361,7 @@ function App() {
   const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
   const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(40)
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
+  const [customLayoutOverlay, setCustomLayoutOverlay] = createSignal<CustomLayoutOverlayState | null>(null)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
   let windowSyncRecoveryPending = false
   let windowSyncRecoveryRequestedAt = 0
@@ -923,6 +926,17 @@ function App() {
     void spawnInCompositor(`xdg-open ${shSingleQuotedForSpawn(path)}`)
   }
 
+  function openCustomLayoutOverlay(detail: { outputName: string; layoutId?: string | null }) {
+    setCustomLayoutOverlay({
+      outputName: detail.outputName,
+      initialLayoutId: detail.layoutId ?? null,
+    })
+  }
+
+  function closeCustomLayoutOverlay() {
+    setCustomLayoutOverlay(null)
+  }
+
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
     return renderShellHostedWindowContent(windowId, {
       allWindowsMap,
@@ -968,6 +982,7 @@ function App() {
       bumpSnapChrome,
       scheduleExclusionZonesSync,
       applyAutoLayout: (name) => workspaceLayoutBridge.applyAutoLayout(name),
+      openCustomLayoutOverlay,
       setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
       setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
       applyCompositorLayoutFromDraft: () => {
@@ -1479,6 +1494,26 @@ function App() {
       <Show when={portalPickerVisible()}>
         <PortalPickerOverlay />
       </Show>
+
+      <CustomLayoutOverlay
+        state={customLayoutOverlay}
+        close={closeCustomLayoutOverlay}
+        saveLayouts={(outputName, layouts) => {
+          setMonitorCustomLayouts(outputName, layouts)
+          setTilingCfgRev((n) => n + 1)
+          bumpSnapChrome()
+          scheduleExclusionZonesSync()
+        }}
+        getMenuLayerHostEl={shellContextMenus.menuLayerHostEl}
+        getMainEl={() => mainRef}
+        acquireOverlayPointer={acquireOverlayPointer}
+        releaseOverlayPointer={releaseOverlayPointer}
+        outputGeom={outputGeom}
+        layoutCanvasOrigin={layoutCanvasOrigin}
+        screenDraftRows={() => screenDraft.rows}
+        reserveTaskbarForMon={(screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen)}
+        scheduleExclusionZonesSync={scheduleExclusionZonesSync}
+      />
 
       <shellWindowGestureRuntime.SnapAssistPickerLayer />
 

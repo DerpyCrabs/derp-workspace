@@ -1,32 +1,36 @@
-export type SnapZone =
-  | 'auto-fill'
-  | 'left-half'
-  | 'right-half'
-  | 'top-left'
-  | 'top-right'
-  | 'bottom-left'
-  | 'bottom-right'
-  | 'left-third'
-  | 'center-third'
-  | 'right-third'
-  | 'left-two-thirds'
-  | 'right-two-thirds'
-  | 'top-left-two-thirds'
-  | 'top-center-two-thirds'
-  | 'top-right-two-thirds'
-  | 'top-left-third'
-  | 'top-center-third'
-  | 'top-right-third'
-  | 'bottom-left-two-thirds'
-  | 'bottom-center-two-thirds'
-  | 'bottom-right-two-thirds'
-  | 'bottom-left-third'
-  | 'bottom-center-third'
-  | 'bottom-right-third'
+export const PRESET_SNAP_ZONES = [
+  'auto-fill',
+  'left-half',
+  'right-half',
+  'top-left',
+  'top-right',
+  'bottom-left',
+  'bottom-right',
+  'left-third',
+  'center-third',
+  'right-third',
+  'left-two-thirds',
+  'right-two-thirds',
+  'top-left-two-thirds',
+  'top-center-two-thirds',
+  'top-right-two-thirds',
+  'top-left-third',
+  'top-center-third',
+  'top-right-third',
+  'bottom-left-two-thirds',
+  'bottom-center-two-thirds',
+  'bottom-right-two-thirds',
+  'bottom-left-third',
+  'bottom-center-third',
+  'bottom-right-third',
+] as const
+
+export type PresetSnapZone = (typeof PRESET_SNAP_ZONES)[number]
+export type SnapZone = string
 
 export type Rect = { x: number; y: number; width: number; height: number }
 
-export const LEFT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
+export const LEFT_SIDE_ZONES: ReadonlySet<PresetSnapZone> = new Set([
   'left-half',
   'top-left',
   'bottom-left',
@@ -38,7 +42,7 @@ export const LEFT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'bottom-left-third',
 ])
 
-export const RIGHT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
+export const RIGHT_SIDE_ZONES: ReadonlySet<PresetSnapZone> = new Set([
   'right-half',
   'top-right',
   'bottom-right',
@@ -50,7 +54,7 @@ export const RIGHT_SIDE_ZONES: ReadonlySet<SnapZone> = new Set([
   'bottom-right-third',
 ])
 
-export const TOP_ZONES: ReadonlySet<SnapZone> = new Set([
+export const TOP_ZONES: ReadonlySet<PresetSnapZone> = new Set([
   'top-left',
   'top-right',
   'top-left-two-thirds',
@@ -61,7 +65,7 @@ export const TOP_ZONES: ReadonlySet<SnapZone> = new Set([
   'top-right-third',
 ])
 
-export const BOTTOM_ZONES: ReadonlySet<SnapZone> = new Set([
+export const BOTTOM_ZONES: ReadonlySet<PresetSnapZone> = new Set([
   'bottom-left',
   'bottom-right',
   'bottom-left-two-thirds',
@@ -72,7 +76,11 @@ export const BOTTOM_ZONES: ReadonlySet<SnapZone> = new Set([
   'bottom-right-third',
 ])
 
-function defaultSnapZoneBoundsLocal(zone: SnapZone, ww: number, wh: number): Rect {
+export function isPresetSnapZone(zone: string): zone is PresetSnapZone {
+  return (PRESET_SNAP_ZONES as readonly string[]).includes(zone)
+}
+
+function defaultSnapZoneBoundsLocal(zone: PresetSnapZone, ww: number, wh: number): Rect {
   const halfW = Math.round(ww / 2)
   const halfH = Math.round(wh / 2)
   const thirdW = Math.round(ww / 3)
@@ -168,6 +176,14 @@ function shiftToWorkArea(local: Rect, workArea: Rect): Rect {
 }
 
 export function snapZoneToBounds(zone: SnapZone, workArea: Rect): Rect {
+  if (!isPresetSnapZone(zone)) {
+    return {
+      x: workArea.x,
+      y: workArea.y,
+      width: workArea.width,
+      height: workArea.height,
+    }
+  }
   const local = defaultSnapZoneBoundsLocal(zone, workArea.width, workArea.height)
   return shiftToWorkArea(local, workArea)
 }
@@ -177,6 +193,14 @@ export function snapZoneToBoundsWithOccupied(
   workArea: Rect,
   occupiedZones: { zone: SnapZone; bounds: Rect }[],
 ): Rect {
+  if (!isPresetSnapZone(zone)) {
+    return {
+      x: workArea.x,
+      y: workArea.y,
+      width: workArea.width,
+      height: workArea.height,
+    }
+  }
   const local = defaultSnapZoneBoundsLocal(zone, workArea.width, workArea.height)
   let { x, y, width, height } = shiftToWorkArea(local, workArea)
 
@@ -188,10 +212,10 @@ export function snapZoneToBoundsWithOccupied(
   const wx1 = workArea.x + workArea.width
   const wy1 = workArea.y + workArea.height
 
-  const leftOccupied = occupiedZones.filter((o) => LEFT_SIDE_ZONES.has(o.zone))
-  const rightOccupied = occupiedZones.filter((o) => RIGHT_SIDE_ZONES.has(o.zone))
-  const topOccupied = occupiedZones.filter((o) => TOP_ZONES.has(o.zone))
-  const bottomOccupied = occupiedZones.filter((o) => BOTTOM_ZONES.has(o.zone))
+  const leftOccupied = occupiedZones.filter((o) => isPresetSnapZone(o.zone) && LEFT_SIDE_ZONES.has(o.zone))
+  const rightOccupied = occupiedZones.filter((o) => isPresetSnapZone(o.zone) && RIGHT_SIDE_ZONES.has(o.zone))
+  const topOccupied = occupiedZones.filter((o) => isPresetSnapZone(o.zone) && TOP_ZONES.has(o.zone))
+  const bottomOccupied = occupiedZones.filter((o) => isPresetSnapZone(o.zone) && BOTTOM_ZONES.has(o.zone))
 
   if (!isThirdZone) {
     if (RIGHT_SIDE_ZONES.has(zone) && leftOccupied.length > 0) {

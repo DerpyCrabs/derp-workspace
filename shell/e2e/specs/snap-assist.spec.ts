@@ -7,6 +7,7 @@ import {
   assertRectMinSize,
   assertTaskbarRowOnMonitor,
   assertTopWindow,
+  clickRect,
   clickPoint,
   compositorWindowById,
   createTimingMarks,
@@ -14,10 +15,12 @@ import {
   ensureNativePair,
   getJson,
   getSnapshots,
+  keyAction,
   movePoint,
   openSettings,
   pickMonitorMove,
   pointerButton,
+  postJson,
   runKeybind,
   taskbarForMonitor,
   waitFor,
@@ -31,6 +34,7 @@ import {
 } from '../lib/runtime.ts'
 
 const TITLEBAR_PX = 26
+const SHIFT_KEYCODE = 42
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   if (window.output_name) return window.output_name
@@ -87,6 +91,17 @@ function assertTopRightQuarterWindow(
   assert(Math.abs(window.width - (output.width - halfWidth)) <= 36, `expected top-right quarter width near ${output.width - halfWidth}, got ${window.width}`)
   assert(Math.abs(window.y - workTop) <= 28, `expected top-right quarter y near ${workTop}, got ${window.y}`)
   assert(Math.abs(window.height - halfHeight) <= 36, `expected top-right quarter height near ${halfHeight}, got ${window.height}`)
+}
+
+function assertWindowMatchesRect(
+  window: WindowSnapshot,
+  expected: { x: number; y: number; width: number; height: number },
+  label: string,
+) {
+  assert(Math.abs(window.x - expected.x) <= 28, `expected ${label} x near ${expected.x}, got ${window.x}`)
+  assert(Math.abs(window.y - expected.y) <= 28, `expected ${label} y near ${expected.y}, got ${window.y}`)
+  assert(Math.abs(window.width - expected.width) <= 36, `expected ${label} width near ${expected.width}, got ${window.width}`)
+  assert(Math.abs(window.height - expected.height) <= 36, `expected ${label} height near ${expected.height}, got ${window.height}`)
 }
 
 function assertTopTwoThirdsThirdWindow(
@@ -626,6 +641,267 @@ export default defineGroup(import.meta.url, ({ test }) => {
     } finally {
       await pointerButton(base, BTN_LEFT, 'release')
     }
+  })
+
+  test('custom layouts created in tiling settings appear in snap picker and snap shell windows', async ({ base }) => {
+    await openSettings(base, 'click')
+    await focusSettingsWindow(base)
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, shell.controls.settings_tab_tiling)
+    shell = await waitFor(
+      'wait for custom layout add control',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_add ? next : null
+      },
+      5000,
+      100,
+    )
+    assert(shell.controls?.settings_custom_layout_add, 'missing add custom layout control')
+    await clickRect(base, shell.controls.settings_custom_layout_add)
+    shell = await waitFor(
+      'wait for custom layout overlay',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_root &&
+          next.controls?.custom_layout_overlay_add &&
+          next.controls?.custom_layout_overlay_save
+          ? next
+          : null
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.custom_layout_overlay_add, 'missing overlay add control')
+    await clickRect(base, shell.controls.custom_layout_overlay_add)
+    shell = await waitFor(
+      'wait for overlay zone after add',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_editor_zone ? next : null
+      },
+      3000,
+      100,
+    )
+    const firstEditorZone = assertRectMinSize('initial editor zone', shell.controls?.settings_custom_layout_editor_zone, 80)
+    await clickPoint(
+      base,
+      firstEditorZone.global_x + firstEditorZone.width * 0.5,
+      firstEditorZone.global_y + firstEditorZone.height * 0.7,
+    )
+    shell = await waitFor(
+      'wait for off-center horizontal split',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const zone = next.controls?.settings_custom_layout_editor_zone
+        if (!zone) return null
+        return Math.abs(zone.global_x - firstEditorZone.global_x) > 12 ? next : null
+      },
+      3000,
+      100,
+    )
+    const secondEditorZone = assertRectMinSize('editor zone after first split', shell.controls?.settings_custom_layout_editor_zone, 80)
+    await keyAction(base, SHIFT_KEYCODE, 'press')
+    try {
+      await clickPoint(
+        base,
+        secondEditorZone.global_x + secondEditorZone.width * 0.88,
+        secondEditorZone.global_y + secondEditorZone.height * 0.5,
+      )
+    } finally {
+      await keyAction(base, SHIFT_KEYCODE, 'release')
+    }
+    shell = await waitFor(
+      'wait for off-center vertical split',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const zone = next.controls?.settings_custom_layout_editor_zone
+        if (!zone) return null
+        return zone.width < secondEditorZone.width - 12 ? next : null
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.custom_layout_overlay_save, 'missing overlay save control')
+    await clickRect(base, shell.controls.custom_layout_overlay_save)
+    await waitFor(
+      'wait for custom layout overlay close',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_root ? null : next
+      },
+      3000,
+      100,
+    )
+
+    const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const customZone = assertRectMinSize('custom picker zone', pickerOpen.controls?.snap_picker_custom_zone, 12)
+    await clickPoint(base, rectGlobalCenter(customZone).x, rectGlobalCenter(customZone).y)
+    const snapped = await waitFor(
+      'wait for settings custom picker snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (!window) return null
+        try {
+          const output = compositor.outputs.find((entry) => entry.name === window.output_name)
+          const taskbar = taskbarForMonitor(shell, window.output_name)
+          assert(output, `missing output ${window.output_name}`)
+          assert(taskbar?.rect, `missing taskbar for ${window.output_name}`)
+          const workTop = output.y + TITLEBAR_PX
+          const workBottom = taskbar.rect.global_y
+          const halfWidth = Math.floor(output.width / 2)
+          const clickedRightHalf = secondEditorZone.global_x >= output.x + halfWidth - 24
+          const halfStart = clickedRightHalf ? output.x + halfWidth : output.x
+          const halfWidthPx = clickedRightHalf ? output.width - halfWidth : halfWidth
+          assertWindowMatchesRect(
+            window,
+            {
+              x: halfStart,
+              y: workTop,
+              width: Math.round(halfWidthPx * 0.88),
+              height: workBottom - workTop,
+            },
+            'custom layout largest zone',
+          )
+        } catch {
+          return null
+        }
+        return { compositor, shell, window }
+      },
+      2000,
+      125,
+    )
+    await writeJsonArtifact('snap-assist-picker-custom-layout.json', snapped)
+  })
+
+  test('custom layout preview follows cursor movement inside one zone and shift flips axis in place', async ({ base }) => {
+    await openSettings(base, 'click')
+    await focusSettingsWindow(base)
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, shell.controls.settings_tab_tiling)
+    shell = await waitFor(
+      'wait for custom layout add control',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_add ? next : null
+      },
+      5000,
+      100,
+    )
+    assert(shell.controls?.settings_custom_layout_add, 'missing add custom layout control')
+    await clickRect(base, shell.controls.settings_custom_layout_add)
+    shell = await waitFor(
+      'wait for custom layout overlay',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_add && next.controls?.custom_layout_overlay_close ? next : null
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.custom_layout_overlay_add, 'missing overlay add control')
+    await clickRect(base, shell.controls.custom_layout_overlay_add)
+    shell = await waitFor(
+      'wait for previewable editor zone',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_editor_zone ? next : null
+      },
+      3000,
+      100,
+    )
+    const overlayScreenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {})
+    await writeJsonArtifact('custom-layout-overlay-dialog-screenshot.json', overlayScreenshot)
+    const zone = assertRectMinSize('preview editor zone', shell.controls?.settings_custom_layout_editor_zone, 80)
+
+    await movePoint(base, zone.global_x + zone.width * 0.5, zone.global_y + zone.height * 0.2)
+    const horizontalTop = await waitFor(
+      'wait for horizontal preview near top',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const first = next.controls?.settings_custom_layout_preview_first
+        const second = next.controls?.settings_custom_layout_preview_second
+        if (!first || !second) return null
+        if (first.height >= zone.height * 0.35) return null
+        if (Math.abs(first.width - zone.width) > 8) return null
+        return { next, first, second }
+      },
+      1000,
+      16,
+    )
+
+    await movePoint(base, zone.global_x + zone.width * 0.5, zone.global_y + zone.height * 0.75)
+    const horizontalLower = await waitFor(
+      'wait for horizontal preview lower in same zone',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const first = next.controls?.settings_custom_layout_preview_first
+        const second = next.controls?.settings_custom_layout_preview_second
+        if (!first || !second) return null
+        if (first.height <= horizontalTop.first.height + 40) return null
+        if (Math.abs(first.width - zone.width) > 8) return null
+        return { next, first, second }
+      },
+      1000,
+      16,
+    )
+
+    await keyAction(base, SHIFT_KEYCODE, 'press')
+    const verticalAtSamePoint = await waitFor(
+      'wait for shift vertical preview without moving zones',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const first = next.controls?.settings_custom_layout_preview_first
+        const second = next.controls?.settings_custom_layout_preview_second
+        if (!first || !second) return null
+        if (Math.abs(first.height - zone.height) > 8) return null
+        if (first.width >= zone.width * 0.7) return null
+        return { next, first, second }
+      },
+      1000,
+      16,
+    )
+
+    await movePoint(base, zone.global_x + zone.width * 0.82, zone.global_y + zone.height * 0.75)
+    const verticalMoved = await waitFor(
+      'wait for vertical preview moved within same zone',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const first = next.controls?.settings_custom_layout_preview_first
+        const second = next.controls?.settings_custom_layout_preview_second
+        if (!first || !second) return null
+        if (Math.abs(first.height - zone.height) > 8) return null
+        if (first.width <= verticalAtSamePoint.first.width + 40) return null
+        return { next, first, second }
+      },
+      1000,
+      16,
+    )
+    await keyAction(base, SHIFT_KEYCODE, 'release')
+
+    assert(horizontalLower.first.height > horizontalTop.first.height, 'horizontal preview should move with pointer inside one zone')
+    assert(verticalAtSamePoint.first.width < horizontalLower.first.width - 40, 'shift should flip preview axis in place')
+    assert(verticalMoved.first.width > verticalAtSamePoint.first.width, 'vertical preview should move with pointer inside one zone')
+
+    assert(shell.controls?.custom_layout_overlay_close, 'missing overlay close control')
+    await clickRect(base, shell.controls.custom_layout_overlay_close)
+    await waitFor(
+      'wait for custom layout overlay close after preview verification',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_root ? null : next
+      },
+      3000,
+      100,
+    )
+
+    await writeJsonArtifact('snap-assist-custom-layout-preview-horizontal-top.json', horizontalTop.next)
+    await writeJsonArtifact('snap-assist-custom-layout-preview-horizontal-lower.json', horizontalLower.next)
+    await writeJsonArtifact('snap-assist-custom-layout-preview-vertical-same-point.json', verticalAtSamePoint.next)
+    await writeJsonArtifact('snap-assist-custom-layout-preview-vertical-moved.json', verticalMoved.next)
   })
 
   test('picker stays monitor-local for native and shell windows on multi-monitor setups', async ({ base, state }) => {

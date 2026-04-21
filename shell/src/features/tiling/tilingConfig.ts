@@ -2,12 +2,14 @@ import {
   DEFAULT_ASSIST_GRID_SHAPE,
   type AssistGridShape,
 } from './assistGrid'
+import { sanitizeCustomLayouts, type CustomLayout } from './customLayouts'
 import { createLayout, type LayoutParams, type LayoutType, type TilingLayout } from './layouts'
 
 export type MonitorTilingEntry = {
   layout: LayoutType
   params?: LayoutParams
   edgeLayout?: AssistGridShape
+  customLayouts?: CustomLayout[]
 }
 
 export type TilingConfig = {
@@ -62,6 +64,10 @@ function parseConfig(raw: string | null): TilingConfig {
       if (isAssistGridShape((el as { edgeLayout?: unknown }).edgeLayout)) {
         cleaned.edgeLayout = (el as { edgeLayout: AssistGridShape }).edgeLayout
       }
+      const customLayouts = sanitizeCustomLayouts((el as { customLayouts?: unknown }).customLayouts)
+      if (customLayouts.length > 0) {
+        cleaned.customLayouts = customLayouts
+      }
       out.monitors[k] = cleaned
     }
     return out
@@ -86,6 +92,7 @@ export function getMonitorLayout(outputName: string): {
   layout: TilingLayout
   params: LayoutParams
   edgeLayout: AssistGridShape
+  customLayouts: CustomLayout[]
 } {
   const cfg = loadTilingConfig()
   const entry = cfg.monitors[outputName]
@@ -95,6 +102,7 @@ export function getMonitorLayout(outputName: string): {
     layout: createLayout(layoutType),
     params,
     edgeLayout: entry?.edgeLayout ?? DEFAULT_ASSIST_GRID_SHAPE,
+    customLayouts: entry?.customLayouts ?? [],
   }
 }
 
@@ -113,6 +121,9 @@ export function setMonitorLayout(
   if (prev?.edgeLayout) {
     next.edgeLayout = prev.edgeLayout
   }
+  if (prev?.customLayouts && prev.customLayouts.length > 0) {
+    next.customLayouts = prev.customLayouts
+  }
   cfg.monitors[outputName] = next
   saveTilingConfig(cfg)
 }
@@ -126,6 +137,26 @@ export function setMonitorEdgeLayout(outputName: string, edgeLayout: AssistGridS
   }
   if (prev?.params && Object.keys(prev.params).length > 0) {
     next.params = prev.params
+  }
+  if (prev?.customLayouts && prev.customLayouts.length > 0) {
+    next.customLayouts = prev.customLayouts
+  }
+  cfg.monitors[outputName] = next
+  saveTilingConfig(cfg)
+}
+
+export function setMonitorCustomLayouts(outputName: string, customLayouts: CustomLayout[]): void {
+  const cfg = loadTilingConfig()
+  const prev = cfg.monitors[outputName]
+  const next: MonitorTilingEntry = {
+    layout: prev?.layout ?? 'manual-snap',
+    edgeLayout: prev?.edgeLayout ?? DEFAULT_ASSIST_GRID_SHAPE,
+  }
+  if (prev?.params && Object.keys(prev.params).length > 0) {
+    next.params = prev.params
+  }
+  if (customLayouts.length > 0) {
+    next.customLayouts = customLayouts
   }
   cfg.monitors[outputName] = next
   saveTilingConfig(cfg)

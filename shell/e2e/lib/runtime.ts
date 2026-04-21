@@ -241,6 +241,17 @@ export interface ShellControls {
   settings_tiling_layout_trigger?: Rect | null
   settings_tiling_layout_option_grid?: Rect | null
   settings_tiling_layout_option_manual_snap?: Rect | null
+  settings_custom_layout_add?: Rect | null
+  custom_layout_overlay_root?: Rect | null
+  custom_layout_overlay_add?: Rect | null
+  custom_layout_overlay_save?: Rect | null
+  custom_layout_overlay_close?: Rect | null
+  settings_custom_layout_split_vertical?: Rect | null
+  settings_custom_layout_split_horizontal?: Rect | null
+  settings_custom_layout_delete_zone?: Rect | null
+  settings_custom_layout_editor_zone?: Rect | null
+  settings_custom_layout_preview_first?: Rect | null
+  settings_custom_layout_preview_second?: Rect | null
   settings_session_autosave_enable?: Rect | null
   settings_session_autosave_disable?: Rect | null
   power_menu_save_session?: Rect | null
@@ -258,6 +269,7 @@ export interface ShellControls {
   snap_picker_hgutter_col0?: Rect | null
   snap_picker_right_two_thirds?: Rect | null
   snap_picker_top_two_thirds_left?: Rect | null
+  snap_picker_custom_zone?: Rect | null
   [key: string]: Rect | null | undefined
 }
 

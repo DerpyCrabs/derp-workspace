@@ -447,6 +447,7 @@ impl CompositorState {
                     && state.shell_has_frame
                 {
                     state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
+                    state.shell_ipc_refresh_pointer_modifiers();
                     return FilterResult::Intercept(());
                 }
                 FilterResult::Forward

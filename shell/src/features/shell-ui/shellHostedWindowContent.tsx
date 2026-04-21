@@ -79,6 +79,7 @@ export type ShellHostedWindowContentEnv = {
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
   applyAutoLayout: (name: string) => void
+  openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   applyCompositorLayoutFromDraft: () => void
@@ -123,6 +124,7 @@ export function renderShellHostedWindowContent(
       <SettingsPanel
         screenDraft={env.screenDraft}
         setScreenDraft={env.setScreenDraft}
+        currentMonitorName={() => env.allWindowsMap().get(SHELL_UI_SETTINGS_WINDOW_ID)?.output_name ?? null}
         shellChromePrimaryName={env.shellChromePrimaryName}
         autoShellChromeMonitorName={env.autoShellChromeMonitorName}
         canSessionControl={env.canSessionControl}
@@ -133,6 +135,7 @@ export function renderShellHostedWindowContent(
         bumpSnapChrome={() => env.bumpSnapChrome()}
         scheduleExclusionZonesSync={() => env.scheduleExclusionZonesSync()}
         applyAutoLayout={(name) => env.applyAutoLayout(name)}
+        openCustomLayoutOverlay={(detail) => env.openCustomLayoutOverlay(detail)}
         setShellPrimary={(name) => env.setShellPrimary(name)}
         setUiScale={(pct) => env.setUiScale(pct)}
         applyCompositorLayoutFromDraft={env.applyCompositorLayoutFromDraft}

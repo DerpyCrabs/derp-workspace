@@ -555,6 +555,7 @@ pub struct CompositorState {
     /// Last `(x,y)` sent on shell IPC [`shell_wire::MSG_COMPOSITOR_POINTER_MOVE`] (dedupe spam).
     pub(crate) shell_last_pointer_ipc_px: Option<(i32, i32)>,
     pub(crate) shell_last_pointer_ipc_global_logical: Option<(i32, i32)>,
+    pub(crate) shell_last_pointer_ipc_modifiers: Option<u32>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
     /// Themed / system default pointer (`left_ptr`); also used for [`CursorImageStatus::Named`].
@@ -1021,6 +1022,7 @@ impl CompositorState {
             shell_initial_pointer_centered: false,
             shell_last_pointer_ipc_px: None,
             shell_last_pointer_ipc_global_logical: None,
+            shell_last_pointer_ipc_modifiers: None,
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
             pointer_cursor_image: CursorImageStatus::default_named(),
@@ -7875,6 +7877,7 @@ impl CompositorState {
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_last_pointer_ipc_px = None;
         self.shell_last_pointer_ipc_global_logical = None;
+        self.shell_last_pointer_ipc_modifiers = None;
         self.touch_routes_to_cef = false;
     }
 
@@ -8131,16 +8134,20 @@ impl CompositorState {
             return;
         };
         let global_key = (pos.x.round() as i32, pos.y.round() as i32);
-        if self.shell_last_pointer_ipc_global_logical == Some(global_key) {
+        let modifiers = self.shell_cef_event_flags();
+        if self.shell_last_pointer_ipc_global_logical == Some(global_key)
+            && self.shell_last_pointer_ipc_modifiers == Some(modifiers)
+        {
             return;
         }
         self.shell_begin_frame_note_shell_input();
         self.shell_last_pointer_ipc_global_logical = Some(global_key);
         self.shell_last_pointer_ipc_px = Some((bx, by));
+        self.shell_last_pointer_ipc_modifiers = Some(modifiers);
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerMove {
             x: bx,
             y: by,
-            modifiers: self.shell_cef_event_flags(),
+            modifiers,
         });
     }
 
@@ -8176,6 +8183,13 @@ impl CompositorState {
             delta_y,
             modifiers: self.shell_cef_event_flags(),
         });
+    }
+
+    pub(crate) fn shell_ipc_refresh_pointer_modifiers(&mut self) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        self.shell_ipc_maybe_forward_pointer_move(pointer.current_location());
     }
 
     /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).
