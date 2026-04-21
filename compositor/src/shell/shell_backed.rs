@@ -128,7 +128,7 @@ impl CompositorState {
         placements
     }
 
-    fn shell_backed_emit_geometry_messages(&mut self, info: &WindowInfo) {
+    pub(crate) fn shell_backed_emit_geometry_messages(&mut self, info: &WindowInfo) {
         let Some(loc) = self.shell_window_info_to_output_local_layout(&info) else {
             return;
         };
@@ -192,11 +192,15 @@ impl CompositorState {
         else {
             return;
         };
-        let client_global = Rectangle::new(
-            Point::<i32, Logical>::from((gx, gy)),
-            Size::<i32, Logical>::from((gw, gh)),
-        );
         let id = p.window_id;
+        let client_global = self
+            .workspace_auto_layout_initial_client_rect_for_window(&p.output_name, id)
+            .unwrap_or_else(|| {
+                Rectangle::new(
+                    Point::<i32, Logical>::from((gx, gy)),
+                    Size::<i32, Logical>::from((gw, gh)),
+                )
+            });
 
         let unmin = self
             .window_registry
@@ -239,6 +243,7 @@ impl CompositorState {
         self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
         self.shell_focus_shell_ui_window(id);
+        let _ = self.workspace_apply_auto_layout_for_output_name(&info.output_name);
     }
 
     pub(crate) fn shell_backed_set_title_json(&mut self, json: &str) {
@@ -407,6 +412,7 @@ impl CompositorState {
         self.shell_move_pending_delta = (0, 0);
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_focus_shell_ui_window(window_id);
+        self.shell_send_interaction_state();
         true
     }
 
@@ -437,6 +443,7 @@ impl CompositorState {
         else {
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         };
         self.shell_move_pending_delta = (0, 0);
@@ -453,6 +460,7 @@ impl CompositorState {
         self.shell_move_flush_pending_deltas_backed();
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }
@@ -495,6 +503,7 @@ impl CompositorState {
         self.shell_resize_accum = (0.0, 0.0);
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_focus_shell_ui_window(window_id);
+        self.shell_send_interaction_state();
         true
     }
 
@@ -568,6 +577,7 @@ impl CompositorState {
             self.shell_resize_edges = None;
             self.shell_resize_initial_rect = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
         self.shell_backed_emit_geometry_messages(&snap);
@@ -584,6 +594,7 @@ impl CompositorState {
         self.shell_resize_edges = None;
         self.shell_resize_initial_rect = None;
         self.shell_resize_accum = (0.0, 0.0);
+        self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }

@@ -11,18 +11,60 @@ export type LayoutScreen = {
 
 export const TILE_SNAP_EDGE_PX = 18
 
+export function monitorTileFrameAreaGlobal(
+  mon: LayoutScreen,
+  reserveTaskbar: boolean,
+  taskbarReservePx: number = CHROME_TASKBAR_RESERVE_PX,
+): { x: number; y: number; w: number; h: number } {
+  const tb = reserveTaskbar ? taskbarReservePx : 0
+  return {
+    x: mon.x,
+    y: mon.y,
+    w: Math.max(1, mon.width),
+    h: Math.max(1, mon.height - tb),
+  }
+}
+
 export function monitorWorkAreaGlobal(
   mon: LayoutScreen,
   reserveTaskbar: boolean,
   titlebarPx: number = CHROME_TITLEBAR_PX,
   taskbarReservePx: number = CHROME_TASKBAR_RESERVE_PX,
 ): { x: number; y: number; w: number; h: number } {
-  const tb = reserveTaskbar ? taskbarReservePx : 0
+  const frame = monitorTileFrameAreaGlobal(mon, reserveTaskbar, taskbarReservePx)
   return {
-    x: mon.x,
-    y: mon.y + titlebarPx,
-    w: Math.max(1, mon.width),
-    h: Math.max(1, mon.height - titlebarPx - tb),
+    x: frame.x,
+    y: frame.y + titlebarPx,
+    w: frame.w,
+    h: Math.max(1, frame.h - titlebarPx),
+  }
+}
+
+export function tiledFrameRectToClientRect(rect: {
+  x: number
+  y: number
+  width: number
+  height: number
+}): { x: number; y: number; width: number; height: number } {
+  return {
+    x: rect.x,
+    y: rect.y + CHROME_TITLEBAR_PX,
+    width: rect.width,
+    height: Math.max(1, rect.height - CHROME_TITLEBAR_PX),
+  }
+}
+
+export function tiledClientRectToFrameRect(rect: {
+  x: number
+  y: number
+  width: number
+  height: number
+}): { x: number; y: number; width: number; height: number } {
+  return {
+    x: rect.x,
+    y: rect.y - CHROME_TITLEBAR_PX,
+    width: rect.width,
+    height: rect.height + CHROME_TITLEBAR_PX,
   }
 }
 

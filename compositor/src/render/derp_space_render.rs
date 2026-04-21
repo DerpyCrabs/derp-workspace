@@ -68,6 +68,14 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 continue;
             };
             let wid = state.derp_elem_window_id(elem);
+            if wid.is_some_and(|window_id| {
+                !state.workspace_window_is_visible_during_render(window_id)
+            }) {
+                continue;
+            }
+            let window_alpha = wid
+                .map(|window_id| alpha * state.workspace_window_render_alpha(window_id))
+                .unwrap_or(alpha);
             let render_origin = eloc - elem.geometry().loc;
             let location = render_origin - output_geo.loc;
             match elem {
@@ -75,7 +83,11 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let scale = Scale::from(output_scale);
                     let loc_phys = location.to_physical_precise_round(scale);
                     for (el, include_self_decor) in render_window_elements_with_exclusion_mode(
-                        window, renderer, loc_phys, scale, alpha,
+                        window,
+                        renderer,
+                        loc_phys,
+                        scale,
+                        window_alpha,
                     ) {
                         out.push((
                             SpaceRenderElements::Element(Wrap::from(el)),
@@ -88,7 +100,11 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let scale = Scale::from(output_scale);
                     let loc_phys = location.to_physical_precise_round(scale);
                     for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
-                        elem, renderer, loc_phys, scale, alpha,
+                        elem,
+                        renderer,
+                        loc_phys,
+                        scale,
+                        window_alpha,
                     ) {
                         out.push((SpaceRenderElements::Element(Wrap::from(el)), wid, true));
                     }

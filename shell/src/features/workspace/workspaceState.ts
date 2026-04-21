@@ -26,12 +26,26 @@ export type WorkspacePreTileGeometry = {
   bounds: Rect
 }
 
+export type WorkspaceMonitorLayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid'
+
+export type WorkspaceMonitorLayoutParams = {
+  masterRatio?: number
+  maxColumns?: number
+}
+
+export type WorkspaceMonitorLayoutState = {
+  outputName: string
+  layout: WorkspaceMonitorLayoutType
+  params: WorkspaceMonitorLayoutParams
+}
+
 export type WorkspaceState = {
   groups: WorkspaceGroupState[]
   activeTabByGroupId: Record<string, number>
   pinnedWindowIds: number[]
   splitByGroupId: Record<string, WorkspaceGroupSplitState>
   monitorTiles: WorkspaceMonitorTileState[]
+  monitorLayouts: WorkspaceMonitorLayoutState[]
   preTileGeometry: WorkspacePreTileGeometry[]
   nextGroupSeq: number
 }
@@ -62,6 +76,11 @@ function cloneState(state: WorkspaceState): WorkspaceState {
         bounds: { ...entry.bounds },
       })),
     })),
+    monitorLayouts: state.monitorLayouts.map((entry) => ({
+      outputName: entry.outputName,
+      layout: entry.layout,
+      params: { ...entry.params },
+    })),
     preTileGeometry: state.preTileGeometry.map((entry) => ({
       windowId: entry.windowId,
       bounds: { ...entry.bounds },
@@ -77,6 +96,7 @@ export function createEmptyWorkspaceState(): WorkspaceState {
     pinnedWindowIds: [],
     splitByGroupId: {},
     monitorTiles: [],
+    monitorLayouts: [],
     preTileGeometry: [],
     nextGroupSeq: 1,
   }
@@ -123,6 +143,15 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
       if (entryA.bounds.width !== entryB.bounds.width) return false
       if (entryA.bounds.height !== entryB.bounds.height) return false
     }
+  }
+  if (a.monitorLayouts.length !== b.monitorLayouts.length) return false
+  for (let layoutIndex = 0; layoutIndex < a.monitorLayouts.length; layoutIndex += 1) {
+    const layoutA = a.monitorLayouts[layoutIndex]
+    const layoutB = b.monitorLayouts[layoutIndex]
+    if (layoutA.outputName !== layoutB.outputName) return false
+    if (layoutA.layout !== layoutB.layout) return false
+    if (layoutA.params.masterRatio !== layoutB.params.masterRatio) return false
+    if (layoutA.params.maxColumns !== layoutB.params.maxColumns) return false
   }
   if (a.preTileGeometry.length !== b.preTileGeometry.length) return false
   for (let entryIndex = 0; entryIndex < a.preTileGeometry.length; entryIndex += 1) {
@@ -265,6 +294,46 @@ function normalizePreTileGeometry(raw: unknown): WorkspacePreTileGeometry[] {
   return out
 }
 
+function isWorkspaceMonitorLayoutType(value: unknown): value is WorkspaceMonitorLayoutType {
+  return value === 'manual-snap' || value === 'master-stack' || value === 'columns' || value === 'grid'
+}
+
+function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
+  if (!Array.isArray(raw)) return []
+  const out: WorkspaceMonitorLayoutState[] = []
+  const seen = new Set<string>()
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') continue
+    const record = value as Record<string, unknown>
+    const outputName =
+      typeof record.outputName === 'string' && record.outputName.trim().length > 0
+        ? record.outputName.trim()
+        : ''
+    const layout = isWorkspaceMonitorLayoutType(record.layout) ? record.layout : null
+    if (!outputName || !layout || seen.has(outputName)) continue
+    seen.add(outputName)
+    const paramsRaw = record.params
+    const params: WorkspaceMonitorLayoutParams = {}
+    if (paramsRaw && typeof paramsRaw === 'object' && !Array.isArray(paramsRaw)) {
+      const paramsRecord = paramsRaw as Record<string, unknown>
+      const masterRatio =
+        typeof paramsRecord.masterRatio === 'number'
+          ? paramsRecord.masterRatio
+          : Number(paramsRecord.masterRatio)
+      if (Number.isFinite(masterRatio)) params.masterRatio = masterRatio
+      const maxColumns =
+        typeof paramsRecord.maxColumns === 'number'
+          ? paramsRecord.maxColumns
+          : Number(paramsRecord.maxColumns)
+      if (Number.isFinite(maxColumns) && Math.trunc(maxColumns) >= 1) {
+        params.maxColumns = Math.trunc(maxColumns)
+      }
+    }
+    out.push({ outputName, layout, params })
+  }
+  return out
+}
+
 function firstRightWindowId(group: WorkspaceGroupState, leftWindowId: number): number | null {
   return group.windowIds.find((windowId) => windowId !== leftWindowId) ?? null
 }
@@ -373,6 +442,7 @@ export function normalizeWorkspaceState(raw: unknown): WorkspaceState {
   state.pinnedWindowIds = normalizePinnedWindowIds(source.pinnedWindowIds)
   state.splitByGroupId = normalizeSplitByGroupId(source.splitByGroupId, state.groups)
   state.monitorTiles = normalizeMonitorTiles(source.monitorTiles)
+  state.monitorLayouts = normalizeMonitorLayouts(source.monitorLayouts)
   state.preTileGeometry = normalizePreTileGeometry(source.preTileGeometry)
   const nextRaw = typeof source.nextGroupSeq === 'number' ? source.nextGroupSeq : Number(source.nextGroupSeq)
   const nextSeq = Math.trunc(nextRaw)
@@ -473,6 +543,7 @@ export function setWorkspaceActiveTab(
       outputName: monitor.outputName,
       entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     })),
+    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
     preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }
@@ -534,6 +605,50 @@ export function moveWorkspaceWindowToGroup(
   return next
 }
 
+export function moveWorkspaceGroupToGroup(
+  state: WorkspaceState,
+  sourceGroupId: string,
+  targetGroupId: string,
+  insertIndex: number,
+): WorkspaceState {
+  if (sourceGroupId === targetGroupId) return state
+  const sourceGroup = state.groups.find((group) => group.id === sourceGroupId)
+  const targetGroup = state.groups.find((group) => group.id === targetGroupId)
+  if (!sourceGroup || !targetGroup || sourceGroup.windowIds.length === 0) return state
+  const movingWindowIds = [...sourceGroup.windowIds]
+  const next = cloneState(state)
+  const nextSourceGroup = next.groups.find((group) => group.id === sourceGroupId)
+  const nextTargetGroup = next.groups.find((group) => group.id === targetGroupId)
+  if (!nextSourceGroup || !nextTargetGroup) return state
+  nextSourceGroup.windowIds = []
+  const targetInsertIndex = clampIndex(insertIndex, nextTargetGroup.windowIds.length)
+  const movingPinnedWindowIds = movingWindowIds.filter((windowId) => next.pinnedWindowIds.includes(windowId))
+  const movingUnpinnedWindowIds = movingWindowIds.filter((windowId) => !next.pinnedWindowIds.includes(windowId))
+  let pinnedInsertIndex = Math.min(targetInsertIndex, leadingPinnedWindowCount(next, nextTargetGroup))
+  for (const windowId of movingPinnedWindowIds) {
+    insertIntoGroup(next, nextTargetGroup, windowId, pinnedInsertIndex)
+    pinnedInsertIndex += 1
+  }
+  let unpinnedInsertIndex = Math.max(
+    targetInsertIndex + movingPinnedWindowIds.length,
+    leadingPinnedWindowCount(next, nextTargetGroup),
+  )
+  for (const windowId of movingUnpinnedWindowIds) {
+    insertIntoGroup(next, nextTargetGroup, windowId, unpinnedInsertIndex)
+    unpinnedInsertIndex += 1
+  }
+  next.groups = next.groups.filter((group) => group.id !== sourceGroupId)
+  delete next.activeTabByGroupId[sourceGroupId]
+  next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, sourceGroupId)
+  next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
+  next.activeTabByGroupId[targetGroupId] =
+    next.activeTabByGroupId[targetGroupId] && nextTargetGroup.windowIds.includes(next.activeTabByGroupId[targetGroupId])
+      ? next.activeTabByGroupId[targetGroupId]
+      : nextTargetGroup.windowIds[0]
+  ensureValidSplitState(next)
+  return next
+}
+
 export function splitWorkspaceWindowToOwnGroup(
   state: WorkspaceState,
   windowId: number,
@@ -563,6 +678,13 @@ export function splitWorkspaceWindowToOwnGroup(
     windowIds: [windowId],
   })
   next.activeTabByGroupId[newGroupId] = windowId
+  next.monitorTiles = next.monitorTiles
+    .map((monitor) => ({
+      outputName: monitor.outputName,
+      entries: monitor.entries.filter((entry) => entry.windowId !== windowId),
+    }))
+    .filter((monitor) => monitor.entries.length > 0)
+  next.preTileGeometry = next.preTileGeometry.filter((entry) => entry.windowId !== windowId)
   ensureValidSplitState(next)
   return next
 }
@@ -658,6 +780,7 @@ export function exitWorkspaceSplitView(state: WorkspaceState, groupId: string): 
       outputName: monitor.outputName,
       entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     })),
+    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
     preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }
@@ -687,6 +810,7 @@ export function setWorkspaceSplitFraction(
       outputName: monitor.outputName,
       entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     })),
+    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
     preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
     nextGroupSeq: state.nextGroupSeq,
   }

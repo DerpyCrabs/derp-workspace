@@ -61,6 +61,13 @@ export type DerpShellDetail =
   | { type: 'window_list'; windows: unknown[] }
   | { type: 'workspace_state'; state: WorkspaceState }
   | { type: 'shell_hosted_app_state'; byWindowId: Record<number, unknown> }
+  | {
+      type: 'interaction_state'
+      pointer_x: number
+      pointer_y: number
+      move_window_id: number | null
+      resize_window_id: number | null
+    }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }
   | { type: 'compositor_ping' }

@@ -34,6 +34,7 @@ import {
   waitForShellUiFocus,
   waitForWindowGone,
   waitForWindowMinimized,
+  windowControls,
   writeJsonArtifact,
   type E2eState,
   type Rect,
@@ -159,6 +160,105 @@ function tabDropSlotRect(shell: ShellSnapshot, targetWindowId: number): Rect | n
   if (idx < 0) return null
   const insertIndex = idx + 1
   return current.drop_slots?.find((slot) => slot.insert_index === insertIndex)?.rect ?? null
+}
+
+function titlebarDragPoint(shell: ShellSnapshot, windowId: number) {
+  const controls = windowControls(shell, windowId)
+  const rect = assertRectMinSize(`titlebar ${windowId}`, controls?.titlebar, 80, 16)
+  const group = tabGroupByWindow(shell, windowId)
+  const tabRight = Math.max(
+    rect.global_x + 24,
+    ...(group?.tabs.map((tab) => (tab.rect?.global_x ?? rect.global_x) + (tab.rect?.width ?? 0)) ?? []),
+  )
+  const controlLeft = controls?.minimize?.global_x ?? rect.global_x + rect.width
+  const minX = Math.min(controlLeft - 24, tabRight + 20)
+  const maxX = Math.max(minX, controlLeft - 24)
+  const preferredX = Math.round(rect.global_x + rect.width * 0.72)
+  return {
+    x: Math.max(minX, Math.min(maxX, preferredX)),
+    y: rect.global_y + Math.max(8, Math.min(rect.height - 8, Math.round(rect.height / 2))),
+  }
+}
+
+function emptyTabStripPoint(shell: ShellSnapshot, windowId: number) {
+  const controls = windowControls(shell, windowId)
+  const titlebar = assertRectMinSize(`titlebar ${windowId}`, controls?.titlebar, 80, 16)
+  const group = tabGroupByWindow(shell, windowId)
+  assert(group, `missing tab group for window ${windowId}`)
+  const rightTabs = group.tabs
+    .filter((tab) => !tab.split_left && !!tab.rect)
+    .map((tab) => tab.rect!)
+  const tabsRight = rightTabs.length > 0
+    ? Math.max(...rightTabs.map((rect) => rect.global_x + rect.width))
+    : titlebar.global_x + 20
+  const controlsLeft = controls?.minimize?.global_x ?? titlebar.global_x + titlebar.width
+  assert(controlsLeft - tabsRight >= 24, `missing blank tab strip area for window ${windowId}`)
+  return {
+    x: Math.round(Math.max(tabsRight + 12, controlsLeft - 20)),
+    y: titlebar.global_y + Math.max(8, Math.min(titlebar.height - 8, Math.round(titlebar.height / 2))),
+  }
+}
+
+function nativeContentPoint(shell: ShellSnapshot, windowId: number) {
+  const controls = windowControls(shell, windowId)
+  const titlebar = assertRectMinSize(`titlebar ${windowId}`, controls?.titlebar, 80, 16)
+  const window = shellWindowById(shell, windowId)
+  assert(window, `missing shell window ${windowId}`)
+  return {
+    x: Math.round(titlebar.global_x + titlebar.width / 2),
+    y: Math.round(
+      titlebar.global_y +
+        titlebar.height +
+        Math.max(32, Math.min(Math.max(48, window.height - 32), 120)),
+    ),
+  }
+}
+
+async function dragWindowHandleOntoTab(
+  base: string,
+  sourceWindowId: number,
+  start: { x: number; y: number },
+  targetWindowId: number,
+  dropPoint?: { x: number; y: number },
+) {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const target = tabRect(shell, targetWindowId)
+  await movePoint(base, start.x, start.y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await movePoint(base, start.x + 28, start.y)
+  let slotRect: Rect | null = null
+  try {
+    slotRect = await waitFor(
+      `wait for window drop slot ${target.group.group_id}`,
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return tabDropSlotRect(next, targetWindowId)
+      },
+      1500,
+      40,
+    )
+  } catch {
+    slotRect = null
+  }
+  const end = dropPoint ?? (slotRect ? rectCenter(slotRect) : rectCenter(target.tab.rect!))
+  for (let step = 1; step <= 24; step += 1) {
+    const t = step / 24
+    await movePoint(base, start.x + 28 + (end.x - (start.x + 28)) * t, start.y + (end.y - start.y) * t)
+  }
+  await waitFor(
+    `wait for window drag target ${sourceWindowId}->${targetWindowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      const currentTarget = tabGroupByWindow(shell, targetWindowId)
+      const dragTarget = shell.tab_drag_target
+      if (!currentTarget || !dragTarget) return null
+      if (compositor.shell_move_window_id !== sourceWindowId) return null
+      if (dragTarget.window_id !== sourceWindowId || dragTarget.group_id !== currentTarget.group_id) return null
+      return { compositor, shell, dragTarget }
+    },
+    2000,
+    40,
+  )
 }
 
 async function dragTabOntoTab(
@@ -343,6 +443,29 @@ async function waitForSplitGroup(base: string, windowId: number, leftWindowId: n
     },
     2000,
     125,
+  )
+}
+
+async function waitForSplitGroupMembers(
+  base: string,
+  windowId: number,
+  leftWindowId: number,
+  memberWindowIds: number[],
+) {
+  const expected = [...memberWindowIds].sort((a, b) => a - b).join(',')
+  return waitFor(
+    `wait for split group members ${memberWindowIds.join(',')}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const group = tabGroupByWindow(shell, windowId)
+      if (!group) return null
+      if (group.split_left_window_id !== leftWindowId) return null
+      if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
+      const members = [...group.member_window_ids].sort((a, b) => a - b).join(',')
+      return members === expected ? { shell, group } : null
+    },
+    2000,
+    40,
   )
 }
 
@@ -626,6 +749,317 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
   })
 
+  test('single-tab tab drag uses window move and drops into another tab bar', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-single-window-drag-drop')
+    let jsWindowId: number | null = null
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindow.window.window_id),
+      )
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const shellBefore = await timing.step('read source tab shell snapshot', () =>
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      )
+      const sourceTab = tabRect(shellBefore, jsWindow.window.window_id)
+      await timing.step('drag single-tab window by tab into native tab bar', () =>
+        dragWindowHandleOntoTab(base, jsWindow.window.window_id, rectCenter(sourceTab.tab.rect!), target.windowId),
+      )
+      const dragging = await timing.step('wait for compositor-backed tab drag state', () =>
+        waitFor(
+          `wait for single-tab window drag ${jsWindow.window.window_id}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === jsWindow.window.window_id) ?? null
+            if (compositor.shell_move_window_id !== jsWindow.window.window_id) return null
+            if (!controls?.dragging || (controls.frame_opacity ?? 1) >= 0.99) return null
+            const dragTarget = shell.tab_drag_target
+            const targetGroup = tabGroupByWindow(shell, target.windowId)
+            if (!dragTarget || !targetGroup || dragTarget.group_id !== targetGroup.group_id) return null
+            return { compositor, shell, controls, dragTarget }
+          },
+          2000,
+          40,
+        ),
+      )
+      await timing.step('release grouped drop', () => finishDrag(base))
+      released = true
+      const grouped = await timing.step('wait for merged members', () =>
+        waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], target.windowId),
+      )
+      await timing.step('write single-tab drag artifact', () =>
+        writeJsonArtifact('tab-groups-single-tab-window-drag.json', {
+          dragging,
+          grouped,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('titlebar drag drops a grouped native window into empty tab strip area with all tabs', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-titlebar-group-drag-drop')
+    let jsWindowId: number | null = null
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const sourceTarget = await timing.step('resolve source native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const sourcePeerWindowId =
+        sourceTarget.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+      await timing.step('group native source pair', () => dragTabOntoTab(base, sourcePeerWindowId, sourceTarget.windowId))
+      const groupedNative = await timing.step('wait for grouped native source', () =>
+        waitForGroupedMembers(base, [red.window.window_id, green.window.window_id], sourceTarget.windowId),
+      )
+      const steadyVisibility = await timing.step('wait for grouped native steady visibility', () =>
+        waitFor(
+          `wait for grouped native visibility ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor } = await getSnapshots(base)
+            const sourceWindow = compositorWindowById(compositor, sourceTarget.windowId)
+            const hiddenWindow = compositorWindowById(compositor, sourcePeerWindowId)
+            if (!sourceWindow || !hiddenWindow) return null
+            const outputStack = compositor.ordered_window_ids_by_output?.find(
+              (entry) => entry.output_name === sourceWindow.output_name,
+            )
+            if (!outputStack) return null
+            if (sourceWindow.workspace_visible !== true || hiddenWindow.workspace_visible !== false) return null
+            if (outputStack.window_ids.includes(sourcePeerWindowId)) return null
+            return { compositor, sourceWindow, hiddenWindow, outputStack }
+          },
+          2000,
+          40,
+        ),
+      )
+      const jsWindow = await timing.step('open js target window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js target window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindow.window.window_id),
+      )
+      const shellBefore = await timing.step('read grouped source shell snapshot', () =>
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      )
+      await timing.step('drag grouped native titlebar onto js empty tab strip area', () =>
+        dragWindowHandleOntoTab(
+          base,
+          sourceTarget.windowId,
+          titlebarDragPoint(shellBefore, sourceTarget.windowId),
+          jsWindow.window.window_id,
+          emptyTabStripPoint(shellBefore, jsWindow.window.window_id),
+        ),
+      )
+      const dragging = await timing.step('wait for grouped native drag state', () =>
+        waitFor(
+          `wait for grouped native drag ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === sourceTarget.windowId) ?? null
+            const sourceWindow = compositorWindowById(compositor, sourceTarget.windowId)
+            const hiddenWindow = compositorWindowById(compositor, sourcePeerWindowId)
+            const dragTarget = shell.tab_drag_target
+            const targetGroup = tabGroupByWindow(shell, jsWindow.window.window_id)
+            if (!controls?.dragging || (controls.frame_opacity ?? 1) >= 0.99) return null
+            if (!sourceWindow || (sourceWindow.render_alpha ?? 1) >= 0.99) return null
+            if (!hiddenWindow || hiddenWindow.workspace_visible !== false) return null
+            if (compositor.shell_move_window_id !== sourceTarget.windowId) return null
+            if (!dragTarget || !targetGroup || dragTarget.group_id !== targetGroup.group_id) return null
+            return { compositor, shell, controls, sourceWindow, hiddenWindow, dragTarget }
+          },
+          2000,
+          40,
+        ),
+      )
+      await timing.step('release grouped native drop', () => finishDrag(base))
+      released = true
+      const merged = await timing.step('wait for whole group merged into js tab bar', () =>
+        waitForGroupedMembers(
+          base,
+          [red.window.window_id, green.window.window_id, jsWindow.window.window_id],
+          jsWindow.window.window_id,
+        ),
+      )
+      await timing.step('write titlebar drag artifact', () =>
+        writeJsonArtifact('tab-groups-titlebar-group-drag.json', {
+          grouped_native: groupedNative,
+          steady_visibility: steadyVisibility,
+          dragging,
+          merged,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
+  test('grouped native titlebar drag released over native content does not stay stuck', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-titlebar-release-over-native')
+    let jsWindowId: number | null = null
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const sourceTarget = await timing.step('resolve source native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const releaseProbeWindowId =
+        sourceTarget.windowId === red.window.window_id ? green.window.window_id : red.window.window_id
+      const jsWindow = await timing.step('open js tab source', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js source to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindow.window.window_id),
+      )
+      await timing.step('group js tab into native source', () =>
+        dragTabOntoTab(base, jsWindow.window.window_id, sourceTarget.windowId),
+      )
+      await timing.step('wait for grouped native/js source', () =>
+        waitForGroupedMembers(base, [sourceTarget.windowId, jsWindow.window.window_id], sourceTarget.windowId),
+      )
+      const shellBefore = await timing.step('read grouped source shell snapshot', () =>
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      )
+      const { compositor: compositorBeforeDrag } = await timing.step('read grouped source compositor snapshot', () =>
+        getSnapshots(base),
+      )
+      const sourceBeforeDrag = compositorWindowById(compositorBeforeDrag, sourceTarget.windowId)
+      assert(sourceBeforeDrag, `missing source window ${sourceTarget.windowId} before drag`)
+      const start = titlebarDragPoint(shellBefore, sourceTarget.windowId)
+      const releasePoint = nativeContentPoint(shellBefore, releaseProbeWindowId)
+      await timing.step('start grouped native drag over release probe', async () => {
+        await movePoint(base, start.x, start.y)
+        await pointerButton(base, BTN_LEFT, 'press')
+        await movePoint(base, start.x + 28, start.y)
+        for (let step = 1; step <= 20; step += 1) {
+          const t = step / 20
+          await movePoint(
+            base,
+            start.x + 28 + (releasePoint.x - (start.x + 28)) * t,
+            start.y + (releasePoint.y - start.y) * t,
+          )
+        }
+      })
+      await timing.step('wait for grouped native drag to keep moving over native content', () =>
+        waitFor(
+          `wait for grouped native motion ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === sourceTarget.windowId) ?? null
+            const sourceWindow = compositorWindowById(compositor, sourceTarget.windowId)
+            if (!controls?.dragging || !sourceWindow) return null
+            if (compositor.shell_move_window_id !== sourceTarget.windowId) return null
+            const moved = Math.hypot(
+              sourceWindow.x - sourceBeforeDrag.x,
+              sourceWindow.y - sourceBeforeDrag.y,
+            )
+            if (moved < 140) return null
+            return { compositor, shell, sourceWindow, moved }
+          },
+          2000,
+          40,
+        ),
+      )
+      await timing.step('wait for grouped native drag state', () =>
+        waitFor(
+          `wait for grouped native drag ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === sourceTarget.windowId) ?? null
+            const sourceWindow = compositorWindowById(compositor, sourceTarget.windowId)
+            if (!controls?.dragging || !sourceWindow) return null
+            if (compositor.shell_move_window_id !== sourceTarget.windowId) return null
+            return { compositor, shell, controls, sourceWindow }
+          },
+          2000,
+          40,
+        ),
+      )
+      const releasedState = await timing.step('release drag over native content', async () => {
+        await pointerButton(base, BTN_LEFT, 'release')
+        released = true
+        return waitFor(
+          `wait for drag release ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === sourceTarget.windowId) ?? null
+            if (compositor.shell_move_window_id !== null) return null
+            if (controls?.dragging) return null
+            if (shell.tab_drag_target) return null
+            const window = compositorWindowById(compositor, sourceTarget.windowId)
+            if (!window) return null
+            if ((controls?.frame_opacity ?? 1) < 0.99) return null
+            return { compositor, shell, window, controls }
+          },
+          2000,
+          40,
+        )
+      })
+      const afterRelease = releasedState.window
+      const movedAfterRelease = await timing.step('move pointer after release and confirm no continued drag', async () => {
+        await movePoint(base, releasePoint.x + 160, releasePoint.y + 90)
+        return waitFor(
+          `wait for no stuck drag ${sourceTarget.windowId}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const window = compositorWindowById(compositor, sourceTarget.windowId)
+            const controls = shell.window_controls?.find((entry) => entry.window_id === sourceTarget.windowId) ?? null
+            if (!window) return null
+            if (compositor.shell_move_window_id !== null) return null
+            if (controls?.dragging) return null
+            if (window.x !== afterRelease.x || window.y !== afterRelease.y) return null
+            return { compositor, shell, window, controls }
+          },
+          2000,
+          40,
+        )
+      })
+      await timing.step('write release-over-native artifact', () =>
+        writeJsonArtifact('tab-groups-titlebar-release-over-native.json', {
+          released_state: releasedState,
+          moved_after_release: movedAfterRelease,
+          release_probe_window_id: releaseProbeWindowId,
+          source_group_window_ids: [sourceTarget.windowId, jsWindow.window.window_id],
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await pointerButton(base, BTN_LEFT, 'release')
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
   test('tab menu closes when its window closes', async ({ base, state }) => {
     const timing = createTimingMarks('tab-menu-close-lifecycle')
     const { red, green } = await ensureFreshNativePair(base, state)
@@ -694,7 +1128,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         waitFor(
           `wait for dragged tab ${draggedWindowId} detached`,
           async () => {
-            const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const { compositor, shell } = await getSnapshots(base)
             const draggedGroup = tabGroupByWindow(shell, draggedWindowId)
             const remainingGroup = tabGroupByWindow(shell, remainingWindowId)
             if (!draggedGroup || !remainingGroup || draggedGroup.group_id === remainingGroup.group_id) {
@@ -705,7 +1139,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
             }
             const draggedWindow = shell.windows.find((window) => window.window_id === draggedWindowId)
             if (!draggedWindow || draggedWindow.minimized) return null
-            return { shell, draggedGroup, remainingGroup, draggedWindow }
+            if (compositor.shell_move_window_id !== draggedWindowId) return null
+            return { compositor, shell, draggedGroup, remainingGroup, draggedWindow }
           },
           5000,
           100,
@@ -743,6 +1178,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
               return null
             }
             if (draggedRow.tab_count !== 1 || remainingRow.tab_count !== 1) return null
+            if (compositor.shell_move_window_id !== null) return null
+            if (compositor.shell_pointer_grab_window_id !== null) return null
             return {
               compositor,
               shell,
@@ -1037,7 +1474,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('wait for three tab group', () =>
         waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id, otherNativeId], target.windowId),
       )
-      const split = await timing.step('enter split', () => enterSplitViewFromTabMenu(base, target.windowId))
+      await timing.step('enter split', () => enterSplitViewFromTabMenu(base, target.windowId))
+      const split = await timing.step('wait for three-member split stable', () =>
+        waitForSplitGroupMembers(base, target.windowId, target.windowId, [
+          target.windowId,
+          jsWindow.window.window_id,
+          otherNativeId,
+        ]),
+      )
       const hiddenRightWindowId =
         [jsWindow.window.window_id, otherNativeId].find(
           (windowId) => !(split.group.visible_window_ids ?? []).includes(windowId),

@@ -49,10 +49,8 @@ export type SettingsPanelProps = {
   uiScalePercent: Accessor<100 | 150 | 200>
   tilingCfgRev: Accessor<number>
   setTilingCfgRev: Setter<number>
-  clearMonitorTiles: (monitorName: string) => void
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
-  applyAutoLayout: (monitorName: string) => void
   openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
@@ -131,10 +129,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             currentMonitorName={props.currentMonitorName}
             tilingCfgRev={props.tilingCfgRev}
             setTilingCfgRev={props.setTilingCfgRev}
-            clearMonitorTiles={props.clearMonitorTiles}
             bumpSnapChrome={props.bumpSnapChrome}
             scheduleExclusionZonesSync={props.scheduleExclusionZonesSync}
-            applyAutoLayout={props.applyAutoLayout}
             openCustomLayoutOverlay={props.openCustomLayoutOverlay}
             sessionAutoSaveEnabled={props.sessionAutoSaveEnabled}
             setSessionAutoSaveEnabled={props.setSessionAutoSaveEnabled}

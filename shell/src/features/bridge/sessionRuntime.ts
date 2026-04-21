@@ -1,4 +1,3 @@
-import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import { backedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui/shellHostedAppsRegistry'
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
@@ -344,8 +343,6 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     }
     if (!options.sendWorkspaceMutation({ type: 'replace_state', state: planned })) return
 
-    const screens = options.getTaskbarScreens()
-    const origin = options.getLayoutCanvasOrigin()
     for (const entry of snapshot.preTileGeometry) {
       const windowId = liveWindowIdForRef(entry.windowRef)
       if (windowId === null) continue
@@ -360,59 +357,18 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         return
       }
     }
-    if (screens.length > 0 && origin) {
+    const screens = options.getTaskbarScreens()
+    if (screens.length > 0) {
       for (const monitorState of snapshot.monitorTiles) {
         const targetMonitor =
           screens.find((screen) => screen.name === monitorState.outputName) ?? screens[0] ?? null
-        if (!targetMonitor) continue
-        const resolvedEntries = monitorState.entries
-          .map((entry) => {
-            const windowId = liveWindowIdForRef(entry.windowRef)
-            if (windowId === null) return null
-            return { windowId, zone: entry.zone, bounds: entry.bounds }
-          })
-          .filter((entry): entry is { windowId: number; zone: SnapZone; bounds: SavedRect } => entry !== null)
-        if (resolvedEntries.length === 0) continue
-        const { layout, params } = getMonitorLayout(targetMonitor.name)
-        let boundsByWindowId = new Map<number, SavedRect>()
-        if (layout.type === 'manual-snap') {
-          boundsByWindowId = new Map(resolvedEntries.map((entry) => [entry.windowId, entry.bounds]))
-        } else {
-          const reserveTb = options.reserveTaskbarForMon(targetMonitor)
-          const work = monitorWorkAreaGlobal(targetMonitor, reserveTb)
-          const rects = layout.computeLayout(
-            resolvedEntries.map((entry) => entry.windowId),
-            { x: work.x, y: work.y, width: work.w, height: work.h },
-            params,
-          )
-          boundsByWindowId = new Map(
-            Array.from(rects.entries()).map(([windowId, rect]) => [
-              windowId,
-              { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-            ]),
-          )
-        }
-        for (const entry of resolvedEntries) {
-          const bounds = boundsByWindowId.get(entry.windowId) ?? entry.bounds
-          if (!options.sendSetMonitorTile(entry.windowId, targetMonitor.name, entry.zone, bounds)) {
+        if (!targetMonitor || getMonitorLayout(targetMonitor.name).layout.type !== 'manual-snap') continue
+        for (const entry of monitorState.entries) {
+          const windowId = liveWindowIdForRef(entry.windowRef)
+          if (windowId === null) continue
+          if (!options.sendSetMonitorTile(windowId, targetMonitor.name, entry.zone, entry.bounds)) {
             return
           }
-          const local = rectGlobalToCanvasLocal(
-            bounds.x,
-            bounds.y,
-            bounds.width,
-            bounds.height,
-            origin,
-          )
-          options.shellWireSend(
-            'set_geometry',
-            entry.windowId,
-            local.x,
-            local.y,
-            local.w,
-            local.h,
-            SHELL_LAYOUT_FLOATING,
-          )
         }
       }
     }

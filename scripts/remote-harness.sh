@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/remote-common.sh"
 remote_common_init "remote-harness"
 
 require_remote_sync_tools
+remote_test_lock_acquire
 
 FETCH=1
 remote_args=()

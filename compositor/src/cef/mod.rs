@@ -23,8 +23,8 @@ pub use osr_view_state::{OsrViewState, OSR_BOOTSTRAP_LOGICAL_HEIGHT, OSR_BOOTSTR
 pub use runner::{maybe_run_cef_subprocess_only, spawn_cef_ui_thread};
 pub use shell_uplink::DerpRenderProcessHandler;
 
-use std::path::PathBuf;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub fn cef_userfree_string_to_string(s: &cef::CefStringUserfreeUtf16) -> String {

@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/remote-common.sh"
 remote_common_init "e2e-remote"
 
 require_remote_sync_tools
+remote_test_lock_acquire
 
 remote_env=()
 for name in DERP_E2E_BASE DERP_SHELL_HTTP_URL_FILE DERP_E2E_ARTIFACT_DIR DERP_E2E_NATIVE_BIN DERP_E2E_SPAWN_COMMAND; do

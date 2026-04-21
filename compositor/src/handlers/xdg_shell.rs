@@ -77,6 +77,12 @@ impl XdgShellHandler for CompositorState {
             .snapshot_for_wl_surface(&wl0)
             .expect("just registered");
         self.capture_refresh_window_source_cache(reg.window_id);
+        let initial_client_rect = if map_at_output_origin {
+            None
+        } else {
+            self.new_toplevel_initial_client_rect(&window, parent.as_ref())
+        };
+        let defer_initial_map = defer_map || initial_client_rect.is_some();
 
         let existing_before = self.space.elements().count();
         let (map_x, map_y) = if map_at_output_origin {
@@ -101,7 +107,7 @@ impl XdgShellHandler for CompositorState {
             app_id = %reg.app_id,
             wayland_client_pid = ?wayland_client_pid,
             parent_protocol_id = ?parent_protocol_id,
-            defer_map,
+            defer_map = defer_initial_map,
             bbox = ?window.bbox(),
             geometry = ?window.geometry(),
             "xdg new_toplevel"
@@ -115,15 +121,15 @@ impl XdgShellHandler for CompositorState {
             wayland_client_pid = ?wayland_client_pid,
             title_len = reg.title.len(),
             parent_wl_surface_protocol_id = ?parent.as_ref().map(|p| p.id().protocol_id()),
-            defer_map,
+            defer_map = defer_initial_map,
             map_at_output_origin,
-            will_emit_WindowMapped_immediately = !defer_map,
+            will_emit_WindowMapped_immediately = !defer_initial_map,
             "xdg new_toplevel staging check"
         );
         if !map_at_output_origin {
             self.pending_gnome_initial_toplevels.insert(reg.window_id);
         }
-        if defer_map {
+        if defer_initial_map {
             let key =
                 crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
             self.pending_deferred_toplevels.insert(
@@ -132,6 +138,7 @@ impl XdgShellHandler for CompositorState {
                     window: window.clone(),
                     map_x,
                     map_y,
+                    initial_client_rect,
                 },
             );
             tracing::warn!(
@@ -160,8 +167,10 @@ impl XdgShellHandler for CompositorState {
                 "xdg new_toplevel emitted WindowMapped immediate map"
             );
             let spawn_focus_wid = info.window_id;
+            let output_name = info.output_name.clone();
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
             self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
         }
     }
 

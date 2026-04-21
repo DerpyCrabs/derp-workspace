@@ -5,8 +5,9 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use smithay::backend::input::{ButtonState, KeyState};
+use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::input::keyboard::FilterResult;
+use smithay::input::pointer::AxisFrame;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat;
@@ -151,6 +152,8 @@ struct E2eWindowSnapshot {
     client_side_decoration: bool,
     shell_hosted: bool,
     wayland_client_pid: Option<i32>,
+    render_alpha: f32,
+    workspace_visible: bool,
 }
 
 #[derive(Serialize)]
@@ -265,17 +268,14 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
-            let move_hosted = self
-                .shell_move_window_id
-                .is_some_and(|wid| self.window_registry.is_shell_hosted(wid));
-            let resize_hosted = self
-                .shell_resize_window_id
-                .is_some_and(|wid| self.window_registry.is_shell_hosted(wid));
-            if self.shell_move_is_active() && !move_hosted {
+            if self.shell_move_is_active() {
                 self.shell_move_delta(dx, dy);
             }
-            if self.shell_resize_is_active() && !resize_hosted {
+            if self.shell_resize_is_active() {
                 self.shell_resize_delta(dx, dy);
+            }
+            if self.shell_move_is_active() || self.shell_resize_is_active() {
+                self.shell_send_interaction_state();
             }
         }
         Ok(())
@@ -331,7 +331,19 @@ impl CompositorState {
         if self.workspace_logical_bounds().is_none() {
             return Err("no workspace bounds available".to_string());
         }
+        let time = self.e2e_now_ms() as u32;
+        let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
+        if delta_x != 0 {
+            frame = frame.value(Axis::Horizontal, -(f64::from(delta_x)));
+        }
+        if delta_y != 0 {
+            frame = frame.value(Axis::Vertical, -(f64::from(delta_y)));
+        }
         self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
+        if let Some(pointer) = self.seat.get_pointer() {
+            pointer.axis(self, frame);
+            pointer.frame(self);
+        }
         Ok(())
     }
 
@@ -520,24 +532,31 @@ impl CompositorState {
             .window_registry
             .all_records()
             .into_iter()
-            .map(|record| E2eWindowSnapshot {
-                window_id: record.info.window_id,
-                surface_id: record.info.surface_id,
-                stack_z: self.shell_window_stack_z(record.info.window_id),
-                title: record.info.title,
-                app_id: record.info.app_id,
-                xwayland_scale: self.xwayland_scale_for_window_id(record.info.window_id),
-                output_name: record.info.output_name,
-                x: record.info.x,
-                y: record.info.y,
-                width: record.info.width,
-                height: record.info.height,
-                minimized: record.info.minimized,
-                maximized: record.info.maximized,
-                fullscreen: record.info.fullscreen,
-                client_side_decoration: record.info.client_side_decoration,
-                shell_hosted: record.kind == WindowKind::ShellHosted,
-                wayland_client_pid: record.info.wayland_client_pid,
+            .map(|record| {
+                let render_alpha = self.workspace_window_render_alpha(record.info.window_id);
+                let workspace_visible =
+                    self.workspace_window_is_visible_during_render(record.info.window_id);
+                E2eWindowSnapshot {
+                    window_id: record.info.window_id,
+                    surface_id: record.info.surface_id,
+                    stack_z: self.shell_window_stack_z(record.info.window_id),
+                    title: record.info.title,
+                    app_id: record.info.app_id,
+                    xwayland_scale: self.xwayland_scale_for_window_id(record.info.window_id),
+                    output_name: record.info.output_name,
+                    x: record.info.x,
+                    y: record.info.y,
+                    width: record.info.width,
+                    height: record.info.height,
+                    minimized: record.info.minimized,
+                    maximized: record.info.maximized,
+                    fullscreen: record.info.fullscreen,
+                    client_side_decoration: record.info.client_side_decoration,
+                    shell_hosted: record.kind == WindowKind::ShellHosted,
+                    wayland_client_pid: record.info.wayland_client_pid,
+                    render_alpha,
+                    workspace_visible,
+                }
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));

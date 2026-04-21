@@ -53,6 +53,8 @@ type ShellWindowFrameProps = {
   repaintKey?: MaybeAcc<number>
   focused: MaybeAcc<boolean>
   stackZ: MaybeAcc<number>
+  dragging?: MaybeAcc<boolean>
+  hidden?: MaybeAcc<boolean>
   onFocusRequest?: () => void
   onTitlebarPointerDown: (pointerId: number, clientX: number, clientY: number) => void
   onSnapAssistOpen?: (anchorRect: DOMRect) => void
@@ -151,6 +153,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         root = el
       }}
       data-shell-window-frame={model()?.window_id ?? 0}
+      data-shell-window-hidden={
+        props.hidden !== undefined && readAcc(props.hidden) ? 'true' : 'false'
+      }
+      data-shell-window-dragging={
+        props.dragging !== undefined && readAcc(props.dragging) ? 'true' : 'false'
+      }
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
       style={{
@@ -167,6 +175,13 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         contain: 'layout paint',
         background: 'var(--shell-chrome-bg)',
         '--shell-chrome-bg': chromeBg(),
+        visibility: props.hidden !== undefined && readAcc(props.hidden) ? 'hidden' : 'visible',
+        opacity:
+          props.hidden !== undefined && readAcc(props.hidden)
+            ? '0'
+            : props.dragging !== undefined && readAcc(props.dragging)
+              ? '0.76'
+              : '1',
       }}
     >
       <Show when={props.children}>

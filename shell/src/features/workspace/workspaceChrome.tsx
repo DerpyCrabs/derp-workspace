@@ -66,10 +66,12 @@ type WorkspaceChromeOptions = {
   shellPointerGlobalLogical: (clientX: number, clientY: number) => { x: number; y: number } | null
   rectFromWindow: (window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>) => SplitGroupRect
   renderShellWindowContent: (windowId: number) => JSX.Element | undefined
+  pointerClient: Accessor<{ x: number; y: number } | null>
+  shellWindowDragId: Accessor<number | null>
+  shellWindowDragMoved: Accessor<boolean>
   focusShellUiWindow: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   focusWindowViaShell: (windowId: number) => void
-  moveWindowUnderPointer: (windowId: number, clientX: number, clientY: number) => boolean
   beginShellWindowMove: (windowId: number, clientX: number, clientY: number) => void
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
@@ -77,6 +79,7 @@ type WorkspaceChromeOptions = {
   selectGroupWindow: (windowId: number) => boolean
   setSplitGroupFraction: (groupId: string, fraction: number) => void
   applyTabDrop: (windowId: number, target: TabMergeTarget) => boolean
+  applyWindowDrop: (windowId: number, target: TabMergeTarget) => boolean
   detachGroupWindow: (windowId: number, clientX: number, clientY: number) => boolean
   workspaceGroupIdForWindow: (windowId: number) => string | null
   isWorkspaceWindowTiled: (windowId: number) => boolean
@@ -254,6 +257,16 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     })
   }
 
+  function resolveWindowDragTarget(windowId: number, clientX: number, clientY: number) {
+    const sourceGroupId = options.workspaceGroupIdForWindow(windowId)
+    if (!sourceGroupId) return null
+    const sourceGroup = options.workspaceGroupsById().get(sourceGroupId) ?? null
+    if (!sourceGroup || sourceGroup.splitLeftWindowId !== null) return null
+    const target = findTabMergeTargetFromPointer(windowId, clientX, clientY, true)
+    if (!target || target.groupId === sourceGroupId) return null
+    return target
+  }
+
   function startTabPointerGesture(
     windowId: number,
     pointerId: number,
@@ -265,6 +278,11 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const sourceGroupId = options.workspaceGroupIdForWindow(windowId)
     if (!sourceGroupId) return
     if (splitLeftWindowId(options.workspaceState(), sourceGroupId) === windowId) return
+    const sourceGroup = options.workspaceGroupsById().get(sourceGroupId) ?? null
+    if (sourceGroup && sourceGroup.members.length <= 1) {
+      options.beginShellWindowMove(windowId, clientX, clientY)
+      return
+    }
     options.shellWireSend('shell_ui_grab_begin', SHELL_UI_SETTINGS_WINDOW_ID)
     tabDragPointerGrab = true
     options.shellContextHideMenu()
@@ -439,8 +457,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     let detached = prev.detached
     if (dragging && !detached && (splitVerticalTear || classicTear)) {
       detached = options.detachGroupWindow(prev.windowId, event.clientX, event.clientY)
-    } else if (dragging && detached) {
-      options.moveWindowUnderPointer(prev.windowId, event.clientX, event.clientY)
     }
     setTabDragState({
       ...prev,
@@ -506,6 +522,22 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     onCleanup(() => cancelAnimationFrame(frame))
   })
 
+  const activeWindowDragWindowId = createMemo(() => {
+    if (tabDragState()) return null
+    if (!options.shellWindowDragMoved()) return null
+    return options.shellWindowDragId()
+  })
+
+  const activeWindowDragTarget = createMemo(() => {
+    const windowId = activeWindowDragWindowId()
+    const pointer = options.pointerClient()
+    if (windowId == null || !pointer) return null
+    return resolveWindowDragTarget(windowId, pointer.x, pointer.y)
+  })
+
+  const activeDragWindowId = createMemo(() => tabDragState()?.windowId ?? activeWindowDragWindowId())
+  const activeDropTarget = createMemo(() => tabDragState()?.target ?? activeWindowDragTarget())
+
   document.addEventListener('pointermove', onTabDragPointerMove, true)
   document.addEventListener('pointerup', onTabDragPointerUp, true)
   document.addEventListener('pointercancel', onTabDragPointerCancel, true)
@@ -524,6 +556,12 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function WorkspaceGroupFrame(props: { groupId: string }) {
     const group = createMemo(() => options.workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
+    const visibleWindow = createMemo(() => {
+      const currentVisibleWindowId = visibleWindowId()
+      return currentVisibleWindowId == null
+        ? undefined
+        : options.allWindowsMap().get(currentVisibleWindowId)
+    })
     const shellHostedMemberWindowIds = createMemo(() => {
       const g = group()
       if (!g) return [] as readonly number[]
@@ -531,15 +569,15 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         .filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
         .map((w) => w.window_id)
     })
+    const keepShellContentMounted = createMemo(() => shellHostedMemberWindowIds().length > 0)
     const splitLayout = createMemo(() => {
       const currentGroup = group()
       return currentGroup ? splitLayoutForGroup(currentGroup) : null
     })
+    const frameHidden = createMemo(() => visibleWindow()?.minimized ?? false)
     const frameModel = createMemo((): ShellWindowModel | undefined => {
-      const currentVisibleWindowId = visibleWindowId()
-      if (currentVisibleWindowId == null) return undefined
-      const window = options.allWindowsMap().get(currentVisibleWindowId)
-      if (!window || window.minimized) return undefined
+      const window = visibleWindow()
+      if (!window) return undefined
       const split = splitLayout()
       if (!split) return { ...window, snap_tiled: options.isWorkspaceWindowTiled(window.window_id) }
       return {
@@ -552,6 +590,10 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         fullscreen: false,
         snap_tiled: false,
       }
+    })
+    const showFrame = createMemo(() => {
+      const model = frameModel()
+      return model !== undefined && (!frameHidden() || keepShellContentMounted())
     })
     const stackZ = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()
@@ -626,13 +668,15 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       )
     }
     return (
-      <Show when={frameModel()} fallback={null}>
+      <Show when={showFrame()} fallback={null}>
         <ShellWindowFrame
           win={frameModel}
           repaintKey={options.snapChromeRev}
           stackZ={stackZ}
           focused={rowFocused}
-          shellUiRegister={splitLayout() ? undefined : deskShellUiReg()}
+          dragging={() => activeDragWindowId() === visibleWindowId()}
+          hidden={frameHidden}
+          shellUiRegister={splitLayout() || frameHidden() ? undefined : deskShellUiReg()}
           tabStrip={
             group() ? (
               <WorkspaceTabStrip
@@ -645,8 +689,8 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                   pinned: options.isWorkspaceWindowPinned(member.window_id),
                 }))}
                 splitLeftWindowId={group()!.splitLeftWindowId}
-                dragWindowId={tabDragState()?.windowId ?? null}
-                dropTarget={tabDragState()?.target ?? null}
+                dragWindowId={activeDragWindowId() ?? null}
+                dropTarget={activeDropTarget() ?? null}
                 suppressClickWindowId={suppressTabClickWindowId()}
                 onSelectTab={selectTab}
                 onConsumeSuppressedClick={(windowId) => {
@@ -736,9 +780,10 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                   <div
                     class={
                       visible()
-                        ? 'pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)'
-                        : 'pointer-events-none hidden h-full min-h-0 min-w-0 overflow-auto'
+                        ? 'pointer-events-auto relative h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)'
+                        : 'pointer-events-none invisible absolute inset-0 min-h-0 min-w-0 overflow-auto'
                     }
+                    aria-hidden={visible() ? undefined : 'true'}
                   >
                     {options.renderShellWindowContent(memberWindowId)}
                   </div>
@@ -786,7 +831,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function TabDragOverlay() {
     const drag = createMemo(() => tabDragState())
     const dropIndicator = createMemo(() => {
-      const target = drag()?.target
+      const target = activeDropTarget()
       if (!target) return null
       const slot = document.querySelector(
         `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
@@ -844,6 +889,73 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     )
   }
 
+  function WindowDragDropOverlay() {
+    const windowId = createMemo(() => activeWindowDragWindowId())
+    const dropIndicator = createMemo(() => {
+      const target = activeWindowDragTarget()
+      if (!target) return null
+      const slot = document.querySelector(
+        `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
+      ) as HTMLElement | null
+      const strip = document.querySelector(
+        `[data-workspace-tab-strip="${target.groupId}"]`,
+      ) as HTMLElement | null
+      if (!slot) return null
+      const slotRect = slot.getBoundingClientRect()
+      const stripRect = strip?.getBoundingClientRect() ?? slotRect
+      return {
+        line: {
+          left: `${Math.round(slotRect.left - 2)}px`,
+          top: `${Math.round(stripRect.top + 2)}px`,
+          width: '4px',
+          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
+        },
+        highlight: {
+          left: `${Math.round(stripRect.left)}px`,
+          top: `${Math.round(stripRect.top)}px`,
+          width: `${Math.round(stripRect.width)}px`,
+          height: `${Math.round(stripRect.height)}px`,
+        },
+        key: `${target.groupId}:${target.insertIndex}`,
+      }
+    })
+    return (
+      <Show when={windowId() !== null}>
+        <div
+          data-window-tab-drop-capture={windowId()!}
+          class="pointer-events-none fixed inset-0 z-470119"
+        >
+          <Show when={dropIndicator()} keyed>
+            {(indicator) => (
+              <>
+                <div
+                  data-tab-drop-indicator={indicator.key}
+                  class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
+                  style={indicator.highlight}
+                />
+                <div
+                  data-tab-drop-indicator-line={indicator.key}
+                  class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
+                  style={indicator.line}
+                />
+              </>
+            )}
+          </Show>
+        </div>
+      </Show>
+    )
+  }
+
+  function finishWindowDragDrop(pointerOverride?: { x: number; y: number } | null) {
+    if (tabDragState()) return false
+    const windowId = activeWindowDragWindowId()
+    const pointer = pointerOverride ?? options.pointerClient()
+    if (windowId == null || !pointer) return false
+    const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
+    if (!target) return false
+    return options.applyWindowDrop(windowId, target)
+  }
+
   function SplitGestureOverlay() {
     const cursorClass = createMemo(() => {
       const gesture = splitGroupGesture()
@@ -867,10 +979,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   return {
     WorkspaceGroupFrame,
     TabDragOverlay,
+    WindowDragDropOverlay,
     SplitGestureOverlay,
     applySplitGroupGeometry,
     cancelSplitGroupGesture,
     clearSuppressTabClickWindowId: () => setSuppressTabClickWindowId(null),
+    finishWindowDragDrop,
+    activeDragWindowId,
+    activeDropTarget,
     splitGroupGesture,
     tabDragState,
   }

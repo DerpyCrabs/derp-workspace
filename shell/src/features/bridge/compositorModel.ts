@@ -16,8 +16,6 @@ import {
 export type CompositorFollowup = {
   flushWindows?: boolean
   syncExclusion?: boolean
-  relayoutAll?: boolean
-  relayoutMonitor?: string | null
   resetScroll?: boolean
 }
 
@@ -189,12 +187,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (detail.type === 'window_state') {
       const windowId = coerceShellWindowId(detail.window_id)
       const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
-      let relayoutMonitor: string | null = null
       if (windowId !== null) {
         if (!previousWindow) {
           return requestRecovery(detail, applyOptions, windowId)
         }
-        relayoutMonitor = previousWindow.output_name || applyOptions.fallbackMonitorKey()
       }
       if (detail.minimized && windowId !== null) {
         setFocusedWindowId((prev) => (prev === windowId ? null : prev))
@@ -205,17 +201,15 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         detailType: detail.type,
         windowId,
         previousWindow,
-        followup: { flushWindows: true, relayoutMonitor },
+        followup: { flushWindows: true },
       }
     }
 
     if (detail.type === 'window_unmapped') {
       const windowId = coerceShellWindowId(detail.window_id)
       const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
-      let relayoutMonitor: string | null = null
       if (windowId !== null) {
         setFocusedWindowId((prev) => (prev === windowId ? null : prev))
-        if (previousWindow) relayoutMonitor = previousWindow.output_name || applyOptions.fallbackMonitorKey()
       }
       setWindows((map) => applyDetail(map, detail))
       return {
@@ -223,7 +217,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         detailType: detail.type,
         windowId,
         previousWindow,
-        followup: { flushWindows: true, relayoutMonitor },
+        followup: { flushWindows: true },
       }
     }
 
@@ -244,15 +238,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
     if (detail.type === 'window_mapped') {
       setWindows((map) => applyDetail(map, detail))
-      const monitorName =
-        typeof detail.output_name === 'string' && detail.output_name.length > 0
-          ? detail.output_name
-          : applyOptions.fallbackMonitorKey()
       return {
         kind: 'window_mapped',
         detailType: detail.type,
         windowId: detail.window_id,
-        followup: { relayoutMonitor: monitorName },
       }
     }
 

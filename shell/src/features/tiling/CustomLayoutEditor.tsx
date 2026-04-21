@@ -52,6 +52,7 @@ export const CustomLayoutEditor: Component<{
                 <CustomLayoutPreview
                   layout={layout}
                   selectedZoneId={firstLeafZoneId(layout.root)}
+                  square
                   zoneAttrs={() => ({
                     'data-settings-custom-layout-zone': firstLeafZoneId(layout.root),
                     'data-settings-custom-layout-monitor': props.outputName,

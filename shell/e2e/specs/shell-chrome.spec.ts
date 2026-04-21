@@ -14,7 +14,9 @@ import {
   compositorFloatingLayerCount,
   compositorFloatingLayers,
   compositorWindowById,
+  dragBetweenPoints,
   defineGroup,
+  getPerfCounters,
   getJson,
   getShellHtml,
   getSnapshots,
@@ -30,8 +32,11 @@ import {
   pointInRect,
   rectCenter,
   assertRectMinSize,
+  resetPerfCounters,
   runKeybind,
+  shellWindowById,
   taskbarEntry,
+  taskbarForMonitor,
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
@@ -42,6 +47,7 @@ import {
   waitForShellUiFocus,
   waitForTaskbarEntry,
   waitForWindowGone,
+  windowControls,
   writeJsonArtifact,
   writeTextArtifact,
   type CompositorSnapshot,
@@ -142,6 +148,36 @@ async function switchSettingsPage(
       const rect = shell.controls?.[controlKey]
       if (rect) await clickRect(base, rect)
       return null
+    },
+    5000,
+    100,
+  )
+}
+
+async function selectSettingsTilingLayout(base: string, layout: 'grid' | 'manual-snap') {
+  await switchSettingsPage(base, 'settings_tab_tiling', 'tiling', 'data-settings-tiling-page')
+  const tilingPageReady = await waitForSettingsTilingLayoutTriggerReady(base)
+  const optionKey =
+    layout === 'grid' ? 'settings_tiling_layout_option_grid' : 'settings_tiling_layout_option_manual_snap'
+  if (!tilingPageReady.controls?.[optionKey]) {
+    assert(tilingPageReady.controls?.settings_tiling_layout_trigger, 'missing tiling layout trigger')
+    await clickRect(base, tilingPageReady.controls.settings_tiling_layout_trigger)
+  }
+  const tilingLayoutOpen = await waitFor(
+    `wait for tiling layout menu option ${layout}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.controls?.[optionKey] ? shell : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, tilingLayoutOpen.controls![optionKey]!)
+  await waitFor(
+    `wait for tiling layout set to ${layout}`,
+    async () => {
+      const html = await getShellHtml(base, '[data-settings-tiling-page]')
+      return html.includes(layout) ? html : null
     },
     5000,
     100,
@@ -618,6 +654,149 @@ export default defineGroup(import.meta.url, ({ test }) => {
       firstFocused: firstFocused.shell,
       refocusedSecond: refocusedSecond.shell,
     })
+  })
+
+  test('maximized shell window titlebar drag restores under pointer', async ({ base, state }) => {
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    await waitForShellUiFocus(base, windowId)
+    await runKeybind(base, 'toggle_maximize', windowId)
+    const maximized = await waitFor(
+      'wait for shell test maximized',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, windowId)
+        return window?.maximized ? { compositor, window } : null
+      },
+      5000,
+      100,
+    )
+    const shellMax = await waitFor(
+      'wait for shell test maximized titlebar',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = shellWindowById(shell, windowId)
+        const controls = windowControls(shell, windowId)
+        if (!window?.maximized || !controls?.titlebar) return null
+        return { titlebar: controls.titlebar }
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(shellMax.titlebar)
+    await dragBetweenPoints(base, start.x, start.y, start.x, start.y + 160, 18)
+    const restored = await waitFor(
+      'wait for shell test unmaximized after titlebar drag',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, windowId)
+        if (!window || window.maximized || window.fullscreen || window.minimized) return null
+        if (window.width >= maximized.window.width - 24 && window.height >= maximized.window.height - 120) return null
+        return { window }
+      },
+      5000,
+      100,
+    )
+    const centerX = restored.window.x + restored.window.width / 2
+    assert(
+      Math.abs(centerX - start.x) < 220,
+      `restored shell window center x ${centerX} should stay near titlebar grab ${start.x}`,
+    )
+    await writeJsonArtifact('shell-max-titlebar-drag-unmax.json', {
+      windowId,
+      grab: { x: start.x, y: start.y },
+      after: {
+        x: restored.window.x,
+        y: restored.window.y,
+        w: restored.window.width,
+        h: restored.window.height,
+        output: restored.window.output_name,
+        centerX,
+      },
+    })
+  })
+
+  test('shell-hosted windows open directly into auto layout geometry', async ({ base, state }) => {
+    await openSettings(base, 'click')
+    try {
+      await selectSettingsTilingLayout(base, 'grid')
+      let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+      await resetPerfCounters(base)
+
+      const opened = await openShellTestWindow(base, state)
+      const windowId = opened.window.window_id
+      const settled = await waitFor(
+        'wait for grid-opened shell window geometry',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const window = compositorWindowById(compositor, windowId)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+          const taskbar = window ? taskbarForMonitor(shell, window.output_name) : null
+          if (!window || !output || !taskbar?.rect) return null
+          const expected = {
+            x: output.x,
+            y: output.y + 26,
+            width: output.width,
+            height: taskbar.rect.global_y - output.y - 26,
+          }
+          if (Math.abs(window.x - expected.x) > 24) return null
+          if (Math.abs(window.y - expected.y) > 24) return null
+          if (Math.abs(window.width - expected.width) > 24) return null
+          if (Math.abs(window.height - expected.height) > 24) return null
+          return { compositor, shell, window, expected }
+        },
+        2000,
+        40,
+      )
+      const perf = await getPerfCounters(base)
+      assert(perf.shell_updates.window_mapped_messages >= 1, 'shell-hosted open should emit a mapped message')
+      assert(
+        perf.shell_updates.window_geometry_messages === 1,
+        `shell-hosted auto-layout open should not emit a follow-up geometry correction, got ${perf.shell_updates.window_geometry_messages}`,
+      )
+      const followup = await getSnapshots(base)
+      const followupWindow = compositorWindowById(followup.compositor, windowId)
+      assert(followupWindow, 'missing follow-up shell-hosted compositor window')
+      assert(
+        followupWindow.x === settled.window.x &&
+          followupWindow.y === settled.window.y &&
+          followupWindow.width === settled.window.width &&
+          followupWindow.height === settled.window.height,
+        'shell-hosted auto-layout open geometry should stay stable after mapping',
+      )
+      await writeJsonArtifact('shell-hosted-grid-open.json', {
+        windowId,
+        perf,
+        expected: settled.expected,
+        actual: {
+          x: settled.window.x,
+          y: settled.window.y,
+          width: settled.window.width,
+          height: settled.window.height,
+          output: settled.window.output_name,
+        },
+        followup: {
+          x: followupWindow.x,
+          y: followupWindow.y,
+          width: followupWindow.width,
+          height: followupWindow.height,
+          output: followupWindow.output_name,
+        },
+      })
+    } finally {
+      try {
+        await openSettings(base, 'click')
+        await selectSettingsTilingLayout(base, 'manual-snap')
+      } finally {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (taskbarEntry(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.close) {
+          await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+          await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+        }
+      }
+    }
   })
 
   test('taskbar context menus switch cleanly without disturbing shell focus', async ({ base }) => {

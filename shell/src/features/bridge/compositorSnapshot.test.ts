@@ -125,4 +125,37 @@ describe('decodeCompositorSnapshot', () => {
       ],
     })
   })
+
+  it('decodes compositor interaction state', () => {
+    const interactionState = frame([
+      ...u32(60),
+      ...i32(140),
+      ...i32(220),
+      ...u32(9),
+      ...u32(0),
+    ])
+    const payload = [...interactionState]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(2),
+      ...u32(payload.length),
+      ...u32(0),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      details: [
+        {
+          type: 'interaction_state',
+          pointer_x: 140,
+          pointer_y: 220,
+          move_window_id: 9,
+          resize_window_id: null,
+        },
+      ],
+    })
+  })
 })

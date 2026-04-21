@@ -6,6 +6,7 @@ import {
   buildShellTestWindowOpenPayload,
   buildTextEditorWindowOpenPayload,
   buildVideoViewerWindowOpenPayload,
+  defaultBackedClientAreaGlobal,
   fileBrowserWindowId,
   fileBrowserWindowTitleForPath,
   imageViewerWindowId,
@@ -24,9 +25,11 @@ import {
   textEditorWindowTitle,
   videoViewerWindowId,
   videoViewerWindowTitle,
+  SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_FILE_BROWSER_APP_ID,
   SHELL_UI_IMAGE_VIEWER_APP_ID,
   SHELL_UI_PDF_VIEWER_APP_ID,
+  SHELL_UI_SETTINGS_WINDOW_ID,
   SHELL_UI_TEST_APP_ID,
   SHELL_UI_TEXT_EDITOR_APP_ID,
   SHELL_UI_VIDEO_VIEWER_APP_ID,
@@ -86,6 +89,31 @@ function nextWindowId(
   return null
 }
 
+type BackedWindowClientAreaGlobal = {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+type ResolveBackedWindowClientAreaGlobalArgs = {
+  windowId: number
+  kind: BackedShellWindowKind
+  monitor: LayoutScreen
+  reserveTaskbar: boolean
+  work: { x: number; y: number; w: number; h: number }
+  staggerIndex: number
+  windows: readonly DerpWindow[]
+  pendingOpens: readonly Pick<BackedWindowOpenPayload, 'window_id' | 'output_name'>[]
+  fallbackMonitorName: string
+}
+
+export function resolveBackedWindowClientAreaGlobal(
+  args: ResolveBackedWindowClientAreaGlobalArgs,
+): BackedWindowClientAreaGlobal {
+  return defaultBackedClientAreaGlobal(args.work, args.kind, args.staggerIndex)
+}
+
 export function createBackedShellWindowActions(options: BackedShellWindowActionsOptions) {
   const pendingBackedWindowOpens = new Map<number, BackedWindowOpenPayload>()
   const reservedBackedWindowIds = new Set<number>()
@@ -117,10 +145,28 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     return {
       origin,
       monitor,
+      reserveTaskbar,
       work: monitorWorkAreaGlobal(monitor, reserveTaskbar),
       staggerIndex: hostedWindowStaggerIndex(options.getWindows(), monitor.name),
     }
   }
+
+  const resolveWindowClientAreaGlobal = (
+    windowId: number,
+    kind: BackedShellWindowKind,
+    context: NonNullable<ReturnType<typeof resolveMonitorContext>>,
+  ) =>
+    resolveBackedWindowClientAreaGlobal({
+      windowId,
+      kind,
+      monitor: context.monitor,
+      reserveTaskbar: context.reserveTaskbar,
+      work: context.work,
+      staggerIndex: context.staggerIndex,
+      windows: options.getWindows(),
+      pendingOpens: [...pendingBackedWindowOpens.values()],
+      fallbackMonitorName: options.getPrimaryMonitorName(),
+    })
 
   const flushPendingBackedWindowOpens = () => {
     if (backedWindowOpenRaf !== 0) return
@@ -146,6 +192,11 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
   const openBackedShellWindow = (kind: 'debug' | 'settings') => {
     const context = resolveMonitorContext()
     if (!context) return
+    const global = resolveWindowClientAreaGlobal(
+      kind === 'debug' ? SHELL_UI_DEBUG_WINDOW_ID : SHELL_UI_SETTINGS_WINDOW_ID,
+      kind,
+      context,
+    )
     queueBackedWindowOpen(
       buildBackedWindowOpenPayload(
         context.monitor.name,
@@ -153,6 +204,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         kind,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
   }
@@ -180,6 +232,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     if (windowId === null) return null
     reservedBackedWindowIds.add(windowId)
     const title = shellTestWindowTitle(windowId - shellTestWindowId(0))
+    const global = resolveWindowClientAreaGlobal(windowId, 'test', context)
     queueBackedWindowOpen(
       buildShellTestWindowOpenPayload(
         context.monitor.name,
@@ -188,6 +241,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId
@@ -216,6 +270,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       directory: detail.directory,
       showHidden: detail.showHidden,
     })
+    const global = resolveWindowClientAreaGlobal(windowId, 'image_viewer', context)
     queueBackedWindowOpen(
       buildImageViewerWindowOpenPayload(
         context.monitor.name,
@@ -224,6 +279,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId
@@ -255,6 +311,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       playbackTime: 0,
       volume: 1,
     })
+    const global = resolveWindowClientAreaGlobal(windowId, 'video_viewer', context)
     queueBackedWindowOpen(
       buildVideoViewerWindowOpenPayload(
         context.monitor.name,
@@ -263,6 +320,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId
@@ -292,6 +350,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       directory: detail.directory,
       showHidden: detail.showHidden,
     })
+    const global = resolveWindowClientAreaGlobal(windowId, 'text_editor', context)
     queueBackedWindowOpen(
       buildTextEditorWindowOpenPayload(
         context.monitor.name,
@@ -300,6 +359,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId
@@ -329,6 +389,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       directory: detail.directory,
       showHidden: detail.showHidden,
     })
+    const global = resolveWindowClientAreaGlobal(windowId, 'pdf_viewer', context)
     queueBackedWindowOpen(
       buildPdfViewerWindowOpenPayload(
         context.monitor.name,
@@ -337,6 +398,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId
@@ -367,6 +429,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       showHidden: prefs.showHidden,
     })
     primeFileBrowserWindowPath(windowId, path)
+    const global = resolveWindowClientAreaGlobal(windowId, 'file_browser', context)
     queueBackedWindowOpen(
       buildFileBrowserWindowOpenPayload(
         context.monitor.name,
@@ -375,6 +438,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
         title,
         context.origin,
         context.staggerIndex,
+        global,
       ),
     )
     return windowId

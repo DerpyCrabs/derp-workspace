@@ -103,6 +103,7 @@ pub const MSG_COMPOSITOR_TRAY_SNI: u32 = 56;
 pub const MSG_COMPOSITOR_WORKSPACE_STATE: u32 = 57;
 pub const MSG_SHELL_WORKSPACE_MUTATION: u32 = 58;
 pub const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE: u32 = 59;
+pub const MSG_COMPOSITOR_INTERACTION_STATE: u32 = 60;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -1172,6 +1173,12 @@ pub enum DecodedCompositorToShellMessage {
     ShellHostedAppState {
         state_json: String,
     },
+    InteractionState {
+        pointer_x: i32,
+        pointer_y: i32,
+        move_window_id: u32,
+        resize_window_id: u32,
+    },
     TrayHints {
         slot_count: u32,
         slot_w: i32,
@@ -1278,6 +1285,23 @@ pub fn encode_compositor_tray_hints(slot_count: u32, slot_w: i32, reserved_w: u3
     v.extend_from_slice(&slot_count.to_le_bytes());
     v.extend_from_slice(&slot_w.to_le_bytes());
     v.extend_from_slice(&reserved_w.to_le_bytes());
+    v
+}
+
+pub fn encode_compositor_interaction_state(
+    pointer_x: i32,
+    pointer_y: i32,
+    move_window_id: u32,
+    resize_window_id: u32,
+) -> Vec<u8> {
+    let body_len = 20u32;
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_INTERACTION_STATE.to_le_bytes());
+    v.extend_from_slice(&pointer_x.to_le_bytes());
+    v.extend_from_slice(&pointer_y.to_le_bytes());
+    v.extend_from_slice(&move_window_id.to_le_bytes());
+    v.extend_from_slice(&resize_window_id.to_le_bytes());
     v
 }
 
@@ -2043,6 +2067,21 @@ fn decode_compositor_to_shell_body(
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
             Ok(DecodedCompositorToShellMessage::ShellHostedAppState { state_json })
+        }
+        MSG_COMPOSITOR_INTERACTION_STATE => {
+            if body.len() != 20 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let pointer_x = i32::from_le_bytes(body[4..8].try_into().unwrap());
+            let pointer_y = i32::from_le_bytes(body[8..12].try_into().unwrap());
+            let move_window_id = u32::from_le_bytes(body[12..16].try_into().unwrap());
+            let resize_window_id = u32::from_le_bytes(body[16..20].try_into().unwrap());
+            Ok(DecodedCompositorToShellMessage::InteractionState {
+                pointer_x,
+                pointer_y,
+                move_window_id,
+                resize_window_id,
+            })
         }
         MSG_COMPOSITOR_TRAY_HINTS => {
             if body.len() != 16 {

@@ -186,6 +186,7 @@ fn apply_message(
             let Some(host) = b.host() else {
                 return;
             };
+            host.set_focus(1);
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
         }
@@ -204,6 +205,7 @@ fn apply_message(
             let Some(host) = b.host() else {
                 return;
             };
+            host.set_focus(1);
             let ev = MouseEvent { x, y, modifiers };
             let ty = match button {
                 1 => MouseButtonType::MIDDLE,
@@ -227,6 +229,7 @@ fn apply_message(
             let Some(host) = b.host() else {
                 return;
             };
+            host.set_focus(1);
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
@@ -325,6 +328,7 @@ fn apply_message(
         | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
         | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
         | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
         | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
             *snapshot_dirty = true;

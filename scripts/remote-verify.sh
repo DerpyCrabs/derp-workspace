@@ -12,6 +12,7 @@ for a in "$@"; do
 done
 
 require_remote_sync_tools
+remote_test_lock_acquire
 
 echo "=== remote mkdir ==="
 ssh_base mkdir -p "$REMOTE_REPO"

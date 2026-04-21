@@ -44,6 +44,40 @@ pub struct WorkspacePreTileGeometry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceMonitorLayoutType {
+    ManualSnap,
+    MasterStack,
+    Columns,
+    Grid,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceMonitorLayoutParams {
+    #[serde(
+        default,
+        rename = "masterRatio",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub master_ratio: Option<f64>,
+    #[serde(
+        default,
+        rename = "maxColumns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_columns: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceMonitorLayoutState {
+    #[serde(rename = "outputName")]
+    pub output_name: String,
+    pub layout: WorkspaceMonitorLayoutType,
+    #[serde(default)]
+    pub params: WorkspaceMonitorLayoutParams,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceRect {
     pub x: i32,
     pub y: i32,
@@ -62,6 +96,8 @@ pub struct WorkspaceState {
     pub split_by_group_id: HashMap<String, WorkspaceGroupSplitState>,
     #[serde(default, rename = "monitorTiles")]
     pub monitor_tiles: Vec<WorkspaceMonitorTileState>,
+    #[serde(default, rename = "monitorLayouts")]
+    pub monitor_layouts: Vec<WorkspaceMonitorLayoutState>,
     #[serde(default, rename = "preTileGeometry")]
     pub pre_tile_geometry: Vec<WorkspacePreTileGeometry>,
     #[serde(rename = "nextGroupSeq")]
@@ -80,6 +116,14 @@ pub enum WorkspaceMutation {
     MoveWindowToGroup {
         #[serde(rename = "windowId")]
         window_id: u32,
+        #[serde(rename = "targetGroupId")]
+        target_group_id: String,
+        #[serde(rename = "insertIndex")]
+        insert_index: usize,
+    },
+    MoveGroupToGroup {
+        #[serde(rename = "sourceGroupId")]
+        source_group_id: String,
         #[serde(rename = "targetGroupId")]
         target_group_id: String,
         #[serde(rename = "insertIndex")]
@@ -133,6 +177,13 @@ pub enum WorkspaceMutation {
         window_id: u32,
         bounds: WorkspaceRect,
     },
+    SetMonitorLayout {
+        #[serde(rename = "outputName")]
+        output_name: String,
+        layout: WorkspaceMonitorLayoutType,
+        #[serde(default)]
+        params: WorkspaceMonitorLayoutParams,
+    },
     ClearPreTileGeometry {
         #[serde(rename = "windowId")]
         window_id: u32,
@@ -150,6 +201,7 @@ impl Default for WorkspaceState {
             pinned_window_ids: Vec::new(),
             split_by_group_id: HashMap::new(),
             monitor_tiles: Vec::new(),
+            monitor_layouts: Vec::new(),
             pre_tile_geometry: Vec::new(),
             next_group_seq: 1,
         }
@@ -366,6 +418,7 @@ pub fn reconcile_workspace_state(
         })
         .filter(|monitor| !monitor.entries.is_empty())
         .collect();
+    next.monitor_layouts = next.monitor_layouts.clone();
     next.pre_tile_geometry = next
         .pre_tile_geometry
         .iter()
@@ -548,6 +601,110 @@ impl WorkspaceState {
                 ensure_valid_split_state(&mut next);
                 Some(next)
             }
+            WorkspaceMutation::MoveGroupToGroup {
+                source_group_id,
+                target_group_id,
+                insert_index,
+            } => {
+                if source_group_id == target_group_id {
+                    return None;
+                }
+                let source_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *source_group_id)?;
+                let target_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id)?;
+                if source_group.window_ids.is_empty() || target_group.window_ids.is_empty() {
+                    return None;
+                }
+                let moving_window_ids = source_group.window_ids.clone();
+                let moving_pinned_window_ids: Vec<u32> = moving_window_ids
+                    .iter()
+                    .copied()
+                    .filter(|window_id| self.pinned_window_ids.contains(window_id))
+                    .collect();
+                let moving_unpinned_window_ids: Vec<u32> = moving_window_ids
+                    .iter()
+                    .copied()
+                    .filter(|window_id| !self.pinned_window_ids.contains(window_id))
+                    .collect();
+                let mut next = self.clone();
+                let source_index = next
+                    .groups
+                    .iter()
+                    .position(|group| group.id == *source_group_id)?;
+                let target_index = next
+                    .groups
+                    .iter()
+                    .position(|group| group.id == *target_group_id)?;
+                next.groups[source_index].window_ids.clear();
+                let clamped_insert_index =
+                    (*insert_index).min(next.groups[target_index].window_ids.len());
+                let mut pinned_insert_index = clamped_insert_index.min(
+                    leading_pinned_window_count(&next, &next.groups[target_index], None),
+                );
+                for window_id in moving_pinned_window_ids {
+                    let snapshot = next.clone();
+                    insert_into_group(
+                        &snapshot,
+                        &mut next.groups[target_index],
+                        window_id,
+                        pinned_insert_index,
+                    );
+                    pinned_insert_index = pinned_insert_index.saturating_add(1);
+                }
+                let mut unpinned_insert_index = (clamped_insert_index
+                    + source_group
+                        .window_ids
+                        .iter()
+                        .filter(|window_id| self.pinned_window_ids.contains(window_id))
+                        .count())
+                .max(leading_pinned_window_count(
+                    &next,
+                    &next.groups[target_index],
+                    None,
+                ));
+                for window_id in moving_unpinned_window_ids {
+                    let snapshot = next.clone();
+                    insert_into_group(
+                        &snapshot,
+                        &mut next.groups[target_index],
+                        window_id,
+                        unpinned_insert_index,
+                    );
+                    unpinned_insert_index = unpinned_insert_index.saturating_add(1);
+                }
+                next.groups.retain(|group| group.id != *source_group_id);
+                next.active_tab_by_group_id.remove(source_group_id);
+                next.split_by_group_id =
+                    without_group_split(&next.split_by_group_id, source_group_id);
+                next.split_by_group_id =
+                    without_group_split(&next.split_by_group_id, target_group_id);
+                if let Some(target_group) = next
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id)
+                {
+                    let target_active = next
+                        .active_tab_by_group_id
+                        .get(target_group_id)
+                        .copied()
+                        .unwrap_or(0);
+                    next.active_tab_by_group_id.insert(
+                        target_group_id.clone(),
+                        if target_group.window_ids.contains(&target_active) {
+                            target_active
+                        } else {
+                            target_group.window_ids[0]
+                        },
+                    );
+                }
+                ensure_valid_split_state(&mut next);
+                Some(next)
+            }
             WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
                 let source_group_id = group_id_for_window(self, *window_id)?.to_string();
                 let source_group = self
@@ -597,6 +754,15 @@ impl WorkspaceState {
                     },
                 );
                 next.active_tab_by_group_id.insert(new_group_id, *window_id);
+                for monitor in &mut next.monitor_tiles {
+                    monitor
+                        .entries
+                        .retain(|entry| entry.window_id != *window_id);
+                }
+                next.monitor_tiles
+                    .retain(|monitor| !monitor.entries.is_empty());
+                next.pre_tile_geometry
+                    .retain(|entry| entry.window_id != *window_id);
                 ensure_valid_split_state(&mut next);
                 Some(next)
             }
@@ -774,6 +940,28 @@ impl WorkspaceState {
                 }
                 Some(next)
             }
+            WorkspaceMutation::SetMonitorLayout {
+                output_name,
+                layout,
+                params,
+            } => {
+                let mut next = self.clone();
+                next.monitor_layouts
+                    .retain(|entry| entry.output_name != *output_name);
+                next.monitor_layouts.push(WorkspaceMonitorLayoutState {
+                    output_name: output_name.clone(),
+                    layout: layout.clone(),
+                    params: params.clone(),
+                });
+                if *layout == WorkspaceMonitorLayoutType::ManualSnap {
+                    next.monitor_tiles
+                        .retain(|monitor| monitor.output_name != *output_name);
+                }
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
             WorkspaceMutation::ClearPreTileGeometry { window_id } => {
                 let mut next = self.clone();
                 next.pre_tile_geometry
@@ -799,6 +987,15 @@ impl WorkspaceState {
             .copied()
             .or_else(|| group.window_ids.first().copied())
             .map(|window_id| normalized_requested_active_window_id(self, group, window_id))
+    }
+
+    pub fn monitor_layout_for_output(
+        &self,
+        output_name: &str,
+    ) -> Option<&WorkspaceMonitorLayoutState> {
+        self.monitor_layouts
+            .iter()
+            .find(|entry| entry.output_name == output_name)
     }
 
     pub fn to_json(&self) -> Result<String, String> {

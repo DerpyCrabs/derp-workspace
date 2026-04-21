@@ -110,11 +110,14 @@ type QueryCache = {
 
 export function snapshotRect(el: Element | null, origin: CanvasOrigin): E2eRectSnapshot | null {
   if (!(el instanceof HTMLElement)) return null
-  const rect = el.getBoundingClientRect()
+  if (el.closest('[data-shell-window-hidden="true"]')) return null
+  const rect = visibleClientRect(el)
+  if (!rect) return null
   const x = Math.round(rect.left)
   const y = Math.round(rect.top)
   const width = Math.max(0, Math.round(rect.width))
   const height = Math.max(0, Math.round(rect.height))
+  if (width <= 0 || height <= 0) return null
   const { ox, oy } = canvasOriginXY(origin)
   return {
     x,
@@ -124,6 +127,51 @@ export function snapshotRect(el: Element | null, origin: CanvasOrigin): E2eRectS
     global_x: ox + x,
     global_y: oy + y,
   }
+}
+
+function visibleClientRect(el: HTMLElement) {
+  const initial = el.getBoundingClientRect()
+  let left = initial.left
+  let top = initial.top
+  let right = initial.right
+  let bottom = initial.bottom
+  if (right <= left || bottom <= top) return null
+  const viewportRight = window.innerWidth || document.documentElement.clientWidth || 0
+  const viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0
+  right = Math.min(right, viewportRight)
+  bottom = Math.min(bottom, viewportBottom)
+  left = Math.max(left, 0)
+  top = Math.max(top, 0)
+  if (right <= left || bottom <= top) return null
+  let parent = el.parentElement
+  while (parent) {
+    const style = window.getComputedStyle(parent)
+    const clipX = shouldClipOverflowAxis(style.overflowX) || shouldClipOverflowAxis(style.overflow)
+    const clipY = shouldClipOverflowAxis(style.overflowY) || shouldClipOverflowAxis(style.overflow)
+    if (clipX || clipY) {
+      const parentRect = parent.getBoundingClientRect()
+      if (clipX) {
+        left = Math.max(left, parentRect.left)
+        right = Math.min(right, parentRect.right)
+      }
+      if (clipY) {
+        top = Math.max(top, parentRect.top)
+        bottom = Math.min(bottom, parentRect.bottom)
+      }
+      if (right <= left || bottom <= top) return null
+    }
+    parent = parent.parentElement
+  }
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top,
+  }
+}
+
+function shouldClipOverflowAxis(value: string) {
+  return value !== 'visible' && value !== 'unset'
 }
 
 function queryWithin(scope: ParentNode, selector: string): HTMLElement | null {
@@ -332,6 +380,14 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     resize_right: snapshotRect(cache.queryAttr('data-shell-resize-right', window.window_id), args.origin),
     resize_bottom_left: snapshotRect(cache.queryAttr('data-shell-resize-bottom-left', window.window_id), args.origin),
     resize_bottom_right: snapshotRect(cache.queryAttr('data-shell-resize-bottom-right', window.window_id), args.origin),
+    dragging:
+      cache.queryAttr('data-shell-window-frame', window.window_id)?.getAttribute('data-shell-window-dragging') === 'true',
+    frame_opacity: (() => {
+      const frame = cache.queryAttr('data-shell-window-frame', window.window_id)
+      if (!frame) return null
+      const opacity = Number.parseFloat(getComputedStyle(frame).opacity)
+      return Number.isFinite(opacity) ? opacity : null
+    })(),
   }))
   const tabGroups = args.workspaceGroups.map((group) => ({
     group_id: group.id,

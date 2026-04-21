@@ -8,7 +8,6 @@ import {
   SHELL_RESIZE_RIGHT,
   SHELL_RESIZE_TOP,
 } from '@/lib/chromeConstants'
-import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
 import {
   clientPointToCanvasLocal,
   clientPointToGlobalLogical,
@@ -17,9 +16,9 @@ import {
   pickScreenForWindow,
   rectGlobalToCanvasLocal,
 } from '@/lib/shellCoords'
-import { maximizedDragUnmaxCanvasPosition } from '@/lib/maximizedDragUnmax'
 import {
   assistGridGutterPx,
+  assistGridSpansEqual,
   assistShapeFromSpan,
   assistSpanFromWorkAreaPoint,
   snapZoneAndPreviewFromAssistSpan,
@@ -34,7 +33,12 @@ import {
   type CustomLayout,
 } from '@/features/tiling/customLayouts'
 import { SnapAssistPicker, type SnapPickerSelection } from '@/features/tiling/SnapAssistPicker'
-import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from '@/features/tiling/tileSnap'
+import {
+  hitTestSnapZoneGlobal,
+  monitorTileFrameAreaGlobal,
+  tiledFrameRectToClientRect,
+  TILE_SNAP_EDGE_PX,
+} from '@/features/tiling/tileSnap'
 import {
   computeTiledResizeRects,
   findEdgeNeighborsInMap,
@@ -137,6 +141,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
   const [dragWindowId, setDragWindowId] = createSignal<number | null>(null)
+  const [dragWindowMoved, setDragWindowMoved] = createSignal(false)
   const dragPreTileSnapshot = new Map<number, WindowRect>()
   let activeSnapPreviewCanvas: WindowRect | null = null
   let activeSnapPreviewGlobal: TileRect | null = null
@@ -147,10 +152,48 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   let activeSnapShape: AssistGridShape | null = null
   let tilePreviewRaf = 0
   let lastTilePreviewKey = ''
-  let shellWindowDrag: { windowId: number; lastX: number; lastY: number; superHeld: boolean } | null = null
+  let shellWindowDrag: {
+    windowId: number
+    lastX: number
+    lastY: number
+    startX: number
+    superHeld: boolean
+    stripArmed: boolean
+    edgeSnapArmed: boolean
+    startedMaximized: boolean
+  } | null = null
   let shellMoveDeltaLogSeq = 0
   let shellWindowResize: ShellResizeSession | null = null
   let shellResizeDeltaLogSeq = 0
+
+  function workCanvasEqual(
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ) {
+    return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
+  }
+
+  function assistOverlayEqual(a: AssistOverlayState | null, b: AssistOverlayState | null) {
+    if (a === b) return true
+    if (a === null || b === null) return a === b
+    if (a.kind !== b.kind) return false
+    if (!workCanvasEqual(a.workCanvas, b.workCanvas)) return false
+    if (a.kind === 'assist' && b.kind === 'assist') {
+      const hoverEqual =
+        a.hoverSpan === null
+          ? b.hoverSpan === null
+          : b.hoverSpan !== null && assistGridSpansEqual(a.hoverSpan, b.hoverSpan)
+      return a.shape === b.shape && a.gutterPx === b.gutterPx && hoverEqual
+    }
+    if (a.kind === 'custom' && b.kind === 'custom') {
+      return a.layout.id === b.layout.id && a.selectedZoneId === b.selectedZoneId
+    }
+    return false
+  }
+
+  function setAssistOverlayState(next: AssistOverlayState | null) {
+    setAssistOverlay((current) => (assistOverlayEqual(current, next) ? current : next))
+  }
 
   function snapAssistAnchorRect(rect: DOMRect): SnapAssistPickerAnchorRect {
     return {
@@ -184,7 +227,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
 
   function clearSnapAssistSelection() {
     resetSnapAssistState()
-    setAssistOverlay(null)
+    setAssistOverlayState(null)
     scheduleTilePreviewSync()
   }
 
@@ -210,7 +253,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const monitorLayout = screen ? getMonitorLayout(screen.name) : null
     if (!screen || !monitorLayout || monitorLayout.layout.type !== 'manual-snap') return null
     const reserveTaskbar = options.reserveTaskbarForMon(screen)
-    const workGlobal = monitorWorkAreaGlobal(screen, reserveTaskbar)
+    const workGlobal = monitorTileFrameAreaGlobal(screen, reserveTaskbar)
     const snapLayout = monitorLayout.snapLayout
     return {
       windowId,
@@ -241,17 +284,13 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapLayout = snapLayout
     activeSnapShape = shape
     activeSnapPreviewGlobal = { ...previewRect }
-    const o = shellOuterFrameFromClient({
-      x: previewRect.x,
-      y: previewRect.y,
-      width: previewRect.width,
-      height: previewRect.height,
-      maximized: false,
-      fullscreen: false,
-      minimized: false,
-      snap_tiled: true,
-    })
-    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(o.x, o.y, o.w, o.h, origin)
+    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
+      previewRect.x,
+      previewRect.y,
+      previewRect.width,
+      previewRect.height,
+      origin,
+    )
   }
 
   function applySnapPickerSelection(context: SnapAssistContext, selection: SnapPickerSelection | null) {
@@ -266,19 +305,15 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapShape = selection.shape
     activeSnapPreviewGlobal = { ...selection.previewRect }
     const origin = options.layoutCanvasOrigin()
-    const outer = shellOuterFrameFromClient({
-      x: selection.previewRect.x,
-      y: selection.previewRect.y,
-      width: selection.previewRect.width,
-      height: selection.previewRect.height,
-      maximized: false,
-      fullscreen: false,
-      minimized: false,
-      snap_tiled: true,
-    })
-    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(outer.x, outer.y, outer.w, outer.h, origin)
+    activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
+      selection.previewRect.x,
+      selection.previewRect.y,
+      selection.previewRect.width,
+      selection.previewRect.height,
+      origin,
+    )
     if (selection.hoverSpan && selection.shape) {
-      setAssistOverlay({
+      setAssistOverlayState({
         kind: 'assist',
         shape: selection.shape,
         gutterPx: assistGridGutterPx(context.workGlobal, selection.shape),
@@ -290,22 +325,26 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       const parsed = parseCustomSnapZoneId(selection.zone)
       const layout = context.customLayouts.find((entry) => entry.id === snapLayout.layoutId) ?? null
       if (parsed && layout) {
-        setAssistOverlay({
+        setAssistOverlayState({
           kind: 'custom',
           layout,
           selectedZoneId: parsed.zoneId,
           workCanvas: context.workCanvas,
         })
       } else {
-        setAssistOverlay(null)
+        setAssistOverlayState(null)
       }
     } else {
-      setAssistOverlay(null)
+      setAssistOverlayState(null)
     }
     scheduleTilePreviewSync()
   }
 
-  function updateSnapAssistFromSpan(context: SnapAssistContext, span: AssistGridSpan | null) {
+  function updateSnapAssistFromSpan(
+    context: SnapAssistContext,
+    span: AssistGridSpan | null,
+    showOverlay = true,
+  ) {
     const shape = span ? assistShapeFromSpan(span) : context.assistShape
     if (!span || !shape) {
       clearSnapAssistSelection()
@@ -314,13 +353,17 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, context.workGlobal)
     applySnapAssistZonePreview(context, zone, previewRect, assistMonitorSnapLayout(shape), shape)
     activeSnapShape = shape
-    setAssistOverlay({
-      kind: 'assist',
-      shape,
-      gutterPx: assistGridGutterPx(context.workGlobal, shape),
-      hoverSpan: span,
-      workCanvas: context.workCanvas,
-    })
+    if (showOverlay) {
+      setAssistOverlayState({
+        kind: 'assist',
+        shape,
+        gutterPx: assistGridGutterPx(context.workGlobal, shape),
+        hoverSpan: span,
+        workCanvas: context.workCanvas,
+      })
+    } else {
+      setAssistOverlayState(null)
+    }
     scheduleTilePreviewSync()
   }
 
@@ -341,11 +384,15 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       options.occupiedSnapZonesOnMonitor(context.screen, context.windowId),
     )
     applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, context.assistShape)
-    setAssistOverlay(null)
+    setAssistOverlayState(null)
     scheduleTilePreviewSync()
   }
 
-  function updateSnapAssistFromCustomZone(context: SnapAssistContext, zoneId: string | null) {
+  function updateSnapAssistFromCustomZone(
+    context: SnapAssistContext,
+    zoneId: string | null,
+    showOverlay = true,
+  ) {
     if (!zoneId || !context.customLayout) {
       clearSnapAssistSelection()
       return
@@ -362,12 +409,16 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       return
     }
     applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, null)
-    setAssistOverlay({
-      kind: 'custom',
-      layout: context.customLayout,
-      selectedZoneId: zoneId,
-      workCanvas: context.workCanvas,
-    })
+    if (showOverlay) {
+      setAssistOverlayState({
+        kind: 'custom',
+        layout: context.customLayout,
+        selectedZoneId: zoneId,
+        workCanvas: context.workCanvas,
+      })
+    } else {
+      setAssistOverlayState(null)
+    }
     scheduleTilePreviewSync()
   }
 
@@ -378,7 +429,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const droppedLayout = activeSnapLayout
     const droppedPreviewGlobal = activeSnapPreviewGlobal ? { ...activeSnapPreviewGlobal } : null
     resetSnapAssistState()
-    setAssistOverlay(null)
+    setAssistOverlayState(null)
     if (closePicker) setSnapAssistPicker(null)
     clearTilePreviewWire()
     if (droppedZone === null || !snapScreen) {
@@ -399,7 +450,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         : null)
     const origin = options.layoutCanvasOrigin()
     const reserveTaskbar = options.reserveTaskbarForMon(snapScreen)
-    const work = monitorWorkAreaGlobal(snapScreen, reserveTaskbar)
+    const work = monitorTileFrameAreaGlobal(snapScreen, reserveTaskbar)
     const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
     const occupied = options.occupiedSnapZonesOnMonitor(snapScreen, snapWindowId)
     const globalBounds =
@@ -416,11 +467,12 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       return
     }
     if (!options.sendSetMonitorTile(snapWindowId, snapScreen.name, droppedZone, globalBounds)) return
+    const clientBounds = tiledFrameRectToClientRect(globalBounds)
     const localBounds = rectGlobalToCanvasLocal(
-      globalBounds.x,
-      globalBounds.y,
-      globalBounds.width,
-      globalBounds.height,
+      clientBounds.x,
+      clientBounds.y,
+      clientBounds.width,
+      clientBounds.height,
       origin,
     )
     options.shellWireSend(
@@ -489,6 +541,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const window = options.allWindowsMap().get(windowId)
     if (!window) return
     if (window.maximized) {
+      options.floatBeforeMaximize.delete(windowId)
       options.shellWireSend('set_maximized', windowId, 0)
       return
     }
@@ -526,42 +579,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     if (main && output && window) {
       const mainRect = main.getBoundingClientRect()
       const pointerCanvas = clientPointToCanvasLocal(clientX, clientY, mainRect, output.w, output.h)
-      const origin = options.layoutCanvasOrigin()
-      if (window.maximized) {
-        const restore = options.floatBeforeMaximize.get(windowId) ?? {
-          x: window.x,
-          y: window.y,
-          w: Math.max(360, Math.floor(window.width * 0.55)),
-          h: Math.max(280, Math.floor(window.height * 0.55)),
-        }
-        const unmax = maximizedDragUnmaxCanvasPosition({
-          pointerCanvasX: pointerCanvas.x,
-          pointerCanvasY: pointerCanvas.y,
-          frameX: window.x,
-          frameY: window.y,
-          frameW: window.width,
-          frameH: window.height,
-          restoreW: restore.w,
-          restoreH: restore.h,
-        })
-        const nextX = unmax.x
-        const nextY = unmax.y
-        options.shellMoveLog('max_drag_unmax', {
-          windowId,
-          origin,
-          frame: { x: window.x, y: window.y, w: window.width, h: window.height, out: window.output_name },
-          pointerCanvas,
-          hadFloatStash: options.floatBeforeMaximize.has(windowId),
-          restore,
-          ratio: { rx: unmax.rx, ry: unmax.ry },
-          next: { x: nextX, y: nextY, w: restore.w, h: restore.h },
-        })
-        options.shellWireSend('set_geometry', windowId, nextX, nextY, restore.w, restore.h, SHELL_LAYOUT_FLOATING)
-        options.floatBeforeMaximize.delete(windowId)
-        dragPreTileSnapshot.set(windowId, { x: nextX, y: nextY, w: restore.w, h: restore.h })
-        options.scheduleExclusionZonesSync()
-        options.bumpSnapChrome()
-      } else if (options.isWorkspaceWindowTiled(windowId)) {
+      if (!window.maximized && options.isWorkspaceWindowTiled(windowId)) {
         const preTile = options.workspacePreTileSnapshot(windowId)
         if (preTile) {
           const grabDx = pointerCanvas.x - window.x
@@ -575,7 +593,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         dragPreTileSnapshot.set(windowId, preTile ?? { x: window.x, y: window.y, w: window.width, h: window.height })
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
-      } else {
+      } else if (!window.maximized) {
         dragPreTileSnapshot.set(windowId, { x: window.x, y: window.y, w: window.width, h: window.height })
       }
     }
@@ -583,8 +601,26 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       options.shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
       return
     }
-    shellWindowDrag = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY), superHeld: false }
+    const stripEl = main?.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
+    const stripRect = stripEl?.getBoundingClientRect() ?? null
+    const stripArmed =
+      !stripRect ||
+      clientX < stripRect.left ||
+      clientX > stripRect.right ||
+      clientY < stripRect.top ||
+      clientY > stripRect.bottom
+    shellWindowDrag = {
+      windowId,
+      lastX: Math.round(clientX),
+      lastY: Math.round(clientY),
+      startX: Math.round(clientX),
+      superHeld: false,
+      stripArmed,
+      edgeSnapArmed: !window?.maximized,
+      startedMaximized: !!window?.maximized,
+    }
     setDragWindowId(windowId)
+    setDragWindowMoved(false)
     options.shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
@@ -611,6 +647,17 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         return
       }
     }
+    if (
+      shellWindowDrag?.startedMaximized &&
+      Math.abs(clientX - shellWindowDrag.startX) < TILE_SNAP_EDGE_PX * 2
+    ) {
+      if (pickerOpen) {
+        closeSnapAssistPicker()
+      } else {
+        clearSnapAssistSelection()
+      }
+      return
+    }
     const stripEl = main.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
     if (stripEl) {
       const stripRect = stripEl.getBoundingClientRect()
@@ -620,11 +667,16 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         clientY >= stripRect.top &&
         clientY <= stripRect.bottom
       ) {
-        if (!pickerOpen) {
-          openSnapAssistPicker(windowId, 'strip', stripRect, false, monitor?.name)
+        if (shellWindowDrag?.stripArmed) {
+          if (!pickerOpen) {
+            openSnapAssistPicker(windowId, 'strip', stripRect, false, monitor?.name)
+          }
+          return
         }
+        clearSnapAssistSelection()
         return
       }
+      if (shellWindowDrag) shellWindowDrag.stripArmed = true
     }
     if (pickerOpen) {
       closeSnapAssistPicker()
@@ -637,6 +689,13 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     if (!context) {
       clearSnapAssistSelection()
       return
+    }
+    if (shellWindowDrag && !shellWindowDrag.edgeSnapArmed) {
+      if (Math.abs(clientX - shellWindowDrag.startX) < TILE_SNAP_EDGE_PX * 2) {
+        clearSnapAssistSelection()
+        return
+      }
+      shellWindowDrag.edgeSnapArmed = true
     }
     const work = context.workGlobal
     const pxForAssist = Math.max(work.x, Math.min(global.x, work.x + work.w))
@@ -667,7 +726,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         (global.y < work.y && work.y - global.y <= TILE_SNAP_EDGE_PX))
     if (inAssistTopStrip && context.assistShape) {
       const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, context.assistShape, work)
-      updateSnapAssistFromSpan(context, span)
+      updateSnapAssistFromSpan(context, span, false)
       return
     }
     if (context.customLayout) {
@@ -683,7 +742,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
           pxForAssist,
           pyForAssist,
         )
-        updateSnapAssistFromCustomZone(context, hovered?.zoneId ?? null)
+        updateSnapAssistFromCustomZone(context, hovered?.zoneId ?? null, false)
         return
       }
       clearSnapAssistSelection()
@@ -693,7 +752,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     updateSnapAssistFromEdgeZone(context, zone)
   }
 
-  function applyShellWindowMove(clientX: number, clientY: number, superHeld = false) {
+  function updateShellWindowMovePointer(clientX: number, clientY: number, superHeld: boolean) {
     if (!shellWindowDrag) return
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
@@ -712,7 +771,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         if (shellMoveDeltaLogSeq <= 12 || shellMoveDeltaLogSeq % 30 === 0) {
           options.shellMoveLog('titlebar_delta', { seq: shellMoveDeltaLogSeq, dx, dy, clientX, clientY })
         }
-        options.shellWireSend('move_delta', dx, dy)
+        setDragWindowMoved(true)
       }
       shellWindowDrag.lastX = cx
       shellWindowDrag.lastY = cy
@@ -721,23 +780,39 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     updateDragSnapAssist(windowId, cx, cy, superHeld)
   }
 
-  function updateShellWindowMoveModifier(superHeld: boolean) {
-    if (!shellWindowDrag || shellWindowDrag.superHeld === superHeld) return
-    shellWindowDrag.superHeld = superHeld
-    updateDragSnapAssist(shellWindowDrag.windowId, shellWindowDrag.lastX, shellWindowDrag.lastY, superHeld)
+  function applyShellWindowMove(clientX: number, clientY: number, superHeld = false, _buttons?: number) {
+    updateShellWindowMovePointer(clientX, clientY, superHeld)
   }
 
-  function endShellWindowMove(reason: string) {
+  function syncShellWindowMovePointer(clientX: number, clientY: number) {
+    if (!shellWindowDrag) return
+    updateShellWindowMovePointer(clientX, clientY, shellWindowDrag.superHeld)
+  }
+
+  function endShellWindowMove(reason: string, commitSnap = true, sendMoveEnd = true) {
     if (!shellWindowDrag) return
     const windowId = shellWindowDrag.windowId
     options.shellMoveLog('titlebar_end', { windowId, reason })
     shellWindowDrag = null
     setDragWindowId(null)
-    commitSnapAssistSelection(
-      windowId,
-      snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId,
-    )
-    options.shellWireSend('move_end', windowId)
+    setDragWindowMoved(false)
+    if (commitSnap) {
+      commitSnapAssistSelection(
+        windowId,
+        snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId,
+      )
+    } else {
+      dragPreTileSnapshot.delete(windowId)
+      resetSnapAssistState()
+      setAssistOverlayState(null)
+      if (snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId) {
+        setSnapAssistPicker(null)
+      }
+      clearTilePreviewWire()
+    }
+    if (sendMoveEnd) {
+      options.shellWireSend('move_end', windowId)
+    }
   }
 
   function beginShellWindowResize(windowId: number, edges: number, clientX: number, clientY: number) {
@@ -794,7 +869,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     options.shellMoveLog('resize_begin', { windowId, edges, clientX, clientY })
   }
 
-  function applyShellWindowResize(clientX: number, clientY: number) {
+  function updateShellWindowResizePointer(clientX: number, clientY: number, sendDelta: boolean) {
     if (!shellWindowResize) return
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
@@ -814,12 +889,14 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     }
     if (shellWindowResize.kind === 'compositor') {
       shellResizeDeltaLogSeq += 1
-      if (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0) {
+      if (sendDelta && (shellResizeDeltaLogSeq <= 12 || shellResizeDeltaLogSeq % 30 === 0)) {
         options.shellMoveLog('resize_delta', { seq: shellResizeDeltaLogSeq, dx, dy, clientX, clientY })
       }
-      options.shellWireSend('resize_delta', dx, dy)
       shellWindowResize.lastX = cx
       shellWindowResize.lastY = cy
+      if (sendDelta) {
+        options.shellWireSend('resize_delta', dx, dy)
+      }
       return
     }
     shellWindowResize.accumDx += dx
@@ -837,11 +914,26 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       TILED_RESIZE_MIN_H,
     )
     for (const [windowId, globalRect] of rects) {
-      const local = rectGlobalToCanvasLocal(globalRect.x, globalRect.y, globalRect.width, globalRect.height, origin)
+      const clientRect = tiledFrameRectToClientRect(globalRect)
+      const local = rectGlobalToCanvasLocal(
+        clientRect.x,
+        clientRect.y,
+        clientRect.width,
+        clientRect.height,
+        origin,
+      )
       options.shellWireSend('set_geometry', windowId, local.x, local.y, local.w, local.h, SHELL_LAYOUT_FLOATING)
     }
     options.scheduleExclusionZonesSync()
     options.bumpSnapChrome()
+  }
+
+  function applyShellWindowResize(clientX: number, clientY: number, _buttons?: number) {
+    updateShellWindowResizePointer(clientX, clientY, false)
+  }
+
+  function syncShellWindowResizePointer(clientX: number, clientY: number) {
+    updateShellWindowResizePointer(clientX, clientY, false)
   }
 
   function endShellWindowResize(reason: string) {
@@ -977,6 +1069,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     assistOverlay,
     snapAssistPicker,
     dragWindowId,
+    dragWindowMoved,
     dragSnapAssistContext,
     snapStripState,
     getShellWindowDragId: () => shellWindowDrag?.windowId ?? null,
@@ -987,10 +1080,11 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     toggleShellMaximizeForWindow,
     beginShellWindowMove,
     applyShellWindowMove,
-    updateShellWindowMoveModifier,
+    syncShellWindowMovePointer,
     endShellWindowMove,
     beginShellWindowResize,
     applyShellWindowResize,
+    syncShellWindowResizePointer,
     endShellWindowResize,
     SnapAssistPickerLayer,
   }

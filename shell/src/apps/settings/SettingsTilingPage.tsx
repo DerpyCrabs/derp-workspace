@@ -13,10 +13,8 @@ export type SettingsTilingPageProps = {
   setTilingCfgRev: Setter<number>
   sessionAutoSaveEnabled: Accessor<boolean>
   setSessionAutoSaveEnabled: (enabled: boolean) => void
-  clearMonitorTiles: (monitorName: string) => void
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
-  applyAutoLayout: (monitorName: string) => void
   openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
 }
 
@@ -54,16 +52,7 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                     revision={props.tilingCfgRev}
                     onPersisted={() => {
                       props.setTilingCfgRev((n) => n + 1)
-                      const name = monitorName
-                      queueMicrotask(() => {
-                        if (getMonitorLayout(name).layout.type === 'manual-snap') {
-                          props.clearMonitorTiles(name)
-                          props.bumpSnapChrome()
-                          props.scheduleExclusionZonesSync()
-                        } else {
-                          props.applyAutoLayout(name)
-                        }
-                      })
+                      props.bumpSnapChrome()
                     }}
                   />
                 </div>

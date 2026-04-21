@@ -11,6 +11,7 @@ type ShellExclusionSyncOptions = {
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   taskbarScreens: Accessor<readonly LayoutScreen[]>
   windows: Accessor<readonly DerpWindow[]>
+  isWindowVisible?: (window: DerpWindow) => boolean
   isWindowTiled: (windowId: number) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
   exclusionReactiveDeps: Accessor<unknown>
@@ -20,21 +21,24 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let exclusionZonesRaf = 0
   let exclusionZonesRaf2 = 0
   let lastExclusionZonesJson: string | null = null
+  const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
   const exclusionWindows = () => {
-    const next = options.windows().map((window) => ({
-      window_id: window.window_id,
-      stack_z: window.stack_z,
-      x: window.x,
-      y: window.y,
-      width: window.width,
-      height: window.height,
-      output_name: window.output_name,
-      minimized: window.minimized,
-      maximized: window.maximized,
-      fullscreen: window.fullscreen,
-      snap_tiled: options.isWindowTiled(window.window_id),
-    }))
+    const next = options.windows()
+      .filter((window) => isWindowVisible(window))
+      .map((window) => ({
+        window_id: window.window_id,
+        stack_z: window.stack_z,
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+        output_name: window.output_name,
+        minimized: window.minimized,
+        maximized: window.maximized,
+        fullscreen: window.fullscreen,
+        snap_tiled: options.isWindowTiled(window.window_id),
+      }))
     next.sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
     return next
   }
@@ -61,7 +65,8 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   const fullscreenTaskbarExclusionSig = () => {
     const fullscreenOutputs = new Set<string>()
     for (const window of options.windows()) {
-      if (!window.minimized && window.fullscreen) fullscreenOutputs.add(window.output_name)
+      if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
+      fullscreenOutputs.add(window.output_name)
     }
     return options
       .taskbarScreens()

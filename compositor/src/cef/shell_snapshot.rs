@@ -17,6 +17,7 @@ struct SnapshotState {
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state_json: Option<String>,
     shell_hosted_app_state_json: Option<String>,
+    interaction_state: Option<(i32, i32, u32, u32)>,
     keyboard_layout: Option<String>,
     volume_overlay: Option<(u16, bool, bool)>,
     tray_hints: Option<(u32, i32, u32)>,
@@ -378,6 +379,16 @@ impl SharedShellSnapshotWriter {
                 self.state.shell_hosted_app_state_json = Some(state_json.clone());
                 true
             }
+            shell_wire::DecodedCompositorToShellMessage::InteractionState {
+                pointer_x,
+                pointer_y,
+                move_window_id,
+                resize_window_id,
+            } => {
+                self.state.interaction_state =
+                    Some((*pointer_x, *pointer_y, *move_window_id, *resize_window_id));
+                true
+            }
             shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
                 self.state.windows.clear();
                 for window in windows {
@@ -511,6 +522,16 @@ impl SharedShellSnapshotWriter {
             if let Some(bytes) = shell_wire::encode_compositor_shell_hosted_app_state(state_json) {
                 payload.extend_from_slice(&bytes);
             }
+        }
+        if let Some((pointer_x, pointer_y, move_window_id, resize_window_id)) =
+            self.state.interaction_state
+        {
+            payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
+                pointer_x,
+                pointer_y,
+                move_window_id,
+                resize_window_id,
+            ));
         }
         if let Some(label) = &self.state.keyboard_layout {
             if let Some(bytes) = shell_wire::encode_compositor_keyboard_layout(label) {

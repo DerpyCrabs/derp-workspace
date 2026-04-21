@@ -77,6 +77,25 @@ export function clientPointToGlobalLogical(
   return { x: p.x + ox, y: p.y + oy }
 }
 
+export function globalPointToClientCss(
+  globalX: number,
+  globalY: number,
+  mainRect: DOMRect,
+  canvasW: number,
+  canvasH: number,
+  origin: CanvasOrigin,
+): { x: number; y: number } {
+  const { ox, oy } = canvasOriginXY(origin)
+  const cw = Math.max(1, canvasW)
+  const ch = Math.max(1, canvasH)
+  const mw = Math.max(1, mainRect.width)
+  const mh = Math.max(1, mainRect.height)
+  return {
+    x: mainRect.left + (globalX - ox) * (mw / cw),
+    y: mainRect.top + (globalY - oy) * (mh / ch),
+  }
+}
+
 export function clientRectToGlobalLogical(
   mainRect: DOMRect,
   elRect: DOMRect,

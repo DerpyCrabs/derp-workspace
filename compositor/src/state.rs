@@ -91,7 +91,8 @@ use crate::{
     desktop::exclusion_clip,
     session::workspace_model::{
         group_id_for_window, next_active_window_after_removal, reconcile_workspace_state,
-        WorkspaceMutation, WorkspaceState,
+        WorkspaceMonitorLayoutState, WorkspaceMonitorLayoutType, WorkspaceMonitorTileEntry,
+        WorkspaceMonitorTileState, WorkspaceMutation, WorkspaceRect, WorkspaceState,
     },
     shell::shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
@@ -127,6 +128,7 @@ pub const GNOME_AUTO_MAXIMIZE_THRESHOLD_PERCENT: i32 = 90;
 pub const SHELL_BORDER_THICKNESS: i32 = 4;
 /// Top border inset above client (shell tabs flush to frame top when 0); keep in sync with `CHROME_BORDER_TOP_PX`.
 pub const SHELL_BORDER_TOP_THICKNESS: i32 = 0;
+pub const SHELL_DRAG_WINDOW_ALPHA: f32 = 0.76;
 /// Wayland `app_id` for the embedded Solid CEF toplevel — must not appear in the shell HUD list.
 pub const DERP_SOLID_SHELL_APP_ID: &str = "com.derp.solid-shell";
 /// Window title set by `cef_host` (`WindowInfo::window_name`); used with [`DERP_SOLID_SHELL_APP_ID`].
@@ -218,6 +220,7 @@ pub(crate) struct PendingDeferredToplevel {
     pub window: Window,
     pub map_x: i32,
     pub map_y: i32,
+    pub initial_client_rect: Option<Rectangle<i32, Logical>>,
 }
 
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
@@ -1332,6 +1335,7 @@ impl CompositorState {
     pub fn apply_shell_chrome_metrics(&mut self, titlebar_h: i32, border_w: i32) {
         self.shell_chrome_titlebar_h = titlebar_h.clamp(0, 256);
         self.shell_chrome_border_w = border_w.clamp(0, 64);
+        self.workspace_apply_auto_layout_for_all_outputs();
     }
 
     pub fn sync_shell_shared_state(&mut self, kind: u32) {
@@ -1464,6 +1468,11 @@ impl CompositorState {
             let render_loc = map_loc - elem.geometry().loc;
             let local = pos - render_loc.to_f64();
             let window_id = self.derp_elem_window_id(elem);
+            if window_id
+                .is_some_and(|window_id| !self.workspace_window_is_visible_during_render(window_id))
+            {
+                continue;
+            }
             let hit = match elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
@@ -1945,19 +1954,100 @@ impl CompositorState {
         }
     }
 
+    fn workspace_group_visible_window_id(&self, group_id: &str) -> Option<u32> {
+        let group = self
+            .workspace_state
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)?;
+        let split_left_window_id = self
+            .workspace_state
+            .split_by_group_id
+            .get(group_id)
+            .map(|split| split.left_window_id);
+        if let Some(window_id) = self.workspace_state.visible_window_id_for_group(group_id) {
+            if split_left_window_id != Some(window_id)
+                && self
+                    .window_registry
+                    .window_info(window_id)
+                    .is_some_and(|info| !info.minimized)
+            {
+                return Some(window_id);
+            }
+        }
+        if let Some(left_window_id) = split_left_window_id {
+            if let Some(first_right_window_id) = group
+                .window_ids
+                .iter()
+                .copied()
+                .find(|window_id| *window_id != left_window_id)
+            {
+                return Some(first_right_window_id);
+            }
+        }
+        group
+            .window_ids
+            .iter()
+            .copied()
+            .find(|window_id| {
+                self.window_registry
+                    .window_info(*window_id)
+                    .is_some_and(|info| !info.minimized)
+            })
+            .or_else(|| group.window_ids.first().copied())
+    }
+
+    fn workspace_window_is_logically_visible(&self, window_id: u32) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if info.minimized {
+            return false;
+        }
+        let Some(group_id) = group_id_for_window(&self.workspace_state, window_id) else {
+            return true;
+        };
+        let Some(group) = self
+            .workspace_state
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+        else {
+            return true;
+        };
+        let split_left_window_id = self
+            .workspace_state
+            .split_by_group_id
+            .get(group_id)
+            .map(|split| split.left_window_id);
+        group.window_ids.len() <= 1
+            || self.workspace_group_visible_window_id(group_id) == Some(window_id)
+            || split_left_window_id == Some(window_id)
+    }
+
+    pub(crate) fn workspace_window_is_visible_during_render(&self, window_id: u32) -> bool {
+        self.workspace_window_is_logically_visible(window_id)
+    }
+
+    pub(crate) fn workspace_window_render_alpha(&self, window_id: u32) -> f32 {
+        if self.shell_move_window_id == Some(window_id) {
+            SHELL_DRAG_WINDOW_ALPHA
+        } else {
+            1.0
+        }
+    }
+
     pub(crate) fn ordered_window_ids_on_output(&self, output: &Output) -> Vec<u32> {
-        let mut seen = HashSet::new();
-        let mut stack = Vec::new();
-        for id in self
+        let visible_window_ids_on_output: HashSet<u32> = self
             .space
             .elements_for_output(output)
             .filter_map(|e| self.derp_elem_window_id(e))
-        {
-            if seen.insert(id) {
-                stack.push(id);
-            }
-        }
-        stack
+            .filter(|window_id| self.workspace_window_is_visible_during_render(*window_id))
+            .collect();
+        self.shell_window_stack_ids()
+            .into_iter()
+            .filter(|window_id| visible_window_ids_on_output.contains(window_id))
+            .collect()
     }
 
     fn window_ids_strictly_above_in_stack<'a>(
@@ -3082,6 +3172,13 @@ impl CompositorState {
             self.pending_gnome_initial_toplevels.remove(&window_id);
             return false;
         };
+        if self
+            .workspace_auto_layout_initial_client_rect_for_window(&out.name(), window_id)
+            .is_some()
+        {
+            self.pending_gnome_initial_toplevels.remove(&window_id);
+            return false;
+        }
         let Some(work) = self.shell_maximize_work_area_global_for_output(&out) else {
             self.pending_gnome_initial_toplevels.remove(&window_id);
             return false;
@@ -3090,29 +3187,18 @@ impl CompositorState {
         if Self::should_auto_maximize_new_toplevel(&work, width, height) {
             return self.apply_toplevel_maximize_layout(window);
         }
-        let (x, y) = self.staggered_toplevel_origin_for_output(&out, &work, width, height);
-        let elem = DerpSpaceElem::Wayland(window.clone());
         let current = window.geometry().size;
         let needs_resize = current.w != width || current.h != height;
-        let needs_reposition = self
-            .space
-            .element_location(&elem)
-            .map(|loc| loc.x != x || loc.y != y)
-            .unwrap_or(true);
-        if !needs_reposition && !needs_resize {
+        if !needs_resize {
             return false;
         }
-        if needs_resize {
-            tl.with_pending_state(|st| {
-                st.states.unset(xdg_toplevel::State::Fullscreen);
-                st.fullscreen_output = None;
-                st.states.unset(xdg_toplevel::State::Maximized);
-                st.size = Some(Size::from((width, height)));
-            });
-            tl.send_pending_configure();
-        }
-        self.space.map_element(elem.clone(), (x, y), true);
-        self.space.raise_element(&elem, true);
+        tl.with_pending_state(|st| {
+            st.states.unset(xdg_toplevel::State::Fullscreen);
+            st.fullscreen_output = None;
+            st.states.unset(xdg_toplevel::State::Maximized);
+            st.size = Some(Size::from((width, height)));
+        });
+        tl.send_pending_configure();
         true
     }
 
@@ -3179,6 +3265,9 @@ impl CompositorState {
         window: &Window,
         parent_wl: Option<&WlSurface>,
     ) -> (i32, i32) {
+        if let Some(rect) = self.new_toplevel_initial_client_rect(window, parent_wl) {
+            return (rect.loc.x, rect.loc.y);
+        }
         let Some(out) = self.new_toplevel_placement_output(parent_wl) else {
             return (DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y);
         };
@@ -3189,6 +3278,465 @@ impl CompositorState {
             .preferred_new_toplevel_size(window)
             .unwrap_or((DEFAULT_XDG_TOPLEVEL_WIDTH, DEFAULT_XDG_TOPLEVEL_HEIGHT));
         self.staggered_toplevel_origin_for_output(&out, &work, width, height)
+    }
+
+    pub(crate) fn new_toplevel_initial_client_rect(
+        &self,
+        window: &Window,
+        parent_wl: Option<&WlSurface>,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let out = self.new_toplevel_placement_output(parent_wl)?;
+        let window_id = window.toplevel().and_then(|toplevel| {
+            self.window_registry
+                .window_id_for_wl_surface(toplevel.wl_surface())
+        })?;
+        self.workspace_auto_layout_initial_client_rect_for_window(&out.name(), window_id)
+    }
+
+    fn workspace_auto_layout_frame_area_for_output(
+        &self,
+        output: &Output,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let geo = self.space.output_geometry(output)?;
+        Some(Rectangle::new(
+            geo.loc,
+            Size::from((
+                geo.size.w.max(1),
+                geo.size.h.saturating_sub(SHELL_TASKBAR_RESERVE_PX).max(1),
+            )),
+        ))
+    }
+
+    fn workspace_auto_layout_client_rect_from_frame_rect(
+        &self,
+        rect: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Logical> {
+        let titlebar_h = self.shell_chrome_titlebar_h.max(0);
+        Rectangle::new(
+            Point::from((rect.loc.x, rect.loc.y.saturating_add(titlebar_h))),
+            Size::from((
+                rect.size.w.max(1),
+                rect.size.h.saturating_sub(titlebar_h).max(1),
+            )),
+        )
+    }
+
+    fn workspace_monitor_layout_state_for_output(
+        &self,
+        output_name: &str,
+    ) -> Option<&WorkspaceMonitorLayoutState> {
+        self.workspace_state.monitor_layout_for_output(output_name)
+    }
+
+    fn workspace_is_auto_layout_managed_window(&self, info: &WindowInfo) -> bool {
+        if info.minimized || info.maximized || info.fullscreen {
+            return false;
+        }
+        if self.window_info_is_solid_shell_host(info) {
+            return false;
+        }
+        info.app_id != "derp.debug" && info.app_id != "derp.settings"
+    }
+
+    fn workspace_window_output_name_for_auto_layout(&self, info: &WindowInfo) -> String {
+        if !info.output_name.is_empty() {
+            return info.output_name.clone();
+        }
+        self.output_for_window_position(info.x, info.y, info.width, info.height)
+            .unwrap_or_default()
+    }
+
+    fn workspace_auto_layout_window_ids_for_output(
+        &self,
+        output_name: &str,
+        extra_window_id: Option<u32>,
+    ) -> Vec<u32> {
+        let mut window_ids = Vec::new();
+        for info in self.window_registry.all_infos() {
+            if !self.workspace_is_auto_layout_managed_window(&info) {
+                continue;
+            }
+            if self.workspace_window_output_name_for_auto_layout(&info) != output_name {
+                continue;
+            }
+            window_ids.push(info.window_id);
+        }
+        if let Some(window_id) = extra_window_id {
+            if !window_ids.contains(&window_id) {
+                window_ids.push(window_id);
+            }
+        }
+        window_ids.sort_unstable();
+        window_ids
+    }
+
+    fn workspace_clamp_master_ratio(value: Option<f64>) -> f64 {
+        const DEFAULT_MASTER_RATIO: f64 = 0.55;
+        let ratio = value.unwrap_or(DEFAULT_MASTER_RATIO);
+        if ratio.is_nan() {
+            return DEFAULT_MASTER_RATIO;
+        }
+        ratio.clamp(0.01, 0.99)
+    }
+
+    fn workspace_compute_auto_layout_frame_rects(
+        &self,
+        layout_state: &WorkspaceMonitorLayoutState,
+        window_ids: &[u32],
+        work_area: Rectangle<i32, Logical>,
+    ) -> HashMap<u32, Rectangle<i32, Logical>> {
+        let mut out = HashMap::new();
+        if window_ids.is_empty() {
+            return out;
+        }
+        let x = work_area.loc.x;
+        let y = work_area.loc.y;
+        let w = work_area.size.w.max(1);
+        let h = work_area.size.h.max(1);
+        match layout_state.layout {
+            WorkspaceMonitorLayoutType::ManualSnap => {}
+            WorkspaceMonitorLayoutType::MasterStack => {
+                if window_ids.len() == 1 {
+                    out.insert(
+                        window_ids[0],
+                        Rectangle::new(Point::from((x, y)), Size::from((w, h))),
+                    );
+                    return out;
+                }
+                let ratio = Self::workspace_clamp_master_ratio(layout_state.params.master_ratio);
+                let master_w = ((f64::from(w)) * ratio).floor() as i32;
+                let stack_w = w.saturating_sub(master_w).max(1);
+                out.insert(
+                    window_ids[0],
+                    Rectangle::new(Point::from((x, y)), Size::from((master_w.max(1), h))),
+                );
+                let stack_ids = &window_ids[1..];
+                let stack_count = stack_ids.len() as i32;
+                for (index, window_id) in stack_ids.iter().enumerate() {
+                    let i = index as i32;
+                    let top = y + ((f64::from(i * h) / f64::from(stack_count)).round() as i32);
+                    let bottom =
+                        y + ((f64::from((i + 1) * h) / f64::from(stack_count)).round() as i32);
+                    out.insert(
+                        *window_id,
+                        Rectangle::new(
+                            Point::from((x.saturating_add(master_w), top)),
+                            Size::from((stack_w, bottom.saturating_sub(top).max(1))),
+                        ),
+                    );
+                }
+            }
+            WorkspaceMonitorLayoutType::Columns => {
+                let n = window_ids.len() as i32;
+                let cap = layout_state
+                    .params
+                    .max_columns
+                    .map(|value| value.max(1) as i32)
+                    .unwrap_or(n)
+                    .max(1);
+                if n <= cap {
+                    for (index, window_id) in window_ids.iter().enumerate() {
+                        let i = index as i32;
+                        let left = x + ((i * w) / n);
+                        let right = if i == n - 1 {
+                            x.saturating_add(w)
+                        } else {
+                            x + (((i + 1) * w) / n)
+                        };
+                        out.insert(
+                            *window_id,
+                            Rectangle::new(
+                                Point::from((left, y)),
+                                Size::from((right.saturating_sub(left).max(1), h)),
+                            ),
+                        );
+                    }
+                    return out;
+                }
+                let num_cols = cap.max(1);
+                for index in 0..(num_cols - 1) {
+                    let left = x + ((index * w) / num_cols);
+                    let right = x + (((index + 1) * w) / num_cols);
+                    out.insert(
+                        window_ids[index as usize],
+                        Rectangle::new(
+                            Point::from((left, y)),
+                            Size::from((right.saturating_sub(left).max(1), h)),
+                        ),
+                    );
+                }
+                let stack_ids = &window_ids[(num_cols - 1) as usize..];
+                let stack_count = stack_ids.len() as i32;
+                let last_left = x + (((num_cols - 1) * w) / num_cols);
+                let last_right = x.saturating_add(w);
+                for (index, window_id) in stack_ids.iter().enumerate() {
+                    let i = index as i32;
+                    let top = y + ((f64::from(i * h) / f64::from(stack_count)).round() as i32);
+                    let bottom =
+                        y + ((f64::from((i + 1) * h) / f64::from(stack_count)).round() as i32);
+                    out.insert(
+                        *window_id,
+                        Rectangle::new(
+                            Point::from((last_left, top)),
+                            Size::from((
+                                last_right.saturating_sub(last_left).max(1),
+                                bottom.saturating_sub(top).max(1),
+                            )),
+                        ),
+                    );
+                }
+            }
+            WorkspaceMonitorLayoutType::Grid => {
+                let n = window_ids.len() as i32;
+                let cols = (f64::from(n).sqrt().ceil() as i32).max(1);
+                let rows = ((n + cols - 1) / cols).max(1);
+                for (index, window_id) in window_ids.iter().enumerate() {
+                    let i = index as i32;
+                    let row = i / cols;
+                    let col = i % cols;
+                    let left = x + ((col * w) / cols);
+                    let top = y + ((row * h) / rows);
+                    let right = if col == cols - 1 {
+                        x.saturating_add(w)
+                    } else {
+                        x + (((col + 1) * w) / cols)
+                    };
+                    let bottom = if row == rows - 1 {
+                        y.saturating_add(h)
+                    } else {
+                        y + (((row + 1) * h) / rows)
+                    };
+                    out.insert(
+                        *window_id,
+                        Rectangle::new(
+                            Point::from((left, top)),
+                            Size::from((
+                                right.saturating_sub(left).max(1),
+                                bottom.saturating_sub(top).max(1),
+                            )),
+                        ),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn workspace_auto_layout_initial_client_rect_for_window(
+        &self,
+        output_name: &str,
+        window_id: u32,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let layout_state = self.workspace_monitor_layout_state_for_output(output_name)?;
+        if layout_state.layout == WorkspaceMonitorLayoutType::ManualSnap {
+            return None;
+        }
+        let output = self
+            .space
+            .outputs()
+            .find(|entry| entry.name() == output_name)?;
+        let work_area = self.workspace_auto_layout_frame_area_for_output(output)?;
+        let window_ids =
+            self.workspace_auto_layout_window_ids_for_output(output_name, Some(window_id));
+        let frame_rects =
+            self.workspace_compute_auto_layout_frame_rects(layout_state, &window_ids, work_area);
+        frame_rects
+            .get(&window_id)
+            .copied()
+            .map(|rect| self.workspace_auto_layout_client_rect_from_frame_rect(rect))
+    }
+
+    fn workspace_set_pre_tile_geometry(&mut self, window_id: u32, bounds: WorkspaceRect) -> bool {
+        self.workspace_state
+            .pre_tile_geometry
+            .retain(|entry| entry.window_id != window_id);
+        self.workspace_state
+            .pre_tile_geometry
+            .push(crate::session::workspace_model::WorkspacePreTileGeometry { window_id, bounds });
+        true
+    }
+
+    fn workspace_set_auto_layout_tiles_for_output(
+        &mut self,
+        output_name: &str,
+        frame_rects: &HashMap<u32, Rectangle<i32, Logical>>,
+    ) -> bool {
+        let mut entries: Vec<WorkspaceMonitorTileEntry> = frame_rects
+            .iter()
+            .map(|(window_id, rect)| WorkspaceMonitorTileEntry {
+                window_id: *window_id,
+                zone: "auto-fill".to_string(),
+                bounds: WorkspaceRect {
+                    x: rect.loc.x,
+                    y: rect.loc.y,
+                    width: rect.size.w.max(1),
+                    height: rect.size.h.max(1),
+                },
+            })
+            .collect();
+        entries.sort_by_key(|entry| entry.window_id);
+        self.workspace_state
+            .monitor_tiles
+            .retain(|monitor| monitor.output_name != output_name);
+        if !entries.is_empty() {
+            self.workspace_state
+                .monitor_tiles
+                .push(WorkspaceMonitorTileState {
+                    output_name: output_name.to_string(),
+                    entries,
+                });
+        }
+        true
+    }
+
+    pub(crate) fn workspace_apply_auto_layout_for_output_name(
+        &mut self,
+        output_name: &str,
+    ) -> bool {
+        let Some(layout_state) = self
+            .workspace_monitor_layout_state_for_output(output_name)
+            .cloned()
+        else {
+            return false;
+        };
+        if layout_state.layout == WorkspaceMonitorLayoutType::ManualSnap {
+            return false;
+        }
+        let Some(output) = self
+            .space
+            .outputs()
+            .find(|entry| entry.name() == output_name)
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(work_area) = self.workspace_auto_layout_frame_area_for_output(&output) else {
+            return false;
+        };
+        let window_ids = self.workspace_auto_layout_window_ids_for_output(output_name, None);
+        let frame_rects =
+            self.workspace_compute_auto_layout_frame_rects(&layout_state, &window_ids, work_area);
+        self.workspace_set_auto_layout_tiles_for_output(output_name, &frame_rects);
+        for window_id in window_ids {
+            let Some(info) = self.window_registry.window_info(window_id) else {
+                continue;
+            };
+            self.workspace_set_pre_tile_geometry(
+                window_id,
+                WorkspaceRect {
+                    x: info.x,
+                    y: info.y,
+                    width: info.width.max(1),
+                    height: info.height.max(1),
+                },
+            );
+            let Some(frame_rect) = frame_rects.get(&window_id).copied() else {
+                continue;
+            };
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            let target_x = client_rect.loc.x;
+            let target_y = client_rect.loc.y;
+            let target_w = client_rect.size.w.max(1);
+            let target_h = client_rect.size.h.max(1);
+            let already_applied = info.x == target_x
+                && info.y == target_y
+                && info.width == target_w
+                && info.height == target_h
+                && info.output_name == output_name
+                && !info.maximized
+                && !info.fullscreen;
+            if self.window_registry.is_shell_hosted(window_id) {
+                if already_applied {
+                    continue;
+                }
+                let snap = self
+                    .window_registry
+                    .update_shell_hosted(window_id, |window_info, _| {
+                        window_info.x = target_x;
+                        window_info.y = target_y;
+                        window_info.width = target_w;
+                        window_info.height = target_h;
+                        window_info.output_name = output_name.to_string();
+                        window_info.maximized = false;
+                        window_info.fullscreen = false;
+                        window_info.clone()
+                    });
+                if let Some(snap) = snap {
+                    self.capture_refresh_window_source_cache(window_id);
+                    self.shell_backed_emit_geometry_messages(&snap);
+                }
+                continue;
+            }
+            self.clear_toplevel_layout_maps(window_id);
+            let Some(surface_id) = self.window_registry.surface_id_for_window(window_id) else {
+                continue;
+            };
+            if let Some(window) = self.find_window_by_surface_id(surface_id) {
+                if already_applied {
+                    continue;
+                }
+                let tl = window.toplevel().unwrap();
+                tl.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.fullscreen_output = None;
+                    state.states.unset(xdg_toplevel::State::Maximized);
+                    state.size = Some(Size::from((target_w, target_h)));
+                });
+                tl.send_pending_configure();
+                self.space.map_element(
+                    DerpSpaceElem::Wayland(window.clone()),
+                    (target_x, target_y),
+                    true,
+                );
+                self.shell_emit_requested_native_geometry(
+                    window_id,
+                    target_x,
+                    target_y,
+                    target_w,
+                    target_h,
+                    output_name.to_string(),
+                    false,
+                );
+                continue;
+            }
+            let Some(x11) = self.find_x11_window_by_surface_id(surface_id) else {
+                continue;
+            };
+            let rect = Rectangle::new(client_rect.loc, client_rect.size);
+            self.apply_x11_window_bounds(window_id, &x11, rect, false, false);
+        }
+        self.workspace_send_state();
+        true
+    }
+
+    fn workspace_apply_auto_layout_for_all_outputs(&mut self) -> bool {
+        let output_names: Vec<String> = self
+            .workspace_state
+            .monitor_layouts
+            .iter()
+            .filter(|entry| entry.layout != WorkspaceMonitorLayoutType::ManualSnap)
+            .map(|entry| entry.output_name.clone())
+            .collect();
+        let mut applied = false;
+        for output_name in output_names {
+            if self.workspace_apply_auto_layout_for_output_name(&output_name) {
+                applied = true;
+            }
+        }
+        applied
+    }
+
+    fn workspace_relayout_auto_layout_outputs_after_geometry(
+        &mut self,
+        previous_output_name: &str,
+        next_output_name: &str,
+    ) {
+        if !previous_output_name.is_empty() {
+            let _ = self.workspace_apply_auto_layout_for_output_name(previous_output_name);
+        }
+        if !next_output_name.is_empty() && next_output_name != previous_output_name {
+            let _ = self.workspace_apply_auto_layout_for_output_name(next_output_name);
+        }
     }
 
     pub(crate) fn shell_effective_primary_output(&self) -> Option<Output> {
@@ -3404,10 +3952,18 @@ impl CompositorState {
         if !initial_configure_sent {
             let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
             if let Some(tl) = pending.window.toplevel() {
-                tl.send_configure();
+                if let Some(rect) = pending.initial_client_rect {
+                    tl.with_pending_state(|state| {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                        state.fullscreen_output = None;
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                        state.size = Some(Size::from((rect.size.w.max(1), rect.size.h.max(1))));
+                    });
+                }
+                tl.send_pending_configure();
             }
         }
-        let (ready_to_map, title, app_id) = {
+        let (ready_to_map, title, app_id, retry_initial_resize) = {
             let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
             let bbox = pending.window.bbox();
             let has_buffer_extent = bbox.size.w >= 1 && bbox.size.h >= 1;
@@ -3425,8 +3981,15 @@ impl CompositorState {
             });
             let parent_p = pending.window.toplevel().and_then(|t| t.parent());
             let ident = !app_id.trim().is_empty();
-            let ready = ident && has_buffer_extent;
             let geo = pending.window.geometry();
+            let matches_initial_rect = pending.initial_client_rect.is_none_or(|rect| {
+                geo.size.w == rect.size.w.max(1) && geo.size.h == rect.size.h.max(1)
+            });
+            let retry_initial_resize = ident
+                && has_buffer_extent
+                && pending.initial_client_rect.is_some()
+                && !matches_initial_rect;
+            let ready = ident && has_buffer_extent && matches_initial_rect;
             tracing::warn!(
                 target: "derp_toplevel",
                 title = %title,
@@ -3451,17 +4014,41 @@ impl CompositorState {
                 will_map_now = ready,
                 "xdg sync deferred toplevel detail"
             );
-            (ready, title, app_id)
+            (ready, title, app_id, retry_initial_resize)
         };
+        if retry_initial_resize {
+            let pending = self.pending_deferred_toplevels.get(&key).expect("checked");
+            if let Some(rect) = pending.initial_client_rect {
+                if let Some(tl) = pending.window.toplevel() {
+                    tl.with_pending_state(|state| {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                        state.fullscreen_output = None;
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                        state.size = Some(Size::from((rect.size.w.max(1), rect.size.h.max(1))));
+                    });
+                    tl.send_pending_configure();
+                }
+            }
+        }
         if ready_to_map {
             let pending = self.pending_deferred_toplevels.remove(&key).unwrap();
             let wl0 = pending.window.toplevel().unwrap().wl_surface();
             let _ = self.window_registry.set_title(wl0, title);
             let _ = self.window_registry.set_app_id(wl0, app_id);
             let wl0 = wl0.clone();
+            let map_x = pending
+                .initial_client_rect
+                .as_ref()
+                .map(|rect| rect.loc.x)
+                .unwrap_or(pending.map_x);
+            let map_y = pending
+                .initial_client_rect
+                .as_ref()
+                .map(|rect| rect.loc.y)
+                .unwrap_or(pending.map_y);
             self.space.map_element(
                 DerpSpaceElem::Wayland(pending.window.clone()),
-                (pending.map_x, pending.map_y),
+                (map_x, map_y),
                 false,
             );
             self.notify_geometry_if_changed(&pending.window);
@@ -3475,13 +4062,15 @@ impl CompositorState {
                 title = %info.title,
                 app_id = %info.app_id,
                 wl_surface_protocol_id = wl0.id().protocol_id(),
-                map_x = pending.map_x,
-                map_y = pending.map_y,
+                map_x,
+                map_y,
                 "deferred toplevel mapped WindowMapped emitted"
             );
             let spawn_focus_wid = info.window_id;
+            let output_name = info.output_name.clone();
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
             self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
         }
     }
 
@@ -3932,6 +4521,13 @@ impl CompositorState {
         let hint = removed_info.as_ref();
         self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
         self.shell_reply_window_list();
+        if let Some(output_name) = removed_info
+            .as_ref()
+            .map(|info| info.output_name.clone())
+            .filter(|output_name| !output_name.is_empty())
+        {
+            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+        }
     }
 
     /// When title/app_id becomes that of the Solid host after an earlier map with empty metadata, retract the phantom HUD entry.
@@ -4915,6 +5511,7 @@ impl CompositorState {
         }
         self.shift_mapped_toplevels_for_output_moves(&before_outputs);
         self.resync_wayland_window_registry_from_space();
+        self.workspace_apply_auto_layout_for_all_outputs();
         self.recompute_shell_canvas_from_outputs();
         self.send_shell_output_layout();
         self.display_config_request_save();
@@ -5459,8 +6056,92 @@ impl CompositorState {
         self.shell_move_end(wid);
     }
 
+    fn shell_drag_restore_rect_from_client_frame(
+        pointer: Point<f64, Logical>,
+        frame_x: i32,
+        frame_y: i32,
+        frame_w: i32,
+        frame_h: i32,
+        restore_w: i32,
+        restore_h: i32,
+    ) -> Rectangle<i32, Logical> {
+        let fw = frame_w.max(1) as f64;
+        let fh = frame_h.max(1) as f64;
+        let rw = restore_w.max(1) as f64;
+        let rh = restore_h.max(1) as f64;
+        let ox = (pointer.x - frame_x as f64).clamp(0.0, fw);
+        let oy = (pointer.y - frame_y as f64).clamp(0.0, fh);
+        let rx = ox / fw;
+        let ry = oy / fh;
+        let clamped_rx = rx.clamp(0.3, 0.7);
+        let x = (pointer.x - clamped_rx * rw).round() as i32;
+        let y = (pointer.y - ry * rh).round() as i32;
+        Rectangle::new(
+            Point::from((x, y)),
+            Size::from((restore_w.max(1), restore_h.max(1))),
+        )
+    }
+
+    fn shell_restore_size_for_maximized_drag(
+        &self,
+        window_id: u32,
+        info: &WindowInfo,
+        kind: WindowKind,
+    ) -> (i32, i32) {
+        if kind == WindowKind::ShellHosted {
+            if let Some(record) = self.window_registry.window_record(window_id) {
+                if let Some(rect) = record.shell_hosted_float_restore {
+                    return (rect.size.w.max(1), rect.size.h.max(1));
+                }
+            }
+        } else if let Some((_, _, w, h)) = self.toplevel_floating_restore.get(&window_id).copied() {
+            return (w.max(1), h.max(1));
+        }
+        (
+            (info.width.max(1) * 55 / 100).max(360),
+            (info.height.max(1) * 55 / 100).max(280),
+        )
+    }
+
+    fn shell_restore_maximized_drag_window_if_needed(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if info.minimized || info.fullscreen || !info.maximized {
+            return;
+        }
+        let kind = self
+            .window_registry
+            .window_kind(window_id)
+            .unwrap_or(WindowKind::Native);
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let (restore_w, restore_h) =
+            self.shell_restore_size_for_maximized_drag(window_id, &info, kind);
+        let rect = Self::shell_drag_restore_rect_from_client_frame(
+            pointer.current_location(),
+            info.x,
+            info.y,
+            info.width,
+            info.height,
+            restore_w,
+            restore_h,
+        );
+        let (ox, oy) = self.shell_canvas_logical_origin;
+        self.shell_set_window_geometry(
+            window_id,
+            rect.loc.x.saturating_sub(ox),
+            rect.loc.y.saturating_sub(oy),
+            rect.size.w,
+            rect.size.h,
+            0,
+        );
+    }
+
     pub fn shell_move_begin(&mut self, window_id: u32) {
         self.shell_resize_end_active();
+        self.shell_restore_maximized_drag_window_if_needed(window_id);
         if self.shell_move_try_begin_backed(window_id) {
             return;
         }
@@ -5534,6 +6215,7 @@ impl CompositorState {
                 loc = ?loc,
                 "shell_move_begin: started"
             );
+            self.shell_send_interaction_state();
             return;
         }
         if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
@@ -5563,6 +6245,7 @@ impl CompositorState {
                 loc = ?loc,
                 "shell_move_begin: started"
             );
+            self.shell_send_interaction_state();
             return;
         }
         tracing::warn!(
@@ -5593,6 +6276,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         };
         if let Some(window) = self.find_window_by_surface_id(sid) {
@@ -5624,6 +6308,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_flush: window gone");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         };
         let Some(loc) = self
@@ -5641,6 +6326,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, ?error, "shell_move_flush: x11 configure failed");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         }
         self.space
@@ -5678,6 +6364,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         };
         if let Some(window) = self.find_window_by_surface_id(sid) {
@@ -5700,6 +6387,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_delta: window gone from space");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         }
         self.shell_move_pending_delta.0 += dx;
@@ -5723,6 +6411,7 @@ impl CompositorState {
         }
         self.shell_move_window_id = None;
         self.notify_geometry_for_window(window, true);
+        self.shell_send_interaction_state();
     }
 
     pub fn shell_move_end(&mut self, window_id: u32) {
@@ -5747,6 +6436,7 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_send_interaction_state();
             return;
         };
         if let Some(window) = self.find_window_by_surface_id(sid) {
@@ -5766,6 +6456,7 @@ impl CompositorState {
             }
             self.shell_move_pending_delta = (0, 0);
             self.emit_x11_window_updates(&x11, true, false);
+            self.shell_send_interaction_state();
             tracing::warn!(
                 target: "derp_shell_move",
                 window_id,
@@ -5781,6 +6472,7 @@ impl CompositorState {
         );
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_send_interaction_state();
     }
 
     fn x11_resize_rect(
@@ -5858,6 +6550,13 @@ impl CompositorState {
             rect.loc = Point::from((DEFAULT_XDG_TOPLEVEL_OFFSET_X, DEFAULT_XDG_TOPLEVEL_OFFSET_Y));
             return rect;
         };
+        if let Some(window_id) = self.x11_window_id_for_surface(window) {
+            if let Some(client_rect) =
+                self.workspace_auto_layout_initial_client_rect_for_window(&output.name(), window_id)
+            {
+                return client_rect;
+            }
+        }
         rect.size.w = rect.size.w.min(work.size.w.max(1));
         rect.size.h = rect.size.h.min(work.size.h.max(1));
         rect.loc = Point::from(self.staggered_toplevel_origin_for_output(
@@ -5904,7 +6603,9 @@ impl CompositorState {
         if let Some(wid) = self.shell_resize_window_id {
             self.shell_resize_end(wid);
         }
-        self.shell_resize_shell_grab = None;
+        if self.shell_resize_shell_grab.take().is_some() {
+            self.shell_send_interaction_state();
+        }
     }
 
     pub fn shell_resize_shell_grab_begin(&mut self, window_id: u32) {
@@ -5926,10 +6627,13 @@ impl CompositorState {
             }
         }
         self.shell_resize_shell_grab = Some(window_id);
+        self.shell_send_interaction_state();
     }
 
     pub fn shell_resize_shell_grab_end(&mut self) {
-        self.shell_resize_shell_grab = None;
+        if self.shell_resize_shell_grab.take().is_some() {
+            self.shell_send_interaction_state();
+        }
     }
 
     pub fn shell_resize_begin(&mut self, window_id: u32, edges_wire: u32) {
@@ -6026,6 +6730,7 @@ impl CompositorState {
                 .get_keyboard()
                 .unwrap()
                 .set_focus(self, Some(wl.clone()), k_serial);
+            self.shell_send_interaction_state();
             return;
         }
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
@@ -6054,6 +6759,7 @@ impl CompositorState {
                 .unwrap()
                 .set_focus(self, Some(wl), k_serial);
         }
+        self.shell_send_interaction_state();
     }
 
     fn shell_emit_interactive_resize_geometry(
@@ -6110,6 +6816,7 @@ impl CompositorState {
             self.shell_resize_edges = None;
             self.shell_resize_initial_rect = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
         self.shell_resize_accum.0 += dx as f64;
@@ -6145,6 +6852,7 @@ impl CompositorState {
             self.shell_resize_edges = None;
             self.shell_resize_initial_rect = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
         let rect = self.x11_resize_rect(
@@ -6183,17 +6891,20 @@ impl CompositorState {
             self.shell_resize_edges = None;
             self.shell_resize_initial_rect = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
         let Some(edges) = self.shell_resize_edges else {
             self.shell_resize_window_id = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
         let Some(initial_rect) = self.shell_resize_initial_rect else {
             self.shell_resize_window_id = None;
             self.shell_resize_edges = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         };
 
@@ -6242,6 +6953,7 @@ impl CompositorState {
             self.shell_resize_edges = None;
             self.shell_resize_initial_rect = None;
             self.shell_resize_accum = (0.0, 0.0);
+            self.shell_send_interaction_state();
             return;
         }
 
@@ -6249,6 +6961,7 @@ impl CompositorState {
         self.shell_resize_edges = None;
         self.shell_resize_initial_rect = None;
         self.shell_resize_accum = (0.0, 0.0);
+        self.shell_send_interaction_state();
 
         tracing::debug!(
             target: "derp_shell_resize",
@@ -6368,6 +7081,22 @@ impl CompositorState {
         );
     }
 
+    pub(crate) fn shell_send_interaction_state(&mut self) {
+        let pointer = self
+            .seat
+            .get_pointer()
+            .map(|pointer| pointer.current_location().to_i32_round())
+            .unwrap_or_else(|| Point::from((0, 0)));
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::InteractionState {
+                pointer_x: pointer.x,
+                pointer_y: pointer.y,
+                move_window_id: self.shell_move_window_id.unwrap_or(0),
+                resize_window_id: self.shell_resize_window_id.unwrap_or(0),
+            },
+        );
+    }
+
     pub(crate) fn hydrate_shell_hosted_app_state_from_session(&mut self) {
         let file = crate::session::session_state::read_session_state();
         let Some(shell) = file.shell.as_object() else {
@@ -6457,6 +7186,32 @@ impl CompositorState {
         );
     }
 
+    fn workspace_begin_detached_window_drag(&mut self, window_id: u32) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            self.shell_activate_window(window_id);
+            return;
+        };
+        let pos = pointer.current_location();
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        let width = info.width.max(1);
+        let height = info.height.max(1);
+        let x = (pos.x.round() as i32).saturating_sub(width / 2);
+        let y = (pos.y.round() as i32).saturating_add(self.shell_chrome_titlebar_h.max(0) / 2);
+        let (ox, oy) = self.shell_canvas_logical_origin;
+        self.shell_set_window_geometry(
+            window_id,
+            x.saturating_sub(ox),
+            y.saturating_sub(oy),
+            width,
+            height,
+            0,
+        );
+        self.shell_activate_window(window_id);
+        self.shell_move_begin(window_id);
+    }
+
     pub(crate) fn apply_workspace_mutation_json(&mut self, mutation_json: &str) {
         let Ok(mutation) = serde_json::from_str::<WorkspaceMutation>(mutation_json) else {
             tracing::warn!(target: "derp_workspace", %mutation_json, "workspace mutation parse failed");
@@ -6471,6 +7226,9 @@ impl CompositorState {
         };
         let next_state = reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
         let mut activation_window_id = None;
+        let mut detached_window_drag = None;
+        let mut auto_layout_output_name = None;
+        let mut auto_layout_all_outputs = false;
         match &mutation {
             WorkspaceMutation::SelectTab { group_id, .. } => {
                 let previous_visible = previous_state.visible_window_id_for_group(group_id);
@@ -6500,8 +7258,34 @@ impl CompositorState {
                     }
                 }
             }
+            WorkspaceMutation::MoveGroupToGroup {
+                source_group_id,
+                target_group_id,
+                ..
+            } => {
+                if source_group_id != target_group_id {
+                    if let Some(target_visible) =
+                        previous_state.visible_window_id_for_group(target_group_id)
+                    {
+                        if let Some(source_group) = previous_state
+                            .groups
+                            .iter()
+                            .find(|group| group.id == *source_group_id)
+                        {
+                            for window_id in &source_group.window_ids {
+                                self.workspace_copy_window_geometry(*window_id, target_visible);
+                            }
+                        }
+                        activation_window_id = Some(target_visible);
+                    }
+                }
+            }
             WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
-                activation_window_id = Some(*window_id);
+                if self.shell_ui_pointer_grab_active() {
+                    detached_window_drag = Some(*window_id);
+                } else {
+                    activation_window_id = Some(*window_id);
+                }
             }
             WorkspaceMutation::EnterSplit { group_id, .. }
             | WorkspaceMutation::ExitSplit { group_id, .. } => {
@@ -6513,12 +7297,34 @@ impl CompositorState {
             | WorkspaceMutation::RemoveMonitorTile { .. }
             | WorkspaceMutation::ClearMonitorTiles { .. }
             | WorkspaceMutation::SetPreTileGeometry { .. }
-            | WorkspaceMutation::ClearPreTileGeometry { .. }
-            | WorkspaceMutation::ReplaceState { .. } => {}
+            | WorkspaceMutation::ClearPreTileGeometry { .. } => {}
+            WorkspaceMutation::ReplaceState { .. } => {
+                auto_layout_all_outputs = true;
+            }
+            WorkspaceMutation::SetMonitorLayout {
+                output_name,
+                layout,
+                ..
+            } => {
+                if *layout != WorkspaceMonitorLayoutType::ManualSnap {
+                    auto_layout_output_name = Some(output_name.clone());
+                }
+            }
         }
         self.workspace_state = next_state;
-        self.workspace_send_state();
-        if let Some(window_id) = activation_window_id {
+        let state_sent = if auto_layout_all_outputs {
+            self.workspace_apply_auto_layout_for_all_outputs()
+        } else if let Some(output_name) = auto_layout_output_name {
+            self.workspace_apply_auto_layout_for_output_name(&output_name)
+        } else {
+            false
+        };
+        if !state_sent {
+            self.workspace_send_state();
+        }
+        if let Some(window_id) = detached_window_drag {
+            self.workspace_begin_detached_window_drag(window_id);
+        } else if let Some(window_id) = activation_window_id {
             self.shell_activate_window(window_id);
         }
     }
@@ -6709,6 +7515,7 @@ impl CompositorState {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return;
         };
+        let previous_output_name = info.output_name.clone();
         if self.window_info_is_solid_shell_host(&info) {
             return;
         }
@@ -6762,6 +7569,10 @@ impl CompositorState {
                     state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
                 });
                 tl.send_pending_configure();
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    &previous_output_name,
+                    &target_output_name,
+                );
                 return;
             }
             if let Some(x11) = self.shell_minimized_x11_windows.get(&window_id).cloned() {
@@ -6804,6 +7615,10 @@ impl CompositorState {
                 if let Err(error) = x11.configure(Some(rect)) {
                     tracing::warn!(window_id, ?error, "x11 configure failed");
                 }
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    &previous_output_name,
+                    &target_output_name,
+                );
                 return;
             }
         }
@@ -6850,6 +7665,10 @@ impl CompositorState {
                     });
                     tl.send_pending_configure();
                 }
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    &previous_output_name,
+                    &target_output_name,
+                );
                 return;
             }
 
@@ -6877,6 +7696,15 @@ impl CompositorState {
                 content_h,
                 target_output_name,
                 layout_state == 1,
+            );
+            let next_output_name = self
+                .window_registry
+                .window_info(window_id)
+                .map(|info| info.output_name)
+                .unwrap_or_default();
+            self.workspace_relayout_auto_layout_outputs_after_geometry(
+                &previous_output_name,
+                &next_output_name,
             );
             return;
         }
@@ -6923,11 +7751,19 @@ impl CompositorState {
                 if let Err(error) = window.configure(Some(rect)) {
                     tracing::warn!(window_id, ?error, "x11 configure failed");
                 }
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    &previous_output_name,
+                    &target_output_name,
+                );
             }
             return;
         }
         let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
         self.apply_x11_window_bounds(window_id, &x11, rect, layout_state == 1, false);
+        self.workspace_relayout_auto_layout_outputs_after_geometry(
+            &previous_output_name,
+            &target_output_name,
+        );
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {
@@ -7406,7 +8242,11 @@ impl CompositorState {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return;
         };
+        let output_name = info.output_name.clone();
         self.shell_emit_chrome_event(ChromeEvent::WindowStateChanged { info, minimized });
+        if !output_name.is_empty() {
+            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+        }
     }
 
     /// Hide a toplevel (xdg minimized + unmap); stash the [`Window`] for restore.
@@ -8358,8 +9198,10 @@ impl XwmHandler for CompositorState {
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
                 if !was_mapped && !info.minimized {
+                    let output_name = info.output_name.clone();
                     self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
                     self.shell_consider_focus_spawned_toplevel(info.window_id);
+                    let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
                 } else {
                     self.emit_x11_window_updates(&window, true, true);
                 }

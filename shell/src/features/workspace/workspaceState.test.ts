@@ -6,6 +6,7 @@ import {
   exitWorkspaceSplitView,
   groupIdForWindow,
   mergeWorkspaceGroups,
+  moveWorkspaceGroupToGroup,
   moveWorkspaceWindowToGroup,
   reconcileWorkspaceState,
   reorderWorkspaceWindowInGroup,
@@ -126,6 +127,36 @@ describe('workspaceState', () => {
     expect(next.splitByGroupId).toEqual({})
   })
 
+  it('clears tile metadata for a tab torn into its own group', () => {
+    const state: WorkspaceState = {
+      ...createEmptyWorkspaceState(),
+      groups: [{ id: 'group-1', windowIds: [1, 2] }],
+      activeTabByGroupId: { 'group-1': 1 },
+      monitorTiles: [
+        {
+          outputName: 'HDMI-A-1',
+          entries: [
+            {
+              windowId: 1,
+              zone: 'left-half',
+              bounds: { x: 0, y: 0, width: 960, height: 1040 },
+            },
+          ],
+        },
+      ],
+      preTileGeometry: [
+        {
+          windowId: 1,
+          bounds: { x: 120, y: 100, width: 900, height: 700 },
+        },
+      ],
+      nextGroupSeq: 2,
+    }
+    const next = splitWorkspaceWindowToOwnGroup(state, 1)
+    expect(next.monitorTiles).toEqual([])
+    expect(next.preTileGeometry).toEqual([])
+  })
+
   it('enters split view and keeps the active tab on the right', () => {
     let state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
     const groupId = groupIdForWindow(state, 2)!
@@ -156,6 +187,19 @@ describe('workspaceState', () => {
     state = enterWorkspaceSplitView(state, groupId, 2)
     const next = mergeWorkspaceGroups(state, 3, 2)
     expect(next.splitByGroupId[groupId]).toBeUndefined()
+  })
+
+  it('moves every window from one group into another group', () => {
+    let state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3, 4])
+    state = mergeWorkspaceGroups(state, 2, 1)
+    const sourceGroupId = groupIdForWindow(state, 1)!
+    const targetGroupId = groupIdForWindow(state, 3)!
+    const next = moveWorkspaceGroupToGroup(state, sourceGroupId, targetGroupId, 1)
+    expect(next.groups).toEqual([
+      { id: targetGroupId, windowIds: [3, 1, 2] },
+      { id: 'group-4', windowIds: [4] },
+    ])
+    expect(next.activeTabByGroupId[sourceGroupId]).toBeUndefined()
   })
 
 })

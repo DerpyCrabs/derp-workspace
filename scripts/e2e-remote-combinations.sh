@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/remote-common.sh"
 remote_common_init "e2e-remote-combinations"
 
 require_remote_sync_tools
+remote_test_lock_acquire
 
 usage() {
   cat <<'EOF'

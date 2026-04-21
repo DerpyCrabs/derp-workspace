@@ -172,6 +172,17 @@ impl CompositorState {
             },
         );
         pointer.frame(self);
+        if dx != 0 || dy != 0 {
+            if self.shell_move_is_active() {
+                self.shell_move_delta(dx, dy);
+            }
+            if self.shell_resize_is_active() {
+                self.shell_resize_delta(dx, dy);
+            }
+            if self.shell_move_is_active() || self.shell_resize_is_active() {
+                self.shell_send_interaction_state();
+            }
+        }
         self.shell_ipc_maybe_forward_pointer_move(pos);
     }
 

@@ -326,4 +326,104 @@ describe('tabGroupOps', () => {
       globalThis.Element = OrigElement
     }
   })
+
+  it('falls back to tab strip geometry when elementsFromPoint misses blank strip area', () => {
+    function ElementShim() {}
+    ElementShim.prototype = Object.create(Object.getPrototypeOf(Object.prototype))
+    globalThis.Element = ElementShim as unknown as typeof globalThis.Element
+    const docHolder = globalThis as typeof globalThis & { document?: Document }
+    if (!docHolder.document) docHolder.document = {} as Document
+    const docAny = docHolder.document as Document & {
+      elementsFromPoint?: (x: number, y: number) => Element[]
+      querySelectorAll?: Document['querySelectorAll']
+    }
+    const origElementsFromPoint = docAny.elementsFromPoint
+    const origQuerySelectorAll = docAny.querySelectorAll
+    const overlay = asElem({
+      closest() {
+        return null
+      },
+    })
+    const firstTab = asElem({
+      getAttribute(name: string) {
+        return name === 'data-workspace-split-left-tab' ? null : null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 120,
+          top: 20,
+          right: 180,
+          bottom: 60,
+          width: 60,
+          height: 40,
+          x: 120,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    const secondTab = asElem({
+      getAttribute(name: string) {
+        return name === 'data-workspace-split-left-tab' ? null : null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 184,
+          top: 20,
+          right: 244,
+          bottom: 60,
+          width: 60,
+          height: 40,
+          x: 184,
+          y: 20,
+        } as DOMRect
+      },
+    })
+    const strip = asElem({
+      closest(sel: string) {
+        if (sel === `[data-shell-window-frame="3"]`) return null
+        return null
+      },
+      getAttribute(name: string) {
+        if (name === 'data-workspace-tab-strip') return 'group-2'
+        return null
+      },
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: 20,
+          right: 320,
+          bottom: 60,
+          width: 220,
+          height: 40,
+          x: 100,
+          y: 20,
+        } as DOMRect
+      },
+      querySelectorAll(selector: string) {
+        if (selector === '[data-workspace-tab]') {
+          return [firstTab, secondTab] as unknown as ReturnType<Element['querySelectorAll']>
+        }
+        return [] as unknown as ReturnType<Element['querySelectorAll']>
+      },
+    })
+    docAny.elementsFromPoint = () => [overlay]
+    docAny.querySelectorAll = ((selector: string) => {
+      if (selector === '[data-workspace-tab-strip]') {
+        return [strip] as unknown as ReturnType<Document['querySelectorAll']>
+      }
+      return [] as unknown as ReturnType<Document['querySelectorAll']>
+    }) as Document['querySelectorAll']
+    try {
+      const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
+      expect(findMergeTarget(state, 3, 292, 40)).toEqual({ groupId: 'group-2', insertIndex: 2 })
+    } finally {
+      if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
+      else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
+      if (origQuerySelectorAll) docAny.querySelectorAll = origQuerySelectorAll
+      else {
+        docAny.querySelectorAll = (() => [] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
+      }
+      globalThis.Element = OrigElement
+    }
+  })
 })

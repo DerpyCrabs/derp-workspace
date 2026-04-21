@@ -25,7 +25,6 @@ type WorkspaceActionsOptions = {
   focusShellUiWindow: (windowId: number) => void
   activateWindowViaShell: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
-  moveWindowUnderPointer: (windowId: number, clientX: number, clientY: number) => void
   shellWireSend: ShellCompositorWireSend
 }
 
@@ -61,7 +60,29 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     })
   }
 
-  const detachGroupWindow = (windowId: number, clientX: number, clientY: number) => {
+  const applyWindowDrop = (sourceWindowId: number, target: TabMergeTarget) => {
+    const prevState = options.workspaceState()
+    const sourceGroupId = groupIdForWindow(prevState, sourceWindowId)
+    const sourceGroup = options.groupForWindow(sourceWindowId)
+    const targetGroup = options.workspaceGroupsById().get(target.groupId) ?? null
+    if (!sourceGroupId || !sourceGroup || !targetGroup || sourceGroupId === target.groupId) return false
+    if (sourceGroup.members.length <= 1) {
+      return sendWorkspaceMutation({
+        type: 'move_window_to_group',
+        windowId: sourceWindowId,
+        targetGroupId: target.groupId,
+        insertIndex: target.insertIndex,
+      })
+    }
+    return sendWorkspaceMutation({
+      type: 'move_group_to_group',
+      sourceGroupId,
+      targetGroupId: target.groupId,
+      insertIndex: target.insertIndex,
+    })
+  }
+
+  const detachGroupWindow = (windowId: number, _clientX: number, _clientY: number) => {
     const prevState = options.workspaceState()
     const sourceGroupId = groupIdForWindow(prevState, windowId)
     const sourceGroup = options.groupForWindow(windowId)
@@ -75,10 +96,6 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     ) {
       return false
     }
-    options.moveWindowUnderPointer(windowId, clientX, clientY)
-    queueMicrotask(() => {
-      options.activateWindowViaShell(windowId)
-    })
     return true
   }
 
@@ -227,6 +244,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   return {
     focusWindowViaShell,
     applyTabDrop,
+    applyWindowDrop,
     detachGroupWindow,
     selectGroupWindow,
     closeGroupWindow,

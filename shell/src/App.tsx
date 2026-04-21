@@ -12,12 +12,11 @@ import { createStore } from 'solid-js/store'
 import {
   CHROME_BORDER_PX,
   CHROME_TITLEBAR_PX,
-  SHELL_LAYOUT_FLOATING,
 } from '@/lib/chromeConstants'
 import {
   canvasRectToClientCss,
   clientPointToGlobalLogical,
-  rectGlobalToCanvasLocal,
+  globalPointToClientCss,
 } from '@/lib/shellCoords'
 import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
 import {
@@ -32,7 +31,7 @@ import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/
 import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { CustomLayoutOverlay, type CustomLayoutOverlayState } from '@/features/tiling/CustomLayoutOverlay'
-import { setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
+import { getMonitorLayout, setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
@@ -264,6 +263,12 @@ function App() {
   const windows = compositorWindowsMap
   const windowsListIds = compositorWindowsListIds
   const windowsList = compositorWindowsList
+  const [compositorInteractionState, setCompositorInteractionState] = createSignal<{
+    pointer_x: number
+    pointer_y: number
+    move_window_id: number | null
+    resize_window_id: number | null
+  } | null>(null)
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
   const [viewportCss, setViewportCss] = createSignal({
@@ -490,6 +495,36 @@ function App() {
     )
   }
 
+  function compositorInteractionPointerClient() {
+    const state = compositorInteractionState()
+    const main = mainRef
+    const og = outputGeom()
+    if (!state || !main || !og) return null
+    const point = globalPointToClientCss(
+      state.pointer_x,
+      state.pointer_y,
+      main.getBoundingClientRect(),
+      og.w,
+      og.h,
+      layoutCanvasOrigin(),
+    )
+    return {
+      x: Math.round(point.x),
+      y: Math.round(point.y),
+    }
+  }
+
+  function syncPointerSignalsFromClient(point: { x: number; y: number }) {
+    setPointerClient(point)
+    if (mainRef) {
+      const rect = mainRef.getBoundingClientRect()
+      setPointerInMain({
+        x: Math.round(point.x - rect.left),
+        y: Math.round(point.y - rect.top),
+      })
+    }
+  }
+
   const canvasCss = createMemo(() => {
     const g = outputGeom()
     const v = viewportCss()
@@ -587,6 +622,26 @@ function App() {
   const fallbackMonitorName = createMemo(() => {
     const part = workspacePartition()
     return part.primary.name || screenDraft.rows.find((row) => row.name)?.name || ''
+  })
+
+  const monitorLayoutSyncSpec = createMemo(() => `${tilingCfgRev()}\u001e${screenDraft.rows.map((row) => row.name).join('\0')}`)
+
+  createEffect(() => {
+    const spec = monitorLayoutSyncSpec()
+    const separator = spec.indexOf('\u001e')
+    const outputsKey = separator >= 0 ? spec.slice(separator + 1) : ''
+    for (const outputName of outputsKey ? outputsKey.split('\0') : []) {
+      const { layout, params } = getMonitorLayout(outputName)
+      shellWireSend(
+        'workspace_mutation',
+        JSON.stringify({
+          type: 'set_monitor_layout',
+          outputName,
+          layout: layout.type,
+          params,
+        }),
+      )
+    }
   })
 
   let shellContextMenus!: ReturnType<typeof createShellContextMenus>
@@ -768,30 +823,10 @@ function App() {
     shellWireSend('activate_window', windowId)
   }
 
-  function moveWindowUnderPointer(windowId: number, clientX: number, clientY: number) {
-    const window = allWindowsMap().get(windowId)
-    const global = shellPointerGlobalLogical(clientX, clientY)
-    if (!window || !global) return false
-    const ww = Math.max(1, window.width)
-    const wh = Math.max(1, window.height)
-    const gx = Math.round(global.x - ww / 2)
-    const gy = Math.round(global.y + CHROME_TITLEBAR_PX / 2)
-    const local = rectGlobalToCanvasLocal(gx, gy, ww, wh, layoutCanvasOrigin())
-    shellWireSend(
-      'set_geometry',
-      windowId,
-      local.x,
-      local.y,
-      local.w,
-      local.h,
-      SHELL_LAYOUT_FLOATING,
-    )
-    return true
-  }
-
   const {
     focusWindowViaShell,
     applyTabDrop,
+    applyWindowDrop,
     detachGroupWindow,
     selectGroupWindow,
     closeGroupWindow,
@@ -813,7 +848,6 @@ function App() {
     focusShellUiWindow,
     activateWindowViaShell,
     activateTaskbarWindowViaShell,
-    moveWindowUnderPointer,
     shellWireSend,
   })
 
@@ -978,10 +1012,8 @@ function App() {
       uiScalePercent,
       tilingCfgRev,
       setTilingCfgRev,
-      clearMonitorTiles: workspaceLayoutBridge.clearMonitorTiles,
       bumpSnapChrome,
       scheduleExclusionZonesSync,
-      applyAutoLayout: (name) => workspaceLayoutBridge.applyAutoLayout(name),
       openCustomLayoutOverlay,
       setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
       setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
@@ -1007,6 +1039,16 @@ function App() {
   const taskbarScreens = createMemo(() =>
     screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
   )
+  const shellExclusionVisibleWindowIds = createMemo(() => {
+    const visible = new Set<number>()
+    for (const group of workspaceGroups()) {
+      for (const windowId of group.visibleWindowIds) visible.add(windowId)
+    }
+    for (const window of windowsList()) {
+      if (workspaceGroupIdForWindow(window.window_id) === null) visible.add(window.window_id)
+    }
+    return visible
+  })
 
   const exclusionReactiveDeps = createMemo(() => {
     void shellContextMenus.ctxMenuOpen()
@@ -1027,6 +1069,7 @@ function App() {
     layoutCanvasOrigin,
     taskbarScreens,
     windows: windowsList,
+    isWindowVisible: (window) => shellExclusionVisibleWindowIds().has(window.window_id),
     isWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
     onHudChange: debugHudRuntime.setExclusionZonesHud,
     exclusionReactiveDeps,
@@ -1035,22 +1078,13 @@ function App() {
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
     getWorkspaceState: workspaceState,
     getAllWindowsMap: allWindowsMap,
-    getWindowsList: windowsList,
-    getWindows: windows,
     getWindowsByMonitor: windowsByMonitor,
     getTaskbarRowsByMonitor: taskbarRowsByMonitor,
-    getTaskbarScreens: taskbarScreens,
-    getLayoutCanvasOrigin: layoutCanvasOrigin,
-    getScreenDraftRows: () => screenDraft.rows,
-    getOutputGeom: outputGeom,
     getFallbackMonitorName: fallbackMonitorName,
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,
-    bumpSnapChrome,
     shellWireSend,
-    debugWindowId: SHELL_UI_DEBUG_WINDOW_ID,
-    settingsWindowId: SHELL_UI_SETTINGS_WINDOW_ID,
   })
 
   createEffect(() => {
@@ -1160,10 +1194,12 @@ function App() {
     shellPointerGlobalLogical,
     rectFromWindow,
     renderShellWindowContent,
+    pointerClient,
+    shellWindowDragId: shellWindowGestureRuntime.dragWindowId,
+    shellWindowDragMoved: shellWindowGestureRuntime.dragWindowMoved,
     focusShellUiWindow,
     activateTaskbarWindowViaShell,
     focusWindowViaShell,
-    moveWindowUnderPointer,
     beginShellWindowMove: shellWindowGestureRuntime.beginShellWindowMove,
     beginShellWindowResize: shellWindowGestureRuntime.beginShellWindowResize,
     toggleShellMaximizeForWindow: shellWindowGestureRuntime.toggleShellMaximizeForWindow,
@@ -1171,6 +1207,7 @@ function App() {
     selectGroupWindow,
     setSplitGroupFraction,
     applyTabDrop,
+    applyWindowDrop,
     detachGroupWindow,
     workspaceGroupIdForWindow,
     isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
@@ -1212,13 +1249,52 @@ function App() {
   })
 
   const e2eTabDragTarget = createMemo(() => {
-    const drag = workspaceChrome.tabDragState()
-    if (!drag?.target) return null
+    const target = workspaceChrome.activeDropTarget()
+    const windowId = workspaceChrome.activeDragWindowId()
+    if (!target || windowId == null) return null
     return {
-      windowId: drag.windowId,
-      groupId: drag.target.groupId,
-      insertIndex: drag.target.insertIndex,
+      windowId,
+      groupId: target.groupId,
+      insertIndex: target.insertIndex,
     }
+  })
+
+  const endWorkspaceAwareShellWindowMove = (reason: string, sendMoveEnd = true) => {
+    const dropped = workspaceChrome.finishWindowDragDrop(compositorInteractionPointerClient())
+    shellWindowGestureRuntime.endShellWindowMove(reason, !dropped, sendMoveEnd)
+  }
+
+  let previousCompositorMoveWindowId: number | null = null
+  createEffect(() => {
+    const interactionState = compositorInteractionState()
+    const compositorMoveWindowId = interactionState?.move_window_id ?? null
+    const compositorResizeWindowId = interactionState?.resize_window_id ?? null
+    const compositorPointer = compositorInteractionPointerClient()
+    const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
+    const interactionActive =
+      interactionState !== null &&
+      (interactionState.move_window_id !== null || interactionState.resize_window_id !== null)
+    if (interactionActive && compositorPointer) {
+      syncPointerSignalsFromClient(compositorPointer)
+      if (compositorMoveWindowId !== null) {
+        shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+      }
+      if (compositorResizeWindowId !== null) {
+        shellWindowGestureRuntime.syncShellWindowResizePointer(compositorPointer.x, compositorPointer.y)
+      }
+    }
+    if (
+      localDragWindowId !== null &&
+      previousCompositorMoveWindowId === localDragWindowId &&
+      compositorMoveWindowId !== localDragWindowId
+    ) {
+      if (compositorPointer) {
+        syncPointerSignalsFromClient(compositorPointer)
+        shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+      }
+      endWorkspaceAwareShellWindowMove('compositor-move-ended', false)
+    }
+    previousCompositorMoveWindowId = compositorMoveWindowId
   })
 
   async function spawnInCompositor(
@@ -1329,6 +1405,7 @@ function App() {
         setScreenDraftRows: (rows) => setScreenDraft('rows', rows),
         bumpTilingCfgRev: () => setTilingCfgRev((n) => n + 1),
         setShellChromePrimaryName,
+        setCompositorInteractionState,
         markHasSeenCompositorWindowSync: sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
         clearWindowSyncRecoveryPending: () => {
           windowSyncRecoveryPending = false
@@ -1359,7 +1436,6 @@ function App() {
         occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
         sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
         bumpSnapChrome,
-        applyAutoLayout: workspaceLayoutBridge.applyAutoLayout,
         sendSetPreTileGeometry: workspaceLayoutBridge.sendSetPreTileGeometry,
         floatBeforeMaximize,
         workspacePreTileSnapshot: workspaceLayoutBridge.workspacePreTileSnapshot,
@@ -1371,8 +1447,7 @@ function App() {
       setViewportCss,
       applyShellWindowMove: shellWindowGestureRuntime.applyShellWindowMove,
       applyShellWindowResize: shellWindowGestureRuntime.applyShellWindowResize,
-      updateShellWindowMoveModifier: shellWindowGestureRuntime.updateShellWindowMoveModifier,
-      endShellWindowMove: shellWindowGestureRuntime.endShellWindowMove,
+      endShellWindowMove: endWorkspaceAwareShellWindowMove,
       endShellWindowResize: shellWindowGestureRuntime.endShellWindowResize,
       getShellWindowDragId: shellWindowGestureRuntime.getShellWindowDragId,
       getShellWindowResizeId: shellWindowGestureRuntime.getShellWindowResizeId,
@@ -1484,6 +1559,7 @@ function App() {
       </For>
 
       <workspaceChrome.TabDragOverlay />
+      <workspaceChrome.WindowDragDropOverlay />
 
       <Show when={workspaceChrome.splitGroupGesture()}>
         <workspaceChrome.SplitGestureOverlay />

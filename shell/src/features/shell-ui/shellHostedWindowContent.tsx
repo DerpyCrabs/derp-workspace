@@ -75,10 +75,8 @@ export type ShellHostedWindowContentEnv = {
   uiScalePercent: Accessor<100 | 150 | 200>
   tilingCfgRev: Accessor<number>
   setTilingCfgRev: Setter<number>
-  clearMonitorTiles: (outputName: string) => void
   bumpSnapChrome: () => void
   scheduleExclusionZonesSync: () => void
-  applyAutoLayout: (name: string) => void
   openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
@@ -131,10 +129,8 @@ export function renderShellHostedWindowContent(
         uiScalePercent={env.uiScalePercent}
         tilingCfgRev={env.tilingCfgRev}
         setTilingCfgRev={env.setTilingCfgRev}
-        clearMonitorTiles={env.clearMonitorTiles}
         bumpSnapChrome={() => env.bumpSnapChrome()}
         scheduleExclusionZonesSync={() => env.scheduleExclusionZonesSync()}
-        applyAutoLayout={(name) => env.applyAutoLayout(name)}
         openCustomLayoutOverlay={(detail) => env.openCustomLayoutOverlay(detail)}
         setShellPrimary={(name) => env.setShellPrimary(name)}
         setUiScale={(pct) => env.setUiScale(pct)}

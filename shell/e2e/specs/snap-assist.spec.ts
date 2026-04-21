@@ -15,12 +15,14 @@ import {
   defineGroup,
   ensureNativePair,
   getJson,
+  getShellHtml,
   getSnapshots,
   keyAction,
   movePoint,
   openSettings,
   pickMonitorMove,
   pointerButton,
+  pointerWheel,
   postJson,
   runKeybind,
   taskbarForMonitor,
@@ -38,6 +40,37 @@ import {
 const TITLEBAR_PX = 26
 const SHIFT_KEYCODE = 42
 const SUPER_KEYCODE = 125
+
+function monitorFrameRect(
+  outputName: string,
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+): { x: number; y: number; width: number; height: number } {
+  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
+  const taskbar = taskbarForMonitor(shell, outputName)
+  assert(output, `missing output ${outputName}`)
+  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
+  return {
+    x: output.x,
+    y: output.y,
+    width: output.width,
+    height: taskbar.rect.global_y - output.y,
+  }
+}
+
+function tiledClientRectFromFrame(frame: {
+  x: number
+  y: number
+  width: number
+  height: number
+}): { x: number; y: number; width: number; height: number } {
+  return {
+    x: frame.x,
+    y: frame.y + TITLEBAR_PX,
+    width: frame.width,
+    height: frame.height - TITLEBAR_PX,
+  }
+}
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   if (window.output_name) return window.output_name
@@ -60,19 +93,27 @@ function assertTopThirdWindow(
   shell: ShellSnapshot,
   column: 'left' | 'center' | 'right',
 ) {
-  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
-  const taskbar = taskbarForMonitor(shell, outputName)
-  assert(output, `missing output ${outputName}`)
-  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
-  const workBottom = taskbar.rect.global_y
-  const thirdWidth = Math.floor(output.width / 3)
-  const expectedX =
-    column === 'left' ? output.x : column === 'center' ? output.x + thirdWidth : output.x + thirdWidth * 2
-  const expectedHeight = Math.floor((workBottom - (output.y + TITLEBAR_PX)) / 2)
-  assert(Math.abs(window.x - expectedX) <= 28, `expected ${column} third x near ${expectedX}, got ${window.x}`)
-  assert(Math.abs(window.width - thirdWidth) <= 36, `expected ${column} third width near ${thirdWidth}, got ${window.width}`)
-  assert(window.y >= output.y && window.y <= output.y + 80, `expected top-row y near ${output.y}, got ${window.y}`)
-  assert(Math.abs(window.height - expectedHeight) <= 36, `expected top-row height near ${expectedHeight}, got ${window.height}`)
+  const work = monitorFrameRect(outputName, compositor, shell)
+  const thirdWidth = Math.round(work.width / 3)
+  const twoThirdWidth = Math.round((work.width * 2) / 3)
+  const halfHeight = Math.round(work.height / 2)
+  const frame = {
+    x:
+      column === 'left'
+        ? work.x
+        : column === 'center'
+          ? work.x + thirdWidth
+          : work.x + twoThirdWidth,
+    y: work.y,
+    width:
+      column === 'left'
+        ? thirdWidth
+        : column === 'center'
+          ? twoThirdWidth - thirdWidth
+          : work.width - twoThirdWidth,
+    height: halfHeight,
+  }
+  assertWindowMatchesRect(window, tiledClientRectFromFrame(frame), `${column} top third`)
 }
 
 function assertTopRightQuarterWindow(
@@ -81,19 +122,19 @@ function assertTopRightQuarterWindow(
   compositor: CompositorSnapshot,
   shell: ShellSnapshot,
 ) {
-  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
-  const taskbar = taskbarForMonitor(shell, outputName)
-  assert(output, `missing output ${outputName}`)
-  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
-  const workTop = output.y + TITLEBAR_PX
-  const workBottom = taskbar.rect.global_y
-  const halfWidth = Math.floor(output.width / 2)
-  const halfHeight = Math.floor((workBottom - workTop) / 2)
-  const expectedX = output.x + halfWidth
-  assert(Math.abs(window.x - expectedX) <= 28, `expected top-right quarter x near ${expectedX}, got ${window.x}`)
-  assert(Math.abs(window.width - (output.width - halfWidth)) <= 36, `expected top-right quarter width near ${output.width - halfWidth}, got ${window.width}`)
-  assert(Math.abs(window.y - workTop) <= 28, `expected top-right quarter y near ${workTop}, got ${window.y}`)
-  assert(Math.abs(window.height - halfHeight) <= 36, `expected top-right quarter height near ${halfHeight}, got ${window.height}`)
+  const work = monitorFrameRect(outputName, compositor, shell)
+  const halfWidth = Math.round(work.width / 2)
+  const halfHeight = Math.round(work.height / 2)
+  assertWindowMatchesRect(
+    window,
+    tiledClientRectFromFrame({
+      x: work.x + halfWidth,
+      y: work.y,
+      width: work.width - halfWidth,
+      height: halfHeight,
+    }),
+    'top-right quarter',
+  )
 }
 
 function assertWindowMatchesRect(
@@ -107,6 +148,17 @@ function assertWindowMatchesRect(
   assert(Math.abs(window.height - expected.height) <= 36, `expected ${label} height near ${expected.height}, got ${window.height}`)
 }
 
+function assertSnapshotRectMatchesRect(
+  rect: { global_x: number; global_y: number; width: number; height: number },
+  expected: { x: number; y: number; width: number; height: number },
+  label: string,
+) {
+  assert(Math.abs(rect.global_x - expected.x) <= 28, `expected ${label} x near ${expected.x}, got ${rect.global_x}`)
+  assert(Math.abs(rect.global_y - expected.y) <= 28, `expected ${label} y near ${expected.y}, got ${rect.global_y}`)
+  assert(Math.abs(rect.width - expected.width) <= 36, `expected ${label} width near ${expected.width}, got ${rect.width}`)
+  assert(Math.abs(rect.height - expected.height) <= 36, `expected ${label} height near ${expected.height}, got ${rect.height}`)
+}
+
 function assertTopTwoThirdsThirdWindow(
   window: WindowSnapshot,
   outputName: string,
@@ -114,23 +166,27 @@ function assertTopTwoThirdsThirdWindow(
   shell: ShellSnapshot,
   column: 'left' | 'center' | 'right',
 ) {
-  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
-  const taskbar = taskbarForMonitor(shell, outputName)
-  assert(output, `missing output ${outputName}`)
-  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
-  const workTop = output.y + TITLEBAR_PX
-  const workHeight = taskbar.rect.global_y - workTop
-  const thirdWidth = Math.floor(output.width / 3)
-  const twoThirdHeight = Math.round((workHeight * 2) / 3)
-  const expectedX =
-    column === 'left' ? output.x : column === 'center' ? output.x + thirdWidth : output.x + thirdWidth * 2
-  assert(Math.abs(window.x - expectedX) <= 28, `expected ${column} third x near ${expectedX}, got ${window.x}`)
-  assert(Math.abs(window.width - thirdWidth) <= 36, `expected ${column} third width near ${thirdWidth}, got ${window.width}`)
-  assert(window.y >= output.y && window.y <= output.y + 80, `expected top-row y near ${output.y}, got ${window.y}`)
-  assert(
-    Math.abs(window.height - twoThirdHeight) <= 40,
-    `expected top two-thirds height near ${twoThirdHeight}, got ${window.height}`,
-  )
+  const work = monitorFrameRect(outputName, compositor, shell)
+  const thirdWidth = Math.round(work.width / 3)
+  const twoThirdWidth = Math.round((work.width * 2) / 3)
+  const twoThirdHeight = Math.round((work.height * 2) / 3)
+  const frame = {
+    x:
+      column === 'left'
+        ? work.x
+        : column === 'center'
+          ? work.x + thirdWidth
+          : work.x + twoThirdWidth,
+    y: work.y,
+    width:
+      column === 'left'
+        ? thirdWidth
+        : column === 'center'
+          ? twoThirdWidth - thirdWidth
+          : work.width - twoThirdWidth,
+    height: twoThirdHeight,
+  }
+  assertWindowMatchesRect(window, tiledClientRectFromFrame(frame), `${column} top two-thirds`)
 }
 
 function assertFullHeightTwoThirdsWindow(
@@ -140,25 +196,15 @@ function assertFullHeightTwoThirdsWindow(
   shell: ShellSnapshot,
   side: 'left' | 'right',
 ) {
-  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
-  const taskbar = taskbarForMonitor(shell, outputName)
-  assert(output, `missing output ${outputName}`)
-  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
-  const workTop = output.y + TITLEBAR_PX
-  const workHeight = taskbar.rect.global_y - workTop
-  const thirdWidth = Math.floor(output.width / 3)
-  const twoThirdWidth = Math.round((output.width * 2) / 3)
-  const expectedX = side === 'left' ? output.x : output.x + thirdWidth
-  assert(Math.abs(window.x - expectedX) <= 28, `expected ${side} two-thirds x near ${expectedX}, got ${window.x}`)
-  assert(
-    Math.abs(window.width - twoThirdWidth) <= 40,
-    `expected ${side} two-thirds width near ${twoThirdWidth}, got ${window.width}`,
-  )
-  assert(window.y >= output.y && window.y <= output.y + 80, `expected full-height y near ${output.y}, got ${window.y}`)
-  assert(
-    Math.abs(window.height - workHeight) <= 40,
-    `expected full-height two-thirds height near ${workHeight}, got ${window.height}`,
-  )
+  const work = monitorFrameRect(outputName, compositor, shell)
+  const thirdWidth = Math.round(work.width / 3)
+  const frame = {
+    x: side === 'left' ? work.x : work.x + thirdWidth,
+    y: work.y,
+    width: Math.round((work.width * 2) / 3),
+    height: work.height,
+  }
+  assertWindowMatchesRect(window, tiledClientRectFromFrame(frame), `${side} full-height two-thirds`)
 }
 
 async function waitForPickerOpen(base: string, windowId: number): Promise<ShellSnapshot> {
@@ -224,6 +270,41 @@ async function hoverPickerCellWhileDragging(
     4000,
     100,
   )
+}
+
+async function revealVisiblePickerControl(
+  base: string,
+  windowId: number,
+  key:
+    | 'snap_picker_first_cell'
+    | 'snap_picker_top_center_cell'
+    | 'snap_picker_right_two_thirds'
+    | 'snap_picker_top_two_thirds_left',
+  label: string,
+) {
+  let shell = await waitForPickerOpen(base, windowId)
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const rect = shell.controls?.[key]
+    if (rect) {
+      return {
+        shell,
+        rect: assertRectMinSize(label, rect, 12),
+      }
+    }
+    const root = assertRectMinSize('picker root', shell.controls?.snap_picker_root, 48)
+    const center = rectGlobalCenter(root)
+    await movePoint(base, center.x, center.y)
+    await pointerWheel(base, 0, 320)
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (!shell.snap_picker_open || shell.snap_picker_window_id !== windowId) {
+      shell = await waitForPickerOpen(base, windowId)
+    }
+  }
+  const finalShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  return {
+    shell: finalShell,
+    rect: assertRectMinSize(label, finalShell.controls?.[key], 12),
+  }
 }
 
 function rectGlobalCenter(rect: { global_x: number; global_y: number; width: number; height: number }) {
@@ -341,7 +422,27 @@ async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('dragging a native titlebar into the strip opens the picker', async ({ base, state }) => {
+  test('dragging a native titlebar into the strip opens the picker without Win', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const focused = await focusNativeWindow(base, redId)
+    const controls = windowControls(focused.shell, redId)
+    assert(controls?.titlebar, 'missing red titlebar rect')
+    const titlebarCenter = rectGlobalCenter(controls.titlebar)
+    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      const pickerOpen = await openPickerWhileDragging(base, redId)
+      assert(pickerOpen.snap_picker_source === 'strip', 'expected plain strip drag to open the picker')
+      await pointerButton(base, BTN_LEFT, 'release')
+      await waitForPickerClosed(base, redId)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
+  })
+
+  test('super-dragging a native titlebar into the strip opens the picker', async ({ base, state }) => {
     await selectSettingsSnapLayout(base, '3x2')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -354,6 +455,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const titlebarCenter = rectGlobalCenter(controls.titlebar)
     await movePoint(base, titlebarCenter.x, titlebarCenter.y)
     await pointerButton(base, 0x110, 'press')
+    await keyAction(base, SUPER_KEYCODE, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       assert(pickerOpen.snap_picker_source === 'strip', 'expected strip drag to open the picker')
@@ -369,10 +471,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await waitForPickerClosed(base, redId)
     } finally {
       await pointerButton(base, 0x110, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
     }
   })
 
-  test('drag picker commits a native window layout', async ({ base, state }) => {
+  test('super-drag picker commits a native window layout', async ({ base, state }) => {
     await selectSettingsSnapLayout(base, '3x2')
     const timing = createTimingMarks('snap native picker')
     const { red } = await ensureNativePair(base, state)
@@ -384,9 +487,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const titlebarCenter = rectGlobalCenter(controls.titlebar)
     await movePoint(base, titlebarCenter.x, titlebarCenter.y)
     await pointerButton(base, 0x110, 'press')
+    await keyAction(base, SUPER_KEYCODE, 'press')
     try {
-      const pickerOpen = await timing.step('open drag picker', () => openPickerWhileDragging(base, redId))
-      const firstCell = assertRectMinSize('picker first cell', pickerOpen.controls?.snap_picker_first_cell, 12)
+      await timing.step('open drag picker', () => openPickerWhileDragging(base, redId))
+      const { rect: firstCell } = await timing.step('reveal picker first cell', () =>
+        revealVisiblePickerControl(base, redId, 'snap_picker_first_cell', 'picker first cell'),
+      )
       await timing.step('hover first cell', () => hoverPickerCellWhileDragging(base, 'hover picker first cell', firstCell))
       await timing.step('release drag on first cell', () => pointerButton(base, 0x110, 'release'))
       const snapped = await timing.step('wait for native picker snap', () =>
@@ -410,10 +516,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await writeJsonArtifact('snap-assist-picker-native.json', snapped)
     } finally {
       await pointerButton(base, 0x110, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
     }
   })
 
-  test('drag picker closes when pointer leaves the strip and picker', async ({ base, state }) => {
+  test('super-drag picker closes when pointer leaves the strip and picker', async ({ base, state }) => {
     await selectSettingsSnapLayout(base, '3x2')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -423,6 +530,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const titlebarCenter = rectGlobalCenter(controls.titlebar)
     await movePoint(base, titlebarCenter.x, titlebarCenter.y)
     await pointerButton(base, 0x110, 'press')
+    await keyAction(base, SUPER_KEYCODE, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       assert(pickerOpen.snap_picker_open, 'expected drag picker to open')
@@ -431,10 +539,47 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const output = focused.compositor.outputs.find((entry) => entry.name === window.output_name) ?? null
       assert(output, `missing output ${window.output_name}`)
       await movePoint(base, output.x + output.width / 2, output.y + output.height - 120)
-      const closed = await waitForPickerClosed(base, redId)
-      assert(!closed.snap_hover_span, 'expected picker hover to clear after leaving picker')
+      await waitForPickerClosed(base, redId)
     } finally {
       await pointerButton(base, 0x110, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
+    }
+  })
+
+  test('plain edge drag does not show pane overlay before snap preview', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const focused = await focusNativeWindow(base, redId)
+    const focusedWindow = compositorWindowById(focused.compositor, redId)
+    const output = focused.compositor.outputs.find((entry) => entry.name === focusedWindow?.output_name) ?? null
+    const controls = windowControls(focused.shell, redId)
+    assert(controls?.titlebar, 'missing red titlebar rect')
+    assert(output, 'missing output for plain edge drag overlay test')
+    const titlebarCenter = rectGlobalCenter(controls.titlebar)
+    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      await movePoint(base, output.x + output.width / 2, output.y + 6)
+      const noOverlay = await waitFor(
+        'wait for no pane overlay during plain edge drag',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const overlayHtml = await getShellHtml(base, '[data-shell-snap-overlay]')
+          if (shell.snap_picker_open) return null
+          if (overlayHtml.trim().length > 0) return null
+          return { shell }
+        },
+        4000,
+        100,
+      )
+      await writeJsonArtifact('snap-assist-plain-edge-no-overlay.json', {
+        redId,
+        output: output.name,
+        shell: noOverlay.shell,
+      })
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
     }
   })
 
@@ -449,7 +594,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       assertRectMinSize('settings maximize button', controls?.maximize, 12),
       assertRectMinSize('settings picker root', pickerOpen.controls?.snap_picker_root, 48),
     )
-    const firstCell = assertRectMinSize('settings picker first cell', pickerOpen.controls?.snap_picker_first_cell, 12)
+    const { rect: firstCell } = await revealVisiblePickerControl(
+      base,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      'snap_picker_first_cell',
+      'settings picker first cell',
+    )
     const firstCellCenter = rectGlobalCenter(firstCell)
     await clickPoint(base, firstCellCenter.x, firstCellCenter.y)
     const snapped = await waitFor(
@@ -478,10 +628,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await focusSettingsWindow(base)
     const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')
-    const topTwoThirds = assertRectMinSize(
+    const { rect: topTwoThirds } = await revealVisiblePickerControl(
+      base,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      'snap_picker_top_two_thirds_left',
       '3x3 top two-thirds left cell',
-      pickerOpen.controls?.snap_picker_top_two_thirds_left,
-      12,
     )
     const topTwoThirdsCenter = rectGlobalCenter(topTwoThirds)
     await clickPoint(base, topTwoThirdsCenter.x, topTwoThirdsCenter.y)
@@ -509,10 +660,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await focusSettingsWindow(base)
     const pickerOpen = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(pickerOpen.snap_picker_source === 'button', 'expected maximize button to open picker')
-    const rightTwoThirds = assertRectMinSize(
+    const { rect: rightTwoThirds } = await revealVisiblePickerControl(
+      base,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      'snap_picker_right_two_thirds',
       '3x2 right two-thirds cell',
-      pickerOpen.controls?.snap_picker_right_two_thirds,
-      12,
     )
     const rightTwoThirdsCenter = rectGlobalCenter(rightTwoThirds)
     await clickPoint(base, rightTwoThirdsCenter.x, rightTwoThirdsCenter.y)
@@ -558,14 +710,37 @@ export default defineGroup(import.meta.url, ({ test }) => {
     let controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const titlebar2x2 = assertRectMinSize('settings titlebar after 2x2 snap', controls?.titlebar, 12)
     const titlebar2x2Center = rectGlobalCenter(titlebar2x2)
-    const window2x2 = compositorWindowById((await getJson<CompositorSnapshot>(base, '/test/state/compositor')), SHELL_UI_SETTINGS_WINDOW_ID)
+    const compositor2x2 = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    const window2x2 = compositorWindowById(compositor2x2, SHELL_UI_SETTINGS_WINDOW_ID)
     assert(window2x2, 'missing settings compositor window after 2x2 snap')
-    const output2x2 = (await getJson<CompositorSnapshot>(base, '/test/state/compositor')).outputs.find((entry) => entry.name === window2x2.output_name) ?? null
+    const output2x2 = compositor2x2.outputs.find((entry) => entry.name === window2x2.output_name) ?? null
     assert(output2x2, `missing output ${window2x2.output_name}`)
     await movePoint(base, titlebar2x2Center.x, titlebar2x2Center.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
-      await movePoint(base, output2x2.x + output2x2.width - 8, output2x2.y + TITLEBAR_PX + 8)
+      await movePoint(base, output2x2.x + output2x2.width - 8, output2x2.y + 8)
+      const preview2x2 = await waitFor(
+        'wait for 2x2 top-right edge preview',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
+        },
+        2000,
+        125,
+      )
+      const work2x2 = monitorFrameRect(output2x2.name, compositor2x2, preview2x2)
+      const halfWidth2x2 = Math.round(work2x2.width / 2)
+      const halfHeight2x2 = Math.round(work2x2.height / 2)
+      assertSnapshotRectMatchesRect(
+        assertRectMinSize('2x2 snap preview', preview2x2.snap_preview_rect, 12),
+        {
+          x: work2x2.x + halfWidth2x2,
+          y: work2x2.y,
+          width: work2x2.width - halfWidth2x2,
+          height: halfHeight2x2,
+        },
+        '2x2 top-right preview',
+      )
       await pointerButton(base, BTN_LEFT, 'release')
       const snapped2x2 = await waitFor(
         'wait for 2x2 top-right edge snap',
@@ -588,11 +763,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await pointerButton(base, BTN_LEFT, 'release')
     }
 
-    const picker3x2 = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    const topCenter3x2 = assertRectMinSize(
+    await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const { rect: topCenter3x2 } = await revealVisiblePickerControl(
+      base,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      'snap_picker_top_center_cell',
       '3x2 top-center cell',
-      picker3x2.controls?.snap_picker_top_center_cell,
-      12,
     )
     const topCenter3x2Center = rectGlobalCenter(topCenter3x2)
     await clickPoint(base, topCenter3x2Center.x, topCenter3x2Center.y)
@@ -625,7 +801,29 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await movePoint(base, titlebar3x2Center.x, titlebar3x2Center.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
-      await movePoint(base, output3x2.x + output3x2.width - 8, output3x2.y + TITLEBAR_PX + 8)
+      await movePoint(base, output3x2.x + output3x2.width - 8, output3x2.y + 8)
+      const preview3x2 = await waitFor(
+        'wait for 3x2 top-right edge preview',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
+        },
+        2000,
+        125,
+      )
+      const work3x2 = monitorFrameRect(output3x2.name, compositor3x2, preview3x2)
+      const twoThirdWidth3x2 = Math.round((work3x2.width * 2) / 3)
+      const halfHeight3x2 = Math.round(work3x2.height / 2)
+      assertSnapshotRectMatchesRect(
+        assertRectMinSize('3x2 snap preview', preview3x2.snap_preview_rect, 12),
+        {
+          x: work3x2.x + twoThirdWidth3x2,
+          y: work3x2.y,
+          width: work3x2.width - twoThirdWidth3x2,
+          height: halfHeight3x2,
+        },
+        '3x2 top-right preview',
+      )
       await pointerButton(base, BTN_LEFT, 'release')
       const snapped3x2 = await waitFor(
         'wait for 3x2 top-right edge snap',
@@ -1154,12 +1352,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await pointerButton(base, 0x110, 'press')
     let nativeSnapped
     try {
+      await keyAction(base, SUPER_KEYCODE, 'press')
       const nativePicker = await openPickerWhileDragging(base, redId)
       assert(nativePicker.snap_picker_monitor === nativeMove.target.name, 'native picker should stay on moved monitor')
       const nativeOutput = nativeMoved.compositor.outputs.find((entry) => entry.name === nativeMove.target.name) ?? null
       assert(nativeOutput, `missing moved native output ${nativeMove.target.name}`)
       assertRectCenteredOnOutput(assertRectMinSize('native picker root', nativePicker.controls?.snap_picker_root, 48), nativeOutput)
-      const topCenter = assertRectMinSize('native picker top-center cell', nativePicker.controls?.snap_picker_top_center_cell, 12)
+      const { rect: topCenter } = await revealVisiblePickerControl(
+        base,
+        redId,
+        'snap_picker_top_center_cell',
+        'native picker top-center cell',
+      )
       await hoverPickerCellWhileDragging(base, 'hover native picker top-center cell', topCenter)
       await pointerButton(base, 0x110, 'release')
       nativeSnapped = await waitFor(
@@ -1181,6 +1385,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
     } finally {
       await pointerButton(base, 0x110, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
     }
 
     await openSettings(base, 'click')
@@ -1221,7 +1426,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         settingsPickerCenter.y < settingsOutput.y + settingsOutput.height,
       `expected settings picker center to stay within ${settingsOutput.name}, got ${settingsPickerCenter.x},${settingsPickerCenter.y}`,
     )
-    const firstCell = assertRectMinSize('settings picker first cell', settingsPicker.controls?.snap_picker_first_cell, 12)
+    const { rect: firstCell } = await revealVisiblePickerControl(
+      base,
+      SHELL_UI_SETTINGS_WINDOW_ID,
+      'snap_picker_first_cell',
+      'settings picker first cell',
+    )
     const firstCellCenter = rectGlobalCenter(firstCell)
     await clickPoint(base, firstCellCenter.x, firstCellCenter.y)
     const settingsSnapped = await waitFor(

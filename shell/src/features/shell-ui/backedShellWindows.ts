@@ -49,6 +49,13 @@ export type BackedWindowOpenPayload = {
   h: number
 }
 
+type BackedWindowClientAreaGlobal = {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export type BackedShellWindowKind =
   | 'debug'
   | 'settings'
@@ -120,15 +127,19 @@ export function defaultBackedClientAreaGlobal(
   return { x: gx, y: gy, w: Math.max(1, cw), h: Math.max(1, ch) }
 }
 
+function localBackedWindowRect(origin: CanvasOrigin, global: BackedWindowClientAreaGlobal) {
+  return rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+}
+
 export function buildBackedWindowOpenPayload(
   monName: string,
   work: { x: number; y: number; w: number; h: number },
   kind: 'debug' | 'settings',
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, kind, staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, kind, staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   if (kind === 'debug') {
     return {
       window_id: SHELL_UI_DEBUG_WINDOW_ID,
@@ -240,9 +251,9 @@ export function buildShellTestWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'test', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'test', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,
@@ -262,9 +273,9 @@ export function buildFileBrowserWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'file_browser', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'file_browser', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,
@@ -284,9 +295,9 @@ export function buildImageViewerWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'image_viewer', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'image_viewer', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,
@@ -306,9 +317,9 @@ export function buildVideoViewerWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'video_viewer', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'video_viewer', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,
@@ -328,9 +339,9 @@ export function buildTextEditorWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'text_editor', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'text_editor', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,
@@ -350,9 +361,9 @@ export function buildPdfViewerWindowOpenPayload(
   title: string,
   origin: CanvasOrigin,
   staggerIndex = 0,
+  global: BackedWindowClientAreaGlobal = defaultBackedClientAreaGlobal(work, 'pdf_viewer', staggerIndex),
 ): BackedWindowOpenPayload {
-  const global = defaultBackedClientAreaGlobal(work, 'pdf_viewer', staggerIndex)
-  const loc = rectGlobalToCanvasLocal(global.x, global.y, global.w, global.h, origin)
+  const loc = localBackedWindowRect(origin, global)
   return {
     window_id: windowId,
     title,

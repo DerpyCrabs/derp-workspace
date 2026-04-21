@@ -119,6 +119,63 @@ function mergeTargetFromDropSlotAtPoint(
   return null
 }
 
+function rightStripSlotAtPoint(strip: Element, clientX: number): number {
+  if (typeof strip.querySelectorAll !== 'function') return 0
+  const rightTabs = Array.from(strip.querySelectorAll('[data-workspace-tab]')).filter(
+    (tab) => tab.getAttribute('data-workspace-split-left-tab') === null,
+  )
+  for (let index = 0; index < rightTabs.length; index += 1) {
+    const rect = rightTabs[index].getBoundingClientRect()
+    if (clientX <= rect.left + rect.width * TAB_INSERT_BEFORE_FRACTION) return index
+    if (clientX <= rect.right) return index + 1
+  }
+  return rightTabs.length
+}
+
+function mergeTargetFromTabStripAtPoint(
+  state: WorkspaceState,
+  draggedWindowId: number,
+  clientX: number,
+  clientY: number,
+  ignoreDraggedWindowFrame: boolean,
+): TabMergeTarget | null {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null
+  const strips = document.querySelectorAll('[data-workspace-tab-strip]')
+  for (const strip of strips) {
+    if (!(strip instanceof Element)) continue
+    if (
+      ignoreDraggedWindowFrame &&
+      strip.closest(`[data-shell-window-frame="${draggedWindowId}"]`)
+    ) {
+      continue
+    }
+    const rect = strip.getBoundingClientRect()
+    if (
+      clientX < rect.left ||
+      clientX > rect.right ||
+      clientY < rect.top ||
+      clientY > rect.bottom
+    ) {
+      continue
+    }
+    const groupId = strip.getAttribute('data-workspace-tab-strip')
+    if (!groupId) continue
+    const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
+    const rightStripIndex = rightStripSlotAtPoint(strip, clientX)
+    return {
+      groupId,
+      insertIndex: clampTabInsertIndex(
+        state,
+        groupId,
+        rightStripIndexToGroupInsertIndex(state, groupId, rightStripIndex),
+        isTabPinned(state, draggedWindowId),
+        sourceGroupId === groupId ? draggedWindowId : undefined,
+      ),
+    }
+  }
+  return null
+}
+
 function mergeTargetFromTabAtPoint(
   state: WorkspaceState,
   draggedWindowId: number,
@@ -217,6 +274,14 @@ export function findMergeTarget(
     ignoreDraggedWindowFrame,
   )
   if (slotTarget) return slotTarget
+  const stripTarget = mergeTargetFromTabStripAtPoint(
+    state,
+    draggedWindowId,
+    clientX,
+    clientY,
+    ignoreDraggedWindowFrame,
+  )
+  if (stripTarget) return stripTarget
   return mergeTargetFromTabAtPoint(
     state,
     draggedWindowId,

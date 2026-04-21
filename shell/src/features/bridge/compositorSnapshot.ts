@@ -11,6 +11,7 @@ const MSG_COMPOSITOR_TRAY_HINTS = 55
 const MSG_COMPOSITOR_TRAY_SNI = 56
 const MSG_COMPOSITOR_WORKSPACE_STATE = 57
 const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE = 59
+const MSG_COMPOSITOR_INTERACTION_STATE = 60
 
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_ABI = 2
@@ -283,6 +284,19 @@ function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: nu
   }
 }
 
+function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 20 !== view.byteLength) return null
+  const moveWindowId = view.getUint32(offset + 12, true)
+  const resizeWindowId = view.getUint32(offset + 16, true)
+  return {
+    type: 'interaction_state',
+    pointer_x: view.getInt32(offset + 4, true),
+    pointer_y: view.getInt32(offset + 8, true),
+    move_window_id: moveWindowId > 0 ? moveWindowId : null,
+    resize_window_id: resizeWindowId > 0 ? resizeWindowId : null,
+  }
+}
+
 function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
   if (offset + 8 > view.byteLength) return null
   const jsonLen = view.getUint32(offset + 4, true)
@@ -359,6 +373,9 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
         break
       case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
         detail = decodeShellHostedAppState(bodyBytes, bodyView, 0)
+        break
+      case MSG_COMPOSITOR_INTERACTION_STATE:
+        detail = decodeInteractionState(bodyView, 0)
         break
       default:
         break

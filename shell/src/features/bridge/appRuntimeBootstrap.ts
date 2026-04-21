@@ -15,9 +15,8 @@ type AppRuntimeBootstrapOptions = {
   registerShellE2eBridge: Parameters<typeof registerShellE2eBridge>[0]
   registerCompositorBridgeRuntime: Parameters<typeof registerCompositorBridgeRuntime>[0]
   setViewportCss: (value: { w: number; h: number }) => void
-  applyShellWindowMove: (clientX: number, clientY: number, superHeld?: boolean) => void
-  applyShellWindowResize: (clientX: number, clientY: number) => void
-  updateShellWindowMoveModifier: (superHeld: boolean) => void
+  applyShellWindowMove: (clientX: number, clientY: number, superHeld?: boolean, buttons?: number) => void
+  applyShellWindowResize: (clientX: number, clientY: number, buttons?: number) => void
   endShellWindowMove: (reason: string) => void
   endShellWindowResize: (reason: string) => void
   getShellWindowDragId: () => number | null
@@ -55,6 +54,7 @@ function updatePointerInMain(
 }
 
 export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions) {
+  let pointerGestureBlurPendingRelease = false
   const stopThemeDomSync = options.startThemeDomSync()
   const stopShellWindowStateSync = options.subscribeShellWindowState(() => {
     options.onShellWindowStateChanged()
@@ -77,77 +77,108 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   const syncViewport = () => options.setViewportCss({ w: window.innerWidth, h: window.innerHeight })
   syncViewport()
 
+  const syncPointerPosition = (clientX: number, clientY: number) => {
+    options.setPointerClient({ x: clientX, y: clientY })
+    updatePointerInMain(options.getMainRef(), clientX, clientY, options.setPointerInMain)
+  }
+
+  const releaseIfPrimaryButtonsCleared = (
+    clientX: number,
+    clientY: number,
+    buttons: number,
+    reason: string,
+  ) => {
+    if ((buttons & 1) !== 0) return false
+    syncPointerPosition(clientX, clientY)
+    options.endShellWindowResize(reason)
+    pointerGestureBlurPendingRelease = false
+    return true
+  }
+
   const onPointerMove = (event: PointerEvent) => {
-    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey)
-    options.applyShellWindowResize(event.clientX, event.clientY)
-    options.setPointerClient({ x: event.clientX, y: event.clientY })
-    updatePointerInMain(options.getMainRef(), event.clientX, event.clientY, options.setPointerInMain)
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
+    options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
+    syncPointerPosition(event.clientX, event.clientY)
+    if (pointerGestureBlurPendingRelease) {
+      releaseIfPrimaryButtonsCleared(
+        event.clientX,
+        event.clientY,
+        event.buttons,
+        'window-pointermove-buttons-cleared',
+      )
+      if (options.getShellWindowDragId() === null && options.getShellWindowResizeId() === null) {
+        pointerGestureBlurPendingRelease = false
+      }
+    }
   }
 
   const onMouseMove = (event: MouseEvent) => {
-    options.setPointerClient({ x: event.clientX, y: event.clientY })
-    updatePointerInMain(options.getMainRef(), event.clientX, event.clientY, options.setPointerInMain)
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey)
+    options.applyShellWindowResize(event.clientX, event.clientY)
+    syncPointerPosition(event.clientX, event.clientY)
   }
 
   const onWindowPointerUp = (event: PointerEvent) => {
     if (!event.isPrimary) return
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
+    options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
+    syncPointerPosition(event.clientX, event.clientY)
     options.endShellWindowResize('window-pointerup')
-    options.endShellWindowMove('window-pointerup')
+    pointerGestureBlurPendingRelease = false
   }
 
   const onWindowMouseUp = (event: MouseEvent) => {
     if (event.button !== 0) return
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
+    options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
+    syncPointerPosition(event.clientX, event.clientY)
     options.endShellWindowResize('window-mouseup')
-    options.endShellWindowMove('window-mouseup')
+    pointerGestureBlurPendingRelease = false
   }
 
   const onWindowPointerCancel = (event: PointerEvent) => {
     if (!event.isPrimary) return
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
+    options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
+    syncPointerPosition(event.clientX, event.clientY)
     options.endShellWindowResize('window-pointercancel')
-    options.endShellWindowMove('window-pointercancel')
+    pointerGestureBlurPendingRelease = false
   }
 
   const onWindowBlur = () => {
-    options.onWindowBlur({
+    const state = {
       dragWindowId: options.getShellWindowDragId(),
       resizeWindowId: options.getShellWindowResizeId(),
-    })
+    }
+    if (state.resizeWindowId !== null) {
+      pointerGestureBlurPendingRelease = true
+    }
+    options.onWindowBlur(state)
   }
 
   const onWindowTouchEnd = () => {
     options.endShellWindowResize('window-touchend')
-    options.endShellWindowMove('window-touchend')
+    pointerGestureBlurPendingRelease = false
   }
 
   const onWindowTouchMove = (event: TouchEvent) => {
     const touch = event.changedTouches[0]
     if (!touch) return
     if (options.getShellWindowDragId() !== null) {
-      options.applyShellWindowMove(touch.clientX, touch.clientY, false)
+      options.applyShellWindowMove(touch.clientX, touch.clientY, false, 1)
       event.preventDefault()
     }
     if (options.getShellWindowResizeId() !== null) {
-      options.applyShellWindowResize(touch.clientX, touch.clientY)
+      options.applyShellWindowResize(touch.clientX, touch.clientY, 1)
       event.preventDefault()
     }
-    options.setPointerClient({ x: touch.clientX, y: touch.clientY })
-    updatePointerInMain(options.getMainRef(), touch.clientX, touch.clientY, options.setPointerInMain)
+    syncPointerPosition(touch.clientX, touch.clientY)
   }
 
   const onWindowResize = () => {
     syncViewport()
     options.invalidateAllShellUiWindows()
     options.scheduleExclusionZonesSync()
-  }
-
-  const onWindowKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Meta') return
-    options.updateShellWindowMoveModifier(true)
-  }
-
-  const onWindowKeyUp = (event: KeyboardEvent) => {
-    if (event.key !== 'Meta') return
-    options.updateShellWindowMoveModifier(false)
   }
 
   const onFullscreenChange = () => {
@@ -164,8 +195,6 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
   window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
   window.addEventListener('resize', onWindowResize, { passive: true })
-  window.addEventListener('keydown', onWindowKeyDown)
-  window.addEventListener('keyup', onWindowKeyUp)
   document.addEventListener('fullscreenchange', onFullscreenChange)
 
   return () => {
@@ -180,8 +209,6 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     window.removeEventListener('touchcancel', onWindowTouchEnd)
     window.removeEventListener('touchmove', onWindowTouchMove)
     window.removeEventListener('resize', onWindowResize)
-    window.removeEventListener('keydown', onWindowKeyDown)
-    window.removeEventListener('keyup', onWindowKeyUp)
     document.removeEventListener('fullscreenchange', onFullscreenChange)
     unregisterShellE2eBridge()
     stopThemeDomSync()

@@ -100,6 +100,8 @@ export interface WindowSnapshot {
   surface_id?: number
   client_side_decoration?: boolean
   wayland_client_pid?: number | null
+  render_alpha?: number
+  workspace_visible?: boolean
 }
 
 export interface CompositorWorkspaceRect {
@@ -204,6 +206,8 @@ export interface ShellWindowControls {
   resize_right?: Rect | null
   resize_bottom_left?: Rect | null
   resize_bottom_right?: Rect | null
+  dragging?: boolean
+  frame_opacity?: number | null
 }
 
 export interface AssistSpanSnapshot {

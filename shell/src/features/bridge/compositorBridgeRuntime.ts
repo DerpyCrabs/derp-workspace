@@ -16,7 +16,11 @@ import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/a
 import { coerceShellWindowId, pickLayoutScreenForMove, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
-import { monitorWorkAreaGlobal } from '@/features/tiling/tileSnap'
+import {
+  monitorTileFrameAreaGlobal,
+  monitorWorkAreaGlobal,
+  tiledFrameRectToClientRect,
+} from '@/features/tiling/tileSnap'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
 import { snapZoneToBoundsWithOccupied } from '@/features/tiling/tileZones'
 import { workspaceGetTiledZone, workspaceIsWindowTiled, type WorkspaceState } from '@/features/workspace/workspaceState'
@@ -25,10 +29,15 @@ import { SHELL_LAYOUT_FLOATING, SHELL_LAYOUT_MAXIMIZED } from '@/lib/chromeConst
 type CompositorFollowup = {
   syncExclusion?: boolean
   flushWindows?: boolean
-  relayoutAll?: boolean
-  relayoutMonitor?: string | null
   resetScroll?: boolean
 }
+
+type CompositorInteractionState = {
+  pointer_x: number
+  pointer_y: number
+  move_window_id: number | null
+  resize_window_id: number | null
+} | null
 
 type CompositorRuntimeWireOp =
   | 'close'
@@ -51,6 +60,7 @@ type CompositorBridgeRuntimeOptions = {
   setScreenDraftRows: (rows: LayoutScreen[]) => void
   bumpTilingCfgRev: () => void
   setShellChromePrimaryName: (value: string | null) => void
+  setCompositorInteractionState: (value: CompositorInteractionState) => void
   markHasSeenCompositorWindowSync: () => void
   clearWindowSyncRecoveryPending: () => void
   scheduleExclusionZonesSync: () => void
@@ -98,7 +108,6 @@ type CompositorBridgeRuntimeOptions = {
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
   sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect) => boolean
   bumpSnapChrome: () => void
-  applyAutoLayout: (monitorName: string) => void
   sendSetPreTileGeometry: (windowId: number, bounds: { x: number; y: number; w: number; h: number }) => boolean
   floatBeforeMaximize: Map<number, { x: number; y: number; w: number; h: number }>
   workspacePreTileSnapshot: (windowId: number) => { x: number; y: number; w: number; h: number } | null
@@ -250,7 +259,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
           refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
         })),
       )
-      options.bumpTilingCfgRev()
       const pr =
         typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
           ? d.shell_chrome_primary
@@ -260,8 +268,16 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     options.scheduleCompositorFollowup({
       syncExclusion: true,
       flushWindows: true,
-      relayoutAll: true,
       resetScroll: true,
+    })
+  }
+
+  const applyInteractionStateDetail = (d: Extract<DerpShellDetail, { type: 'interaction_state' }>) => {
+    options.setCompositorInteractionState({
+      pointer_x: d.pointer_x,
+      pointer_y: d.pointer_y,
+      move_window_id: coerceShellWindowId(d.move_window_id),
+      resize_window_id: coerceShellWindowId(d.resize_window_id),
     })
   }
 
@@ -290,6 +306,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       applyOutputLayoutDetail(d)
       return true
     }
+    if (d.type === 'interaction_state') {
+      applyInteractionStateDetail(d)
+      return true
+    }
     return false
   }
 
@@ -297,6 +317,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
+    let sawInteractionState = false
     batch(() => {
       options.applyModelCompositorSnapshot(details)
       for (const detail of details) {
@@ -304,8 +325,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
           sawWindowList = true
           continue
         }
+        if (detail.type === 'interaction_state') {
+          sawInteractionState = true
+        }
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
+      if (!sawInteractionState) options.setCompositorInteractionState(null)
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
@@ -383,12 +408,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         layoutFlag = SHELL_LAYOUT_MAXIMIZED
       } else if (workspaceIsWindowTiled(options.workspaceState(), tid)) {
         const zone = workspaceGetTiledZone(options.workspaceState(), tid)!
-        const tw = monitorWorkAreaGlobal(tgtMon, reserveTgt)
+        const tw = monitorTileFrameAreaGlobal(tgtMon, reserveTgt)
         const workRect: TileRect = { x: tw.x, y: tw.y, width: tw.w, height: tw.h }
         const occ = options.occupiedSnapZonesOnMonitor(tgtMon, tid)
         const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
         if (!options.sendSetMonitorTile(tid, tgtMon.name, zone, gb)) return
-        gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
+        const clientRect = tiledFrameRectToClientRect(gb)
+        gRect = { x: clientRect.x, y: clientRect.y, w: clientRect.width, h: clientRect.height }
         layoutFlag = SHELL_LAYOUT_FLOATING
       } else {
         const srcWork = monitorWorkAreaGlobal(curMon, reserveCur)
@@ -409,10 +435,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.shellWireSend('set_geometry', tid, loc.x, loc.y, loc.w, loc.h, layoutFlag)
       options.scheduleExclusionZonesSync()
       options.bumpSnapChrome()
-      queueMicrotask(() => {
-        options.applyAutoLayout(curMon.name)
-        options.applyAutoLayout(tgtMon.name)
-      })
       return
     }
     if (action === 'tile_left' || action === 'tile_right') {
@@ -426,11 +448,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       if (!mon) return
       const zone: SnapZone = action === 'tile_left' ? 'left-half' : 'right-half'
       const reserveTb = options.reserveTaskbarForMon(mon)
-      const wr = monitorWorkAreaGlobal(mon, reserveTb)
+      const wr = monitorTileFrameAreaGlobal(mon, reserveTb)
       const workRect: TileRect = { x: wr.x, y: wr.y, width: wr.w, height: wr.h }
       const occ = options.occupiedSnapZonesOnMonitor(mon, tid)
       const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
-      const gRect = { x: gb.x, y: gb.y, w: gb.width, h: gb.height }
+      const clientRect = tiledFrameRectToClientRect(gb)
+      const gRect = { x: clientRect.x, y: clientRect.y, w: clientRect.width, h: clientRect.height }
       const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
       const preTile = w.maximized
         ? (options.floatBeforeMaximize.get(tid) ?? {
@@ -588,19 +611,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         requestWindowSyncRecovery: options.requestWindowSyncRecovery,
       })
       if (result.kind === 'recovery_requested') return
-      const wid = result.windowId ?? null
-      if (wid !== null) {
-        queueMicrotask(() => {
-          const w2 = options.windows().get(wid)
-          const fb = options.fallbackMonitorKey()
-          const newMon = w2 ? w2.output_name || fb : null
-          const prevMon = result.previousWindow?.output_name || fb
-          if (newMon !== null && prevMon !== newMon) {
-            options.applyAutoLayout(prevMon)
-            options.applyAutoLayout(newMon)
-          }
-        })
-      }
       return
     }
     if (d.type === 'window_mapped') {

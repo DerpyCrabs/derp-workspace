@@ -19,7 +19,9 @@ import {
   defineGroup,
   dragBetweenPoints,
   ensureNativePair,
+  getPerfCounters,
   getJson,
+  getShellHtml,
   getSnapshots,
   movePoint,
   openDebug,
@@ -27,6 +29,7 @@ import {
   outputForWindow,
   pointInRect,
   raiseTaskbarWindow,
+  resetPerfCounters,
   runKeybind,
   shellWindowStack,
   spawnNativeWindow,
@@ -121,6 +124,14 @@ function assertOutputOrderMatchesGlobalTop(
 ) {
   const row = compositor.ordered_window_ids_by_output?.find((entry) => entry.output_name === outputName)
   assert(row, `${label}: missing ordered stack for output ${outputName}`)
+  const rowSet = new Set(row.window_ids)
+  const expectedBottomToTop = compositorWindowStack(compositor)
+    .filter((windowId) => rowSet.has(windowId))
+    .reverse()
+  assert(
+    row.window_ids.join(',') === expectedBottomToTop.join(','),
+    `${label}: expected output order ${expectedBottomToTop.join(', ')}, got ${row.window_ids.join(', ')}`,
+  )
   const top = row.window_ids[row.window_ids.length - 1] ?? null
   assert(top === expectedTopWindowId, `${label}: expected top output window ${expectedTopWindowId}, got ${top}`)
 }
@@ -160,6 +171,78 @@ async function waitForTrackedStackParity(base: string, windowIds: number[], labe
       return { compositor, shell }
     },
     2000,
+    100,
+  )
+}
+
+async function waitForSettingsTilingLayoutTriggerReady(base: string) {
+  let lastRectKey = ''
+  return waitFor(
+    'wait for tiling layout trigger ready',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = shell.controls?.settings_tiling_layout_trigger
+      if (!rect) return null
+      const nextKey = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+      if (nextKey !== lastRectKey) {
+        lastRectKey = nextKey
+        return null
+      }
+      return shell
+    },
+    5000,
+    100,
+  )
+}
+
+async function switchSettingsPage(base: string) {
+  return waitFor(
+    'wait for settings tiling page',
+    async () => {
+      const html = await getShellHtml(base, '[data-settings-root]')
+      if (html.includes('data-settings-active-page="tiling"') && html.includes('data-settings-tiling-page')) {
+        return html
+      }
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = shell.controls?.settings_tab_tiling
+      if (rect) {
+        await clickPoint(base, rect.global_x + rect.width / 2, rect.global_y + rect.height / 2)
+      }
+      return null
+    },
+    5000,
+    100,
+  )
+}
+
+async function selectSettingsTilingLayout(base: string, layout: 'grid' | 'manual-snap') {
+  await switchSettingsPage(base)
+  const tilingPageReady = await waitForSettingsTilingLayoutTriggerReady(base)
+  const optionKey =
+    layout === 'grid' ? 'settings_tiling_layout_option_grid' : 'settings_tiling_layout_option_manual_snap'
+  if (!tilingPageReady.controls?.[optionKey]) {
+    assert(tilingPageReady.controls?.settings_tiling_layout_trigger, 'missing tiling layout trigger')
+    const trigger = tilingPageReady.controls.settings_tiling_layout_trigger
+    await clickPoint(base, trigger.global_x + trigger.width / 2, trigger.global_y + trigger.height / 2)
+  }
+  const tilingLayoutOpen = await waitFor(
+    `wait for tiling layout menu option ${layout}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.controls?.[optionKey] ? shell : null
+    },
+    5000,
+    100,
+  )
+  const option = tilingLayoutOpen.controls![optionKey]!
+  await clickPoint(base, option.global_x + option.width / 2, option.global_y + option.height / 2)
+  await waitFor(
+    `wait for tiling layout set to ${layout}`,
+    async () => {
+      const html = await getShellHtml(base, '[data-settings-tiling-page]')
+      return html.includes(layout) ? html : null
+    },
+    5000,
     100,
   )
 }
@@ -447,10 +530,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    const shellMax = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    const controls = windowControls(shellMax, redId)
-    assert(controls?.titlebar, 'missing red titlebar while maximized')
-    const start = rectCenter(controls.titlebar)
+    const shellMax = await waitFor(
+      'wait for red maximized in shell snapshot',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = shellWindowById(shell, redId)
+        const controls = windowControls(shell, redId)
+        if (!window?.maximized || !controls?.titlebar) return null
+        return { titlebar: controls.titlebar }
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(shellMax.titlebar)
     await dragBetweenPoints(base, start.x, start.y, start.x, start.y + 160, 18)
     const unmaxed = await waitFor(
       'wait for red unmaximized after titlebar drag',
@@ -876,5 +968,76 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('native-js-restack-settings-restored-compositor.json', settingsRestored.compositor)
     await writeJsonArtifact('native-js-restack-debug-compositor.json', debugFocused.compositor)
     await writeJsonArtifact('native-js-restack-red-refocused-compositor.json', redRefocused.compositor)
+  })
+
+  test('native windows open directly into compositor auto layout geometry', async ({ base, state }) => {
+    await openSettings(base, 'click')
+    try {
+      await selectSettingsTilingLayout(base, 'grid')
+      await closeWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+      await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+      await resetPerfCounters(base)
+
+      const opened = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: 'Derp Native Grid Open',
+        token: 'native-grid-open',
+        strip: '#2573c2',
+        width: 480,
+        height: 320,
+      })
+      const windowId = opened.window.window_id
+      const settled = await waitFor(
+        'wait for grid-opened native window geometry',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const window = compositorWindowById(compositor, windowId)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+          const taskbar = window ? taskbarForMonitor(shell, window.output_name) : null
+          if (!window || !output || !taskbar?.rect) return null
+          const expected = {
+            x: output.x,
+            y: output.y + 26,
+            width: output.width,
+            height: taskbar.rect.global_y - output.y - 26,
+          }
+          if (Math.abs(window.x - expected.x) > 24) return null
+          if (Math.abs(window.y - expected.y) > 24) return null
+          if (Math.abs(window.width - expected.width) > 24) return null
+          if (Math.abs(window.height - expected.height) > 24) return null
+          return { compositor, shell, window, expected }
+        },
+        2000,
+        40,
+      )
+      const perf = await getPerfCounters(base)
+      assert(perf.shell_updates.window_mapped_messages >= 1, 'native open should emit a mapped message')
+      assert(
+        perf.shell_updates.window_geometry_messages <= 1,
+        `native auto-layout open should not emit follow-up geometry corrections, got ${perf.shell_updates.window_geometry_messages}`,
+      )
+      await writeJsonArtifact('native-grid-open.json', {
+        windowId,
+        perf,
+        expected: settled.expected,
+        actual: {
+          x: settled.window.x,
+          y: settled.window.y,
+          width: settled.window.width,
+          height: settled.window.height,
+          output: settled.window.output_name,
+        },
+      })
+    } finally {
+      try {
+        await openSettings(base, 'click')
+        await selectSettingsTilingLayout(base, 'manual-snap')
+      } finally {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)) {
+          await closeWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+          await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+        }
+      }
+    }
   })
 })

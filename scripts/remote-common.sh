@@ -100,3 +100,41 @@ require_remote_sync_tools() {
     fi
   done
 }
+
+remote_test_lock_acquire() {
+  local lock_path="${TMPDIR:-/tmp}/derp-remote-test.lock"
+  local lock_dir="${lock_path}.d"
+  local lock_pid_path="${lock_dir}/pid"
+  local timeout="${DERP_REMOTE_TEST_LOCK_TIMEOUT_SEC:-0}"
+  if command -v flock >/dev/null 2>&1; then
+    exec {REMOTE_TEST_LOCK_FD}>"$lock_path"
+    if [[ "$timeout" =~ ^[0-9]+$ ]] && ((timeout > 0)); then
+      if ! flock -w "$timeout" "$REMOTE_TEST_LOCK_FD"; then
+        echo "${REMOTE_COMMON_SCRIPT_NAME}: another remote test, verify, or harness run is already active" >&2
+        exit 1
+      fi
+      return
+    fi
+    if ! flock -n "$REMOTE_TEST_LOCK_FD"; then
+      echo "${REMOTE_COMMON_SCRIPT_NAME}: another remote test, verify, or harness run is already active" >&2
+      exit 1
+    fi
+    return
+  fi
+  if [[ -f "$lock_pid_path" ]]; then
+    local lock_pid
+    lock_pid="$(cat "$lock_pid_path" 2>/dev/null || true)"
+    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$lock_pid_path"
+      rmdir "$lock_dir" 2>/dev/null || true
+    fi
+  elif [[ -d "$lock_dir" ]]; then
+    rmdir "$lock_dir" 2>/dev/null || true
+  fi
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    echo "${REMOTE_COMMON_SCRIPT_NAME}: another remote test, verify, or harness run is already active" >&2
+    exit 1
+  fi
+  printf '%s\n' "$$" >"$lock_pid_path"
+  trap "rm -f '$lock_pid_path'; rmdir '$lock_dir'" EXIT
+}
