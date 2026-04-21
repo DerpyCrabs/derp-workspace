@@ -667,6 +667,21 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         '[data-settings-tiling-layout-option="manual-snap"]',
         args.origin,
       ),
+      settings_snap_layout_option_2x2: queryRect(
+        cache,
+        '[data-settings-snap-layout-option="2x2"]',
+        args.origin,
+      ),
+      settings_snap_layout_option_3x2: queryRect(
+        cache,
+        '[data-settings-snap-layout-option="3x2"]',
+        args.origin,
+      ),
+      settings_snap_layout_option_custom: queryRect(
+        cache,
+        '[data-settings-snap-layout-option-custom]',
+        args.origin,
+      ),
       settings_custom_layout_add: queryRect(
         cache,
         settingsMonitorName
@@ -727,7 +742,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
       snap_picker_2x2_top_right_cell: queryLargestRect(
         cache,
-        '[data-shell-snap-picker] [data-assist-mini-grid="2x2"] [data-assist-grid-span][data-grid-cols="2"][data-gc0="1"][data-gc1="1"][data-gr0="0"][data-gr1="0"]',
+        '[data-shell-snap-picker] [data-assist-mini-grid="2x2"] [data-testid="snap-assist-2x2-top-right-cell"]',
         args.origin,
       ),
       snap_picker_top_center_cell: queryLargestRect(

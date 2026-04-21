@@ -1301,7 +1301,10 @@ function App() {
         getSettingsWindowVisible: settingsHudFrameVisible,
         getSnapAssistPicker: shellWindowGestureRuntime.snapAssistPicker,
         getActiveSnapPreviewCanvas: shellWindowGestureRuntime.getActiveSnapPreviewCanvas,
-        getAssistOverlayHoverSpan: () => shellWindowGestureRuntime.assistOverlay()?.hoverSpan ?? null,
+        getAssistOverlayHoverSpan: () => {
+          const overlay = shellWindowGestureRuntime.assistOverlay()
+          return overlay?.kind === 'assist' ? overlay.hoverSpan : null
+        },
         getProgramsMenuQuery: shellContextMenus.programsMenuProps.query,
         buildSessionSnapshot,
         getSessionRestoreActive: () => sessionRestoreSnapshot() !== null,
@@ -1368,6 +1371,7 @@ function App() {
       setViewportCss,
       applyShellWindowMove: shellWindowGestureRuntime.applyShellWindowMove,
       applyShellWindowResize: shellWindowGestureRuntime.applyShellWindowResize,
+      updateShellWindowMoveModifier: shellWindowGestureRuntime.updateShellWindowMoveModifier,
       endShellWindowMove: shellWindowGestureRuntime.endShellWindowMove,
       endShellWindowResize: shellWindowGestureRuntime.endShellWindowResize,
       getShellWindowDragId: shellWindowGestureRuntime.getShellWindowDragId,

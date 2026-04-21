@@ -3,12 +3,18 @@ import type { AssistGridShape, AssistGridSpan } from './assistGrid'
 import { snapZoneAndPreviewFromAssistSpan } from './assistGrid'
 import { CustomLayoutPreview } from './CustomLayoutPreview'
 import {
+  firstLeafZoneId,
   resolveCustomLayoutZoneBounds,
   type CustomLayout,
 } from './customLayouts'
 import { SnapAssistMasterGrid } from './SnapAssistMasterGrid'
 import type { SnapAssistPickerAnchorRect } from '@/host/types'
 import type { Rect, SnapZone } from './tileZones'
+import type { MonitorSnapLayout } from './tilingConfig'
+import {
+  assistMonitorSnapLayout,
+  customMonitorSnapLayout,
+} from './tilingConfig'
 import {
   invalidateShellUiWindow,
   registerShellUiWindow,
@@ -46,7 +52,7 @@ export type SnapAssistPickerProps = {
   anchorRect: SnapAssistPickerAnchorRect
   container: HTMLElement
   workArea: { x: number; y: number; w: number; h: number }
-  edgeShape: AssistGridShape
+  currentSnapLayout: MonitorSnapLayout
   customLayouts: CustomLayout[]
   hoverSelection: SnapPickerSelection | null
   autoHover?: boolean
@@ -61,6 +67,7 @@ export type SnapAssistPickerProps = {
 export type SnapPickerSelection = {
   zone: SnapZone
   previewRect: Rect
+  snapLayout: MonitorSnapLayout
   shape: AssistGridShape | null
   hoverSpan: AssistGridSpan | null
 }
@@ -146,7 +153,10 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
       onCleanup(unreg)
     }
     if (props.autoHover !== false) {
-      const defaultSelection = selectionFromSpan(DEFAULT_PICKER_SPAN, props.edgeShape, props.workArea)
+      const defaultSelection =
+        props.currentSnapLayout.kind === 'assist'
+          ? selectionFromSpan(DEFAULT_PICKER_SPAN, props.currentSnapLayout.shape, props.workArea)
+          : customDefaultSelection(props.currentSnapLayout.layoutId)
       props.onHoverSelectionChange(props.hoverSelection ?? defaultSelection)
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -178,12 +188,13 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     return {
       zone,
       previewRect,
+      snapLayout: assistMonitorSnapLayout(shape),
       shape,
       hoverSpan: span,
     }
   }
 
-  function customSelection(zone: string): SnapPickerSelection | null {
+  function customSelection(layoutId: string, zone: string): SnapPickerSelection | null {
     const bounds = resolveCustomLayoutZoneBounds(props.customLayouts, zone, {
       x: props.workArea.x,
       y: props.workArea.y,
@@ -194,9 +205,16 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
     return {
       zone,
       previewRect: bounds,
+      snapLayout: customMonitorSnapLayout(layoutId),
       shape: null,
       hoverSpan: null,
     }
+  }
+
+  function customDefaultSelection(layoutId: string): SnapPickerSelection | null {
+    const layout = props.customLayouts.find((entry) => entry.id === layoutId)
+    if (!layout) return null
+    return customSelection(layoutId, `custom:${layout.id}:${firstLeafZoneId(layout.root)}`)
   }
 
   return (
@@ -227,7 +245,9 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
                 layout={layout}
                 pickMode
                 selectedZoneId={
-                  props.hoverSelection?.shape === null && props.hoverSelection.zone.startsWith(`custom:${layout.id}:`)
+                  props.hoverSelection?.snapLayout.kind === 'custom' &&
+                  props.hoverSelection.snapLayout.layoutId === layout.id &&
+                  props.hoverSelection.zone.startsWith(`custom:${layout.id}:`)
                     ? props.hoverSelection.zone.slice(`custom:${layout.id}:`.length)
                     : null
                 }
@@ -235,9 +255,9 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
                   'data-snap-picker-custom-layout': layout.id,
                   'data-snap-picker-custom-zone': zoneId,
                 })}
-                onZoneHover={(zone) => props.onHoverSelectionChange(zone ? customSelection(zone.zone) : null)}
+                onZoneHover={(zone) => props.onHoverSelectionChange(zone ? customSelection(layout.id, zone.zone) : null)}
                 onZoneClick={(zone) => {
-                  const selection = customSelection(zone.zone)
+                  const selection = customSelection(layout.id, zone.zone)
                   if (selection) props.onSelectSelection(selection)
                 }}
               />

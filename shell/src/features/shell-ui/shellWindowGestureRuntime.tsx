@@ -22,11 +22,17 @@ import {
   assistGridGutterPx,
   assistShapeFromSpan,
   assistSpanFromWorkAreaPoint,
-  DEFAULT_ASSIST_GRID_SHAPE,
   snapZoneAndPreviewFromAssistSpan,
   type AssistGridShape,
   type AssistGridSpan,
 } from '@/features/tiling/assistGrid'
+import {
+  customSnapZoneId,
+  parseCustomSnapZoneId,
+  resolveCustomLayoutZoneBounds,
+  resolveCustomLayoutZoneAtPoint,
+  type CustomLayout,
+} from '@/features/tiling/customLayouts'
 import { SnapAssistPicker, type SnapPickerSelection } from '@/features/tiling/SnapAssistPicker'
 import { hitTestSnapZoneGlobal, monitorWorkAreaGlobal, TILE_SNAP_EDGE_PX } from '@/features/tiling/tileSnap'
 import {
@@ -37,7 +43,12 @@ import {
   TILED_RESIZE_MIN_W,
 } from '@/features/tiling/tileState'
 import { snapZoneToBoundsWithOccupied, type Rect as TileRect, type SnapZone } from '@/features/tiling/tileZones'
-import { getMonitorLayout, setMonitorEdgeLayout } from '@/features/tiling/tilingConfig'
+import {
+  assistMonitorSnapLayout,
+  getMonitorLayout,
+  setMonitorSnapLayout,
+  type MonitorSnapLayout,
+} from '@/features/tiling/tilingConfig'
 import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
 import type {
@@ -55,7 +66,10 @@ type SnapAssistContext = {
   screen: LayoutScreen
   workGlobal: { x: number; y: number; w: number; h: number }
   workCanvas: { x: number; y: number; w: number; h: number }
-  shape: AssistGridShape
+  snapLayout: MonitorSnapLayout
+  assistShape: AssistGridShape | null
+  customLayout: CustomLayout | null
+  customLayouts: CustomLayout[]
 }
 
 type ShellResizeSession =
@@ -129,10 +143,11 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   let activeSnapZone: SnapZone | null = null
   let activeSnapScreen: LayoutScreen | null = null
   let activeSnapWindowId: number | null = null
+  let activeSnapLayout: MonitorSnapLayout | null = null
   let activeSnapShape: AssistGridShape | null = null
   let tilePreviewRaf = 0
   let lastTilePreviewKey = ''
-  let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
+  let shellWindowDrag: { windowId: number; lastX: number; lastY: number; superHeld: boolean } | null = null
   let shellMoveDeltaLogSeq = 0
   let shellWindowResize: ShellResizeSession | null = null
   let shellResizeDeltaLogSeq = 0
@@ -154,6 +169,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapZone = null
     activeSnapScreen = null
     activeSnapWindowId = null
+    activeSnapLayout = null
     activeSnapShape = null
   }
 
@@ -180,7 +196,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   function resolveSnapAssistContext(
     windowId: number,
     preferredMonitorName?: string | null,
-    shape: AssistGridShape = DEFAULT_ASSIST_GRID_SHAPE,
   ): SnapAssistContext | null {
     const window = options.allWindowsMap().get(windowId)
     if (!window || window.minimized) return null
@@ -196,12 +211,19 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     if (!screen || !monitorLayout || monitorLayout.layout.type !== 'manual-snap') return null
     const reserveTaskbar = options.reserveTaskbarForMon(screen)
     const workGlobal = monitorWorkAreaGlobal(screen, reserveTaskbar)
+    const snapLayout = monitorLayout.snapLayout
     return {
       windowId,
       screen,
       workGlobal,
       workCanvas: rectGlobalToCanvasLocal(workGlobal.x, workGlobal.y, workGlobal.w, workGlobal.h, origin),
-      shape: shape === DEFAULT_ASSIST_GRID_SHAPE ? monitorLayout.edgeLayout : shape,
+      snapLayout,
+      assistShape: snapLayout.kind === 'assist' ? snapLayout.shape : null,
+      customLayout:
+        snapLayout.kind === 'custom'
+          ? monitorLayout.customLayouts.find((layout) => layout.id === snapLayout.layoutId) ?? null
+          : null,
+      customLayouts: monitorLayout.customLayouts,
     }
   }
 
@@ -209,12 +231,15 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     context: SnapAssistContext,
     zone: SnapZone,
     previewRect: TileRect,
+    snapLayout: MonitorSnapLayout,
+    shape: AssistGridShape | null,
   ) {
     const origin = options.layoutCanvasOrigin()
     activeSnapZone = zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
-    activeSnapShape = context.shape
+    activeSnapLayout = snapLayout
+    activeSnapShape = shape
     activeSnapPreviewGlobal = { ...previewRect }
     const o = shellOuterFrameFromClient({
       x: previewRect.x,
@@ -237,6 +262,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapZone = selection.zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
+    activeSnapLayout = selection.snapLayout
     activeSnapShape = selection.shape
     activeSnapPreviewGlobal = { ...selection.previewRect }
     const origin = options.layoutCanvasOrigin()
@@ -253,11 +279,26 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapPreviewCanvas = rectGlobalToCanvasLocal(outer.x, outer.y, outer.w, outer.h, origin)
     if (selection.hoverSpan && selection.shape) {
       setAssistOverlay({
+        kind: 'assist',
         shape: selection.shape,
         gutterPx: assistGridGutterPx(context.workGlobal, selection.shape),
         hoverSpan: selection.hoverSpan,
         workCanvas: context.workCanvas,
       })
+    } else if (selection.snapLayout.kind === 'custom') {
+      const snapLayout = selection.snapLayout
+      const parsed = parseCustomSnapZoneId(selection.zone)
+      const layout = context.customLayouts.find((entry) => entry.id === snapLayout.layoutId) ?? null
+      if (parsed && layout) {
+        setAssistOverlay({
+          kind: 'custom',
+          layout,
+          selectedZoneId: parsed.zoneId,
+          workCanvas: context.workCanvas,
+        })
+      } else {
+        setAssistOverlay(null)
+      }
     } else {
       setAssistOverlay(null)
     }
@@ -265,15 +306,16 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   }
 
   function updateSnapAssistFromSpan(context: SnapAssistContext, span: AssistGridSpan | null) {
-    const shape = span ? assistShapeFromSpan(span) : context.shape
+    const shape = span ? assistShapeFromSpan(span) : context.assistShape
     if (!span || !shape) {
       clearSnapAssistSelection()
       return
     }
     const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, context.workGlobal)
-    applySnapAssistZonePreview(context, zone, previewRect)
+    applySnapAssistZonePreview(context, zone, previewRect, assistMonitorSnapLayout(shape), shape)
     activeSnapShape = shape
     setAssistOverlay({
+      kind: 'assist',
       shape,
       gutterPx: assistGridGutterPx(context.workGlobal, shape),
       hoverSpan: span,
@@ -283,7 +325,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   }
 
   function updateSnapAssistFromEdgeZone(context: SnapAssistContext, zone: SnapZone | null) {
-    if (!zone) {
+    if (!zone || !context.assistShape) {
       clearSnapAssistSelection()
       return
     }
@@ -298,8 +340,34 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       workRect,
       options.occupiedSnapZonesOnMonitor(context.screen, context.windowId),
     )
-    applySnapAssistZonePreview(context, zone, previewRect)
+    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, context.assistShape)
     setAssistOverlay(null)
+    scheduleTilePreviewSync()
+  }
+
+  function updateSnapAssistFromCustomZone(context: SnapAssistContext, zoneId: string | null) {
+    if (!zoneId || !context.customLayout) {
+      clearSnapAssistSelection()
+      return
+    }
+    const zone = customSnapZoneId(context.customLayout.id, zoneId)
+    const previewRect = resolveCustomLayoutZoneBounds(context.customLayouts, zone, {
+      x: context.workGlobal.x,
+      y: context.workGlobal.y,
+      width: context.workGlobal.w,
+      height: context.workGlobal.h,
+    })
+    if (!previewRect) {
+      clearSnapAssistSelection()
+      return
+    }
+    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, null)
+    setAssistOverlay({
+      kind: 'custom',
+      layout: context.customLayout,
+      selectedZoneId: zoneId,
+      workCanvas: context.workCanvas,
+    })
     scheduleTilePreviewSync()
   }
 
@@ -307,7 +375,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const snapWindowId = activeSnapWindowId ?? windowId
     const droppedZone = activeSnapZone
     const snapScreen = activeSnapScreen
-    const droppedShape = activeSnapShape
+    const droppedLayout = activeSnapLayout
     const droppedPreviewGlobal = activeSnapPreviewGlobal ? { ...activeSnapPreviewGlobal } : null
     resetSnapAssistState()
     setAssistOverlay(null)
@@ -337,8 +405,8 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const globalBounds =
       droppedPreviewGlobal ??
       snapZoneToBoundsWithOccupied(droppedZone, workRect, occupied)
-    if (droppedShape) {
-      setMonitorEdgeLayout(snapScreen.name, droppedShape)
+    if (droppedLayout) {
+      setMonitorSnapLayout(snapScreen.name, droppedLayout)
     }
     if (
       preTile
@@ -515,12 +583,117 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       options.shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
       return
     }
-    shellWindowDrag = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY) }
+    shellWindowDrag = { windowId, lastX: Math.round(clientX), lastY: Math.round(clientY), superHeld: false }
     setDragWindowId(windowId)
     options.shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
-  function applyShellWindowMove(clientX: number, clientY: number) {
+  function updateDragSnapAssist(windowId: number, clientX: number, clientY: number, superHeld: boolean) {
+    const main = options.getMainRef()
+    const output = options.outputGeom()
+    const origin = options.layoutCanvasOrigin()
+    if (!main || !output) return
+    const mainRect = main.getBoundingClientRect()
+    const global = clientPointToGlobalLogical(clientX, clientY, mainRect, output.w, output.h, origin)
+    const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), origin)
+    const monitor = pickScreenForPointerSnap(global.x, global.y, list)
+    const pickerEl = main.querySelector('[data-shell-snap-picker]') as HTMLElement | null
+    const pickerOpen = snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId
+    if (pickerEl) {
+      const pickerRect = pickerEl.getBoundingClientRect()
+      if (
+        pickerOpen &&
+        clientX >= pickerRect.left &&
+        clientX <= pickerRect.right &&
+        clientY >= pickerRect.top &&
+        clientY <= pickerRect.bottom
+      ) {
+        return
+      }
+    }
+    const stripEl = main.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
+    if (stripEl) {
+      const stripRect = stripEl.getBoundingClientRect()
+      if (
+        clientX >= stripRect.left &&
+        clientX <= stripRect.right &&
+        clientY >= stripRect.top &&
+        clientY <= stripRect.bottom
+      ) {
+        if (!pickerOpen) {
+          openSnapAssistPicker(windowId, 'strip', stripRect, false, monitor?.name)
+        }
+        return
+      }
+    }
+    if (pickerOpen) {
+      closeSnapAssistPicker()
+    }
+    if (!monitor) {
+      clearSnapAssistSelection()
+      return
+    }
+    const context = resolveSnapAssistContext(windowId, monitor.name)
+    if (!context) {
+      clearSnapAssistSelection()
+      return
+    }
+    const work = context.workGlobal
+    const pxForAssist = Math.max(work.x, Math.min(global.x, work.x + work.w))
+    const pyForAssist = Math.max(work.y, Math.min(global.y, work.y + work.h))
+    if (superHeld) {
+      if (context.assistShape) {
+        const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, context.assistShape, work)
+        updateSnapAssistFromSpan(context, span)
+        return
+      }
+      if (context.customLayout) {
+        const hovered = resolveCustomLayoutZoneAtPoint(
+          context.customLayout,
+          { x: work.x, y: work.y, width: work.w, height: work.h },
+          pxForAssist,
+          pyForAssist,
+        )
+        updateSnapAssistFromCustomZone(context, hovered?.zoneId ?? null)
+        return
+      }
+      clearSnapAssistSelection()
+      return
+    }
+    const inAssistTopStrip =
+      global.x >= work.x &&
+      global.x <= work.x + work.w &&
+      ((global.y >= work.y && global.y <= work.y + TILE_SNAP_EDGE_PX) ||
+        (global.y < work.y && work.y - global.y <= TILE_SNAP_EDGE_PX))
+    if (inAssistTopStrip && context.assistShape) {
+      const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, context.assistShape, work)
+      updateSnapAssistFromSpan(context, span)
+      return
+    }
+    if (context.customLayout) {
+      const nearEdge =
+        pxForAssist - work.x <= TILE_SNAP_EDGE_PX ||
+        work.x + work.w - pxForAssist <= TILE_SNAP_EDGE_PX ||
+        pyForAssist - work.y <= TILE_SNAP_EDGE_PX ||
+        work.y + work.h - pyForAssist <= TILE_SNAP_EDGE_PX
+      if (nearEdge) {
+        const hovered = resolveCustomLayoutZoneAtPoint(
+          context.customLayout,
+          { x: work.x, y: work.y, width: work.w, height: work.h },
+          pxForAssist,
+          pyForAssist,
+        )
+        updateSnapAssistFromCustomZone(context, hovered?.zoneId ?? null)
+        return
+      }
+      clearSnapAssistSelection()
+      return
+    }
+    const zone = context.assistShape ? hitTestSnapZoneGlobal(global.x, global.y, work, context.assistShape) : null
+    updateSnapAssistFromEdgeZone(context, zone)
+  }
+
+  function applyShellWindowMove(clientX: number, clientY: number, superHeld = false) {
     if (!shellWindowDrag) return
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
@@ -544,66 +717,14 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       shellWindowDrag.lastX = cx
       shellWindowDrag.lastY = cy
     }
-    const main = options.getMainRef()
-    const output = options.outputGeom()
-    const origin = options.layoutCanvasOrigin()
-    if (!main || !output) return
-    const mainRect = main.getBoundingClientRect()
-    const global = clientPointToGlobalLogical(cx, cy, mainRect, output.w, output.h, origin)
-    const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), origin)
-    const monitor = pickScreenForPointerSnap(global.x, global.y, list)
-    const pickerEl = main.querySelector('[data-shell-snap-picker]') as HTMLElement | null
-    const pickerOpen = snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId
-    if (pickerEl) {
-      const pickerRect = pickerEl.getBoundingClientRect()
-      if (
-        pickerOpen &&
-        cx >= pickerRect.left &&
-        cx <= pickerRect.right &&
-        cy >= pickerRect.top &&
-        cy <= pickerRect.bottom
-      ) {
-        return
-      }
-    }
-    const stripEl = main.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
-    if (stripEl) {
-      const stripRect = stripEl.getBoundingClientRect()
-      if (cx >= stripRect.left && cx <= stripRect.right && cy >= stripRect.top && cy <= stripRect.bottom) {
-        if (!pickerOpen) {
-          openSnapAssistPicker(windowId, 'strip', stripRect, false, monitor?.name)
-        }
-        return
-      }
-    }
-    if (pickerOpen) {
-      closeSnapAssistPicker()
-    }
-    if (!monitor) {
-      clearSnapAssistSelection()
-      return
-    }
-    const context = resolveSnapAssistContext(windowId, monitor.name)
-    if (!context) {
-      clearSnapAssistSelection()
-      return
-    }
-    const work = context.workGlobal
-    const inAssistTopStrip =
-      global.x >= work.x &&
-      global.x <= work.x + work.w &&
-      ((global.y >= work.y && global.y <= work.y + TILE_SNAP_EDGE_PX) ||
-        (global.y < work.y && work.y - global.y <= TILE_SNAP_EDGE_PX))
+    shellWindowDrag.superHeld = superHeld
+    updateDragSnapAssist(windowId, cx, cy, superHeld)
+  }
 
-    if (inAssistTopStrip) {
-      const pxForAssist = Math.max(work.x, Math.min(global.x, work.x + work.w))
-      const pyForAssist = Math.max(work.y, Math.min(global.y, work.y + work.h))
-      const span = assistSpanFromWorkAreaPoint(pxForAssist, pyForAssist, context.shape, work)
-      updateSnapAssistFromSpan(context, span)
-      return
-    }
-    const zone = hitTestSnapZoneGlobal(global.x, global.y, work, context.shape)
-    updateSnapAssistFromEdgeZone(context, zone)
+  function updateShellWindowMoveModifier(superHeld: boolean) {
+    if (!shellWindowDrag || shellWindowDrag.superHeld === superHeld) return
+    shellWindowDrag.superHeld = superHeld
+    updateDragSnapAssist(shellWindowDrag.windowId, shellWindowDrag.lastX, shellWindowDrag.lastY, superHeld)
   }
 
   function endShellWindowMove(reason: string) {
@@ -808,15 +929,22 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
                 ? context.workGlobal
                 : { x: 0, y: 0, w: 1, h: 1 }
             })()}
-            edgeShape={resolveSnapAssistContext(picker.windowId, picker.monitorName)?.shape ?? DEFAULT_ASSIST_GRID_SHAPE}
-            customLayouts={getMonitorLayout(picker.monitorName).customLayouts}
+            currentSnapLayout={
+              resolveSnapAssistContext(picker.windowId, picker.monitorName)?.snapLayout ??
+              assistMonitorSnapLayout('3x2')
+            }
+            customLayouts={resolveSnapAssistContext(picker.windowId, picker.monitorName)?.customLayouts ?? []}
             hoverSelection={
               activeSnapZone && activeSnapPreviewGlobal
                 ? {
                     zone: activeSnapZone,
                     previewRect: activeSnapPreviewGlobal,
+                    snapLayout: activeSnapLayout ?? assistMonitorSnapLayout(activeSnapShape ?? '3x2'),
                     shape: activeSnapShape,
-                    hoverSpan: assistOverlay()?.hoverSpan ?? null,
+                    hoverSpan: (() => {
+                      const overlay = assistOverlay()
+                      return overlay?.kind === 'assist' ? overlay.hoverSpan : null
+                    })(),
                   }
                 : null
             }
@@ -859,6 +987,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     toggleShellMaximizeForWindow,
     beginShellWindowMove,
     applyShellWindowMove,
+    updateShellWindowMoveModifier,
     endShellWindowMove,
     beginShellWindowResize,
     applyShellWindowResize,

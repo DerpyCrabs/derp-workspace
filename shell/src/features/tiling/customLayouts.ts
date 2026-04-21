@@ -567,6 +567,31 @@ export function resolveCustomLayoutZoneBounds(
   return normalizedRectToBounds(zoneRect, workArea)
 }
 
+export function resolveCustomLayoutZoneAtPoint(
+  layout: CustomLayout,
+  workArea: Rect,
+  px: number,
+  py: number,
+): { zoneId: string; zone: string; bounds: Rect } | null {
+  const zones = listCustomLayoutZones(layout)
+  for (const zone of zones) {
+    const bounds = normalizedRectToBounds(zone, workArea)
+    if (
+      px >= bounds.x &&
+      px <= bounds.x + bounds.width &&
+      py >= bounds.y &&
+      py <= bounds.y + bounds.height
+    ) {
+      return {
+        zoneId: zone.zoneId,
+        zone: customSnapZoneId(layout.id, zone.zoneId),
+        bounds,
+      }
+    }
+  }
+  return null
+}
+
 function sanitizeNode(value: unknown): CustomLayoutNode | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const row = value as Record<string, unknown>

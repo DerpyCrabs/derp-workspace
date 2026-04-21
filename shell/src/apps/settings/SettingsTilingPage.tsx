@@ -1,7 +1,7 @@
 import { For, Show } from 'solid-js'
 import type { Accessor, Setter } from 'solid-js'
-import { EdgeLayoutPicker } from '@/features/tiling/EdgeLayoutPicker'
 import { LayoutTypePicker } from '@/features/tiling/LayoutTypePicker'
+import { SnapLayoutPicker } from '@/features/tiling/SnapLayoutPicker'
 import { CustomLayoutEditor } from '@/features/tiling/CustomLayoutEditor'
 import { getMonitorLayout } from '@/features/tiling/tilingConfig'
 import type { SettingsLayoutScreen } from './settingsTypes'
@@ -77,7 +77,7 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                       revision={props.tilingCfgRev}
                       onOpenOverlay={props.openCustomLayoutOverlay}
                     />
-                    <EdgeLayoutPicker
+                    <SnapLayoutPicker
                       outputName={monitorName}
                       revision={props.tilingCfgRev}
                       onPersisted={() => {

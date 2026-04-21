@@ -35,6 +35,7 @@ import {
 
 const TITLEBAR_PX = 26
 const SHIFT_KEYCODE = 42
+const SUPER_KEYCODE = 125
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   if (window.output_name) return window.output_name
@@ -308,8 +309,35 @@ async function focusSettingsWindow(base: string) {
   return waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
+async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
+  await openSettings(base, 'click')
+  await focusSettingsWindow(base)
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+  await clickRect(base, shell.controls.settings_tab_tiling)
+  shell = await waitFor(
+    `wait for settings ${layout} snap layout option`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const control =
+        layout === '2x2'
+          ? next.controls?.settings_snap_layout_option_2x2
+          : next.controls?.settings_snap_layout_option_3x2
+      return control ? next : null
+    },
+    2000,
+    125,
+  )
+  const control =
+    layout === '2x2'
+      ? shell.controls?.settings_snap_layout_option_2x2
+      : shell.controls?.settings_snap_layout_option_3x2
+  await clickRect(base, assertRectMinSize(`settings ${layout} snap layout option`, control, 12))
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('dragging a native titlebar into the strip opens the picker and snaps on release', async ({ base, state }) => {
+  test('dragging a native titlebar into the strip opens the picker', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
     const focused = await focusNativeWindow(base, redId)
@@ -332,33 +360,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
         assertRectMinSize('snap strip trigger', pickerOpen.controls?.snap_strip_trigger, 12),
         pickerRoot,
       )
-      const topCenter = assertRectMinSize('picker top-center cell', pickerOpen.controls?.snap_picker_top_center_cell, 12)
-      const hover = await hoverPickerCellWhileDragging(base, 'hover picker top-center cell', topCenter)
-      assert(hover.snap_hover_span?.gc0 === 1, 'expected strip drag hover to reach center column')
       await pointerButton(base, 0x110, 'release')
-      const snapped = await waitFor(
-        'wait for strip picker snap',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const window = compositorWindowById(compositor, redId)
-          if (!window || window.output_name !== state.tiledOutput && !taskbarForMonitor(shell, window.output_name)?.rect) return null
-          try {
-            assertTopThirdWindow(window, window.output_name, compositor, shell, 'center')
-          } catch {
-            return null
-          }
-          return { compositor, shell, window }
-        },
-        2000,
-        125,
-      )
-      await writeJsonArtifact('snap-assist-drag-native.json', snapped)
+      await waitForPickerClosed(base, redId)
     } finally {
       await pointerButton(base, 0x110, 'release')
     }
   })
 
   test('drag picker commits a native window layout', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
     const timing = createTimingMarks('snap native picker')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -399,6 +409,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('drag picker closes when pointer leaves the strip and picker', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
     const focused = await focusNativeWindow(base, redId)
@@ -519,36 +530,26 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('snap-assist-picker-settings-right-two-thirds.json', snapped)
   })
 
-  test('picker-selected layout changes top-right edge tiling per monitor', async ({ base }) => {
+  test('selected layout changes top-right edge tiling per monitor', async ({ base }) => {
     await openSettings(base, 'click')
     await focusSettingsWindow(base)
-
-    const picker2x2 = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    const topRight2x2 = assertRectMinSize(
-      '2x2 top-right cell',
-      picker2x2.controls?.snap_picker_2x2_top_right_cell,
-      12,
-    )
-    const topRight2x2Center = rectGlobalCenter(topRight2x2)
-    await clickPoint(base, topRight2x2Center.x, topRight2x2Center.y)
-    await waitFor(
-      'wait for settings 2x2 picker snap',
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, shell.controls.settings_tab_tiling)
+    shell = await waitFor(
+      'wait for settings snap layout options',
       async () => {
-        const { compositor, shell } = await getSnapshots(base)
-        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
-        if (!window) return null
-        try {
-          assertTopRightQuarterWindow(window, window.output_name, compositor, shell)
-        } catch {
-          return null
-        }
-        return { compositor, shell, window }
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_snap_layout_option_2x2 &&
+          next.controls?.settings_snap_layout_option_3x2
+          ? next
+          : null
       },
       2000,
       125,
     )
+    await clickRect(base, assertRectMinSize('settings 2x2 snap layout option', shell.controls?.settings_snap_layout_option_2x2, 12))
 
-    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     let controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const titlebar2x2 = assertRectMinSize('settings titlebar after 2x2 snap', controls?.titlebar, 12)
     const titlebar2x2Center = rectGlobalCenter(titlebar2x2)
@@ -774,6 +775,202 @@ export default defineGroup(import.meta.url, ({ test }) => {
       125,
     )
     await writeJsonArtifact('snap-assist-picker-custom-layout.json', snapped)
+  })
+
+  test('settings-selected custom snap layout snaps a shell window on super drag', async ({ base }) => {
+    await openSettings(base, 'click')
+    await focusSettingsWindow(base)
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    await clickRect(base, shell.controls.settings_tab_tiling)
+    shell = await waitFor(
+      'wait for custom layout add control',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_add ? next : null
+      },
+      5000,
+      100,
+    )
+    assert(shell.controls?.settings_custom_layout_add, 'missing add custom layout control')
+    await clickRect(base, shell.controls.settings_custom_layout_add)
+    shell = await waitFor(
+      'wait for custom layout overlay',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_root &&
+          next.controls?.custom_layout_overlay_add &&
+          next.controls?.custom_layout_overlay_save
+          ? next
+          : null
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.custom_layout_overlay_add, 'missing overlay add control')
+    await clickRect(base, shell.controls.custom_layout_overlay_add)
+    shell = await waitFor(
+      'wait for overlay zone after add',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_custom_layout_editor_zone ? next : null
+      },
+      3000,
+      100,
+    )
+    const firstEditorZone = assertRectMinSize('initial editor zone', shell.controls?.settings_custom_layout_editor_zone, 80)
+    await clickPoint(
+      base,
+      firstEditorZone.global_x + firstEditorZone.width * 0.5,
+      firstEditorZone.global_y + firstEditorZone.height * 0.7,
+    )
+    shell = await waitFor(
+      'wait for off-center horizontal split',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const zone = next.controls?.settings_custom_layout_editor_zone
+        if (!zone) return null
+        return Math.abs(zone.global_x - firstEditorZone.global_x) > 12 ? next : null
+      },
+      3000,
+      100,
+    )
+    const secondEditorZone = assertRectMinSize('editor zone after first split', shell.controls?.settings_custom_layout_editor_zone, 80)
+    await keyAction(base, SHIFT_KEYCODE, 'press')
+    try {
+      await clickPoint(
+        base,
+        secondEditorZone.global_x + secondEditorZone.width * 0.88,
+        secondEditorZone.global_y + secondEditorZone.height * 0.5,
+      )
+    } finally {
+      await keyAction(base, SHIFT_KEYCODE, 'release')
+    }
+    shell = await waitFor(
+      'wait for custom layout save after second split',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_save &&
+          next.controls?.settings_custom_layout_editor_zone
+          ? next
+          : null
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.custom_layout_overlay_save, 'missing overlay save control')
+    await clickRect(base, shell.controls.custom_layout_overlay_save)
+    shell = await waitFor(
+      'wait for custom layout overlay close',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.custom_layout_overlay_root ? null : next
+      },
+      3000,
+      100,
+    )
+    assert(shell.controls?.settings_snap_layout_option_custom, 'missing custom snap layout option')
+    await clickRect(base, shell.controls.settings_snap_layout_option_custom)
+
+    const focused = await focusSettingsWindow(base)
+    const window = compositorWindowById(focused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(window, 'missing settings compositor window before super drag')
+    const output = focused.compositor.outputs.find((entry) => entry.name === window.output_name)
+    const taskbar = taskbarForMonitor(focused.shell, window.output_name)
+    assert(output, `missing output ${window.output_name}`)
+    assert(taskbar?.rect, `missing taskbar for ${window.output_name}`)
+    const workTop = output.y + TITLEBAR_PX
+    const workBottom = taskbar.rect.global_y
+    const halfWidth = Math.floor(output.width / 2)
+    const clickedRightHalf = secondEditorZone.global_x >= output.x + halfWidth - 24
+    const halfStart = clickedRightHalf ? output.x + halfWidth : output.x
+    const halfWidthPx = clickedRightHalf ? output.width - halfWidth : halfWidth
+    const target = {
+      x: halfStart + Math.round(halfWidthPx * 0.44),
+      y: workTop + Math.round((workBottom - workTop) * 0.5),
+    }
+    const controls = windowControls(focused.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const titlebar = assertRectMinSize('settings titlebar before super drag', controls?.titlebar, 12)
+    const titlebarCenter = rectGlobalCenter(titlebar)
+
+    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    await keyAction(base, SUPER_KEYCODE, 'press')
+    try {
+      await movePoint(base, target.x, target.y)
+      await waitFor(
+        'wait for custom super drag preview',
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return next.snap_preview_visible ? next : null
+        },
+        2000,
+        16,
+      )
+      await keyAction(base, SUPER_KEYCODE, 'release')
+      const afterSuperReleaseDuringDrag = await waitFor(
+        'wait for programs menu stay closed after super keyup during drag',
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return next.programs_menu_open ? null : next
+        },
+        2000,
+        16,
+      )
+      assert(!afterSuperReleaseDuringDrag.programs_menu_open, 'programs menu should stay closed when super is released before mouseup')
+      await keyAction(base, SUPER_KEYCODE, 'press')
+      await movePoint(base, target.x, target.y)
+      await waitFor(
+        'wait for custom super drag preview after re-press',
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return next.snap_preview_visible ? next : null
+        },
+        2000,
+        16,
+      )
+      await pointerButton(base, BTN_LEFT, 'release')
+      const snapped = await waitFor(
+        'wait for custom super drag snap',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const current = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+          if (!current) return null
+          try {
+            assertWindowMatchesRect(
+              current,
+              {
+                x: halfStart,
+                y: workTop,
+                width: Math.round(halfWidthPx * 0.88),
+                height: workBottom - workTop,
+              },
+              'custom layout super drag zone',
+            )
+          } catch {
+            return null
+          }
+          return { compositor, shell, window: current }
+        },
+        2000,
+        125,
+      )
+      await keyAction(base, SUPER_KEYCODE, 'release')
+      const afterSuperRelease = await waitFor(
+        'wait for programs menu stay closed after custom super drag',
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return next.programs_menu_open ? null : next
+        },
+        2000,
+        16,
+      )
+      assert(!afterSuperRelease.programs_menu_open, 'programs menu should stay closed after custom super drag snap')
+      await writeJsonArtifact('snap-assist-super-drag-custom-layout.json', snapped)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
+    }
   })
 
   test('custom layout preview follows cursor movement inside one zone and shift flips axis in place', async ({ base }) => {

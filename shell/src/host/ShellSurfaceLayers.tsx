@@ -1,5 +1,6 @@
 import { For, Show, type Accessor } from 'solid-js'
 import { canvasRectToClientCss } from '@/lib/shellCoords'
+import { CustomLayoutPreview } from '@/features/tiling/CustomLayoutPreview'
 import { SnapAssistMasterGrid } from '@/features/tiling/SnapAssistMasterGrid'
 import { Taskbar, type TaskbarSniItem, type TaskbarWindowRow } from '@/features/taskbar/Taskbar'
 import { SnapAssistTopStrip } from './SnapAssistTopStrip'
@@ -56,6 +57,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           )
           return (
             <div
+              data-shell-snap-overlay={s.kind}
               class="bg-(--shell-overlay-muted) outline-(--shell-preview-outline) shadow-[0_0_24px_var(--shell-preview-shadow)] pointer-events-none fixed z-450000 box-border flex min-h-0 min-w-0 flex-col rounded-sm p-1.5 outline-2 -outline-offset-1"
               style={{
                 left: `${css.left}px`,
@@ -64,11 +66,23 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                 height: `${css.height}px`,
               }}
             >
-              <SnapAssistMasterGrid
-                shape={s.shape}
-                gutterPx={s.gutterPx}
-                getHoverSpan={() => props.assistOverlay()?.hoverSpan ?? null}
-              />
+              {s.kind === 'assist' ? (
+                <SnapAssistMasterGrid
+                  shape={s.shape}
+                  gutterPx={s.gutterPx}
+                  getHoverSpan={() => {
+                    const overlay = props.assistOverlay()
+                    return overlay?.kind === 'assist' ? overlay.hoverSpan : null
+                  }}
+                />
+              ) : (
+                  <CustomLayoutPreview
+                    layout={s.layout}
+                    selectedZoneId={s.selectedZoneId}
+                    fill
+                    class="h-full rounded-sm"
+                  />
+              )}
             </div>
           )
         }}

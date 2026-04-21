@@ -5,10 +5,16 @@ import {
 import { sanitizeCustomLayouts, type CustomLayout } from './customLayouts'
 import { createLayout, type LayoutParams, type LayoutType, type TilingLayout } from './layouts'
 
+const CUSTOM_SNAP_LAYOUT_PREFIX = 'custom:'
+
+export type MonitorSnapLayout =
+  | { kind: 'assist'; shape: AssistGridShape }
+  | { kind: 'custom'; layoutId: string }
+
 export type MonitorTilingEntry = {
   layout: LayoutType
   params?: LayoutParams
-  edgeLayout?: AssistGridShape
+  snapLayout?: string
   customLayouts?: CustomLayout[]
 }
 
@@ -33,6 +39,64 @@ function isLayoutType(v: unknown): v is LayoutType {
     v === 'columns' ||
     v === 'grid'
   )
+}
+
+export function assistMonitorSnapLayout(shape: AssistGridShape): MonitorSnapLayout {
+  return { kind: 'assist', shape }
+}
+
+export function customMonitorSnapLayout(layoutId: string): MonitorSnapLayout {
+  return { kind: 'custom', layoutId }
+}
+
+export function monitorSnapLayoutEquals(a: MonitorSnapLayout, b: MonitorSnapLayout): boolean {
+  if (a.kind === 'assist' && b.kind === 'assist') {
+    return a.shape === b.shape
+  }
+  if (a.kind === 'custom' && b.kind === 'custom') {
+    return a.layoutId === b.layoutId
+  }
+  return false
+}
+
+export function monitorSnapLayoutStorageKey(layout: MonitorSnapLayout): string {
+  if (layout.kind === 'assist') {
+    return layout.shape
+  }
+  return `${CUSTOM_SNAP_LAYOUT_PREFIX}${layout.layoutId}`
+}
+
+function parseMonitorSnapLayout(
+  value: unknown,
+  customLayouts: readonly CustomLayout[],
+): MonitorSnapLayout | null {
+  if (isAssistGridShape(value)) {
+    return assistMonitorSnapLayout(value)
+  }
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (isAssistGridShape(raw)) {
+    return assistMonitorSnapLayout(raw)
+  }
+  if (!raw.startsWith(CUSTOM_SNAP_LAYOUT_PREFIX)) return null
+  const layoutId = raw.slice(CUSTOM_SNAP_LAYOUT_PREFIX.length).trim()
+  if (!layoutId || !customLayouts.some((layout) => layout.id === layoutId)) return null
+  return customMonitorSnapLayout(layoutId)
+}
+
+function sanitizeStoredSnapLayout(
+  value: unknown,
+  customLayouts: readonly CustomLayout[],
+): string | undefined {
+  const parsed = parseMonitorSnapLayout(value, customLayouts)
+  return parsed ? monitorSnapLayoutStorageKey(parsed) : undefined
+}
+
+function resolveMonitorSnapLayout(
+  snapLayout: unknown,
+  customLayouts: readonly CustomLayout[],
+): MonitorSnapLayout {
+  return parseMonitorSnapLayout(snapLayout, customLayouts) ?? assistMonitorSnapLayout(DEFAULT_ASSIST_GRID_SHAPE)
 }
 
 function parseConfig(raw: string | null): TilingConfig {
@@ -61,12 +125,17 @@ function parseConfig(raw: string | null): TilingConfig {
         }
         if (Object.keys(lp).length > 0) cleaned.params = lp
       }
-      if (isAssistGridShape((el as { edgeLayout?: unknown }).edgeLayout)) {
-        cleaned.edgeLayout = (el as { edgeLayout: AssistGridShape }).edgeLayout
-      }
       const customLayouts = sanitizeCustomLayouts((el as { customLayouts?: unknown }).customLayouts)
       if (customLayouts.length > 0) {
         cleaned.customLayouts = customLayouts
+      }
+      const snapLayout = sanitizeStoredSnapLayout(
+        (el as { snapLayout?: unknown; edgeLayout?: unknown }).snapLayout ??
+          (el as { edgeLayout?: unknown }).edgeLayout,
+        customLayouts,
+      )
+      if (snapLayout) {
+        cleaned.snapLayout = snapLayout
       }
       out.monitors[k] = cleaned
     }
@@ -91,18 +160,19 @@ export function saveTilingConfig(cfg: TilingConfig): void {
 export function getMonitorLayout(outputName: string): {
   layout: TilingLayout
   params: LayoutParams
-  edgeLayout: AssistGridShape
+  snapLayout: MonitorSnapLayout
   customLayouts: CustomLayout[]
 } {
   const cfg = loadTilingConfig()
   const entry = cfg.monitors[outputName]
   const layoutType: LayoutType = entry?.layout ?? 'manual-snap'
   const params: LayoutParams = entry?.params ?? {}
+  const customLayouts = entry?.customLayouts ?? []
   return {
     layout: createLayout(layoutType),
     params,
-    edgeLayout: entry?.edgeLayout ?? DEFAULT_ASSIST_GRID_SHAPE,
-    customLayouts: entry?.customLayouts ?? [],
+    snapLayout: resolveMonitorSnapLayout(entry?.snapLayout, customLayouts),
+    customLayouts,
   }
 }
 
@@ -118,28 +188,33 @@ export function setMonitorLayout(
   if (Object.keys(nextParams).length > 0) {
     next.params = nextParams
   }
-  if (prev?.edgeLayout) {
-    next.edgeLayout = prev.edgeLayout
+  const customLayouts = prev?.customLayouts ?? []
+  const snapLayout = sanitizeStoredSnapLayout(prev?.snapLayout, customLayouts)
+  if (snapLayout) {
+    next.snapLayout = snapLayout
   }
-  if (prev?.customLayouts && prev.customLayouts.length > 0) {
-    next.customLayouts = prev.customLayouts
+  if (customLayouts.length > 0) {
+    next.customLayouts = customLayouts
   }
   cfg.monitors[outputName] = next
   saveTilingConfig(cfg)
 }
 
-export function setMonitorEdgeLayout(outputName: string, edgeLayout: AssistGridShape): void {
+export function setMonitorSnapLayout(outputName: string, snapLayout: MonitorSnapLayout): void {
   const cfg = loadTilingConfig()
   const prev = cfg.monitors[outputName]
+  const customLayouts = prev?.customLayouts ?? []
   const next: MonitorTilingEntry = {
     layout: prev?.layout ?? 'manual-snap',
-    edgeLayout,
+    snapLayout: monitorSnapLayoutStorageKey(
+      parseMonitorSnapLayout(monitorSnapLayoutStorageKey(snapLayout), customLayouts) ?? assistMonitorSnapLayout(DEFAULT_ASSIST_GRID_SHAPE),
+    ),
   }
   if (prev?.params && Object.keys(prev.params).length > 0) {
     next.params = prev.params
   }
-  if (prev?.customLayouts && prev.customLayouts.length > 0) {
-    next.customLayouts = prev.customLayouts
+  if (customLayouts.length > 0) {
+    next.customLayouts = customLayouts
   }
   cfg.monitors[outputName] = next
   saveTilingConfig(cfg)
@@ -148,12 +223,15 @@ export function setMonitorEdgeLayout(outputName: string, edgeLayout: AssistGridS
 export function setMonitorCustomLayouts(outputName: string, customLayouts: CustomLayout[]): void {
   const cfg = loadTilingConfig()
   const prev = cfg.monitors[outputName]
+  const nextSnapLayout = sanitizeStoredSnapLayout(prev?.snapLayout, customLayouts)
   const next: MonitorTilingEntry = {
     layout: prev?.layout ?? 'manual-snap',
-    edgeLayout: prev?.edgeLayout ?? DEFAULT_ASSIST_GRID_SHAPE,
   }
   if (prev?.params && Object.keys(prev.params).length > 0) {
     next.params = prev.params
+  }
+  if (nextSnapLayout) {
+    next.snapLayout = nextSnapLayout
   }
   if (customLayouts.length > 0) {
     next.customLayouts = customLayouts

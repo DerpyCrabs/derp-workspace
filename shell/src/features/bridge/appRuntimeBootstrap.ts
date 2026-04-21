@@ -15,8 +15,9 @@ type AppRuntimeBootstrapOptions = {
   registerShellE2eBridge: Parameters<typeof registerShellE2eBridge>[0]
   registerCompositorBridgeRuntime: Parameters<typeof registerCompositorBridgeRuntime>[0]
   setViewportCss: (value: { w: number; h: number }) => void
-  applyShellWindowMove: (clientX: number, clientY: number) => void
+  applyShellWindowMove: (clientX: number, clientY: number, superHeld?: boolean) => void
   applyShellWindowResize: (clientX: number, clientY: number) => void
+  updateShellWindowMoveModifier: (superHeld: boolean) => void
   endShellWindowMove: (reason: string) => void
   endShellWindowResize: (reason: string) => void
   getShellWindowDragId: () => number | null
@@ -77,7 +78,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   syncViewport()
 
   const onPointerMove = (event: PointerEvent) => {
-    options.applyShellWindowMove(event.clientX, event.clientY)
+    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey)
     options.applyShellWindowResize(event.clientX, event.clientY)
     options.setPointerClient({ x: event.clientX, y: event.clientY })
     updatePointerInMain(options.getMainRef(), event.clientX, event.clientY, options.setPointerInMain)
@@ -122,7 +123,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     const touch = event.changedTouches[0]
     if (!touch) return
     if (options.getShellWindowDragId() !== null) {
-      options.applyShellWindowMove(touch.clientX, touch.clientY)
+      options.applyShellWindowMove(touch.clientX, touch.clientY, false)
       event.preventDefault()
     }
     if (options.getShellWindowResizeId() !== null) {
@@ -139,6 +140,16 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     options.scheduleExclusionZonesSync()
   }
 
+  const onWindowKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Meta') return
+    options.updateShellWindowMoveModifier(true)
+  }
+
+  const onWindowKeyUp = (event: KeyboardEvent) => {
+    if (event.key !== 'Meta') return
+    options.updateShellWindowMoveModifier(false)
+  }
+
   const onFullscreenChange = () => {
     options.shellWireSend('presentation_fullscreen', document.fullscreenElement ? 1 : 0)
   }
@@ -153,6 +164,8 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
   window.addEventListener('touchmove', onWindowTouchMove, { passive: false })
   window.addEventListener('resize', onWindowResize, { passive: true })
+  window.addEventListener('keydown', onWindowKeyDown)
+  window.addEventListener('keyup', onWindowKeyUp)
   document.addEventListener('fullscreenchange', onFullscreenChange)
 
   return () => {
@@ -167,6 +180,8 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     window.removeEventListener('touchcancel', onWindowTouchEnd)
     window.removeEventListener('touchmove', onWindowTouchMove)
     window.removeEventListener('resize', onWindowResize)
+    window.removeEventListener('keydown', onWindowKeyDown)
+    window.removeEventListener('keyup', onWindowKeyUp)
     document.removeEventListener('fullscreenchange', onFullscreenChange)
     unregisterShellE2eBridge()
     stopThemeDomSync()

@@ -160,6 +160,15 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
               p().span.gr0 === 0 &&
               p().span.gr1 === 0,
             )
+            const is2x2TopRightCell = createMemo(() =>
+              p().kind === 'cell' &&
+              p().span.gridCols === 2 &&
+              p().span.gridRows === 2 &&
+              p().span.gc0 === 1 &&
+              p().span.gc1 === 1 &&
+              p().span.gr0 === 0 &&
+              p().span.gr1 === 0,
+            )
             const tileClass = createMemo(() =>
               p().kind === 'cell'
                 ? 'rounded-sm border border-(--shell-border) bg-(--shell-surface-elevated) shadow-sm'
@@ -182,6 +191,8 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
                     ? 'snap-assist-master-cell'
                     : isFirstColumnHgutter()
                       ? 'snap-assist-hgutter-col0'
+                      : is2x2TopRightCell()
+                        ? 'snap-assist-2x2-top-right-cell'
                       : isVgutterTwoColsTopRow()
                         ? 'snap-assist-vgutter-two-cols-top'
                         : undefined

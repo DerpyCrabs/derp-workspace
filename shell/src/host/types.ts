@@ -1,4 +1,5 @@
 import type { AssistGridShape, AssistGridSpan } from '@/features/tiling/assistGrid'
+import type { CustomLayout } from '@/features/tiling/customLayouts'
 
 export type LayoutScreen = {
   name: string
@@ -18,12 +19,20 @@ export type ExclusionHudZone = {
   h: number
 }
 
-export type AssistOverlayState = {
-  shape: AssistGridShape
-  gutterPx: number
-  hoverSpan: AssistGridSpan | null
-  workCanvas: { x: number; y: number; w: number; h: number }
-}
+export type AssistOverlayState =
+  | {
+      kind: 'assist'
+      shape: AssistGridShape
+      gutterPx: number
+      hoverSpan: AssistGridSpan | null
+      workCanvas: { x: number; y: number; w: number; h: number }
+    }
+  | {
+      kind: 'custom'
+      layout: CustomLayout
+      selectedZoneId: string | null
+      workCanvas: { x: number; y: number; w: number; h: number }
+    }
 
 export type SnapAssistPickerAnchorRect = {
   left: number

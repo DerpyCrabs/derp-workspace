@@ -241,6 +241,9 @@ export interface ShellControls {
   settings_tiling_layout_trigger?: Rect | null
   settings_tiling_layout_option_grid?: Rect | null
   settings_tiling_layout_option_manual_snap?: Rect | null
+  settings_snap_layout_option_2x2?: Rect | null
+  settings_snap_layout_option_3x2?: Rect | null
+  settings_snap_layout_option_custom?: Rect | null
   settings_custom_layout_add?: Rect | null
   custom_layout_overlay_root?: Rect | null
   custom_layout_overlay_add?: Rect | null

@@ -141,6 +141,15 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
+            if self.programs_menu_super_armed
+                && (grabbed
+                    || self.shell_move_is_active()
+                    || self.shell_resize_is_active()
+                    || self.shell_ui_pointer_grab_active()
+                    || self.shell_backed_move_candidate.is_some())
+            {
+                self.programs_menu_super_chord = true;
+            }
             self.shell_begin_frame_note_shell_input();
             if self.shell_move_window_id.is_none() {
                 if let Some((window_id, start)) = self.shell_backed_move_candidate {
@@ -279,6 +288,9 @@ impl CompositorState {
         button_state: ButtonState,
         time_msec: u32,
     ) {
+        if self.programs_menu_super_armed {
+            self.programs_menu_super_chord = true;
+        }
         self.shell_begin_frame_note_shell_input();
         if self.handle_screenshot_pointer_button(button, button_state) {
             let pointer = self.seat.get_pointer().unwrap();
