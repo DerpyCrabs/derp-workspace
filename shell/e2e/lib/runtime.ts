@@ -111,6 +111,15 @@ export interface CompositorWorkspaceRect {
   height: number
 }
 
+export interface CompositorInteractionVisualSnapshot {
+  x: number
+  y: number
+  width: number
+  height: number
+  maximized: boolean
+  fullscreen: boolean
+}
+
 export interface CompositorFloatingLayerSnapshot {
   id: number
   z: number
@@ -142,6 +151,8 @@ export interface CompositorSnapshot {
   shell_keyboard_focus?: boolean
   session_power_action?: string | null
   session_power_requested_at_ms?: number | null
+  shell_move_visual?: CompositorInteractionVisualSnapshot | null
+  shell_resize_visual?: CompositorInteractionVisualSnapshot | null
   window_stack_order?: number[]
   ordered_window_ids_by_output?: CompositorOutputWindowStackSnapshot[]
   shell_ui_windows_generation?: number

@@ -67,6 +67,26 @@ export type DerpShellDetail =
       pointer_y: number
       move_window_id: number | null
       resize_window_id: number | null
+      move_rect:
+        | {
+            x: number
+            y: number
+            width: number
+            height: number
+            maximized: boolean
+            fullscreen: boolean
+          }
+        | null
+      resize_rect:
+        | {
+            x: number
+            y: number
+            width: number
+            height: number
+            maximized: boolean
+            fullscreen: boolean
+          }
+        | null
     }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }

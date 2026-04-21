@@ -17,11 +17,21 @@ struct SnapshotState {
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state_json: Option<String>,
     shell_hosted_app_state_json: Option<String>,
-    interaction_state: Option<(i32, i32, u32, u32)>,
+    interaction_state: Option<SnapshotInteractionState>,
     keyboard_layout: Option<String>,
     volume_overlay: Option<(u16, bool, bool)>,
     tray_hints: Option<(u32, i32, u32)>,
     tray_sni: Option<Vec<shell_wire::TraySniItemWire>>,
+}
+
+#[derive(Clone, Copy)]
+struct SnapshotInteractionState {
+    pointer_x: i32,
+    pointer_y: i32,
+    move_window_id: u32,
+    resize_window_id: u32,
+    move_visual: Option<shell_wire::CompositorInteractionVisual>,
+    resize_visual: Option<shell_wire::CompositorInteractionVisual>,
 }
 
 struct SharedMmapFile {
@@ -384,9 +394,17 @@ impl SharedShellSnapshotWriter {
                 pointer_y,
                 move_window_id,
                 resize_window_id,
+                move_visual,
+                resize_visual,
             } => {
-                self.state.interaction_state =
-                    Some((*pointer_x, *pointer_y, *move_window_id, *resize_window_id));
+                self.state.interaction_state = Some(SnapshotInteractionState {
+                    pointer_x: *pointer_x,
+                    pointer_y: *pointer_y,
+                    move_window_id: *move_window_id,
+                    resize_window_id: *resize_window_id,
+                    move_visual: *move_visual,
+                    resize_visual: *resize_visual,
+                });
                 true
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
@@ -523,14 +541,14 @@ impl SharedShellSnapshotWriter {
                 payload.extend_from_slice(&bytes);
             }
         }
-        if let Some((pointer_x, pointer_y, move_window_id, resize_window_id)) =
-            self.state.interaction_state
-        {
+        if let Some(interaction) = self.state.interaction_state {
             payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
-                pointer_x,
-                pointer_y,
-                move_window_id,
-                resize_window_id,
+                interaction.pointer_x,
+                interaction.pointer_y,
+                interaction.move_window_id,
+                interaction.resize_window_id,
+                interaction.move_visual,
+                interaction.resize_visual,
             ));
         }
         if let Some(label) = &self.state.keyboard_layout {

@@ -37,6 +37,22 @@ type CompositorInteractionState = {
   pointer_y: number
   move_window_id: number | null
   resize_window_id: number | null
+  move_rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+    maximized: boolean
+    fullscreen: boolean
+  } | null
+  resize_rect: {
+    x: number
+    y: number
+    width: number
+    height: number
+    maximized: boolean
+    fullscreen: boolean
+  } | null
 } | null
 
 type CompositorRuntimeWireOp =
@@ -278,6 +294,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       pointer_y: d.pointer_y,
       move_window_id: coerceShellWindowId(d.move_window_id),
       resize_window_id: coerceShellWindowId(d.resize_window_id),
+      move_rect: d.move_rect,
+      resize_rect: d.resize_rect,
     })
   }
 

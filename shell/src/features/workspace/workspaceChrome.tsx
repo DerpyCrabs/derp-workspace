@@ -66,6 +66,14 @@ type WorkspaceChromeOptions = {
   shellPointerGlobalLogical: (clientX: number, clientY: number) => { x: number; y: number } | null
   rectFromWindow: (window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>) => SplitGroupRect
   renderShellWindowContent: (windowId: number) => JSX.Element | undefined
+  interactionFrameForWindow: (windowId: number) => {
+    x: number
+    y: number
+    width: number
+    height: number
+    maximized: boolean
+    fullscreen: boolean
+  } | null
   pointerClient: Accessor<{ x: number; y: number } | null>
   shellWindowDragId: Accessor<number | null>
   shellWindowDragMoved: Accessor<boolean>
@@ -578,7 +586,23 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const frameModel = createMemo((): ShellWindowModel | undefined => {
       const window = visibleWindow()
       if (!window) return undefined
+      const liveFrame = options.interactionFrameForWindow(window.window_id)
       const split = splitLayout()
+      if (!split && liveFrame) {
+        return {
+          ...window,
+          x: liveFrame.x,
+          y: liveFrame.y,
+          width: liveFrame.width,
+          height: liveFrame.height,
+          maximized: liveFrame.maximized,
+          fullscreen: liveFrame.fullscreen,
+          snap_tiled:
+            options.isWorkspaceWindowTiled(window.window_id) &&
+            !liveFrame.maximized &&
+            !liveFrame.fullscreen,
+        }
+      }
       if (!split) return { ...window, snap_tiled: options.isWorkspaceWindowTiled(window.window_id) }
       return {
         ...window,

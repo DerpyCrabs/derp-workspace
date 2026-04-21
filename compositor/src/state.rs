@@ -7082,6 +7082,18 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_interaction_state(&mut self) {
+        let interaction_visual = |window_id: Option<u32>| {
+            window_id
+                .and_then(|wid| self.window_registry.window_info(wid))
+                .map(|info| shell_wire::CompositorInteractionVisual {
+                    x: info.x,
+                    y: info.y,
+                    width: info.width.max(1),
+                    height: info.height.max(1),
+                    maximized: info.maximized,
+                    fullscreen: info.fullscreen,
+                })
+        };
         let pointer = self
             .seat
             .get_pointer()
@@ -7093,6 +7105,8 @@ impl CompositorState {
                 pointer_y: pointer.y,
                 move_window_id: self.shell_move_window_id.unwrap_or(0),
                 resize_window_id: self.shell_resize_window_id.unwrap_or(0),
+                move_visual: interaction_visual(self.shell_move_window_id),
+                resize_visual: interaction_visual(self.shell_resize_window_id),
             },
         );
     }

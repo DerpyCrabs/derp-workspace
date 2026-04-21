@@ -137,7 +137,7 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 2;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 3;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -1178,6 +1178,8 @@ pub enum DecodedCompositorToShellMessage {
         pointer_y: i32,
         move_window_id: u32,
         resize_window_id: u32,
+        move_visual: Option<CompositorInteractionVisual>,
+        resize_visual: Option<CompositorInteractionVisual>,
     },
     TrayHints {
         slot_count: u32,
@@ -1190,6 +1192,16 @@ pub enum DecodedCompositorToShellMessage {
     TraySniMenu {
         menu: TraySniMenuWire,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompositorInteractionVisual {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1293,15 +1305,43 @@ pub fn encode_compositor_interaction_state(
     pointer_y: i32,
     move_window_id: u32,
     resize_window_id: u32,
+    move_visual: Option<CompositorInteractionVisual>,
+    resize_visual: Option<CompositorInteractionVisual>,
 ) -> Vec<u8> {
-    let body_len = 20u32;
+    let body_len = 60u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
+    let encode_visual =
+        |out: &mut Vec<u8>, visual: Option<CompositorInteractionVisual>| match visual {
+            Some(visual) => {
+                let mut flags = 0u32;
+                if visual.maximized {
+                    flags |= 1;
+                }
+                if visual.fullscreen {
+                    flags |= 2;
+                }
+                out.extend_from_slice(&visual.x.to_le_bytes());
+                out.extend_from_slice(&visual.y.to_le_bytes());
+                out.extend_from_slice(&visual.width.to_le_bytes());
+                out.extend_from_slice(&visual.height.to_le_bytes());
+                out.extend_from_slice(&flags.to_le_bytes());
+            }
+            None => {
+                out.extend_from_slice(&0i32.to_le_bytes());
+                out.extend_from_slice(&0i32.to_le_bytes());
+                out.extend_from_slice(&0i32.to_le_bytes());
+                out.extend_from_slice(&0i32.to_le_bytes());
+                out.extend_from_slice(&0u32.to_le_bytes());
+            }
+        };
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_INTERACTION_STATE.to_le_bytes());
     v.extend_from_slice(&pointer_x.to_le_bytes());
     v.extend_from_slice(&pointer_y.to_le_bytes());
     v.extend_from_slice(&move_window_id.to_le_bytes());
     v.extend_from_slice(&resize_window_id.to_le_bytes());
+    encode_visual(&mut v, move_visual);
+    encode_visual(&mut v, resize_visual);
     v
 }
 
@@ -2069,9 +2109,24 @@ fn decode_compositor_to_shell_body(
             Ok(DecodedCompositorToShellMessage::ShellHostedAppState { state_json })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
-            if body.len() != 20 {
+            if body.len() != 60 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
+            let decode_visual = |window_id: u32,
+                                 base: usize|
+             -> Option<CompositorInteractionVisual> {
+                (window_id != 0).then(|| {
+                    let flags = u32::from_le_bytes(body[base + 16..base + 20].try_into().unwrap());
+                    CompositorInteractionVisual {
+                        x: i32::from_le_bytes(body[base..base + 4].try_into().unwrap()),
+                        y: i32::from_le_bytes(body[base + 4..base + 8].try_into().unwrap()),
+                        width: i32::from_le_bytes(body[base + 8..base + 12].try_into().unwrap()),
+                        height: i32::from_le_bytes(body[base + 12..base + 16].try_into().unwrap()),
+                        maximized: (flags & 1) != 0,
+                        fullscreen: (flags & 2) != 0,
+                    }
+                })
+            };
             let pointer_x = i32::from_le_bytes(body[4..8].try_into().unwrap());
             let pointer_y = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let move_window_id = u32::from_le_bytes(body[12..16].try_into().unwrap());
@@ -2081,6 +2136,8 @@ fn decode_compositor_to_shell_body(
                 pointer_y,
                 move_window_id,
                 resize_window_id,
+                move_visual: decode_visual(move_window_id, 20),
+                resize_visual: decode_visual(resize_window_id, 40),
             })
         }
         MSG_COMPOSITOR_TRAY_HINTS => {

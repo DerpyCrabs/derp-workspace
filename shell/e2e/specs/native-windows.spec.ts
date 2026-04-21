@@ -94,6 +94,16 @@ function nativeDecorTopRect(
   )
 }
 
+function nativeFrameTopLeftFromVisual(visual: {
+  x: number
+  y: number
+}) {
+  return {
+    x: visual.x - NATIVE_BORDER_PX,
+    y: visual.y - NATIVE_TITLEBAR_PX,
+  }
+}
+
 function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
   const tracked = new Set(windowIds)
   return shellWindowStack(shell).filter((windowId) => tracked.has(windowId))
@@ -664,6 +674,78 @@ export default defineGroup(import.meta.url, ({ test }) => {
       movedWindow: duringDrag.movedWindow,
       decorTop: duringDrag.decorTop,
       compositorDuringDrag: duringDrag.compositor,
+    })
+  })
+
+  test('native shell titlebar tracks compositor move visual during active drag', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Native Drag Visual ${stamp}`,
+      token: `native-drag-visual-${stamp}`,
+      strip: 'green',
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const shellReady = await waitFor(
+      'wait for native drag visual titlebar',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const controls = windowControls(shell, windowId)
+        return controls?.titlebar ? controls.titlebar : null
+      },
+      5000,
+      100,
+    )
+    const titlebar = assertRectMinSize('native drag visual titlebar', shellReady, 80, 16)
+    const startX = Math.round(titlebar.global_x + Math.min(140, Math.max(40, titlebar.width * 0.35)))
+    const startY = Math.round(titlebar.global_y + titlebar.height / 2)
+
+    await movePoint(base, startX, startY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    const dx = 260
+    const dy = 92
+    const steps = 30
+    for (let index = 1; index <= steps; index += 1) {
+      const t = index / steps
+      await postJson(base, '/test/input/pointer_move', {
+        x: startX + dx * t,
+        y: startY + dy * t,
+      })
+    }
+
+    const duringDrag = await waitFor(
+      'wait for native titlebar to track compositor move visual',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (compositor.shell_move_window_id !== windowId || !compositor.shell_move_visual) return null
+        const controls = windowControls(shell, windowId)
+        const liveTitlebar = controls?.titlebar
+        if (!liveTitlebar) return null
+        const expected = nativeFrameTopLeftFromVisual(compositor.shell_move_visual)
+        if (Math.abs(liveTitlebar.global_x - expected.x) > 8) return null
+        if (Math.abs(liveTitlebar.global_y - expected.y) > 8) return null
+        return {
+          compositor,
+          shell,
+          expected,
+          titlebar: liveTitlebar,
+        }
+      },
+      1000,
+      20,
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+    await syncTest(base)
+
+    await writeJsonArtifact('native-drag-titlebar-live.json', {
+      windowId,
+      titlebar: duringDrag.titlebar,
+      expected: duringDrag.expected,
+      compositorDuringDrag: duringDrag.compositor,
+      shellDuringDrag: duringDrag.shell,
     })
   })
 

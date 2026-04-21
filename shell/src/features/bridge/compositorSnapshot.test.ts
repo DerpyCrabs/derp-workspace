@@ -76,7 +76,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(2),
+      ...u32(3),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -133,11 +133,21 @@ describe('decodeCompositorSnapshot', () => {
       ...i32(220),
       ...u32(9),
       ...u32(0),
+      ...i32(320),
+      ...i32(480),
+      ...i32(900),
+      ...i32(640),
+      ...u32(1),
+      ...i32(0),
+      ...i32(0),
+      ...i32(0),
+      ...i32(0),
+      ...u32(0),
     ])
     const payload = [...interactionState]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(2),
+      ...u32(3),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -154,6 +164,15 @@ describe('decodeCompositorSnapshot', () => {
           pointer_y: 220,
           move_window_id: 9,
           resize_window_id: null,
+          move_rect: {
+            x: 320,
+            y: 480,
+            width: 900,
+            height: 640,
+            maximized: true,
+            fullscreen: false,
+          },
+          resize_rect: null,
         },
       ],
     })

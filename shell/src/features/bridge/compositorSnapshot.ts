@@ -14,7 +14,7 @@ const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE = 59
 const MSG_COMPOSITOR_INTERACTION_STATE = 60
 
 const SNAPSHOT_MAGIC = 0x44525053
-const SNAPSHOT_ABI = 2
+const SNAPSHOT_ABI = 3
 const SNAPSHOT_HEADER_BYTES = 32
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
@@ -285,7 +285,19 @@ function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: nu
 }
 
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 20 !== view.byteLength) return null
+  if (offset + 60 !== view.byteLength) return null
+  const decodeVisual = (windowId: number, base: number) => {
+    if (windowId <= 0) return null
+    const flags = view.getUint32(base + 16, true)
+    return {
+      x: view.getInt32(base, true),
+      y: view.getInt32(base + 4, true),
+      width: view.getInt32(base + 8, true),
+      height: view.getInt32(base + 12, true),
+      maximized: (flags & 1) !== 0,
+      fullscreen: (flags & 2) !== 0,
+    }
+  }
   const moveWindowId = view.getUint32(offset + 12, true)
   const resizeWindowId = view.getUint32(offset + 16, true)
   return {
@@ -294,6 +306,8 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
     pointer_y: view.getInt32(offset + 8, true),
     move_window_id: moveWindowId > 0 ? moveWindowId : null,
     resize_window_id: resizeWindowId > 0 ? resizeWindowId : null,
+    move_rect: decodeVisual(moveWindowId, offset + 20),
+    resize_rect: decodeVisual(resizeWindowId, offset + 40),
   }
 }
 

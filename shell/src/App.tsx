@@ -268,6 +268,22 @@ function App() {
     pointer_y: number
     move_window_id: number | null
     resize_window_id: number | null
+    move_rect: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized: boolean
+      fullscreen: boolean
+    } | null
+    resize_rect: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized: boolean
+      fullscreen: boolean
+    } | null
   } | null>(null)
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
@@ -512,6 +528,14 @@ function App() {
       x: Math.round(point.x),
       y: Math.round(point.y),
     }
+  }
+
+  function compositorInteractionFrameForWindow(windowId: number) {
+    const state = compositorInteractionState()
+    if (!state) return null
+    if (state.move_window_id === windowId && state.move_rect) return state.move_rect
+    if (state.resize_window_id === windowId && state.resize_rect) return state.resize_rect
+    return null
   }
 
   function syncPointerSignalsFromClient(point: { x: number; y: number }) {
@@ -1194,6 +1218,7 @@ function App() {
     shellPointerGlobalLogical,
     rectFromWindow,
     renderShellWindowContent,
+    interactionFrameForWindow: compositorInteractionFrameForWindow,
     pointerClient,
     shellWindowDragId: shellWindowGestureRuntime.dragWindowId,
     shellWindowDragMoved: shellWindowGestureRuntime.dragWindowMoved,

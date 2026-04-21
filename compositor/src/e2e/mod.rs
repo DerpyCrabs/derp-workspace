@@ -177,6 +177,16 @@ struct E2eOutputWindowStackSnapshot {
 }
 
 #[derive(Serialize)]
+struct E2eInteractionVisualSnapshot {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    maximized: bool,
+    fullscreen: bool,
+}
+
+#[derive(Serialize)]
 struct E2eCompositorSnapshot {
     captured_at_ms: u128,
     pointer: E2ePointSnapshot,
@@ -192,6 +202,8 @@ struct E2eCompositorSnapshot {
     shell_pointer_grab_window_id: Option<u32>,
     shell_move_window_id: Option<u32>,
     shell_resize_window_id: Option<u32>,
+    shell_move_visual: Option<E2eInteractionVisualSnapshot>,
+    shell_resize_visual: Option<E2eInteractionVisualSnapshot>,
     shell_canvas_origin_x: i32,
     shell_canvas_origin_y: i32,
     shell_canvas_width: u32,
@@ -217,6 +229,21 @@ struct E2eFloatingLayerSnapshot {
 }
 
 impl CompositorState {
+    fn e2e_interaction_visual_snapshot(
+        &self,
+        window_id: Option<u32>,
+    ) -> Option<E2eInteractionVisualSnapshot> {
+        let info = self.window_registry.window_info(window_id?)?;
+        Some(E2eInteractionVisualSnapshot {
+            x: info.x,
+            y: info.y,
+            width: info.width.max(1),
+            height: info.height.max(1),
+            maximized: info.maximized,
+            fullscreen: info.fullscreen,
+        })
+    }
+
     fn e2e_rect_snapshot<N>(rect: Rectangle<i32, N>) -> E2eRectSnapshot {
         E2eRectSnapshot {
             x: rect.loc.x,
@@ -682,6 +709,8 @@ impl CompositorState {
             shell_pointer_grab_window_id: self.shell_ui_pointer_grab,
             shell_move_window_id: self.shell_move_window_id,
             shell_resize_window_id: self.shell_resize_window_id,
+            shell_move_visual: self.e2e_interaction_visual_snapshot(self.shell_move_window_id),
+            shell_resize_visual: self.e2e_interaction_visual_snapshot(self.shell_resize_window_id),
             shell_canvas_origin_x: self.shell_canvas_logical_origin.0,
             shell_canvas_origin_y: self.shell_canvas_logical_origin.1,
             shell_canvas_width: self.shell_canvas_logical_size.0,
