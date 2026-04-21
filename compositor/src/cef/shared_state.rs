@@ -146,6 +146,7 @@ fn reader_cache() -> &'static Mutex<HashMap<PathBuf, File>> {
 }
 
 pub fn path_for_kind(runtime_dir: PathBuf, kind: u32) -> PathBuf {
+    super::cleanup_shell_runtime_files(&runtime_dir);
     let name = match kind {
         SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => "derp-shell-exclusion-zones-state",
         SHELL_SHARED_STATE_KIND_UI_WINDOWS => "derp-shell-ui-windows-state",

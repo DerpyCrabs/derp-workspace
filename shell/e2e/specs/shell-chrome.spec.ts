@@ -93,6 +93,26 @@ async function waitForPointerIdle(base: string) {
   )
 }
 
+async function waitForSettingsTilingLayoutTriggerReady(base: string) {
+  let lastRectKey = ''
+  return waitFor(
+    'wait for tiling layout trigger ready',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const rect = shell.controls?.settings_tiling_layout_trigger
+      if (!rect) return null
+      const nextKey = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+      if (nextKey !== lastRectKey) {
+        lastRectKey = nextKey
+        return null
+      }
+      return shell
+    },
+    5000,
+    100,
+  )
+}
+
 async function pressSuperEnter(base: string) {
   await keyAction(base, 125, 'press')
   await keyAction(base, KEY.enter, 'press')
@@ -336,7 +356,67 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'keyboard',
       'Apply keyboard settings',
     )
-    await switchSettingsPage(base, 'settings_tab_tiling', 'tiling', 'data-settings-active-page="tiling"')
+    await waitFor(
+      'wait for settings tiling page',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        if (html.includes('Per-monitor layout')) return html
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const rect = shell.controls?.settings_tab_tiling
+        if (rect) await clickRect(base, rect)
+        return null
+      },
+      5000,
+      100,
+    )
+    const tilingPageReady = await waitForSettingsTilingLayoutTriggerReady(base)
+    assert(tilingPageReady.controls?.settings_tiling_layout_trigger, 'missing tiling layout trigger')
+    await clickRect(base, tilingPageReady.controls.settings_tiling_layout_trigger)
+    const tilingLayoutOpen = await waitFor(
+      'wait for tiling layout menu open',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.controls?.settings_tiling_layout_option_grid ? shell : null
+      },
+      5000,
+      100,
+    )
+    assert(tilingLayoutOpen.controls?.settings_tiling_layout_option_grid, 'missing tiling layout grid option')
+    await clickRect(base, tilingLayoutOpen.controls.settings_tiling_layout_option_grid)
+    const tilingGridHtml = await waitFor(
+      'wait for tiling layout set to grid',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        return html.includes('grid') ? html : null
+      },
+      5000,
+      100,
+    )
+    const tilingGridShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(
+      !tilingGridShell.controls?.settings_tiling_layout_option_grid,
+      'tiling layout menu should close after selecting grid',
+    )
+    await clickRect(base, tilingGridShell.controls!.settings_tiling_layout_trigger!)
+    const tilingManualOpen = await waitFor(
+      'wait for tiling layout manual snap option',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.controls?.settings_tiling_layout_option_manual_snap ? shell : null
+      },
+      5000,
+      100,
+    )
+    await clickRect(base, tilingManualOpen.controls!.settings_tiling_layout_option_manual_snap!)
+    await waitFor(
+      'wait for tiling layout restored to manual snap',
+      async () => {
+        const html = await getShellHtml(base, '[data-settings-tiling-page]')
+        return html.includes('manual-snap') ? html : null
+      },
+      5000,
+      100,
+    )
     const defaultAppsHtml = await switchSettingsPage(
       base,
       'settings_tab_default_applications',
@@ -357,6 +437,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeTextArtifact('settings-root.html', settingsHtml)
     await writeTextArtifact('settings-user-page.html', userHtml)
     await writeTextArtifact('settings-keyboard-page.html', keyboardHtml)
+    await writeTextArtifact('settings-tiling-grid-page.html', tilingGridHtml)
     await writeTextArtifact('settings-default-applications-page.html', defaultAppsHtml)
     await writeJsonArtifact('settings-keyboard.json', keyboardSettings)
     await writeJsonArtifact('settings-user.json', userSettings)

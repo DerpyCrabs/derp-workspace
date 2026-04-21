@@ -24,6 +24,8 @@ pub use runner::{maybe_run_cef_subprocess_only, spawn_cef_ui_thread};
 pub use shell_uplink::DerpRenderProcessHandler;
 
 use std::path::PathBuf;
+use std::path::Path;
+use std::sync::OnceLock;
 
 pub fn cef_userfree_string_to_string(s: &cef::CefStringUserfreeUtf16) -> String {
     cef::CefStringUtf8::from(&cef::CefStringUtf16::from(s)).to_string()
@@ -34,6 +36,30 @@ pub fn runtime_dir() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+pub fn cleanup_shell_runtime_files(runtime_dir: &Path) {
+    static CLEANED: OnceLock<()> = OnceLock::new();
+    if CLEANED.get().is_some() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let matches = name.ends_with(".bin")
+                && (name.starts_with("derp-shell-snapshot-")
+                    || name.starts_with("derp-shell-exclusion-zones-state-")
+                    || name.starts_with("derp-shell-ui-windows-state-")
+                    || name.starts_with("derp-shell-floating-layers-state-"));
+            if matches {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let _ = CLEANED.set(());
 }
 
 pub fn cef_user_data_dir() -> PathBuf {

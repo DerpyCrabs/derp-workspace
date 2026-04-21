@@ -37,7 +37,7 @@ import {
   TILED_RESIZE_MIN_W,
 } from '@/features/tiling/tileState'
 import { snapZoneToBoundsWithOccupied, type Rect as TileRect, type SnapZone } from '@/features/tiling/tileZones'
-import { getMonitorLayout } from '@/features/tiling/tilingConfig'
+import { getMonitorLayout, setMonitorEdgeLayout } from '@/features/tiling/tilingConfig'
 import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
 import {
@@ -132,6 +132,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   let activeSnapZone: SnapZone | null = null
   let activeSnapScreen: LayoutScreen | null = null
   let activeSnapWindowId: number | null = null
+  let activeSnapShape: AssistGridShape | null = null
   let tilePreviewRaf = 0
   let lastTilePreviewKey = ''
   let shellWindowDrag: { windowId: number; lastX: number; lastY: number } | null = null
@@ -155,6 +156,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapZone = null
     activeSnapScreen = null
     activeSnapWindowId = null
+    activeSnapShape = null
   }
 
   function clearTilePreviewWire() {
@@ -192,7 +194,8 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       (preferredMonitorName ? screens.find((entry) => entry.name === preferredMonitorName) : undefined) ??
       pickScreenForWindow(window, screens, origin) ??
       screens[0]
-    if (!screen || getMonitorLayout(screen.name).layout.type !== 'manual-snap') return null
+    const monitorLayout = screen ? getMonitorLayout(screen.name) : null
+    if (!screen || !monitorLayout || monitorLayout.layout.type !== 'manual-snap') return null
     const reserveTaskbar = options.reserveTaskbarForMon(screen)
     const workGlobal = monitorWorkAreaGlobal(screen, reserveTaskbar)
     return {
@@ -200,7 +203,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       screen,
       workGlobal,
       workCanvas: rectGlobalToCanvasLocal(workGlobal.x, workGlobal.y, workGlobal.w, workGlobal.h, origin),
-      shape,
+      shape: shape === DEFAULT_ASSIST_GRID_SHAPE ? monitorLayout.edgeLayout : shape,
     }
   }
 
@@ -213,6 +216,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapZone = zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
+    activeSnapShape = context.shape
     const o = shellOuterFrameFromClient({
       x: previewRect.x,
       y: previewRect.y,
@@ -234,6 +238,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     }
     const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, context.workGlobal)
     applySnapAssistZonePreview(context, zone, previewRect)
+    activeSnapShape = shape
     setAssistOverlay({
       shape,
       gutterPx: assistGridGutterPx(context.workGlobal, shape),
@@ -268,6 +273,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const snapWindowId = activeSnapWindowId ?? windowId
     const droppedZone = activeSnapZone
     const snapScreen = activeSnapScreen
+    const droppedShape = activeSnapShape
     resetSnapAssistState()
     setAssistOverlay(null)
     if (closePicker) setSnapAssistPicker(null)
@@ -294,6 +300,9 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
     const occupied = options.occupiedSnapZonesOnMonitor(snapScreen, snapWindowId)
     const globalBounds = snapZoneToBoundsWithOccupied(droppedZone, workRect, occupied)
+    if (droppedShape) {
+      setMonitorEdgeLayout(snapScreen.name, droppedShape)
+    }
     if (
       preTile
         ? !options.sendSetPreTileGeometry(snapWindowId, preTile)
@@ -556,8 +565,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       updateSnapAssistFromSpan(context, span)
       return
     }
-
-    const zone = hitTestSnapZoneGlobal(global.x, global.y, work)
+    const zone = hitTestSnapZoneGlobal(global.x, global.y, work, context.shape)
     updateSnapAssistFromEdgeZone(context, zone)
   }
 

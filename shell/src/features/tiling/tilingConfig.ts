@@ -1,8 +1,13 @@
+import {
+  DEFAULT_ASSIST_GRID_SHAPE,
+  type AssistGridShape,
+} from './assistGrid'
 import { createLayout, type LayoutParams, type LayoutType, type TilingLayout } from './layouts'
 
 export type MonitorTilingEntry = {
   layout: LayoutType
   params?: LayoutParams
+  edgeLayout?: AssistGridShape
 }
 
 export type TilingConfig = {
@@ -13,6 +18,10 @@ const STORAGE_KEY = 'derp-tiling-config'
 
 function defaultConfig(): TilingConfig {
   return { monitors: {} }
+}
+
+function isAssistGridShape(v: unknown): v is AssistGridShape {
+  return v === '2x2' || v === '3x2' || v === '2x3' || v === '3x3'
 }
 
 function isLayoutType(v: unknown): v is LayoutType {
@@ -50,6 +59,9 @@ function parseConfig(raw: string | null): TilingConfig {
         }
         if (Object.keys(lp).length > 0) cleaned.params = lp
       }
+      if (isAssistGridShape((el as { edgeLayout?: unknown }).edgeLayout)) {
+        cleaned.edgeLayout = (el as { edgeLayout: AssistGridShape }).edgeLayout
+      }
       out.monitors[k] = cleaned
     }
     return out
@@ -73,12 +85,17 @@ export function saveTilingConfig(cfg: TilingConfig): void {
 export function getMonitorLayout(outputName: string): {
   layout: TilingLayout
   params: LayoutParams
+  edgeLayout: AssistGridShape
 } {
   const cfg = loadTilingConfig()
   const entry = cfg.monitors[outputName]
   const layoutType: LayoutType = entry?.layout ?? 'manual-snap'
   const params: LayoutParams = entry?.params ?? {}
-  return { layout: createLayout(layoutType), params }
+  return {
+    layout: createLayout(layoutType),
+    params,
+    edgeLayout: entry?.edgeLayout ?? DEFAULT_ASSIST_GRID_SHAPE,
+  }
 }
 
 export function setMonitorLayout(
@@ -92,6 +109,23 @@ export function setMonitorLayout(
   const next: MonitorTilingEntry = { layout: layoutType }
   if (Object.keys(nextParams).length > 0) {
     next.params = nextParams
+  }
+  if (prev?.edgeLayout) {
+    next.edgeLayout = prev.edgeLayout
+  }
+  cfg.monitors[outputName] = next
+  saveTilingConfig(cfg)
+}
+
+export function setMonitorEdgeLayout(outputName: string, edgeLayout: AssistGridShape): void {
+  const cfg = loadTilingConfig()
+  const prev = cfg.monitors[outputName]
+  const next: MonitorTilingEntry = {
+    layout: prev?.layout ?? 'manual-snap',
+    edgeLayout,
+  }
+  if (prev?.params && Object.keys(prev.params).length > 0) {
+    next.params = prev.params
   }
   cfg.monitors[outputName] = next
   saveTilingConfig(cfg)

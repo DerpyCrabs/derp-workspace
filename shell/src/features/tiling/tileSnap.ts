@@ -1,4 +1,5 @@
 import { CHROME_TASKBAR_RESERVE_PX, CHROME_TITLEBAR_PX } from '@/lib/chromeConstants'
+import { snapZoneFromEdgePointer, type AssistGridShape } from './assistGrid'
 import type { SnapZone } from './tileZones'
 
 export type LayoutScreen = {
@@ -29,6 +30,7 @@ export function hitTestSnapZoneGlobal(
   px: number,
   py: number,
   work: { x: number; y: number; w: number; h: number },
+  shape: AssistGridShape = '2x2',
   edgePx: number = TILE_SNAP_EDGE_PX,
   titlebarProbePx: number = CHROME_TITLEBAR_PX,
 ): SnapZone | null {
@@ -42,11 +44,8 @@ export function hitTestSnapZoneGlobal(
   const nearL = dl <= edgePx
   const nearR = dr <= edgePx
   const nearB = db <= edgePx
-  if (nearL && nearT) return 'top-left'
-  if (nearR && nearT) return 'top-right'
-  if (nearL && nearB) return 'bottom-left'
-  if (nearR && nearB) return 'bottom-right'
-  if (nearL) return 'left-half'
-  if (nearR) return 'right-half'
+  if (nearL || nearR || nearT || nearB) {
+    return snapZoneFromEdgePointer(px, py, shape, work, nearL, nearR, nearT, nearB)
+  }
   return null
 }

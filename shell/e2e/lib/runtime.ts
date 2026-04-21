@@ -238,6 +238,9 @@ export interface ShellControls {
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
   settings_tab_keyboard?: Rect | null
+  settings_tiling_layout_trigger?: Rect | null
+  settings_tiling_layout_option_grid?: Rect | null
+  settings_tiling_layout_option_manual_snap?: Rect | null
   settings_session_autosave_enable?: Rect | null
   settings_session_autosave_disable?: Rect | null
   power_menu_save_session?: Rect | null
@@ -250,6 +253,7 @@ export interface ShellControls {
   snap_strip_trigger?: Rect | null
   snap_picker_root?: Rect | null
   snap_picker_first_cell?: Rect | null
+  snap_picker_2x2_top_right_cell?: Rect | null
   snap_picker_top_center_cell?: Rect | null
   snap_picker_hgutter_col0?: Rect | null
   snap_picker_right_two_thirds?: Rect | null

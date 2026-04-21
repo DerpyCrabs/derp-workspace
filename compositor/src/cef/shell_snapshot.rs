@@ -219,6 +219,7 @@ impl SharedShellSnapshotWriter {
     }
 
     pub fn new(runtime_dir: PathBuf) -> Result<Self, String> {
+        super::cleanup_shell_runtime_files(&runtime_dir);
         let path = runtime_dir.join(format!("derp-shell-snapshot-{}.bin", std::process::id()));
         let mut mmap = SharedMmapFile::create(&path, SNAPSHOT_CAPACITY_BYTES)?;
         mmap.as_slice_mut().fill(0);

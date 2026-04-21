@@ -1,4 +1,5 @@
 import {
+  BTN_LEFT,
   BTN_RIGHT,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -65,6 +66,27 @@ function assertTopThirdWindow(
   assert(Math.abs(window.width - thirdWidth) <= 36, `expected ${column} third width near ${thirdWidth}, got ${window.width}`)
   assert(window.y >= output.y && window.y <= output.y + 80, `expected top-row y near ${output.y}, got ${window.y}`)
   assert(Math.abs(window.height - expectedHeight) <= 36, `expected top-row height near ${expectedHeight}, got ${window.height}`)
+}
+
+function assertTopRightQuarterWindow(
+  window: WindowSnapshot,
+  outputName: string,
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+) {
+  const output = compositor.outputs.find((entry) => entry.name === outputName) ?? null
+  const taskbar = taskbarForMonitor(shell, outputName)
+  assert(output, `missing output ${outputName}`)
+  assert(taskbar?.rect, `missing taskbar for ${outputName}`)
+  const workTop = output.y + TITLEBAR_PX
+  const workBottom = taskbar.rect.global_y
+  const halfWidth = Math.floor(output.width / 2)
+  const halfHeight = Math.floor((workBottom - workTop) / 2)
+  const expectedX = output.x + halfWidth
+  assert(Math.abs(window.x - expectedX) <= 28, `expected top-right quarter x near ${expectedX}, got ${window.x}`)
+  assert(Math.abs(window.width - (output.width - halfWidth)) <= 36, `expected top-right quarter width near ${output.width - halfWidth}, got ${window.width}`)
+  assert(Math.abs(window.y - workTop) <= 28, `expected top-right quarter y near ${workTop}, got ${window.y}`)
+  assert(Math.abs(window.height - halfHeight) <= 36, `expected top-right quarter height near ${halfHeight}, got ${window.height}`)
 }
 
 function assertTopTwoThirdsThirdWindow(
@@ -480,6 +502,130 @@ export default defineGroup(import.meta.url, ({ test }) => {
       125,
     )
     await writeJsonArtifact('snap-assist-picker-settings-right-two-thirds.json', snapped)
+  })
+
+  test('picker-selected layout changes top-right edge tiling per monitor', async ({ base }) => {
+    await openSettings(base, 'click')
+    await focusSettingsWindow(base)
+
+    const picker2x2 = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const topRight2x2 = assertRectMinSize(
+      '2x2 top-right cell',
+      picker2x2.controls?.snap_picker_2x2_top_right_cell,
+      12,
+    )
+    const topRight2x2Center = rectGlobalCenter(topRight2x2)
+    await clickPoint(base, topRight2x2Center.x, topRight2x2Center.y)
+    await waitFor(
+      'wait for settings 2x2 picker snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (!window) return null
+        try {
+          assertTopRightQuarterWindow(window, window.output_name, compositor, shell)
+        } catch {
+          return null
+        }
+        return { compositor, shell, window }
+      },
+      2000,
+      125,
+    )
+
+    let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    let controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const titlebar2x2 = assertRectMinSize('settings titlebar after 2x2 snap', controls?.titlebar, 12)
+    const titlebar2x2Center = rectGlobalCenter(titlebar2x2)
+    const window2x2 = compositorWindowById((await getJson<CompositorSnapshot>(base, '/test/state/compositor')), SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(window2x2, 'missing settings compositor window after 2x2 snap')
+    const output2x2 = (await getJson<CompositorSnapshot>(base, '/test/state/compositor')).outputs.find((entry) => entry.name === window2x2.output_name) ?? null
+    assert(output2x2, `missing output ${window2x2.output_name}`)
+    await movePoint(base, titlebar2x2Center.x, titlebar2x2Center.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      await movePoint(base, output2x2.x + output2x2.width - 8, output2x2.y + TITLEBAR_PX + 8)
+      await pointerButton(base, BTN_LEFT, 'release')
+      const snapped2x2 = await waitFor(
+        'wait for 2x2 top-right edge snap',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+          if (!window) return null
+          try {
+            assertTopRightQuarterWindow(window, window.output_name, compositor, shell)
+          } catch {
+            return null
+          }
+          return { compositor, shell, window }
+        },
+        2000,
+        125,
+      )
+      await writeJsonArtifact('snap-assist-edge-layout-2x2.json', snapped2x2)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
+
+    const picker3x2 = await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const topCenter3x2 = assertRectMinSize(
+      '3x2 top-center cell',
+      picker3x2.controls?.snap_picker_top_center_cell,
+      12,
+    )
+    const topCenter3x2Center = rectGlobalCenter(topCenter3x2)
+    await clickPoint(base, topCenter3x2Center.x, topCenter3x2Center.y)
+    await waitFor(
+      'wait for settings 3x2 picker snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (!window) return null
+        try {
+          assertTopThirdWindow(window, window.output_name, compositor, shell, 'center')
+        } catch {
+          return null
+        }
+        return { compositor, shell, window }
+      },
+      2000,
+      125,
+    )
+
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const titlebar3x2 = assertRectMinSize('settings titlebar after 3x2 snap', controls?.titlebar, 12)
+    const titlebar3x2Center = rectGlobalCenter(titlebar3x2)
+    const compositor3x2 = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    const window3x2 = compositorWindowById(compositor3x2, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(window3x2, 'missing settings compositor window after 3x2 snap')
+    const output3x2 = compositor3x2.outputs.find((entry) => entry.name === window3x2.output_name) ?? null
+    assert(output3x2, `missing output ${window3x2.output_name}`)
+    await movePoint(base, titlebar3x2Center.x, titlebar3x2Center.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      await movePoint(base, output3x2.x + output3x2.width - 8, output3x2.y + TITLEBAR_PX + 8)
+      await pointerButton(base, BTN_LEFT, 'release')
+      const snapped3x2 = await waitFor(
+        'wait for 3x2 top-right edge snap',
+        async () => {
+          const { compositor, shell } = await getSnapshots(base)
+          const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+          if (!window) return null
+          try {
+            assertTopThirdWindow(window, window.output_name, compositor, shell, 'right')
+          } catch {
+            return null
+          }
+          return { compositor, shell, window }
+        },
+        2000,
+        125,
+      )
+      await writeJsonArtifact('snap-assist-edge-layout-3x2.json', snapped3x2)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
   })
 
   test('picker stays monitor-local for native and shell windows on multi-monitor setups', async ({ base, state }) => {

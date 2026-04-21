@@ -251,3 +251,84 @@ export function snapZoneAndPreviewFromAssistSpan(
   }
   return { zone: bestSnapZoneForRect(workRect, previewRect), previewRect }
 }
+
+function clampIndex(value: number, count: number): number {
+  return Math.max(0, Math.min(count - 1, value))
+}
+
+function columnFromPoint(px: number, work: { x: number; w: number }, cols: number): number {
+  const ratio = (px - work.x) / Math.max(1, work.w)
+  return clampIndex(Math.floor(ratio * cols), cols)
+}
+
+export function snapZoneFromEdgePointer(
+  px: number,
+  _py: number,
+  shape: AssistGridShape,
+  work: { x: number; y: number; w: number; h: number },
+  nearLeft: boolean,
+  nearRight: boolean,
+  nearTop: boolean,
+  nearBottom: boolean,
+): SnapZone {
+  const { cols, rows } = assistShapeToDims(shape)
+  if (nearTop) {
+    const col = columnFromPoint(px, work, cols)
+    return snapZoneAndPreviewFromAssistSpan(
+      {
+        gridCols: cols,
+        gridRows: rows,
+        gc0: col,
+        gc1: col,
+        gr0: 0,
+        gr1: 0,
+      },
+      shape,
+      work,
+    ).zone
+  }
+  if (nearBottom) {
+    const col = columnFromPoint(px, work, cols)
+    return snapZoneAndPreviewFromAssistSpan(
+      {
+        gridCols: cols,
+        gridRows: rows,
+        gc0: col,
+        gc1: col,
+        gr0: rows - 1,
+        gr1: rows - 1,
+      },
+      shape,
+      work,
+    ).zone
+  }
+  if (nearLeft) {
+    return snapZoneAndPreviewFromAssistSpan(
+      {
+        gridCols: cols,
+        gridRows: rows,
+        gc0: 0,
+        gc1: 0,
+        gr0: 0,
+        gr1: rows - 1,
+      },
+      shape,
+      work,
+    ).zone
+  }
+  if (nearRight) {
+    return snapZoneAndPreviewFromAssistSpan(
+      {
+        gridCols: cols,
+        gridRows: rows,
+        gc0: cols - 1,
+        gc1: cols - 1,
+        gr0: 0,
+        gr1: rows - 1,
+      },
+      shape,
+      work,
+    ).zone
+  }
+  return 'center-third'
+}

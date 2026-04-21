@@ -267,6 +267,7 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
 
 export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const cache = createQueryCache(args.document)
+  const settingsTilingLayoutTriggerRect = queryRect(cache, '[data-settings-tiling-layout-trigger]', args.origin)
 
   const projectFloatingElementRect = (selector: string) => {
     const el = cache.query(selector)
@@ -653,6 +654,17 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_tiling: queryRect(cache, '[data-settings-tab="tiling"]', args.origin),
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
       settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
+      settings_tiling_layout_trigger: settingsTilingLayoutTriggerRect,
+      settings_tiling_layout_option_grid: queryRect(
+        cache,
+        '[data-settings-tiling-layout-option="grid"]',
+        args.origin,
+      ),
+      settings_tiling_layout_option_manual_snap: queryRect(
+        cache,
+        '[data-settings-tiling-layout-option="manual-snap"]',
+        args.origin,
+      ),
       settings_default_app_image: queryRect(cache, '[data-default-app-select="image"]', args.origin),
       settings_session_autosave_enable: queryRect(cache, '[data-settings-session-autosave-enable]', args.origin),
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
@@ -668,6 +680,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       snap_picker_first_cell: queryLargestRect(
         cache,
         '[data-shell-snap-picker] [data-assist-mini-grid="3x2"] [data-testid="snap-assist-master-cell"]',
+        args.origin,
+      ),
+      snap_picker_2x2_top_right_cell: queryLargestRect(
+        cache,
+        '[data-shell-snap-picker] [data-assist-mini-grid="2x2"] [data-assist-grid-span][data-grid-cols="2"][data-gc0="1"][data-gc1="1"][data-gr0="0"][data-gr1="0"]',
         args.origin,
       ),
       snap_picker_top_center_cell: queryLargestRect(

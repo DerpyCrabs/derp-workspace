@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { saveTilingConfig, setMonitorLayout } from './tilingConfig'
+import { getMonitorLayout, saveTilingConfig, setMonitorEdgeLayout, setMonitorLayout } from './tilingConfig'
 
 function stubLocalStorage() {
   const store = new Map<string, string>()
@@ -38,5 +38,23 @@ describe('tilingConfig', () => {
     setMonitorLayout('DP-1', 'columns', { maxColumns: 2 })
 
     expect(localStorage.setItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves edge layout when changing monitor layout mode', () => {
+    stubLocalStorage()
+
+    setMonitorEdgeLayout('DP-1', '2x2')
+    setMonitorLayout('DP-1', 'columns', { maxColumns: 2 })
+
+    expect(getMonitorLayout('DP-1').edgeLayout).toBe('2x2')
+  })
+
+  it('defaults edge layout to 3x2 and persists explicit override', () => {
+    stubLocalStorage()
+
+    expect(getMonitorLayout('DP-1').edgeLayout).toBe('3x2')
+    setMonitorEdgeLayout('DP-1', '3x3')
+
+    expect(getMonitorLayout('DP-1').edgeLayout).toBe('3x3')
   })
 })

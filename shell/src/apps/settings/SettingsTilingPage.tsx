@@ -1,5 +1,6 @@
 import { For, Show } from 'solid-js'
 import type { Accessor, Setter } from 'solid-js'
+import { EdgeLayoutPicker } from '@/features/tiling/EdgeLayoutPicker'
 import { LayoutTypePicker } from '@/features/tiling/LayoutTypePicker'
 import { getMonitorLayout } from '@/features/tiling/tilingConfig'
 import type { SettingsLayoutScreen } from './settingsTypes'
@@ -32,27 +33,41 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
           </p>
           <For each={props.screenDraftRows}>
             {(row) => (
-              <div class="mb-4 flex flex-wrap items-end gap-x-4 gap-y-2 border-b border-(--shell-border) pb-4 last:mb-0 last:border-0 last:pb-0">
+              <div class="mb-4 flex flex-col gap-3 border-b border-(--shell-border) pb-4 last:mb-0 last:border-0 last:pb-0">
                 <span class="min-w-24 text-[0.82rem] font-mono font-semibold text-(--shell-text-muted)">
                   {row.name}
                 </span>
-                <LayoutTypePicker
-                  outputName={row.name}
-                  revision={props.tilingCfgRev}
-                  onPersisted={() => {
-                    props.setTilingCfgRev((n) => n + 1)
-                    const name = row.name
-                    queueMicrotask(() => {
-                      if (getMonitorLayout(name).layout.type === 'manual-snap') {
-                        props.clearMonitorTiles(name)
-                        props.bumpSnapChrome()
-                        props.scheduleExclusionZonesSync()
-                      } else {
-                        props.applyAutoLayout(name)
-                      }
-                    })
-                  }}
-                />
+                <div class="flex flex-wrap items-start gap-x-4 gap-y-3">
+                  <LayoutTypePicker
+                    outputName={row.name}
+                    revision={props.tilingCfgRev}
+                    onPersisted={() => {
+                      props.setTilingCfgRev((n) => n + 1)
+                      const name = row.name
+                      queueMicrotask(() => {
+                        if (getMonitorLayout(name).layout.type === 'manual-snap') {
+                          props.clearMonitorTiles(name)
+                          props.bumpSnapChrome()
+                          props.scheduleExclusionZonesSync()
+                        } else {
+                          props.applyAutoLayout(name)
+                        }
+                      })
+                    }}
+                  />
+                </div>
+                <Show when={(() => {
+                  props.tilingCfgRev()
+                  return getMonitorLayout(row.name).layout.type === 'manual-snap'
+                })()}>
+                  <EdgeLayoutPicker
+                    outputName={row.name}
+                    revision={props.tilingCfgRev}
+                    onPersisted={() => {
+                      props.setTilingCfgRev((n) => n + 1)
+                    }}
+                  />
+                </Show>
               </div>
             )}
           </For>
