@@ -1472,6 +1472,34 @@ impl CompositorState {
         self.workspace_apply_auto_layout_for_all_outputs();
     }
 
+    fn shell_shared_state_payload_is_stale(
+        &self,
+        kind: u32,
+        sequence: u64,
+        payload: &[u8],
+    ) -> bool {
+        if payload.len() < 16 {
+            return false;
+        }
+        let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+        let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+        if output_layout_revision == 0
+            || output_layout_revision >= self.shell_output_topology_revision
+        {
+            return false;
+        }
+        tracing::warn!(
+            target: "derp_shell_shared_state",
+            kind,
+            sequence,
+            snapshot_epoch,
+            output_layout_revision,
+            current_output_layout_revision = self.shell_output_topology_revision,
+            "rejected stale shell shared-state payload"
+        );
+        true
+    }
+
     pub fn sync_shell_shared_state(&mut self, kind: u32) {
         let path = crate::cef::shared_state::path_for_kind(crate::cef::runtime_dir(), kind);
         let min_sequence_exclusive = match kind {
@@ -1490,6 +1518,18 @@ impl CompositorState {
         ) else {
             return;
         };
+        if self.shell_shared_state_payload_is_stale(kind, sequence, &payload) {
+            match kind {
+                crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => {
+                    self.shell_exclusion_shared_sequence = sequence;
+                }
+                crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS => {
+                    self.shell_ui_windows_shared_sequence = sequence;
+                }
+                _ => {}
+            }
+            return;
+        }
         match kind {
             crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => {
                 self.shell_exclusion_shared_sequence = sequence;
@@ -8944,6 +8984,18 @@ impl CompositorState {
         window_ids
     }
 
+    fn workspace_warn_invariants(&self, context: &str) {
+        let live_window_ids = self.workspace_live_window_ids();
+        for warning in self.workspace_state.invariant_warnings(&live_window_ids) {
+            tracing::warn!(
+                target: "derp_workspace_state",
+                context,
+                warning = %warning,
+                "workspace invariant"
+            );
+        }
+    }
+
     fn workspace_sync_from_registry(&mut self) -> bool {
         let live_window_ids = self.workspace_live_window_ids();
         let next = reconcile_workspace_state(&self.workspace_state, &live_window_ids);
@@ -8951,10 +9003,12 @@ impl CompositorState {
             return false;
         }
         self.workspace_state = next;
+        self.workspace_warn_invariants("sync_from_registry");
         true
     }
 
     fn workspace_send_state(&mut self) {
+        self.workspace_warn_invariants("send_state");
         self.next_shell_workspace_revision();
         let Some(msg) = self.workspace_state_message() else {
             return;
@@ -9618,6 +9672,7 @@ impl CompositorState {
             }
         }
         self.workspace_state = next_state;
+        self.workspace_warn_invariants("apply_mutation");
         if detached_drag_before_workspace_state {
             if let Some(window_id) = detached_window_drag.take() {
                 self.workspace_begin_detached_window_drag(window_id);

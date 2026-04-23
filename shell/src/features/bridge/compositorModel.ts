@@ -6,7 +6,11 @@ import {
   type DerpShellDetail,
   type DerpWindow,
 } from '@/host/appWindowState'
-import { createEmptyWorkspaceState, type WorkspaceState } from '@/features/workspace/workspaceState'
+import {
+  createEmptyWorkspaceState,
+  workspaceStatesEqual,
+  type WorkspaceState,
+} from '@/features/workspace/workspaceState'
 
 export type CompositorFollowup = {
   flushWindows?: boolean
@@ -77,6 +81,15 @@ function collectWindowOrderIds(raw: unknown): number[] {
     if (id !== null) ids.push(id)
   }
   return ids
+}
+
+function sameNumberArray(left: readonly number[], right: readonly number[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
 }
 
 function shellHostedAppByWindowFromState(state: { byWindowId?: Record<string, unknown> } | null | undefined) {
@@ -155,7 +168,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       if (authoritative.windows.revision !== windowsRevision()) {
         const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
         setWindows((prev) => (prev === nextWindows ? prev : nextWindows))
-        setWindowOrderIds(collectWindowOrderIds(authoritative.windows.rows))
+        const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
         setWindowsRevision(authoritative.windows.revision)
         nextWindowsMap = nextWindows
       }
@@ -166,7 +180,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
     if (authoritative.workspaceState !== undefined) {
       if (authoritative.workspaceState.revision !== workspaceRevision()) {
-        setWorkspaceState(authoritative.workspaceState.state)
+        const nextState = authoritative.workspaceState.state
+        setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
         setWorkspaceRevision(authoritative.workspaceState.revision)
       }
     }
@@ -209,7 +224,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const revision = coerceRevision(detail.revision)
       if (revision !== windowsRevision()) {
         setWindows((prev) => buildWindowsMapFromList(detail.windows, prev))
-        setWindowOrderIds(collectWindowOrderIds(detail.windows))
+        const nextOrderIds = collectWindowOrderIds(detail.windows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
         setWindowsRevision(revision)
       }
       return {
@@ -222,7 +238,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (detail.type === 'workspace_state') {
       const revision = coerceRevision(detail.revision)
       if (revision !== workspaceRevision()) {
-        setWorkspaceState(detail.state)
+        const nextState = detail.state
+        setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
         setWorkspaceRevision(revision)
       }
       return {

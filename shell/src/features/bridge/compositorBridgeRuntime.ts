@@ -201,6 +201,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return epoch === 0 || epoch >= lastSnapshotSequence
   }
 
+  const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
+    detail.type === 'window_list' ||
+    detail.type === 'workspace_state' ||
+    detail.type === 'shell_hosted_app_state' ||
+    detail.type === 'output_layout' ||
+    detail.type === 'keyboard_layout' ||
+    detail.type === 'tray_hints' ||
+    detail.type === 'tray_sni'
+
   const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
     const lw = Math.max(1, logicalWidth)
     const pw = Math.max(1, physicalWidth)
@@ -511,6 +520,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorDetail = (d: DerpShellDetail) => {
     if (!shouldApplyLiveDetail(d)) return
+    const detailEpoch = detailSnapshotEpoch(d)
+    if (detailEpoch > lastSnapshotSequence && detailCanBeSupersededBySnapshot(d)) {
+      syncCompositorSnapshot()
+      if (lastSnapshotSequence >= detailEpoch) return
+    }
     if (d.type === 'context_menu_dismiss') {
       options.closeAllAtlasSelects()
       options.hideContextMenu()

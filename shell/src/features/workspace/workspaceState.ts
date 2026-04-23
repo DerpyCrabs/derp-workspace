@@ -572,6 +572,39 @@ function inferNextGroupSeq(state: WorkspaceState): number {
   return next
 }
 
+function refreshDerivedWorkspaceIndexes(state: WorkspaceState): void {
+  const groupIdByWindowId: Record<string, string> = {}
+  const visibleWindowIdByGroupId: Record<string, number> = {}
+  const monitorNameByWindowId: Record<string, string> = {}
+  const monitorIdByWindowId: Record<string, string> = {}
+  for (const group of state.groups) {
+    for (const windowId of group.windowIds) {
+      groupIdByWindowId[windowId] = group.id
+    }
+    const active = state.activeTabByGroupId[group.id]
+    visibleWindowIdByGroupId[group.id] = normalizedRequestedActiveWindowId(
+      state,
+      group,
+      group.windowIds.includes(active) ? active : group.windowIds[0],
+    )
+  }
+  for (const monitor of state.monitorTiles) {
+    for (const entry of monitor.entries) {
+      monitorNameByWindowId[entry.windowId] = monitor.outputName
+      if (monitor.outputId) monitorIdByWindowId[entry.windowId] = monitor.outputId
+    }
+  }
+  state.groupIdByWindowId = groupIdByWindowId
+  state.visibleWindowIdByGroupId = visibleWindowIdByGroupId
+  state.monitorNameByWindowId = monitorNameByWindowId
+  state.monitorIdByWindowId = Object.keys(monitorIdByWindowId).length > 0 ? monitorIdByWindowId : undefined
+}
+
+function withRefreshedDerivedWorkspaceIndexes(state: WorkspaceState): WorkspaceState {
+  refreshDerivedWorkspaceIndexes(state)
+  return state
+}
+
 export function allWorkspaceWindowIds(state: WorkspaceState): number[] {
   const out: number[] = []
   const seen = new Set<number>()
@@ -587,7 +620,13 @@ export function allWorkspaceWindowIds(state: WorkspaceState): number[] {
 
 export function groupIdForWindow(state: WorkspaceState, windowId: number): string | null {
   const derived = state.groupIdByWindowId?.[windowId]
-  if (typeof derived === 'string' && derived.length > 0) return derived
+  if (
+    typeof derived === 'string' &&
+    derived.length > 0 &&
+    state.groups.some((group) => group.id === derived && group.windowIds.includes(windowId))
+  ) {
+    return derived
+  }
   for (const group of state.groups) {
     if (group.windowIds.includes(windowId)) return group.id
   }
@@ -621,6 +660,7 @@ export function reconcileWorkspaceState(
   }
   next.monitorTiles = next.monitorTiles
     .map((monitor) => ({
+      outputId: monitor.outputId,
       outputName: monitor.outputName,
       entries: monitor.entries.filter((entry) => live.has(entry.windowId)),
     }))
@@ -628,6 +668,7 @@ export function reconcileWorkspaceState(
   next.preTileGeometry = next.preTileGeometry.filter((entry) => live.has(entry.windowId))
   ensurePinnedWindowIds(next)
   ensureValidSplitState(next)
+  refreshDerivedWorkspaceIndexes(next)
   return next
 }
 
@@ -640,25 +681,9 @@ export function setWorkspaceActiveTab(
   if (!group || !group.windowIds.includes(windowId)) return state
   const nextWindowId = normalizedRequestedActiveWindowId(state, group, windowId)
   if (state.activeTabByGroupId[groupId] === nextWindowId) return state
-  return {
-    groups: state.groups.map((entry) => ({
-      id: entry.id,
-      windowIds: [...entry.windowIds],
-    })),
-    activeTabByGroupId: {
-      ...state.activeTabByGroupId,
-      [groupId]: nextWindowId,
-    },
-    pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
-    splitByGroupId: { ...(state.splitByGroupId ?? {}) },
-    monitorTiles: state.monitorTiles.map((monitor) => ({
-      outputName: monitor.outputName,
-      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    })),
-    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
-    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    nextGroupSeq: state.nextGroupSeq,
-  }
+  const next = cloneState(state)
+  next.activeTabByGroupId[groupId] = nextWindowId
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function isWorkspaceWindowPinned(state: WorkspaceState, windowId: number): boolean {
@@ -678,7 +703,7 @@ export function reorderWorkspaceWindowInGroup(
   if (!nextGroup) return state
   const before = nextGroup.windowIds.join(',')
   insertIntoGroup(next, nextGroup, windowId, insertIndex)
-  return nextGroup.windowIds.join(',') === before ? state : next
+  return nextGroup.windowIds.join(',') === before ? state : withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function moveWorkspaceWindowToGroup(
@@ -711,7 +736,7 @@ export function moveWorkspaceWindowToGroup(
   next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
   next.activeTabByGroupId[targetGroupId] = sourceWindowId
   ensureValidSplitState(next)
-  return next
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function moveWorkspaceGroupToGroup(
@@ -756,7 +781,7 @@ export function moveWorkspaceGroupToGroup(
   next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
   next.activeTabByGroupId[targetGroupId] = sourceVisibleWindowId
   ensureValidSplitState(next)
-  return next
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function splitWorkspaceWindowToOwnGroup(
@@ -790,13 +815,14 @@ export function splitWorkspaceWindowToOwnGroup(
   next.activeTabByGroupId[newGroupId] = windowId
   next.monitorTiles = next.monitorTiles
     .map((monitor) => ({
+      outputId: monitor.outputId,
       outputName: monitor.outputName,
       entries: monitor.entries.filter((entry) => entry.windowId !== windowId),
     }))
     .filter((monitor) => monitor.entries.length > 0)
   next.preTileGeometry = next.preTileGeometry.filter((entry) => entry.windowId !== windowId)
   ensureValidSplitState(next)
-  return next
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function setWorkspaceWindowPinned(
@@ -821,7 +847,7 @@ export function setWorkspaceWindowPinned(
   const insertIndex = pinned ? pinnedCount : Math.min(pinnedCount, remaining.length)
   group.windowIds = remaining
   group.windowIds.splice(insertIndex, 0, windowId)
-  return next
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function getWorkspaceGroupSplit(
@@ -876,24 +902,14 @@ export function enterWorkspaceSplitView(
     leftPaneFraction: clampWorkspaceSplitPaneFraction(leftPaneFraction),
   }
   ensureValidSplitState(next)
-  return workspaceStatesEqual(state, next) ? state : next
+  return workspaceStatesEqual(state, next) ? state : withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function exitWorkspaceSplitView(state: WorkspaceState, groupId: string): WorkspaceState {
   if (!state.splitByGroupId[groupId]) return state
-  return {
-    groups: state.groups.map((entry) => ({ id: entry.id, windowIds: [...entry.windowIds] })),
-    activeTabByGroupId: { ...state.activeTabByGroupId },
-    pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
-    splitByGroupId: withoutGroupSplit(state.splitByGroupId, groupId),
-    monitorTiles: state.monitorTiles.map((monitor) => ({
-      outputName: monitor.outputName,
-      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    })),
-    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
-    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    nextGroupSeq: state.nextGroupSeq,
-  }
+  const next = cloneState(state)
+  next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, groupId)
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function setWorkspaceSplitFraction(
@@ -905,25 +921,12 @@ export function setWorkspaceSplitFraction(
   if (!split) return state
   const nextFraction = clampWorkspaceSplitPaneFraction(leftPaneFraction)
   if (split.leftPaneFraction === nextFraction) return state
-  return {
-    groups: state.groups.map((entry) => ({ id: entry.id, windowIds: [...entry.windowIds] })),
-    activeTabByGroupId: { ...state.activeTabByGroupId },
-    pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
-    splitByGroupId: {
-      ...state.splitByGroupId,
-      [groupId]: {
-        ...split,
-        leftPaneFraction: nextFraction,
-      },
-    },
-    monitorTiles: state.monitorTiles.map((monitor) => ({
-      outputName: monitor.outputName,
-      entries: monitor.entries.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    })),
-    monitorLayouts: state.monitorLayouts.map((entry) => ({ ...entry, params: { ...entry.params } })),
-    preTileGeometry: state.preTileGeometry.map((entry) => ({ ...entry, bounds: { ...entry.bounds } })),
-    nextGroupSeq: state.nextGroupSeq,
+  const next = cloneState(state)
+  next.splitByGroupId[groupId] = {
+    ...split,
+    leftPaneFraction: nextFraction,
   }
+  return withRefreshedDerivedWorkspaceIndexes(next)
 }
 
 export function mergeWorkspaceGroups(

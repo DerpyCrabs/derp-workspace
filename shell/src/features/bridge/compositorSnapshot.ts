@@ -1,5 +1,5 @@
 import type { DerpShellDetail } from '@/host/appWindowState'
-import type { WorkspaceState } from '@/features/workspace/workspaceState'
+import { normalizeWorkspaceState } from '@/features/workspace/workspaceState'
 
 const MSG_OUTPUT_GEOMETRY = 5
 const MSG_FOCUS_CHANGED = 10
@@ -382,7 +382,7 @@ function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number)
     return {
       type: 'workspace_state',
       revision,
-      state: JSON.parse(json) as WorkspaceState,
+      state: normalizeWorkspaceState(JSON.parse(json)),
     }
   } catch {
     return null

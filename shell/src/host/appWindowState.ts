@@ -201,6 +201,7 @@ export function windowOnMonitor(
   list: LayoutScreen[],
   co: CanvasOrigin,
 ): boolean {
+  if (w.output_id && mon.identity && w.output_id === mon.identity) return true
   if (w.output_name && w.output_name === mon.name) return true
   const p = pickScreenForWindow(w, list, co)
   return p !== null && p.name === mon.name
@@ -208,6 +209,10 @@ export function windowOnMonitor(
 
 export function pickLayoutScreenForMove(w: DerpWindow, list: LayoutScreen[], co: CanvasOrigin): LayoutScreen | null {
   if (list.length === 0) return null
+  if (w.output_id) {
+    const byIdentity = list.find((s) => s.identity === w.output_id)
+    if (byIdentity) return byIdentity
+  }
   if (w.output_name) {
     const byName = list.find((s) => s.name === w.output_name)
     if (byName) return byName
@@ -344,11 +349,18 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       const sid = coerceShellWindowId(detail.surface_id)
       if (wid === null || sid === null) break
       const current = map.get(wid)
-      const shell_flags = current?.shell_flags ?? 0
+      const shell_flags =
+        typeof detail.shell_flags === 'number' && Number.isFinite(detail.shell_flags)
+          ? Math.trunc(detail.shell_flags)
+          : (current?.shell_flags ?? 0)
+      const stack_z =
+        typeof detail.stack_z === 'number' && Number.isFinite(detail.stack_z)
+          ? Math.trunc(detail.stack_z)
+          : nextStackZ(map, wid)
       const nextWindow: DerpWindow = {
         window_id: wid,
         surface_id: sid,
-        stack_z: nextStackZ(map, wid),
+        stack_z,
         x: detail.x,
         y: detail.y,
         width: detail.width,
@@ -357,14 +369,17 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         app_id: detail.app_id,
         output_id: coerceOutputId(detail.output_id, current?.output_id ?? ''),
         output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
-        kind: current?.kind ?? '',
-        x11_class: current?.x11_class ?? '',
-        x11_instance: current?.x11_instance ?? '',
-        minimized: false,
-        maximized: false,
-        fullscreen: false,
+        kind: typeof detail.kind === 'string' ? detail.kind : (current?.kind ?? ''),
+        x11_class: typeof detail.x11_class === 'string' ? detail.x11_class : (current?.x11_class ?? ''),
+        x11_instance: typeof detail.x11_instance === 'string' ? detail.x11_instance : (current?.x11_instance ?? ''),
+        minimized: detail.minimized ?? false,
+        maximized: detail.maximized ?? false,
+        fullscreen: detail.fullscreen ?? false,
         shell_flags,
-        capture_identifier: current?.capture_identifier ?? '',
+        capture_identifier:
+          typeof detail.capture_identifier === 'string'
+            ? detail.capture_identifier
+            : (current?.capture_identifier ?? ''),
       }
       if (
         current &&

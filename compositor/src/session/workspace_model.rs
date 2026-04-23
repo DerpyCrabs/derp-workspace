@@ -1098,6 +1098,103 @@ impl WorkspaceState {
             .find(|entry| entry.output_name == output_name)
     }
 
+    pub fn invariant_warnings(&self, live_window_ids: &[u32]) -> Vec<String> {
+        let live: HashSet<u32> = live_window_ids.iter().copied().collect();
+        let mut warnings = Vec::new();
+        let mut group_ids = HashSet::new();
+        let mut assigned_windows = HashSet::new();
+        for group in &self.groups {
+            if group.id.is_empty() {
+                warnings.push("empty group id".to_string());
+            }
+            if !group_ids.insert(group.id.clone()) {
+                warnings.push(format!("duplicate group id {}", group.id));
+            }
+            if group.window_ids.is_empty() {
+                warnings.push(format!("empty group {}", group.id));
+            }
+            for window_id in &group.window_ids {
+                if !live.contains(window_id) {
+                    warnings.push(format!(
+                        "group {} contains stale window {}",
+                        group.id, window_id
+                    ));
+                }
+                if !assigned_windows.insert(*window_id) {
+                    warnings.push(format!("window {} assigned more than once", window_id));
+                }
+            }
+            let active = self.active_tab_by_group_id.get(&group.id).copied();
+            if active.is_none_or(|window_id| !group.window_ids.contains(&window_id)) {
+                warnings.push(format!("group {} active tab invalid", group.id));
+            }
+        }
+        for group_id in self.active_tab_by_group_id.keys() {
+            if !group_ids.contains(group_id) {
+                warnings.push(format!("active tab references missing group {}", group_id));
+            }
+        }
+        for window_id in &self.pinned_window_ids {
+            if !assigned_windows.contains(window_id) {
+                warnings.push(format!("pinned window {} missing from groups", window_id));
+            }
+        }
+        for (group_id, split) in &self.split_by_group_id {
+            let Some(group) = self.groups.iter().find(|group| group.id == *group_id) else {
+                warnings.push(format!("split references missing group {}", group_id));
+                continue;
+            };
+            if !group.window_ids.contains(&split.left_window_id) {
+                warnings.push(format!("split {} left window missing", group_id));
+            }
+            if first_right_window_id(group, split.left_window_id).is_none() {
+                warnings.push(format!("split {} has no right window", group_id));
+            }
+        }
+        let mut tiled_windows = HashSet::new();
+        for monitor in &self.monitor_tiles {
+            if monitor.output_id.is_empty() && monitor.output_name.is_empty() {
+                warnings.push("monitor tile without output identity".to_string());
+            }
+            for entry in &monitor.entries {
+                if !live.contains(&entry.window_id) {
+                    warnings.push(format!("tile references stale window {}", entry.window_id));
+                }
+                if !tiled_windows.insert(entry.window_id) {
+                    warnings.push(format!("window {} tiled more than once", entry.window_id));
+                }
+                if entry.bounds.width <= 0 || entry.bounds.height <= 0 {
+                    warnings.push(format!(
+                        "tile window {} has invalid bounds",
+                        entry.window_id
+                    ));
+                }
+            }
+        }
+        let mut pre_tile_windows = HashSet::new();
+        for entry in &self.pre_tile_geometry {
+            if !live.contains(&entry.window_id) {
+                warnings.push(format!(
+                    "pre-tile references stale window {}",
+                    entry.window_id
+                ));
+            }
+            if !pre_tile_windows.insert(entry.window_id) {
+                warnings.push(format!(
+                    "window {} has duplicate pre-tile geometry",
+                    entry.window_id
+                ));
+            }
+            if entry.bounds.width <= 0 || entry.bounds.height <= 0 {
+                warnings.push(format!(
+                    "pre-tile window {} has invalid bounds",
+                    entry.window_id
+                ));
+            }
+        }
+        warnings
+    }
+
     pub fn to_json(&self) -> Result<String, String> {
         let mut value = serde_json::to_value(self)
             .map_err(|error| format!("serialize workspace state: {error}"))?;
