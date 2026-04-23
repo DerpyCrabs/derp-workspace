@@ -111,6 +111,9 @@ impl CompositorState {
                 continue;
             }
             let id = info.window_id;
+            if !self.workspace_window_is_visible_during_render(id) {
+                continue;
+            }
             let outer = self.shell_backed_outer_global_rect(&info);
             let Some(clamped) = outer.intersection(ws) else {
                 continue;
@@ -407,12 +410,11 @@ impl CompositorState {
                 }
             }
         }
+        self.shell_move_deferred_cancel(None);
         self.shell_resize_end_active();
-        self.shell_move_window_id = Some(window_id);
-        self.shell_move_pending_delta = (0, 0);
         self.shell_ipc_keyboard_to_cef = true;
         self.shell_focus_shell_ui_window(window_id);
-        self.shell_send_interaction_state();
+        self.shell_move_activate_backed_now(window_id, (0, 0));
         true
     }
 
@@ -443,6 +445,8 @@ impl CompositorState {
         else {
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_deferred_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         };
@@ -460,6 +464,7 @@ impl CompositorState {
         self.shell_move_flush_pending_deltas_backed();
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_move_proxy_cancel(Some(window_id));
         self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);

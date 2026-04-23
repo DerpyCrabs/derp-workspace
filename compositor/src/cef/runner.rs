@@ -869,7 +869,7 @@ fn run_cef(
     );
 
     let mut browser_settings = BrowserSettings::default();
-    browser_settings.windowless_frame_rate = 144;
+    browser_settings.windowless_frame_rate = 60;
     browser_settings.background_color = 0x0000_0000;
 
     tracing::warn!(

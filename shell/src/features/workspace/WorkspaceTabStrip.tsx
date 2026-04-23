@@ -80,6 +80,8 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
       </Show>
       <div
         class="group flex min-h-0 min-w-0 max-w-[240px] flex-[0_1_auto] items-stretch overflow-hidden border-r border-(--shell-border) transition-colors"
+        draggable={false}
+        style={{ '-webkit-user-drag': 'none' }}
         classList={{
           'bg-(--shell-control-muted-bg) text-(--shell-text)': tab().active,
           'bg-transparent text-(--shell-text-muted) hover:bg-[color-mix(in_srgb,var(--shell-control-muted-bg)_42%,transparent)] hover:text-(--shell-text)':
@@ -92,7 +94,8 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
       >
         <button
           type="button"
-          class="flex h-full min-h-0 min-w-0 flex-1 cursor-grab items-center gap-1.5 truncate px-2.5 py-1 text-left text-[11px] font-medium active:cursor-grabbing"
+          class="flex h-full min-h-0 min-w-0 flex-1 cursor-grab select-none items-center gap-1.5 truncate px-2.5 py-1 text-left text-[11px] font-medium active:cursor-grabbing"
+          draggable={false}
           classList={{
             'cursor-pointer active:cursor-pointer': splitLeft,
             'pr-2': tab().pinned,
@@ -104,7 +107,9 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
           data-workspace-split-left-tab={splitLeft ? '' : undefined}
           aria-pressed={tab().active}
           title={windowLabel(tab())}
+          style={{ '-webkit-user-drag': 'none' }}
           onPointerDown={(event) => {
+            if (event.button === 0) event.preventDefault()
             event.stopPropagation()
             if (splitLeft) return
             props.onTabPointerDown(
@@ -115,10 +120,16 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
               event.button,
             )
           }}
+          onMouseDown={(event) => {
+            if (event.button === 0) event.preventDefault()
+          }}
           onContextMenu={(event) => {
             event.preventDefault()
             event.stopPropagation()
             props.onTabContextMenu(tab().window_id, event.clientX, event.clientY)
+          }}
+          onDragStart={(event) => {
+            event.preventDefault()
           }}
           onClick={(event) => {
             event.stopPropagation()
@@ -131,6 +142,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
         >
           <span
             class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-(--shell-text-dim) transition-colors"
+            draggable={false}
             classList={{
               'text-(--shell-text-muted)': !tab().active,
               'text-(--shell-text)': tab().active || props.dragWindowId === tab().window_id || splitLeft,
@@ -144,16 +156,20 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
             <Show when={tab().pinned}>
               <span
                 class="h-1.5 w-1.5 shrink-0 rounded-full bg-(--shell-accent)"
+                draggable={false}
                 aria-label="Pinned tab"
               />
             </Show>
-            <span class="min-w-0 truncate">{windowLabel(tab())}</span>
+            <span class="min-w-0 truncate" draggable={false}>
+              {windowLabel(tab())}
+            </span>
           </span>
         </button>
         <Show when={props.tabs.length > 1}>
           <button
             type="button"
             class="mr-1 flex h-4.5 w-4.5 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-(--shell-text-dim) opacity-70 transition-opacity hover:text-(--shell-text) hover:opacity-100"
+            draggable={false}
             data-workspace-tab-close={tab().window_id}
             aria-label={`Close ${windowLabel(tab())}`}
             title={`Close ${windowLabel(tab())}`}
@@ -166,6 +182,9 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
               event.stopPropagation()
               props.onCloseTab(tab().window_id)
             }}
+            onDragStart={(event) => {
+              event.preventDefault()
+            }}
           >
             <X class="h-3.5 w-3.5" stroke-width={2} />
           </button>
@@ -176,8 +195,12 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
 
   return (
     <div
-      class="flex min-w-0 flex-1 items-stretch overflow-hidden"
+      class="flex min-w-0 flex-1 select-none items-stretch overflow-hidden"
       data-workspace-tab-strip={props.groupId}
+      style={{ '-webkit-user-drag': 'none' }}
+      onDragStart={(event) => {
+        event.preventDefault()
+      }}
     >
       <Show when={leftTabId()}>{(tabId) => renderTab(() => tabsByWindowId().get(tabId())!, 0, true)}</Show>
       <div class="flex min-w-0 flex-1 items-stretch overflow-hidden">

@@ -10,6 +10,17 @@ export function ShellTestWindowContent(props: ShellTestWindowContentProps) {
       data-shell-test-window={props.windowId}
       data-shell-test-window-title={props.title}
     >
+      <div class="grid gap-2" data-shell-test-window-marker>
+        <div class="flex h-12 items-stretch gap-2">
+          <div class="w-12 rounded-md bg-[#64dfdf]" />
+          <div class="flex-1 rounded-md bg-[#ffd166]" />
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="h-6 rounded-md bg-[#ef476f]" />
+          <div class="h-6 rounded-md bg-[#118ab2]" />
+          <div class="h-6 rounded-md bg-[#06d6a0]" />
+        </div>
+      </div>
       <div class="flex items-center justify-between gap-3">
         <h2 class="m-0 text-base font-semibold text-(--shell-text)">{props.title}</h2>
         <span class="rounded border border-(--shell-border) px-2 py-1 text-[11px] text-(--shell-text-muted)">

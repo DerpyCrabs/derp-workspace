@@ -54,7 +54,10 @@ type ShellWindowFrameProps = {
   focused: MaybeAcc<boolean>
   stackZ: MaybeAcc<number>
   dragging?: MaybeAcc<boolean>
+  dragOpacity?: MaybeAcc<number>
   hidden?: MaybeAcc<boolean>
+  contentPointerEvents?: MaybeAcc<'auto' | 'none'>
+  contentBackground?: MaybeAcc<string>
   onFocusRequest?: () => void
   onTitlebarPointerDown: (pointerId: number, clientX: number, clientY: number) => void
   onSnapAssistOpen?: (anchorRect: DOMRect) => void
@@ -179,6 +182,8 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         opacity:
           props.hidden !== undefined && readAcc(props.hidden)
             ? '0'
+            : props.dragOpacity !== undefined
+              ? String(readAcc(props.dragOpacity))
             : props.dragging !== undefined && readAcc(props.dragging)
               ? '0.76'
               : '1',
@@ -192,6 +197,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             top: `${layout().insetTop + layout().th}px`,
             width: `${model()?.width ?? 0}px`,
             height: `${model()?.height ?? 0}px`,
+            background:
+              props.contentBackground !== undefined
+                ? readAcc(props.contentBackground)
+                : 'var(--shell-surface-inset)',
+            'pointer-events':
+              props.contentPointerEvents !== undefined
+                ? readAcc(props.contentPointerEvents)
+                : 'auto',
           }}
           onPointerDown={(e) => {
             if (!e.isPrimary || e.button !== 0) return
@@ -217,15 +230,19 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         onPointerDown={(e) => {
           if (!e.isPrimary) return
           if (e.button !== 0) return
-          requestFocus()
-          if (titlebarInteractionTarget(e.target)) return
+          if (titlebarInteractionTarget(e.target)) {
+            requestFocus()
+            return
+          }
           e.preventDefault()
           e.stopPropagation()
           props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY)
         }}
         onTouchStart={(e) => {
-          requestFocus()
-          if (titlebarInteractionTarget(e.target)) return
+          if (titlebarInteractionTarget(e.target)) {
+            requestFocus()
+            return
+          }
           const t = e.changedTouches[0]
           if (!t) return
           e.preventDefault()

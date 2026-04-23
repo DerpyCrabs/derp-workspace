@@ -11,11 +11,12 @@ use smithay::{
     backend::{
         allocator::{dmabuf::Dmabuf, Buffer as AllocatorBuffer, Fourcc},
         renderer::{
-            element::Element,
+            element::AsRenderElements,
             gles::{GlesRenderer, GlesTarget, GlesTexture},
             Bind, Blit, Frame, Offscreen, Renderer, TextureFilter,
         },
     },
+    desktop::space::SpaceElement,
     output::Output,
     reexports::wayland_server::{
         backend::GlobalId,
@@ -518,20 +519,19 @@ fn render_window_output_texture(
         .into_iter()
         .filter_map(|(el, wid, _)| (wid == Some(window_id)).then_some(el))
         .collect();
-    let rendered_bounds = elements
-        .iter()
-        .fold(None::<Rectangle<i32, Physical>>, |acc, el| {
-            let geo = el.geometry(Scale::from(1.0));
-            Some(match acc {
-                Some(bounds) => {
-                    let left = bounds.loc.x.min(geo.loc.x);
-                    let top = bounds.loc.y.min(geo.loc.y);
-                    let right = (bounds.loc.x + bounds.size.w).max(geo.loc.x + geo.size.w);
-                    let bottom = (bounds.loc.y + bounds.size.h).max(geo.loc.y + geo.size.h);
-                    Rectangle::new((left, top).into(), (right - left, bottom - top).into())
-                }
-                None => geo,
-            })
+    let rendered_bounds = state
+        .capture_window_source_descriptor(window_id)
+        .and_then(|source| {
+            (source.output_name == output_name)
+                .then_some(source.logical_rect)
+                .and_then(|logical_rect| logical_rect.intersection(output_source.logical_rect))
+        })
+        .map(|visible_logical_rect| {
+            capture_region_buffer_rect(
+                output_source.buffer_size,
+                output_source.logical_rect,
+                visible_logical_rect,
+            )
         });
     let mut offscreen: GlesTexture = renderer
         .create_buffer(Fourcc::Abgr8888, output_source.buffer_size)
@@ -543,6 +543,7 @@ fn render_window_output_texture(
         let target_size =
             Size::<i32, Physical>::from((output_source.buffer_size.w, output_source.buffer_size.h));
         let damage = [Rectangle::from_size(target_size)];
+        let render_scale = output.current_scale().fractional_scale();
         let mut frame = renderer
             .render(&mut target, target_size, Transform::Normal)
             .map_err(|error| error.to_string())?;
@@ -550,7 +551,10 @@ fn render_window_output_texture(
             .clear([0.0, 0.0, 0.0, 0.0].into(), &damage)
             .map_err(|error| error.to_string())?;
         smithay::backend::renderer::utils::draw_render_elements(
-            &mut frame, 1.0, &elements, &damage,
+            &mut frame,
+            render_scale,
+            &elements,
+            &damage,
         )
         .map_err(|error| error.to_string())?;
         let _ = frame.finish().map_err(|error| error.to_string())?;
@@ -573,25 +577,108 @@ fn blit_capture_region_to_target(
     target: &mut GlesTarget<'_>,
     target_size: Size<i32, Buffer>,
 ) -> Result<(), String> {
-    let capture_src = capture_region_buffer_rect(output_buffer_size, output_rect, capture_rect);
-    let src = rendered_bounds
-        .map(|bounds| {
-            let left = bounds.loc.x.max(capture_src.loc.x);
-            let top = bounds.loc.y.max(capture_src.loc.y);
-            let right = (bounds.loc.x + bounds.size.w).min(capture_src.loc.x + capture_src.size.w);
-            let bottom = (bounds.loc.y + bounds.size.h).min(capture_src.loc.y + capture_src.size.h);
-            if right > left && bottom > top {
-                Rectangle::new((left, top).into(), (right - left, bottom - top).into())
-            } else {
-                capture_src
-            }
-        })
-        .unwrap_or(capture_src);
-    let dst = Rectangle::new((0, 0).into(), (target_size.w, target_size.h).into());
+    clear_capture_target(renderer, target, target_size)?;
+    let Some((src, dst)) = capture_blit_rects(
+        output_buffer_size,
+        output_rect,
+        capture_rect,
+        rendered_bounds,
+        target_size,
+    ) else {
+        return Ok(());
+    };
     renderer
         .blit(source, target, src, dst, TextureFilter::Nearest)
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn clear_capture_target(
+    renderer: &mut GlesRenderer,
+    target: &mut GlesTarget<'_>,
+    target_size: Size<i32, Buffer>,
+) -> Result<(), String> {
+    let physical_size = Size::<i32, Physical>::from((target_size.w.max(1), target_size.h.max(1)));
+    let damage = [Rectangle::from_size(physical_size)];
+    let mut frame = renderer
+        .render(target, physical_size, Transform::Normal)
+        .map_err(|error| error.to_string())?;
+    frame
+        .clear([0.0, 0.0, 0.0, 0.0].into(), &damage)
+        .map_err(|error| error.to_string())?;
+    let _ = frame.finish().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn capture_blit_rects(
+    output_buffer_size: Size<i32, Buffer>,
+    output_rect: Rectangle<i32, Logical>,
+    capture_rect: Rectangle<i32, Logical>,
+    rendered_bounds: Option<Rectangle<i32, Physical>>,
+    target_size: Size<i32, Buffer>,
+) -> Option<(Rectangle<i32, Physical>, Rectangle<i32, Physical>)> {
+    let capture_src = capture_region_buffer_rect(output_buffer_size, output_rect, capture_rect);
+    let dst = Rectangle::new(
+        (0, 0).into(),
+        (target_size.w.max(1), target_size.h.max(1)).into(),
+    );
+    match rendered_bounds {
+        Some(bounds) => {
+            let src = intersect_physical_rect(bounds, capture_src)?;
+            if src == capture_src {
+                Some((src, dst))
+            } else {
+                Some((
+                    src,
+                    map_capture_src_to_target(capture_src, src, target_size),
+                ))
+            }
+        }
+        None => Some((capture_src, dst)),
+    }
+}
+
+fn intersect_physical_rect(
+    bounds: Rectangle<i32, Physical>,
+    capture_src: Rectangle<i32, Physical>,
+) -> Option<Rectangle<i32, Physical>> {
+    let left = bounds.loc.x.max(capture_src.loc.x);
+    let top = bounds.loc.y.max(capture_src.loc.y);
+    let right = (bounds.loc.x + bounds.size.w).min(capture_src.loc.x + capture_src.size.w);
+    let bottom = (bounds.loc.y + bounds.size.h).min(capture_src.loc.y + capture_src.size.h);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some(Rectangle::new(
+        (left, top).into(),
+        (right - left, bottom - top).into(),
+    ))
+}
+
+fn map_capture_src_to_target(
+    capture_src: Rectangle<i32, Physical>,
+    src: Rectangle<i32, Physical>,
+    target_size: Size<i32, Buffer>,
+) -> Rectangle<i32, Physical> {
+    let capture_width = capture_src.size.w.max(1) as f64;
+    let capture_height = capture_src.size.h.max(1) as f64;
+    let target_width = target_size.w.max(1) as f64;
+    let target_height = target_size.h.max(1) as f64;
+    let src_left = (src.loc.x - capture_src.loc.x).max(0) as f64;
+    let src_top = (src.loc.y - capture_src.loc.y).max(0) as f64;
+    let src_right = (src.loc.x + src.size.w - capture_src.loc.x).max(0) as f64;
+    let src_bottom = (src.loc.y + src.size.h - capture_src.loc.y).max(0) as f64;
+    let dst_left = ((src_left / capture_width) * target_width).round() as i32;
+    let dst_top = ((src_top / capture_height) * target_height).round() as i32;
+    let dst_right = ((src_right / capture_width) * target_width).round() as i32;
+    let dst_bottom = ((src_bottom / capture_height) * target_height).round() as i32;
+    let max_width = target_size.w.max(1);
+    let max_height = target_size.h.max(1);
+    let left = dst_left.clamp(0, max_width - 1);
+    let top = dst_top.clamp(0, max_height - 1);
+    let right = dst_right.max(left + 1).min(max_width);
+    let bottom = dst_bottom.max(top + 1).min(max_height);
+    Rectangle::new((left, top).into(), (right - left, bottom - top).into())
 }
 
 fn render_window_capture_image(
@@ -639,6 +726,80 @@ fn render_window_capture_image(
         renderer,
         &target,
         buffer_size,
+        Transform::Normal,
+    )
+}
+
+pub(crate) fn capture_window_preview_png(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    window_id: u32,
+) -> Result<Vec<u8>, String> {
+    let image = render_window_preview_image_direct(state, renderer, window_id)?;
+    crate::render::screenshot::encode_png(&image)
+}
+
+fn render_window_preview_image_direct(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    window_id: u32,
+) -> Result<image::RgbaImage, String> {
+    let source = state
+        .capture_window_source_descriptor(window_id)
+        .ok_or_else(|| format!("missing capture source for window {window_id}"))?;
+    let output = state
+        .space
+        .outputs()
+        .find(|output| output.name() == source.output_name)
+        .ok_or_else(|| "capture output is no longer available".to_string())?;
+    let render_scale = output.current_scale().fractional_scale();
+    let scale = Scale::from(render_scale);
+    let elem = state
+        .space
+        .elements()
+        .find(|elem| state.derp_elem_window_id(elem) == Some(window_id))
+        .cloned()
+        .ok_or_else(|| "capture window is no longer mapped".to_string())?;
+    let map_loc = state
+        .space
+        .element_location(&elem)
+        .ok_or_else(|| "capture window location is unavailable".to_string())?;
+    let render_origin = map_loc - elem.geometry().loc;
+    let location = (render_origin - source.logical_rect.loc).to_physical_precise_round(scale);
+    let elements = AsRenderElements::<GlesRenderer>::render_elements::<
+        crate::render::derp_space_render::DerpWinRenderEl,
+    >(&elem, renderer, location, scale, 1.0);
+    let mut offscreen: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, source.buffer_size)
+        .map_err(|error| error.to_string())?;
+    {
+        let mut target = renderer
+            .bind(&mut offscreen)
+            .map_err(|error| error.to_string())?;
+        let target_size = Size::<i32, Physical>::from((source.buffer_size.w, source.buffer_size.h));
+        let damage = [Rectangle::from_size(target_size)];
+        let mut frame = renderer
+            .render(&mut target, target_size, Transform::Normal)
+            .map_err(|error| error.to_string())?;
+        frame
+            .clear([0.0, 0.0, 0.0, 0.0].into(), &damage)
+            .map_err(|error| error.to_string())?;
+        smithay::backend::renderer::utils::draw_render_elements(
+            &mut frame,
+            render_scale,
+            &elements,
+            &damage,
+        )
+        .map_err(|error| error.to_string())?;
+        let _ = frame.finish().map_err(|error| error.to_string())?;
+    }
+    let target = renderer
+        .bind(&mut offscreen)
+        .map_err(|error| error.to_string())?;
+    crate::render::screenshot::capture_output_image(
+        renderer,
+        &target,
+        source.buffer_size,
         Transform::Normal,
     )
 }
@@ -1073,3 +1234,84 @@ smithay::reexports::wayland_server::delegate_dispatch!(
 smithay::reexports::wayland_server::delegate_dispatch!(
     crate::CompositorState: [ExtImageCopyCaptureFrameV1: ImageCopyCaptureFrameState] => ExtImageCaptureManagerState
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_blit_rects_keep_clipped_gap_in_same_scale_target() {
+        let output_buffer_size = Size::<i32, Buffer>::from((720, 480));
+        let output_rect = Rectangle::<i32, Logical>::new((0, 0).into(), (480, 320).into());
+        let capture_rect = output_rect;
+        let rendered_bounds = Some(Rectangle::<i32, Physical>::new(
+            (180, 0).into(),
+            (540, 480).into(),
+        ));
+        let target_size = Size::<i32, Buffer>::from((720, 480));
+        let (src, dst) = capture_blit_rects(
+            output_buffer_size,
+            output_rect,
+            capture_rect,
+            rendered_bounds,
+            target_size,
+        )
+        .expect("expected clipped blit rects");
+        assert_eq!(
+            src,
+            Rectangle::<i32, Physical>::new((180, 0).into(), (540, 480).into())
+        );
+        assert_eq!(
+            dst,
+            Rectangle::<i32, Physical>::new((180, 0).into(), (540, 480).into())
+        );
+    }
+
+    #[test]
+    fn capture_blit_rects_keep_clipped_gap_when_downscaling() {
+        let output_buffer_size = Size::<i32, Buffer>::from((720, 480));
+        let output_rect = Rectangle::<i32, Logical>::new((0, 0).into(), (480, 320).into());
+        let capture_rect = output_rect;
+        let rendered_bounds = Some(Rectangle::<i32, Physical>::new(
+            (180, 0).into(),
+            (540, 480).into(),
+        ));
+        let target_size = Size::<i32, Buffer>::from((480, 320));
+        let (src, dst) = capture_blit_rects(
+            output_buffer_size,
+            output_rect,
+            capture_rect,
+            rendered_bounds,
+            target_size,
+        )
+        .expect("expected clipped blit rects");
+        assert_eq!(
+            src,
+            Rectangle::<i32, Physical>::new((180, 0).into(), (540, 480).into())
+        );
+        assert_eq!(
+            dst,
+            Rectangle::<i32, Physical>::new((120, 0).into(), (360, 320).into())
+        );
+    }
+
+    #[test]
+    fn capture_blit_rects_return_none_when_window_is_fully_outside_capture() {
+        let output_buffer_size = Size::<i32, Buffer>::from((720, 480));
+        let output_rect = Rectangle::<i32, Logical>::new((0, 0).into(), (480, 320).into());
+        let capture_rect = output_rect;
+        let rendered_bounds = Some(Rectangle::<i32, Physical>::new(
+            (900, 0).into(),
+            (120, 480).into(),
+        ));
+        let target_size = Size::<i32, Buffer>::from((720, 480));
+        assert!(capture_blit_rects(
+            output_buffer_size,
+            output_rect,
+            capture_rect,
+            rendered_bounds,
+            target_size,
+        )
+        .is_none());
+    }
+}

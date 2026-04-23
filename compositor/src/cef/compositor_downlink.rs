@@ -178,6 +178,9 @@ fn apply_message(
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
             *snapshot_dirty = true;
         }
+        shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
+            *snapshot_dirty = true;
+        }
         shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
             flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {

@@ -118,6 +118,24 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_native_drag_preview_begin(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_native_drag_preview_begin(window_id);
+        });
+    }
+
+    pub fn shell_native_drag_preview_cancel(&self, window_id: u32) {
+        self.run(move |s| {
+            s.shell_native_drag_preview_cancel(Some(window_id));
+        });
+    }
+
+    pub fn shell_native_drag_preview_ready(&self, window_id: u32, generation: u32) {
+        self.run(move |s| {
+            s.shell_native_drag_preview_mark_ready(window_id, generation);
+        });
+    }
+
     pub fn shell_resize_begin(&self, window_id: u32, edges: u32) {
         self.run(move |s| {
             s.window_op_begin_resize(window_id, edges);

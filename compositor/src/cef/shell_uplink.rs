@@ -109,6 +109,19 @@ fn handle_uplink_list(
                 crate::cef::begin_frame_diag::ShellViewInvalidateReason::MoveEnd,
             );
         }
+        "native_drag_preview_begin" => {
+            let wid = args.int(1) as u32;
+            uplink.shell_native_drag_preview_begin(wid);
+        }
+        "native_drag_preview_cancel" => {
+            let wid = args.int(1) as u32;
+            uplink.shell_native_drag_preview_cancel(wid);
+        }
+        "native_drag_preview_ready" => {
+            let wid = args.int(1) as u32;
+            let generation = args.int(2) as u32;
+            uplink.shell_native_drag_preview_ready(wid, generation);
+        }
         "resize_begin" => {
             let wid = args.int(1) as u32;
             let edges = args.int(2) as u32;
@@ -231,6 +244,12 @@ fn handle_uplink_list(
         }
         "request_compositor_sync" => {
             uplink.shell_request_compositor_sync();
+        }
+        "invalidate_view" => {
+            invalidate_shell_view_unthrottled(
+                browser,
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::FocusChanged,
+            );
         }
         "backed_window_open" => {
             let json = cef_string_userfree_to_string(&args.string(1));
@@ -414,9 +433,10 @@ wrap_v8_handler! {
                 }
                 "move_begin" | "move_end" | "taskbar_activate" | "activate_window"
                 | "shell_focus_ui_window" | "shell_ui_grab_begin" | "minimize" | "resize_end"
-                | "resize_shell_grab_begin" => {
+                | "resize_shell_grab_begin" | "native_drag_preview_begin"
+                | "native_drag_preview_cancel" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize require window id");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize/native_drag_preview_begin/native_drag_preview_cancel require window id");
                     };
                     let id = if a1.is_int() != 0 {
                         a1.int_value()
@@ -425,12 +445,43 @@ wrap_v8_handler! {
                     } else if a1.is_double() != 0 {
                         a1.double_value() as i32
                     } else {
-                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize: second arg must be a number");
+                        return_exception!("move_begin/move_end/resize_end/resize_shell_grab_begin/taskbar_activate/activate_window/shell_focus_ui_window/shell_ui_grab_begin/minimize/native_drag_preview_begin/native_drag_preview_cancel: second arg must be a number");
                     };
                     if id < 0 {
                         return_exception!("window id must be non-negative");
                     }
                     let _ = list.set_int(1, id);
+                }
+                "native_drag_preview_ready" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("native_drag_preview_ready requires window id");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("native_drag_preview_ready requires generation");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!("native_drag_preview_ready: window id must be a number");
+                    };
+                    let generation = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_uint() != 0 {
+                        a2.uint_value() as i32
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("native_drag_preview_ready: generation must be a number");
+                    };
+                    if id < 0 || generation <= 0 {
+                        return_exception!("native_drag_preview_ready: window id and generation must be positive");
+                    }
+                    let _ = list.set_int(1, id);
+                    let _ = list.set_int(2, generation);
                 }
                 "resize_begin" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
@@ -848,7 +899,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_test_window_open_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_test_window_open_response)"
                     );
                 }
             }

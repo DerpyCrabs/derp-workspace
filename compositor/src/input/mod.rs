@@ -152,7 +152,7 @@ impl CompositorState {
                 self.programs_menu_super_chord = true;
             }
             self.shell_begin_frame_note_shell_input();
-            if self.shell_move_window_id.is_none() {
+            if self.shell_move_window_id.is_none() && !self.shell_ui_pointer_grab_active() {
                 if let Some((window_id, start)) = self.shell_backed_move_candidate {
                     let travel = ((pos.x - start.x).powi(2) + (pos.y - start.y).powi(2)).sqrt();
                     if travel >= 8.0 {
@@ -176,6 +176,8 @@ impl CompositorState {
         if dx != 0 || dy != 0 {
             if self.shell_move_is_active() {
                 self.shell_move_delta(dx, dy);
+            } else if self.shell_move_deferred.is_some() {
+                self.shell_move_deferred_accumulate_delta(dx, dy);
             }
             if self.shell_resize_is_active() {
                 self.shell_resize_delta(dx, dy);
@@ -326,14 +328,14 @@ impl CompositorState {
 
         let pos = pointer.current_location();
         self.sync_shell_shared_state_for_input();
-        let mut route_cef = self.shell_pointer_route_to_cef(pos);
+        let mut route_cef = self.shell_pointer_should_ipc_to_cef(pos);
         if button_state == ButtonState::Pressed
             && self.shell_exclusion_overlay_open
             && !self.shell_point_in_shell_floating_overlay_global(pos)
             && !route_cef
         {
             self.shell_dismiss_context_menu_from_compositor();
-            route_cef = self.shell_pointer_route_to_cef(pos);
+            route_cef = self.shell_pointer_should_ipc_to_cef(pos);
         }
         let norm = self
             .shell_pointer_norm
@@ -355,11 +357,20 @@ impl CompositorState {
             None
         };
         let in_excl = self.point_in_shell_exclusion_zones(pos);
-        let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
+        let shell_ui_hit_window_id = self
+            .shell_ui_placement_topmost_for_input_at(pos)
+            .map(|placement| placement.id);
+        let in_shell_ui = shell_ui_hit_window_id.is_some();
         let native_hit = self.native_surface_under_no_shell_exclusion(pos);
         let under_native = native_hit.is_some();
         let force_native_buttons =
             under_native && !in_excl && !in_shell_ui && !self.shell_ui_pointer_grab_active();
+        let preserve_native_shell_ui_focus = button_state == ButtonState::Pressed
+            && !pointer.is_grabbed()
+            && !self.shell_move_is_active()
+            && !self.shell_resize_is_active()
+            && shell_ui_hit_window_id
+                .is_some_and(|window_id| !self.window_registry.is_shell_hosted(window_id));
         let take_shell_base = shell_px.is_some()
             || (self.shell_cef_active() && route_cef && cef_ipc.is_some())
             || self.shell_move_is_active()
@@ -389,20 +400,24 @@ impl CompositorState {
         );
         if take_shell {
             if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                self.space.elements().for_each(|e| {
-                    e.set_activate(false);
-                    if let DerpSpaceElem::Wayland(w) = e {
-                        w.toplevel().unwrap().send_pending_configure();
+                if preserve_native_shell_ui_focus {
+                    self.shell_backed_move_candidate = None;
+                } else {
+                    self.space.elements().for_each(|e| {
+                        e.set_activate(false);
+                        if let DerpSpaceElem::Wayland(w) = e {
+                            w.toplevel().unwrap().send_pending_configure();
+                        }
+                    });
+                    keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+                    self.keyboard_on_focus_surface_changed(None);
+                    self.shell_ipc_keyboard_to_cef = true;
+                    self.shell_emit_shell_ui_focus_from_point(pos);
+                    if button == BTN_LEFT {
+                        self.shell_backed_move_candidate = self
+                            .shell_backed_titlebar_window_at(pos)
+                            .map(|window_id| (window_id, pos));
                     }
-                });
-                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-                self.keyboard_on_focus_surface_changed(None);
-                self.shell_ipc_keyboard_to_cef = true;
-                self.shell_emit_shell_ui_focus_from_point(pos);
-                if button == BTN_LEFT {
-                    self.shell_backed_move_candidate = self
-                        .shell_backed_titlebar_window_at(pos)
-                        .map(|window_id| (window_id, pos));
                 }
             }
             pointer.button(
@@ -417,7 +432,7 @@ impl CompositorState {
             pointer.frame(self);
             if (route_cef || self.shell_ui_pointer_grab_active()) && self.shell_cef_active() {
                 if let Some((bx, by)) = cef_ipc {
-                    if button_state == ButtonState::Pressed {
+                    if button_state == ButtonState::Pressed && !preserve_native_shell_ui_focus {
                         self.shell_ipc_keyboard_to_cef = true;
                     }
                     const BTN_RIGHT: u32 = 0x111;

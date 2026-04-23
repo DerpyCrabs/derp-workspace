@@ -18,6 +18,7 @@ struct SnapshotState {
     workspace_state_json: Option<String>,
     shell_hosted_app_state_json: Option<String>,
     interaction_state: Option<SnapshotInteractionState>,
+    native_drag_preview: Option<SnapshotNativeDragPreview>,
     keyboard_layout: Option<String>,
     volume_overlay: Option<(u16, bool, bool)>,
     tray_hints: Option<(u32, i32, u32)>,
@@ -30,8 +31,17 @@ struct SnapshotInteractionState {
     pointer_y: i32,
     move_window_id: u32,
     resize_window_id: u32,
+    move_proxy_window_id: u32,
+    move_capture_window_id: u32,
     move_visual: Option<shell_wire::CompositorInteractionVisual>,
     resize_visual: Option<shell_wire::CompositorInteractionVisual>,
+}
+
+#[derive(Clone)]
+struct SnapshotNativeDragPreview {
+    window_id: u32,
+    generation: u32,
+    image_path: String,
 }
 
 struct SharedMmapFile {
@@ -394,6 +404,8 @@ impl SharedShellSnapshotWriter {
                 pointer_y,
                 move_window_id,
                 resize_window_id,
+                move_proxy_window_id,
+                move_capture_window_id,
                 move_visual,
                 resize_visual,
             } => {
@@ -402,9 +414,27 @@ impl SharedShellSnapshotWriter {
                     pointer_y: *pointer_y,
                     move_window_id: *move_window_id,
                     resize_window_id: *resize_window_id,
+                    move_proxy_window_id: *move_proxy_window_id,
+                    move_capture_window_id: *move_capture_window_id,
                     move_visual: *move_visual,
                     resize_visual: *resize_visual,
                 });
+                true
+            }
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+                window_id,
+                generation,
+                image_path,
+            } => {
+                if image_path.is_empty() {
+                    self.state.native_drag_preview = None;
+                } else {
+                    self.state.native_drag_preview = Some(SnapshotNativeDragPreview {
+                        window_id: *window_id,
+                        generation: *generation,
+                        image_path: image_path.clone(),
+                    });
+                }
                 true
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
@@ -547,9 +577,20 @@ impl SharedShellSnapshotWriter {
                 interaction.pointer_y,
                 interaction.move_window_id,
                 interaction.resize_window_id,
+                interaction.move_proxy_window_id,
+                interaction.move_capture_window_id,
                 interaction.move_visual,
                 interaction.resize_visual,
             ));
+        }
+        if let Some(preview) = &self.state.native_drag_preview {
+            if let Some(bytes) = shell_wire::encode_compositor_native_drag_preview(
+                preview.window_id,
+                preview.generation,
+                &preview.image_path,
+            ) {
+                payload.extend_from_slice(&bytes);
+            }
         }
         if let Some(label) = &self.state.keyboard_layout {
             if let Some(bytes) = shell_wire::encode_compositor_keyboard_layout(label) {

@@ -578,6 +578,10 @@ pub struct CompositorState {
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
     /// (immediate flush) and from [`Self::shell_move_end`].
     pub(crate) shell_move_pending_delta: (i32, i32),
+    pub(crate) shell_move_deferred: Option<ShellMoveDeferredStartState>,
+    pub(crate) shell_move_proxy: Option<ShellMoveProxyState>,
+    pub(crate) shell_native_drag_preview: Option<NativeDragPreviewState>,
+    pub(crate) shell_native_drag_preview_generation: u32,
     pub(crate) shell_backed_move_candidate: Option<(u32, Point<f64, Logical>)>,
     /// Shell-initiated interactive resize ([`shell_wire::MSG_SHELL_RESIZE_*`]).
     pub(crate) shell_resize_window_id: Option<u32>,
@@ -666,6 +670,50 @@ pub(crate) struct ShellUiWindowPlacement {
     pub z: u32,
     pub global_rect: Rectangle<i32, Logical>,
     pub buffer_rect: Rectangle<i32, Buffer>,
+}
+
+pub(crate) struct ShellMoveProxyState {
+    pub window_id: u32,
+    pub source_client_rect: Rectangle<i32, Logical>,
+    pub source_global_rect: Option<Rectangle<i32, Logical>>,
+    pub texture_global_rect: Option<Rectangle<i32, Logical>>,
+    pub source_buffer_rect: Option<Rectangle<i32, Buffer>>,
+    pub arm_after_shell_commit: Option<CommitCounter>,
+    pub request_opaque_source: bool,
+    pub pending_capture: bool,
+    pub texture: Option<smithay::backend::renderer::gles::GlesTexture>,
+    pub texture_id: Id,
+    pub commit: CommitCounter,
+    pub release_state: Option<ShellMoveProxyReleaseState>,
+}
+
+pub(crate) struct NativeDragPreviewState {
+    pub window_id: u32,
+    pub generation: u32,
+    pub capture_pending: bool,
+    pub image_path: Option<String>,
+    pub shell_ready: bool,
+    pub output_name: String,
+    pub logical_width: i32,
+    pub logical_height: i32,
+    pub buffer_width: i32,
+    pub buffer_height: i32,
+}
+
+pub(crate) struct ShellMoveDeferredStartState {
+    pub window_id: u32,
+    pub wait_for_shell_commit: CommitCounter,
+    pub wait_for_ui_generation: u32,
+    pub pending_delta: (i32, i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellMoveProxyReleaseState {
+    AwaitShellStateCommit(CommitCounter),
+    AwaitVisibleShellCommit {
+        commit: CommitCounter,
+        ui_generation: u32,
+    },
 }
 
 struct KeyboardLayoutFocusOp {
@@ -1039,6 +1087,10 @@ impl CompositorState {
             shell_close_refocus_targets: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
+            shell_move_deferred: None,
+            shell_move_proxy: None,
+            shell_native_drag_preview: None,
+            shell_native_drag_preview_generation: 0,
             shell_backed_move_candidate: None,
             shell_resize_window_id: None,
             shell_resize_edges: None,
@@ -1539,10 +1591,10 @@ impl CompositorState {
             .collect()
     }
 
-    pub(crate) fn shell_global_rect_to_buffer_rect(
+    pub(crate) fn shell_global_rect_to_buffer_mapping(
         &self,
         global: &Rectangle<i32, Logical>,
-    ) -> Option<Rectangle<i32, Buffer>> {
+    ) -> Option<(Rectangle<i32, Logical>, Rectangle<i32, Buffer>)> {
         let (buf_w, buf_h) = self.shell_view_px?;
         let content_h = buf_h.max(1);
         let (lw_u, lh_u) = self.shell_output_logical_size()?;
@@ -1587,10 +1639,21 @@ impl CompositorState {
         if !any {
             return None;
         }
-        Some(Rectangle::new(
-            Point::new(min_x, min_y),
-            Size::new((max_x - min_x + 1).max(1), (max_y - min_y + 1).max(1)),
+        Some((
+            g,
+            Rectangle::new(
+                Point::new(min_x, min_y),
+                Size::new((max_x - min_x + 1).max(1), (max_y - min_y + 1).max(1)),
+            ),
         ))
+    }
+
+    pub(crate) fn shell_global_rect_to_buffer_rect(
+        &self,
+        global: &Rectangle<i32, Logical>,
+    ) -> Option<Rectangle<i32, Buffer>> {
+        self.shell_global_rect_to_buffer_mapping(global)
+            .map(|(_, buffer_rect)| buffer_rect)
     }
 
     pub fn apply_shell_ui_windows_payload(&mut self, payload: &[u8]) {
@@ -1690,6 +1753,7 @@ impl CompositorState {
         if js_changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
+            self.shell_move_try_activate_deferred();
         }
     }
 
@@ -1714,6 +1778,8 @@ impl CompositorState {
             window_id,
         });
         self.shell_exclusion_zones_need_full_damage = true;
+        self.shell_dmabuf_dirty_force_full = true;
+        self.shell_nudge_cef_repaint();
     }
 
     pub(crate) fn shell_emit_shell_ui_focus_from_point(&mut self, pos: Point<f64, Logical>) {
@@ -1735,6 +1801,8 @@ impl CompositorState {
         if window_id == 0 {
             return;
         }
+        self.cancel_shell_move_resize_for_window(window_id);
+        self.shell_backed_move_candidate = None;
         self.shell_ui_pointer_grab = Some(window_id);
     }
 
@@ -2037,6 +2105,41 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn workspace_window_is_tiled(&self, window_id: u32) -> bool {
+        self.workspace_state.monitor_tiles.iter().any(|monitor| {
+            monitor
+                .entries
+                .iter()
+                .any(|entry| entry.window_id == window_id)
+        })
+    }
+
+    pub(crate) fn shell_native_outer_global_rect(
+        &self,
+        info: &WindowInfo,
+    ) -> Rectangle<i32, Logical> {
+        let th = self.shell_chrome_titlebar_h.max(0);
+        let bd = self.shell_chrome_border_w.max(0);
+        let suppress_side_strips =
+            info.maximized || info.fullscreen || self.workspace_window_is_tiled(info.window_id);
+        let inset = if suppress_side_strips { 0 } else { bd };
+        let inset_top = if suppress_side_strips {
+            0
+        } else {
+            SHELL_BORDER_TOP_THICKNESS
+        };
+        let x = info.x.saturating_sub(inset);
+        let y = info.y.saturating_sub(th.saturating_add(inset_top));
+        let w = info.width.max(1).saturating_add(inset.saturating_mul(2));
+        let h = info
+            .height
+            .max(1)
+            .saturating_add(th)
+            .saturating_add(inset_top)
+            .saturating_add(inset);
+        Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))))
+    }
+
     pub(crate) fn ordered_window_ids_on_output(&self, output: &Output) -> Vec<u32> {
         let visible_window_ids_on_output: HashSet<u32> = self
             .space
@@ -2082,6 +2185,17 @@ impl CompositorState {
             .iter()
             .filter_map(|z| z.intersection(visible))
             .collect();
+        out.extend(
+            self.shell_exclusion_floating
+                .iter()
+                .filter_map(|z| z.intersection(visible)),
+        );
+        if let Some(rect) = self
+            .shell_native_drag_preview_clip_rect()
+            .and_then(|rect| rect.intersection(visible))
+        {
+            out.push(rect);
+        }
         let placements = self.shell_hosted_clip_placements(elem_window);
         match elem_window {
             None => {
@@ -4197,6 +4311,7 @@ impl CompositorState {
     }
 
     pub(crate) fn cancel_shell_move_resize_for_window(&mut self, window_id: u32) {
+        self.shell_move_deferred_cancel(Some(window_id));
         if self.shell_move_window_id == Some(window_id) {
             if self.window_registry.is_shell_hosted(window_id) {
                 self.shell_move_end_backed_only(window_id);
@@ -6044,16 +6159,324 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn shell_move_shell_hosted_frame_ready_now(&self, window_id: u32) -> bool {
+        if self.shell_focused_ui_window_id != Some(window_id) {
+            return false;
+        }
+        let placements = self.shell_visible_placements();
+        let Some(placement) = placements
+            .iter()
+            .find(|placement| placement.id == window_id)
+        else {
+            return false;
+        };
+        let topmost = placements
+            .iter()
+            .max_by_key(|placement| (placement.z, placement.id));
+        topmost.is_some_and(|topmost| topmost.id == placement.id)
+    }
+
+    fn shell_move_shell_hosted_proxy_visible_now(
+        &self,
+        info: &WindowInfo,
+        placement: &ShellUiWindowPlacement,
+    ) -> bool {
+        let outer = self.shell_backed_outer_global_rect(info);
+        let outer_right = outer.loc.x.saturating_add(outer.size.w);
+        let outer_bottom = outer.loc.y.saturating_add(outer.size.h);
+        let placement_right = placement
+            .global_rect
+            .loc
+            .x
+            .saturating_add(placement.global_rect.size.w);
+        let placement_bottom = placement
+            .global_rect
+            .loc
+            .y
+            .saturating_add(placement.global_rect.size.h);
+        (placement.global_rect.loc.x - outer.loc.x).abs() <= 1
+            && (placement.global_rect.loc.y - outer.loc.y).abs() <= 1
+            && (placement_right - outer_right).abs() <= 1
+            && (placement_bottom - outer_bottom).abs() <= 1
+    }
+
+    fn shell_move_proxy_release_ready_now(&self, window_id: u32) -> bool {
+        if !self.window_registry.is_shell_hosted(window_id) {
+            return true;
+        }
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        let Some(placement) = self
+            .shell_visible_placements()
+            .into_iter()
+            .find(|placement| placement.id == window_id)
+        else {
+            return false;
+        };
+        let outer = self.shell_backed_outer_global_rect(&info);
+        let expected = self
+            .workspace_logical_bounds()
+            .map(|workspace| {
+                Point::from((
+                    outer.loc.x.max(workspace.loc.x),
+                    outer.loc.y.max(workspace.loc.y),
+                ))
+            })
+            .unwrap_or(outer.loc);
+        (placement.global_rect.loc.x - expected.x).abs() <= 1
+            && (placement.global_rect.loc.y - expected.y).abs() <= 1
+    }
+
+    pub(crate) fn shell_move_deferred_ready(&self, pending: &ShellMoveDeferredStartState) -> bool {
+        if self.shell_dmabuf_commit == pending.wait_for_shell_commit {
+            return false;
+        }
+        if self.shell_ui_windows_generation == pending.wait_for_ui_generation {
+            return false;
+        }
+        self.window_registry.is_shell_hosted(pending.window_id)
+            && self.shell_move_shell_hosted_frame_ready_now(pending.window_id)
+    }
+
+    pub(crate) fn shell_move_deferred_cancel(&mut self, window_id: Option<u32>) {
+        if self
+            .shell_move_deferred
+            .as_ref()
+            .is_some_and(|pending| window_id.map_or(true, |wid| wid == pending.window_id))
+        {
+            self.shell_move_deferred = None;
+        }
+    }
+
+    pub(crate) fn shell_move_deferred_accumulate_delta(&mut self, dx: i32, dy: i32) {
+        let Some(pending) = self.shell_move_deferred.as_mut() else {
+            return;
+        };
+        pending.pending_delta.0 = pending.pending_delta.0.saturating_add(dx);
+        pending.pending_delta.1 = pending.pending_delta.1.saturating_add(dy);
+    }
+
+    pub(crate) fn shell_move_activate_backed_now(
+        &mut self,
+        window_id: u32,
+        initial_pending_delta: (i32, i32),
+    ) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if !self.window_registry.is_shell_hosted(window_id) || info.minimized {
+            return false;
+        }
+        self.shell_move_window_id = Some(window_id);
+        self.shell_move_pending_delta = initial_pending_delta;
+        self.shell_move_proxy_cancel(Some(window_id));
+        self.shell_ipc_keyboard_to_cef = true;
+        if initial_pending_delta != (0, 0) {
+            self.shell_move_flush_pending_deltas_backed();
+        }
+        self.shell_send_interaction_state();
+        true
+    }
+
+    pub(crate) fn shell_move_try_activate_deferred(&mut self) {
+        let Some(pending) = self.shell_move_deferred.take() else {
+            return;
+        };
+        if !self.shell_move_deferred_ready(&pending) {
+            self.shell_move_deferred = Some(pending);
+            return;
+        }
+        if !self.shell_move_activate_backed_now(pending.window_id, pending.pending_delta) {
+            self.shell_move_proxy_cancel(Some(pending.window_id));
+            self.shell_send_interaction_state();
+        }
+    }
+
     pub(crate) fn shell_move_is_active(&self) -> bool {
         self.shell_move_window_id.is_some()
     }
 
     pub(crate) fn shell_move_end_active(&mut self) {
+        if self.shell_move_deferred.take().is_some() {
+            return;
+        }
         let Some(wid) = self.shell_move_window_id else {
             return;
         };
         tracing::warn!(target: "derp_shell_move", wid, "shell_move_end_active (seat LMB release)");
         self.shell_move_end(wid);
+    }
+
+    pub(crate) fn shell_move_proxy_try_arm_capture(&mut self) {
+        let Some(window_id) = self.shell_move_proxy.as_ref().map(|proxy| proxy.window_id) else {
+            return;
+        };
+        if self.shell_move_proxy.as_ref().is_some_and(|proxy| {
+            proxy.pending_capture || proxy.texture.is_some() || proxy.release_state.is_some()
+        }) {
+            return;
+        }
+        if self
+            .shell_move_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.arm_after_shell_commit)
+            .is_some_and(|commit| commit == self.shell_dmabuf_commit)
+        {
+            return;
+        }
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        let shell_hosted = self.window_registry.is_shell_hosted(window_id);
+        if shell_hosted {
+            let had_proxy = self.shell_move_proxy.take().is_some();
+            if had_proxy {
+                self.shell_send_interaction_state();
+            }
+            return;
+        }
+        let visible_placement = self
+            .shell_visible_placements()
+            .into_iter()
+            .find(|placement| placement.id == window_id);
+        let request_opaque_source = self
+            .shell_move_proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.request_opaque_source);
+        if shell_hosted && visible_placement.is_none() {
+            if request_opaque_source {
+                if let Some(proxy) = self.shell_move_proxy.as_mut() {
+                    proxy.request_opaque_source = false;
+                    proxy.arm_after_shell_commit = None;
+                }
+                self.shell_send_interaction_state();
+            }
+            return;
+        }
+        if shell_hosted && !self.shell_move_shell_hosted_frame_ready_now(window_id) {
+            if request_opaque_source {
+                if let Some(proxy) = self.shell_move_proxy.as_mut() {
+                    proxy.request_opaque_source = false;
+                    proxy.arm_after_shell_commit = None;
+                }
+                self.shell_send_interaction_state();
+            }
+            return;
+        }
+        let native_source_global_rect =
+            (!shell_hosted).then(|| self.shell_native_outer_global_rect(&info));
+        let native_texture_global_rect = if shell_hosted {
+            None
+        } else {
+            native_source_global_rect.map(|outer| {
+                let titlebar_h = info.y.saturating_sub(outer.loc.y).max(1);
+                Rectangle::new(outer.loc, Size::from((outer.size.w.max(1), titlebar_h)))
+            })
+        };
+        let native_texture_capture = if shell_hosted {
+            None
+        } else {
+            native_texture_global_rect.and_then(|texture_global_rect| {
+                self.shell_global_rect_to_buffer_mapping(&texture_global_rect)
+            })
+        };
+        if !shell_hosted
+            && (native_source_global_rect.is_none()
+                || native_texture_global_rect.is_none()
+                || native_texture_capture.is_none())
+        {
+            return;
+        }
+        let shell_hosted_proxy_visible = shell_hosted
+            && visible_placement.as_ref().is_some_and(|placement| {
+                self.shell_move_shell_hosted_proxy_visible_now(&info, placement)
+            });
+        if shell_hosted && !shell_hosted_proxy_visible {
+            if request_opaque_source {
+                if let Some(proxy) = self.shell_move_proxy.as_mut() {
+                    proxy.request_opaque_source = false;
+                    proxy.arm_after_shell_commit = None;
+                }
+                self.shell_send_interaction_state();
+            }
+            return;
+        }
+        let Some(proxy) = self.shell_move_proxy.as_mut() else {
+            return;
+        };
+        if shell_hosted && !proxy.request_opaque_source {
+            proxy.request_opaque_source = true;
+            proxy.arm_after_shell_commit = Some(self.shell_dmabuf_commit);
+            self.shell_send_interaction_state();
+            return;
+        }
+        proxy.arm_after_shell_commit = None;
+        proxy.source_client_rect = Rectangle::new(
+            Point::from((info.x, info.y)),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        if shell_hosted {
+            let Some(placement) = visible_placement else {
+                return;
+            };
+            proxy.source_global_rect = Some(placement.global_rect);
+            proxy.texture_global_rect = Some(placement.global_rect);
+            proxy.source_buffer_rect = Some(placement.buffer_rect);
+        } else {
+            let Some((capture_texture_global_rect, capture_source_buffer_rect)) =
+                native_texture_capture
+            else {
+                return;
+            };
+            proxy.source_global_rect = native_source_global_rect;
+            proxy.texture_global_rect = Some(capture_texture_global_rect);
+            proxy.source_buffer_rect = Some(capture_source_buffer_rect);
+        }
+        proxy.pending_capture = true;
+    }
+
+    pub(crate) fn shell_move_proxy_target_global_rect(&self) -> Option<Rectangle<i32, Logical>> {
+        let proxy = self.shell_move_proxy.as_ref()?;
+        let source_global_rect = proxy.source_global_rect?;
+        let info = self.window_registry.window_info(proxy.window_id)?;
+        let dx = info.x.saturating_sub(proxy.source_client_rect.loc.x);
+        let dy = info.y.saturating_sub(proxy.source_client_rect.loc.y);
+        Some(Rectangle::new(
+            Point::from((
+                source_global_rect.loc.x.saturating_add(dx),
+                source_global_rect.loc.y.saturating_add(dy),
+            )),
+            source_global_rect.size,
+        ))
+    }
+
+    pub(crate) fn shell_move_proxy_release(&mut self, window_id: u32) {
+        let can_keep = self.shell_has_frame && self.shell_frame_is_dmabuf;
+        let current_commit = self.shell_dmabuf_commit;
+        let Some(proxy) = self.shell_move_proxy.as_mut() else {
+            return;
+        };
+        if proxy.window_id != window_id {
+            return;
+        }
+        if proxy.texture.is_none() || !can_keep {
+            self.shell_move_proxy = None;
+            return;
+        }
+        proxy.release_state = Some(ShellMoveProxyReleaseState::AwaitShellStateCommit(
+            current_commit,
+        ));
+    }
+
+    pub(crate) fn shell_move_proxy_cancel(&mut self, window_id: Option<u32>) {
+        if self
+            .shell_move_proxy
+            .as_ref()
+            .is_some_and(|proxy| window_id.is_none() || window_id == Some(proxy.window_id))
+        {
+            self.shell_move_proxy = None;
+        }
     }
 
     fn shell_drag_restore_rect_from_client_frame(
@@ -6206,6 +6629,7 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_begin(window_id);
             let loc = self
                 .space
                 .element_location(&DerpSpaceElem::Wayland(window.clone()));
@@ -6236,6 +6660,7 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_begin(window_id);
             let loc = self
                 .space
                 .element_location(&DerpSpaceElem::X11(x11.clone()));
@@ -6276,6 +6701,8 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         };
@@ -6308,6 +6735,8 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_flush: window gone");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         };
@@ -6326,6 +6755,8 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, ?error, "shell_move_flush: x11 configure failed");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         }
@@ -6346,6 +6777,10 @@ impl CompositorState {
 
     pub fn shell_move_delta(&mut self, dx: i32, dy: i32) {
         let Some(wid) = self.shell_move_window_id else {
+            if self.shell_move_deferred.is_some() {
+                self.shell_move_deferred_accumulate_delta(dx, dy);
+                return;
+            }
             tracing::debug!(
                 target: "derp_shell_move",
                 dx,
@@ -6357,6 +6792,7 @@ impl CompositorState {
         if self.window_registry.is_shell_hosted(wid) {
             self.shell_move_pending_delta.0 += dx;
             self.shell_move_pending_delta.1 += dy;
+            self.shell_move_proxy_try_arm_capture();
             self.shell_move_flush_pending_deltas_backed();
             return;
         }
@@ -6364,6 +6800,8 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         };
@@ -6387,6 +6825,8 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_delta: window gone from space");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(wid));
+            self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
             return;
         }
@@ -6400,8 +6840,8 @@ impl CompositorState {
             accum = ?self.shell_move_pending_delta,
             "shell_move_delta: flushing to space"
         );
+        self.shell_move_proxy_try_arm_capture();
         self.shell_move_flush_pending_deltas();
-        self.shell_nudge_cef_repaint();
     }
 
     /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.
@@ -6410,11 +6850,21 @@ impl CompositorState {
             return;
         }
         self.shell_move_window_id = None;
+        self.shell_native_drag_preview_cancel(Some(window_id));
         self.notify_geometry_for_window(window, true);
+        self.shell_move_proxy_release(window_id);
         self.shell_send_interaction_state();
     }
 
     pub fn shell_move_end(&mut self, window_id: u32) {
+        if self
+            .shell_move_deferred
+            .as_ref()
+            .is_some_and(|pending| pending.window_id == window_id)
+        {
+            self.shell_move_deferred = None;
+            return;
+        }
         if self.shell_move_window_id != Some(window_id) {
             tracing::debug!(
                 target: "derp_shell_move",
@@ -6436,6 +6886,8 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(window_id));
+            self.shell_move_proxy_cancel(Some(window_id));
             self.shell_send_interaction_state();
             return;
         };
@@ -6455,7 +6907,9 @@ impl CompositorState {
                 self.shell_move_window_id = None;
             }
             self.shell_move_pending_delta = (0, 0);
+            self.shell_native_drag_preview_cancel(Some(window_id));
             self.emit_x11_window_updates(&x11, true, false);
+            self.shell_move_proxy_release(window_id);
             self.shell_send_interaction_state();
             tracing::warn!(
                 target: "derp_shell_move",
@@ -6472,6 +6926,8 @@ impl CompositorState {
         );
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_native_drag_preview_cancel(Some(window_id));
+        self.shell_move_proxy_cancel(Some(window_id));
         self.shell_send_interaction_state();
     }
 
@@ -7081,7 +7537,286 @@ impl CompositorState {
         );
     }
 
+    pub(crate) fn shell_native_drag_preview_begin(&mut self, window_id: u32) {
+        if self.window_registry.is_shell_hosted(window_id) {
+            if let Some(preview) = self.shell_native_drag_preview.take() {
+                self.shell_send_native_drag_preview_detail(
+                    preview.window_id,
+                    preview.generation,
+                    String::new(),
+                );
+            }
+            return;
+        }
+        let capture_signature = self.shell_native_drag_preview_capture_signature(window_id);
+        if let Some(preview) = self.shell_native_drag_preview.take() {
+            self.shell_send_native_drag_preview_detail(
+                preview.window_id,
+                preview.generation,
+                String::new(),
+            );
+        }
+        let generation = self
+            .shell_native_drag_preview_generation
+            .wrapping_add(1)
+            .max(1);
+        self.shell_native_drag_preview_generation = generation;
+        let (output_name, logical_width, logical_height, buffer_width, buffer_height) =
+            capture_signature.unwrap_or_else(|| (String::new(), 0, 0, 0, 0));
+        self.shell_native_drag_preview = Some(NativeDragPreviewState {
+            window_id,
+            generation,
+            capture_pending: true,
+            image_path: None,
+            shell_ready: false,
+            output_name,
+            logical_width,
+            logical_height,
+            buffer_width,
+            buffer_height,
+        });
+        self.shell_send_native_drag_preview_state();
+    }
+
+    pub(crate) fn shell_native_drag_preview_cancel(&mut self, window_id: Option<u32>) {
+        let clear = self.shell_native_drag_preview.as_ref().and_then(|preview| {
+            (window_id.is_none() || window_id == Some(preview.window_id))
+                .then_some((preview.window_id, preview.generation))
+        });
+        if let Some((preview_window_id, generation)) = clear {
+            self.shell_native_drag_preview = None;
+            self.shell_send_native_drag_preview_detail(
+                preview_window_id,
+                generation,
+                String::new(),
+            );
+        }
+    }
+
+    pub(crate) fn shell_native_drag_preview_mark_ready(&mut self, window_id: u32, generation: u32) {
+        let Some(preview) = self.shell_native_drag_preview.as_mut() else {
+            return;
+        };
+        if preview.window_id != window_id || preview.generation != generation {
+            return;
+        }
+        if preview.shell_ready {
+            return;
+        }
+        preview.shell_ready = true;
+        self.shell_send_interaction_state();
+    }
+
+    pub(crate) fn shell_native_drag_preview_capture_if_needed(
+        &mut self,
+        renderer: &mut GlesRenderer,
+    ) {
+        let Some((window_id, generation)) =
+            self.shell_native_drag_preview.as_ref().and_then(|preview| {
+                if !preview.capture_pending || preview.image_path.is_some() {
+                    return None;
+                }
+                Some((preview.window_id, preview.generation))
+            })
+        else {
+            return;
+        };
+        let Some((
+            output_name,
+            next_logical_width,
+            next_logical_height,
+            buffer_width,
+            buffer_height,
+        )) = self.shell_native_drag_preview_capture_signature(window_id)
+        else {
+            return;
+        };
+        if let Some(preview) = self.shell_native_drag_preview.as_mut() {
+            if preview.window_id == window_id
+                && preview.generation == generation
+                && (preview.output_name != output_name
+                    || preview.logical_width != next_logical_width
+                    || preview.logical_height != next_logical_height
+                    || preview.buffer_width != buffer_width
+                    || preview.buffer_height != buffer_height)
+            {
+                preview.output_name = output_name.clone();
+                preview.logical_width = next_logical_width;
+                preview.logical_height = next_logical_height;
+                preview.buffer_width = buffer_width;
+                preview.buffer_height = buffer_height;
+                preview.image_path = None;
+                preview.shell_ready = false;
+            }
+        }
+        if !self.shell_native_drag_preview_capture_ready(
+            window_id,
+            next_logical_width,
+            next_logical_height,
+        ) {
+            return;
+        }
+        let png =
+            match crate::render::capture_ext::capture_window_preview_png(self, renderer, window_id)
+            {
+                Ok(png) => png,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "derp_shell_move",
+                        window_id,
+                        %error,
+                        "native drag preview capture failed"
+                    );
+                    if let Some(preview) = self.shell_native_drag_preview.as_mut() {
+                        if preview.window_id == window_id && preview.generation == generation {
+                            preview.capture_pending = false;
+                        }
+                    }
+                    return;
+                }
+            };
+        let path = crate::cef::runtime_dir().join(format!(
+            "derp-native-drag-preview-{}-{}-{}.png",
+            std::process::id(),
+            window_id,
+            generation,
+        ));
+        let path = match crate::render::screenshot::save_png_to_path(&png, &path) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    target: "derp_shell_move",
+                    window_id,
+                    %error,
+                    "native drag preview save failed"
+                );
+                if let Some(preview) = self.shell_native_drag_preview.as_mut() {
+                    if preview.window_id == window_id && preview.generation == generation {
+                        preview.capture_pending = false;
+                    }
+                }
+                return;
+            }
+        };
+        let Some(preview) = self.shell_native_drag_preview.as_mut() else {
+            return;
+        };
+        if preview.window_id != window_id || preview.generation != generation {
+            return;
+        }
+        preview.capture_pending = false;
+        preview.shell_ready = false;
+        preview.image_path = Some(path.to_string_lossy().into_owned());
+        self.shell_send_native_drag_preview_state();
+    }
+
+    fn shell_native_drag_preview_capture_signature(
+        &self,
+        window_id: u32,
+    ) -> Option<(String, i32, i32, i32, i32)> {
+        let source = self.capture_window_source_descriptor(window_id)?;
+        Some((
+            source.output_name,
+            source.logical_rect.size.w,
+            source.logical_rect.size.h,
+            source.buffer_size.w,
+            source.buffer_size.h,
+        ))
+    }
+
+    fn shell_native_drag_preview_capture_ready(
+        &self,
+        window_id: u32,
+        logical_width: i32,
+        logical_height: i32,
+    ) -> bool {
+        if logical_width <= 0 || logical_height <= 0 {
+            return false;
+        }
+        let Some(actual_rect) = self.mapped_native_window_content_rect(window_id) else {
+            return false;
+        };
+        actual_rect.size.w == logical_width && actual_rect.size.h == logical_height
+    }
+
+    pub(crate) fn mapped_native_window_content_rect(
+        &self,
+        window_id: u32,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let sid = self.window_registry.surface_id_for_window(window_id)?;
+        if let Some(window) = self.find_window_by_surface_id(sid) {
+            let loc = self
+                .space
+                .element_location(&DerpSpaceElem::Wayland(window.clone()))?;
+            let size = window.geometry().size;
+            return Some(Rectangle::new(loc, size));
+        }
+        let x11 = self.find_x11_window_by_surface_id(sid)?;
+        let loc = self
+            .space
+            .element_location(&DerpSpaceElem::X11(x11.clone()))?;
+        Some(Rectangle::new(loc, x11.geometry().size))
+    }
+
+    pub(crate) fn shell_native_drag_preview_clip_rect(&self) -> Option<Rectangle<i32, Logical>> {
+        let preview = self.shell_native_drag_preview.as_ref()?;
+        if self.shell_move_window_id != Some(preview.window_id)
+            || preview.image_path.is_none()
+            || !preview.shell_ready
+        {
+            return None;
+        }
+        let info = self.window_registry.window_info(preview.window_id)?;
+        Some(self.shell_native_outer_global_rect(&info))
+    }
+
+    pub(crate) fn shell_send_native_drag_preview_state(&mut self) {
+        let Some((window_id, generation, image_path)) =
+            self.shell_native_drag_preview.as_ref().map(|preview| {
+                (
+                    preview.window_id,
+                    preview.generation,
+                    preview.image_path.clone().unwrap_or_default(),
+                )
+            })
+        else {
+            return;
+        };
+        self.shell_send_native_drag_preview_detail(window_id, generation, image_path);
+    }
+
+    fn shell_send_native_drag_preview_detail(
+        &mut self,
+        window_id: u32,
+        generation: u32,
+        image_path: String,
+    ) {
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+                window_id,
+                generation,
+                image_path,
+            },
+        );
+    }
+
     pub(crate) fn shell_send_interaction_state(&mut self) {
+        let move_proxy_window_id = self
+            .shell_move_proxy
+            .as_ref()
+            .and_then(|proxy| {
+                proxy.texture.as_ref()?;
+                match proxy.release_state {
+                    Some(ShellMoveProxyReleaseState::AwaitVisibleShellCommit { .. }) => None,
+                    _ => Some(proxy.window_id),
+                }
+            })
+            .unwrap_or(0);
+        let move_capture_window_id = self
+            .shell_move_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.request_opaque_source.then_some(proxy.window_id))
+            .unwrap_or(0);
         let interaction_visual = |window_id: Option<u32>| {
             window_id
                 .and_then(|wid| self.window_registry.window_info(wid))
@@ -7105,6 +7840,8 @@ impl CompositorState {
                 pointer_y: pointer.y,
                 move_window_id: self.shell_move_window_id.unwrap_or(0),
                 resize_window_id: self.shell_resize_window_id.unwrap_or(0),
+                move_proxy_window_id,
+                move_capture_window_id,
                 move_visual: interaction_visual(self.shell_move_window_id),
                 resize_visual: interaction_visual(self.shell_resize_window_id),
             },
@@ -7241,6 +7978,8 @@ impl CompositorState {
         let next_state = reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
         let mut activation_window_id = None;
         let mut detached_window_drag = None;
+        let mut activate_before_workspace_state = false;
+        let mut detached_drag_before_workspace_state = false;
         let mut auto_layout_output_name = None;
         let mut auto_layout_all_outputs = false;
         match &mutation {
@@ -7253,6 +7992,8 @@ impl CompositorState {
                     if previous_visible != next_visible {
                         self.workspace_copy_window_geometry(next_visible, previous_visible);
                         activation_window_id = Some(next_visible);
+                        activate_before_workspace_state =
+                            !self.window_registry.is_shell_hosted(next_visible);
                     }
                 }
             }
@@ -7268,7 +8009,7 @@ impl CompositorState {
                         previous_state.visible_window_id_for_group(target_group_id)
                     {
                         self.workspace_copy_window_geometry(*window_id, target_visible);
-                        activation_window_id = Some(target_visible);
+                        activation_window_id = Some(*window_id);
                     }
                 }
             }
@@ -7281,6 +8022,8 @@ impl CompositorState {
                     if let Some(target_visible) =
                         previous_state.visible_window_id_for_group(target_group_id)
                     {
+                        let source_visible =
+                            previous_state.visible_window_id_for_group(source_group_id);
                         if let Some(source_group) = previous_state
                             .groups
                             .iter()
@@ -7290,13 +8033,15 @@ impl CompositorState {
                                 self.workspace_copy_window_geometry(*window_id, target_visible);
                             }
                         }
-                        activation_window_id = Some(target_visible);
+                        activation_window_id = source_visible.or(Some(target_visible));
                     }
                 }
             }
             WorkspaceMutation::SplitWindowToOwnGroup { window_id } => {
                 if self.shell_ui_pointer_grab_active() {
                     detached_window_drag = Some(*window_id);
+                    detached_drag_before_workspace_state =
+                        !self.window_registry.is_shell_hosted(*window_id);
                 } else {
                     activation_window_id = Some(*window_id);
                 }
@@ -7326,6 +8071,15 @@ impl CompositorState {
             }
         }
         self.workspace_state = next_state;
+        if detached_drag_before_workspace_state {
+            if let Some(window_id) = detached_window_drag.take() {
+                self.workspace_begin_detached_window_drag(window_id);
+            }
+        } else if activate_before_workspace_state {
+            if let Some(window_id) = activation_window_id.take() {
+                self.shell_activate_window(window_id);
+            }
+        }
         let state_sent = if auto_layout_all_outputs {
             self.workspace_apply_auto_layout_for_all_outputs()
         } else if let Some(output_name) = auto_layout_output_name {
@@ -8642,11 +9396,48 @@ impl CompositorState {
             self.shell_dmabuf_dirty_buffer = buffer_rects;
         }
         self.shell_dmabuf_commit.increment();
+        let mut handoff_shell_move_proxy = false;
+        let proxy_release_state = self
+            .shell_move_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.release_state.map(|state| (proxy.window_id, state)));
+        let released_move_proxy = match proxy_release_state {
+            Some((_, ShellMoveProxyReleaseState::AwaitShellStateCommit(commit)))
+                if commit != self.shell_dmabuf_commit =>
+            {
+                if let Some(proxy) = self.shell_move_proxy.as_mut() {
+                    proxy.release_state =
+                        Some(ShellMoveProxyReleaseState::AwaitVisibleShellCommit {
+                            commit: self.shell_dmabuf_commit,
+                            ui_generation: self.shell_ui_windows_generation,
+                        });
+                }
+                handoff_shell_move_proxy = true;
+                false
+            }
+            Some((
+                window_id,
+                ShellMoveProxyReleaseState::AwaitVisibleShellCommit { commit, .. },
+            )) if commit != self.shell_dmabuf_commit
+                && self.shell_move_proxy_release_ready_now(window_id) =>
+            {
+                true
+            }
+            _ => false,
+        };
+        if released_move_proxy {
+            self.shell_move_proxy = None;
+        }
 
         self.shell_dmabuf = Some(dmabuf);
         self.shell_frame_is_dmabuf = true;
+        if handoff_shell_move_proxy || released_move_proxy {
+            self.shell_send_interaction_state();
+        }
         self.shell_has_frame = true;
         self.shell_view_px = Some((width, height));
+        self.shell_move_proxy_try_arm_capture();
+        self.shell_move_try_activate_deferred();
         if let Ok(g) = self.shell_to_cef.lock() {
             if let Some(link) = g.as_ref() {
                 link.sync_osr_physical_from_dmabuf(width as i32, height as i32);
@@ -8727,6 +9518,8 @@ impl CompositorState {
         self.shell_dmabuf_generation = 0;
         self.shell_dmabuf_overlay_id = Id::new();
         self.shell_dmabuf_commit = CommitCounter::default();
+        self.shell_move_proxy = None;
+        self.shell_native_drag_preview = None;
         self.shell_dmabuf_dirty_buffer.clear();
         self.shell_dmabuf_dirty_force_full = true;
         self.shell_last_pointer_ipc_px = None;

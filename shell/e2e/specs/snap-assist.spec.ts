@@ -344,9 +344,18 @@ function assertNoVerticalGapBetweenRects(
 }
 
 async function openPickerFromMaximizeButton(base: string, windowId: number): Promise<ShellSnapshot> {
-  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const controls = windowControls(shell, windowId)
-  const maximize = assertRectMinSize('maximize button', controls?.maximize, 12)
+  const { maximize } = await waitFor(
+    `wait for maximize button ${windowId}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const controls = windowControls(shell, windowId)
+      const maximize = controls?.maximize
+      if (!maximize || maximize.width < 12 || maximize.height < 12) return null
+      return { shell, maximize }
+    },
+    2000,
+    40,
+  )
   const center = rectGlobalCenter(maximize)
   await movePoint(base, center.x, center.y)
   await pointerButton(base, BTN_RIGHT, 'press')

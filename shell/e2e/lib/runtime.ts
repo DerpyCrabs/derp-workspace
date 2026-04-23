@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { inflateSync } from 'node:zlib'
 
 export const BTN_LEFT = 0x110
 export const BTN_RIGHT = 0x111
@@ -102,6 +103,10 @@ export interface WindowSnapshot {
   wayland_client_pid?: number | null
   render_alpha?: number
   workspace_visible?: boolean
+  mapped_x?: number | null
+  mapped_y?: number | null
+  mapped_width?: number | null
+  mapped_height?: number | null
 }
 
 export interface CompositorWorkspaceRect {
@@ -152,6 +157,12 @@ export interface CompositorSnapshot {
   session_power_action?: string | null
   session_power_requested_at_ms?: number | null
   shell_move_visual?: CompositorInteractionVisualSnapshot | null
+  shell_move_proxy_window_id?: number | null
+  shell_move_proxy_global?: CompositorWorkspaceRect | null
+  shell_move_proxy_capture_global?: CompositorWorkspaceRect | null
+  shell_move_proxy_visible_rects?: CompositorWorkspaceRect[]
+  shell_move_proxy_alpha?: number | null
+  shell_move_proxy_decor_only?: boolean
   shell_resize_visual?: CompositorInteractionVisualSnapshot | null
   window_stack_order?: number[]
   ordered_window_ids_by_output?: CompositorOutputWindowStackSnapshot[]
@@ -159,6 +170,11 @@ export interface CompositorSnapshot {
   shell_ui_windows?: CompositorShellUiWindowSnapshot[]
   shell_exclusion_global?: CompositorWorkspaceRect[]
   shell_exclusion_decor?: CompositorWindowRectsSnapshot[]
+  shell_native_drag_preview_window_id?: number | null
+  shell_native_drag_preview_generation?: number | null
+  shell_native_drag_preview_shell_ready?: boolean
+  shell_native_drag_preview_image_path?: string | null
+  shell_native_drag_preview_clip_rect?: CompositorWorkspaceRect | null
   pending_deferred_window_ids?: number[]
   orphaned_wayland_surface_protocol_ids?: number[]
   pointer?: { x: number; y: number }
@@ -218,7 +234,16 @@ export interface ShellWindowControls {
   resize_bottom_left?: Rect | null
   resize_bottom_right?: Rect | null
   dragging?: boolean
+  hidden?: boolean
   frame_opacity?: number | null
+  native_drag_preview_rect?: Rect | null
+  native_drag_preview_generation?: number | null
+  native_drag_preview_loaded?: boolean
+  native_drag_preview_src?: string | null
+  native_drag_preview_source_width?: number | null
+  native_drag_preview_source_height?: number | null
+  native_drag_preview_backing_width?: number | null
+  native_drag_preview_backing_height?: number | null
 }
 
 export interface AssistSpanSnapshot {
@@ -422,6 +447,15 @@ export interface ShellSnapshot {
     group_id: string
     insert_index: number
   } | null
+  compositor_interaction_state?: {
+    move_window_id: number | null
+    resize_window_id: number | null
+    move_proxy_window_id: number | null
+    move_capture_window_id: number | null
+  } | null
+  window_interaction_capture?: Rect | null
+  window_interaction_capture_blocks_pointer?: boolean
+  window_interaction_capture_hit_pointer?: boolean | null
   [key: string]: unknown
 }
 
@@ -1271,6 +1305,182 @@ export async function writeTextArtifact(name: string, value: string): Promise<st
   return filePath
 }
 
+export async function copyArtifactFile(name: string, sourcePath: string): Promise<string> {
+  const filePath = artifactPath(name)
+  await copyFile(sourcePath, filePath)
+  return filePath
+}
+
+type DecodedPng = {
+  width: number
+  height: number
+  data: Uint8Array
+}
+
+function decodePngSignature(bytes: Buffer): boolean {
+  return (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+}
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c
+  const pa = Math.abs(p - a)
+  const pb = Math.abs(p - b)
+  const pc = Math.abs(p - c)
+  if (pa <= pb && pa <= pc) return a
+  if (pb <= pc) return b
+  return c
+}
+
+async function readPngRgba(filePath: string): Promise<DecodedPng> {
+  const bytes = await readFile(filePath)
+  if (!decodePngSignature(bytes)) {
+    throw new Error(`bad png signature: ${filePath}`)
+  }
+  let width = 0
+  let height = 0
+  let bitDepth = 0
+  let colorType = 0
+  let compression = 0
+  let filterMethod = 0
+  let interlace = 0
+  const idat: Buffer[] = []
+  for (let offset = 8; offset + 12 <= bytes.length; ) {
+    const length = bytes.readUInt32BE(offset)
+    const type = bytes.toString('ascii', offset + 4, offset + 8)
+    const dataStart = offset + 8
+    const dataEnd = dataStart + length
+    if (dataEnd + 4 > bytes.length) {
+      throw new Error(`truncated png chunk ${type}: ${filePath}`)
+    }
+    const data = bytes.subarray(dataStart, dataEnd)
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0)
+      height = data.readUInt32BE(4)
+      bitDepth = data[8] ?? 0
+      colorType = data[9] ?? 0
+      compression = data[10] ?? 0
+      filterMethod = data[11] ?? 0
+      interlace = data[12] ?? 0
+    } else if (type === 'IDAT') {
+      idat.push(data)
+    } else if (type === 'IEND') {
+      break
+    }
+    offset = dataEnd + 4
+  }
+  if (width < 1 || height < 1) throw new Error(`png missing size: ${filePath}`)
+  if (bitDepth !== 8) throw new Error(`unsupported png bit depth ${bitDepth}: ${filePath}`)
+  if (compression !== 0 || filterMethod !== 0 || interlace !== 0) {
+    throw new Error(`unsupported png encoding: ${filePath}`)
+  }
+  if (colorType !== 6 && colorType !== 2) {
+    throw new Error(`unsupported png color type ${colorType}: ${filePath}`)
+  }
+  const channels = colorType === 6 ? 4 : 3
+  const bytesPerPixel = channels
+  const rowBytes = width * channels
+  const inflated = inflateSync(Buffer.concat(idat))
+  const expectedLength = height * (rowBytes + 1)
+  if (inflated.length !== expectedLength) {
+    throw new Error(`png decode size mismatch for ${filePath}: expected ${expectedLength}, got ${inflated.length}`)
+  }
+  const decoded = new Uint8Array(height * rowBytes)
+  let sourceOffset = 0
+  for (let y = 0; y < height; y += 1) {
+    const filter = inflated[sourceOffset++] ?? 0
+    const rowOffset = y * rowBytes
+    for (let x = 0; x < rowBytes; x += 1) {
+      const raw = inflated[sourceOffset++] ?? 0
+      const left = x >= bytesPerPixel ? decoded[rowOffset + x - bytesPerPixel] ?? 0 : 0
+      const up = y > 0 ? decoded[rowOffset + x - rowBytes] ?? 0 : 0
+      const upLeft = y > 0 && x >= bytesPerPixel ? decoded[rowOffset + x - rowBytes - bytesPerPixel] ?? 0 : 0
+      const next =
+        filter === 0
+          ? raw
+          : filter === 1
+            ? (raw + left) & 0xff
+            : filter === 2
+              ? (raw + up) & 0xff
+              : filter === 3
+                ? (raw + Math.floor((left + up) / 2)) & 0xff
+                : filter === 4
+                  ? (raw + paethPredictor(left, up, upLeft)) & 0xff
+                  : NaN
+      if (!Number.isFinite(next)) {
+        throw new Error(`unsupported png filter ${filter}: ${filePath}`)
+      }
+      decoded[rowOffset + x] = next
+    }
+  }
+  if (channels === 4) {
+    return { width, height, data: decoded }
+  }
+  const rgba = new Uint8Array(width * height * 4)
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < decoded.length; sourceIndex += 3, targetIndex += 4) {
+    rgba[targetIndex] = decoded[sourceIndex] ?? 0
+    rgba[targetIndex + 1] = decoded[sourceIndex + 1] ?? 0
+    rgba[targetIndex + 2] = decoded[sourceIndex + 2] ?? 0
+    rgba[targetIndex + 3] = 0xff
+  }
+  return { width, height, data: rgba }
+}
+
+export async function comparePngFixture(
+  actualPath: string,
+  expectedPath: string,
+  options: {
+    maxDifferentPixels?: number
+    maxChannelDelta?: number
+  } = {},
+): Promise<{
+  width: number
+  height: number
+  differentPixels: number
+  maxObservedChannelDelta: number
+}> {
+  const actual = await readPngRgba(actualPath)
+  const expected = await readPngRgba(expectedPath)
+  if (actual.width !== expected.width || actual.height !== expected.height) {
+    throw new Error(
+      `png dimensions differ: actual ${actual.width}x${actual.height} vs expected ${expected.width}x${expected.height}`,
+    )
+  }
+  const maxDifferentPixels = options.maxDifferentPixels ?? 0
+  const maxChannelDelta = options.maxChannelDelta ?? 0
+  let differentPixels = 0
+  let maxObservedChannelDelta = 0
+  for (let index = 0; index < actual.data.length; index += 4) {
+    let pixelDelta = 0
+    for (let channel = 0; channel < 4; channel += 1) {
+      const delta = Math.abs((actual.data[index + channel] ?? 0) - (expected.data[index + channel] ?? 0))
+      if (delta > pixelDelta) pixelDelta = delta
+      if (delta > maxObservedChannelDelta) maxObservedChannelDelta = delta
+    }
+    if (pixelDelta > maxChannelDelta) differentPixels += 1
+  }
+  if (differentPixels > maxDifferentPixels) {
+    throw new Error(
+      `png mismatch: ${differentPixels} pixels differ (max delta ${maxObservedChannelDelta}), allowed ${maxDifferentPixels} with channel delta ${maxChannelDelta}`,
+    )
+  }
+  return {
+    width: actual.width,
+    height: actual.height,
+    differentPixels,
+    maxObservedChannelDelta,
+  }
+}
+
 export async function captureFailureArtifacts(base: string, label: string): Promise<void> {
   try {
     const [compositor, shell, html] = await Promise.all([
@@ -1471,6 +1681,20 @@ export function taskbarForMonitor(shellSnapshot: ShellSnapshot, monitorName: str
   return shellSnapshot.taskbars.find((taskbar) => taskbar.monitor === monitorName) || null
 }
 
+export function taskbarWindowOrderOnMonitor(shellSnapshot: ShellSnapshot, monitorName: string): number[] {
+  const taskbar = taskbarForMonitor(shellSnapshot, monitorName)
+  if (!taskbar?.rect) return []
+  return shellSnapshot.taskbar_windows
+    .filter((entry) => !!entry.activate && pointInRect(taskbar.rect, rectCenter(entry.activate)))
+    .sort(
+      (left, right) =>
+        (left.activate?.global_x ?? 0) - (right.activate?.global_x ?? 0) ||
+        (left.activate?.global_y ?? 0) - (right.activate?.global_y ?? 0) ||
+        left.window_id - right.window_id,
+    )
+    .map((entry) => entry.window_id)
+}
+
 export function outputForWindow(snapshot: CompositorSnapshot, window: WindowSnapshot): OutputSnapshot | null {
   return snapshot.outputs.find((output) => output.name === window.output_name) || null
 }
@@ -1527,6 +1751,61 @@ export function assertWindowTiled(window: WindowSnapshot, output: OutputSnapshot
   approxEqual(window.width, expectedHalfWidth, 12, `${side} window width`)
   assert(window.y >= output.y && window.y <= output.y + 80, `${side} window y: expected top inset within 80px, got ${window.y}`)
   approxEqual(window.y + window.height, workBottom, 12, `${side} window bottom`)
+}
+
+export function autoLayoutManagedWindowsOnOutput(
+  snapshot: CompositorSnapshot,
+  outputName: string,
+): WindowSnapshot[] {
+  return snapshot.windows
+    .filter(
+      (window) =>
+        window.output_name === outputName &&
+        window.workspace_visible !== false &&
+        !window.minimized &&
+        !window.maximized &&
+        !window.fullscreen &&
+        window.app_id !== 'derp.debug' &&
+        window.app_id !== 'derp.settings',
+    )
+    .sort((left, right) => left.window_id - right.window_id)
+}
+
+export function expectedGridAutoLayoutClientRect(
+  output: OutputSnapshot,
+  taskbarRect: Rect,
+  existingWindows: WindowSnapshot[],
+  windowId: number,
+  titlebarHeight = 26,
+): Rect {
+  const windowIds = [...new Set([...existingWindows.map((window) => window.window_id), windowId])].sort(
+    (left, right) => left - right,
+  )
+  const index = windowIds.indexOf(windowId)
+  if (index < 0) {
+    throw new Error(`missing auto-layout window ${windowId}`)
+  }
+  const workX = output.x
+  const workY = output.y
+  const workWidth = output.width
+  const workHeight = Math.max(1, taskbarRect.global_y - output.y)
+  const cols = Math.max(1, Math.ceil(Math.sqrt(windowIds.length)))
+  const rows = Math.max(1, Math.ceil(windowIds.length / cols))
+  const row = Math.floor(index / cols)
+  const col = index % cols
+  const left = workX + Math.floor((col * workWidth) / cols)
+  const top = workY + Math.floor((row * workHeight) / rows)
+  const right = col === cols - 1 ? workX + workWidth : workX + Math.floor(((col + 1) * workWidth) / cols)
+  const bottom = row === rows - 1 ? workY + workHeight : workY + Math.floor(((row + 1) * workHeight) / rows)
+  const height = Math.max(1, bottom - top - titlebarHeight)
+  return {
+    x: left,
+    y: top + titlebarHeight,
+    global_x: left,
+    global_y: top + titlebarHeight,
+    width: Math.max(1, right - left),
+    height,
+  }
 }
 
 export async function getSnapshots(base: string): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {

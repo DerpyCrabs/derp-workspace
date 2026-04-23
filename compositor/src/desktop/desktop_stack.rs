@@ -311,6 +311,7 @@ pub struct ShellDmaElement {
     buffer_src: Rectangle<f64, Buffer>,
     commit: CommitCounter,
     damage_phys: Option<Vec<Rectangle<i32, Physical>>>,
+    alpha: f32,
 }
 
 impl ShellDmaElement {
@@ -332,7 +333,13 @@ impl ShellDmaElement {
             buffer_src,
             commit,
             damage_phys: None,
+            alpha: 1.0,
         }
+    }
+
+    pub(crate) fn with_alpha(mut self, alpha: f32) -> Self {
+        self.alpha = alpha.clamp(0.0, 1.0);
+        self
     }
 
     fn physical_size(&self, scale: Scale<f64>) -> Size<i32, Physical> {
@@ -398,6 +405,10 @@ impl Element for ShellDmaElement {
     fn kind(&self) -> Kind {
         Kind::Unspecified
     }
+
+    fn alpha(&self) -> f32 {
+        self.alpha
+    }
 }
 
 impl RenderElement<GlesRenderer> for ShellDmaElement {
@@ -422,7 +433,7 @@ impl RenderElement<GlesRenderer> for ShellDmaElement {
             damage,
             opaque_regions,
             Transform::Normal,
-            1.0,
+            self.alpha,
         )
     }
 }
@@ -791,5 +802,6 @@ pub fn shell_dmabuf_overlay_element(
         buffer_src,
         commit,
         damage_phys,
+        alpha: 1.0,
     })
 }

@@ -5,10 +5,11 @@ import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { findMergeTarget, splitLeftWindowId, type TabMergeTarget } from './tabGroupOps'
 import { clampWorkspaceSplitPaneFraction, type WorkspaceState } from './workspaceState'
 import type { WorkspaceGroupModel } from './workspaceSelectors'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED, SHELL_UI_SETTINGS_WINDOW_ID, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { SnapAssistPickerSource } from '@/host/types'
-import { createEffect, createMemo, createSignal, onCleanup, For, Show, type Accessor, type JSX } from 'solid-js'
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, type Accessor, type JSX } from 'solid-js'
+import { Portal } from 'solid-js/web'
 
 type TabDragState = {
   pointerId: number
@@ -36,6 +37,13 @@ type SplitLayoutRects = {
   right: SplitGroupRect
   leftWindowId: number
   rightWindowIds: number[]
+}
+
+type NativeDragPreviewMetrics = {
+  sourceWidth: number
+  sourceHeight: number
+  backingWidth: number
+  backingHeight: number
 }
 
 type SplitGroupGestureState = {
@@ -75,12 +83,25 @@ type WorkspaceChromeOptions = {
     fullscreen: boolean
   } | null
   pointerClient: Accessor<{ x: number; y: number } | null>
+  compositorPointerClient: Accessor<{ x: number; y: number } | null>
   shellWindowDragId: Accessor<number | null>
   shellWindowDragMoved: Accessor<boolean>
+  compositorMoveWindowId: Accessor<number | null>
+  compositorMoveProxyWindowId: Accessor<number | null>
+  compositorMoveCaptureWindowId: Accessor<number | null>
+  nativeDragPreview: Accessor<{
+    window_id: number
+    generation: number
+    image_path: string
+    src: string
+    loaded: boolean
+    image: HTMLImageElement | null
+  } | null>
   focusShellUiWindow: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   focusWindowViaShell: (windowId: number) => void
   beginShellWindowMove: (windowId: number, clientX: number, clientY: number) => void
+  adoptShellWindowMove: (windowId: number, clientX: number, clientY: number, moved?: boolean) => boolean
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
   closeGroupWindow: (windowId: number) => void
@@ -102,7 +123,12 @@ type WorkspaceChromeOptions = {
   shellContextOpenTabMenu: (windowId: number, clientX: number, clientY: number) => void
   shellContextHideMenu: () => void
   shellWireSend: (
-    op: 'set_geometry' | 'taskbar_activate' | 'minimize' | 'shell_ui_grab_begin' | 'shell_ui_grab_end',
+    op:
+      | 'set_geometry'
+      | 'taskbar_activate'
+      | 'minimize'
+      | 'shell_ui_grab_begin'
+      | 'shell_ui_grab_end',
     arg?: number | string,
     arg2?: number | string,
     arg3?: number,
@@ -112,17 +138,80 @@ type WorkspaceChromeOptions = {
   ) => boolean
 }
 
+function NativeDragPreviewCanvas(props: {
+  image: HTMLImageElement | null
+  onMetrics: (metrics: NativeDragPreviewMetrics | null) => void
+}) {
+  let canvas: HTMLCanvasElement | undefined
+
+  const draw = () => {
+    const image = props.image
+    if (!canvas || !image || !image.complete) return
+    const sourceWidth = image.naturalWidth
+    const sourceHeight = image.naturalHeight
+    if (sourceWidth < 1 || sourceHeight < 1) return
+    const backingWidth = sourceWidth
+    const backingHeight = sourceHeight
+    if (canvas.width !== backingWidth) canvas.width = backingWidth
+    if (canvas.height !== backingHeight) canvas.height = backingHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, backingWidth, backingHeight)
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(image, 0, 0, backingWidth, backingHeight)
+    props.onMetrics({ sourceWidth, sourceHeight, backingWidth, backingHeight })
+  }
+
+  createEffect(() => {
+    props.onMetrics(null)
+    draw()
+  })
+
+  return (
+    <canvas
+      ref={(el) => {
+        canvas = el
+      }}
+      class="pointer-events-none block h-full w-full select-none"
+    />
+  )
+}
+
 export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   const [tabDragState, setTabDragState] = createSignal<TabDragState | null>(null)
   const [splitGroupGesture, setSplitGroupGesture] = createSignal<SplitGroupGestureState | null>(null)
   const [suppressTabClickWindowId, setSuppressTabClickWindowId] = createSignal<number | null>(null)
+  const [shellHostedContentMounts, setShellHostedContentMounts] = createSignal(new Map<number, HTMLDivElement>())
   const appliedSplitGroupLayoutKeys = new Map<string, string>()
   let tabDragPointerGrab = false
+  let shellHostedContentParkingLot: HTMLDivElement | undefined
+
+  function updateShellHostedContentMount(windowId: number, el: HTMLDivElement | undefined) {
+    setShellHostedContentMounts((prev) => {
+      const current = prev.get(windowId)
+      if (el) {
+        if (current === el) return prev
+        const next = new Map(prev)
+        next.set(windowId, el)
+        return next
+      }
+      if (!current) return prev
+      const next = new Map(prev)
+      next.delete(windowId)
+      return next
+    })
+  }
 
   function endTabDragPointerGrab() {
     if (!tabDragPointerGrab) return
     tabDragPointerGrab = false
     options.shellWireSend('shell_ui_grab_end')
+  }
+
+  function beginShellUiPointerGrab(windowId: number | null | undefined) {
+    const nextWindowId = typeof windowId === 'number' && Number.isFinite(windowId) ? Math.trunc(windowId) : 0
+    if (nextWindowId <= 0) return false
+    return options.shellWireSend('shell_ui_grab_begin', nextWindowId)
   }
 
   function splitLayoutForGroup(
@@ -291,10 +380,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       options.beginShellWindowMove(windowId, clientX, clientY)
       return
     }
-    options.shellWireSend('shell_ui_grab_begin', SHELL_UI_SETTINGS_WINDOW_ID)
-    tabDragPointerGrab = true
+    const grabWindowId =
+      sourceGroup?.visibleWindowId ?? sourceGroup?.splitLeftWindowId ?? sourceGroup?.members[0]?.window_id ?? windowId
     options.shellContextHideMenu()
     setSuppressTabClickWindowId(null)
+    if (!tabDragPointerGrab && beginShellUiPointerGrab(grabWindowId)) {
+      tabDragPointerGrab = true
+    }
     setTabDragState({
       pointerId,
       windowId,
@@ -372,7 +464,10 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       startGlobalY: global.y,
       originGroupRect: layout.group,
     })
-    options.shellWireSend('shell_ui_grab_begin', SHELL_UI_SETTINGS_WINDOW_ID)
+    if (!beginShellUiPointerGrab(group.visibleWindowId ?? group.splitLeftWindowId ?? group.members[0]?.window_id)) {
+      setSplitGroupGesture(null)
+      return false
+    }
     return true
   }
 
@@ -440,7 +535,8 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     if (!prev || prev.pointerId !== event.pointerId) return
     const dx = event.clientX - prev.startClientX
     const dy = event.clientY - prev.startClientY
-    const dragging = prev.dragging || Math.hypot(dx, dy) >= 40
+    const dragDistance = Math.hypot(dx, dy)
+    const dragging = prev.dragging || dragDistance >= 40
     const ignoreDraggedWindowFrame =
       prev.detached || (options.workspaceGroupsById().get(prev.sourceGroupId)?.members.length ?? 0) <= 1
     const target = dragging
@@ -530,21 +626,45 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     onCleanup(() => cancelAnimationFrame(frame))
   })
 
+  createEffect(() => {
+    const drag = tabDragState()
+    if (!drag?.detached) return
+    if (options.compositorMoveWindowId() !== drag.windowId) return
+    if (!options.adoptShellWindowMove(drag.windowId, drag.currentClientX, drag.currentClientY, drag.dragging)) {
+      return
+    }
+    endTabDragPointerGrab()
+    setSuppressTabClickWindowId(drag.windowId)
+    setTabDragState(null)
+  })
+
+  const activeMoveProxyWindowId = createMemo(() => options.compositorMoveProxyWindowId())
   const activeWindowDragWindowId = createMemo(() => {
     if (tabDragState()) return null
     if (!options.shellWindowDragMoved()) return null
     return options.shellWindowDragId()
   })
 
+  const windowDragPointerClient = () => options.compositorPointerClient() ?? options.pointerClient()
+
   const activeWindowDragTarget = createMemo(() => {
     const windowId = activeWindowDragWindowId()
-    const pointer = options.pointerClient()
+    const pointer = windowDragPointerClient()
     if (windowId == null || !pointer) return null
     return resolveWindowDragTarget(windowId, pointer.x, pointer.y)
   })
 
-  const activeDragWindowId = createMemo(() => tabDragState()?.windowId ?? activeWindowDragWindowId())
-  const activeDropTarget = createMemo(() => tabDragState()?.target ?? activeWindowDragTarget())
+  const activeFrameDragWindowId = createMemo(() => activeWindowDragWindowId())
+  const activeDragWindowId = createMemo(() => {
+    const tabDrag = tabDragState()
+    if (tabDrag && (tabDrag.dragging || tabDrag.detached)) return tabDrag.windowId
+    return activeWindowDragWindowId()
+  })
+  const activeDropTarget = createMemo(() => {
+    const tabDrag = tabDragState()
+    if (tabDrag && (tabDrag.dragging || tabDrag.detached)) return tabDrag.target
+    return activeWindowDragTarget()
+  })
 
   document.addEventListener('pointermove', onTabDragPointerMove, true)
   document.addEventListener('pointerup', onTabDragPointerUp, true)
@@ -577,12 +697,80 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
         .filter((w) => (w.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
         .map((w) => w.window_id)
     })
+    const nativeDragPreview = createMemo(() => {
+      const window = visibleWindow()
+      if (!window || (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) return null
+      const preview = options.nativeDragPreview()
+      return preview && preview.window_id === window.window_id ? preview : null
+    })
+    const nativeDragPreviewVisible = createMemo(() => {
+      const preview = nativeDragPreview()
+      const window = visibleWindow()
+      if (!preview || !window || !preview.loaded) return null
+      const windowId = window.window_id
+      return options.compositorMoveWindowId() === windowId ||
+        options.compositorMoveProxyWindowId() === windowId ||
+        options.compositorMoveCaptureWindowId() === windowId
+        ? preview
+        : null
+    })
+    const nativeDragPreviewKey = createMemo(() => {
+      const preview = nativeDragPreviewVisible()
+      return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
+    })
+    const [nativeDragPreviewMetrics, setNativeDragPreviewMetrics] =
+      createSignal<NativeDragPreviewMetrics | null>(null)
+    createEffect(() => {
+      nativeDragPreviewKey()
+      setNativeDragPreviewMetrics(null)
+    })
+    const nativeDragPreviewLoaded = createMemo(() => {
+      return nativeDragPreviewVisible()?.loaded ?? false
+    })
+    const nativeDragPreviewSrc = createMemo(() => {
+      const preview = nativeDragPreviewVisible()
+      if (!preview) return ''
+      return preview.src
+    })
     const keepShellContentMounted = createMemo(() => shellHostedMemberWindowIds().length > 0)
     const splitLayout = createMemo(() => {
       const currentGroup = group()
       return currentGroup ? splitLayoutForGroup(currentGroup) : null
     })
+    const detachedNativeAwaitingMove = createMemo(() => {
+      const window = visibleWindow()
+      const drag = tabDragState()
+      if (!window || !drag || !drag.detached || drag.windowId !== window.window_id) return false
+      if ((window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0) return false
+      return options.compositorMoveWindowId() !== window.window_id &&
+        options.compositorMoveProxyWindowId() !== window.window_id &&
+        options.compositorMoveCaptureWindowId() !== window.window_id
+    })
     const frameHidden = createMemo(() => visibleWindow()?.minimized ?? false)
+    const proxyHidden = createMemo(() => activeMoveProxyWindowId() === visibleWindowId())
+    const dragOpacity = createMemo(() => {
+      if (activeFrameDragWindowId() !== visibleWindowId()) return 1
+      const window = visibleWindow()
+      if (!window) return 1
+      const shellHosted = (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+      if (shellHosted) return 0.76
+      if (nativeDragPreviewLoaded()) return 0.76
+      return activeMoveProxyWindowId() === visibleWindowId() ? 0.76 : 1
+    })
+    const contentPointerEvents = createMemo<'auto' | 'none'>(() => {
+      const window = visibleWindow()
+      if (!window) return 'auto'
+      const shellHosted = (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+      if (shellHosted) return 'auto'
+      return nativeDragPreviewVisible() ? 'none' : 'auto'
+    })
+    const contentBackground = createMemo(() => {
+      const window = visibleWindow()
+      if (!window) return 'var(--shell-surface-inset)'
+      const shellHosted = (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+      if (shellHosted) return 'var(--shell-surface-inset)'
+      return nativeDragPreviewLoaded() ? 'var(--shell-surface-inset)' : 'transparent'
+    })
     const frameModel = createMemo((): ShellWindowModel | undefined => {
       const window = visibleWindow()
       if (!window) return undefined
@@ -617,11 +805,16 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     })
     const showFrame = createMemo(() => {
       const model = frameModel()
-      return model !== undefined && (!frameHidden() || keepShellContentMounted())
+      return model !== undefined && !detachedNativeAwaitingMove() && (!frameHidden() || keepShellContentMounted())
     })
     const stackZ = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()
-      return currentVisibleWindowId == null ? 0 : (options.allWindowsMap().get(currentVisibleWindowId)?.stack_z ?? 0)
+      if (currentVisibleWindowId == null) return 0
+      const base = options.allWindowsMap().get(currentVisibleWindowId)?.stack_z ?? 0
+      return options.shellWindowDragId() === currentVisibleWindowId &&
+        activeMoveProxyWindowId() !== currentVisibleWindowId
+        ? base + 1_000_000
+        : base
     })
     const rowFocused = createMemo(() => options.activeWorkspaceGroupId() === props.groupId)
     const deskShellUiReg = createMemo(() => {
@@ -679,14 +872,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
         >
           <Show when={shellHosted}>
-            <div
+            <ShellHostedContentMount
+              windowId={windowId}
               class="pointer-events-auto h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
               onPointerDown={() => {
                 options.selectGroupWindow(windowId)
               }}
-            >
-              {options.renderShellWindowContent(windowId)}
-            </div>
+            />
           </Show>
         </div>
       )
@@ -698,8 +890,11 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           repaintKey={options.snapChromeRev}
           stackZ={stackZ}
           focused={rowFocused}
-          dragging={() => activeDragWindowId() === visibleWindowId()}
-          hidden={frameHidden}
+          dragging={() => activeFrameDragWindowId() === visibleWindowId()}
+          dragOpacity={dragOpacity}
+          contentPointerEvents={contentPointerEvents}
+          contentBackground={contentBackground}
+          hidden={() => frameHidden() || proxyHidden()}
           shellUiRegister={splitLayout() || frameHidden() ? undefined : deskShellUiReg()}
           tabStrip={
             group() ? (
@@ -797,20 +992,52 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
         >
           <Show when={!splitLayout() && visibleWindowId() !== null}>
+            <Show when={nativeDragPreviewVisible()}>
+              {(preview) => (
+                <div
+                  class="pointer-events-none relative h-full min-h-0 min-w-0 overflow-hidden"
+                  data-shell-native-drag-preview={preview().window_id}
+                  data-shell-native-drag-preview-generation={preview().generation}
+                  data-shell-native-drag-preview-loaded={
+                    nativeDragPreviewLoaded() ? 'true' : 'false'
+                  }
+                  data-shell-native-drag-preview-src={nativeDragPreviewSrc()}
+                  data-shell-native-drag-preview-src-width={
+                    nativeDragPreviewMetrics()?.sourceWidth ?? ''
+                  }
+                  data-shell-native-drag-preview-src-height={
+                    nativeDragPreviewMetrics()?.sourceHeight ?? ''
+                  }
+                  data-shell-native-drag-preview-backing-width={
+                    nativeDragPreviewMetrics()?.backingWidth ?? ''
+                  }
+                  data-shell-native-drag-preview-backing-height={
+                    nativeDragPreviewMetrics()?.backingHeight ?? ''
+                  }
+                  style={{
+                    background: nativeDragPreviewLoaded() ? 'var(--shell-surface-inset)' : 'transparent',
+                  }}
+                >
+                  <NativeDragPreviewCanvas
+                    image={preview().loaded ? preview().image : null}
+                    onMetrics={setNativeDragPreviewMetrics}
+                  />
+                </div>
+              )}
+            </Show>
             <For each={shellHostedMemberWindowIds()}>
               {(memberWindowId) => {
                 const visible = () => memberWindowId === visibleWindowId()!
                 return (
-                  <div
+                  <ShellHostedContentMount
+                    windowId={memberWindowId}
                     class={
                       visible()
                         ? 'pointer-events-auto relative h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)'
                         : 'pointer-events-none invisible absolute inset-0 min-h-0 min-w-0 overflow-auto'
                     }
                     aria-hidden={visible() ? undefined : 'true'}
-                  >
-                    {options.renderShellWindowContent(memberWindowId)}
-                  </div>
+                  />
                 )
               }}
             </For>
@@ -849,6 +1076,63 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           )}
         </Show>
       </Show>
+    )
+  }
+
+  function ShellHostedContentMount(props: {
+    windowId: number
+    class: string
+    style?: JSX.CSSProperties
+    ['aria-hidden']?: 'true' | undefined
+    onPointerDown?: JSX.EventHandlerUnion<HTMLDivElement, PointerEvent>
+  }) {
+    let root: HTMLDivElement | undefined
+    onMount(() => {
+      updateShellHostedContentMount(props.windowId, root)
+    })
+    onCleanup(() => {
+      if (root && shellHostedContentMounts().get(props.windowId) === root) {
+        updateShellHostedContentMount(props.windowId, undefined)
+      }
+    })
+    return (
+      <div
+        ref={(el) => {
+          root = el
+        }}
+        data-shell-hosted-content-mount={props.windowId}
+        class={props.class}
+        style={props.style}
+        aria-hidden={props['aria-hidden']}
+        onPointerDown={props.onPointerDown}
+      />
+    )
+  }
+
+  function ShellHostedWindowContentPortals() {
+    const shellHostedWindowIds = createMemo(() =>
+      [...options.allWindowsMap().values()]
+        .filter((window) => (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0)
+        .map((window) => window.window_id),
+    )
+
+    return (
+      <>
+        <div
+          ref={(el) => {
+            shellHostedContentParkingLot = el
+          }}
+          class="hidden"
+          aria-hidden="true"
+        />
+        <For each={shellHostedWindowIds()}>
+          {(windowId) => (
+            <Portal mount={shellHostedContentMounts().get(windowId) ?? shellHostedContentParkingLot ?? document.body}>
+              {options.renderShellWindowContent(windowId)}
+            </Portal>
+          )}
+        </For>
+      </>
     )
   }
 
@@ -973,7 +1257,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function finishWindowDragDrop(pointerOverride?: { x: number; y: number } | null) {
     if (tabDragState()) return false
     const windowId = activeWindowDragWindowId()
-    const pointer = pointerOverride ?? options.pointerClient()
+    const pointer = pointerOverride ?? windowDragPointerClient()
     if (windowId == null || !pointer) return false
     const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
     if (!target) return false
@@ -1002,6 +1286,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
 
   return {
     WorkspaceGroupFrame,
+    ShellHostedWindowContentPortals,
     TabDragOverlay,
     WindowDragDropOverlay,
     SplitGestureOverlay,

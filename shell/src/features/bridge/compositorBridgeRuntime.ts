@@ -37,6 +37,8 @@ type CompositorInteractionState = {
   pointer_y: number
   move_window_id: number | null
   resize_window_id: number | null
+  move_proxy_window_id: number | null
+  move_capture_window_id: number | null
   move_rect: {
     x: number
     y: number
@@ -55,9 +57,16 @@ type CompositorInteractionState = {
   } | null
 } | null
 
+type NativeDragPreviewState = {
+  window_id: number
+  generation: number
+  image_path: string
+} | null
+
 type CompositorRuntimeWireOp =
   | 'close'
   | 'shell_ipc_pong'
+  | 'invalidate_view'
   | 'set_fullscreen'
   | 'set_geometry'
   | 'presentation_fullscreen'
@@ -77,6 +86,8 @@ type CompositorBridgeRuntimeOptions = {
   bumpTilingCfgRev: () => void
   setShellChromePrimaryName: (value: string | null) => void
   setCompositorInteractionState: (value: CompositorInteractionState) => void
+  setNativeDragPreview: (value: NativeDragPreviewState) => void
+  getNativeDragPreview: () => NativeDragPreviewState
   markHasSeenCompositorWindowSync: () => void
   clearWindowSyncRecoveryPending: () => void
   scheduleExclusionZonesSync: () => void
@@ -289,14 +300,47 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyInteractionStateDetail = (d: Extract<DerpShellDetail, { type: 'interaction_state' }>) => {
+    const moveWindowId = coerceShellWindowId(d.move_window_id)
     options.setCompositorInteractionState({
       pointer_x: d.pointer_x,
       pointer_y: d.pointer_y,
-      move_window_id: coerceShellWindowId(d.move_window_id),
+      move_window_id: moveWindowId,
       resize_window_id: coerceShellWindowId(d.resize_window_id),
+      move_proxy_window_id: coerceShellWindowId(d.move_proxy_window_id),
+      move_capture_window_id: coerceShellWindowId(d.move_capture_window_id),
       move_rect: d.move_rect,
       resize_rect: d.resize_rect,
     })
+  }
+
+  const applyNativeDragPreviewDetail = (d: Extract<DerpShellDetail, { type: 'native_drag_preview' }>) => {
+    const window_id = coerceShellWindowId(d.window_id) ?? d.window_id
+    const generation = Math.max(1, Math.trunc(d.generation))
+    if (d.image_path.length === 0) {
+      const current = options.getNativeDragPreview()
+      if (
+        current &&
+        (current.window_id !== window_id || current.generation !== generation)
+      ) {
+        return
+      }
+      options.setNativeDragPreview(null)
+      return
+    }
+    const next = {
+      window_id,
+      generation,
+      image_path: d.image_path,
+    }
+    const current = options.getNativeDragPreview()
+    if (
+      current?.window_id === next.window_id &&
+      current.generation === next.generation &&
+      current.image_path === next.image_path
+    ) {
+      return
+    }
+    options.setNativeDragPreview(next)
   }
 
   const applySnapshotVisualDetail = (d: DerpShellDetail, skipOutputGeometry: boolean) => {
@@ -328,6 +372,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       applyInteractionStateDetail(d)
       return true
     }
+    if (d.type === 'native_drag_preview') {
+      applyNativeDragPreviewDetail(d)
+      return true
+    }
     return false
   }
 
@@ -336,6 +384,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawInteractionState = false
+    let sawFocusChanged = false
     batch(() => {
       options.applyModelCompositorSnapshot(details)
       for (const detail of details) {
@@ -346,12 +395,16 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         if (detail.type === 'interaction_state') {
           sawInteractionState = true
         }
+        if (detail.type === 'focus_changed') {
+          sawFocusChanged = true
+        }
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
       if (!sawInteractionState) options.setCompositorInteractionState(null)
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
+    if (sawFocusChanged) queueMicrotask(() => options.shellWireSend('invalidate_view'))
   }
 
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>

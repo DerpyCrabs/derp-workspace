@@ -152,20 +152,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const controls = windowControls(focusedShell, red.window.window_id)
     assert(controls?.titlebar, 'missing red titlebar before perf move')
     const titlebarCenter = rectCenter(controls.titlebar)
+    await resetPerfCounters(base)
     await dragBetweenPoints(base, titlebarCenter.x, titlebarCenter.y, titlebarCenter.x + 180, titlebarCenter.y + 48, 18)
     const movedSample = await waitFor(
       'wait for perf counters after window drag',
       async () => {
         const sample = await getPerfCounters(base)
-        const delta = diffPerfCounters(sample, openedSample)
-        if (delta.shell_updates.window_geometry_messages < 1) return null
-        if (delta.begin_frame.cef_send_external_begin_frame < 1) return null
+        if (sample.shell_updates.window_geometry_messages < 1) return null
+        if (sample.begin_frame.cef_send_external_begin_frame < 1) return null
         return sample
       },
       5000,
       100,
     )
-    const moveDelta = diffPerfCounters(movedSample, openedSample)
+    const moveDelta = movedSample
 
     assert(
       moveDelta.shell_updates.window_geometry_messages >= 1,
@@ -175,15 +175,21 @@ export default defineGroup(import.meta.url, ({ test }) => {
       moveDelta.begin_frame.cef_send_external_begin_frame >= 1,
       `window move should drive begin frames, got ${moveDelta.begin_frame.cef_send_external_begin_frame}`,
     )
-
-    const churnDelta = diffPerfCounters(movedSample, idleSample)
+    assert(
+      moveDelta.begin_frame.compositor_schedules_forced <= 2,
+      `window move should not rely on forced begin frames, got ${moveDelta.begin_frame.compositor_schedules_forced}`,
+    )
+    assert(
+      moveDelta.begin_frame.cef_send_external_begin_frame <= moveDelta.begin_frame.drm_render_ticks + 8,
+      `window move begin frames regressed: expected <= drm ticks + 8, got begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drm=${moveDelta.begin_frame.drm_render_ticks}`,
+    )
 
     assert(
-      churnDelta.shell_sync.full_window_list_replies <= 5,
-      `window churn should not trigger repeated full window list replies, got ${churnDelta.shell_sync.full_window_list_replies}`,
+      moveDelta.shell_sync.full_window_list_replies <= 2,
+      `window drag should not trigger repeated full window list replies, got ${moveDelta.shell_sync.full_window_list_replies}`,
     )
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} moved=${moveDelta.shell_updates.window_geometry_messages} full_lists=${churnDelta.shell_sync.full_window_list_replies} snapshot_notifies=${churnDelta.shell_sync.snapshot_notifies} snapshot_reads=${churnDelta.shell_sync.snapshot_reads}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} moved=${moveDelta.shell_updates.window_geometry_messages} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -193,7 +199,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       deltas: {
         open: openDelta,
         move: moveDelta,
-        churn: churnDelta,
       },
       windows: {
         red: red.window,

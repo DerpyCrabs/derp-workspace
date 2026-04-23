@@ -597,10 +597,7 @@ export function moveWorkspaceWindowToGroup(
       : sourceGroup.windowIds[0]
   }
   next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
-  next.activeTabByGroupId[targetGroupId] =
-    next.activeTabByGroupId[targetGroupId] && targetGroup.windowIds.includes(next.activeTabByGroupId[targetGroupId])
-      ? next.activeTabByGroupId[targetGroupId]
-      : targetGroup.windowIds[0]
+  next.activeTabByGroupId[targetGroupId] = sourceWindowId
   ensureValidSplitState(next)
   return next
 }
@@ -616,6 +613,10 @@ export function moveWorkspaceGroupToGroup(
   const targetGroup = state.groups.find((group) => group.id === targetGroupId)
   if (!sourceGroup || !targetGroup || sourceGroup.windowIds.length === 0) return state
   const movingWindowIds = [...sourceGroup.windowIds]
+  const sourceVisibleWindowId =
+    state.activeTabByGroupId[sourceGroupId] && sourceGroup.windowIds.includes(state.activeTabByGroupId[sourceGroupId])
+      ? state.activeTabByGroupId[sourceGroupId]
+      : sourceGroup.windowIds[0]
   const next = cloneState(state)
   const nextSourceGroup = next.groups.find((group) => group.id === sourceGroupId)
   const nextTargetGroup = next.groups.find((group) => group.id === targetGroupId)
@@ -641,10 +642,7 @@ export function moveWorkspaceGroupToGroup(
   delete next.activeTabByGroupId[sourceGroupId]
   next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, sourceGroupId)
   next.splitByGroupId = withoutGroupSplit(next.splitByGroupId, targetGroupId)
-  next.activeTabByGroupId[targetGroupId] =
-    next.activeTabByGroupId[targetGroupId] && nextTargetGroup.windowIds.includes(next.activeTabByGroupId[targetGroupId])
-      ? next.activeTabByGroupId[targetGroupId]
-      : nextTargetGroup.windowIds[0]
+  next.activeTabByGroupId[targetGroupId] = sourceVisibleWindowId
   ensureValidSplitState(next)
   return next
 }

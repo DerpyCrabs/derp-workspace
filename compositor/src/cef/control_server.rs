@@ -556,6 +556,22 @@ fn wallpaper_preview_allowed(canon: &Path) -> bool {
     ext_ok && canon.is_file()
 }
 
+fn native_drag_preview_allowed(canon: &Path) -> bool {
+    let runtime_dir = crate::cef::runtime_dir();
+    if !canon.starts_with(&runtime_dir) {
+        return false;
+    }
+    let Some(name) = canon.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    name.starts_with("derp-native-drag-preview-")
+        && canon
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        && canon.is_file()
+}
+
 fn json_i32_field(v: &serde_json::Value, key: &str) -> Result<i32, String> {
     let raw = v
         .get(key)
@@ -885,6 +901,24 @@ fn handle_one(
         }
         let jpeg = crate::desktop::desktop_background::encode_wallpaper_preview_jpeg(&canon)?;
         write_http_ok_bytes(stream, "image/jpeg", &jpeg).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/native_drag_preview" {
+        let q = query_str.ok_or_else(|| "native_drag_preview: missing query".to_string())?;
+        let p_enc =
+            query_param_raw(q, "p").ok_or_else(|| "native_drag_preview: missing p".to_string())?;
+        let p_dec = percent_decode_component(p_enc)?;
+        let pb = PathBuf::from(p_dec);
+        let canon = pb
+            .canonicalize()
+            .map_err(|e| format!("native_drag_preview: {e}"))?;
+        if !native_drag_preview_allowed(&canon) {
+            write_http_json(stream, 403, r#"{"error":"forbidden"}"#).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        let png = std::fs::read(&canon).map_err(|e| format!("native_drag_preview: {e}"))?;
+        write_http_ok_bytes(stream, "image/png", &png).map_err(|e| e.to_string())?;
         return Ok(());
     }
 

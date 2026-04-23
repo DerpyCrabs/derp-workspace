@@ -67,6 +67,8 @@ export type DerpShellDetail =
       pointer_y: number
       move_window_id: number | null
       resize_window_id: number | null
+      move_proxy_window_id: number | null
+      move_capture_window_id: number | null
       move_rect:
         | {
             x: number
@@ -87,6 +89,12 @@ export type DerpShellDetail =
             fullscreen: boolean
           }
         | null
+    }
+  | {
+      type: 'native_drag_preview'
+      window_id: number
+      generation: number
+      image_path: string
     }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }

@@ -104,6 +104,7 @@ pub const MSG_COMPOSITOR_WORKSPACE_STATE: u32 = 57;
 pub const MSG_SHELL_WORKSPACE_MUTATION: u32 = 58;
 pub const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE: u32 = 59;
 pub const MSG_COMPOSITOR_INTERACTION_STATE: u32 = 60;
+pub const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW: u32 = 61;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -137,7 +138,7 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 3;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 4;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -1178,8 +1179,15 @@ pub enum DecodedCompositorToShellMessage {
         pointer_y: i32,
         move_window_id: u32,
         resize_window_id: u32,
+        move_proxy_window_id: u32,
+        move_capture_window_id: u32,
         move_visual: Option<CompositorInteractionVisual>,
         resize_visual: Option<CompositorInteractionVisual>,
+    },
+    NativeDragPreview {
+        window_id: u32,
+        generation: u32,
+        image_path: String,
     },
     TrayHints {
         slot_count: u32,
@@ -1305,10 +1313,12 @@ pub fn encode_compositor_interaction_state(
     pointer_y: i32,
     move_window_id: u32,
     resize_window_id: u32,
+    move_proxy_window_id: u32,
+    move_capture_window_id: u32,
     move_visual: Option<CompositorInteractionVisual>,
     resize_visual: Option<CompositorInteractionVisual>,
 ) -> Vec<u8> {
-    let body_len = 60u32;
+    let body_len = 68u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     let encode_visual =
         |out: &mut Vec<u8>, visual: Option<CompositorInteractionVisual>| match visual {
@@ -1340,9 +1350,35 @@ pub fn encode_compositor_interaction_state(
     v.extend_from_slice(&pointer_y.to_le_bytes());
     v.extend_from_slice(&move_window_id.to_le_bytes());
     v.extend_from_slice(&resize_window_id.to_le_bytes());
+    v.extend_from_slice(&move_proxy_window_id.to_le_bytes());
+    v.extend_from_slice(&move_capture_window_id.to_le_bytes());
     encode_visual(&mut v, move_visual);
     encode_visual(&mut v, resize_visual);
     v
+}
+
+pub fn encode_compositor_native_drag_preview(
+    window_id: u32,
+    generation: u32,
+    image_path: &str,
+) -> Option<Vec<u8>> {
+    let path = image_path.as_bytes();
+    let path_len = u32::try_from(path.len()).ok()?;
+    if window_id == 0 || generation == 0 || path_len > MAX_WINDOW_STRING_BYTES {
+        return None;
+    }
+    let body_len = 16u32.checked_add(path_len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW.to_le_bytes());
+    v.extend_from_slice(&window_id.to_le_bytes());
+    v.extend_from_slice(&generation.to_le_bytes());
+    v.extend_from_slice(&path_len.to_le_bytes());
+    v.extend_from_slice(path);
+    Some(v)
 }
 
 pub fn encode_compositor_tray_sni(items: &[TraySniItemWire]) -> Option<Vec<u8>> {
@@ -2109,7 +2145,7 @@ fn decode_compositor_to_shell_body(
             Ok(DecodedCompositorToShellMessage::ShellHostedAppState { state_json })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
-            if body.len() != 60 {
+            if body.len() != 68 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let decode_visual = |window_id: u32,
@@ -2131,13 +2167,42 @@ fn decode_compositor_to_shell_body(
             let pointer_y = i32::from_le_bytes(body[8..12].try_into().unwrap());
             let move_window_id = u32::from_le_bytes(body[12..16].try_into().unwrap());
             let resize_window_id = u32::from_le_bytes(body[16..20].try_into().unwrap());
+            let move_proxy_window_id = u32::from_le_bytes(body[20..24].try_into().unwrap());
+            let move_capture_window_id = u32::from_le_bytes(body[24..28].try_into().unwrap());
             Ok(DecodedCompositorToShellMessage::InteractionState {
                 pointer_x,
                 pointer_y,
                 move_window_id,
                 resize_window_id,
-                move_visual: decode_visual(move_window_id, 20),
-                resize_visual: decode_visual(resize_window_id, 40),
+                move_proxy_window_id,
+                move_capture_window_id,
+                move_visual: decode_visual(move_window_id, 28),
+                resize_visual: decode_visual(resize_window_id, 48),
+            })
+        }
+        MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW => {
+            if body.len() < 16 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let window_id = u32::from_le_bytes(body[4..8].try_into().unwrap());
+            let generation = u32::from_le_bytes(body[8..12].try_into().unwrap());
+            let path_len = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+            if window_id == 0 || generation == 0 || path_len > MAX_WINDOW_STRING_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 16usize
+                .checked_add(path_len)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let image_path = std::str::from_utf8(&body[16..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedCompositorToShellMessage::NativeDragPreview {
+                window_id,
+                generation,
+                image_path,
             })
         }
         MSG_COMPOSITOR_TRAY_HINTS => {

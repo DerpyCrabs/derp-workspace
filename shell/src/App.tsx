@@ -148,6 +148,12 @@ function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
   void detail
 }
 
+function nativeDragPreviewUrl(imagePath: string, generation: number) {
+  const base = shellHttpBase()
+  if (!base) return ''
+  return `${base}/native_drag_preview?p=${encodeURIComponent(imagePath)}&g=${generation}`
+}
+
 const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   op: ShellCompositorWireOp,
   arg?: number | string,
@@ -197,6 +203,7 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   } else if (
     op === 'quit' ||
     op === 'request_compositor_sync' ||
+    op === 'invalidate_view' ||
     op === 'shell_ipc_pong' ||
     op === 'resize_shell_grab_end'
   ) {
@@ -215,6 +222,12 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
     fn(op, arg)
+  } else if (
+    op === 'native_drag_preview_ready' &&
+    typeof arg === 'number' &&
+    typeof arg2 === 'number'
+  ) {
+    fn(op, arg, arg2)
   } else if (
     op === 'set_tile_preview' &&
     typeof arg === 'number' &&
@@ -268,6 +281,8 @@ function App() {
     pointer_y: number
     move_window_id: number | null
     resize_window_id: number | null
+    move_proxy_window_id: number | null
+    move_capture_window_id: number | null
     move_rect: {
       x: number
       y: number
@@ -285,6 +300,13 @@ function App() {
       fullscreen: boolean
     } | null
   } | null>(null)
+  const [nativeDragPreview, setNativeDragPreview] = createSignal<{
+    window_id: number
+    generation: number
+    image_path: string
+  } | null>(null)
+  const [loadedNativeDragPreviewKey, setLoadedNativeDragPreviewKey] = createSignal<string | null>(null)
+  const [loadedNativeDragPreviewImage, setLoadedNativeDragPreviewImage] = createSignal<HTMLImageElement | null>(null)
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
   const [pointerInMain, setPointerInMain] = createSignal<{ x: number; y: number } | null>(null)
   const [viewportCss, setViewportCss] = createSignal({
@@ -303,6 +325,57 @@ function App() {
   }>({
     muted: false,
     volumePercent: null,
+  })
+  const nativeDragPreviewKey = createMemo(() => {
+    const preview = nativeDragPreview()
+    return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
+  })
+  const nativeDragPreviewWindowId = createMemo(() => nativeDragPreview()?.window_id ?? null)
+  const nativeDragPreviewGeneration = createMemo(() => nativeDragPreview()?.generation ?? null)
+  const nativeDragPreviewSrc = createMemo(() => {
+    const preview = nativeDragPreview()
+    if (!preview) return ''
+    return nativeDragPreviewUrl(preview.image_path, preview.generation)
+  })
+  createEffect(() => {
+    const key = nativeDragPreviewKey()
+    const windowId = nativeDragPreviewWindowId()
+    const generation = nativeDragPreviewGeneration()
+    const src = nativeDragPreviewSrc()
+    setLoadedNativeDragPreviewKey(null)
+    setLoadedNativeDragPreviewImage(null)
+    if (!key || windowId === null || generation === null || !src) return
+    let cancelled = false
+    let loaded = false
+    const image = new Image()
+    const markLoaded = () => {
+      if (cancelled || loaded) return
+      loaded = true
+      setLoadedNativeDragPreviewImage(image)
+      setLoadedNativeDragPreviewKey(key)
+      shellWireSend('native_drag_preview_ready', windowId, generation)
+    }
+    image.onload = markLoaded
+    image.src = src
+    if (image.complete && image.naturalWidth > 0) markLoaded()
+    onCleanup(() => {
+      cancelled = true
+      image.onload = null
+    })
+  })
+  const nativeDragPreviewAsset = createMemo(() => {
+    const preview = nativeDragPreview()
+    const key = nativeDragPreviewKey()
+    const src = nativeDragPreviewSrc()
+    if (!preview || !key || !src) return null
+    const image = loadedNativeDragPreviewImage()
+    const loaded = loadedNativeDragPreviewKey() === key && image !== null
+    return {
+      ...preview,
+      src,
+      loaded,
+      image: loaded ? image : null,
+    }
   })
   const shellAudio = useShellAudioState()
   createEffect(() => {
@@ -1158,6 +1231,23 @@ function App() {
       </>
     )
   })
+  const windowInteractionCapture = createMemo(() => {
+    const state = compositorInteractionState()
+    if (!state) return null
+    const activeWindowId =
+      state.move_proxy_window_id ?? state.move_window_id ?? state.resize_window_id
+    if (activeWindowId === null) return null
+    const activeWindow = windows().get(activeWindowId)
+    if (!activeWindow || !windowIsShellHosted(activeWindow)) return null
+    return {
+      cursor:
+        state.resize_window_id !== null
+          ? 'cursor-default'
+          : state.move_window_id !== null || state.move_proxy_window_id !== null
+            ? 'cursor-grabbing'
+            : 'cursor-default',
+    }
+  })
 
   createEffect(() => {
     outputGeom()
@@ -1202,6 +1292,7 @@ function App() {
     floatBeforeMaximize,
     shellWireSend,
     shellMoveLog,
+    clearNativeDragPreview: () => setNativeDragPreview(null),
   })
 
   const workspaceChrome = createWorkspaceChrome({
@@ -1220,12 +1311,18 @@ function App() {
     renderShellWindowContent,
     interactionFrameForWindow: compositorInteractionFrameForWindow,
     pointerClient,
+    compositorPointerClient: () => compositorInteractionPointerClient(),
     shellWindowDragId: shellWindowGestureRuntime.dragWindowId,
     shellWindowDragMoved: shellWindowGestureRuntime.dragWindowMoved,
+    compositorMoveWindowId: () => compositorInteractionState()?.move_window_id ?? null,
+    compositorMoveProxyWindowId: () => compositorInteractionState()?.move_proxy_window_id ?? null,
+    compositorMoveCaptureWindowId: () => compositorInteractionState()?.move_capture_window_id ?? null,
+    nativeDragPreview: nativeDragPreviewAsset,
     focusShellUiWindow,
     activateTaskbarWindowViaShell,
     focusWindowViaShell,
     beginShellWindowMove: shellWindowGestureRuntime.beginShellWindowMove,
+    adoptShellWindowMove: shellWindowGestureRuntime.adoptShellWindowMove,
     beginShellWindowResize: shellWindowGestureRuntime.beginShellWindowResize,
     toggleShellMaximizeForWindow: shellWindowGestureRuntime.toggleShellMaximizeForWindow,
     closeGroupWindow,
@@ -1382,6 +1479,17 @@ function App() {
       registerShellE2eBridge: {
         getMainRef: () => mainRef ?? null,
         getViewport: viewportCss,
+        getPointerClient: pointerClient,
+        getCompositorInteractionState: () => {
+          const state = compositorInteractionState()
+          if (!state) return null
+          return {
+            move_window_id: state.move_window_id,
+            resize_window_id: state.resize_window_id,
+            move_proxy_window_id: state.move_proxy_window_id,
+            move_capture_window_id: state.move_capture_window_id,
+          }
+        },
         getOrigin: layoutCanvasOrigin,
         getCanvas: () => {
           const logicalCanvas = layoutUnionBbox()
@@ -1389,6 +1497,7 @@ function App() {
         },
         getWindows: windowsList,
         getWorkspaceGroups: workspaceGroups,
+        getTaskbarRowsByMonitor: taskbarRowsByMonitor,
         getFocusedWindowId: focusedWindowId,
         getKeyboardLayoutLabel: keyboardLayoutLabel,
         getScreenshotMode: screenshotMode,
@@ -1431,6 +1540,8 @@ function App() {
         bumpTilingCfgRev: () => setTilingCfgRev((n) => n + 1),
         setShellChromePrimaryName,
         setCompositorInteractionState,
+        setNativeDragPreview,
+        getNativeDragPreview: nativeDragPreview,
         markHasSeenCompositorWindowSync: sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
         clearWindowSyncRecoveryPending: () => {
           windowSyncRecoveryPending = false
@@ -1579,6 +1690,8 @@ function App() {
         )}
       </Show>
 
+      <workspaceChrome.ShellHostedWindowContentPortals />
+
       <For each={workspaceGroupIds()}>
         {(groupId) => <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />}
       </For>
@@ -1588,6 +1701,18 @@ function App() {
 
       <Show when={workspaceChrome.splitGroupGesture()}>
         <workspaceChrome.SplitGestureOverlay />
+      </Show>
+
+      <Show when={windowInteractionCapture()} keyed>
+        {(capture) => (
+          <div
+            data-window-interaction-capture
+            class={`fixed inset-0 z-470118 touch-none ${capture.cursor}`}
+            onContextMenu={(event) => {
+              event.preventDefault()
+            }}
+          />
+        )}
       </Show>
 
       {volumeOverlayHud()}

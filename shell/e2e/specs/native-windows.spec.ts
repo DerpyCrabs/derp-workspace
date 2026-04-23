@@ -1,7 +1,11 @@
+import { fileURLToPath } from 'node:url'
+
 import {
   BTN_LEFT,
   assertTaskbarRowOnMonitor,
+  comparePngFixture,
   compositorWindowStack,
+  copyArtifactFile,
   GREEN_NATIVE_TITLE,
   NATIVE_APP_ID,
   pickMonitorMove,
@@ -11,6 +15,7 @@ import {
   SHELL_UI_SETTINGS_WINDOW_ID,
   SkipError,
   activateTaskbarWindow,
+  autoLayoutManagedWindowsOnOutput,
   assert,
   assertTopWindow,
   assertWindowTiled,
@@ -20,6 +25,7 @@ import {
   defineGroup,
   dragBetweenPoints,
   ensureNativePair,
+  expectedGridAutoLayoutClientRect,
   getPerfCounters,
   getJson,
   getShellHtml,
@@ -39,6 +45,7 @@ import {
   shellWindowById,
   syncTest,
   taskbarForMonitor,
+  taskbarWindowOrderOnMonitor,
   waitFor,
   waitForNativeFocus,
   waitForShellUiFocus,
@@ -127,6 +134,21 @@ function assertRestackToFront(beforeShell: ShellSnapshot, afterShell: ShellSnaps
   assert(
     afterSet.join(',') === beforeSet.join(','),
     `${label}: expected tracked set ${beforeSet.join(', ')}, got ${afterSet.join(', ')}`,
+  )
+}
+
+function assertTrackedTaskbarOrder(
+  shell: ShellSnapshot,
+  monitorName: string,
+  trackedWindowIds: number[],
+  expectedOrder: number[],
+  label: string,
+) {
+  const tracked = new Set(trackedWindowIds)
+  const actual = taskbarWindowOrderOnMonitor(shell, monitorName).filter((windowId) => tracked.has(windowId))
+  assert(
+    actual.join(',') === expectedOrder.join(','),
+    `${label}: expected taskbar order ${expectedOrder.join(', ')}, got ${actual.join(', ')}`,
   )
 }
 
@@ -677,11 +699,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
-  test('native shell titlebar tracks compositor move visual during active drag', async ({ base, state }) => {
+  test('native drag preview keeps shell titlebar aligned with captured content', async ({ base, state }) => {
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
       title: `Derp Native Drag Visual ${stamp}`,
-      token: `native-drag-visual-${stamp}`,
+      token: 'native-drag-preview-green',
       strip: 'green',
     })
     state.spawnedNativeWindowIds.add(spawned.window.window_id)
@@ -704,8 +726,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     await movePoint(base, startX, startY)
     await pointerButton(base, BTN_LEFT, 'press')
-    const dx = 260
-    const dy = 92
+    const dx = -220
+    const dy = -84
     const steps = 30
     for (let index = 1; index <= steps; index += 1) {
       const t = index / steps
@@ -716,34 +738,334 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
 
     const duringDrag = await waitFor(
-      'wait for native titlebar to track compositor move visual',
+      'wait for native drag preview to track compositor move visual',
       async () => {
         const { compositor, shell } = await getSnapshots(base)
         if (compositor.shell_move_window_id !== windowId || !compositor.shell_move_visual) return null
+        if (compositor.shell_move_proxy_window_id != null) return null
+        if (compositor.shell_native_drag_preview_window_id !== windowId) return null
+        if (compositor.shell_native_drag_preview_shell_ready !== true) return null
+        if (!compositor.shell_native_drag_preview_image_path) return null
+        if (!compositor.shell_native_drag_preview_clip_rect) return null
         const controls = windowControls(shell, windowId)
-        const liveTitlebar = controls?.titlebar
-        if (!liveTitlebar) return null
+        if (
+          !controls?.dragging ||
+          !controls.titlebar ||
+          !controls.native_drag_preview_rect ||
+          controls.native_drag_preview_loaded !== true ||
+          controls.native_drag_preview_source_width == null ||
+          controls.native_drag_preview_source_height == null ||
+          controls.native_drag_preview_backing_width == null ||
+          controls.native_drag_preview_backing_height == null
+        ) {
+          return null
+        }
+        if (Math.abs(controls.native_drag_preview_source_width - controls.native_drag_preview_backing_width) > 1) {
+          return null
+        }
+        if (Math.abs(controls.native_drag_preview_source_height - controls.native_drag_preview_backing_height) > 1) {
+          return null
+        }
         const expected = nativeFrameTopLeftFromVisual(compositor.shell_move_visual)
-        if (Math.abs(liveTitlebar.global_x - expected.x) > 8) return null
-        if (Math.abs(liveTitlebar.global_y - expected.y) > 8) return null
+        const previewRect = controls.native_drag_preview_rect
+        const clipRect = compositor.shell_native_drag_preview_clip_rect
+        if (Math.abs(controls.titlebar.global_x - expected.x) > 8) return null
+        if (Math.abs(controls.titlebar.global_y - expected.y) > 8) return null
+        if (Math.abs(previewRect.global_x - compositor.shell_move_visual.x) > 8) return null
+        if (Math.abs(previewRect.global_y - compositor.shell_move_visual.y) > 8) return null
+        if (Math.abs(previewRect.width - compositor.shell_move_visual.width) > 8) return null
+        if (Math.abs(previewRect.height - compositor.shell_move_visual.height) > 8) return null
+        const expectedClip = {
+          x: expected.x,
+          y: expected.y,
+          width: compositor.shell_move_visual.width + 2 * NATIVE_BORDER_PX,
+          height: compositor.shell_move_visual.height + NATIVE_TITLEBAR_PX + NATIVE_BORDER_PX,
+        }
+        if (Math.abs(clipRect.x - expectedClip.x) > 8) return null
+        if (Math.abs(clipRect.y - expectedClip.y) > 8) return null
+        if (Math.abs(clipRect.width - expectedClip.width) > 8) return null
+        if (Math.abs(clipRect.height - expectedClip.height) > 8) return null
         return {
           compositor,
           shell,
+          controls,
           expected,
-          titlebar: liveTitlebar,
+          previewRect,
+          clipRect,
         }
       },
       1000,
       20,
     )
+    const previewFixture = fileURLToPath(
+      new URL('../fixtures/visual/native-drag-preview-green.png', import.meta.url),
+    )
+    const previewActualArtifact = await copyArtifactFile(
+      'native-drag-preview-green-actual.png',
+      String(duringDrag.compositor.shell_native_drag_preview_image_path),
+    )
+    const previewVisual = await comparePngFixture(
+      String(duringDrag.compositor.shell_native_drag_preview_image_path),
+      previewFixture,
+      {
+        maxDifferentPixels: 240,
+        maxChannelDelta: 3,
+      },
+    )
+    const dragScreenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {
+      x: Math.max(0, duringDrag.expected.x - 24),
+      y: Math.max(0, duringDrag.expected.y - 24),
+      width: duringDrag.clipRect.width + 48,
+      height: duringDrag.clipRect.height + 48,
+    })
+    assert(dragScreenshot.path, 'native drag visual screenshot path missing')
 
     await pointerButton(base, BTN_LEFT, 'release')
+    const afterRelease = await waitFor(
+      'wait for native drag preview handoff back to live titlebar',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (
+          compositor.shell_move_window_id !== null ||
+          compositor.shell_move_proxy_window_id != null ||
+          compositor.shell_native_drag_preview_window_id != null
+        ) {
+          return null
+        }
+        const controls = windowControls(shell, windowId)
+        const titlebar = controls?.titlebar
+        const movedWindow = compositorWindowById(compositor, windowId)
+        if (!titlebar || !movedWindow) return null
+        const expected = nativeFrameTopLeftFromVisual(movedWindow)
+        if (Math.abs(titlebar.global_x - expected.x) > 8) return null
+        if (Math.abs(titlebar.global_y - expected.y) > 8) return null
+        return {
+          compositor,
+          shell,
+          controls,
+          titlebar,
+          expected,
+        }
+      },
+      1000,
+      20,
+    )
+    const firstPreviewGeneration = duringDrag.controls.native_drag_preview_generation
+    assert(firstPreviewGeneration != null, 'native drag preview generation missing during first drag')
+
+    const secondStartX = Math.round(
+      afterRelease.titlebar.global_x + Math.min(140, Math.max(40, afterRelease.titlebar.width * 0.35)),
+    )
+    const secondStartY = Math.round(afterRelease.titlebar.global_y + afterRelease.titlebar.height / 2)
+    await movePoint(base, secondStartX, secondStartY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    await postJson(base, '/test/input/pointer_move', {
+      x: secondStartX + 28,
+      y: secondStartY + 16,
+    })
+    const secondDragStart = await waitFor(
+      'wait for second native drag start without stale preview reuse',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (compositor.shell_move_window_id !== windowId || !compositor.shell_move_visual) return null
+        const controls = windowControls(shell, windowId)
+        return {
+          compositor,
+          shell,
+          controls,
+          previewGeneration: controls?.native_drag_preview_generation ?? null,
+        }
+      },
+      400,
+      10,
+    )
+    assert(
+      secondDragStart.previewGeneration !== firstPreviewGeneration,
+      `second drag reused stale native preview generation ${String(firstPreviewGeneration)}`,
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+    const afterSecondRelease = await waitFor(
+      'wait for second native drag preview handoff back to live titlebar',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (
+          compositor.shell_move_window_id !== null ||
+          compositor.shell_move_proxy_window_id != null ||
+          compositor.shell_native_drag_preview_window_id != null
+        ) {
+          return null
+        }
+        const controls = windowControls(shell, windowId)
+        const titlebar = controls?.titlebar
+        const movedWindow = compositorWindowById(compositor, windowId)
+        if (!titlebar || !movedWindow) return null
+        const expected = nativeFrameTopLeftFromVisual(movedWindow)
+        if (Math.abs(titlebar.global_x - expected.x) > 8) return null
+        if (Math.abs(titlebar.global_y - expected.y) > 8) return null
+        return {
+          compositor,
+          shell,
+          controls,
+          titlebar,
+          expected,
+        }
+      },
+      1000,
+      20,
+    )
     await syncTest(base)
 
     await writeJsonArtifact('native-drag-titlebar-live.json', {
       windowId,
-      titlebar: duringDrag.titlebar,
+      previewRect: duringDrag.previewRect,
+      clipRect: duringDrag.clipRect,
       expected: duringDrag.expected,
+      previewImagePath: duringDrag.compositor.shell_native_drag_preview_image_path,
+      previewReady: duringDrag.compositor.shell_native_drag_preview_shell_ready,
+      previewLoaded: duringDrag.controls.native_drag_preview_loaded,
+      previewSourceWidth: duringDrag.controls.native_drag_preview_source_width,
+      previewSourceHeight: duringDrag.controls.native_drag_preview_source_height,
+      previewBackingWidth: duringDrag.controls.native_drag_preview_backing_width,
+      previewBackingHeight: duringDrag.controls.native_drag_preview_backing_height,
+      previewActualArtifact,
+      previewVisual,
+      dragScreenshot,
+      dragScreenshotArtifact: await copyArtifactFile('native-drag-proxy-full-actual.png', dragScreenshot.path),
+      firstPreviewGeneration,
+      secondDragPreviewGeneration: secondDragStart.previewGeneration,
+      compositorDuringDrag: duringDrag.compositor,
+      shellDuringDrag: duringDrag.shell,
+      compositorAfterRelease: afterRelease.compositor,
+      shellAfterRelease: afterRelease.shell,
+      titlebarAfterRelease: afterRelease.titlebar,
+      compositorSecondDragStart: secondDragStart.compositor,
+      shellSecondDragStart: secondDragStart.shell,
+      compositorAfterSecondRelease: afterSecondRelease.compositor,
+      shellAfterSecondRelease: afterSecondRelease.shell,
+      titlebarAfterSecondRelease: afterSecondRelease.titlebar,
+    })
+  })
+
+  test('native drag preview keeps clipped left edge unstretched', async ({ base, state }) => {
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Native Drag Clipped ${stamp}`,
+      token: 'native-drag-preview-green',
+      strip: 'green',
+      width: 2200,
+      height: 240,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const initial = await waitFor(
+      'wait for clipped native drag start geometry',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const controls = windowControls(shell, windowId)
+        const titlebar = controls?.titlebar
+        const window = compositorWindowById(compositor, windowId)
+        if (!titlebar || !window) return null
+        const output = outputForWindow(compositor, window)
+        if (!output) return null
+        const clipped =
+          window.x < output.x ||
+          window.y < output.y ||
+          window.x + window.width > output.x + output.width ||
+          window.y + window.height > output.y + output.height
+        if (!clipped) return null
+        return { compositor, shell, controls, titlebar, window, output }
+      },
+      5000,
+      100,
+    )
+    const titlebar = assertRectMinSize('clipped native drag titlebar', initial.titlebar, 80, 16)
+    const visibleLeft = Math.max(titlebar.global_x, initial.output.x)
+    const visibleRight = Math.min(titlebar.global_x + titlebar.width, initial.output.x + initial.output.width)
+    const dragStartX = Math.round(
+      Math.max(visibleLeft + 40, Math.min(visibleRight - 40, visibleLeft + (visibleRight - visibleLeft) / 2)),
+    )
+    const dragStartY = Math.round(titlebar.global_y + titlebar.height / 2)
+    await movePoint(base, dragStartX, dragStartY)
+    await pointerButton(base, BTN_LEFT, 'press')
+    const dx = 96
+    const dy = 36
+    const dragSteps = 24
+    for (let index = 1; index <= dragSteps; index += 1) {
+      const t = index / dragSteps
+      await postJson(base, '/test/input/pointer_move', {
+        x: dragStartX + dx * t,
+        y: dragStartY + dy * t,
+      })
+    }
+
+    const duringDrag = await waitFor(
+      'wait for clipped native drag preview to load',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (compositor.shell_move_window_id !== windowId || !compositor.shell_move_visual) return null
+        if (compositor.shell_native_drag_preview_window_id !== windowId) return null
+        if (compositor.shell_native_drag_preview_shell_ready !== true) return null
+        if (!compositor.shell_native_drag_preview_image_path) return null
+        const controls = windowControls(shell, windowId)
+        if (
+          !controls?.dragging ||
+          !controls.titlebar ||
+          !controls.native_drag_preview_rect ||
+          controls.native_drag_preview_loaded !== true ||
+          controls.native_drag_preview_source_width == null ||
+          controls.native_drag_preview_source_height == null ||
+          controls.native_drag_preview_backing_width == null ||
+          controls.native_drag_preview_backing_height == null
+        ) {
+          return null
+        }
+        if (Math.abs(controls.native_drag_preview_source_width - controls.native_drag_preview_backing_width) > 1) {
+          return null
+        }
+        if (Math.abs(controls.native_drag_preview_source_height - controls.native_drag_preview_backing_height) > 1) {
+          return null
+        }
+        return { compositor, shell, controls }
+      },
+      1000,
+      20,
+    )
+    const previewFixture = fileURLToPath(
+      new URL('../fixtures/visual/native-drag-preview-green-left-clipped.png', import.meta.url),
+    )
+    const previewActualArtifact = await copyArtifactFile(
+      'native-drag-preview-green-left-clipped-actual.png',
+      String(duringDrag.compositor.shell_native_drag_preview_image_path),
+    )
+    const previewVisual = await comparePngFixture(
+      String(duringDrag.compositor.shell_native_drag_preview_image_path),
+      previewFixture,
+      {
+        maxDifferentPixels: 240,
+        maxChannelDelta: 3,
+      },
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+    await syncTest(base)
+
+    await writeJsonArtifact('native-drag-preview-left-clipped.json', {
+      windowId,
+      initialTitlebar: initial.titlebar,
+      initialWindow: initial.window,
+      initialOutput: initial.output,
+      previewRect: duringDrag.controls.native_drag_preview_rect,
+      previewLoaded: duringDrag.controls.native_drag_preview_loaded,
+      previewSourceWidth: duringDrag.controls.native_drag_preview_source_width,
+      previewSourceHeight: duringDrag.controls.native_drag_preview_source_height,
+      previewBackingWidth: duringDrag.controls.native_drag_preview_backing_width,
+      previewBackingHeight: duringDrag.controls.native_drag_preview_backing_height,
+      previewImagePath: duringDrag.compositor.shell_native_drag_preview_image_path,
+      previewActualArtifact,
+      previewVisual,
       compositorDuringDrag: duringDrag.compositor,
       shellDuringDrag: duringDrag.shell,
     })
@@ -1055,6 +1377,47 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('native and shell focus changes keep taskbar order stable', async ({ base, state }) => {
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+
+    await openSettings(base, 'click')
+    const initial = await getSnapshots(base)
+    const nativeWindow = shellWindowById(initial.shell, redId)
+    const settingsWindow = shellWindowById(initial.shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(nativeWindow, 'missing native shell snapshot for taskbar order test')
+    assert(settingsWindow, 'missing settings shell snapshot for taskbar order test')
+    const monitorName = nativeWindow.output_name
+    assert(
+      monitorName === settingsWindow.output_name,
+      `expected native and settings windows on same monitor, got ${monitorName} and ${settingsWindow.output_name}`,
+    )
+    const trackedWindowIds = [redId, SHELL_UI_SETTINGS_WINDOW_ID]
+    const initialOrder = taskbarWindowOrderOnMonitor(initial.shell, monitorName).filter((windowId) =>
+      trackedWindowIds.includes(windowId),
+    )
+    assert(
+      initialOrder.length === trackedWindowIds.length,
+      `expected ${trackedWindowIds.length} tracked taskbar windows, got ${initialOrder.join(', ')}`,
+    )
+
+    const redFocused = await raiseTaskbarWindow(base, redId)
+    assertTrackedTaskbarOrder(redFocused.shell, monitorName, trackedWindowIds, initialOrder, 'native focus taskbar order')
+
+    const settingsFocused = await raiseTaskbarWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTrackedTaskbarOrder(
+      settingsFocused.shell,
+      monitorName,
+      trackedWindowIds,
+      initialOrder,
+      'shell focus taskbar order',
+    )
+
+    await writeJsonArtifact('native-shell-taskbar-order-initial.json', initial.shell)
+    await writeJsonArtifact('native-shell-taskbar-order-native-focused.json', redFocused.shell)
+    await writeJsonArtifact('native-shell-taskbar-order-shell-focused.json', settingsFocused.shell)
+  })
+
   test('js and native windows preserve restack order across focus changes', async ({ base, state }) => {
     const { red, green } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -1153,6 +1516,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await closeWindow(base, SHELL_UI_SETTINGS_WINDOW_ID)
       await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
       await resetPerfCounters(base)
+      const beforeOpen = await getSnapshots(base)
 
       const opened = await spawnNativeWindow(base, state.knownWindowIds, {
         title: 'Derp Native Grid Open',
@@ -1161,6 +1525,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         width: 480,
         height: 320,
       })
+      state.spawnedNativeWindowIds.add(opened.window.window_id)
       const windowId = opened.window.window_id
       const settled = await waitFor(
         'wait for grid-opened native window geometry',
@@ -1170,12 +1535,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const output = compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
           const taskbar = window ? taskbarForMonitor(shell, window.output_name) : null
           if (!window || !output || !taskbar?.rect) return null
-          const expected = {
-            x: output.x,
-            y: output.y + 26,
-            width: output.width,
-            height: taskbar.rect.global_y - output.y - 26,
-          }
+          const expected = expectedGridAutoLayoutClientRect(
+            output,
+            taskbar.rect,
+            autoLayoutManagedWindowsOnOutput(beforeOpen.compositor, output.name),
+            windowId,
+          )
           if (Math.abs(window.x - expected.x) > 24) return null
           if (Math.abs(window.y - expected.y) > 24) return null
           if (Math.abs(window.width - expected.width) > 24) return null
@@ -1187,20 +1552,44 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       const perf = await getPerfCounters(base)
       assert(perf.shell_updates.window_mapped_messages >= 1, 'native open should emit a mapped message')
+      const followup = await getSnapshots(base)
+      const followupWindow = compositorWindowById(followup.compositor, windowId)
+      assert(followupWindow, 'missing follow-up native compositor window')
       assert(
-        perf.shell_updates.window_geometry_messages <= 1,
-        `native auto-layout open should not emit follow-up geometry corrections, got ${perf.shell_updates.window_geometry_messages}`,
+        followupWindow.x === settled.window.x &&
+          followupWindow.y === settled.window.y &&
+          followupWindow.width === settled.window.width &&
+          followupWindow.height === settled.window.height,
+        'native auto-layout open geometry should stay stable after mapping',
       )
       await writeJsonArtifact('native-grid-open.json', {
         windowId,
         perf,
+        existingWindowIds: autoLayoutManagedWindowsOnOutput(
+          beforeOpen.compositor,
+          settled.window.output_name,
+        ).map((window) => window.window_id),
         expected: settled.expected,
+        initial: {
+          x: opened.window.x,
+          y: opened.window.y,
+          width: opened.window.width,
+          height: opened.window.height,
+          output: opened.window.output_name,
+        },
         actual: {
           x: settled.window.x,
           y: settled.window.y,
           width: settled.window.width,
           height: settled.window.height,
           output: settled.window.output_name,
+        },
+        followup: {
+          x: followupWindow.x,
+          y: followupWindow.y,
+          width: followupWindow.width,
+          height: followupWindow.height,
+          output: followupWindow.output_name,
         },
       })
     } finally {

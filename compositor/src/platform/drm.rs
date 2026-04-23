@@ -193,6 +193,9 @@ impl DrmHead {
                 if state.shell_presentation_fullscreen {
                     match space_render_elements(renderer, [&state.space], output, 1.0) {
                         Ok(space_els) => {
+                            for el in &shell_render.move_proxy {
+                                render_elements.push(DesktopStack::ShellDma(el));
+                            }
                             if let Some(ref el) = shell_render.dmabuf {
                                 render_elements.push(DesktopStack::ShellDma(el));
                             }
@@ -250,6 +253,9 @@ impl DrmHead {
                         Err(e) => Err(e.into()),
                     }
                 } else {
+                    for el in &shell_render.move_proxy {
+                        render_elements.push(DesktopStack::ShellDma(el));
+                    }
                     let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
                         &state.space,
                         state,
@@ -412,6 +418,18 @@ pub struct DrmSession {
 }
 
 impl DrmSession {
+    fn shell_begin_min_when_active(&self) -> Duration {
+        let refresh_milli_hz = self
+            .heads
+            .iter()
+            .filter_map(|head| head.output.current_mode())
+            .filter_map(|mode| u64::try_from(mode.refresh.max(1)).ok())
+            .map(|refresh| refresh.min(60_000))
+            .max()
+            .unwrap_or(60_000);
+        Duration::from_nanos((1_000_000_000_000u64 / refresh_milli_hz.max(1)).max(1))
+    }
+
     fn pause(&mut self) {
         let _ = self.libinput.suspend();
         self.drm.pause();
@@ -690,6 +708,7 @@ impl DrmSession {
 
         if let Ok(mut rg) = renderer.lock() {
             state.sync_desktop_wallpaper_upload(&mut *rg);
+            state.shell_native_drag_preview_capture_if_needed(&mut *rg);
         }
 
         let mut any_advanced = false;
@@ -699,7 +718,6 @@ impl DrmSession {
             any_advanced |= advanced;
         }
 
-        const SHELL_BEGIN_MIN_WHEN_ACTIVE: Duration = Duration::from_millis(8);
         const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(250);
         let now = Instant::now();
         let schedule_kind = if any_advanced || state.shell_begin_frame_interaction_active(now) {
@@ -707,11 +725,12 @@ impl DrmSession {
         } else {
             crate::cef::begin_frame_diag::CompositorScheduleKind::Idle
         };
+        let shell_begin_min_when_active = self.shell_begin_min_when_active();
         let min_gap = match schedule_kind {
             crate::cef::begin_frame_diag::CompositorScheduleKind::Idle => SHELL_BEGIN_MIN_WHEN_IDLE,
             crate::cef::begin_frame_diag::CompositorScheduleKind::Active
             | crate::cef::begin_frame_diag::CompositorScheduleKind::Forced => {
-                SHELL_BEGIN_MIN_WHEN_ACTIVE
+                shell_begin_min_when_active
             }
         };
         let shell_send = match state.shell_begin_frame_last {

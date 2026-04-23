@@ -84,7 +84,19 @@ describe('workspaceSelectors', () => {
       { name: 'Console', exec: 'kgx', executable: 'kgx', desktop_id: 'org.gnome.Console.desktop', icon: 'console' },
     ]
 
-    const first = buildTaskbarRowsByMonitor(groups, apps, 'HDMI-A-1')
+    const first = buildTaskbarRowsByMonitor(
+      {
+        ...workspaceState,
+        groups: [
+          { id: 'group-a', windowIds: [1] },
+          { id: 'group-b', windowIds: [2] },
+        ],
+        activeTabByGroupId: { 'group-a': 1, 'group-b': 2 },
+      },
+      groups,
+      apps,
+      'HDMI-A-1',
+    )
     const updatedGroups = buildWorkspaceGroups(
       {
         ...workspaceState,
@@ -100,10 +112,61 @@ describe('workspaceSelectors', () => {
       ]),
       groups,
     )
-    const second = buildTaskbarRowsByMonitor(updatedGroups, apps, 'HDMI-A-1', first)
+    const second = buildTaskbarRowsByMonitor(
+      {
+        ...workspaceState,
+        groups: [
+          { id: 'group-a', windowIds: [1] },
+          { id: 'group-b', windowIds: [2] },
+        ],
+        activeTabByGroupId: { 'group-a': 1, 'group-b': 2 },
+      },
+      updatedGroups,
+      apps,
+      'HDMI-A-1',
+      first,
+    )
 
     expect(second.get('HDMI-A-1')).toBe(first.get('HDMI-A-1'))
     expect(second.get('DP-1')).toBe(first.get('DP-1'))
+  })
+
+  it('keeps taskbar row order stable when focus changes restack windows', () => {
+    const state = {
+      ...workspaceState,
+      groups: [
+        { id: 'group-a', windowIds: [1] },
+        { id: 'group-b', windowIds: [2] },
+      ],
+      activeTabByGroupId: { 'group-a': 1, 'group-b': 2 },
+    }
+    const focusedShellGroups = buildWorkspaceGroups(
+      state,
+      new Map([
+        [1, makeWindow(1, { title: 'Native', stack_z: 1 })],
+        [2, makeWindow(2, { title: 'Settings', stack_z: 2 })],
+      ]),
+    )
+    const focusedNativeGroups = buildWorkspaceGroups(
+      state,
+      new Map([
+        [1, makeWindow(1, { title: 'Native', stack_z: 3 })],
+        [2, makeWindow(2, { title: 'Settings', stack_z: 1 })],
+      ]),
+    )
+
+    expect(focusedShellGroups.map((group) => group.id)).toEqual(['group-b', 'group-a'])
+    expect(focusedNativeGroups.map((group) => group.id)).toEqual(['group-a', 'group-b'])
+    expect(
+      buildTaskbarRowsByMonitor(state, focusedShellGroups, [], 'HDMI-A-1')
+        .get('HDMI-A-1')
+        ?.map((row) => row.group_id),
+    ).toEqual(['group-a', 'group-b'])
+    expect(
+      buildTaskbarRowsByMonitor(state, focusedNativeGroups, [], 'HDMI-A-1')
+        .get('HDMI-A-1')
+        ?.map((row) => row.group_id),
+    ).toEqual(['group-a', 'group-b'])
   })
 
   it('exposes split metadata on workspace groups', () => {

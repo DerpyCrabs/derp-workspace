@@ -53,7 +53,8 @@ pub fn cleanup_shell_runtime_files(runtime_dir: &Path) {
                 && (name.starts_with("derp-shell-snapshot-")
                     || name.starts_with("derp-shell-exclusion-zones-state-")
                     || name.starts_with("derp-shell-ui-windows-state-")
-                    || name.starts_with("derp-shell-floating-layers-state-"));
+                    || name.starts_with("derp-shell-floating-layers-state-"))
+                || (name.ends_with(".png") && name.starts_with("derp-native-drag-preview-"));
             if matches {
                 let _ = std::fs::remove_file(path);
             }

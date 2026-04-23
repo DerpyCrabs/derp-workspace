@@ -1,5 +1,4 @@
 import type { AssistGridSpan } from '@/features/tiling/assistGrid'
-import { buildTaskbarGroupRows } from '@/features/taskbar/taskbarGroups'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { CanvasOrigin } from '@/lib/shellCoords'
 import type { WorkspaceGroupModel } from '@/features/workspace/workspaceSelectors'
@@ -40,13 +39,27 @@ type TabDragTargetLike = {
   insertIndex: number
 }
 
+type TaskbarRowLike = {
+  group_id: string
+  window_id: number
+  tab_count: number
+}
+
 type RegisterShellE2eBridgeOptions = {
   getMainRef: () => HTMLElement | null
   getViewport: () => unknown
+  getPointerClient: () => { x: number; y: number } | null
+  getCompositorInteractionState: () => {
+    move_window_id: number | null
+    resize_window_id: number | null
+    move_proxy_window_id: number | null
+    move_capture_window_id: number | null
+  } | null
   getOrigin: () => CanvasOrigin
   getCanvas: () => CanvasSize | null
   getWindows: () => DerpWindow[]
   getWorkspaceGroups: () => WorkspaceGroupModel[]
+  getTaskbarRowsByMonitor: () => ReadonlyMap<string, readonly TaskbarRowLike[]>
   getFocusedWindowId: () => number | null
   getKeyboardLayoutLabel: () => string | null
   getScreenshotMode: () => unknown
@@ -70,6 +83,20 @@ type RegisterShellE2eBridgeOptions = {
   getMenuLayerHostEl: () => HTMLElement | undefined
 }
 
+function flattenTaskbarRowsByMonitor(taskbarRowsByMonitor: ReadonlyMap<string, readonly TaskbarRowLike[]>): TaskbarRowLike[] {
+  const rows: TaskbarRowLike[] = []
+  for (const monitorRows of taskbarRowsByMonitor.values()) {
+    for (const row of monitorRows) {
+      rows.push({
+        group_id: row.group_id,
+        window_id: row.window_id,
+        tab_count: row.tab_count,
+      })
+    }
+  }
+  return rows
+}
+
 export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
   function publishE2eShellSnapshot(requestId: number) {
     const send = window.__derpShellWireSend
@@ -89,11 +116,13 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
         buildE2eShellSnapshot({
           document,
           viewport: options.getViewport(),
+          pointerClient: options.getPointerClient(),
+          compositorInteractionState: options.getCompositorInteractionState(),
           main: options.getMainRef(),
           origin: options.getOrigin(),
           canvas: options.getCanvas(),
           windows: options.getWindows(),
-          taskbarGroupRows: buildTaskbarGroupRows(workspaceGroups),
+          taskbarGroupRows: flattenTaskbarRowsByMonitor(options.getTaskbarRowsByMonitor()),
           workspaceGroups,
           focusedWindowId: options.getFocusedWindowId(),
           keyboardLayoutLabel: options.getKeyboardLayoutLabel(),

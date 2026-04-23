@@ -126,7 +126,7 @@ describe('tabGroupOps', () => {
   it('builds taskbar labels with the hidden-tab count', () => {
     const merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2]), 1, 2)
     const groupId = merged.groups.find((group) => group.windowIds.includes(2))!.id
-    expect(groupTaskbarLabel(merged, groupId, [makeWindow(1, 'Alpha'), makeWindow(2, 'Beta')])).toBe('Beta (+1)')
+    expect(groupTaskbarLabel(merged, groupId, [makeWindow(1, 'Alpha'), makeWindow(2, 'Beta')])).toBe('Alpha (+1)')
   })
 
   it('parses tab drop slots from DOM attributes', () => {

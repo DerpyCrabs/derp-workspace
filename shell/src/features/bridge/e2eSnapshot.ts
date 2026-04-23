@@ -72,6 +72,15 @@ type E2eTabDragTarget = {
 export type BuildE2eShellSnapshotArgs = {
   document: Document
   viewport: unknown
+  pointerClient: { x: number; y: number } | null
+  compositorInteractionState:
+    | {
+        move_window_id: number | null
+        resize_window_id: number | null
+        move_proxy_window_id: number | null
+        move_capture_window_id: number | null
+      }
+    | null
   main: HTMLElement | null
   origin: CanvasOrigin
   canvas: { w: number; h: number } | null
@@ -356,6 +365,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const floatingMenuRect = (selector: string) => projectFloatingElementRect(selector) ?? queryRect(cache, selector, args.origin)
   const volumeMenuRect = (selector: string) => floatingMenuRect(selector)
   const powerMenuRect = (selector: string) => floatingMenuRect(selector)
+  const windowInteractionCaptureEl = cache.query('[data-window-interaction-capture]')
+  const windowInteractionCaptureRect = snapshotRect(windowInteractionCaptureEl, args.origin)
+  const windowInteractionCaptureBlocksPointer =
+    windowInteractionCaptureEl instanceof HTMLElement &&
+    getComputedStyle(windowInteractionCaptureEl).pointerEvents !== 'none'
+  const windowInteractionCaptureHitPointer = (() => {
+    if (!windowInteractionCaptureEl || !args.pointerClient) return null
+    const hit = args.document.elementFromPoint(args.pointerClient.x, args.pointerClient.y)
+    return !!(hit && windowInteractionCaptureEl.contains(hit))
+  })()
 
   const stackOrderedWindows = [...args.windows].sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
   const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-monitor').map((taskbarEl) => ({
@@ -369,12 +388,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     activate: snapshotRect(cache.queryAttr('data-shell-taskbar-window-activate', row.window_id), args.origin),
     close: snapshotRect(cache.queryAttr('data-shell-taskbar-window-close', row.window_id), args.origin),
   }))
-  const windowControls = args.windows.map((window) => ({
-    window_id: window.window_id,
-    titlebar: snapshotRect(cache.queryAttr('data-shell-titlebar', window.window_id), args.origin),
-    minimize: snapshotRect(cache.queryAttr('data-shell-minimize-trigger', window.window_id), args.origin),
-    maximize: snapshotRect(cache.queryAttr('data-shell-maximize-trigger', window.window_id), args.origin),
-    close: snapshotRect(cache.queryAttr('data-shell-close-trigger', window.window_id), args.origin),
+  const windowControls = args.windows.map((window) => {
+    const nativeDragPreviewEl = cache.queryAttr('data-shell-native-drag-preview', window.window_id)
+    const nativeDragPreviewImg = nativeDragPreviewEl?.querySelector('img')
+    const nativeDragPreviewCanvas = nativeDragPreviewEl?.querySelector('canvas')
+    return {
+      window_id: window.window_id,
+      titlebar: snapshotRect(cache.queryAttr('data-shell-titlebar', window.window_id), args.origin),
+      minimize: snapshotRect(cache.queryAttr('data-shell-minimize-trigger', window.window_id), args.origin),
+      maximize: snapshotRect(cache.queryAttr('data-shell-maximize-trigger', window.window_id), args.origin),
+      close: snapshotRect(cache.queryAttr('data-shell-close-trigger', window.window_id), args.origin),
     snap_picker: snapshotRect(cache.queryAttr('data-shell-snap-picker-trigger', window.window_id), args.origin),
     resize_left: snapshotRect(cache.queryAttr('data-shell-resize-left', window.window_id), args.origin),
     resize_right: snapshotRect(cache.queryAttr('data-shell-resize-right', window.window_id), args.origin),
@@ -382,13 +405,57 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     resize_bottom_right: snapshotRect(cache.queryAttr('data-shell-resize-bottom-right', window.window_id), args.origin),
     dragging:
       cache.queryAttr('data-shell-window-frame', window.window_id)?.getAttribute('data-shell-window-dragging') === 'true',
-    frame_opacity: (() => {
-      const frame = cache.queryAttr('data-shell-window-frame', window.window_id)
-      if (!frame) return null
-      const opacity = Number.parseFloat(getComputedStyle(frame).opacity)
-      return Number.isFinite(opacity) ? opacity : null
-    })(),
-  }))
+      hidden:
+        cache.queryAttr('data-shell-window-frame', window.window_id)?.getAttribute('data-shell-window-hidden') === 'true',
+      frame_opacity: (() => {
+        const frame = cache.queryAttr('data-shell-window-frame', window.window_id)
+        if (!frame) return null
+        const opacity = Number.parseFloat(getComputedStyle(frame).opacity)
+        return Number.isFinite(opacity) ? opacity : null
+      })(),
+      native_drag_preview_rect: snapshotRect(nativeDragPreviewEl, args.origin),
+      native_drag_preview_generation: (() => {
+        const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-generation')
+        if (raw == null) return null
+        const value = Number.parseInt(raw, 10)
+        return Number.isFinite(value) ? value : null
+      })(),
+      native_drag_preview_loaded:
+        nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-loaded') === 'true' ||
+        (nativeDragPreviewImg instanceof HTMLImageElement && nativeDragPreviewImg.complete),
+      native_drag_preview_src:
+        nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-src') ??
+        (nativeDragPreviewImg instanceof HTMLImageElement ? nativeDragPreviewImg.currentSrc || nativeDragPreviewImg.src : null),
+      native_drag_preview_source_width: (() => {
+        const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-src-width')
+        if (raw == null || raw === '') return null
+        const value = Number.parseInt(raw, 10)
+        return Number.isFinite(value) ? value : null
+      })(),
+      native_drag_preview_source_height: (() => {
+        const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-src-height')
+        if (raw == null || raw === '') return null
+        const value = Number.parseInt(raw, 10)
+        return Number.isFinite(value) ? value : null
+      })(),
+      native_drag_preview_backing_width: (() => {
+        const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-backing-width')
+        if (raw == null || raw === '') {
+          return nativeDragPreviewCanvas instanceof HTMLCanvasElement ? nativeDragPreviewCanvas.width : null
+        }
+        const value = Number.parseInt(raw, 10)
+        return Number.isFinite(value) ? value : null
+      })(),
+      native_drag_preview_backing_height: (() => {
+        const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-backing-height')
+        if (raw == null || raw === '') {
+          return nativeDragPreviewCanvas instanceof HTMLCanvasElement ? nativeDragPreviewCanvas.height : null
+        }
+        const value = Number.parseInt(raw, 10)
+        return Number.isFinite(value) ? value : null
+      })(),
+    }
+  })
   const tabGroups = args.workspaceGroups.map((group) => ({
     group_id: group.id,
     visible_window_id: group.visibleWindowId,
@@ -657,6 +724,10 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
           insert_index: args.tabDragTarget.insertIndex,
         }
       : null,
+    compositor_interaction_state: args.compositorInteractionState,
+    window_interaction_capture: windowInteractionCaptureRect,
+    window_interaction_capture_blocks_pointer: windowInteractionCaptureBlocksPointer,
+    window_interaction_capture_hit_pointer: windowInteractionCaptureHitPointer,
     programs_menu_list_scroll: (() => {
       if (!args.programsMenuOpen) return null
       const el = cache.query('[data-programs-menu-scroll]')

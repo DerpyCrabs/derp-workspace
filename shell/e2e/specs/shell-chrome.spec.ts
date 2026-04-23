@@ -1,4 +1,5 @@
 import {
+  BTN_LEFT,
   KEY,
   ensureNativePair,
   RED_NATIVE_TITLE,
@@ -14,8 +15,10 @@ import {
   compositorFloatingLayerCount,
   compositorFloatingLayers,
   compositorWindowById,
+  autoLayoutManagedWindowsOnOutput,
   dragBetweenPoints,
   defineGroup,
+  expectedGridAutoLayoutClientRect,
   getPerfCounters,
   getJson,
   getShellHtml,
@@ -28,6 +31,7 @@ import {
   openVolumeMenu,
   openSettings,
   openShellTestWindow,
+  pointerButton,
   pointerWheel,
   pointInRect,
   rectCenter,
@@ -35,6 +39,7 @@ import {
   resetPerfCounters,
   runKeybind,
   shellWindowById,
+  spawnNativeWindow,
   taskbarEntry,
   taskbarForMonitor,
   waitForPowerMenuClosed,
@@ -54,6 +59,7 @@ import {
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import { openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
 
 async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
   let lastTop = -1
@@ -96,6 +102,16 @@ async function waitForPointerIdle(base: string) {
     },
     400,
     25,
+  )
+}
+
+function pointCoveredByShellExclusion(compositor: CompositorSnapshot, point: { x: number; y: number }) {
+  return (compositor.shell_exclusion_global ?? []).some(
+    (rect) =>
+      point.x >= rect.x &&
+      point.x <= rect.x + rect.width &&
+      point.y >= rect.y &&
+      point.y <= rect.y + rect.height,
   )
 }
 
@@ -176,8 +192,19 @@ async function selectSettingsTilingLayout(base: string, layout: 'grid' | 'manual
   await waitFor(
     `wait for tiling layout set to ${layout}`,
     async () => {
-      const html = await getShellHtml(base, '[data-settings-tiling-page]')
-      return html.includes(layout) ? html : null
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const settingsWindow = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      const monitorName = settingsWindow?.output_name
+      const sessionSnapshot = shell.session_snapshot as
+        | {
+            tilingConfig?: {
+              monitors?: Record<string, { layout?: string | null } | null> | null
+            } | null
+          }
+        | null
+      if (!monitorName) return null
+      const nextLayout = sessionSnapshot?.tilingConfig?.monitors?.[monitorName]?.layout
+      return nextLayout === layout ? shell : null
     },
     5000,
     100,
@@ -716,6 +743,503 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('shell drag stays live and blocks pointer hover below', async ({ base, state }) => {
+    const lower = await openShellTestWindow(base, state)
+    const upper = await openShellTestWindow(base, state)
+    const lowerId = lower.window.window_id
+    const upperId = upper.window.window_id
+    await waitForShellUiFocus(base, upperId)
+
+    const lowerWindow = compositorWindowById(upper.compositor, lowerId)
+    const upperWindow = compositorWindowById(upper.compositor, upperId)
+    assert(lowerWindow, 'missing lower shell window')
+    assert(upperWindow, 'missing upper shell window')
+
+    const dragTarget = bodyClickPoint(lowerWindow, upperWindow)
+    const titlebar = await waitFor(
+      'wait for upper shell titlebar',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const rect = windowControls(shell, upperId)?.titlebar
+        return rect && rect.width >= 80 && rect.height >= 16 ? rect : null
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(titlebar)
+
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    await movePoint(base, start.x, start.y + 24)
+    await movePoint(base, dragTarget.x, dragTarget.y)
+
+    const duringDrag = await waitFor(
+      'wait for shell drag capture shield',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const controls = windowControls(snapshots.shell, upperId)
+        if (snapshots.compositor.shell_move_window_id !== upperId) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (!snapshots.shell.window_interaction_capture) return null
+        if (snapshots.shell.window_interaction_capture_blocks_pointer !== true) return null
+        if (snapshots.shell.window_interaction_capture_hit_pointer !== true) return null
+        if (!controls || controls.hidden) return null
+        if (!controls.titlebar) return null
+        return {
+          compositor: snapshots.compositor,
+          shell: snapshots.shell,
+          controls,
+        }
+      },
+      5000,
+      100,
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+
+    const settled = await waitFor(
+      'wait for shell drag release',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const controls = windowControls(snapshots.shell, upperId)
+        if (snapshots.compositor.shell_move_window_id !== null) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (!controls || controls.hidden) return null
+        if (snapshots.shell.window_interaction_capture) return null
+        return {
+          compositor: snapshots.compositor,
+          shell: snapshots.shell,
+          controls,
+        }
+      },
+      5000,
+      8,
+    )
+
+    assert(settled.controls?.titlebar, 'missing settled titlebar')
+
+    await writeJsonArtifact('shell-drag-live-frame.json', {
+      lowerId,
+      upperId,
+      start,
+      dragTarget,
+      duringDrag: {
+        hidden: duringDrag.controls.hidden,
+        titlebar: duringDrag.controls.titlebar ?? null,
+        interactionCapture: duringDrag.shell.window_interaction_capture,
+        interactionCaptureBlocksPointer: duringDrag.shell.window_interaction_capture_blocks_pointer,
+        interactionCaptureHitPointer: duringDrag.shell.window_interaction_capture_hit_pointer,
+      },
+      settled: {
+        proxyWindowId: settled.compositor.shell_move_proxy_window_id,
+        hidden: settled.controls?.hidden ?? null,
+        titlebar: settled.controls?.titlebar ?? null,
+        interactionCapture: settled.shell.window_interaction_capture,
+      },
+    })
+  })
+
+  test('dragging an unfocused file browser keeps the live shell frame active without a compositor proxy above a native overlap', async ({ base, state }) => {
+    let nativeId: number | null = null
+    try {
+      const opened = await openFileBrowserFromLauncher(base, state.spawnedShellWindowIds)
+      const fileBrowserId = opened.windowId
+      await waitForShellUiFocus(base, fileBrowserId)
+
+      const fileBrowserReady = await waitFor(
+        'wait for file browser titlebar and output geometry',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          const fileBrowserWindow = shellWindowById(snapshots.shell, fileBrowserId)
+          const fileBrowserTitlebar = windowControls(snapshots.shell, fileBrowserId)?.titlebar
+          const output = snapshots.compositor.outputs.find((entry) => entry.name === fileBrowserWindow?.output_name) ?? null
+          return fileBrowserWindow && fileBrowserTitlebar && output
+            ? { fileBrowserWindow, fileBrowserTitlebar, output }
+            : null
+        },
+        5000,
+        50,
+      )
+      const safeFileBrowserLeft = fileBrowserReady.output.x + 180
+      const safeFileBrowserTop = fileBrowserReady.output.y + 220
+      const fileBrowserDragStart = rectCenter(fileBrowserReady.fileBrowserTitlebar)
+      await dragBetweenPoints(
+        base,
+        fileBrowserDragStart.x,
+        fileBrowserDragStart.y,
+        Math.round(fileBrowserDragStart.x + (safeFileBrowserLeft - fileBrowserReady.fileBrowserWindow.x)),
+        Math.round(fileBrowserDragStart.y + (safeFileBrowserTop - fileBrowserReady.fileBrowserWindow.y)),
+        18,
+      )
+      await waitFor(
+        'wait for file browser moved into fully visible workspace area',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          const fileBrowserWindow = compositorWindowById(snapshots.compositor, fileBrowserId)
+          const workspace = snapshots.compositor.workspace
+          if (!fileBrowserWindow || !workspace) return null
+          const right = fileBrowserWindow.x + fileBrowserWindow.width
+          const bottom = fileBrowserWindow.y + fileBrowserWindow.height
+          if (fileBrowserWindow.x < workspace.x + 24) return null
+          if (fileBrowserWindow.y < workspace.y + 24) return null
+          if (right > workspace.x + workspace.width - 24) return null
+          if (bottom > workspace.y + workspace.height - 24) return null
+          return { fileBrowserWindow, workspace }
+        },
+        5000,
+        50,
+      )
+
+      const nativeTitle = `Derp Native Overlap ${Date.now()}`
+      const spawnedNative = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: nativeTitle,
+        token: `native-overlap-${Date.now()}`,
+        strip: 'green',
+      })
+      nativeId = spawnedNative.window.window_id
+      await waitForNativeFocus(base, nativeId)
+      const nativeReady = await waitFor(
+        'wait for native overlap titlebar',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          const fileBrowserWindow = shellWindowById(snapshots.shell, fileBrowserId)
+          const nativeWindow = compositorWindowById(snapshots.compositor, nativeId!)
+          const nativeTitlebar = windowControls(snapshots.shell, nativeId!)?.titlebar
+          return fileBrowserWindow && nativeWindow && nativeTitlebar
+            ? { compositor: snapshots.compositor, shell: snapshots.shell, nativeWindow, fileBrowserWindow, nativeTitlebar }
+            : null
+        },
+        5000,
+        100,
+      )
+
+      const desiredNativeLeft =
+        nativeReady.fileBrowserWindow.x + Math.max(180, Math.round(nativeReady.fileBrowserWindow.width * 0.3))
+      const desiredNativeTop =
+        nativeReady.fileBrowserWindow.y + Math.max(72, Math.round(nativeReady.fileBrowserWindow.height * 0.14))
+      const nativeDragStart = rectCenter(nativeReady.nativeTitlebar)
+      await dragBetweenPoints(
+        base,
+        nativeDragStart.x,
+        nativeDragStart.y,
+        Math.round(nativeDragStart.x + (desiredNativeLeft - nativeReady.nativeWindow.x)),
+        Math.round(nativeDragStart.y + (desiredNativeTop - nativeReady.nativeWindow.y)),
+        18,
+      )
+
+      const overlapReady = await waitFor(
+        'wait for native overlap with left edge exposed on file browser',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          const fileBrowserWindow = shellWindowById(snapshots.shell, fileBrowserId)
+          const fileBrowserTitlebar = windowControls(snapshots.shell, fileBrowserId)?.titlebar
+          const nativeWindow = compositorWindowById(snapshots.compositor, nativeId!)
+          const nativeTitlebar = windowControls(snapshots.shell, nativeId!)?.titlebar
+          const output = snapshots.compositor.outputs.find((entry) => entry.name === fileBrowserWindow?.output_name) ?? null
+          if (!fileBrowserWindow || !fileBrowserTitlebar || !nativeWindow || !nativeTitlebar || !output) return null
+          const overlapLeft = Math.max(fileBrowserWindow.x, nativeWindow.x)
+          const overlapTop = Math.max(fileBrowserWindow.y, nativeWindow.y)
+          const overlapRight = Math.min(
+            fileBrowserWindow.x + fileBrowserWindow.width,
+            nativeWindow.x + nativeWindow.width,
+          )
+          const overlapBottom = Math.min(
+            fileBrowserWindow.y + fileBrowserWindow.height,
+            nativeWindow.y + nativeWindow.height,
+          )
+          if (overlapRight - overlapLeft < 160 || overlapBottom - overlapTop < 120) return null
+          const fileBrowserStart = {
+            x: Math.round(fileBrowserTitlebar.global_x + 36),
+            y: Math.round(fileBrowserTitlebar.global_y + fileBrowserTitlebar.height / 2),
+          }
+          if (fileBrowserStart.x >= nativeWindow.x - 12) return null
+          if (pointInRect(nativeTitlebar, fileBrowserStart)) return null
+          return {
+            compositor: snapshots.compositor,
+            shell: snapshots.shell,
+            fileBrowserWindow,
+            fileBrowserTitlebar,
+            nativeWindow,
+            nativeTitlebar,
+            output,
+            fileBrowserStart,
+          }
+        },
+        5000,
+        50,
+      )
+
+      await movePoint(base, overlapReady.fileBrowserStart.x, overlapReady.fileBrowserStart.y)
+      await pointerButton(base, BTN_LEFT, 'press')
+      await movePoint(base, overlapReady.fileBrowserStart.x + 18, overlapReady.fileBrowserStart.y + 16)
+      const beforeDragSnapshots = await getSnapshots(base)
+      const beforeDragControls = windowControls(beforeDragSnapshots.shell, fileBrowserId)
+
+      const maxVisibleDx =
+        overlapReady.output.x +
+        overlapReady.output.width -
+        (overlapReady.fileBrowserWindow.x + overlapReady.fileBrowserWindow.width) -
+        12
+      await movePoint(
+        base,
+        overlapReady.fileBrowserStart.x + Math.max(48, Math.min(260, maxVisibleDx)),
+        overlapReady.fileBrowserStart.y + 48,
+      )
+
+      const duringDrag = await waitFor(
+        'wait for focused file browser live drag above native overlap without a compositor proxy',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          if (snapshots.compositor.focused_shell_ui_window_id !== fileBrowserId) return null
+          if (snapshots.compositor.shell_move_window_id !== fileBrowserId) return null
+          if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+          const controls = windowControls(snapshots.shell, fileBrowserId)
+          const fileBrowserWindow = compositorWindowById(snapshots.compositor, fileBrowserId)
+          if (!controls || controls.hidden || !controls.titlebar || !fileBrowserWindow) return null
+          if ((controls.frame_opacity ?? 0) > 0.8) return null
+          const nativeWindow = compositorWindowById(snapshots.compositor, nativeId!)
+          if (!nativeWindow) return null
+          const overlapLeft = Math.max(fileBrowserWindow.x, nativeWindow.x)
+          const overlapTop = Math.max(fileBrowserWindow.y, nativeWindow.y)
+          const overlapRight = Math.min(
+            fileBrowserWindow.x + fileBrowserWindow.width,
+            nativeWindow.x + nativeWindow.width,
+          )
+          const overlapBottom = Math.min(
+            fileBrowserWindow.y + fileBrowserWindow.height,
+            nativeWindow.y + nativeWindow.height,
+          )
+          if (overlapRight - overlapLeft < 24 || overlapBottom - overlapTop < 24) return null
+          return {
+            compositor: snapshots.compositor,
+            shell: snapshots.shell,
+            controls,
+            fileBrowserWindow,
+            nativeWindow,
+          }
+        },
+        5000,
+        20,
+      )
+
+      await pointerButton(base, BTN_LEFT, 'release')
+
+      const settled = await waitFor(
+        'wait for file browser live drag release after unfocused drag',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          if (snapshots.compositor.shell_move_window_id !== null) return null
+          if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+          const controls = windowControls(snapshots.shell, fileBrowserId)
+          if (!controls || controls.hidden) return null
+          return {
+            compositor: snapshots.compositor,
+            shell: snapshots.shell,
+            controls,
+          }
+        },
+        5000,
+        20,
+      )
+
+      await writeJsonArtifact('shell-drag-unfocused-file-browser-live.json', {
+        fileBrowserId,
+        nativeId,
+        beforeDrag: {
+          hidden: beforeDragControls?.hidden ?? null,
+          dragging: beforeDragControls?.dragging ?? null,
+          moveWindowId: beforeDragSnapshots.compositor.shell_move_window_id,
+          moveProxyWindowId: beforeDragSnapshots.compositor.shell_move_proxy_window_id,
+        },
+        duringDrag: {
+          focusedShellUiWindowId: duringDrag.compositor.focused_shell_ui_window_id,
+          titlebar: duringDrag.controls.titlebar ?? null,
+          frameOpacity: duringDrag.controls.frame_opacity ?? null,
+          fileBrowserWindow: duringDrag.fileBrowserWindow,
+          nativeWindow: duringDrag.nativeWindow,
+        },
+        settled: {
+          hidden: settled.controls.hidden,
+          moveWindowId: settled.compositor.shell_move_window_id,
+          moveProxyWindowId: settled.compositor.shell_move_proxy_window_id,
+        },
+      })
+    } finally {
+      if (nativeId !== null) {
+        await cleanupNativeWindows(base, new Set([nativeId]))
+      }
+    }
+  })
+
+  test('shell drag stays live when a taskbar-clipped frame becomes fully visible again', async ({ base, state }) => {
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    await waitForShellUiFocus(base, windowId)
+
+    const initial = await waitFor(
+      'wait for shell test window output and taskbar geometry',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        const titlebar = windowControls(snapshots.shell, windowId)?.titlebar
+        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+        return window && titlebar && output && taskbar?.rect
+          ? { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
+          : null
+      },
+      5000,
+      40,
+    )
+
+    const initialTitlebarCenter = rectCenter(initial.titlebar)
+    const clippedTarget = {
+      x: Math.round(initialTitlebarCenter.x),
+      y: Math.round(initialTitlebarCenter.y + 240),
+    }
+
+    await dragBetweenPoints(
+      base,
+      initialTitlebarCenter.x,
+      initialTitlebarCenter.y,
+      clippedTarget.x,
+      clippedTarget.y,
+      18,
+    )
+
+    const positioned = await waitFor(
+      'wait for shell test window clipped by taskbar',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        const titlebar = windowControls(snapshots.shell, windowId)?.titlebar
+        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+        if (
+          !window ||
+          !titlebar ||
+          !output ||
+          !taskbar?.rect ||
+          snapshots.compositor.shell_move_window_id !== null ||
+          snapshots.compositor.shell_move_proxy_window_id !== null
+        ) {
+          return null
+        }
+        if (window.y + window.height <= taskbar.rect.global_y + 24) return null
+        return { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
+      },
+      5000,
+      20,
+    )
+
+    const dragStart = rectCenter(positioned.titlebar)
+    await movePoint(base, dragStart.x, dragStart.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    await movePoint(base, dragStart.x - 18, dragStart.y - 16)
+
+    const clippedDuringDrag = await waitFor(
+      'wait for clipped shell drag to stay live without proxy',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        const controls = windowControls(snapshots.shell, windowId)
+        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+        if (!window || !controls || !output || !taskbar?.rect) return null
+        if (snapshots.compositor.shell_move_window_id !== windowId) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (controls.hidden) return null
+        if (window.y + window.height <= taskbar.rect.global_y + 8) return null
+        return { compositor: snapshots.compositor, shell: snapshots.shell, window, controls, output, taskbar: taskbar.rect }
+      },
+      5000,
+      20,
+    )
+
+    await movePoint(base, dragStart.x, dragStart.y - 120)
+
+    const fullyVisibleDuringDrag = await waitFor(
+      'wait for shell drag to stay live after the clipped frame becomes fully visible',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        const controls = windowControls(snapshots.shell, windowId)
+        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+        if (!window || !controls || !output || !taskbar?.rect) return null
+        if (snapshots.compositor.shell_move_window_id !== windowId) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (controls.hidden) return null
+        if ((controls.frame_opacity ?? 0) > 0.8) return null
+        if (window.y + window.height > taskbar.rect.global_y + 1) return null
+        return {
+          compositor: snapshots.compositor,
+          shell: snapshots.shell,
+          window,
+          controls,
+          output,
+          taskbar: taskbar.rect,
+        }
+      },
+      5000,
+      20,
+    )
+
+    await pointerButton(base, BTN_LEFT, 'release')
+
+    const settled = await waitFor(
+      'wait for clipped shell drag release',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const controls = windowControls(snapshots.shell, windowId)
+        if (snapshots.compositor.shell_move_window_id !== null) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (!controls || controls.hidden) return null
+        return { compositor: snapshots.compositor, shell: snapshots.shell, controls }
+      },
+      5000,
+      20,
+    )
+
+    await writeJsonArtifact('shell-drag-clipped-proxy-gating.json', {
+      windowId,
+      clippedStartTarget: clippedTarget,
+      positioned: {
+        x: positioned.window.x,
+        y: positioned.window.y,
+        width: positioned.window.width,
+        height: positioned.window.height,
+        output: positioned.window.output_name,
+        taskbarTop: positioned.taskbar.global_y,
+      },
+      clippedDuringDrag: {
+        x: clippedDuringDrag.window.x,
+        y: clippedDuringDrag.window.y,
+        width: clippedDuringDrag.window.width,
+        height: clippedDuringDrag.window.height,
+        hidden: clippedDuringDrag.controls.hidden,
+        frameOpacity: clippedDuringDrag.controls.frame_opacity ?? null,
+        moveWindowId: clippedDuringDrag.compositor.shell_move_window_id,
+        moveProxyWindowId: clippedDuringDrag.compositor.shell_move_proxy_window_id,
+      },
+      fullyVisibleDuringDrag: {
+        x: fullyVisibleDuringDrag.window.x,
+        y: fullyVisibleDuringDrag.window.y,
+        width: fullyVisibleDuringDrag.window.width,
+        height: fullyVisibleDuringDrag.window.height,
+        hidden: fullyVisibleDuringDrag.controls.hidden,
+        frameOpacity: fullyVisibleDuringDrag.controls.frame_opacity ?? null,
+        moveWindowId: fullyVisibleDuringDrag.compositor.shell_move_window_id,
+        moveProxyWindowId: fullyVisibleDuringDrag.compositor.shell_move_proxy_window_id,
+      },
+      settled: {
+        hidden: settled.controls.hidden,
+        moveWindowId: settled.compositor.shell_move_window_id,
+        moveProxyWindowId: settled.compositor.shell_move_proxy_window_id,
+      },
+    })
+  })
+
   test('shell-hosted windows open directly into auto layout geometry', async ({ base, state }) => {
     await openSettings(base, 'click')
     try {
@@ -724,9 +1248,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
       await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
       await resetPerfCounters(base)
+      const beforeOpen = await getSnapshots(base)
 
       const opened = await openShellTestWindow(base, state)
       const windowId = opened.window.window_id
+      const initialWindow = compositorWindowById(opened.compositor, windowId)
+      assert(initialWindow, 'missing initial shell-hosted compositor window')
       const settled = await waitFor(
         'wait for grid-opened shell window geometry',
         async () => {
@@ -735,12 +1262,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const output = compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
           const taskbar = window ? taskbarForMonitor(shell, window.output_name) : null
           if (!window || !output || !taskbar?.rect) return null
-          const expected = {
-            x: output.x,
-            y: output.y + 26,
-            width: output.width,
-            height: taskbar.rect.global_y - output.y - 26,
-          }
+          const expected = expectedGridAutoLayoutClientRect(
+            output,
+            taskbar.rect,
+            autoLayoutManagedWindowsOnOutput(beforeOpen.compositor, output.name),
+            windowId,
+          )
           if (Math.abs(window.x - expected.x) > 24) return null
           if (Math.abs(window.y - expected.y) > 24) return null
           if (Math.abs(window.width - expected.width) > 24) return null
@@ -753,8 +1280,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const perf = await getPerfCounters(base)
       assert(perf.shell_updates.window_mapped_messages >= 1, 'shell-hosted open should emit a mapped message')
       assert(
-        perf.shell_updates.window_geometry_messages === 1,
-        `shell-hosted auto-layout open should not emit a follow-up geometry correction, got ${perf.shell_updates.window_geometry_messages}`,
+        initialWindow.x === settled.window.x &&
+          initialWindow.y === settled.window.y &&
+          initialWindow.width === settled.window.width &&
+          initialWindow.height === settled.window.height,
+        'shell-hosted auto-layout open geometry should match the first visible compositor snapshot',
       )
       const followup = await getSnapshots(base)
       const followupWindow = compositorWindowById(followup.compositor, windowId)
@@ -769,7 +1299,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await writeJsonArtifact('shell-hosted-grid-open.json', {
         windowId,
         perf,
+        existingWindowIds: autoLayoutManagedWindowsOnOutput(
+          beforeOpen.compositor,
+          settled.window.output_name,
+        ).map((window) => window.window_id),
         expected: settled.expected,
+        initial: {
+          x: initialWindow.x,
+          y: initialWindow.y,
+          width: initialWindow.width,
+          height: initialWindow.height,
+          output: initialWindow.output_name,
+        },
         actual: {
           x: settled.window.x,
           y: settled.window.y,
@@ -1079,6 +1620,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       40,
     )
+    const tooltipOverlay = await waitFor(
+      'taskbar row tooltip enters compositor floating exclusions',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const layers = compositor.shell_floating_layers ?? []
+        const match = layers.find((layer) => layer.global.width >= 80 && layer.global.height >= 16)
+        return match ? { compositor, layer: match } : null
+      },
+      3000,
+      40,
+    )
     const { compositor } = await getSnapshots(base)
     const output = compositor.outputs[0]
     assert(output, 'expected at least one output')
@@ -1092,7 +1644,56 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       40,
     )
+    await writeJsonArtifact('taskbar-row-tooltip-floating.json', tooltipOverlay)
     await cleanupNativeWindows(base, new Set([redId, green.window.window_id]))
+  })
+
+  test('taskbar exclusion covers programs gutter and right edge', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    const snapshots = await getSnapshots(base)
+    const toggle = assertRectMinSize(
+      'taskbar programs toggle',
+      snapshots.shell.controls?.taskbar_programs_toggle,
+      8,
+      8,
+    )
+    const monitorName =
+      snapshots.shell.taskbars.find((taskbar) => pointInRect(taskbar.rect, rectCenter(toggle)))?.monitor ??
+      snapshots.shell.taskbars[0]?.monitor ??
+      null
+    assert(monitorName, 'missing taskbar monitor for programs toggle')
+    const taskbar = taskbarForMonitor(snapshots.shell, monitorName)
+    assert(taskbar?.rect, `missing taskbar rect for ${monitorName}`)
+    const centerY = Math.round(taskbar.rect.global_y + taskbar.rect.height / 2)
+    const leftEdgePoint = { x: taskbar.rect.global_x + 2, y: centerY }
+    const programsGapPoint = { x: toggle.global_x + toggle.width + 2, y: centerY }
+    const rightEdgePoint = { x: taskbar.rect.global_x + taskbar.rect.width - 2, y: centerY }
+    assert(pointInRect(taskbar.rect, leftEdgePoint), 'left edge sample should stay inside taskbar')
+    assert(pointInRect(taskbar.rect, programsGapPoint), 'programs gutter sample should stay inside taskbar')
+    assert(pointInRect(taskbar.rect, rightEdgePoint), 'right edge sample should stay inside taskbar')
+    assert(
+      pointCoveredByShellExclusion(snapshots.compositor, leftEdgePoint),
+      `taskbar exclusion should cover left edge ${leftEdgePoint.x},${leftEdgePoint.y}`,
+    )
+    assert(
+      pointCoveredByShellExclusion(snapshots.compositor, programsGapPoint),
+      `taskbar exclusion should cover programs gutter ${programsGapPoint.x},${programsGapPoint.y}`,
+    )
+    assert(
+      pointCoveredByShellExclusion(snapshots.compositor, rightEdgePoint),
+      `taskbar exclusion should cover right edge ${rightEdgePoint.x},${rightEdgePoint.y}`,
+    )
+    await writeJsonArtifact('taskbar-exclusion-full-bar.json', {
+      monitorName,
+      taskbar: taskbar.rect,
+      toggle,
+      leftEdgePoint,
+      programsGapPoint,
+      rightEdgePoint,
+      compositor: snapshots.compositor,
+      shell: snapshots.shell,
+    })
+    await cleanupNativeWindows(base, new Set([red.window.window_id, green.window.window_id]))
   })
 
   test('tray volume panel stays on the compositor overlay while native windows exist', async ({ base, state }) => {

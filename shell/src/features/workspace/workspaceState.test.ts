@@ -110,6 +110,14 @@ describe('workspaceState', () => {
     expect(next.groups.find((group) => group.id === groupId)?.windowIds).toEqual([2, 3, 1])
   })
 
+  it('focuses the moved tab when moving into another group', () => {
+    const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3])
+    const targetGroupId = groupIdForWindow(state, 2)!
+    const next = moveWorkspaceWindowToGroup(state, 3, targetGroupId, 1)
+    expect(next.groups.find((group) => group.id === targetGroupId)?.windowIds).toEqual([2, 3])
+    expect(next.activeTabByGroupId[targetGroupId]).toBe(3)
+  })
+
   it('splits a grouped window into its own group', () => {
     let merged = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
     merged = enterWorkspaceSplitView(merged, groupIdForWindow(merged, 2)!, 2)
@@ -200,6 +208,7 @@ describe('workspaceState', () => {
       { id: 'group-4', windowIds: [4] },
     ])
     expect(next.activeTabByGroupId[sourceGroupId]).toBeUndefined()
+    expect(next.activeTabByGroupId[targetGroupId]).toBe(2)
   })
 
 })

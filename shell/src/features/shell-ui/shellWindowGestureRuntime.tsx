@@ -49,12 +49,14 @@ import {
 import { snapZoneToBoundsWithOccupied, type Rect as TileRect, type SnapZone } from '@/features/tiling/tileZones'
 import {
   assistMonitorSnapLayout,
+  customMonitorSnapLayout,
   getMonitorLayout,
   setMonitorSnapLayout,
   type MonitorSnapLayout,
 } from '@/features/tiling/tilingConfig'
 import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type {
   AssistOverlayState,
   LayoutScreen,
@@ -135,6 +137,7 @@ type ShellWindowGestureRuntimeOptions = {
     arg6?: number,
   ) => boolean
   shellMoveLog: (msg: string, detail?: Record<string, unknown>) => void
+  clearNativeDragPreview: () => void
 }
 
 export function createShellWindowGestureRuntime(options: ShellWindowGestureRuntimeOptions) {
@@ -489,6 +492,77 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     options.bumpSnapChrome()
   }
 
+  function assistSpanFromPickerTarget(target: EventTarget | null, pickerEl: HTMLElement): AssistGridSpan | null {
+    if (!(target instanceof HTMLElement)) return null
+    const spanEl = target.closest('[data-assist-grid-span]')
+    if (!(spanEl instanceof HTMLElement) || !pickerEl.contains(spanEl)) return null
+    const gridCols = Number(spanEl.getAttribute('data-grid-cols'))
+    const gridRows = Number(spanEl.getAttribute('data-grid-rows'))
+    const gc0 = Number(spanEl.getAttribute('data-gc0'))
+    const gc1 = Number(spanEl.getAttribute('data-gc1'))
+    const gr0 = Number(spanEl.getAttribute('data-gr0'))
+    const gr1 = Number(spanEl.getAttribute('data-gr1'))
+    if (![gridCols, gridRows, gc0, gc1, gr0, gr1].every(Number.isFinite)) return null
+    return {
+      gridCols: Math.trunc(gridCols),
+      gridRows: Math.trunc(gridRows),
+      gc0: Math.trunc(gc0),
+      gc1: Math.trunc(gc1),
+      gr0: Math.trunc(gr0),
+      gr1: Math.trunc(gr1),
+    }
+  }
+
+  function customSelectionFromPickerTarget(
+    target: EventTarget | null,
+    context: SnapAssistContext,
+    pickerEl: HTMLElement,
+  ): SnapPickerSelection | null {
+    if (!(target instanceof HTMLElement)) return null
+    const zoneEl = target.closest('[data-snap-picker-custom-zone]')
+    if (!(zoneEl instanceof HTMLElement) || !pickerEl.contains(zoneEl)) return null
+    const zoneId = zoneEl.getAttribute('data-snap-picker-custom-zone')
+    const layoutId = zoneEl.getAttribute('data-snap-picker-custom-layout')
+    if (!zoneId || !layoutId) return null
+    const zone = customSnapZoneId(layoutId, zoneId)
+    const previewRect = resolveCustomLayoutZoneBounds(context.customLayouts, zone, {
+      x: context.workGlobal.x,
+      y: context.workGlobal.y,
+      width: context.workGlobal.w,
+      height: context.workGlobal.h,
+    })
+    if (!previewRect) return null
+    return {
+      zone,
+      previewRect,
+      snapLayout: customMonitorSnapLayout(layoutId),
+      shape: null,
+      hoverSpan: null,
+    }
+  }
+
+  function updateSnapAssistFromPickerPointer(
+    context: SnapAssistContext,
+    pickerEl: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ) {
+    const targets = document.elementsFromPoint(clientX, clientY)
+    for (const target of targets) {
+      const span = assistSpanFromPickerTarget(target, pickerEl)
+      if (span) {
+        updateSnapAssistFromSpan(context, span)
+        return true
+      }
+      const selection = customSelectionFromPickerTarget(target, context, pickerEl)
+      if (selection) {
+        applySnapPickerSelection(context, selection)
+        return true
+      }
+    }
+    return targets.some((target) => pickerEl.contains(target))
+  }
+
   function openSnapAssistPicker(
     windowId: number,
     source: SnapAssistPickerSource,
@@ -597,6 +671,9 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         dragPreTileSnapshot.set(windowId, { x: window.x, y: window.y, w: window.width, h: window.height })
       }
     }
+    if (window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) === 0) {
+      options.clearNativeDragPreview()
+    }
     if (!options.shellWireSend('move_begin', windowId)) {
       options.shellMoveLog('titlebar_begin_aborted', { windowId, reason: 'no __derpShellWireSend' })
       return
@@ -624,6 +701,35 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     options.shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
+  function adoptShellWindowMove(windowId: number, clientX: number, clientY: number, moved = true) {
+    if (shellWindowResize !== null) return false
+    const cx = Math.round(clientX)
+    const cy = Math.round(clientY)
+    if (shellWindowDrag?.windowId === windowId) {
+      shellWindowDrag.lastX = cx
+      shellWindowDrag.lastY = cy
+      if (moved) setDragWindowMoved(true)
+      return true
+    }
+    closeSnapAssistPicker()
+    clearTilePreviewWire()
+    const window = options.allWindowsMap().get(windowId)
+    shellWindowDrag = {
+      windowId,
+      lastX: cx,
+      lastY: cy,
+      startX: cx,
+      superHeld: false,
+      stripArmed: true,
+      edgeSnapArmed: !window?.maximized,
+      startedMaximized: !!window?.maximized,
+    }
+    setDragWindowId(windowId)
+    setDragWindowMoved(moved)
+    options.shellMoveLog('titlebar_begin_adopted', { windowId, clientX, clientY, moved })
+    return true
+  }
+
   function updateDragSnapAssist(windowId: number, clientX: number, clientY: number, superHeld: boolean) {
     const main = options.getMainRef()
     const output = options.outputGeom()
@@ -633,6 +739,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const global = clientPointToGlobalLogical(clientX, clientY, mainRect, output.w, output.h, origin)
     const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), origin)
     const monitor = pickScreenForPointerSnap(global.x, global.y, list)
+    const context = monitor ? resolveSnapAssistContext(windowId, monitor.name) : null
     const pickerEl = main.querySelector('[data-shell-snap-picker]') as HTMLElement | null
     const pickerOpen = snapAssistPicker()?.source === 'strip' && snapAssistPicker()?.windowId === windowId
     if (pickerEl) {
@@ -644,6 +751,9 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         clientY >= pickerRect.top &&
         clientY <= pickerRect.bottom
       ) {
+        if (pickerOpen && context) {
+          updateSnapAssistFromPickerPointer(context, pickerEl, clientX, clientY)
+        }
         return
       }
     }
@@ -685,7 +795,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       clearSnapAssistSelection()
       return
     }
-    const context = resolveSnapAssistContext(windowId, monitor.name)
     if (!context) {
       clearSnapAssistSelection()
       return
@@ -1079,6 +1188,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     closeSnapAssistPicker,
     toggleShellMaximizeForWindow,
     beginShellWindowMove,
+    adoptShellWindowMove,
     applyShellWindowMove,
     syncShellWindowMovePointer,
     endShellWindowMove,

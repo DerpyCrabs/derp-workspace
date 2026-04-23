@@ -104,7 +104,6 @@ fn post_external_begin_frame_task(
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
     {
-        pending_begin_frame_reschedule.store(true, Ordering::Relaxed);
         return;
     }
     let mut task = ExternalBeginFrameTask::new(
@@ -142,12 +141,6 @@ wrap_task! {
                 std::mem::take(&mut guard.messages)
             };
             compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
-            post_external_begin_frame_task(
-                self.browser_holder.clone(),
-                self.pending_begin_frame.clone(),
-                self.pending_begin_frame_reschedule.clone(),
-                crate::cef::begin_frame_diag::CompositorScheduleKind::Active,
-            );
             let should_repost = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
@@ -192,10 +185,14 @@ wrap_task! {
         fn execute(&self) {
             let Ok(guard) = self.browser_holder.lock() else {
                 self.pending_begin_frame.store(false, Ordering::Relaxed);
+                self.pending_begin_frame_reschedule
+                    .store(false, Ordering::Relaxed);
                 return;
             };
             let Some(b) = guard.as_ref() else {
                 self.pending_begin_frame.store(false, Ordering::Relaxed);
+                self.pending_begin_frame_reschedule
+                    .store(false, Ordering::Relaxed);
                 return;
             };
             if let Some(host) = b.host() {
@@ -203,23 +200,8 @@ wrap_task! {
                 crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
             }
             self.pending_begin_frame.store(false, Ordering::Relaxed);
-            if self
-                .pending_begin_frame_reschedule
-                .swap(false, Ordering::Relaxed)
-                && self
-                    .pending_begin_frame
-                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-            {
-                let mut task = ExternalBeginFrameTask::new(
-                    self.browser_holder.clone(),
-                    self.pending_begin_frame.clone(),
-                    self.pending_begin_frame_reschedule.clone(),
-                );
-                if post_task(ThreadId::UI, Some(&mut task)) == 0 {
-                    self.pending_begin_frame.store(false, Ordering::Relaxed);
-                }
-            }
+            self.pending_begin_frame_reschedule
+                .store(false, Ordering::Relaxed);
         }
     }
 }

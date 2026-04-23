@@ -34,6 +34,7 @@ pub(crate) enum ShellViewInvalidateReason {
     ResizeDelta,
     ResizeEnd,
     ResizeShellGrabEnd,
+    FocusChanged,
     OutputResize,
     BrowserLoad,
 }

@@ -255,8 +255,9 @@ export function Taskbar(props: TaskbarProps) {
   return (
     <>
     <div
-      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
+      data-shell-taskbar-exclude
       data-shell-taskbar-monitor={props.monitorName}
+      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
     >
       <Show
         when={props.isPrimary}
@@ -483,6 +484,7 @@ export function Taskbar(props: TaskbarProps) {
       <Portal mount={document.body}>
         <div
           data-shell-taskbar-row-tooltip
+          data-shell-exclusion-floating
           class="pointer-events-none fixed z-430000 max-w-[min(28rem,calc(100vw-1rem))] rounded-md border border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-2.5 py-1.5 text-left text-xs leading-snug text-(--shell-text) shadow-lg"
           style={{
             left: `${rowHoverTip()!.left}px`,

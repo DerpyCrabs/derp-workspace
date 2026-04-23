@@ -122,6 +122,7 @@ export function buildWindowsByMonitor(
 }
 
 export function buildTaskbarRowsByMonitor(
+  workspaceState: WorkspaceState,
   groups: readonly WorkspaceGroupModel[],
   apps: readonly DesktopAppMatchCandidate[],
   fallbackMonitorKey: string,
@@ -131,8 +132,11 @@ export function buildTaskbarRowsByMonitor(
   for (const rows of previous.values()) {
     for (const row of rows) previousRowsByGroupId.set(row.group_id, row)
   }
+  const groupsById = new Map(groups.map((group) => [group.id, group]))
   const groupsByMonitor = new Map<string, WorkspaceGroupModel[]>()
-  for (const group of groups) {
+  for (const workspaceGroup of workspaceState.groups) {
+    const group = groupsById.get(workspaceGroup.id)
+    if (!group) continue
     const key = group.visibleWindow.output_name || fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)
@@ -255,6 +259,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   let previousTaskbarRowsByMonitor: ReadonlyMap<string, readonly TaskbarWorkspaceRow[]> = new Map()
   const taskbarRowsByMonitor = createMemo(() => {
     previousTaskbarRowsByMonitor = buildTaskbarRowsByMonitor(
+      options.workspaceState(),
       workspaceGroups(),
       options.desktopApps(),
       options.fallbackMonitorKey(),

@@ -154,6 +154,10 @@ struct E2eWindowSnapshot {
     wayland_client_pid: Option<i32>,
     render_alpha: f32,
     workspace_visible: bool,
+    mapped_x: Option<i32>,
+    mapped_y: Option<i32>,
+    mapped_width: Option<i32>,
+    mapped_height: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -203,6 +207,12 @@ struct E2eCompositorSnapshot {
     shell_move_window_id: Option<u32>,
     shell_resize_window_id: Option<u32>,
     shell_move_visual: Option<E2eInteractionVisualSnapshot>,
+    shell_move_proxy_window_id: Option<u32>,
+    shell_move_proxy_global: Option<E2eRectSnapshot>,
+    shell_move_proxy_capture_global: Option<E2eRectSnapshot>,
+    shell_move_proxy_visible_rects: Vec<E2eRectSnapshot>,
+    shell_move_proxy_alpha: Option<f32>,
+    shell_move_proxy_decor_only: bool,
     shell_resize_visual: Option<E2eInteractionVisualSnapshot>,
     shell_canvas_origin_x: i32,
     shell_canvas_origin_y: i32,
@@ -217,6 +227,11 @@ struct E2eCompositorSnapshot {
     shell_ui_windows: Vec<E2eShellUiWindowSnapshot>,
     shell_exclusion_global: Vec<E2eRectSnapshot>,
     shell_exclusion_decor: Vec<E2eWindowRectsSnapshot>,
+    shell_native_drag_preview_window_id: Option<u32>,
+    shell_native_drag_preview_generation: Option<u32>,
+    shell_native_drag_preview_shell_ready: bool,
+    shell_native_drag_preview_image_path: Option<String>,
+    shell_native_drag_preview_clip_rect: Option<E2eRectSnapshot>,
     pending_deferred_window_ids: Vec<u32>,
     orphaned_wayland_surface_protocol_ids: Vec<u32>,
 }
@@ -563,6 +578,7 @@ impl CompositorState {
                 let render_alpha = self.workspace_window_render_alpha(record.info.window_id);
                 let workspace_visible =
                     self.workspace_window_is_visible_during_render(record.info.window_id);
+                let mapped_rect = self.mapped_native_window_content_rect(record.info.window_id);
                 E2eWindowSnapshot {
                     window_id: record.info.window_id,
                     surface_id: record.info.surface_id,
@@ -583,6 +599,10 @@ impl CompositorState {
                     wayland_client_pid: record.info.wayland_client_pid,
                     render_alpha,
                     workspace_visible,
+                    mapped_x: mapped_rect.map(|rect| rect.loc.x),
+                    mapped_y: mapped_rect.map(|rect| rect.loc.y),
+                    mapped_width: mapped_rect.map(|rect| rect.size.w),
+                    mapped_height: mapped_rect.map(|rect| rect.size.h),
                 }
             })
             .collect();
@@ -710,6 +730,46 @@ impl CompositorState {
             shell_move_window_id: self.shell_move_window_id,
             shell_resize_window_id: self.shell_resize_window_id,
             shell_move_visual: self.e2e_interaction_visual_snapshot(self.shell_move_window_id),
+            shell_move_proxy_window_id: self
+                .shell_move_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.texture.as_ref().map(|_| proxy.window_id)),
+            shell_move_proxy_global: self
+                .shell_move_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
+                .and_then(|_| self.shell_move_proxy_target_global_rect())
+                .map(Self::e2e_rect_snapshot),
+            shell_move_proxy_capture_global: self
+                .shell_move_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
+                .and_then(|_| {
+                    self.shell_move_proxy
+                        .as_ref()
+                        .and_then(|proxy| proxy.texture_global_rect)
+                })
+                .map(Self::e2e_rect_snapshot),
+            shell_move_proxy_visible_rects: self
+                .space
+                .outputs()
+                .flat_map(|output| {
+                    crate::render::shell_render::shell_move_proxy_visible_rects_for_output(
+                        self, output,
+                    )
+                })
+                .map(Self::e2e_rect_snapshot)
+                .collect(),
+            shell_move_proxy_alpha: self.shell_move_proxy.as_ref().and_then(|proxy| {
+                proxy
+                    .texture
+                    .as_ref()
+                    .map(|_| crate::state::SHELL_DRAG_WINDOW_ALPHA)
+            }),
+            shell_move_proxy_decor_only: self
+                .shell_move_proxy
+                .as_ref()
+                .is_some_and(|proxy| !self.window_registry.is_shell_hosted(proxy.window_id)),
             shell_resize_visual: self.e2e_interaction_visual_snapshot(self.shell_resize_window_id),
             shell_canvas_origin_x: self.shell_canvas_logical_origin.0,
             shell_canvas_origin_y: self.shell_canvas_logical_origin.1,
@@ -724,6 +784,25 @@ impl CompositorState {
             shell_ui_windows,
             shell_exclusion_global,
             shell_exclusion_decor,
+            shell_native_drag_preview_window_id: self
+                .shell_native_drag_preview
+                .as_ref()
+                .map(|preview| preview.window_id),
+            shell_native_drag_preview_generation: self
+                .shell_native_drag_preview
+                .as_ref()
+                .map(|preview| preview.generation),
+            shell_native_drag_preview_shell_ready: self
+                .shell_native_drag_preview
+                .as_ref()
+                .is_some_and(|preview| preview.shell_ready),
+            shell_native_drag_preview_image_path: self
+                .shell_native_drag_preview
+                .as_ref()
+                .and_then(|preview| preview.image_path.clone()),
+            shell_native_drag_preview_clip_rect: self
+                .shell_native_drag_preview_clip_rect()
+                .map(Self::e2e_rect_snapshot),
             pending_deferred_window_ids,
             orphaned_wayland_surface_protocol_ids,
         })

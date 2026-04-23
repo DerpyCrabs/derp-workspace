@@ -584,15 +584,10 @@ impl WorkspaceState {
                     .iter()
                     .find(|group| group.id == *target_group_id)
                 {
-                    let target_active = next
-                        .active_tab_by_group_id
-                        .get(target_group_id)
-                        .copied()
-                        .unwrap_or(0);
                     next.active_tab_by_group_id.insert(
                         target_group_id.clone(),
-                        if target_group.window_ids.contains(&target_active) {
-                            target_active
+                        if target_group.window_ids.contains(window_id) {
+                            *window_id
                         } else {
                             target_group.window_ids[0]
                         },
@@ -621,6 +616,9 @@ impl WorkspaceState {
                     return None;
                 }
                 let moving_window_ids = source_group.window_ids.clone();
+                let source_visible_window_id = self
+                    .visible_window_id_for_group(source_group_id)
+                    .or_else(|| source_group.window_ids.first().copied())?;
                 let moving_pinned_window_ids: Vec<u32> = moving_window_ids
                     .iter()
                     .copied()
@@ -688,15 +686,10 @@ impl WorkspaceState {
                     .iter()
                     .find(|group| group.id == *target_group_id)
                 {
-                    let target_active = next
-                        .active_tab_by_group_id
-                        .get(target_group_id)
-                        .copied()
-                        .unwrap_or(0);
                     next.active_tab_by_group_id.insert(
                         target_group_id.clone(),
-                        if target_group.window_ids.contains(&target_active) {
-                            target_active
+                        if target_group.window_ids.contains(&source_visible_window_id) {
+                            source_visible_window_id
                         } else {
                             target_group.window_ids[0]
                         },

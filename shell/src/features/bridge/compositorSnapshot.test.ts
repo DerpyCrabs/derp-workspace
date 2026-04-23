@@ -76,7 +76,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(3),
+      ...u32(4),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -133,6 +133,8 @@ describe('decodeCompositorSnapshot', () => {
       ...i32(220),
       ...u32(9),
       ...u32(0),
+      ...u32(9),
+      ...u32(9),
       ...i32(320),
       ...i32(480),
       ...i32(900),
@@ -147,7 +149,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...interactionState]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(3),
+      ...u32(4),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -164,6 +166,8 @@ describe('decodeCompositorSnapshot', () => {
           pointer_y: 220,
           move_window_id: 9,
           resize_window_id: null,
+          move_proxy_window_id: 9,
+          move_capture_window_id: 9,
           move_rect: {
             x: 320,
             y: 480,
@@ -173,6 +177,68 @@ describe('decodeCompositorSnapshot', () => {
             fullscreen: false,
           },
           resize_rect: null,
+        },
+      ],
+    })
+  })
+
+  it('decodes native drag preview state', () => {
+    const path = bytesForString('/tmp/derp-native-drag-preview-1-9-2.png')
+    const preview = frame([
+      ...u32(61),
+      ...u32(9),
+      ...u32(2),
+      ...u32(path.length),
+      ...path,
+    ])
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(4),
+      ...u32(preview.length),
+      ...u32(0),
+      ...u64(2n),
+      ...u64(0n),
+      ...preview,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      details: [
+        {
+          type: 'native_drag_preview',
+          window_id: 9,
+          generation: 2,
+          image_path: '/tmp/derp-native-drag-preview-1-9-2.png',
+        },
+      ],
+    })
+  })
+
+  it('decodes native drag preview clear state', () => {
+    const preview = frame([
+      ...u32(61),
+      ...u32(9),
+      ...u32(3),
+      ...u32(0),
+    ])
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(4),
+      ...u32(preview.length),
+      ...u32(0),
+      ...u64(2n),
+      ...u64(0n),
+      ...preview,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      details: [
+        {
+          type: 'native_drag_preview',
+          window_id: 9,
+          generation: 3,
+          image_path: '',
         },
       ],
     })

@@ -123,7 +123,17 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       }
     }
     const floatingRaw: typeof rects = []
+    const floatingEls = new Set<Element>()
     for (const el of main.querySelectorAll('[data-shell-exclusion-floating]')) {
+      floatingEls.add(el)
+    }
+    const floatingDoc = main.ownerDocument
+    if (floatingDoc) {
+      for (const el of floatingDoc.querySelectorAll('[data-shell-exclusion-floating]')) {
+        floatingEls.add(el)
+      }
+    }
+    for (const el of floatingEls) {
       const r = el.getBoundingClientRect()
       if (r.width < 1 || r.height < 1) continue
       const z = clientRectToGlobalLogical(mainRect, r, og.w, og.h, co)
