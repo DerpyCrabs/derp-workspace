@@ -4,17 +4,42 @@ import { createStore } from 'solid-js/store'
 import {
   listFileBrowserDirectory,
   listFileBrowserRoots,
+  fileBrowserReadUrl,
   mkdirFileBrowserEntry,
   removeFileBrowserPath,
   renameFileBrowserPath,
+  statFileBrowserPath,
   touchFileBrowserFile,
+  writeFileBrowserBytes,
+  copyFileBrowserFile,
   type FileBrowserEntry,
   type FileBrowserRoot,
 } from './fileBrowserBridge'
 import {
+  fileBrowserFsClipClear,
   fileBrowserFsClipCopy,
   fileBrowserFsClipCut,
+  fileBrowserFsClipState,
 } from './fileBrowserFsClipboard'
+import {
+  FILE_BROWSER_FAVORITES_PATH,
+  useFileBrowserFilesSettings,
+  type FileBrowserDefaultOpenTarget,
+} from './fileBrowserFilesSettings'
+import {
+  FILE_BROWSER_CUSTOM_ICONS,
+  renderFileBrowserCustomIcon,
+} from './fileBrowserCustomIcons'
+import {
+  extractFileBrowserPasteData,
+  fileToBase64,
+  type FileBrowserPasteData,
+} from './fileBrowserPaste'
+import {
+  FILE_BROWSER_DRAG_MIME,
+  parseFileBrowserDragPayload,
+  type FileBrowserDragPayload,
+} from './fileBrowserDragPayload'
 import { loadFileBrowserPrefs, setFileBrowserShowHidden } from './fileBrowserPrefs'
 import {
   clampFileBrowserSelection,
@@ -43,6 +68,7 @@ import Columns2 from 'lucide-solid/icons/columns-2'
 import ArrowLeft from 'lucide-solid/icons/arrow-left'
 import Clipboard from 'lucide-solid/icons/clipboard'
 import Copy from 'lucide-solid/icons/copy'
+import ClipboardPaste from 'lucide-solid/icons/clipboard-paste'
 import ExternalLink from 'lucide-solid/icons/external-link'
 import Eye from 'lucide-solid/icons/eye'
 import EyeOff from 'lucide-solid/icons/eye-off'
@@ -50,16 +76,22 @@ import File from 'lucide-solid/icons/file'
 import FilePlus from 'lucide-solid/icons/file-plus'
 import FileText from 'lucide-solid/icons/file-text'
 import Folder from 'lucide-solid/icons/folder'
+import FolderInput from 'lucide-solid/icons/folder-input'
 import FolderPlus from 'lucide-solid/icons/folder-plus'
 import HardDrive from 'lucide-solid/icons/hard-drive'
 import Home from 'lucide-solid/icons/home'
 import Image from 'lucide-solid/icons/image'
+import LayoutGrid from 'lucide-solid/icons/layout-grid'
+import List from 'lucide-solid/icons/list'
 import MoreHorizontal from 'lucide-solid/icons/more-horizontal'
 import Music from 'lucide-solid/icons/music'
+import Paintbrush from 'lucide-solid/icons/paintbrush'
 import Pencil from 'lucide-solid/icons/pencil'
 import RefreshCw from 'lucide-solid/icons/refresh-cw'
 import Scissors from 'lucide-solid/icons/scissors'
+import Star from 'lucide-solid/icons/star'
 import Trash2 from 'lucide-solid/icons/trash-2'
+import Upload from 'lucide-solid/icons/upload'
 import Video from 'lucide-solid/icons/video'
 import Workflow from 'lucide-solid/icons/workflow'
 
@@ -86,6 +118,20 @@ type FileBrowserWindowProps = {
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
   ) => void
+  onOpenInTabDrop?: (
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    clientX: number,
+    clientY: number,
+  ) => boolean
+  onPreviewInTabDrop?: (
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    label: string,
+    clientX: number,
+    clientY: number,
+  ) => boolean
+  onClearInTabDropPreview?: () => void
 }
 
 type Breadcrumb = {
@@ -131,6 +177,10 @@ function formatEntryModified(modifiedMs: number | null): string {
   }
 }
 
+function normalizeFilesSettingsPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
 function normalizeDisplayName(entry: FileBrowserEntry): string {
   return entry.name || entry.path
 }
@@ -145,15 +195,21 @@ function fileBrowserEntryCanOpenInShell(entry: FileBrowserEntry): boolean {
   )
 }
 
-function fileBrowserIconForEntry(entry: FileBrowserEntry) {
-  if (fileBrowserEntryIsDirectory(entry)) return <Folder class="h-4 w-4" stroke-width={2} />
+function customIconNameForPath(path: string, customIcons: Record<string, string>): string | null {
+  return customIcons[path] ?? customIcons[normalizeFilesSettingsPath(path)] ?? null
+}
+
+function fileBrowserIconForEntry(entry: FileBrowserEntry, customIcons: Record<string, string>, className = 'h-4 w-4') {
+  const customIcon = renderFileBrowserCustomIcon(customIconNameForPath(entry.path, customIcons), className)
+  if (customIcon) return customIcon
+  if (fileBrowserEntryIsDirectory(entry)) return <Folder class={className} stroke-width={2} />
   const name = normalizeDisplayName(entry).toLowerCase()
-  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name)) return <Image class="h-4 w-4" stroke-width={2} />
-  if (/\.(mp4|webm|mov|mkv|avi|m4v)$/.test(name)) return <Video class="h-4 w-4" stroke-width={2} />
-  if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/.test(name)) return <Music class="h-4 w-4" stroke-width={2} />
-  if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(name)) return <Archive class="h-4 w-4" stroke-width={2} />
-  if (/\.(txt|md|json|toml|yaml|yml|rs|ts|tsx|js|jsx|css|html|pdf)$/.test(name)) return <FileText class="h-4 w-4" stroke-width={2} />
-  return <File class="h-4 w-4" stroke-width={2} />
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name)) return <Image class={className} stroke-width={2} />
+  if (/\.(mp4|webm|mov|mkv|avi|m4v)$/.test(name)) return <Video class={className} stroke-width={2} />
+  if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/.test(name)) return <Music class={className} stroke-width={2} />
+  if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(name)) return <Archive class={className} stroke-width={2} />
+  if (/\.(txt|md|json|toml|yaml|yml|rs|ts|tsx|js|jsx|css|html|pdf)$/.test(name)) return <FileText class={className} stroke-width={2} />
+  return <File class={className} stroke-width={2} />
 }
 
 function menuSeparator(): ShellContextMenuItem {
@@ -218,6 +274,7 @@ function posixBasename(p: string): string {
 
 function fileBrowserTitleForPath(path: string | null): string {
   if (!path) return 'Files'
+  if (path === FILE_BROWSER_FAVORITES_PATH) return 'Favorites'
   const base = posixBasename(path)
   return base === '/' ? 'Files' : base
 }
@@ -229,13 +286,19 @@ type FileBrowserUiDialog =
   | { kind: 'rename'; path: string; draft: string }
   | { kind: 'delete'; path: string; label: string }
   | { kind: 'open-with'; path: string; label: string; options: OpenWithOption[] }
-
-type FileBrowserDragPayload = {
-  path: string
-}
+  | { kind: 'move-to'; path: string; label: string; draft: string }
+  | { kind: 'copy-to'; path: string; label: string; draft: string }
+  | { kind: 'icon'; path: string; label: string; selected: string | null }
+  | { kind: 'paste-file'; pasteData: FileBrowserPasteData; draft: string }
+  | { kind: 'open-target'; path: string; label: string }
 
 type FileBrowserPointerDrag = {
   path: string
+  label: string
+  kind: string
+  writable: boolean
+  directory: string
+  showHidden: boolean
   pointerId: number
   startX: number
   startY: number
@@ -243,7 +306,16 @@ type FileBrowserPointerDrag = {
   dropDir: string | null
 }
 
-const FILE_BROWSER_DRAG_MIME = 'application/x-derp-file-browser-path'
+type FileSystemEntryLike = {
+  name: string
+  isFile: boolean
+  isDirectory: boolean
+  file?: (success: (file: File) => void, failure?: (error: unknown) => void) => void
+  createReader?: () => {
+    readEntries: (success: (entries: FileSystemEntryLike[]) => void, failure?: (error: unknown) => void) => void
+  }
+}
+
 const FILE_BROWSER_MUTATED_EVENT = 'derp-file-browser-mutated'
 
 let nextFileBrowserMountSeq = 0
@@ -251,6 +323,7 @@ let nextFileBrowserMountSeq = 0
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const mountSeq = ++nextFileBrowserMountSeq
   const initialPrefs = loadFileBrowserPrefs()
+  const filesSettings = useFileBrowserFilesSettings()
   const [state, setState] = createStore(
     createInitialFileBrowserWindowState(
       sanitizeFileBrowserWindowMemento(peekShellWindowState(props.windowId))?.showHidden ?? initialPrefs.showHidden,
@@ -263,7 +336,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let applyingFromCompositor = false
   let lastCompositorMementoJson = ''
   let rootRef: HTMLDivElement | undefined
+  let uploadInputRef: HTMLInputElement | undefined
   let pointerDrag: FileBrowserPointerDrag | null = null
+  let lastFavoritesReloadKey = ''
+  let typeSearchBuffer = ''
+  let typeSearchTimer: number | null = null
   let suppressClickAfterPointerDrag = false
   let lastRowClick: { path: string; timeStamp: number; x: number; y: number } | null = null
 
@@ -271,8 +348,17 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const [dialog, setDialog] = createSignal<FileBrowserUiDialog>({ kind: 'closed' })
   const [opError, setOpError] = createSignal<string | null>(null)
   const [dropTargetPath, setDropTargetPath] = createSignal<string | null>(null)
+  const [externalUploadDragOver, setExternalUploadDragOver] = createSignal(false)
+  const [uploadBusy, setUploadBusy] = createSignal(false)
 
   const breadcrumbs = createMemo(() => buildBreadcrumbs(state.activePath, state.roots))
+  const favoritePathSet = createMemo(() => new Set(filesSettings.settings().favorites))
+  const customIcons = createMemo(() => filesSettings.settings().custom_icons)
+  const activeViewMode = createMemo(() => {
+    const path = state.activePath
+    if (!path) return 'list'
+    return filesSettings.settings().view_modes[normalizeFilesSettingsPath(path)] ?? 'list'
+  })
   const breadcrumbRows = createMemo((): BreadcrumbRow[] => {
     const list = breadcrumbs()
     if (list.length <= 3) {
@@ -293,6 +379,31 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const selectedEntry = createMemo(
     () => state.entries.find((entry) => entry.path === state.selectedPath) ?? null,
   )
+  const showParentRow = createMemo(() => !!state.parentPath && state.activePath !== FILE_BROWSER_FAVORITES_PATH)
+  const parentEntryPath = createMemo(() => (showParentRow() ? state.parentPath : null))
+
+  function withFavoritesRoot(roots: readonly FileBrowserRoot[]): FileBrowserRoot[] {
+    const filtered = roots.filter((root) => root.path !== FILE_BROWSER_FAVORITES_PATH)
+    return [
+      ...filtered,
+      {
+        label: 'Favorites',
+        path: FILE_BROWSER_FAVORITES_PATH,
+        kind: 'favorite',
+      },
+    ]
+  }
+
+  async function listFavoriteEntries(base: string | null): Promise<FileBrowserEntry[]> {
+    const entries: FileBrowserEntry[] = []
+    for (const favorite of filesSettings.settings().favorites) {
+      try {
+        entries.push((await statFileBrowserPath(favorite, base)).entry)
+      } catch {}
+    }
+    return entries
+  }
+
   async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
     const base = shellHttpBase()
     const runId = ++requestSeq
@@ -304,10 +415,22 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     try {
       const roots = forceRoots || state.roots.length === 0 ? await listFileBrowserRoots(base) : { roots: state.roots }
       if (runId !== requestSeq) return
-      setState('roots', roots.roots)
+      const nextRoots = withFavoritesRoot(roots.roots)
+      setState('roots', nextRoots)
       const path = targetPath ?? state.activePath ?? roots.roots[0]?.path ?? null
       if (!path) {
         throw new Error('No file browser roots are available.')
+      }
+      if (path === FILE_BROWSER_FAVORITES_PATH) {
+        const entries = await listFavoriteEntries(base)
+        if (runId !== requestSeq) return
+        setState('activePath', FILE_BROWSER_FAVORITES_PATH)
+        setState('parentPath', null)
+        setState('entries', entries)
+        setState('selectedPath', clampFileBrowserSelection(entries, state.selectedPath))
+        setState('status', 'ready')
+        setOpError(null)
+        return
       }
       const listing = await listFileBrowserDirectory(path, showHidden, base)
       if (runId !== requestSeq) return
@@ -338,8 +461,56 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       void loadDirectory(entry.path)
       return
     }
+    const target = filesSettings.settings().default_open_target
+    if (target === 'ask' && fileBrowserEntryCanOpenInShell(entry)) {
+      setDialog({ kind: 'open-target', path: entry.path, label: normalizeDisplayName(entry) })
+      return
+    }
+    openFilePathWithTarget(entry.path, target)
+  }
+
+  function openFilePathWithTarget(path: string, target: FileBrowserDefaultOpenTarget) {
     const directory = state.activePath ?? ''
-    props.onOpenFile(entry.path, { directory, showHidden: state.showHidden })
+    const context = { directory, showHidden: state.showHidden, isDirectory: false }
+    const shellOpenable =
+      isImageFilePath(path) || isVideoFilePath(path) || isTextEditorFilePath(path) || isPdfFilePath(path)
+    if (target === 'tab' && shellOpenable && props.onOpenInTab) {
+      props.onOpenInTab(path, context)
+      return
+    }
+    if (target === 'split' && shellOpenable && props.onOpenInSplitView) {
+      props.onOpenInSplitView(path, context)
+      return
+    }
+    props.onOpenFile(path, { directory, showHidden: state.showHidden })
+  }
+
+  function openEntryInDroppedTab(drag: FileBrowserPointerDrag, clientX: number, clientY: number): boolean {
+    if (!props.onOpenInTabDrop) return false
+    return props.onOpenInTabDrop(
+      drag.path,
+      {
+        directory: drag.directory,
+        showHidden: drag.showHidden,
+        isDirectory: drag.kind === 'directory',
+      },
+      clientX,
+      clientY,
+    )
+  }
+
+  function previewEntryInDroppedTab(drag: FileBrowserPointerDrag, clientX: number, clientY: number) {
+    props.onPreviewInTabDrop?.(
+      drag.path,
+      {
+        directory: drag.directory,
+        showHidden: drag.showHidden,
+        isDirectory: drag.kind === 'directory',
+      },
+      drag.label,
+      clientX,
+      clientY,
+    )
   }
 
   function openEntryWith(entryPath: string, option: OpenWithOption) {
@@ -362,26 +533,21 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     if (doubleClick) openEntry(entry)
   }
 
-  function parseDragPayload(event: DragEvent): FileBrowserDragPayload | null {
-    const dt = event.dataTransfer
-    if (!dt) return null
-    const raw = dt.getData(FILE_BROWSER_DRAG_MIME) || dt.getData('text/plain')
-    if (!raw) return null
-    try {
-      const parsed = JSON.parse(raw) as unknown
-      if (!parsed || typeof parsed !== 'object') return null
-      const path = (parsed as { path?: unknown }).path
-      return typeof path === 'string' && path.length > 0 ? { path } : null
-    } catch {
-      return raw.startsWith('/') ? { path: raw } : null
-    }
-  }
-
   function setDragPayload(event: DragEvent, entry: FileBrowserEntry) {
     const dt = event.dataTransfer
     if (!dt) return
-    const payload = JSON.stringify({ path: entry.path } satisfies FileBrowserDragPayload)
-    dt.effectAllowed = entry.writable === true ? 'move' : 'copyMove'
+    const directory =
+      state.activePath && state.activePath !== FILE_BROWSER_FAVORITES_PATH
+        ? state.activePath
+        : posixDirname(entry.path)
+    const payload = JSON.stringify({
+      path: entry.path,
+      kind: entry.kind,
+      writable: entry.writable === true,
+      directory,
+      showHidden: state.showHidden,
+    } satisfies FileBrowserDragPayload)
+    dt.effectAllowed = entry.writable === true ? 'copyMove' : 'copy'
     dt.setData(FILE_BROWSER_DRAG_MIME, payload)
     dt.setData('text/plain', entry.path)
   }
@@ -400,6 +566,155 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     window.dispatchEvent(new CustomEvent(FILE_BROWSER_MUTATED_EVENT))
   }
 
+  async function refreshAfterMutation(targetPath?: string | null) {
+    notifyFileBrowserMutated()
+    await loadDirectory(targetPath ?? state.activePath, true)
+  }
+
+  async function toggleFavoritePath(path: string) {
+    const norm = normalizeFilesSettingsPath(path)
+    try {
+      await filesSettings.setFavorite(norm, !favoritePathSet().has(norm))
+      if (state.activePath === FILE_BROWSER_FAVORITES_PATH) await loadDirectory(FILE_BROWSER_FAVORITES_PATH, true)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function pasteFsClipInto(targetDir: string) {
+    const clip = fileBrowserFsClipState()
+    if (!clip.path || clip.mode === 'none') return
+    const base = shellHttpBase()
+    setOpError(null)
+    try {
+      if (clip.mode === 'copy') {
+        await copyFileBrowserFile(clip.path, targetDir, null, base)
+      } else {
+        const dest = targetDir === '/' ? `/${posixBasename(clip.path)}` : `${targetDir.replace(/\/+$/, '')}/${posixBasename(clip.path)}`
+        await renameFileBrowserPath(clip.path, dest, base)
+        fileBrowserFsClipClear()
+      }
+      await refreshAfterMutation(targetDir)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function writePasteDataToCurrentFolder(pasteData: FileBrowserPasteData, name: string) {
+    if (!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH) return
+    const base = shellHttpBase()
+    setOpError(null)
+    try {
+      await writeFileBrowserBytes(state.activePath, name.trim(), pasteData.contentBase64, base)
+      closeFileDialog()
+      await refreshAfterMutation(state.activePath)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function hasExternalFileDrop(event: DragEvent): boolean {
+    const dt = event.dataTransfer
+    if (!dt) return false
+    if (dt.files && dt.files.length > 0) return true
+    return Array.from(dt.types ?? []).includes('Files')
+  }
+
+  function dataTransferEntry(item: DataTransferItem): FileSystemEntryLike | null {
+    const getter = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }).webkitGetAsEntry
+    return typeof getter === 'function' ? getter.call(item) : null
+  }
+
+  function fileFromEntry(entry: FileSystemEntryLike): Promise<File> {
+    return new Promise((resolve, reject) => {
+      if (!entry.file) {
+        reject(new Error('Dropped item is not a file.'))
+        return
+      }
+      entry.file(resolve, reject)
+    })
+  }
+
+  function entriesFromDirectory(entry: FileSystemEntryLike): Promise<FileSystemEntryLike[]> {
+    return new Promise((resolve, reject) => {
+      const reader = entry.createReader?.()
+      if (!reader) {
+        resolve([])
+        return
+      }
+      const out: FileSystemEntryLike[] = []
+      const read = () => {
+        reader.readEntries((chunk) => {
+          if (chunk.length === 0) {
+            resolve(out)
+            return
+          }
+          out.push(...chunk)
+          read()
+        }, reject)
+      }
+      read()
+    })
+  }
+
+  async function uploadEntryToFolder(entry: FileSystemEntryLike, targetDir: string, base: string | null) {
+    if (entry.isFile) {
+      const file = await fileFromEntry(entry)
+      await writeFileBrowserBytes(targetDir, file.name || entry.name, await fileToBase64(file), base)
+      return
+    }
+    if (!entry.isDirectory) return
+    const made = await mkdirFileBrowserEntry(targetDir, entry.name, base)
+    const nextDir =
+      made.path ?? (targetDir === '/' ? `/${entry.name}` : `${targetDir.replace(/\/+$/, '')}/${entry.name}`)
+    for (const child of await entriesFromDirectory(entry)) {
+      await uploadEntryToFolder(child, nextDir, base)
+    }
+  }
+
+  async function uploadFilesToCurrentFolder(files: readonly File[]) {
+    if (!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH || files.length === 0) return
+    setUploadBusy(true)
+    setOpError(null)
+    const base = shellHttpBase()
+    try {
+      for (const file of files) {
+        await writeFileBrowserBytes(state.activePath, file.name, await fileToBase64(file), base)
+      }
+      await refreshAfterMutation(state.activePath)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUploadBusy(false)
+      setExternalUploadDragOver(false)
+    }
+  }
+
+  async function uploadDataTransferToCurrentFolder(dataTransfer: DataTransfer) {
+    if (!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH) return
+    const entries = Array.from(dataTransfer.items ?? [])
+      .map(dataTransferEntry)
+      .filter((entry): entry is FileSystemEntryLike => entry !== null)
+    if (entries.length === 0) {
+      await uploadFilesToCurrentFolder(Array.from(dataTransfer.files ?? []))
+      return
+    }
+    setUploadBusy(true)
+    setOpError(null)
+    const base = shellHttpBase()
+    try {
+      for (const entry of entries) {
+        await uploadEntryToFolder(entry, state.activePath, base)
+      }
+      await refreshAfterMutation(state.activePath)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUploadBusy(false)
+      setExternalUploadDragOver(false)
+    }
+  }
+
   async function moveDraggedPathInto(sourcePath: string, targetDir: string) {
     if (!canDropPathInto(sourcePath, targetDir)) return
     const base = shellHttpBase()
@@ -408,15 +723,15 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     try {
       await renameFileBrowserPath(sourcePath, destPath, base)
       setDropTargetPath(null)
-      notifyFileBrowserMutated()
+      await refreshAfterMutation(state.activePath)
     } catch (e) {
       setOpError(e instanceof Error ? e.message : String(e))
     }
   }
 
   function dragOverDirectory(event: DragEvent, targetDir: string) {
-    const payload = parseDragPayload(event)
-    if (!payload || !canDropPathInto(payload.path, targetDir)) return
+    const payload = parseFileBrowserDragPayload(event.dataTransfer)
+    if (!payload?.writable || !canDropPathInto(payload.path, targetDir)) return
     event.preventDefault()
     event.stopPropagation()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
@@ -424,8 +739,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   }
 
   function dropOnDirectory(event: DragEvent, targetDir: string) {
-    const payload = parseDragPayload(event)
-    if (!payload) return
+    const payload = parseFileBrowserDragPayload(event.dataTransfer)
+    if (!payload?.writable) return
     event.preventDefault()
     event.stopPropagation()
     void moveDraggedPathInto(payload.path, targetDir)
@@ -464,8 +779,9 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     event.preventDefault()
     drag.dragging = true
     const dir = pointerDropDirAt(event.clientX, event.clientY)
-    drag.dropDir = dir && canDropPathInto(drag.path, dir) ? dir : null
+    drag.dropDir = drag.writable && dir && canDropPathInto(drag.path, dir) ? dir : null
     setDropTargetPath(drag.dropDir)
+    previewEntryInDroppedTab(drag, event.clientX, event.clientY)
   }
 
   function onWindowPointerDragEnd(event: PointerEvent) {
@@ -474,6 +790,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     clearPointerDragListeners()
     pointerDrag = null
     setDropTargetPath(null)
+    props.onClearInTabDropPreview?.()
     if (!drag.dragging) return
     event.preventDefault()
     suppressClickAfterPointerDrag = true
@@ -481,15 +798,27 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       suppressClickAfterPointerDrag = false
     }, 0)
     const dir = drag.dropDir ?? pointerDropDirAt(event.clientX, event.clientY)
-    if (dir && canDropPathInto(drag.path, dir)) {
+    if (drag.writable && dir && canDropPathInto(drag.path, dir)) {
       void moveDraggedPathInto(drag.path, dir)
+      return
     }
+    openEntryInDroppedTab(drag, event.clientX, event.clientY)
   }
 
   function beginPointerDrag(event: PointerEvent, entry: FileBrowserEntry) {
-    if (event.button !== 0 || entry.writable !== true) return
+    if (event.button !== 0) return
+    if (entry.writable !== true && !fileBrowserEntryCanOpenInShell(entry)) return
+    const directory =
+      state.activePath && state.activePath !== FILE_BROWSER_FAVORITES_PATH
+        ? state.activePath
+        : posixDirname(entry.path)
     pointerDrag = {
       path: entry.path,
+      label: normalizeDisplayName(entry),
+      kind: entry.kind,
+      writable: entry.writable === true,
+      directory,
+      showHidden: state.showHidden,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -565,6 +894,28 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       })
     }
+    if (items.length > 0) items.push(menuSeparator())
+    items.push({
+      actionId: favoritePathSet().has(normalizeFilesSettingsPath(entry.path)) ? 'unfavorite' : 'favorite',
+      label: favoritePathSet().has(normalizeFilesSettingsPath(entry.path)) ? 'Unfavorite' : 'Favorite',
+      icon: tinyIcon(Star),
+      action: () => {
+        void toggleFavoritePath(entry.path)
+      },
+    })
+    items.push({
+      actionId: 'set-icon',
+      label: 'Set icon…',
+      icon: tinyIcon(Paintbrush),
+      action: () => {
+        setDialog({
+          kind: 'icon',
+          path: entry.path,
+          label: normalizeDisplayName(entry),
+          selected: customIconNameForPath(entry.path, customIcons()),
+        })
+      },
+    })
     if (writable) {
       if (items.length > 0) items.push(menuSeparator())
       if (isFile) {
@@ -584,6 +935,19 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
             fileBrowserFsClipCopy(entry.path)
           },
         })
+        items.push({
+          actionId: 'copy-to',
+          label: 'Copy to…',
+          icon: tinyIcon(FolderInput),
+          action: () => {
+            setDialog({
+              kind: 'copy-to',
+              path: entry.path,
+              label: normalizeDisplayName(entry),
+              draft: state.activePath ?? posixDirname(entry.path),
+            })
+          },
+        })
       } else if (isDir) {
         items.push({
           actionId: 'fs-cut-dir',
@@ -594,6 +958,19 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           },
         })
       }
+      items.push({
+        actionId: 'move-to',
+        label: 'Move to…',
+        icon: tinyIcon(FolderInput),
+        action: () => {
+          setDialog({
+            kind: 'move-to',
+            path: entry.path,
+            label: normalizeDisplayName(entry),
+            draft: state.activePath ?? posixDirname(entry.path),
+          })
+        },
+      })
       items.push({
         actionId: 'rename',
         label: 'Rename…',
@@ -643,7 +1020,31 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         },
       })
     }
+    if (fileBrowserFsClipState().mode !== 'none' && root.path !== FILE_BROWSER_FAVORITES_PATH) {
+      if (items.length > 0) items.push(menuSeparator())
+      items.push({
+        actionId: 'fs-paste',
+        label: 'Paste',
+        icon: tinyIcon(ClipboardPaste),
+        action: () => {
+          void pasteFsClipInto(root.path)
+        },
+      })
+    }
     if (items.length > 0) items.push(menuSeparator())
+    items.push({
+      actionId: 'set-icon',
+      label: 'Set icon…',
+      icon: tinyIcon(Paintbrush),
+      action: () => {
+        setDialog({
+          kind: 'icon',
+          path: root.path,
+          label: root.label,
+          selected: customIconNameForPath(root.path, customIcons()),
+        })
+      },
+    })
     items.push({
       actionId: 'copy-path',
       label: 'Copy path',
@@ -659,6 +1060,20 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
 
   function moveSelection(delta: number) {
     setState('selectedPath', moveFileBrowserSelection(state.entries, state.selectedPath, delta))
+  }
+
+  function handleTypeSearch(key: string) {
+    if (typeSearchTimer !== null) window.clearTimeout(typeSearchTimer)
+    typeSearchBuffer = `${typeSearchBuffer}${key}`.toLowerCase()
+    typeSearchTimer = window.setTimeout(() => {
+      typeSearchBuffer = ''
+      typeSearchTimer = null
+    }, 850)
+    const selectedIndex = state.entries.findIndex((entry) => entry.path === state.selectedPath)
+    const start = selectedIndex >= 0 ? selectedIndex + 1 : 0
+    const candidates = [...state.entries.slice(start), ...state.entries.slice(0, start)]
+    const found = candidates.find((entry) => normalizeDisplayName(entry).toLowerCase().startsWith(typeSearchBuffer))
+    if (found) selectEntry(found.path)
   }
 
   function toggleHidden() {
@@ -696,6 +1111,23 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         await renameFileBrowserPath(d.path, to, base)
       } else if (d.kind === 'delete') {
         await removeFileBrowserPath(d.path, base)
+      } else if (d.kind === 'move-to') {
+        const destDir = d.draft.trim()
+        if (!destDir) throw new Error('Destination folder is required.')
+        const to = destDir === '/' ? `/${posixBasename(d.path)}` : `${destDir.replace(/\/+$/, '')}/${posixBasename(d.path)}`
+        await renameFileBrowserPath(d.path, to, base)
+        fileBrowserFsClipClear()
+      } else if (d.kind === 'copy-to') {
+        const destDir = d.draft.trim()
+        if (!destDir) throw new Error('Destination folder is required.')
+        await copyFileBrowserFile(d.path, destDir, null, base)
+      } else if (d.kind === 'icon') {
+        await filesSettings.setCustomIcon(d.path, d.selected)
+      } else if (d.kind === 'paste-file') {
+        const name = d.draft.trim()
+        if (!name) throw new Error('Filename is required.')
+        await writePasteDataToCurrentFolder(d.pasteData, name)
+        return
       }
       closeFileDialog()
       await loadDirectory(state.activePath, true)
@@ -749,6 +1181,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   }
 
   onMount(() => {
+    void filesSettings.warm()
     const wid = props.windowId
     const restored = sanitizeFileBrowserWindowMemento(peekShellWindowState(wid))
     const primed = consumeFileBrowserWindowPath(wid)
@@ -774,6 +1207,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   onCleanup(() => {
     window.removeEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
     clearPointerDragListeners()
+    props.onClearInTabDropPreview?.()
+    if (typeSearchTimer !== null) window.clearTimeout(typeSearchTimer)
   })
 
   createEffect(() => {
@@ -846,6 +1281,14 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   })
 
   createEffect(() => {
+    const favKey = filesSettings.settings().favorites.join('\u001f')
+    if (state.activePath !== FILE_BROWSER_FAVORITES_PATH || state.status !== 'ready') return
+    if (favKey === lastFavoritesReloadKey) return
+    lastFavoritesReloadKey = favKey
+    void loadDirectory(FILE_BROWSER_FAVORITES_PATH, true)
+  })
+
+  createEffect(() => {
     void state.activePath
     closeCtxMenu()
   })
@@ -870,7 +1313,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       data-file-browser-list-state={state.status}
       data-file-browser-mount-seq={mountSeq}
       data-file-browser-load-count={loadCount()}
-      class="flex h-full min-h-0 min-w-0 bg-(--shell-surface-inset) text-(--shell-text)"
+      class="relative flex h-full min-h-0 min-w-0 bg-(--shell-surface-inset) text-(--shell-text)"
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.defaultPrevented) return
@@ -893,6 +1336,21 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           ) {
             closeCtxMenu()
           }
+        }
+        const keyTarget = event.target
+        if (
+          event.key.length === 1 &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !(keyTarget instanceof HTMLInputElement) &&
+          !(keyTarget instanceof HTMLTextAreaElement) &&
+          !(keyTarget instanceof HTMLSelectElement) &&
+          state.entries.length > 0
+        ) {
+          event.preventDefault()
+          handleTypeSearch(event.key)
+          return
         }
         if (event.key === 'ArrowDown') {
           event.preventDefault()
@@ -938,16 +1396,38 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           void loadDirectory(state.parentPath)
         }
       }}
+      onPaste={(event) => {
+        if (!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH) return
+        const data = event.clipboardData
+        if (!data || (!data.files.length && !data.getData('text/plain') && !data.getData('text/html'))) return
+        event.preventDefault()
+        void extractFileBrowserPasteData(event.clipboardData).then((pasteData) => {
+          if (!pasteData) return
+          setDialog({ kind: 'paste-file', pasteData, draft: pasteData.suggestedName })
+        })
+      }}
       onDragOver={(event) => {
         if (!state.activePath) return
+        if (hasExternalFileDrop(event) && state.activePath !== FILE_BROWSER_FAVORITES_PATH) {
+          event.preventDefault()
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+          setExternalUploadDragOver(true)
+          return
+        }
         dragOverDirectory(event, state.activePath)
       }}
       onDragLeave={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
         setDropTargetPath(null)
+        setExternalUploadDragOver(false)
       }}
       onDrop={(event) => {
         if (!state.activePath) return
+        if (hasExternalFileDrop(event) && event.dataTransfer) {
+          event.preventDefault()
+          void uploadDataTransferToCurrentFolder(event.dataTransfer)
+          return
+        }
         dropOnDirectory(event, state.activePath)
       }}
     >
@@ -974,7 +1454,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                 }}
               >
                 <span class="shrink-0 text-(--shell-text-dim)">
-                  <HardDrive class="h-4 w-4" stroke-width={2} />
+                  {root.path === FILE_BROWSER_FAVORITES_PATH ? (
+                    <Star class="h-4 w-4" stroke-width={2} />
+                  ) : (
+                    renderFileBrowserCustomIcon(customIconNameForPath(root.path, customIcons()), 'h-4 w-4') ?? (
+                      <HardDrive class="h-4 w-4" stroke-width={2} />
+                    )
+                  )}
                 </span>
                 <span class="min-w-0 flex-1 truncate">{root.label}</span>
                 <span class="shrink-0 rounded border border-(--shell-border) px-1.5 py-0.5 text-[10px] uppercase text-(--shell-text-dim)">{root.kind}</span>
@@ -1076,7 +1562,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
             data-file-browser-primary-action="new-folder"
             aria-label="New folder"
             title="New folder"
-            disabled={!state.activePath}
+            disabled={!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH}
             onClick={() => setDialog({ kind: 'mkdir', draft: '' })}
           >
             <FolderPlus class="h-4 w-4" stroke-width={2} />
@@ -1087,7 +1573,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
             data-file-browser-primary-action="new-file"
             aria-label="New file"
             title="New file"
-            disabled={!state.activePath}
+            disabled={!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH}
             onClick={() => setDialog({ kind: 'touch', draft: '' })}
           >
             <FilePlus class="h-4 w-4" stroke-width={2} />
@@ -1112,41 +1598,310 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           >
             {state.showHidden ? <EyeOff class="h-4 w-4" stroke-width={2} /> : <Eye class="h-4 w-4" stroke-width={2} />}
           </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) hover:bg-(--shell-control-muted-hover)"
+            classList={{
+              'bg-(--shell-accent) text-(--shell-accent-text)': activeViewMode() === 'list',
+              'text-(--shell-text-dim)': activeViewMode() !== 'list',
+            }}
+            data-file-browser-primary-action="view-list"
+            aria-label="List view"
+            title="List view"
+            onClick={() => {
+              if (state.activePath) void filesSettings.setViewMode(state.activePath, 'list')
+            }}
+          >
+            <List class="h-4 w-4" stroke-width={2} />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) hover:bg-(--shell-control-muted-hover)"
+            classList={{
+              'bg-(--shell-accent) text-(--shell-accent-text)': activeViewMode() === 'grid',
+              'text-(--shell-text-dim)': activeViewMode() !== 'grid',
+            }}
+            data-file-browser-primary-action="view-grid"
+            aria-label="Grid view"
+            title="Grid view"
+            onClick={() => {
+              if (state.activePath) void filesSettings.setViewMode(state.activePath, 'grid')
+            }}
+          >
+            <LayoutGrid class="h-4 w-4" stroke-width={2} />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="paste"
+            aria-label="Paste"
+            title="Paste"
+            disabled={fileBrowserFsClipState().mode === 'none' || !state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH}
+            onClick={() => {
+              if (state.activePath) void pasteFsClipInto(state.activePath)
+            }}
+          >
+            <ClipboardPaste class="h-4 w-4" stroke-width={2} />
+          </button>
+          <input
+            ref={(el) => {
+              uploadInputRef = el
+            }}
+            type="file"
+            multiple
+            class="hidden"
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? [])
+              event.currentTarget.value = ''
+              void uploadFilesToCurrentFolder(files)
+            }}
+          />
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-(--shell-border) text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) disabled:cursor-not-allowed disabled:opacity-50"
+            data-file-browser-primary-action="upload"
+            aria-label="Upload files"
+            title="Upload files"
+            disabled={!state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH || uploadBusy()}
+            onClick={() => uploadInputRef?.click()}
+          >
+            <Upload class="h-4 w-4" stroke-width={2} />
+          </button>
+          <select
+            class="h-8 shrink-0 rounded-md border border-(--shell-border) bg-(--shell-surface-inset) px-2 text-xs text-(--shell-text-muted)"
+            value={filesSettings.settings().default_open_target}
+            title="Default file open target"
+            onChange={(event) => {
+              void filesSettings.setDefaultOpenTarget(event.currentTarget.value as FileBrowserDefaultOpenTarget)
+            }}
+          >
+            <option value="window">Window</option>
+            <option value="tab">Tab</option>
+            <option value="split">Split</option>
+            <option value="ask">Ask</option>
+          </select>
         </div>
         <Show when={opError()}>
           <div class="border-b border-(--shell-border) px-3 py-2 text-xs text-red-300">{opError()}</div>
         </Show>
-        <div class="grid grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 border-b border-(--shell-border) bg-(--shell-surface-panel) px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
-          <div>Name</div>
-          <div>Kind</div>
-          <div>Modified</div>
-          <div>Size</div>
-        </div>
+        <Show when={activeViewMode() === 'list'}>
+          <div class="grid grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 border-b border-(--shell-border) bg-(--shell-surface-panel) px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-(--shell-text-dim) uppercase">
+            <div>Name</div>
+            <div>Kind</div>
+            <div>Modified</div>
+            <div>Size</div>
+          </div>
+        </Show>
         <div class="min-h-0 flex-1 overflow-auto" data-file-browser-entry-scroll>
           {state.status === 'loading' ? (
-            <div class="flex h-full items-center justify-center px-6 py-10 text-sm text-(--shell-text-dim)">
-              Loading files…
+            <div class="flex h-full items-center justify-center px-6 py-10">
+              <div class="rounded border border-(--shell-border) bg-(--shell-surface-panel) px-4 py-3 text-sm text-(--shell-text-dim)">
+                Loading files…
+              </div>
             </div>
           ) : state.status === 'error' ? (
             <div class="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
-              <div class="text-sm font-medium text-(--shell-text)">Failed to load this folder.</div>
-              <div class="max-w-lg text-sm text-(--shell-text-dim)">{state.errorMessage ?? 'Unknown error'}</div>
-              <button
-                type="button"
-                class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
-                onClick={() => void loadDirectory(state.activePath ?? state.roots[0]?.path, true)}
-              >
-                Retry
-              </button>
+              <div class="flex max-w-lg flex-col items-center gap-3 rounded border border-(--shell-border) bg-(--shell-surface-panel) px-5 py-4">
+                <div class="text-sm font-medium text-(--shell-text)">Failed to load this folder.</div>
+                <div class="text-sm text-(--shell-text-dim)">{state.errorMessage ?? 'Unknown error'}</div>
+                <button
+                  type="button"
+                  class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                  onClick={() => void loadDirectory(state.activePath ?? state.roots[0]?.path, true)}
+                >
+                  Retry
+                </button>
+              </div>
             </div>
-          ) : state.entries.length === 0 ? (
+          ) : state.entries.length === 0 && !showParentRow() ? (
             <div class="flex h-full items-center justify-center px-6 py-10 text-sm text-(--shell-text-dim)">
-              This folder is empty.
+              <div class="rounded border border-(--shell-border) bg-(--shell-surface-panel) px-4 py-3">
+                {state.activePath === FILE_BROWSER_FAVORITES_PATH ? 'No favorites yet.' : 'This folder is empty.'}
+              </div>
+            </div>
+          ) : activeViewMode() === 'grid' ? (
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-3 p-3">
+              <Show when={parentEntryPath()}>
+                {(parentPath) => (
+                  <button
+                    type="button"
+                    class="group flex min-h-36 flex-col items-center justify-center gap-2 rounded border border-(--shell-border) bg-(--shell-surface-panel) p-3 text-sm"
+                    data-file-browser-row
+                    data-file-browser-path={parentPath()}
+                    data-file-browser-name=".."
+                    data-file-browser-kind="directory"
+                    data-file-browser-selected="false"
+                    onClick={() => void loadDirectory(parentPath())}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setCtxMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        items: [
+                          {
+                            actionId: 'open-parent',
+                            label: 'Open parent',
+                            icon: tinyIcon(Folder),
+                            action: () => void loadDirectory(parentPath()),
+                          },
+                        ],
+                      })
+                    }}
+                  >
+                    <FolderInput class="h-10 w-10 text-(--shell-text-dim)" stroke-width={2} />
+                    <span class="max-w-full truncate font-medium">..</span>
+                  </button>
+                )}
+              </Show>
+              <Show when={state.entries.length === 0}>
+                <div class="col-span-full flex min-h-24 items-center justify-center rounded border border-(--shell-border) bg-(--shell-surface-panel) px-4 py-3 text-sm text-(--shell-text-dim)">
+                  This folder is empty.
+                </div>
+              </Show>
+              {state.entries.map((entry) => {
+                const selected = () => state.selectedPath === entry.path
+                const favorite = () => favoritePathSet().has(normalizeFilesSettingsPath(entry.path))
+                const imageThumb = () => entry.kind === 'file' && isImageFilePath(entry.path)
+                return (
+                  <div
+                    class="group relative flex min-h-36 cursor-default flex-col rounded border border-(--shell-border) bg-(--shell-surface-panel) p-2 text-sm hover:bg-(--shell-control-muted-hover)"
+                    classList={{
+                      'border-(--shell-accent) bg-(--shell-accent-soft) text-(--shell-accent-soft-text)': selected(),
+                      'outline outline-2 outline-(--shell-accent)': dropTargetPath() === entry.path,
+                    }}
+                    draggable={entry.writable === true}
+                    role="row"
+                    aria-selected={selected() ? 'true' : undefined}
+                    data-file-browser-row
+                    data-file-browser-path={entry.path}
+                    data-file-browser-name={normalizeDisplayName(entry)}
+                    data-file-browser-kind={entry.kind}
+                    data-file-browser-selected={selected() ? 'true' : 'false'}
+                    data-file-browser-draggable={entry.writable === true ? 'true' : 'false'}
+                    onClick={(event) => clickEntry(event, entry)}
+                    onPointerDown={(e) => beginPointerDrag(e, entry)}
+                    onDragStart={(e) => {
+                      selectEntry(entry.path)
+                      setDragPayload(e, entry)
+                    }}
+                    onDragEnd={() => setDropTargetPath(null)}
+                    onDragOver={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      dragOverDirectory(e, entry.path)
+                    }}
+                    onDragLeave={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                      setDropTargetPath((current) => (current === entry.path ? null : current))
+                    }}
+                    onDrop={(e) => {
+                      if (!fileBrowserEntryIsDirectory(entry)) return
+                      dropOnDirectory(e, entry.path)
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      selectEntry(entry.path)
+                      setCtxMenu({ x: e.clientX, y: e.clientY, items: entryContextItems(entry) })
+                    }}
+                  >
+                    <button
+                      type="button"
+                      class="absolute top-2 right-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded border border-(--shell-border) bg-(--shell-surface-inset)/85 text-(--shell-text-dim) opacity-0 hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) group-hover:opacity-100"
+                      classList={{ 'opacity-100 text-yellow-300': favorite() }}
+                      aria-label={favorite() ? 'Unfavorite' : 'Favorite'}
+                      title={favorite() ? 'Unfavorite' : 'Favorite'}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        void toggleFavoritePath(entry.path)
+                      }}
+                    >
+                      <Star class="h-3.5 w-3.5" fill={favorite() ? 'currentColor' : 'none'} stroke-width={2} />
+                    </button>
+                    <div class="flex min-h-24 items-center justify-center overflow-hidden rounded bg-(--shell-surface-inset)">
+                      {imageThumb() ? (
+                        <img
+                          src={fileBrowserReadUrl(entry.path, shellHttpBase())}
+                          alt=""
+                          class="h-full max-h-24 w-full object-cover"
+                          draggable={false}
+                        />
+                      ) : (
+                        <span class="text-(--shell-text-dim)">
+                          {fileBrowserIconForEntry(entry, customIcons(), 'h-12 w-12')}
+                        </span>
+                      )}
+                    </div>
+                    <div class="mt-2 min-w-0">
+                      <div class="truncate font-medium">{normalizeDisplayName(entry)}</div>
+                      <div class="mt-1 flex items-center justify-between gap-2 text-xs text-(--shell-text-dim)">
+                        <span class="truncate">{entry.kind}</span>
+                        <span class="shrink-0">{formatEntrySize(entry.size)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           ) : (
             <div class="divide-y divide-(--shell-border)">
+              <Show when={parentEntryPath()}>
+                {(parentPath) => (
+                  <div
+                    class="group grid cursor-default grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 px-3 py-2 text-sm"
+                    role="row"
+                    data-file-browser-row
+                    data-file-browser-path={parentPath()}
+                    data-file-browser-name=".."
+                    data-file-browser-kind="directory"
+                    data-file-browser-selected="false"
+                    onClick={(event) => {
+                      const previous = lastRowClick
+                      const doubleClick =
+                        event.detail >= 2 ||
+                        (previous?.path === parentPath() &&
+                          event.timeStamp - previous.timeStamp <= 500 &&
+                          Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 8)
+                      lastRowClick = doubleClick
+                        ? null
+                        : { path: parentPath(), timeStamp: event.timeStamp, x: event.clientX, y: event.clientY }
+                      if (doubleClick) void loadDirectory(parentPath())
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setCtxMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        items: [
+                          {
+                            actionId: 'open-parent',
+                            label: 'Open parent',
+                            icon: tinyIcon(Folder),
+                            action: () => void loadDirectory(parentPath()),
+                          },
+                        ],
+                      })
+                    }}
+                  >
+                    <div class="flex min-w-0 items-center gap-2 truncate font-medium">
+                      <FolderInput class="h-4 w-4 shrink-0 text-(--shell-text-dim)" stroke-width={2} />
+                      <span class="min-w-0 truncate">..</span>
+                    </div>
+                    <div class="truncate text-(--shell-text-dim)">directory</div>
+                    <div class="truncate text-(--shell-text-dim)">—</div>
+                    <div class="truncate text-(--shell-text-dim)">—</div>
+                  </div>
+                )}
+              </Show>
+              <Show when={state.entries.length === 0}>
+                <div class="px-3 py-8 text-center text-sm text-(--shell-text-dim)">This folder is empty.</div>
+              </Show>
               {state.entries.map((entry) => {
                 const selected = () => state.selectedPath === entry.path
+                const favorite = () => favoritePathSet().has(normalizeFilesSettingsPath(entry.path))
                 return (
                   <div
                     class="group grid cursor-default grid-cols-[minmax(0,1fr)_110px_160px_96px] gap-3 px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover)"
@@ -1191,13 +1946,27 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                     }}
                   >
                     <div class="flex min-w-0 items-center gap-2 truncate font-medium">
+                      <button
+                        type="button"
+                        class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-(--shell-text-dim) opacity-0 hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) group-hover:opacity-100"
+                        classList={{ 'opacity-100 text-yellow-300': favorite() }}
+                        aria-label={favorite() ? 'Unfavorite' : 'Favorite'}
+                        title={favorite() ? 'Unfavorite' : 'Favorite'}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          void toggleFavoritePath(entry.path)
+                        }}
+                      >
+                        <Star class="h-3.5 w-3.5" fill={favorite() ? 'currentColor' : 'none'} stroke-width={2} />
+                      </button>
                       <span
                         class="shrink-0 text-(--shell-text-dim)"
                         classList={{
                           'text-(--shell-accent-soft-text)': selected(),
                         }}
                       >
-                        {fileBrowserIconForEntry(entry)}
+                        {fileBrowserIconForEntry(entry, customIcons())}
                       </span>
                       <span class="min-w-0 truncate">{normalizeDisplayName(entry)}</span>
                     </div>
@@ -1215,6 +1984,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
           <span>{busy() ? 'Busy' : `${state.entries.length} item${state.entries.length === 1 ? '' : 's'}`}</span>
         </div>
       </section>
+      <Show when={externalUploadDragOver()}>
+        <div class="pointer-events-none absolute inset-4 z-20 flex items-center justify-center rounded border border-(--shell-accent) bg-(--shell-surface-panel)/90 text-sm font-medium text-(--shell-text)">
+          Drop files to upload
+        </div>
+      </Show>
       <FileBrowserContextMenu
         open={() => ctxMenu() !== null}
         anchor={() => {
@@ -1312,8 +2086,200 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
             </Show>
             <Show
               when={(() => {
+                const row = dialog()
+                return row.kind === 'open-target' ? row : false
+              })()}
+            >
+              {(d) => (
+                <>
+                  <div class="mb-3 text-sm font-medium">Open {d().label}</div>
+                  <div class="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      class="flex items-center justify-between rounded border border-(--shell-border) px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-open-target="window"
+                      onClick={() => {
+                        openFilePathWithTarget(d().path, 'window')
+                        closeFileDialog()
+                      }}
+                    >
+                      <span>Window</span>
+                      <ExternalLink class="h-4 w-4" stroke-width={2} />
+                    </button>
+                    <button
+                      type="button"
+                      class="flex items-center justify-between rounded border border-(--shell-border) px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover) disabled:opacity-50"
+                      data-file-browser-open-target="tab"
+                      disabled={!props.onOpenInTab}
+                      onClick={() => {
+                        openFilePathWithTarget(d().path, 'tab')
+                        closeFileDialog()
+                      }}
+                    >
+                      <span>Tab</span>
+                      <Workflow class="h-4 w-4" stroke-width={2} />
+                    </button>
+                    <button
+                      type="button"
+                      class="flex items-center justify-between rounded border border-(--shell-border) px-3 py-2 text-sm hover:bg-(--shell-control-muted-hover) disabled:opacity-50"
+                      data-file-browser-open-target="split"
+                      disabled={!props.onOpenInSplitView}
+                      onClick={() => {
+                        openFilePathWithTarget(d().path, 'split')
+                        closeFileDialog()
+                      }}
+                    >
+                      <span>Split view</span>
+                      <Columns2 class="h-4 w-4" stroke-width={2} />
+                    </button>
+                  </div>
+                  <div class="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-cancel
+                      onClick={closeFileDialog}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show
+              when={(() => {
+                const row = dialog()
+                return row.kind === 'icon' ? row : false
+              })()}
+            >
+              {(d) => (
+                <>
+                  <div class="mb-1 text-sm font-medium">Icon for {d().label}</div>
+                  <div class="grid grid-cols-4 gap-2">
+                    {FILE_BROWSER_CUSTOM_ICONS.map((icon) => (
+                      <button
+                        type="button"
+                        class="flex h-16 flex-col items-center justify-center gap-1 rounded border border-(--shell-border) text-xs hover:bg-(--shell-control-muted-hover)"
+                        classList={{
+                          'border-(--shell-accent) bg-(--shell-accent-soft) text-(--shell-accent-soft-text)': d().selected === icon.name,
+                        }}
+                        data-file-browser-icon-option={icon.name}
+                        onClick={() =>
+                          setDialog({
+                            kind: 'icon',
+                            path: d().path,
+                            label: d().label,
+                            selected: icon.name,
+                          })
+                        }
+                      >
+                        {renderFileBrowserCustomIcon(icon.name, 'h-5 w-5')}
+                        <span class="max-w-full truncate">{icon.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div class="mt-4 flex justify-between gap-2">
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-clear
+                      onClick={() =>
+                        setDialog({
+                          kind: 'icon',
+                          path: d().path,
+                          label: d().label,
+                          selected: null,
+                        })
+                      }
+                    >
+                      Clear
+                    </button>
+                    <div class="flex gap-2">
+                      <button
+                        type="button"
+                        class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                        data-file-browser-dialog-cancel
+                        onClick={closeFileDialog}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                        data-file-browser-dialog-confirm
+                        onClick={() => void submitFileDialog()}
+                      >
+                        OK
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show
+              when={(() => {
+                const row = dialog()
+                return row.kind === 'paste-file' ? row : false
+              })()}
+            >
+              {(d) => (
+                <>
+                  <div class="mb-1 text-sm font-medium">Paste as new file</div>
+                  <div class="mb-3 text-xs text-(--shell-text-dim)">{formatEntrySize(d().pasteData.size)}</div>
+                  <Show when={d().pasteData.previewDataUrl}>
+                    {(src) => (
+                      <img
+                        src={src()}
+                        alt=""
+                        class="mb-3 max-h-48 w-full rounded border border-(--shell-border) object-contain"
+                      />
+                    )}
+                  </Show>
+                  <Show when={!d().pasteData.previewDataUrl && d().pasteData.previewText}>
+                    {(text) => (
+                      <pre class="mb-3 max-h-36 overflow-auto whitespace-pre-wrap rounded border border-(--shell-border) bg-(--shell-surface-inset) p-2 text-xs text-(--shell-text-dim)">
+                        {text()}
+                      </pre>
+                    )}
+                  </Show>
+                  <input
+                    type="text"
+                    data-file-browser-dialog-input
+                    class="w-full rounded border border-(--shell-border) bg-(--shell-surface-inset) px-2 py-1.5 text-sm text-(--shell-text)"
+                    value={d().draft}
+                    onInput={(e) =>
+                      setDialog({
+                        kind: 'paste-file',
+                        pasteData: d().pasteData,
+                        draft: e.currentTarget.value,
+                      })
+                    }
+                  />
+                  <div class="mt-4 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-cancel
+                      onClick={closeFileDialog}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded border border-(--shell-border) px-3 py-1.5 text-sm hover:bg-(--shell-control-muted-hover)"
+                      data-file-browser-dialog-confirm
+                      onClick={() => void submitFileDialog()}
+                    >
+                      Paste
+                    </button>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show
+              when={(() => {
                 const k = dialog().kind
-                return k === 'mkdir' || k === 'touch' || k === 'rename'
+                return k === 'mkdir' || k === 'touch' || k === 'rename' || k === 'move-to' || k === 'copy-to'
               })()}
             >
               <div class="mb-2 text-sm font-medium text-(--shell-text-dim)">
@@ -1321,6 +2287,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                   const k = dialog().kind
                   if (k === 'mkdir') return 'New folder'
                   if (k === 'touch') return 'New file'
+                  if (k === 'move-to') return 'Move to folder'
+                  if (k === 'copy-to') return 'Copy to folder'
                   return 'Rename'
                 })()}
               </div>
@@ -1330,7 +2298,14 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                 class="w-full rounded border border-(--shell-border) bg-(--shell-surface-inset) px-2 py-1.5 text-sm text-(--shell-text)"
                 value={(() => {
                   const row = dialog()
-                  if (row.kind === 'mkdir' || row.kind === 'touch' || row.kind === 'rename') return row.draft
+                  if (
+                    row.kind === 'mkdir' ||
+                    row.kind === 'touch' ||
+                    row.kind === 'rename' ||
+                    row.kind === 'move-to' ||
+                    row.kind === 'copy-to'
+                  )
+                    return row.draft
                   return ''
                 })()}
                 onInput={(e) => {
@@ -1339,6 +2314,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                   if (row.kind === 'mkdir') setDialog({ kind: 'mkdir', draft: v })
                   else if (row.kind === 'touch') setDialog({ kind: 'touch', draft: v })
                   else if (row.kind === 'rename') setDialog({ kind: 'rename', path: row.path, draft: v })
+                  else if (row.kind === 'move-to') setDialog({ kind: 'move-to', path: row.path, label: row.label, draft: v })
+                  else if (row.kind === 'copy-to') setDialog({ kind: 'copy-to', path: row.path, label: row.label, draft: v })
                 }}
               />
               <div class="mt-4 flex justify-end gap-2">

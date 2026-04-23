@@ -24,6 +24,14 @@ type TabDragState = {
   target: TabMergeTarget | null
 }
 
+export type WorkspaceExternalTabDropDrag = {
+  target: TabMergeTarget | null
+  clientX: number
+  clientY: number
+  label: string
+  canDrop: boolean
+}
+
 type SplitGroupRect = {
   x: number
   y: number
@@ -122,6 +130,7 @@ type WorkspaceChromeOptions = {
   ) => void
   shellContextOpenTabMenu: (windowId: number, clientX: number, clientY: number) => void
   shellContextHideMenu: () => void
+  externalTabDropDrag: Accessor<WorkspaceExternalTabDropDrag | null>
   shellWireSend: (
     op:
       | 'set_geometry'
@@ -663,7 +672,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   const activeDropTarget = createMemo(() => {
     const tabDrag = tabDragState()
     if (tabDrag && (tabDrag.dragging || tabDrag.detached)) return tabDrag.target
-    return activeWindowDragTarget()
+    const windowTarget = activeWindowDragTarget()
+    if (windowTarget) return windowTarget
+    return options.externalTabDropDrag()?.target ?? null
   })
 
   document.addEventListener('pointermove', onTabDragPointerMove, true)
@@ -908,7 +919,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                   pinned: options.isWorkspaceWindowPinned(member.window_id),
                 }))}
                 splitLeftWindowId={group()!.splitLeftWindowId}
-                dragWindowId={activeDragWindowId() ?? null}
+                dragWindowId={activeDragWindowId() ?? (options.externalTabDropDrag() ? 0 : null)}
                 dropTarget={activeDropTarget() ?? null}
                 suppressClickWindowId={suppressTabClickWindowId()}
                 onSelectTab={selectTab}
@@ -1243,36 +1254,37 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     )
   }
 
+  function tabDropIndicatorForTarget(target: TabMergeTarget | null) {
+    if (!target) return null
+    const slot = document.querySelector(
+      `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
+    ) as HTMLElement | null
+    const strip = document.querySelector(
+      `[data-workspace-tab-strip="${target.groupId}"]`,
+    ) as HTMLElement | null
+    if (!slot) return null
+    const slotRect = slot.getBoundingClientRect()
+    const stripRect = strip?.getBoundingClientRect() ?? slotRect
+    return {
+      line: {
+        left: `${Math.round(slotRect.left - 2)}px`,
+        top: `${Math.round(stripRect.top + 2)}px`,
+        width: '4px',
+        height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
+      },
+      highlight: {
+        left: `${Math.round(stripRect.left)}px`,
+        top: `${Math.round(stripRect.top)}px`,
+        width: `${Math.round(stripRect.width)}px`,
+        height: `${Math.round(stripRect.height)}px`,
+      },
+      key: `${target.groupId}:${target.insertIndex}`,
+    }
+  }
+
   function TabDragOverlay() {
     const drag = createMemo(() => tabDragState())
-    const dropIndicator = createMemo(() => {
-      const target = activeDropTarget()
-      if (!target) return null
-      const slot = document.querySelector(
-        `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
-      ) as HTMLElement | null
-      const strip = document.querySelector(
-        `[data-workspace-tab-strip="${target.groupId}"]`,
-      ) as HTMLElement | null
-      if (!slot) return null
-      const slotRect = slot.getBoundingClientRect()
-      const stripRect = strip?.getBoundingClientRect() ?? slotRect
-      return {
-        line: {
-          left: `${Math.round(slotRect.left - 2)}px`,
-          top: `${Math.round(stripRect.top + 2)}px`,
-          width: '4px',
-          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
-        },
-        highlight: {
-          left: `${Math.round(stripRect.left)}px`,
-          top: `${Math.round(stripRect.top)}px`,
-          width: `${Math.round(stripRect.width)}px`,
-          height: `${Math.round(stripRect.height)}px`,
-        },
-        key: `${target.groupId}:${target.insertIndex}`,
-      }
-    })
+    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(activeDropTarget()))
     return (
       <Show when={drag()?.dragging}>
         <div
@@ -1306,34 +1318,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
 
   function WindowDragDropOverlay() {
     const windowId = createMemo(() => activeWindowDragWindowId())
-    const dropIndicator = createMemo(() => {
-      const target = activeWindowDragTarget()
-      if (!target) return null
-      const slot = document.querySelector(
-        `[data-tab-drop-slot="${target.groupId}:${target.insertIndex}"]`,
-      ) as HTMLElement | null
-      const strip = document.querySelector(
-        `[data-workspace-tab-strip="${target.groupId}"]`,
-      ) as HTMLElement | null
-      if (!slot) return null
-      const slotRect = slot.getBoundingClientRect()
-      const stripRect = strip?.getBoundingClientRect() ?? slotRect
-      return {
-        line: {
-          left: `${Math.round(slotRect.left - 2)}px`,
-          top: `${Math.round(stripRect.top + 2)}px`,
-          width: '4px',
-          height: `${Math.max(10, Math.round(stripRect.height - 4))}px`,
-        },
-        highlight: {
-          left: `${Math.round(stripRect.left)}px`,
-          top: `${Math.round(stripRect.top)}px`,
-          width: `${Math.round(stripRect.width)}px`,
-          height: `${Math.round(stripRect.height)}px`,
-        },
-        key: `${target.groupId}:${target.insertIndex}`,
-      }
-    })
+    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(activeWindowDragTarget()))
     return (
       <Show when={windowId() !== null}>
         <div
@@ -1357,6 +1342,58 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             )}
           </Show>
         </div>
+      </Show>
+    )
+  }
+
+  function ExternalTabDropOverlay() {
+    const drag = createMemo(() => options.externalTabDropDrag())
+    const dropIndicator = createMemo(() => tabDropIndicatorForTarget(drag()?.target ?? null))
+    const ghostStyle = createMemo(() => {
+      const current = drag()
+      if (!current) return {}
+      const width = 260
+      const height = 44
+      const maxLeft = Math.max(8, window.innerWidth - width - 8)
+      const maxTop = Math.max(8, window.innerHeight - height - 8)
+      return {
+        left: `${Math.min(Math.max(8, current.clientX + 14), maxLeft)}px`,
+        top: `${Math.min(Math.max(8, current.clientY + 14), maxTop)}px`,
+      }
+    })
+    return (
+      <Show when={drag()} keyed>
+        {(current) => (
+          <div class="pointer-events-none fixed inset-0 z-470121">
+            <div
+              data-file-tab-drag-preview
+              class="fixed max-w-[260px] rounded-md border bg-(--shell-surface-panel)/95 px-2.5 py-1.5 text-xs font-medium text-(--shell-text) shadow-lg ring-1"
+              classList={{
+                'border-(--shell-accent) ring-[color-mix(in_srgb,var(--shell-accent)_48%,transparent)]': current.canDrop,
+                'border-(--shell-border) opacity-85 ring-[color-mix(in_srgb,var(--shell-border)_60%,transparent)]': !current.canDrop,
+              }}
+              style={ghostStyle()}
+            >
+              <span class="block truncate">{current.label}</span>
+            </div>
+            <Show when={dropIndicator()} keyed>
+              {(indicator) => (
+                <>
+                  <div
+                    data-tab-drop-indicator={indicator.key}
+                    class="pointer-events-none fixed rounded-sm bg-[color-mix(in_srgb,var(--shell-accent-soft)_80%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--shell-accent)_58%,transparent)]"
+                    style={indicator.highlight}
+                  />
+                  <div
+                    data-tab-drop-indicator-line={indicator.key}
+                    class="pointer-events-none fixed rounded-full bg-(--shell-accent) shadow-[0_0_0_1px_var(--shell-accent),0_0_18px_color-mix(in_srgb,var(--shell-accent)_55%,transparent)]"
+                    style={indicator.line}
+                  />
+                </>
+              )}
+            </Show>
+          </div>
+        )}
       </Show>
     )
   }
@@ -1397,6 +1434,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     ShellHostedWindowContentPortals,
     TabDragOverlay,
     WindowDragDropOverlay,
+    ExternalTabDropOverlay,
     SplitGestureOverlay,
     applySplitGroupGeometry,
     cancelSplitGroupGesture,

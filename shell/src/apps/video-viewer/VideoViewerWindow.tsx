@@ -8,6 +8,7 @@ import Pause from 'lucide-solid/icons/pause'
 import Play from 'lucide-solid/icons/play'
 import Shrink from 'lucide-solid/icons/shrink'
 import { fileBrowserStreamUrl, listFileBrowserDirectory } from '@/apps/file-browser/fileBrowserBridge'
+import { ViewerFileActions } from '@/apps/file-browser/ViewerFileActions'
 import { orderedVideoPathsFromDirectoryEntries } from '@/apps/video-viewer/videoViewerCore'
 import {
   sanitizeVideoViewerWindowMemento,
@@ -28,6 +29,8 @@ type VideoViewerWindowProps = {
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
   allWindowsMap: () => Map<number, DerpWindow>
+  onOpenContainingFolder?: (path: string) => void
+  onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
 
 type ListStatus = 'loading' | 'ready' | 'error'
@@ -248,9 +251,7 @@ export function VideoViewerWindow(props: VideoViewerWindowProps) {
         if (t > 0 && Number.isFinite(t)) {
           try {
             el.currentTime = t
-          } catch {
-            /* ignore */
-          }
+          } catch {}
         }
         setDisplayTime(el.currentTime)
       }
@@ -411,6 +412,13 @@ export function VideoViewerWindow(props: VideoViewerWindowProps) {
               >
                 <ChevronRight class="h-4 w-4" stroke-width={2} />
               </button>
+              <ViewerFileActions
+                path={state.viewingPath}
+                directory={state.directory}
+                showHidden={state.showHidden}
+                onOpenContainingFolder={props.onOpenContainingFolder}
+                onOpenExternalFile={props.onOpenExternalFile}
+              />
               <button
                 type="button"
                 title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
@@ -432,6 +440,7 @@ export function VideoViewerWindow(props: VideoViewerWindowProps) {
               }}
               class="max-h-full w-full flex-1 bg-black object-contain"
               controls={false}
+              preload="metadata"
               playsinline
               data-video-viewer-element
             />

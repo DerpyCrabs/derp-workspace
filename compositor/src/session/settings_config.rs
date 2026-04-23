@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,15 @@ pub struct DefaultApplicationsFile {
     pub other: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FilesSettingsFile {
+    pub view_modes: BTreeMap<String, String>,
+    pub favorites: Vec<String>,
+    pub custom_icons: BTreeMap<String, String>,
+    pub default_open_target: String,
+}
+
 impl Default for DefaultApplicationsFile {
     fn default() -> Self {
         Self {
@@ -51,6 +61,17 @@ impl Default for DefaultApplicationsFile {
             text: "shell:text_editor".into(),
             pdf: "shell:pdf_viewer".into(),
             other: "xdg-open".into(),
+        }
+    }
+}
+
+impl Default for FilesSettingsFile {
+    fn default() -> Self {
+        Self {
+            view_modes: BTreeMap::new(),
+            favorites: Vec::new(),
+            custom_icons: BTreeMap::new(),
+            default_open_target: "window".into(),
         }
     }
 }
@@ -167,6 +188,7 @@ pub struct SettingsFile {
     pub theme: ThemeSettingsFile,
     pub keyboard: KeyboardSettingsFile,
     pub default_applications: DefaultApplicationsFile,
+    pub files: FilesSettingsFile,
     pub scratchpads: ScratchpadSettingsFile,
 }
 
@@ -177,6 +199,7 @@ impl Default for SettingsFile {
             theme: ThemeSettingsFile::default(),
             keyboard: KeyboardSettingsFile::default(),
             default_applications: DefaultApplicationsFile::default(),
+            files: FilesSettingsFile::default(),
             scratchpads: ScratchpadSettingsFile::default(),
         }
     }
@@ -279,6 +302,93 @@ pub fn sanitize_default_applications_settings(
         text: sanitize_default_app_token(&settings.text, &defaults.text),
         pdf: sanitize_default_app_token(&settings.pdf, &defaults.pdf),
         other: sanitize_default_app_token(&settings.other, &defaults.other),
+    }
+}
+
+fn sanitize_settings_path_key(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 4096 {
+        return None;
+    }
+    if trimmed.chars().any(|ch| ch.is_control()) {
+        return None;
+    }
+    Some(trimmed.replace('\\', "/"))
+}
+
+fn sanitize_files_view_mode(value: &str) -> Option<String> {
+    match value.trim() {
+        "list" => Some("list".into()),
+        "grid" => Some("grid".into()),
+        _ => None,
+    }
+}
+
+fn sanitize_files_icon_name(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn sanitize_default_open_target(value: &str) -> String {
+    match value.trim() {
+        "window" | "tab" | "split" | "ask" => value.trim().to_string(),
+        _ => FilesSettingsFile::default().default_open_target,
+    }
+}
+
+pub fn sanitize_files_settings(settings: FilesSettingsFile) -> FilesSettingsFile {
+    let mut view_modes = BTreeMap::new();
+    for (path, mode) in settings.view_modes {
+        let Some(path) = sanitize_settings_path_key(&path) else {
+            continue;
+        };
+        let Some(mode) = sanitize_files_view_mode(&mode) else {
+            continue;
+        };
+        view_modes.insert(path, mode);
+        if view_modes.len() >= 512 {
+            break;
+        }
+    }
+    let mut favorites = Vec::new();
+    for path in settings.favorites {
+        let Some(path) = sanitize_settings_path_key(&path) else {
+            continue;
+        };
+        if !favorites.contains(&path) {
+            favorites.push(path);
+        }
+        if favorites.len() >= 512 {
+            break;
+        }
+    }
+    let mut custom_icons = BTreeMap::new();
+    for (path, icon) in settings.custom_icons {
+        let Some(path) = sanitize_settings_path_key(&path) else {
+            continue;
+        };
+        let Some(icon) = sanitize_files_icon_name(&icon) else {
+            continue;
+        };
+        custom_icons.insert(path, icon);
+        if custom_icons.len() >= 512 {
+            break;
+        }
+    }
+    FilesSettingsFile {
+        view_modes,
+        favorites,
+        custom_icons,
+        default_open_target: sanitize_default_open_target(&settings.default_open_target),
     }
 }
 
@@ -476,6 +586,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
             cfg.keyboard = sanitize_keyboard_settings(cfg.keyboard);
             cfg.default_applications =
                 sanitize_default_applications_settings(cfg.default_applications);
+            cfg.files = sanitize_files_settings(cfg.files);
             cfg.scratchpads = sanitize_scratchpad_settings(cfg.scratchpads);
             if cfg.version == 0 {
                 cfg.version = 1;
@@ -589,6 +700,41 @@ pub fn write_default_applications_settings(
     }
     cfg.version = 1;
     cfg.default_applications = default_applications;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
+}
+
+pub fn read_files_settings() -> FilesSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return FilesSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).files
+}
+
+pub fn read_files_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_files_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_files_settings(files: FilesSettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let files = sanitize_files_settings(files);
+    if cfg.version == 1 && cfg.files == files {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.files = files;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{json}\n")).map_err(|e| {
         tracing::warn!(

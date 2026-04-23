@@ -30,6 +30,7 @@ export type TaskbarWindowRow = {
   desktop_id?: string | null
   desktop_icon?: string | null
   app_display_name?: string | null
+  shell_file_path?: string | null
   minimized: boolean
   output_name: string
   tab_count: number
@@ -167,6 +168,7 @@ function TaskbarWindowRows(props: {
                     appId: w()!.app_id,
                     desktopId: w()!.desktop_id ?? null,
                     desktopIcon: w()!.desktop_icon ?? null,
+                    shellFilePath: w()!.shell_file_path ?? null,
                   }}
                   active={active()}
                   compact={props.compactMode !== 'normal'}

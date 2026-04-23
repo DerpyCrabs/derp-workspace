@@ -7,6 +7,7 @@ import Shrink from 'lucide-solid/icons/shrink'
 import ZoomIn from 'lucide-solid/icons/zoom-in'
 import ZoomOut from 'lucide-solid/icons/zoom-out'
 import { fileBrowserReadUrl, listFileBrowserDirectory } from '@/apps/file-browser/fileBrowserBridge'
+import { ViewerFileActions } from '@/apps/file-browser/ViewerFileActions'
 import { orderedImagePathsFromDirectoryEntries } from '@/apps/image-viewer/imageViewerCore'
 import {
   sanitizeImageViewerWindowMemento,
@@ -28,6 +29,8 @@ type ImageViewerWindowProps = {
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
   allWindowsMap: () => Map<number, DerpWindow>
+  onOpenContainingFolder?: (path: string) => void
+  onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
 
 type ListStatus = 'loading' | 'ready' | 'error'
@@ -328,6 +331,13 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
               >
                 <RotateCw class="h-3.5 w-3.5" stroke-width={2} />
               </button>
+              <ViewerFileActions
+                path={state.viewingPath}
+                directory={state.directory}
+                showHidden={state.showHidden}
+                onOpenContainingFolder={props.onOpenContainingFolder}
+                onOpenExternalFile={props.onOpenExternalFile}
+              />
               <button
                 type="button"
                 title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

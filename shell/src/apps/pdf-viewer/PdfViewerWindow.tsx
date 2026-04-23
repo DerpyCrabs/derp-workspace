@@ -4,6 +4,7 @@ import { createStore } from 'solid-js/store'
 import Expand from 'lucide-solid/icons/expand'
 import Shrink from 'lucide-solid/icons/shrink'
 import { fileBrowserStreamUrl } from '@/apps/file-browser/fileBrowserBridge'
+import { ViewerFileActions } from '@/apps/file-browser/ViewerFileActions'
 import {
   sanitizePdfViewerWindowMemento,
   snapshotPdfViewerWindowMemento,
@@ -23,6 +24,8 @@ type PdfViewerWindowProps = {
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
   allWindowsMap: () => Map<number, DerpWindow>
+  onOpenContainingFolder?: (path: string) => void
+  onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
 
 function initialStore(m: PdfViewerWindowMemento): PdfViewerWindowMemento {
@@ -144,6 +147,15 @@ export function PdfViewerWindow(props: PdfViewerWindowProps) {
         <span class="min-w-0 flex-1 truncate px-1 text-xs text-white/90" data-pdf-viewer-title>
           {fileName()}
         </span>
+        <div class="flex shrink-0 items-center gap-1">
+          <ViewerFileActions
+            path={state.viewingPath}
+            directory={state.directory}
+            showHidden={state.showHidden}
+            onOpenContainingFolder={props.onOpenContainingFolder}
+            onOpenExternalFile={props.onOpenExternalFile}
+          />
+        </div>
         <button
           type="button"
           title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

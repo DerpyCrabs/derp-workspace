@@ -26,6 +26,7 @@ import {
   movePoint,
   prepareFileBrowserFixtures,
   pointerButton,
+  postJson,
   rectCenter,
   resetFileBrowserFixtures,
   rightClickRect,
@@ -47,6 +48,22 @@ const TEXT_EDITOR_APP_ID = 'derp.text-editor'
 const WRITABLE_TEXT = 'Phase 1 writable fixture\nThis file should reset between runs.\n'
 const READ_ONLY_TEXT = 'Phase 1 read-only fixture\nThis file should refuse direct writes.\n'
 const READ_ONLY_MD = '# Read only doc\n\nbody\n'
+
+type FilesSettingsSnapshot = {
+  view_modes: Record<string, string>
+  favorites: string[]
+  custom_icons: Record<string, string>
+  default_open_target: string
+}
+
+function blankFilesSettings(): FilesSettingsSnapshot {
+  return {
+    view_modes: {},
+    favorites: [],
+    custom_icons: {},
+    default_open_target: 'window',
+  }
+}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('file browser fixtures prepare deterministically and expose snapshot contract', async ({ base, state }) => {
@@ -177,6 +194,172 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(rootBreadcrumb?.rect, 'missing root breadcrumb')
     await clickRect(base, assertRectMinSize('file browser root breadcrumb', rootBreadcrumb.rect, 24, 18))
     await waitForActivePath(base, fixtures.root_path, navigated.windowId)
+  })
+
+  test('file browser view mode favorites custom icons and ask target persist through settings', async ({ base, state }) => {
+    await postJson(base, '/settings_files', blankFilesSettings())
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaDir = path.posix.dirname(fixtures.image_file)
+    await openDirectoryRow(base, mediaDir, 'media', navigated.windowId)
+    let shell = await waitForActivePath(base, mediaDir, navigated.windowId)
+    const gridAction = fileBrowserAction(shell, 'view-grid', navigated.windowId)
+    assert(gridAction?.rect, 'missing grid view action')
+    await clickRect(base, assertRectMinSize('grid view action', gridAction.rect, 24, 18))
+    await waitFor(
+      'grid view settings persisted',
+      async () => {
+        const settings = await getJson<FilesSettingsSnapshot>(base, '/settings_files')
+        return settings.view_modes[mediaDir] === 'grid' ? settings : null
+      },
+      2000,
+      100,
+    )
+    const gridShell = await waitFor(
+      'wait for grid cards',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = fileBrowserRow(shell, 'blue-image.png', navigated.windowId)
+        return row?.rect && row.rect.height >= 80 ? shell : null
+      },
+      2000,
+      100,
+    )
+    const imageGridRow = fileBrowserRow(gridShell, 'blue-image.png', navigated.windowId)
+    assert(imageGridRow?.rect, 'missing image grid row')
+    await rightClickRect(base, assertRectMinSize('image grid context', imageGridRow.rect, 40, 40))
+    const favoriteItem = await waitFor(
+      'favorite context item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'favorite')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('favorite item', favoriteItem.rect!, 24, 18))
+    await waitFor(
+      'favorite persisted',
+      async () => {
+        const settings = await getJson<FilesSettingsSnapshot>(base, '/settings_files')
+        return settings.favorites.includes(fixtures.image_file) ? settings : null
+      },
+      2000,
+      100,
+    )
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const imageRowForIcon = fileBrowserRow(shell, 'blue-image.png', navigated.windowId)
+    assert(imageRowForIcon?.rect, 'missing image row for icon')
+    await rightClickRect(base, assertRectMinSize('image icon context', imageRowForIcon.rect, 40, 40))
+    const iconItem = await waitFor(
+      'set icon context item',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'set-icon')
+        return item?.rect ? item : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('set icon item', iconItem.rect!, 24, 18))
+    const starOption = await waitFor(
+      'star icon option',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const option = fileBrowserSnapshot(shell, navigated.windowId)?.icon_options?.find((entry) => entry.id === 'star')
+        return option?.rect ? option : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('star icon option', starOption.rect!, 24, 18))
+    const iconOk = fileBrowserSnapshot(await getJson<ShellSnapshot>(base, '/test/state/shell'), navigated.windowId)?.dialog_confirm_rect
+    assert(iconOk, 'icon dialog confirm')
+    await clickRect(base, assertRectMinSize('icon ok', iconOk, 24, 18))
+    await waitFor(
+      'custom icon persisted',
+      async () => {
+        const settings = await getJson<FilesSettingsSnapshot>(base, '/settings_files')
+        return settings.custom_icons[fixtures.image_file] === 'star' ? settings : null
+      },
+      2000,
+      100,
+    )
+    const askSettings = blankFilesSettings()
+    askSettings.default_open_target = 'ask'
+    await postJson(base, '/settings_files', askSettings)
+    const askNavigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    await openDirectoryRow(base, mediaDir, 'media', askNavigated.windowId)
+    shell = await waitForActivePath(base, mediaDir, askNavigated.windowId)
+    const imageAskRow = fileBrowserRow(shell, 'blue-image.png', askNavigated.windowId)
+    assert(imageAskRow?.rect, 'missing image row for ask target')
+    await doubleClickRect(base, assertRectMinSize('image ask row', imageAskRow.rect, 32, 24))
+    const windowTarget = await waitFor(
+      'open target dialog',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const option = fileBrowserSnapshot(shell, askNavigated.windowId)?.open_target_options?.find((entry) => entry.id === 'window')
+        return option?.rect ? option : null
+      },
+      2000,
+      100,
+    )
+    await clickRect(base, assertRectMinSize('window target option', windowTarget.rect!, 24, 18))
+    const viewerWindow = await waitFor(
+      'wait for image viewer after ask target',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = shell.windows.find((entry) => entry.app_id === IMAGE_VIEWER_APP_ID && entry.shell_hosted && !entry.minimized)
+        return window ? window : null
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(viewerWindow.window_id)
+    await postJson(base, '/settings_files', blankFilesSettings())
+  })
+
+  test('file browser binary write bridge creates files and reports conflicts', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const payload = Buffer.from('pasted through bridge\n', 'utf8').toString('base64')
+    await postJson(base, '/file_browser/write_bytes', {
+      parent: fixtures.empty_dir,
+      name: 'pasted.txt',
+      base64: payload,
+    })
+    let conflict = false
+    try {
+      await postJson(base, '/file_browser/write_bytes', {
+        parent: fixtures.empty_dir,
+        name: 'pasted.txt',
+        base64: payload,
+      })
+    } catch {
+      conflict = true
+    }
+    assert(conflict, 'expected write_bytes conflict to fail')
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    await openDirectoryRow(base, fixtures.empty_dir, 'empty-folder', navigated.windowId)
+    const shell = await waitForActivePath(base, fixtures.empty_dir, navigated.windowId)
+    const pasted = fileBrowserRow(shell, 'pasted.txt', navigated.windowId)
+    assert(pasted?.rect, 'expected pasted file row')
+    await rightClickRect(base, assertRectMinSize('pasted context', pasted.rect, 32, 24))
+    const contextShell = await waitFor(
+      'copy move context items',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const hasCopy = shell.file_browser_context_menu?.some((entry) => entry.id === 'copy-to')
+        const hasMove = shell.file_browser_context_menu?.some((entry) => entry.id === 'move-to')
+        return hasCopy && hasMove ? shell : null
+      },
+      2000,
+      100,
+    )
+    await writeJsonArtifact('file-browser-write-bytes-copy-move.json', {
+      rows: fileBrowserSnapshot(contextShell, navigated.windowId)?.rows,
+      context: contextShell.file_browser_context_menu,
+    })
   })
 
   test('file browser breadcrumb ellipsis opens hidden path segments and crumb context menu', async ({ base, state }) => {
@@ -501,6 +684,94 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
   })
 
+  test('file browser drags a file into the tabbar to open a focused shell tab', async ({ base, state }) => {
+    await postJson(base, '/settings_files', blankFilesSettings())
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const mediaPath = path.posix.join(fixtures.root_path, 'media')
+    await openDirectoryRow(base, mediaPath, 'media', navigated.windowId)
+    const ready = await waitFor(
+      'wait for file row and workspace tab target',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const row = fileBrowserRow(shell, 'blue-image.png', navigated.windowId)
+        const group = tabGroupByWindow(shell, navigated.windowId)
+        const tab = group?.tabs.find((entry) => entry.window_id === navigated.windowId)
+        return row?.rect && tab?.rect ? { shell, row, group, tab } : null
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(assertRectMinSize('blue-image drag source', ready.row.rect, 32, 24))
+    assert(ready.group, 'missing workspace tab group for file drag')
+    const readyGroupId = ready.group.group_id
+    const tabRect = assertRectMinSize('file browser workspace tab', ready.tab.rect, 24, 12)
+    const target = {
+      x: tabRect.global_x + Math.max(4, tabRect.width - 4),
+      y: tabRect.global_y + tabRect.height / 2,
+    }
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    let released = false
+    let dragPreviewHtml = ''
+    let dropIndicatorHtml = ''
+    try {
+      for (let index = 1; index <= 24; index += 1) {
+        const t = index / 24
+        await movePoint(base, start.x + (target.x - start.x) * t, start.y + (target.y - start.y) * t)
+      }
+      dragPreviewHtml = await waitFor(
+        'wait for file drag preview',
+        async () => {
+          const html = await getShellHtml(base, '[data-file-tab-drag-preview]')
+          return html.includes('blue-image.png') ? html : null
+        },
+        5000,
+        100,
+      )
+      dropIndicatorHtml = await waitFor(
+        'wait for file tab drop indicator',
+        async () => {
+          const html = await getShellHtml(base, '[data-tab-drop-indicator]')
+          return html.includes(readyGroupId) ? html : null
+        },
+        5000,
+        100,
+      )
+      await pointerButton(base, BTN_LEFT, 'release')
+      released = true
+    } finally {
+      if (!released) await pointerButton(base, BTN_LEFT, 'release')
+    }
+    const opened = await waitFor(
+      'wait for dragged image viewer tab',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const group = tabGroupByWindow(shell, navigated.windowId)
+        if (!group) return null
+        const imageWindow = shell.windows.find(
+          (entry) =>
+            entry.shell_hosted &&
+            entry.app_id === IMAGE_VIEWER_APP_ID &&
+            !entry.minimized &&
+            group.member_window_ids.includes(entry.window_id),
+        )
+        if (!imageWindow || group.visible_window_id !== imageWindow.window_id) return null
+        return { shell, group, windowId: imageWindow.window_id }
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(opened.windowId)
+    await writeJsonArtifact('file-browser-drag-file-to-tabbar.json', {
+      windowId: navigated.windowId,
+      openedWindowId: opened.windowId,
+      group: opened.group,
+      dragPreviewHtml,
+      dropIndicatorHtml,
+    })
+  })
+
   test('file browser open with can pick a shell app for a file', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
@@ -647,6 +918,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html0.includes('alt="blue-image.png"'), 'expected blue image alt')
+    assert(html0.includes('data-viewer-copy-path'), 'expected image viewer copy path action')
+    assert(html0.includes('data-viewer-open-containing-folder'), 'expected image viewer folder action')
+    assert(html0.includes('data-viewer-open-external'), 'expected image viewer external action')
     const imageControls = await waitFor(
       'wait for image rotate control',
       async () => {
@@ -751,6 +1025,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(html.includes('file_browser/stream'), 'expected video src to use stream endpoint')
+    assert(html.includes('preload="metadata"'), 'expected video metadata preload')
+    assert(html.includes('data-viewer-copy-path'), 'expected video viewer copy path action')
+    assert(html.includes('data-viewer-open-containing-folder'), 'expected video viewer folder action')
+    assert(html.includes('data-viewer-open-external'), 'expected video viewer external action')
   })
 
   test('pdf viewer opens from file browser and streams document', async ({ base, state }) => {
@@ -800,6 +1078,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(html.includes('application/pdf'), 'expected pdf object type')
     assert(html.includes('file_browser/stream'), 'expected pdf object to use stream endpoint')
+    assert(html.includes('data-viewer-copy-path'), 'expected pdf viewer copy path action')
+    assert(html.includes('data-viewer-open-containing-folder'), 'expected pdf viewer folder action')
+    assert(html.includes('data-viewer-open-external'), 'expected pdf viewer external action')
     await writeJsonArtifact('file-browser-pdf-viewer.json', viewerWindow)
   })
 
@@ -924,7 +1205,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     const targetRow =
-      fileBrowserSnapshot(navigated.shell, navigated.windowId)?.rows.find((row) => row.kind === 'directory') ?? null
+      fileBrowserSnapshot(navigated.shell, navigated.windowId)?.rows.find((row) => row.kind === 'directory' && row.name !== '..') ?? null
     assert(targetRow, 'expected a directory row in fixture root')
     const openedDirectory = await openDirectoryRowWithClicks(
       base,

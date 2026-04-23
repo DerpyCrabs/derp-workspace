@@ -4,6 +4,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use base64::Engine;
 use serde::Serialize;
 
 #[derive(Debug)]
@@ -562,6 +563,74 @@ pub(crate) fn file_browser_write_file_utf8(
         )
     })?;
     Ok(())
+}
+
+pub(crate) fn file_browser_write_file_base64_json(
+    parent_raw: &str,
+    name: &str,
+    content_base64: &str,
+) -> Result<String, FileBrowserHttpError> {
+    let parent = canonicalize_existing_path(parent_raw)?;
+    require_writable_directory(&parent)?;
+    let seg = sanitize_new_name_segment(name)?;
+    let dest = parent.join(&seg);
+    if dest.exists() {
+        return Err(http_error(
+            409,
+            "exists",
+            "destination already exists",
+            Some(&dest),
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(content_base64.trim())
+        .map_err(|error| http_error(400, "invalid_base64", error.to_string(), None))?;
+    let byte_len = bytes.len() as u64;
+    if byte_len > FILE_BROWSER_READ_MAX_BYTES {
+        return Err(http_error(
+            413,
+            "too_large",
+            format!("content exceeds {} bytes", FILE_BROWSER_READ_MAX_BYTES),
+            Some(&dest),
+        ));
+    }
+    fs::write(&dest, &bytes).map_err(|error| {
+        let code = match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io_error",
+        };
+        let status = if error.kind() == std::io::ErrorKind::PermissionDenied {
+            403
+        } else {
+            500
+        };
+        http_error(
+            status,
+            code,
+            format!("failed to write {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    let canon = dest.canonicalize().map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("failed to canonicalize {}: {error}", dest.display()),
+            Some(&dest),
+        )
+    })?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "path": canon.to_string_lossy(),
+    }))
+    .map_err(|error| {
+        http_error(
+            500,
+            "io_error",
+            format!("serialize write bytes response: {error}"),
+            Some(&canon),
+        )
+    })
 }
 
 fn video_content_type_for_path(path: &Path) -> Option<&'static str> {

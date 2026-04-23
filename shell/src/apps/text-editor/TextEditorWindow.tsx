@@ -2,11 +2,14 @@ import type { Accessor } from 'solid-js'
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import Save from 'lucide-solid/icons/save'
+import Expand from 'lucide-solid/icons/expand'
+import Shrink from 'lucide-solid/icons/shrink'
 import {
   fileBrowserReadUrl,
   statFileBrowserPath,
   writeFileBrowserFile,
 } from '@/apps/file-browser/fileBrowserBridge'
+import { ViewerFileActions } from '@/apps/file-browser/ViewerFileActions'
 import { MarkdownPane } from '@/apps/text-editor/MarkdownPane'
 import { isMarkdownFilePath } from '@/apps/text-editor/textEditorCore'
 import { resolveMarkdownImageReadUrl } from '@/apps/text-editor/resolveMarkdownImageReadUrl'
@@ -29,6 +32,8 @@ type TextEditorWindowProps = {
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
   allWindowsMap: () => Map<number, DerpWindow>
+  onOpenContainingFolder?: (path: string) => void
+  onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -180,6 +185,14 @@ export function TextEditorWindow(props: TextEditorWindowProps) {
     setEditing(false)
   }
 
+  const windowModel = createMemo(() => props.allWindowsMap().get(props.windowId))
+
+  function toggleWindowFullscreen() {
+    const w = windowModel()
+    if (!w || w.minimized) return
+    props.shellWireSend('set_fullscreen', props.windowId, w.fullscreen ? 0 : 1)
+  }
+
   const unsubscribeShellWindowState = subscribeShellWindowState(() => {
     applyPrimedRestoredState()
   })
@@ -235,6 +248,7 @@ export function TextEditorWindow(props: TextEditorWindowProps) {
       data-text-editor-root
     >
       <div class="flex shrink-0 items-center gap-2 border-b border-(--shell-border) bg-(--shell-surface) px-2 py-1.5">
+        <div class="flex min-w-0 flex-1 items-center gap-2">
         <Show when={state.writable === true && !editing()}>
           <button
             type="button"
@@ -266,6 +280,29 @@ export function TextEditorWindow(props: TextEditorWindowProps) {
             Save
           </button>
         </Show>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <ViewerFileActions
+            path={state.viewingPath}
+            directory={state.directory}
+            showHidden={state.showHidden}
+            tone="shell"
+            onOpenContainingFolder={props.onOpenContainingFolder}
+            onOpenExternalFile={props.onOpenExternalFile}
+          />
+          <button
+            type="button"
+            title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            class="inline-flex h-7 w-7 items-center justify-center rounded-md text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+            onClick={() => toggleWindowFullscreen()}
+          >
+            {windowModel()?.fullscreen ? (
+              <Shrink class="h-3.5 w-3.5" stroke-width={2} />
+            ) : (
+              <Expand class="h-3.5 w-3.5" stroke-width={2} />
+            )}
+          </button>
+        </div>
       </div>
       <Show when={state.loadStatus === 'loading'}>
         <div class="flex flex-1 items-center justify-center text-sm text-(--shell-text-dim)">Loading…</div>

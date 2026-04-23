@@ -14,22 +14,23 @@ export function FileBrowserContextMenu(props: {
   onRequestClose: () => void
 }) {
   let panelEl: HTMLDivElement | undefined
-  const [placed, setPlaced] = createSignal({ left: 0, top: 0 })
+  const [placed, setPlaced] = createSignal({ left: 0, top: 0, maxHeight: 320 })
 
   createEffect(() => {
     if (!props.open() || !props.anchor()) return
     const a = props.anchor()!
     const list = props.items()
     const estW = 220
-    const estH = Math.min(360, Math.max(44, list.length * 40) + 8)
     const margin = 6
+    const maxHeight = Math.max(44, window.innerHeight - margin * 2)
+    const estH = Math.min(maxHeight, Math.max(44, list.length * 40) + 8)
     let left = a.x
     let top = a.y
     if (left + estW > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - estW - margin)
     if (top + estH > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - estH - margin)
     if (left < margin) left = margin
     if (top < margin) top = margin
-    setPlaced({ left, top })
+    setPlaced({ left, top, maxHeight })
   })
 
   createEffect(() => {
@@ -67,11 +68,12 @@ export function FileBrowserContextMenu(props: {
             ref={(el) => {
               panelEl = el
             }}
-            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 max-h-80 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
+            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
             aria-label="Files"
             style={{
               left: `${placed().left}px`,
               top: `${placed().top}px`,
+              'max-height': `${placed().maxHeight}px`,
             }}
           >
             <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">

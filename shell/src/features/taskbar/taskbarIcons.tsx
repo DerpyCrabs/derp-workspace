@@ -12,13 +12,16 @@ import Music4 from 'lucide-solid/icons/music-4'
 import Settings from 'lucide-solid/icons/settings'
 import SquareTerminal from 'lucide-solid/icons/square-terminal'
 import Video from 'lucide-solid/icons/video'
-import type { Component } from 'solid-js'
+import { createEffect, type Component } from 'solid-js'
+import { renderFileBrowserCustomIcon } from '@/apps/file-browser/fileBrowserCustomIcons'
+import { useFileBrowserFilesSettings } from '@/apps/file-browser/fileBrowserFilesSettings'
 
 export type TaskbarIconMeta = {
   title: string
   appId: string
   desktopId?: string | null
   desktopIcon?: string | null
+  shellFilePath?: string | null
 }
 
 function normalizedKey(meta: TaskbarIconMeta) {
@@ -133,8 +136,20 @@ export function TaskbarWindowIcon(props: {
   active: boolean
   compact?: boolean
 }) {
+  const filesSettings = useFileBrowserFilesSettings()
+  createEffect(() => {
+    if (!props.meta.shellFilePath) return
+    void filesSettings.warm()
+  })
   const Icon = chooseIcon(props.meta)
   const sizeClass = props.compact ? 'h-4 w-4' : 'h-[18px] w-[18px]'
+  const customIcon = () => {
+    const path = props.meta.shellFilePath
+    if (!path) return null
+    const icons = filesSettings.settings().custom_icons
+    const key = path.replace(/\\/g, '/')
+    return renderFileBrowserCustomIcon(icons[path] ?? icons[key] ?? null, sizeClass)
+  }
   return (
     <span
       class="flex shrink-0 items-center justify-center rounded-md text-white shadow-sm"
@@ -146,7 +161,9 @@ export function TaskbarWindowIcon(props: {
       }}
       aria-hidden="true"
     >
-      {Icon ? (
+      {customIcon() ? (
+        customIcon()
+      ) : Icon ? (
         <Icon class={sizeClass} stroke-width={2.2} />
       ) : (
         <span class="text-[10px] font-semibold leading-none">{monogram(props.meta)}</span>

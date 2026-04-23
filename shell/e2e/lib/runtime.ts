@@ -365,6 +365,12 @@ export interface FileBrowserOpenWithOptionSnapshot {
   rect?: Rect | null
 }
 
+export interface FileBrowserDialogOptionSnapshot {
+  id: string
+  label: string
+  rect?: Rect | null
+}
+
 export interface FileBrowserSnapshot {
   list_state?: string | null
   mount_seq?: number
@@ -379,6 +385,8 @@ export interface FileBrowserSnapshot {
   dialog_input_rect?: Rect | null
   dialog_confirm_rect?: Rect | null
   open_with_options?: FileBrowserOpenWithOptionSnapshot[]
+  icon_options?: FileBrowserDialogOptionSnapshot[]
+  open_target_options?: FileBrowserDialogOptionSnapshot[]
 }
 
 export interface FileBrowserContextMenuActionSnapshot {

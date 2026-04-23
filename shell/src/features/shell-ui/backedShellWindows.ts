@@ -98,7 +98,7 @@ export function defaultBackedClientAreaGlobal(
     ch = Math.round(Math.max(480, Math.min(900, work.h * 0.78)))
   } else if (kind === 'video_viewer') {
     cw = Math.round(Math.max(720, Math.min(1180, work.w * 0.78)))
-    ch = Math.round(Math.max(520, Math.min(920, work.h * 0.82)))
+    ch = Math.round(Math.max(420, Math.min(920, work.h * 0.82, cw * 9 / 16)))
   } else if (kind === 'text_editor') {
     cw = Math.round(Math.max(640, Math.min(1000, work.w * 0.72)))
     ch = Math.round(Math.max(480, Math.min(860, work.h * 0.75)))

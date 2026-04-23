@@ -21,6 +21,7 @@ export type TaskbarWorkspaceRow = TaskbarGroupRow & {
   desktop_id: string | null
   desktop_icon: string | null
   app_display_name: string | null
+  shell_file_path: string | null
 }
 
 function sameWindowMembers(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
@@ -127,6 +128,7 @@ export function buildTaskbarRowsByMonitor(
   apps: readonly DesktopAppMatchCandidate[],
   fallbackMonitorKey: string,
   previous: ReadonlyMap<string, readonly TaskbarWorkspaceRow[]> = new Map(),
+  shellHostedAppByWindow: Readonly<Record<number, unknown>> = {},
 ): Map<string, TaskbarWorkspaceRow[]> {
   const previousRowsByGroupId = new Map<string, TaskbarWorkspaceRow>()
   for (const rows of previous.values()) {
@@ -156,6 +158,7 @@ export function buildTaskbarRowsByMonitor(
         desktop_id: match?.desktop_id ?? null,
         desktop_icon: match?.icon ?? null,
         app_display_name: appDisplayName,
+        shell_file_path: shellHostedFilePath(row, shellHostedAppByWindow),
       }
       if (
         previousRow &&
@@ -167,7 +170,8 @@ export function buildTaskbarRowsByMonitor(
         previousRow.tab_count === nextRow.tab_count &&
         previousRow.desktop_id === nextRow.desktop_id &&
         previousRow.desktop_icon === nextRow.desktop_icon &&
-        previousRow.app_display_name === nextRow.app_display_name
+        previousRow.app_display_name === nextRow.app_display_name &&
+        previousRow.shell_file_path === nextRow.shell_file_path
       ) {
         return previousRow
       }
@@ -200,6 +204,18 @@ type CreateWorkspaceSelectorsOptions = {
   focusedWindowId: Accessor<number | null>
   fallbackMonitorKey: Accessor<string>
   desktopApps: Accessor<readonly DesktopAppMatchCandidate[]>
+  shellHostedAppByWindow: Accessor<Readonly<Record<number, unknown>>>
+}
+
+function shellHostedFilePath(
+  row: Pick<TaskbarGroupRow, 'window_id' | 'app_id'>,
+  shellHostedAppByWindow: Readonly<Record<number, unknown>>,
+): string | null {
+  const state = shellHostedAppByWindow[row.window_id]
+  if (!state || typeof state !== 'object') return null
+  const rec = state as Record<string, unknown>
+  const path = row.app_id === 'derp.files' ? rec.activePath : rec.viewingPath
+  return typeof path === 'string' && path.length > 0 ? path : null
 }
 
 export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOptions) {
@@ -264,6 +280,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
       options.desktopApps(),
       options.fallbackMonitorKey(),
       previousTaskbarRowsByMonitor,
+      options.shellHostedAppByWindow(),
     )
     return previousTaskbarRowsByMonitor as Map<string, TaskbarWorkspaceRow[]>
   })

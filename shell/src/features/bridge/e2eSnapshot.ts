@@ -299,6 +299,16 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     label: optionEl.textContent?.trim() ?? '',
     rect: snapshotRect(optionEl, origin),
   }))
+  const iconOptions = queryAllWithin(root, '[data-file-browser-icon-option]').map((optionEl) => ({
+    id: optionEl.getAttribute('data-file-browser-icon-option') ?? '',
+    label: optionEl.textContent?.trim() ?? '',
+    rect: snapshotRect(optionEl, origin),
+  }))
+  const openTargetOptions = queryAllWithin(root, '[data-file-browser-open-target]').map((optionEl) => ({
+    id: optionEl.getAttribute('data-file-browser-open-target') ?? '',
+    label: optionEl.textContent?.trim() ?? '',
+    rect: snapshotRect(optionEl, origin),
+  }))
   return {
     list_state: fileBrowserListStateEl?.getAttribute('data-file-browser-list-state') ?? null,
     mount_seq: Number(fileBrowserListStateEl?.getAttribute('data-file-browser-mount-seq') ?? 0),
@@ -319,6 +329,8 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     dialog_input_rect: snapshotRect(dialogInputEl, origin),
     dialog_confirm_rect: snapshotRect(dialogConfirmEl, origin),
     open_with_options: openWithOptions,
+    icon_options: iconOptions,
+    open_target_options: openTargetOptions,
   }
 }
 

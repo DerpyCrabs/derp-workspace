@@ -57,7 +57,13 @@ import {
   windowIsShellHosted,
 } from '@/host/appWindowState'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
-import { useDefaultApplicationsState, type OpenWithOption } from '@/apps/default-applications/defaultApplications'
+import {
+  DEFAULT_APPLICATIONS_FALLBACK,
+  fileOpenCategoryForPath,
+  optionById,
+  useDefaultApplicationsState,
+  type OpenWithOption,
+} from '@/apps/default-applications/defaultApplications'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import {
   nativeWindowRef,
@@ -87,8 +93,9 @@ import {
   workspaceGetTiledZone,
   workspaceIsWindowTiled,
 } from '@/features/workspace/workspaceState'
+import { findMergeTarget, type TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import { createWorkspaceSelectors } from '@/features/workspace/workspaceSelectors'
-import { createWorkspaceChrome } from '@/features/workspace/workspaceChrome'
+import { createWorkspaceChrome, type WorkspaceExternalTabDropDrag } from '@/features/workspace/workspaceChrome'
 import { createWorkspaceLayoutBridge } from '@/features/workspace/workspaceLayoutBridge'
 import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
 import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
@@ -898,6 +905,7 @@ function App() {
     focusedWindowId,
     fallbackMonitorKey: fallbackMonitorName,
     desktopApps: desktopApps.items,
+    shellHostedAppByWindow,
   })
   const workspaceGroupIds = createMemo(() => workspaceGroups().map((group) => group.id))
 
@@ -949,6 +957,8 @@ function App() {
     shellWireSend,
   })
 
+  const [fileTabDropDrag, setFileTabDropDrag] = createSignal<WorkspaceExternalTabDropDrag | null>(null)
+
   function openFileBrowserEntryBackedWindowId(
     path: string,
     context: { directory: string; showHidden: boolean; isDirectory: boolean },
@@ -960,6 +970,84 @@ function App() {
     if (isTextEditorFilePath(path)) return backedShellWindowActions.openTextEditorWindowWithId(detail)
     if (isPdfFilePath(path)) return backedShellWindowActions.openPdfViewerWindowWithId(detail)
     return null
+  }
+
+  function fileBrowserEntryHasShellTabApp(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ): boolean {
+    if (context.isDirectory) return true
+    const category = fileOpenCategoryForPath(path)
+    const appId = defaultApps.loaded() ? defaultApps.settings()[category] : DEFAULT_APPLICATIONS_FALLBACK[category]
+    const option = optionById(appId, category, desktopApps.items())
+    return (
+      option.kind === 'shell' ||
+      isImageFilePath(path) ||
+      isVideoFilePath(path) ||
+      isTextEditorFilePath(path) ||
+      isPdfFilePath(path)
+    )
+  }
+
+  function openFileBrowserEntryShellDefaultWindowId(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+  ): number | null {
+    if (context.isDirectory) return backedShellWindowActions.openFileBrowserWindowWithId(path)
+    const detail = { path, directory: context.directory, showHidden: context.showHidden }
+    const category = fileOpenCategoryForPath(path)
+    const appId = defaultApps.loaded() ? defaultApps.settings()[category] : DEFAULT_APPLICATIONS_FALLBACK[category]
+    const option = optionById(appId, category, desktopApps.items())
+    if (option.kind === 'shell') {
+      if (option.shellKind === 'image_viewer') return backedShellWindowActions.openImageViewerWindowWithId(detail)
+      if (option.shellKind === 'video_viewer') return backedShellWindowActions.openVideoViewerWindowWithId(detail)
+      if (option.shellKind === 'text_editor') return backedShellWindowActions.openTextEditorWindowWithId(detail)
+      if (option.shellKind === 'pdf_viewer') return backedShellWindowActions.openPdfViewerWindowWithId(detail)
+    }
+    return openFileBrowserEntryBackedWindowId(path, context)
+  }
+
+  function placeOpenedWindowInTargetGroup(
+    openedWindowId: number,
+    targetGroupId: string,
+    insertIndex: number,
+  ) {
+    let mergeFrames = 0
+    const waitForOpenedGroup = () => {
+      mergeFrames += 1
+      const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
+      const targetGroup = workspaceState().groups.find((group) => group.id === targetGroupId)
+      if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
+        if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
+        return
+      }
+      if (openedGroupId !== targetGroupId) {
+        shellWireSend(
+          'workspace_mutation',
+          JSON.stringify({
+            type: 'move_window_to_group',
+            windowId: openedWindowId,
+            targetGroupId,
+            insertIndex,
+          }),
+        )
+      }
+      let selectFrames = 0
+      const waitForMergedGroup = () => {
+        selectFrames += 1
+        const group = workspaceState().groups.find((entry) => entry.id === targetGroupId)
+        if (!group?.windowIds.includes(openedWindowId)) {
+          if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
+          return
+        }
+        shellWireSend(
+          'workspace_mutation',
+          JSON.stringify({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId }),
+        )
+      }
+      waitForMergedGroup()
+    }
+    waitForOpenedGroup()
   }
 
   function placeOpenedWindowInSourceGroup(
@@ -1033,6 +1121,55 @@ function App() {
     placeOpenedWindowInSourceGroup(sourceWindowId, openedWindowId, mode)
   }
 
+  function openFileBrowserEntryInWorkspaceTarget(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    target: TabMergeTarget,
+  ): boolean {
+    const openedWindowId = openFileBrowserEntryShellDefaultWindowId(path, context)
+    if (openedWindowId === null) {
+      reportShellActionIssue('This file does not have a shell tab app.')
+      return false
+    }
+    placeOpenedWindowInTargetGroup(openedWindowId, target.groupId, target.insertIndex)
+    return true
+  }
+
+  function previewFileBrowserEntryAtTabDrop(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    label: string,
+    clientX: number,
+    clientY: number,
+  ): boolean {
+    const canOpen = fileBrowserEntryHasShellTabApp(path, context)
+    const target = canOpen ? findMergeTarget(workspaceState(), 0, clientX, clientY, false) : null
+    setFileTabDropDrag({
+      target,
+      clientX,
+      clientY,
+      label,
+      canDrop: canOpen && target !== null,
+    })
+    return target !== null
+  }
+
+  function clearFileBrowserTabDropPreview() {
+    setFileTabDropDrag(null)
+  }
+
+  function openFileBrowserEntryAtTabDrop(
+    path: string,
+    context: { directory: string; showHidden: boolean; isDirectory: boolean },
+    clientX: number,
+    clientY: number,
+  ): boolean {
+    clearFileBrowserTabDropPreview()
+    const target = findMergeTarget(workspaceState(), 0, clientX, clientY, false)
+    if (!target) return false
+    return openFileBrowserEntryInWorkspaceTarget(path, context, target)
+  }
+
   function openFileWithOption(
     option: OpenWithOption,
     path: string,
@@ -1083,6 +1220,9 @@ function App() {
       onOpenPathInTab: (sourceWindowId, path, context) => {
         openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'tab')
       },
+      onOpenPathInTabDrop: openFileBrowserEntryAtTabDrop,
+      onPreviewPathInTabDrop: previewFileBrowserEntryAtTabDrop,
+      onClearPathInTabDropPreview: clearFileBrowserTabDropPreview,
       onOpenPathInSplitView: (sourceWindowId, path, context) => {
         openFileBrowserEntryInWorkspaceGroup(sourceWindowId, path, context, 'split')
       },
@@ -1338,6 +1478,7 @@ function App() {
     openSnapAssistPicker: shellWindowGestureRuntime.openSnapAssistPicker,
     shellContextOpenTabMenu: shellContextMenus.openTabMenu,
     shellContextHideMenu: shellContextMenus.hideContextMenu,
+    externalTabDropDrag: fileTabDropDrag,
     shellWireSend,
   })
 
@@ -1703,6 +1844,7 @@ function App() {
 
       <workspaceChrome.TabDragOverlay />
       <workspaceChrome.WindowDragDropOverlay />
+      <workspaceChrome.ExternalTabDropOverlay />
 
       <Show when={workspaceChrome.splitGroupGesture()}>
         <workspaceChrome.SplitGestureOverlay />

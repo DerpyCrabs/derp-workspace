@@ -92,7 +92,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     state.spawnedShellWindowIds.add(editor.windowId)
     await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const frameSel = `[data-shell-window-frame="${editor.windowId}"]`
-    await waitFor(
+    const editorHtml = await waitFor(
       'wait for markdown h1 and img',
       async () => {
         const h = await getShellHtml(base, frameSel)
@@ -105,6 +105,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    assert(editorHtml.includes('data-viewer-copy-path'), 'expected text editor copy path action')
+    assert(editorHtml.includes('data-viewer-open-containing-folder'), 'expected text editor folder action')
+    assert(editorHtml.includes('data-viewer-open-external'), 'expected text editor external action')
     await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const withImg = await waitFor(
       'wait for markdown img snapshot rect',

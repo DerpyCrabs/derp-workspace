@@ -862,6 +862,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_files" {
+        let json = crate::session::settings_config::read_files_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_scratchpads" {
         let json = crate::session::settings_config::read_scratchpad_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -935,10 +941,10 @@ fn handle_one(
 
     let max_content_length = if req_path == "/session_state" || req_path == "/session_reload" {
         512 * 1024
-    } else if req_path == "/settings_scratchpads" {
+    } else if req_path == "/settings_scratchpads" || req_path == "/settings_files" {
         64 * 1024
-    } else if req_path == "/file_browser/write" {
-        (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_add(512 * 1024)
+    } else if req_path == "/file_browser/write" || req_path == "/file_browser/write_bytes" {
+        (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_mul(2)
     } else {
         8192
     };
@@ -993,6 +999,23 @@ fn handle_one(
         };
         match crate::cef::file_browser::file_browser_write_file_utf8(path, content) {
             Ok(()) => write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
+            }
+        }
+        return Ok(());
+    }
+
+    if req_path == "/file_browser/write_bytes" {
+        let parent = v.get("parent").and_then(|x| x.as_str()).unwrap_or("");
+        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        let content_base64 = v.get("base64").and_then(|x| x.as_str()).unwrap_or("");
+        match crate::cef::file_browser::file_browser_write_file_base64_json(
+            parent,
+            name,
+            content_base64,
+        ) {
+            Ok(json) => write_http_ok_json(stream, &json).map_err(|e| e.to_string())?,
             Err(error) => {
                 write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?
             }
@@ -1368,6 +1391,12 @@ fn handle_one(
             crate::session::settings_config::write_default_applications_settings(
                 default_applications,
             )?;
+        }
+        "/settings_files" => {
+            let files =
+                serde_json::from_value::<crate::session::settings_config::FilesSettingsFile>(v)
+                    .map_err(|e| format!("invalid files settings: {e}"))?;
+            crate::session::settings_config::write_files_settings(files)?;
         }
         "/settings_scratchpads" => {
             let scratchpads = serde_json::from_value::<

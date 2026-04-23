@@ -181,6 +181,19 @@ export async function writeFileBrowserFile(path: string, content: string, base: 
   }
 }
 
+export async function writeFileBrowserBytes(
+  parent: string,
+  name: string,
+  contentBase64: string,
+  base: string | null,
+): Promise<FileBrowserMutationOk> {
+  try {
+    return parseMutationOk(await postShellJsonReturnJson('/file_browser/write_bytes', { parent, name, base64: contentBase64 }, base))
+  } catch (error) {
+    throw parseBridgeError(error)
+  }
+}
+
 export type FileBrowserMutationOk = {
   ok: true
   path?: string
