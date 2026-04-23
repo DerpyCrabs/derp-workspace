@@ -6,6 +6,7 @@ const saved = (overrides: Partial<SavedNativeWindow>): SavedNativeWindow => ({
   windowRef: nativeWindowRef(1),
   title: 'Foot',
   appId: 'foot',
+  outputId: 'make:model:serial-1',
   outputName: 'DP-1',
   bounds: { x: 0, y: 0, width: 800, height: 600 },
   minimized: false,
@@ -22,6 +23,7 @@ describe('nativeSessionMatch', () => {
         {
           title: 'Foot',
           appId: 'foot',
+          outputId: 'make:model:serial-1',
           outputName: 'DP-1',
           maximized: false,
           fullscreen: false,
@@ -36,13 +38,14 @@ describe('nativeSessionMatch', () => {
       {
         title: 'Foot',
         appId: 'foot',
+        outputId: 'make:model:serial-1',
         outputName: 'DP-1',
         maximized: false,
         fullscreen: false,
       },
       [
         saved({ windowRef: nativeWindowRef(1) }),
-        saved({ windowRef: nativeWindowRef(2), outputName: 'DP-2' }),
+        saved({ windowRef: nativeWindowRef(2) }),
       ],
     )
     expect(match).toBeNull()
@@ -53,6 +56,7 @@ describe('nativeSessionMatch', () => {
       {
         title: 'Foot',
         appId: 'foot',
+        outputId: 'make:model:serial-1',
         outputName: 'DP-1',
         maximized: false,
         fullscreen: false,

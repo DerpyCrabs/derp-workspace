@@ -13,6 +13,7 @@ cd "$REPO_ROOT"
 cargo test
 
 cd "$REPO_ROOT/shell"
+rm -rf node_modules/.vite node_modules/.vitest
 npm run check
 npm run e2e:guard
 npm run test

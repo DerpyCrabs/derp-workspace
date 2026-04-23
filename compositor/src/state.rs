@@ -2430,13 +2430,19 @@ impl CompositorState {
         let snapshot_epoch = authoritative_snapshot
             .as_ref()
             .map(|_| self.next_shell_snapshot_epoch());
+        let live_epoch = snapshot_epoch.unwrap_or(self.shell_snapshot_epoch);
         let Ok(g) = self.shell_to_cef.lock() else {
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.send_with_snapshot(msg, authoritative_snapshot, snapshot_epoch);
+            link.send_with_snapshot(
+                msg,
+                authoritative_snapshot,
+                snapshot_epoch,
+                Some(live_epoch),
+            );
             if let Some(workspace_state_message) = workspace_state_message {
-                link.send(workspace_state_message);
+                link.send_with_snapshot(workspace_state_message, None, None, Some(live_epoch));
             }
         }
     }
@@ -2470,7 +2476,7 @@ impl CompositorState {
             | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
-                messages.push(self.shell_window_list_message());
+                messages.push(msg.clone());
                 messages.push(self.shell_focus_message());
             }
             _ => {}
@@ -4392,17 +4398,39 @@ impl CompositorState {
 
     fn workspace_custom_auto_overflow_target_slot(
         &self,
+        slots: &[WorkspaceCustomAutoSlot],
         slot_groups: &[Option<String>],
     ) -> Option<usize> {
+        let preferred_slots: Vec<usize> = slot_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(index, group_id)| {
+                if group_id.is_none() {
+                    return None;
+                }
+                let slot = slots.get(index)?;
+                if slot.rules.is_empty() {
+                    return Some(index);
+                }
+                None
+            })
+            .collect();
         if let Some(focused) = self.logical_focused_window_id() {
             if let Some(group_id) = group_id_for_window(&self.workspace_state, focused) {
                 if let Some(index) = slot_groups
                     .iter()
                     .position(|slot_group| slot_group.as_deref() == Some(group_id))
                 {
-                    return Some(index);
+                    if preferred_slots.is_empty()
+                        || slots.get(index).is_some_and(|slot| slot.rules.is_empty())
+                    {
+                        return Some(index);
+                    }
                 }
             }
+        }
+        if let Some(index) = preferred_slots.last().copied() {
+            return Some(index);
         }
         slot_groups.iter().rposition(Option::is_some)
     }
@@ -4421,7 +4449,7 @@ impl CompositorState {
             self.workspace_custom_auto_assignment(output_name, &slots);
         if !overflow_groups.is_empty() {
             let target_slot = self
-                .workspace_custom_auto_overflow_target_slot(&slot_groups)
+                .workspace_custom_auto_overflow_target_slot(&slots, &slot_groups)
                 .unwrap_or_else(|| slots.len().saturating_sub(1));
             if slot_groups[target_slot].is_none() {
                 slot_groups[target_slot] = overflow_groups.first().cloned();
@@ -5677,6 +5705,7 @@ impl CompositorState {
             if let Some(msg) =
                 crate::shell::shell_encode::chrome_event_to_shell_message(&shell_packet_source)
             {
+                let msg = self.enrich_shell_live_message(msg);
                 self.shell_send_to_cef(msg);
             }
         }
@@ -8678,75 +8707,88 @@ impl CompositorState {
         None
     }
 
+    fn shell_window_snapshot_row(
+        &mut self,
+        info: &WindowInfo,
+        kind: WindowKind,
+    ) -> shell_wire::ShellWindowSnapshot {
+        let output_id = self
+            .workspace_output_identity_for_name(&info.output_name)
+            .unwrap_or_default();
+        let scratchpad_kind = self.scratchpad_rule_value(
+            info.window_id,
+            info,
+            &crate::session::settings_config::ScratchpadRuleFieldFile::Kind,
+        );
+        let x11_class = self.scratchpad_rule_value(
+            info.window_id,
+            info,
+            &crate::session::settings_config::ScratchpadRuleFieldFile::X11Class,
+        );
+        let x11_instance = self.scratchpad_rule_value(
+            info.window_id,
+            info,
+            &crate::session::settings_config::ScratchpadRuleFieldFile::X11Instance,
+        );
+        let capture_identifier = self
+            .capture_toplevel_handles
+            .get(&info.window_id)
+            .map(|handle| handle.identifier())
+            .unwrap_or_default();
+        shell_wire::ShellWindowSnapshot {
+            window_id: info.window_id,
+            surface_id: info.surface_id,
+            stack_z: self.shell_window_stack_z(info.window_id),
+            x: info.x,
+            y: info.y,
+            w: info.width,
+            h: info.height,
+            minimized: if info.minimized { 1 } else { 0 },
+            maximized: if info.maximized { 1 } else { 0 },
+            fullscreen: if info.fullscreen { 1 } else { 0 },
+            client_side_decoration: if info.client_side_decoration { 1 } else { 0 },
+            shell_flags: (if kind == WindowKind::ShellHosted {
+                shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
+            } else {
+                0
+            }) | if self.scratchpad_windows.contains_key(&info.window_id) {
+                shell_wire::SHELL_WINDOW_FLAG_SCRATCHPAD
+            } else {
+                0
+            },
+            title: info.title.clone(),
+            app_id: info.app_id.clone(),
+            output_id,
+            output_name: info.output_name.clone(),
+            capture_identifier,
+            kind: scratchpad_kind,
+            x11_class,
+            x11_instance,
+        }
+    }
+
     fn shell_window_list_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
         self.shell_window_stack_seed_known_windows();
         self.capture_sync_toplevel_handles();
-        let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
-            .window_registry
-            .all_records()
-            .into_iter()
-            .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
-            .filter(|record| shell_window_row_should_show(&record.info))
-            .filter(|record| {
-                record.kind == WindowKind::ShellHosted
-                    || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
-            })
-            .map(|record| {
-                let info = record.info;
-                let kind = self.scratchpad_rule_value(
-                    info.window_id,
-                    &info,
-                    &crate::session::settings_config::ScratchpadRuleFieldFile::Kind,
-                );
-                let x11_class = self.scratchpad_rule_value(
-                    info.window_id,
-                    &info,
-                    &crate::session::settings_config::ScratchpadRuleFieldFile::X11Class,
-                );
-                let x11_instance = self.scratchpad_rule_value(
-                    info.window_id,
-                    &info,
-                    &crate::session::settings_config::ScratchpadRuleFieldFile::X11Instance,
-                );
-                let i = self
-                    .shell_window_info_to_output_local_layout(&info)
-                    .unwrap_or_else(|| info.clone());
-                let capture_identifier = self
-                    .capture_toplevel_handles
-                    .get(&i.window_id)
-                    .map(|handle| handle.identifier())
-                    .unwrap_or_default();
-                shell_wire::ShellWindowSnapshot {
-                    window_id: i.window_id,
-                    surface_id: i.surface_id,
-                    stack_z: self.shell_window_stack_z(i.window_id),
-                    x: i.x,
-                    y: i.y,
-                    w: i.width,
-                    h: i.height,
-                    minimized: if i.minimized { 1 } else { 0 },
-                    maximized: if i.maximized { 1 } else { 0 },
-                    fullscreen: if i.fullscreen { 1 } else { 0 },
-                    client_side_decoration: if i.client_side_decoration { 1 } else { 0 },
-                    shell_flags: (if record.kind == WindowKind::ShellHosted {
-                        shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
-                    } else {
-                        0
-                    }) | if self.scratchpad_windows.contains_key(&i.window_id) {
-                        shell_wire::SHELL_WINDOW_FLAG_SCRATCHPAD
-                    } else {
-                        0
-                    },
-                    title: i.title,
-                    app_id: i.app_id,
-                    output_name: i.output_name,
-                    capture_identifier,
-                    kind,
-                    x11_class,
-                    x11_instance,
-                }
-            })
-            .collect();
+        let records = self.window_registry.all_records();
+        let mut windows: Vec<shell_wire::ShellWindowSnapshot> = Vec::new();
+        for record in records {
+            if self.window_info_is_solid_shell_host(&record.info) {
+                continue;
+            }
+            if !shell_window_row_should_show(&record.info) {
+                continue;
+            }
+            if record.kind != WindowKind::ShellHosted
+                && self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+            {
+                continue;
+            }
+            let i = self
+                .shell_window_info_to_output_local_layout(&record.info)
+                .unwrap_or_else(|| record.info.clone());
+            windows.push(self.shell_window_snapshot_row(&i, record.kind));
+        }
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         windows
     }
@@ -8755,6 +8797,121 @@ impl CompositorState {
         shell_wire::DecodedCompositorToShellMessage::WindowList {
             revision: self.next_shell_window_domain_revision(),
             windows: self.shell_window_list_rows(),
+        }
+    }
+
+    fn enrich_shell_live_message(
+        &mut self,
+        msg: shell_wire::DecodedCompositorToShellMessage,
+    ) -> shell_wire::DecodedCompositorToShellMessage {
+        match msg {
+            shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+                window_id,
+                surface_id,
+                stack_z,
+                x,
+                y,
+                w,
+                h,
+                minimized,
+                maximized,
+                fullscreen,
+                title,
+                app_id,
+                client_side_decoration,
+                shell_flags,
+                output_id,
+                output_name,
+                capture_identifier,
+                kind,
+                x11_class,
+                x11_instance,
+            } => {
+                let window_kind = if self.window_registry.is_shell_hosted(window_id) {
+                    WindowKind::ShellHosted
+                } else {
+                    WindowKind::Native
+                };
+                let Some(info) = self
+                    .window_registry
+                    .window_info(window_id)
+                    .and_then(|info| self.shell_window_info_to_output_local_layout(&info))
+                else {
+                    return shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+                        window_id,
+                        surface_id,
+                        stack_z,
+                        x,
+                        y,
+                        w,
+                        h,
+                        minimized,
+                        maximized,
+                        fullscreen,
+                        title,
+                        app_id,
+                        client_side_decoration,
+                        shell_flags,
+                        output_id,
+                        output_name,
+                        capture_identifier,
+                        kind,
+                        x11_class,
+                        x11_instance,
+                    };
+                };
+                let row = self.shell_window_snapshot_row(&info, window_kind);
+                shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+                    window_id: row.window_id,
+                    surface_id: row.surface_id,
+                    stack_z: row.stack_z,
+                    x: row.x,
+                    y: row.y,
+                    w: row.w,
+                    h: row.h,
+                    minimized: row.minimized != 0,
+                    maximized: row.maximized != 0,
+                    fullscreen: row.fullscreen != 0,
+                    title: row.title,
+                    app_id: row.app_id,
+                    client_side_decoration: row.client_side_decoration != 0,
+                    shell_flags: row.shell_flags,
+                    output_id: row.output_id,
+                    output_name: row.output_name,
+                    capture_identifier: row.capture_identifier,
+                    kind: row.kind,
+                    x11_class: row.x11_class,
+                    x11_instance: row.x11_instance,
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id,
+                surface_id,
+                x,
+                y,
+                w,
+                h,
+                maximized,
+                fullscreen,
+                client_side_decoration,
+                output_name,
+                ..
+            } => shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id,
+                surface_id,
+                x,
+                y,
+                w,
+                h,
+                maximized,
+                fullscreen,
+                client_side_decoration,
+                output_id: self
+                    .workspace_output_identity_for_name(&output_name)
+                    .unwrap_or_default(),
+                output_name,
+            },
+            other => other,
         }
     }
 
@@ -9356,15 +9513,12 @@ impl CompositorState {
                         .map(|mutation| (mutation, client_mutation_id))
                 })
         else {
-            tracing::warn!(target: "derp_workspace", %mutation_json, "workspace mutation parse failed");
             self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, false);
             return;
         };
-        tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation received");
         self.workspace_sync_from_registry();
         let previous_state = self.workspace_state.clone();
         let Some(next_state) = previous_state.apply_mutation(&mutation) else {
-            tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation produced no change");
             self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, true);
             return;
         };

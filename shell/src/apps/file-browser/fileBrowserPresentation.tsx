@@ -12,7 +12,6 @@ import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import { FILE_BROWSER_FAVORITES_PATH } from './fileBrowserFilesSettings'
 import { renderFileBrowserCustomIcon } from './fileBrowserCustomIcons'
 import type { FileBrowserEntry, FileBrowserRoot } from './fileBrowserBridge'
-import { fileBrowserEntryIsDirectory } from './fileBrowserState'
 
 export type Breadcrumb = {
   path: string
@@ -71,6 +70,10 @@ export function normalizeFilesSettingsPath(path: string): string {
 
 export function normalizeDisplayName(entry: FileBrowserEntry): string {
   return entry.name || entry.path
+}
+
+function fileBrowserEntryIsDirectory(entry: Pick<FileBrowserEntry, 'kind'>): boolean {
+  return entry.kind === 'directory'
 }
 
 export function fileBrowserEntryCanOpenInShell(entry: FileBrowserEntry): boolean {

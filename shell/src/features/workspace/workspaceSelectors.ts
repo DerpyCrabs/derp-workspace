@@ -139,7 +139,10 @@ export function buildTaskbarRowsByMonitor(
   for (const workspaceGroup of workspaceState.groups) {
     const group = groupsById.get(workspaceGroup.id)
     if (!group) continue
-    const key = group.visibleWindow.output_name || fallbackMonitorKey
+    const key =
+      workspaceState.monitorNameByWindowId?.[String(group.visibleWindow.window_id)] ||
+      group.visibleWindow.output_name ||
+      fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)
     else groupsByMonitor.set(key, [group])

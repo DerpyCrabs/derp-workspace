@@ -843,6 +843,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/session_shell_snapshot" {
+        let json = crate::session::session_state::read_shell_session_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/gnome_desktop_background" {
         let json = crate::cef::gnome_background::read_gnome_desktop_background_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -950,7 +956,10 @@ fn handle_one(
         return Ok(());
     }
 
-    let max_content_length = if req_path == "/session_state" || req_path == "/session_reload" {
+    let max_content_length = if req_path == "/session_state"
+        || req_path == "/session_reload"
+        || req_path == "/session_shell_snapshot"
+    {
         512 * 1024
     } else if req_path == "/settings_scratchpads" || req_path == "/settings_files" {
         64 * 1024
@@ -1385,6 +1394,11 @@ fn handle_one(
         }
         "/session_state" => {
             let json = uplink.write_session_state_json_with_merge(v)?;
+            write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        "/session_shell_snapshot" => {
+            let json = uplink.write_shell_session_json_with_merge(v)?;
             write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
             return Ok(());
         }

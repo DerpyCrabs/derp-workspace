@@ -3,7 +3,9 @@ import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindo
 import { groupIdForWindow, type WorkspaceState } from '@/features/workspace/workspaceState'
 import type { LayoutScreen } from './types'
 
-export type DerpShellDetail =
+export type DerpShellDetail = ({
+  snapshot_epoch?: number
+} & (
   | { type: 'output_geometry'; logical_width: number; logical_height: number }
   | {
       type: 'output_layout'
@@ -36,7 +38,17 @@ export type DerpShellDetail =
       height: number
       title: string
       app_id: string
+      output_id?: string
       output_name?: string
+      stack_z?: number
+      minimized?: boolean
+      maximized?: boolean
+      fullscreen?: boolean
+      shell_flags?: number
+      capture_identifier?: string
+      kind?: string
+      x11_class?: string
+      x11_instance?: string
     }
   | { type: 'window_unmapped'; window_id: number }
   | {
@@ -47,6 +59,7 @@ export type DerpShellDetail =
       y: number
       width: number
       height: number
+      output_id?: string
       output_name?: string
       maximized?: boolean
       fullscreen?: boolean
@@ -133,7 +146,7 @@ export type DerpShellDetail =
       client_mutation_id: number
       status: string
       snapshot_epoch?: number
-    }
+    }))
 
 export type DerpWindow = {
   window_id: number
@@ -145,6 +158,7 @@ export type DerpWindow = {
   height: number
   title: string
   app_id: string
+  output_id: string
   output_name: string
   kind: string
   x11_class: string
@@ -162,6 +176,10 @@ export function workspaceGroupWindowIds(state: WorkspaceState, windowId: number)
 }
 
 function coerceOutputName(nextValue: unknown, previousValue: string): string {
+  return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
+}
+
+function coerceOutputId(nextValue: unknown, previousValue: string): string {
   return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
 }
 
@@ -234,6 +252,7 @@ export function buildWindowsMapFromList(
       height: Number(r.height) || 0,
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
+      output_id: coerceOutputId(r.output_id, previousWindow?.output_id ?? ''),
       output_name: outputName,
       kind: typeof r.kind === 'string' ? r.kind : (prev?.get(wid)?.kind ?? ''),
       x11_class: typeof r.x11_class === 'string' ? r.x11_class : (prev?.get(wid)?.x11_class ?? ''),
@@ -257,6 +276,7 @@ export function buildWindowsMapFromList(
       previousWindow.height === window.height &&
       previousWindow.title === window.title &&
       previousWindow.app_id === window.app_id &&
+      previousWindow.output_id === window.output_id &&
       previousWindow.output_name === window.output_name &&
       previousWindow.kind === window.kind &&
       previousWindow.x11_class === window.x11_class &&
@@ -335,6 +355,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         height: detail.height,
         title: detail.title,
         app_id: detail.app_id,
+        output_id: coerceOutputId(detail.output_id, current?.output_id ?? ''),
         output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
         kind: current?.kind ?? '',
         x11_class: current?.x11_class ?? '',
@@ -355,6 +376,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         current.height === nextWindow.height &&
         current.title === nextWindow.title &&
         current.app_id === nextWindow.app_id &&
+        current.output_id === nextWindow.output_id &&
         current.output_name === nextWindow.output_name &&
         current.kind === nextWindow.kind &&
         current.x11_class === nextWindow.x11_class &&
@@ -389,6 +411,10 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
           y: detail.y,
           width: detail.width,
           height: detail.height,
+          output_id:
+            detail.output_id !== undefined
+              ? coerceOutputId(detail.output_id, w.output_id)
+              : w.output_id,
           output_name:
             detail.output_name !== undefined
               ? coerceOutputName(detail.output_name, w.output_name)
@@ -401,6 +427,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
           nextWindow.y === w.y &&
           nextWindow.width === w.width &&
           nextWindow.height === w.height &&
+          nextWindow.output_id === w.output_id &&
           nextWindow.output_name === w.output_name &&
           nextWindow.maximized === w.maximized &&
           nextWindow.fullscreen === w.fullscreen

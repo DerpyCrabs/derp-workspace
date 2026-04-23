@@ -190,6 +190,17 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
 
+  const detailSnapshotEpoch = (detail: DerpShellDetail) => {
+    const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
+    return Math.max(0, Math.trunc(raw))
+  }
+
+  const shouldApplyLiveDetail = (detail: DerpShellDetail) => {
+    const epoch = detailSnapshotEpoch(detail)
+    return epoch === 0 || epoch >= lastSnapshotSequence
+  }
+
   const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
     const lw = Math.max(1, logicalWidth)
     const pw = Math.max(1, physicalWidth)
@@ -499,6 +510,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyCompositorDetail = (d: DerpShellDetail) => {
+    if (!shouldApplyLiveDetail(d)) return
     if (d.type === 'context_menu_dismiss') {
       options.closeAllAtlasSelects()
       options.hideContextMenu()

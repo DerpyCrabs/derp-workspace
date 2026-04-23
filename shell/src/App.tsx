@@ -499,6 +499,8 @@ function App() {
     reconcilePendingClientMutations(compositorSnapshotSequence())
   })
 
+  const liveScreenRows = createMemo(() => outputTopology()?.screens ?? [])
+
   function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
     const clientMutationId = nextClientMutationId++
     const ok = shellWireSend('workspace_mutation', JSON.stringify({ clientMutationId, mutation }))
@@ -715,7 +717,7 @@ function App() {
   })
 
   const workspacePartition = createMemo(() => {
-    const rows = screenDraft.rows
+    const rows = liveScreenRows()
     const g = outputGeom()
     const v = viewportCss()
     const cw = Math.max(1, g?.w ?? v.w ?? 1)
@@ -754,7 +756,7 @@ function App() {
 
   const backedShellWindowActions = createBackedShellWindowActions({
     getWindows: windowsList,
-    getScreenDraftRows: () => screenDraft.rows,
+    getScreenDraftRows: liveScreenRows,
     getOutputGeom: outputGeom,
     getLayoutCanvasOrigin: layoutCanvasOrigin,
     getPrimaryMonitorName: () => workspacePartition().primary.name,
@@ -768,10 +770,10 @@ function App() {
     sendHostedWindowOpen: (payload) => shellWireSend('hosted_window_open', JSON.stringify(payload)),
   })
 
-  const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(screenDraft.rows))
+  const layoutUnionBbox = createMemo(() => unionBBoxFromScreens(liveScreenRows()))
 
   const autoShellChromeMonitorName = createMemo(() => {
-    const rows = screenDraft.rows
+    const rows = liveScreenRows()
     if (rows.length === 0) return null
     let pi = 0
     for (let i = 1; i < rows.length; i++) {
@@ -783,7 +785,7 @@ function App() {
   })
 
   const panelHostForHud = createMemo(() => {
-    if (screenDraft.rows.length === 0) return null
+    if (liveScreenRows().length === 0) return null
     return workspacePartition().primary
   })
 
@@ -802,10 +804,10 @@ function App() {
 
   const fallbackMonitorName = createMemo(() => {
     const part = workspacePartition()
-    return part.primary.name || screenDraft.rows.find((row) => row.name)?.name || ''
+    return part.primary.name || liveScreenRows().find((row) => row.name)?.name || ''
   })
 
-  const monitorLayoutSyncSpec = createMemo(() => `${tilingCfgRev()}\u001e${screenDraft.rows.map((row) => row.name).join('\0')}`)
+  const monitorLayoutSyncSpec = createMemo(() => `${tilingCfgRev()}\u001e${liveScreenRows().map((row) => row.name).join('\0')}`)
 
   createEffect(() => {
     const spec = monitorLayoutSyncSpec()
@@ -830,7 +832,7 @@ function App() {
     outputPhysical,
     layoutCanvasOrigin,
     canvasCss,
-    screenDraftRows: () => screenDraft.rows,
+    screenDraftRows: liveScreenRows,
     shellChromePrimaryName,
     getWorkspacePrimary: () => workspacePartition().primary,
     getWindows: windowsList,
@@ -865,7 +867,7 @@ function App() {
     outputGeom,
     outputPhysical,
     layoutCanvasOrigin,
-    screenDraftRows: () => screenDraft.rows,
+    screenDraftRows: liveScreenRows,
     shellChromePrimaryName,
     viewportCss,
     canvasCss,
@@ -1336,7 +1338,7 @@ function App() {
   }
 
   const taskbarScreens = createMemo(() =>
-    screensListForLayout(screenDraft.rows, outputGeom(), layoutCanvasOrigin()),
+    screensListForLayout(liveScreenRows(), outputGeom(), layoutCanvasOrigin()),
   )
   const shellExclusionVisibleWindowIds = createMemo(() => {
     const visible = new Set<number>()
@@ -1475,7 +1477,7 @@ function App() {
     getMainRef: () => mainRef,
     outputGeom,
     layoutCanvasOrigin,
-    screenDraftRows: () => screenDraft.rows,
+    screenDraftRows: liveScreenRows,
     allWindowsMap,
     reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
     occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
@@ -1773,7 +1775,7 @@ function App() {
         allWindowsMap,
         windows,
         layoutCanvasOrigin,
-        screenDraftRows: () => screenDraft.rows,
+        screenDraftRows: liveScreenRows,
         outputGeom,
         reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
         workspaceState,
@@ -1826,7 +1828,7 @@ function App() {
       t: Date.now(),
       shellBuild: shellBuildLabel,
       uiFps: debugHudRuntime.hudFps(),
-      screens: screenDraft.rows.map((r) => ({ ...r })),
+      screens: liveScreenRows().map((r) => ({ ...r })),
       outputGeom: g ? { w: g.w, h: g.h } : null,
       windowCount: windowsList().length,
       layoutUnion: layoutUnionBbox(),
@@ -1864,7 +1866,7 @@ function App() {
     outputGeom,
     outputPhysical,
     layoutCanvasOrigin,
-    screenDraftRows: () => screenDraft.rows,
+    screenDraftRows: liveScreenRows,
   }
 
   return (
@@ -1953,7 +1955,7 @@ function App() {
         releaseOverlayPointer={releaseOverlayPointer}
         outputGeom={outputGeom}
         layoutCanvasOrigin={layoutCanvasOrigin}
-        screenDraftRows={() => screenDraft.rows}
+        screenDraftRows={liveScreenRows}
         reserveTaskbarForMon={(screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen)}
         scheduleExclusionZonesSync={scheduleExclusionZonesSync}
       />

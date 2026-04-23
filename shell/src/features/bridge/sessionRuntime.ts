@@ -1,9 +1,9 @@
 import { backedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui/shellHostedAppsRegistry'
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
-import { monitorWorkAreaGlobal } from '@/features/tiling/tileSnap'
+import { monitorWorkAreaGlobal, tiledFrameRectToClientRect } from '@/features/tiling/tileSnap'
 import type { SnapZone } from '@/features/tiling/tileZones'
-import { getMonitorLayout, loadTilingConfig } from '@/features/tiling/tilingConfig'
+import { loadTilingConfig } from '@/features/tiling/tilingConfig'
 import {
   enterWorkspaceSplitView,
   exitWorkspaceSplitView,
@@ -21,6 +21,7 @@ import {
 import type { DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
+import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import { rectCanvasLocalToGlobal, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
 import { matchNativeSessionWindow } from './nativeSessionMatch'
 import {
@@ -80,6 +81,29 @@ type SessionRuntimeOptions = {
 }
 
 export function createSessionRuntime(options: SessionRuntimeOptions) {
+  function rectMatches(
+    left: Pick<SavedRect, 'x' | 'y' | 'width' | 'height'>,
+    right: Pick<SavedRect, 'x' | 'y' | 'width' | 'height'>,
+    tolerance = 0,
+  ): boolean {
+    return (
+      Math.abs(left.x - right.x) <= tolerance &&
+      Math.abs(left.y - right.y) <= tolerance &&
+      Math.abs(left.width - right.width) <= tolerance &&
+      Math.abs(left.height - right.height) <= tolerance
+    )
+  }
+
+  function screenBySavedOutput(outputId: string, outputName: string): LayoutScreen | null {
+    const screens = options.getTaskbarScreens()
+    return (
+      screens.find((screen) => outputId.length > 0 && screen.identity === outputId) ??
+      screens.find((screen) => screen.name === outputName) ??
+      screens[0] ??
+      null
+    )
+  }
+
   function nativeWindowRefForId(windowId: number): SessionWindowRef | null {
     return options.getNativeWindowRefs().get(windowId) ?? null
   }
@@ -114,14 +138,13 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       .join(',')
     const outputs = options
       .getTaskbarScreens()
-      .map((screen) => screen.name)
+      .map((screen) => `${screen.identity}:${screen.name}`)
       .join(',')
     return `${shellWindowIds}|${nativeWindowKeys}|${outputs}|${options.getTilingCfgRev()}`
   }
 
-  function savedWindowBoundsToLocalRect(bounds: SavedRect, outputName: string): SavedRect {
-    const screens = options.getTaskbarScreens()
-    const target = screens.find((screen) => screen.name === outputName) ?? screens[0] ?? null
+  function savedWindowBoundsToLocalRect(bounds: SavedRect, outputId: string, outputName: string): SavedRect {
+    const target = screenBySavedOutput(outputId, outputName)
     if (!target) return bounds
     const reserveTb = options.reserveTaskbarForMon(target)
     const work = monitorWorkAreaGlobal(target, reserveTb)
@@ -133,7 +156,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       options.getLayoutCanvasOrigin(),
     )
     const fitsOutput =
-      outputName === target.name &&
+      (outputId.length > 0 ? target.identity === outputId : outputName === target.name) &&
       globalRect.x >= target.x &&
       globalRect.y >= target.y &&
       globalRect.x + globalRect.w <= target.x + target.width &&
@@ -156,7 +179,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     const kind = backedShellWindowKind(record.windowId, record.appId)
     if (!kind) return
     if (record.state !== null) primeShellWindowState(record.windowId, record.state)
-    const bounds = savedWindowBoundsToLocalRect(record.bounds, record.outputName)
+    const bounds = savedWindowBoundsToLocalRect(record.bounds, record.outputId, record.outputName)
     options.shellWireSend(
       'backed_window_open',
       JSON.stringify({
@@ -191,6 +214,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         {
           title: window.title,
           appId: window.app_id,
+          outputId: window.output_id,
           outputName: window.output_name,
           maximized: window.maximized,
           fullscreen: window.fullscreen,
@@ -361,14 +385,31 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     if (screens.length > 0) {
       for (const monitorState of snapshot.monitorTiles) {
         const targetMonitor =
-          screens.find((screen) => screen.name === monitorState.outputName) ?? screens[0] ?? null
-        if (!targetMonitor || getMonitorLayout(targetMonitor.name).layout.type !== 'manual-snap') continue
+          screenBySavedOutput(monitorState.outputId ?? '', monitorState.outputName)
+        if (!targetMonitor) continue
         for (const entry of monitorState.entries) {
           const windowId = liveWindowIdForRef(entry.windowRef)
           if (windowId === null) continue
           if (!options.sendSetMonitorTile(windowId, targetMonitor.name, entry.zone, entry.bounds)) {
             return
           }
+          const clientBounds = tiledFrameRectToClientRect(entry.bounds)
+          const localBounds = rectGlobalToCanvasLocal(
+            clientBounds.x,
+            clientBounds.y,
+            clientBounds.width,
+            clientBounds.height,
+            options.getLayoutCanvasOrigin(),
+          )
+          options.shellWireSend(
+            'set_geometry',
+            windowId,
+            localBounds.x,
+            localBounds.y,
+            localBounds.w,
+            localBounds.h,
+            SHELL_LAYOUT_FLOATING,
+          )
         }
       }
     }
@@ -408,6 +449,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
           kind,
           title: window.title,
           appId: window.app_id,
+          outputId: window.output_id,
           outputName: window.output_name,
           bounds: options.rectFromWindow(window),
           minimized: window.minimized,
@@ -424,6 +466,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
         windowRef,
         title: window.title,
         appId: window.app_id,
+        outputId: window.output_id,
         outputName: window.output_name,
         bounds: options.rectFromWindow(window),
         minimized: window.minimized,
@@ -484,6 +527,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       },
       tilingConfig: loadTilingConfig(),
       monitorTiles: workspace.monitorTiles.map((monitor) => ({
+        outputId: monitor.outputId,
         outputName: monitor.outputName,
         entries: monitor.entries
           .map((entry) => {
@@ -531,6 +575,8 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(shellWindow.windowId)
       if (!live) return false
       if (live.minimized !== shellWindow.minimized) return false
+      if (live.maximized !== shellWindow.maximized) return false
+      if (live.fullscreen !== shellWindow.fullscreen) return false
     }
     for (const nativeWindow of snapshot.nativeWindows) {
       const liveWindowId = liveWindowIdForRef(nativeWindow.windowRef)
@@ -538,6 +584,40 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
       const live = windowsById.get(liveWindowId)
       if (!live) return false
       if (live.minimized !== nativeWindow.minimized) return false
+      if (live.maximized !== nativeWindow.maximized) return false
+      if (live.fullscreen !== nativeWindow.fullscreen) return false
+    }
+    for (const monitorState of snapshot.monitorTiles) {
+      const targetMonitor = screenBySavedOutput(monitorState.outputId ?? '', monitorState.outputName)
+      if (!targetMonitor) return false
+      for (const entry of monitorState.entries) {
+        const windowId = liveWindowIdForRef(entry.windowRef)
+        if (windowId === null) return false
+        const live = windowsById.get(windowId)
+        if (!live) return false
+        const clientBounds = tiledFrameRectToClientRect(entry.bounds)
+        const expectedBounds = rectGlobalToCanvasLocal(
+          clientBounds.x,
+          clientBounds.y,
+          clientBounds.width,
+          clientBounds.height,
+          options.getLayoutCanvasOrigin(),
+        )
+        if (
+          !rectMatches(
+            live,
+            {
+              x: expectedBounds.x,
+              y: expectedBounds.y,
+              width: expectedBounds.w,
+              height: expectedBounds.h,
+            },
+            8,
+          )
+        ) {
+          return false
+        }
+      }
     }
     return true
   }

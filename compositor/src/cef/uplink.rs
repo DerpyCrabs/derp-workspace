@@ -349,6 +349,19 @@ impl UplinkToCompositor {
         })
     }
 
+    pub fn write_shell_session_json_with_merge(
+        &self,
+        mut shell: serde_json::Value,
+    ) -> Result<String, String> {
+        self.run_result(move |s| {
+            crate::session::session_state::merge_shell_hosted_window_state_into_shell_snapshot(
+                &mut shell,
+                &s.shell_hosted_app_state,
+            );
+            crate::session::session_state::write_shell_session_json(shell)
+        })
+    }
+
     pub fn sni_tray_activate(&self, id: String) {
         self.run(move |s| {
             s.sni_tray_activate_clicked(id);

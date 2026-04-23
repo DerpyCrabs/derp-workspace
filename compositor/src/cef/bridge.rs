@@ -15,15 +15,21 @@ use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 
 struct PendingCompositorMessages {
     scheduled: bool,
-    messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
-    snapshot: Vec<shell_wire::DecodedCompositorToShellMessage>,
+    messages: Vec<PendingCompositorMessage>,
+    snapshot: Vec<PendingCompositorMessage>,
     snapshot_epoch: u64,
 }
 
+pub(crate) struct PendingCompositorMessage {
+    pub(crate) snapshot_epoch: u64,
+    pub(crate) msg: shell_wire::DecodedCompositorToShellMessage,
+}
+
 fn push_pending_message(
-    messages: &mut Vec<shell_wire::DecodedCompositorToShellMessage>,
-    msg: shell_wire::DecodedCompositorToShellMessage,
+    messages: &mut Vec<PendingCompositorMessage>,
+    pending_message: PendingCompositorMessage,
 ) {
+    let msg = &pending_message.msg;
     match &msg {
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
         | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
@@ -35,53 +41,53 @@ fn push_pending_message(
         | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
         | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
         | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
-            let keep = std::mem::discriminant(&msg);
-            messages.retain(|pending| std::mem::discriminant(pending) != keep);
+            let keep = std::mem::discriminant(msg);
+            messages.retain(|pending| std::mem::discriminant(&pending.msg) != keep);
         }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } => {
             messages.retain(|pending| {
                 !matches!(
-                    pending,
+                    pending.msg,
                     shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
                         window_id: pending_window_id,
                         ..
-                    } if pending_window_id == window_id
+                    } if pending_window_id == *window_id
                 )
             });
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMetadata { window_id, .. } => {
             messages.retain(|pending| {
                 !matches!(
-                    pending,
+                    pending.msg,
                     shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
                         window_id: pending_window_id,
                         ..
-                    } if pending_window_id == window_id
+                    } if pending_window_id == *window_id
                 )
             });
         }
         shell_wire::DecodedCompositorToShellMessage::WindowState { window_id, .. } => {
             messages.retain(|pending| {
                 !matches!(
-                    pending,
+                    pending.msg,
                     shell_wire::DecodedCompositorToShellMessage::WindowState {
                         window_id: pending_window_id,
                         ..
-                    } if pending_window_id == window_id
+                    } if pending_window_id == *window_id
                 )
             });
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
             messages.retain(|pending| {
                 !matches!(
-                    pending,
+                    pending.msg,
                     shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
                 )
             });
         }
         _ => {}
     }
-    messages.push(msg);
+    messages.push(pending_message);
 }
 
 fn post_external_begin_frame_task(
@@ -139,6 +145,8 @@ wrap_task! {
             if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
+                        let snapshot_messages: Vec<_> =
+                            snapshot_messages.into_iter().map(|pending| pending.msg).collect();
                         if let Err(error) =
                             snapshot.publish_messages(snapshot_epoch, &snapshot_messages)
                         {
@@ -260,7 +268,7 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
-        self.send_with_snapshot(msg, None, None);
+        self.send_with_snapshot(msg, None, None, None);
     }
 
     pub fn send_with_snapshot(
@@ -268,6 +276,7 @@ impl ShellToCefLink {
         msg: shell_wire::DecodedCompositorToShellMessage,
         snapshot: Option<Vec<shell_wire::DecodedCompositorToShellMessage>>,
         snapshot_epoch: Option<u64>,
+        msg_epoch: Option<u64>,
     ) {
         let should_post = {
             let Ok(mut guard) = self.pending_messages.lock() else {
@@ -275,13 +284,25 @@ impl ShellToCefLink {
             };
             if let Some(snapshot) = snapshot {
                 for snapshot_msg in snapshot {
-                    push_pending_message(&mut guard.snapshot, snapshot_msg);
+                    push_pending_message(
+                        &mut guard.snapshot,
+                        PendingCompositorMessage {
+                            snapshot_epoch: 0,
+                            msg: snapshot_msg,
+                        },
+                    );
                 }
             }
             if let Some(snapshot_epoch) = snapshot_epoch {
                 guard.snapshot_epoch = guard.snapshot_epoch.max(snapshot_epoch);
             }
-            push_pending_message(&mut guard.messages, msg);
+            push_pending_message(
+                &mut guard.messages,
+                PendingCompositorMessage {
+                    snapshot_epoch: msg_epoch.unwrap_or_default(),
+                    msg,
+                },
+            );
             self.pending_work.store(true, Ordering::Relaxed);
             if guard.scheduled {
                 false

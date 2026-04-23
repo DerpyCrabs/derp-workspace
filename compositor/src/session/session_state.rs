@@ -56,6 +56,10 @@ pub fn read_session_state_json() -> Result<String, String> {
     serde_json::to_string(&read_session_state()).map_err(|e| e.to_string())
 }
 
+pub fn read_shell_session_json() -> Result<String, String> {
+    serde_json::to_string(&read_session_state().shell).map_err(|e| e.to_string())
+}
+
 pub fn write_session_state(state: SessionStateFile) -> Result<(), String> {
     let Some(path) = session_state_path() else {
         return Err("session state path unavailable".into());
@@ -75,6 +79,17 @@ pub fn write_session_state_json(value: Value) -> Result<String, String> {
     serde_json::to_string(&state).map_err(|e| e.to_string())
 }
 
+pub fn write_shell_session_json(value: Value) -> Result<String, String> {
+    let mut state = read_session_state();
+    state.shell = if value.is_object() {
+        value
+    } else {
+        default_shell_session_value()
+    };
+    write_session_state(state.clone())?;
+    serde_json::to_string(&state.shell).map_err(|e| e.to_string())
+}
+
 pub fn merge_shell_hosted_into_session_value(root: &mut Value, by_window: &HashMap<u32, Value>) {
     if by_window.is_empty() {
         return;
@@ -85,7 +100,7 @@ pub fn merge_shell_hosted_into_session_value(root: &mut Value, by_window: &HashM
     merge_shell_hosted_window_state_into_shell_snapshot(shell, by_window);
 }
 
-fn merge_shell_hosted_window_state_into_shell_snapshot(
+pub fn merge_shell_hosted_window_state_into_shell_snapshot(
     shell_snapshot: &mut Value,
     by_window: &HashMap<u32, Value>,
 ) {

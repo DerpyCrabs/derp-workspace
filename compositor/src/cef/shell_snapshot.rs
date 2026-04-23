@@ -200,15 +200,6 @@ impl SnapshotAuthoritativeState {
         self.window_list_revision
     }
 
-    fn next_window_stack_z(&self) -> u32 {
-        self.window_list_rows
-            .iter()
-            .map(|row| row.stack_z)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1)
-    }
-
     fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
         self.window_list_rows
             .iter_mut()
@@ -237,47 +228,67 @@ impl SnapshotAuthoritativeState {
             shell_wire::DecodedCompositorToShellMessage::WindowMapped {
                 window_id,
                 surface_id,
+                stack_z,
                 x,
                 y,
                 w,
                 h,
+                minimized,
+                maximized,
+                fullscreen,
                 title,
                 app_id,
                 client_side_decoration,
+                shell_flags,
+                output_id,
                 output_name,
+                capture_identifier,
+                kind,
+                x11_class,
+                x11_instance,
             } => {
                 if let Some(row) = self.window_row_mut(*window_id) {
                     row.surface_id = *surface_id;
+                    row.stack_z = *stack_z;
                     row.x = *x;
                     row.y = *y;
                     row.w = *w;
                     row.h = *h;
+                    row.minimized = if *minimized { 1 } else { 0 };
+                    row.maximized = if *maximized { 1 } else { 0 };
+                    row.fullscreen = if *fullscreen { 1 } else { 0 };
                     row.title = title.clone();
                     row.app_id = app_id.clone();
                     row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
+                    row.shell_flags = *shell_flags;
+                    row.output_id = output_id.clone();
                     row.output_name = output_name.clone();
-                    row.minimized = 0;
+                    row.capture_identifier = capture_identifier.clone();
+                    row.kind = kind.clone();
+                    row.x11_class = x11_class.clone();
+                    row.x11_instance = x11_instance.clone();
                 } else {
                     self.window_list_rows.push(shell_wire::ShellWindowSnapshot {
                         window_id: *window_id,
                         surface_id: *surface_id,
-                        stack_z: self.next_window_stack_z(),
+                        stack_z: *stack_z,
                         x: *x,
                         y: *y,
                         w: *w,
                         h: *h,
-                        minimized: 0,
-                        maximized: 0,
-                        fullscreen: 0,
+                        minimized: if *minimized { 1 } else { 0 },
+                        maximized: if *maximized { 1 } else { 0 },
+                        fullscreen: if *fullscreen { 1 } else { 0 },
                         client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: 0,
+                        shell_flags: *shell_flags,
                         title: title.clone(),
                         app_id: app_id.clone(),
+                        output_id: output_id.clone(),
                         output_name: output_name.clone(),
-                        capture_identifier: String::new(),
-                        kind: String::new(),
-                        x11_class: String::new(),
-                        x11_instance: String::new(),
+                        capture_identifier: capture_identifier.clone(),
+                        kind: kind.clone(),
+                        x11_class: x11_class.clone(),
+                        x11_instance: x11_instance.clone(),
                     });
                 }
                 self.window_list_rows
@@ -299,6 +310,7 @@ impl SnapshotAuthoritativeState {
                 maximized,
                 fullscreen,
                 client_side_decoration,
+                output_id,
                 output_name,
             } => {
                 if let Some(row) = self.window_row_mut(*window_id) {
@@ -310,6 +322,7 @@ impl SnapshotAuthoritativeState {
                     row.maximized = if *maximized { 1 } else { 0 };
                     row.fullscreen = if *fullscreen { 1 } else { 0 };
                     row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
+                    row.output_id = output_id.clone();
                     row.output_name = output_name.clone();
                     self.next_window_list_revision();
                 }
@@ -552,6 +565,7 @@ fn append_snapshot_message(
             app_id,
             client_side_decoration,
             output_name,
+            ..
         } => extend_snapshot_packet(
             payload,
             shell_wire::encode_window_mapped(
@@ -582,6 +596,7 @@ fn append_snapshot_message(
             fullscreen,
             client_side_decoration,
             output_name,
+            ..
         } => extend_snapshot_packet(
             payload,
             shell_wire::encode_window_geometry(

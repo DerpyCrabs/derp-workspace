@@ -44,6 +44,7 @@ describe('decodeCompositorSnapshot', () => {
 
     const title = bytesForString('Terminal')
     const appId = bytesForString('foot')
+    const outputId = bytesForString('make:model:serial')
     const outputName = bytesForString('HDMI-A-1')
     const captureIdentifier = bytesForString('cap-1')
     const kind = bytesForString('native')
@@ -69,6 +70,8 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(appId.length),
       ...title,
       ...appId,
+      ...u32(outputId.length),
+      ...outputId,
       ...u32(outputName.length),
       ...outputName,
       ...u32(captureIdentifier.length),
@@ -123,6 +126,7 @@ describe('decodeCompositorSnapshot', () => {
               shell_flags: 0,
               title: 'Terminal',
               app_id: 'foot',
+              output_id: 'make:model:serial',
               output_name: 'HDMI-A-1',
               capture_identifier: 'cap-1',
               kind: 'native',

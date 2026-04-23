@@ -146,6 +146,7 @@ impl CompositorState {
                 maximized: loc.maximized,
                 fullscreen: false,
                 client_side_decoration: false,
+                output_id: String::new(),
                 output_name: loc.output_name.clone(),
             },
         );
@@ -158,14 +159,24 @@ impl CompositorState {
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowMapped {
             window_id: loc.window_id,
             surface_id: loc.surface_id,
+            stack_z: loc.window_id,
             x: loc.x,
             y: loc.y,
             w: loc.width.max(1),
             h: loc.height.max(1),
+            minimized: loc.minimized,
+            maximized: loc.maximized,
+            fullscreen: false,
             title: loc.title.clone(),
             app_id: loc.app_id.clone(),
             client_side_decoration: false,
+            shell_flags: 0,
+            output_id: String::new(),
             output_name: loc.output_name.clone(),
+            capture_identifier: String::new(),
+            kind: String::new(),
+            x11_class: String::new(),
+            x11_instance: String::new(),
         });
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WindowMetadata {

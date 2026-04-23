@@ -126,9 +126,7 @@ pub(crate) fn wait_for_shell_reset_tiling_config(
             .wait_timeout(state, remaining)
             .map_err(|_| "e2e reset tiling config wait poisoned".to_string())?;
         state = next_state;
-        if wait_result.timed_out()
-            && !state.shell_reset_tiling_config.contains_key(&request_id)
-        {
+        if wait_result.timed_out() && !state.shell_reset_tiling_config.contains_key(&request_id) {
             return Err(format!(
                 "timed out waiting for shell reset tiling config ack {request_id}"
             ));

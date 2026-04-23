@@ -3,6 +3,7 @@ import type { SavedNativeWindow } from './sessionSnapshot'
 export type NativeMatchWindow = {
   title: string
   appId: string
+  outputId: string
   outputName: string
   maximized: boolean
   fullscreen: boolean
@@ -20,6 +21,8 @@ export function scoreNativeSessionMatch(
   const savedAppId = normalize(saved.appId)
   const liveTitle = normalize(window.title)
   const savedTitle = normalize(saved.title)
+  const liveOutputId = normalize(window.outputId)
+  const savedOutputId = normalize(saved.outputId)
   const liveOutput = normalize(window.outputName)
   const savedOutput = normalize(saved.outputName)
   let score = 0
@@ -30,6 +33,10 @@ export function scoreNativeSessionMatch(
   if (liveTitle && savedTitle) {
     if (liveTitle === savedTitle) score += 28
     else if (liveTitle.includes(savedTitle) || savedTitle.includes(liveTitle)) score += 12
+  }
+  if (liveOutputId && savedOutputId) {
+    if (liveOutputId === savedOutputId) score += 10
+    else score -= 8
   }
   if (liveOutput && savedOutput && liveOutput === savedOutput) score += 6
   if (window.maximized === saved.maximized) score += 2

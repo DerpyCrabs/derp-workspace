@@ -17,6 +17,7 @@ function baseWindow(id: number, shellHosted: boolean): DerpWindow {
     height: 100,
     title: 't',
     app_id: 'app.test',
+    output_id: 'make:model:serial',
     output_name: 'o',
     kind: 'native',
     x11_class: '',

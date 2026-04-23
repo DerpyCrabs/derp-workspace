@@ -42,12 +42,17 @@ import {
 const FILE_BROWSER_APP_ID = 'derp.files'
 const SHELL_TEST_APP_ID = 'derp.test-shell'
 
-function fileBrowserRow(shell: ShellSnapshot, name: string): FileBrowserSnapshotRow | null {
-  return shell.file_browser?.rows.find((row) => row.name === name) ?? null
+function fileBrowserState(shell: ShellSnapshot, windowId?: number) {
+  if (windowId === undefined) return shell.file_browser ?? null
+  return shell.file_browser_windows?.find((entry) => entry.window_id === windowId) ?? null
 }
 
-function fileBrowserAction(shell: ShellSnapshot, id: string): FileBrowserSnapshotAction | null {
-  return shell.file_browser?.primary_actions.find((action) => action.id === id) ?? null
+function fileBrowserRow(shell: ShellSnapshot, name: string, windowId?: number): FileBrowserSnapshotRow | null {
+  return fileBrowserState(shell, windowId)?.rows.find((row) => row.name === name) ?? null
+}
+
+function fileBrowserAction(shell: ShellSnapshot, id: string, windowId?: number): FileBrowserSnapshotAction | null {
+  return fileBrowserState(shell, windowId)?.primary_actions.find((action) => action.id === id) ?? null
 }
 
 function tabRect(shell: ShellSnapshot, windowId: number) {
@@ -128,22 +133,26 @@ async function waitForActivePath(base: string, expectedPath: string, windowId?: 
 
 async function openDirectoryRowWithClicks(base: string, expectedPath: string, rowName: string, windowId: number) {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  const row = fileBrowserRow(shell, rowName)
+  const row = fileBrowserRow(shell, rowName, windowId)
   assert(row?.rect, `missing row rect for ${rowName}`)
   await clickRect(base, row.rect)
-  await waitFor(
-    `wait for ${rowName} selection`,
-    async () => {
-      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      if (next.file_browser?.active_path === expectedPath) return next
-      return fileBrowserRow(next, rowName)?.selected ? next : null
-    },
-    2000,
-    100,
-  )
+  try {
+    const next = await waitFor(
+      `wait for ${rowName} selection`,
+      async () => {
+        const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fileBrowser = fileBrowserState(current, windowId)
+        if (fileBrowser?.active_path === expectedPath) return current
+        return fileBrowserRow(current, rowName, windowId)?.selected ? current : null
+      },
+      2000,
+      100,
+    )
+    if (fileBrowserState(next, windowId)?.active_path === expectedPath) return next
+  } catch {}
   const openedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-  if (openedShell.file_browser?.active_path === expectedPath) return openedShell
-  const selectedRow = fileBrowserRow(openedShell, rowName)
+  if (fileBrowserState(openedShell, windowId)?.active_path === expectedPath) return openedShell
+  const selectedRow = fileBrowserRow(openedShell, rowName, windowId)
   assert(selectedRow?.rect, `missing selected row rect for ${rowName}`)
   await clickRect(base, selectedRow.rect)
   return waitForActivePath(base, expectedPath, windowId)
@@ -157,19 +166,33 @@ async function navigateToFixtureRoot(
   const opened = await openFileBrowserFromLauncher(base, spawnedShellWindowIds)
   const initialPath = opened.shell.file_browser?.active_path
   assert(typeof initialPath === 'string' && initialPath.length > 0, 'missing initial file browser path')
+  if (
+    initialPath !== fixtures.root_path &&
+    (initialPath === fixtures.root_path || initialPath.startsWith(`${fixtures.root_path}/`))
+  ) {
+    const breadcrumb = fileBrowserState(opened.shell, opened.window.window_id)?.breadcrumbs.find(
+      (entry) => entry.path === fixtures.root_path,
+    )
+    assert(breadcrumb?.rect, `missing breadcrumb for ${fixtures.root_path}`)
+    await clickRect(base, breadcrumb.rect)
+    return {
+      shell: await waitForActivePath(base, fixtures.root_path, opened.window.window_id),
+      window: opened.window,
+    }
+  }
   const relativeSegments = path.posix.relative(initialPath, fixtures.root_path).split('/').filter(Boolean)
-  const showHiddenAction = fileBrowserAction(opened.shell, 'show-hidden')
+  const showHiddenAction = fileBrowserAction(opened.shell, 'show-hidden', opened.window.window_id)
   if (showHiddenAction?.rect) {
     await clickRect(base, showHiddenAction.rect)
     await waitFor(
       'wait for hidden rows to appear',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const toggleApplied = !!fileBrowserAction(shell, 'hide-hidden')
+        const toggleApplied = !!fileBrowserAction(shell, 'hide-hidden', opened.window.window_id)
         if (!toggleApplied) return null
         const firstSegment = relativeSegments[0]
         if (!firstSegment) return shell
-        return fileBrowserRow(shell, firstSegment) ? shell : null
+        return fileBrowserRow(shell, firstSegment, opened.window.window_id) ? shell : null
       },
       2000,
       100,
@@ -262,7 +285,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     await dragRectToRect(base, tabRect(shellTest.shell, shellTestWindowId), tabRect(shellTest.shell, fileBrowserWindowId))
     const grouped = await waitForGroupedMembers(base, [fileBrowserWindowId, shellTestWindowId])
-    await activateTaskbarWindow(base, grouped.shell, fileBrowserWindowId)
+    await activateTaskbarWindow(base, grouped.shell, grouped.group.visible_window_id)
     const groupedFocused = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await clickRect(base, tabRect(groupedFocused, fileBrowserWindowId))
     await waitForActivePath(base, fixtures.root_path, fileBrowserWindowId)
@@ -276,7 +299,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     state.spawnedNativeWindowIds.add(spawnedNative.window.window_id)
     state.nativeLaunchByWindowId.set(spawnedNative.window.window_id, spawnedNative.command)
     const shellWithNativeTaskbar = await waitForTaskbarEntry(base, spawnedNative.window.window_id)
-    await activateTaskbarWindow(base, shellWithNativeTaskbar, spawnedNative.window.window_id)
+    if (shellWithNativeTaskbar.focused_window_id !== spawnedNative.window.window_id) {
+      await activateTaskbarWindow(base, shellWithNativeTaskbar, spawnedNative.window.window_id)
+    }
     const { compositor: compositorAfterActivate } = await getSnapshots(base)
     const nativeWindow = compositorWindowById(compositorAfterActivate, spawnedNative.window.window_id)
     assert(nativeWindow, 'missing spawned native compositor window')

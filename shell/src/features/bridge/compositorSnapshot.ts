@@ -166,6 +166,13 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     if (appId == null) return null
     cursor += appLen
     if (cursor + 4 > view.byteLength) return null
+    const outputIdLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (outputIdLen > MAX_WINDOW_STRING_BYTES) return null
+    const outputId = readUtf8(bytes, cursor, outputIdLen)
+    if (outputId == null) return null
+    cursor += outputIdLen
+    if (cursor + 4 > view.byteLength) return null
     const outputLen = view.getUint32(cursor, true)
     cursor += 4
     if (outputLen > MAX_WINDOW_STRING_BYTES) return null
@@ -215,6 +222,7 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       shell_flags: shellFlags,
       title,
       app_id: appId,
+      output_id: outputId,
       output_name: outputName,
       capture_identifier: captureIdentifier,
       kind,

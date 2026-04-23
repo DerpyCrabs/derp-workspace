@@ -34,6 +34,7 @@ function shellWindow(windowId: number, outputName = 'DP-1'): DerpWindow {
     height: 300,
     title: `window-${windowId}`,
     app_id: 'derp.test-shell',
+    output_id: 'make:model:serial',
     output_name: outputName,
     kind: 'test-shell',
     x11_class: '',

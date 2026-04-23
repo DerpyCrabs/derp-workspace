@@ -8,6 +8,15 @@ use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
 
+fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
+    if snapshot_epoch > 0 {
+        if let Some(object) = detail.as_object_mut() {
+            object.insert("snapshot_epoch".to_string(), json!(snapshot_epoch));
+        }
+    }
+    detail
+}
+
 fn execute_main_frame_script(browser: &Browser, code: &str) {
     let Some(frame) = browser.main_frame() else {
         return;
@@ -89,7 +98,7 @@ fn flush_shell_updates(
 }
 
 pub fn apply_messages(
-    messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
+    messages: Vec<crate::cef::bridge::PendingCompositorMessage>,
     browser: &Mutex<Option<Browser>>,
     view_state: &Mutex<OsrViewState>,
 ) {
@@ -99,9 +108,10 @@ pub fn apply_messages(
     };
     let mut pending_details = Vec::new();
     let mut snapshot_dirty = false;
-    for msg in messages {
+    for pending in messages {
         apply_message(
-            msg,
+            pending.msg,
+            pending.snapshot_epoch,
             browser.as_ref(),
             view_state,
             &mut pending_details,
@@ -113,6 +123,7 @@ pub fn apply_messages(
 
 fn apply_message(
     msg: shell_wire::DecodedCompositorToShellMessage,
+    message_snapshot_epoch: u64,
     browser: Option<&Browser>,
     view_state: &Mutex<OsrViewState>,
     pending_details: &mut Vec<Value>,
@@ -128,11 +139,14 @@ fn apply_message(
             apply_output_dimensions_to_osr(
                 logical_w, logical_h, physical_w, physical_h, view_state, browser,
             );
-            pending_details.push(json!({
-                "type": "output_geometry",
-                "logical_width": logical_w,
-                "logical_height": logical_h,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "output_geometry",
+                    "logical_width": logical_w,
+                    "logical_height": logical_h,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             revision,
@@ -166,42 +180,68 @@ fn apply_message(
                     })
                 })
                 .collect();
-            pending_details.push(json!({
-                "type": "output_layout",
-                "revision": revision,
-                "canvas_logical_width": canvas_logical_w,
-                "canvas_logical_height": canvas_logical_h,
-                "canvas_physical_width": canvas_physical_w,
-                "canvas_physical_height": canvas_physical_h,
-                "screens": screens,
-                "shell_chrome_primary": shell_chrome_primary,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "output_layout",
+                    "revision": revision,
+                    "canvas_logical_width": canvas_logical_w,
+                    "canvas_logical_height": canvas_logical_h,
+                    "canvas_physical_width": canvas_physical_w,
+                    "canvas_physical_height": canvas_physical_h,
+                    "screens": screens,
+                    "shell_chrome_primary": shell_chrome_primary,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMapped {
             window_id,
             surface_id,
+            stack_z,
             x,
             y,
             w,
             h,
+            minimized,
+            maximized,
+            fullscreen,
             title,
             app_id,
+            shell_flags,
+            output_id,
             output_name,
+            capture_identifier,
+            kind,
+            x11_class,
+            x11_instance,
             ..
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
-            pending_details.push(json!({
-                "type": "window_mapped",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h,
-                "title": title,
-                "app_id": app_id,
-                "output_name": output_name,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_mapped",
+                    "window_id": window_id,
+                    "surface_id": surface_id,
+                    "stack_z": stack_z,
+                    "x": x,
+                    "y": y,
+                    "width": w,
+                    "height": h,
+                    "minimized": minimized,
+                    "maximized": maximized,
+                    "fullscreen": fullscreen,
+                    "title": title,
+                    "app_id": app_id,
+                    "shell_flags": shell_flags,
+                    "output_id": output_id,
+                    "output_name": output_name,
+                    "capture_identifier": capture_identifier,
+                    "kind": kind,
+                    "x11_class": x11_class,
+                    "x11_instance": x11_instance,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
             window_id,
@@ -212,22 +252,27 @@ fn apply_message(
             h,
             maximized,
             fullscreen,
+            output_id,
             output_name,
             ..
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
-            pending_details.push(json!({
-                "type": "window_geometry",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h,
-                "output_name": output_name,
-                "maximized": maximized,
-                "fullscreen": fullscreen,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_geometry",
+                    "window_id": window_id,
+                    "surface_id": surface_id,
+                    "x": x,
+                    "y": y,
+                    "width": w,
+                    "height": h,
+                    "output_id": output_id,
+                    "output_name": output_name,
+                    "maximized": maximized,
+                    "fullscreen": fullscreen,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
             window_id,
@@ -236,13 +281,16 @@ fn apply_message(
             app_id,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
-            pending_details.push(json!({
-                "type": "window_metadata",
-                "window_id": window_id,
-                "surface_id": surface_id,
-                "title": title,
-                "app_id": app_id,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_metadata",
+                    "window_id": window_id,
+                    "surface_id": surface_id,
+                    "title": title,
+                    "app_id": app_id,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_list();
@@ -264,6 +312,7 @@ fn apply_message(
                         "shell_flags": window.shell_flags,
                         "title": window.title,
                         "app_id": window.app_id,
+                        "output_id": window.output_id,
                         "output_name": window.output_name,
                         "capture_identifier": window.capture_identifier,
                         "kind": window.kind,
@@ -272,33 +321,42 @@ fn apply_message(
                     })
                 })
                 .collect();
-            pending_details.push(json!({
-                "type": "window_list",
-                "revision": revision,
-                "windows": windows,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_list",
+                    "revision": revision,
+                    "windows": windows,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,
             minimized,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_state();
-            pending_details.push(json!({
-                "type": "window_state",
-                "window_id": window_id,
-                "minimized": minimized,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_state",
+                    "window_id": window_id,
+                    "minimized": minimized,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
-            pending_details.push(json!({
-                "type": "focus_changed",
-                "surface_id": surface_id,
-                "window_id": window_id,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "focus_changed",
+                    "surface_id": surface_id,
+                    "window_id": window_id,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
             window_id,
@@ -476,11 +534,14 @@ fn apply_message(
             let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
                 return;
             };
-            pending_details.push(json!({
-                "type": "workspace_state",
-                "revision": revision,
-                "state": state,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "workspace_state",
+                    "revision": revision,
+                    "state": state,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {
             revision,
@@ -489,11 +550,14 @@ fn apply_message(
             let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
                 return;
             };
-            pending_details.push(json!({
-                "type": "shell_hosted_app_state",
-                "revision": revision,
-                "state": state,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "shell_hosted_app_state",
+                    "revision": revision,
+                    "state": state,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
@@ -506,44 +570,50 @@ fn apply_message(
             move_visual,
             resize_visual,
         } => {
-            pending_details.push(json!({
-                "type": "interaction_state",
-                "revision": revision,
-                "pointer_x": pointer_x,
-                "pointer_y": pointer_y,
-                "move_window_id": move_window_id,
-                "resize_window_id": resize_window_id,
-                "move_proxy_window_id": move_proxy_window_id,
-                "move_capture_window_id": move_capture_window_id,
-                "move_rect": move_visual.map(|visual| json!({
-                    "x": visual.x,
-                    "y": visual.y,
-                    "width": visual.width,
-                    "height": visual.height,
-                    "maximized": visual.maximized,
-                    "fullscreen": visual.fullscreen,
-                })),
-                "resize_rect": resize_visual.map(|visual| json!({
-                    "x": visual.x,
-                    "y": visual.y,
-                    "width": visual.width,
-                    "height": visual.height,
-                    "maximized": visual.maximized,
-                    "fullscreen": visual.fullscreen,
-                })),
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "interaction_state",
+                    "revision": revision,
+                    "pointer_x": pointer_x,
+                    "pointer_y": pointer_y,
+                    "move_window_id": move_window_id,
+                    "resize_window_id": resize_window_id,
+                    "move_proxy_window_id": move_proxy_window_id,
+                    "move_capture_window_id": move_capture_window_id,
+                    "move_rect": move_visual.map(|visual| json!({
+                        "x": visual.x,
+                        "y": visual.y,
+                        "width": visual.width,
+                        "height": visual.height,
+                        "maximized": visual.maximized,
+                        "fullscreen": visual.fullscreen,
+                    })),
+                    "resize_rect": resize_visual.map(|visual| json!({
+                        "x": visual.x,
+                        "y": visual.y,
+                        "width": visual.width,
+                        "height": visual.height,
+                        "maximized": visual.maximized,
+                        "fullscreen": visual.fullscreen,
+                    })),
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::TrayHints {
             slot_count,
             slot_w,
             reserved_w,
         } => {
-            pending_details.push(json!({
-                "type": "tray_hints",
-                "slot_count": slot_count,
-                "slot_w": slot_w,
-                "reserved_w": reserved_w,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "tray_hints",
+                    "slot_count": slot_count,
+                    "slot_w": slot_w,
+                    "reserved_w": reserved_w,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
             let items: Vec<Value> = items
@@ -559,24 +629,30 @@ fn apply_message(
                     })
                 })
                 .collect();
-            pending_details.push(json!({
-                "type": "tray_sni",
-                "items": items,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "tray_sni",
+                    "items": items,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::MutationAck {
             domain,
             client_mutation_id,
             status,
-            snapshot_epoch,
+            snapshot_epoch: ack_snapshot_epoch,
         } => {
-            pending_details.push(json!({
-                "type": "mutation_ack",
-                "domain": domain,
-                "client_mutation_id": client_mutation_id,
-                "status": status,
-                "snapshot_epoch": snapshot_epoch,
-            }));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "mutation_ack",
+                    "domain": domain,
+                    "client_mutation_id": client_mutation_id,
+                    "status": status,
+                    "snapshot_epoch": ack_snapshot_epoch,
+                }),
+                message_snapshot_epoch,
+            ));
         }
         shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
             volume_linear_percent_x100,

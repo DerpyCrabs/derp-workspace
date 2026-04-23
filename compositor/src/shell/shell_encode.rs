@@ -8,14 +8,24 @@ pub fn chrome_event_to_shell_message(
             shell_wire::DecodedCompositorToShellMessage::WindowMapped {
                 window_id: info.window_id,
                 surface_id: info.surface_id,
+                stack_z: info.window_id,
                 x: info.x,
                 y: info.y,
                 w: info.width,
                 h: info.height,
+                minimized: info.minimized,
+                maximized: info.maximized,
+                fullscreen: info.fullscreen,
                 title: info.title.clone(),
                 app_id: info.app_id.clone(),
                 client_side_decoration: info.client_side_decoration,
+                shell_flags: 0,
+                output_id: String::new(),
                 output_name: info.output_name.clone(),
+                capture_identifier: String::new(),
+                kind: String::new(),
+                x11_class: String::new(),
+                x11_instance: String::new(),
             }
         }
         ChromeEvent::WindowUnmapped { window_id } => {
@@ -34,6 +44,7 @@ pub fn chrome_event_to_shell_message(
                 maximized: info.maximized,
                 fullscreen: info.fullscreen,
                 client_side_decoration: info.client_side_decoration,
+                output_id: String::new(),
                 output_name: info.output_name.clone(),
             }
         }

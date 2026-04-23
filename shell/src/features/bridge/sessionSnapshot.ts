@@ -35,6 +35,7 @@ export type SavedShellWindow = {
   kind: SavedShellWindowKind
   title: string
   appId: string
+  outputId: string
   outputName: string
   bounds: SavedRect
   minimized: boolean
@@ -48,6 +49,7 @@ export type SavedNativeWindow = {
   windowRef: SessionWindowRef
   title: string
   appId: string
+  outputId: string
   outputName: string
   bounds: SavedRect
   minimized: boolean
@@ -71,6 +73,7 @@ export type SavedMonitorTileEntry = {
 }
 
 export type SavedMonitorTileState = {
+  outputId?: string
   outputName: string
   entries: SavedMonitorTileEntry[]
 }
@@ -95,7 +98,7 @@ export type SessionSnapshot = {
   nativeWindows: SavedNativeWindow[]
 }
 
-const SESSION_STATE_PATH = '/session_state'
+const SESSION_SHELL_SNAPSHOT_PATH = '/session_shell_snapshot'
 const SESSION_SNAPSHOT_VERSION = 1 as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -178,6 +181,7 @@ function sanitizeShellWindow(value: unknown): SavedShellWindow | null {
     kind: sanitizeShellWindowKind(value.kind),
     title: coerceString(value.title),
     appId: coerceString(value.appId),
+    outputId: coerceString(value.outputId),
     outputName: coerceString(value.outputName),
     bounds: sanitizeRect(value.bounds),
     minimized: coerceBool(value.minimized),
@@ -196,6 +200,7 @@ function sanitizeNativeWindow(value: unknown): SavedNativeWindow | null {
     windowRef,
     title: coerceString(value.title),
     appId: coerceString(value.appId),
+    outputId: coerceString(value.outputId),
     outputName: coerceString(value.outputName),
     bounds: sanitizeRect(value.bounds),
     minimized: coerceBool(value.minimized),
@@ -267,6 +272,7 @@ function sanitizeMonitorTileState(value: unknown): SavedMonitorTileState | null 
   if (!isObject(value)) return null
   const outputName = coerceString(value.outputName).trim()
   if (!outputName) return null
+  const outputId = coerceString(value.outputId).trim()
   const entriesRaw = Array.isArray(value.entries) ? value.entries : []
   const entries: SavedMonitorTileEntry[] = []
   const seen = new Set<string>()
@@ -276,7 +282,7 @@ function sanitizeMonitorTileState(value: unknown): SavedMonitorTileState | null 
     seen.add(entry.windowRef)
     entries.push(entry)
   }
-  return entries.length > 0 ? { outputName, entries } : null
+  return entries.length > 0 ? { outputId: outputId || undefined, outputName, entries } : null
 }
 
 function sanitizePreTileGeometry(value: unknown): SavedPreTileGeometry | null {
@@ -385,20 +391,11 @@ export function sanitizeSessionSnapshot(value: unknown): SessionSnapshot {
 export async function loadSessionSnapshot(): Promise<SessionSnapshot> {
   const base = await waitForShellHttpBase()
   if (!base) return defaultSnapshot()
-  const value = await getShellJson(SESSION_STATE_PATH, base)
-  const shellValue = isObject(value) ? value.shell : null
-  return sanitizeSessionSnapshot(shellValue)
+  return sanitizeSessionSnapshot(await getShellJson(SESSION_SHELL_SNAPSHOT_PATH, base))
 }
 
 export async function saveSessionSnapshot(snapshot: SessionSnapshot): Promise<void> {
   const base = await waitForShellHttpBase()
   if (!base) return
-  await postShellJson(
-    SESSION_STATE_PATH,
-    {
-      version: SESSION_SNAPSHOT_VERSION,
-      shell: sanitizeSessionSnapshot(snapshot),
-    },
-    base,
-  )
+  await postShellJson(SESSION_SHELL_SNAPSHOT_PATH, sanitizeSessionSnapshot(snapshot), base)
 }
