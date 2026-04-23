@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
     "e2e:guard": "node e2e/check-boundaries.mjs",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism --maxWorkers=1 --maxConcurrency=1",
     "preview": "vite preview"
   },
   "dependencies": {

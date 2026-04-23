@@ -2055,6 +2055,33 @@ export async function waitForDebugVisible(base: string, timeoutMs = 5000): Promi
   )
 }
 
+type TaskbarToggleControl =
+  | 'taskbar_programs_toggle'
+  | 'taskbar_settings_toggle'
+  | 'taskbar_debug_toggle'
+  | 'taskbar_volume_toggle'
+  | 'taskbar_power_toggle'
+
+async function waitForTaskbarToggle(
+  base: string,
+  key: TaskbarToggleControl,
+  label: string,
+  timeoutMs = 5000,
+): Promise<{ shell: ShellSnapshot; rect: Rect }> {
+  const shell = await waitFor(
+    `wait for taskbar ${label} toggle`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.[key] ? next : null
+    },
+    timeoutMs,
+    50,
+  )
+  const rect = shell.controls?.[key]
+  assert(rect, `missing taskbar ${label} toggle`)
+  return { shell, rect }
+}
+
 export async function waitForProgramsMenuOpen(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
   return waitFor(
     'wait for programs menu open',
@@ -2144,8 +2171,8 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
   if (method === 'keybind') {
     await runKeybind(base, 'open_settings')
   } else {
-    assert(shell.controls?.taskbar_settings_toggle, 'missing taskbar settings toggle')
-    await clickRect(base, shell.controls.taskbar_settings_toggle)
+    const { rect } = await waitForTaskbarToggle(base, 'taskbar_settings_toggle', 'settings')
+    await clickRect(base, rect)
   }
   return waitForWindowRaised(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
@@ -2161,8 +2188,8 @@ export async function openDebug(base: string): Promise<{ compositor: CompositorS
     }
     return waitForDebugVisible(base)
   }
-  assert(shell.controls?.taskbar_debug_toggle, 'missing taskbar debug toggle')
-  await clickRect(base, shell.controls.taskbar_debug_toggle)
+  const { rect } = await waitForTaskbarToggle(base, 'taskbar_debug_toggle', 'debug')
+  await clickRect(base, rect)
   return waitForWindowRaised(base, SHELL_UI_DEBUG_WINDOW_ID)
 }
 
@@ -2211,16 +2238,15 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
   if (shell0.programs_menu_open) return waitForProgramsMenuOpen(base)
 
   const openOnce = async (useKeybind: boolean) => {
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     if (useKeybind) {
       await runKeybind(base, 'toggle_programs_menu')
     } else {
-      assert(shell.controls?.taskbar_programs_toggle, 'missing taskbar programs toggle')
+      const { shell, rect } = await waitForTaskbarToggle(base, 'taskbar_programs_toggle', 'programs')
       if (!shell.shell_keyboard_layout) {
-        const center = rectCenter(shell.controls.taskbar_programs_toggle)
+        const center = rectCenter(rect)
         await movePoint(base, center.x, center.y)
       }
-      await clickRect(base, shell.controls.taskbar_programs_toggle)
+      await clickRect(base, rect)
     }
     return waitForProgramsMenuOpen(base, 2000)
   }
@@ -2239,16 +2265,16 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
 export async function openPowerMenu(base: string): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.power_menu_open) return waitForPowerMenuOpen(base)
-  assert(shell.controls?.taskbar_power_toggle, 'missing taskbar power toggle')
-  await clickRect(base, shell.controls.taskbar_power_toggle)
+  const { rect } = await waitForTaskbarToggle(base, 'taskbar_power_toggle', 'power')
+  await clickRect(base, rect)
   return waitForPowerMenuOpen(base)
 }
 
 export async function openVolumeMenu(base: string): Promise<ShellSnapshot> {
   const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (shell.volume_menu_open) return waitForVolumeMenuOpen(base)
-  assert(shell.controls?.taskbar_volume_toggle, 'missing taskbar volume toggle')
-  await clickRect(base, shell.controls.taskbar_volume_toggle)
+  const { rect } = await waitForTaskbarToggle(base, 'taskbar_volume_toggle', 'volume')
+  await clickRect(base, rect)
   return waitForVolumeMenuOpen(base)
 }
 

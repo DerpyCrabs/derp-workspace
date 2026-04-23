@@ -50,6 +50,22 @@ import {
   sanitizeFileBrowserWindowMemento,
   snapshotFileBrowserWindowMemento,
 } from './fileBrowserState'
+import {
+  buildBreadcrumbs,
+  customIconNameForPath,
+  fileBrowserEntryCanOpenInShell,
+  fileBrowserIconForEntry,
+  fileBrowserPathCanOpenInShell,
+  fileBrowserTitleForPath,
+  formatEntryModified,
+  formatEntrySize,
+  normalizeDisplayName,
+  normalizeFilesSettingsPath,
+  pathWithinRoot,
+  posixBasename,
+  posixDirname,
+  type BreadcrumbRow,
+} from './fileBrowserPresentation'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import {
   peekShellWindowState,
@@ -59,11 +75,7 @@ import {
 import type { ShellContextMenuItem } from '@/host/contextMenu'
 import { FileBrowserContextMenu } from './FileBrowserContextMenu'
 import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
-import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
-import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
-import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import type { OpenWithOption } from '@/apps/default-applications/defaultApplications'
-import Archive from 'lucide-solid/icons/archive'
 import Columns2 from 'lucide-solid/icons/columns-2'
 import ArrowLeft from 'lucide-solid/icons/arrow-left'
 import Clipboard from 'lucide-solid/icons/clipboard'
@@ -72,19 +84,15 @@ import ClipboardPaste from 'lucide-solid/icons/clipboard-paste'
 import ExternalLink from 'lucide-solid/icons/external-link'
 import Eye from 'lucide-solid/icons/eye'
 import EyeOff from 'lucide-solid/icons/eye-off'
-import File from 'lucide-solid/icons/file'
 import FilePlus from 'lucide-solid/icons/file-plus'
-import FileText from 'lucide-solid/icons/file-text'
 import Folder from 'lucide-solid/icons/folder'
 import FolderInput from 'lucide-solid/icons/folder-input'
 import FolderPlus from 'lucide-solid/icons/folder-plus'
 import HardDrive from 'lucide-solid/icons/hard-drive'
 import Home from 'lucide-solid/icons/home'
-import Image from 'lucide-solid/icons/image'
 import LayoutGrid from 'lucide-solid/icons/layout-grid'
 import List from 'lucide-solid/icons/list'
 import MoreHorizontal from 'lucide-solid/icons/more-horizontal'
-import Music from 'lucide-solid/icons/music'
 import Paintbrush from 'lucide-solid/icons/paintbrush'
 import Pencil from 'lucide-solid/icons/pencil'
 import RefreshCw from 'lucide-solid/icons/refresh-cw'
@@ -92,7 +100,6 @@ import Scissors from 'lucide-solid/icons/scissors'
 import Star from 'lucide-solid/icons/star'
 import Trash2 from 'lucide-solid/icons/trash-2'
 import Upload from 'lucide-solid/icons/upload'
-import Video from 'lucide-solid/icons/video'
 import Workflow from 'lucide-solid/icons/workflow'
 
 type FileBrowserWindowProps = {
@@ -134,84 +141,6 @@ type FileBrowserWindowProps = {
   onClearInTabDropPreview?: () => void
 }
 
-type Breadcrumb = {
-  path: string
-  label: string
-}
-
-type BreadcrumbRow =
-  | { kind: 'crumb'; crumb: Breadcrumb; index: number; current: boolean }
-  | { kind: 'ellipsis'; hidden: Breadcrumb[] }
-
-const dateFormatter = new Intl.DateTimeFormat([], {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-})
-
-function pathWithinRoot(path: string | null, rootPath: string): boolean {
-  if (!path) return false
-  if (path === rootPath) return true
-  return rootPath === '/' ? path.startsWith('/') : path.startsWith(`${rootPath}/`)
-}
-
-function formatEntrySize(size: number | null): string {
-  if (size === null) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = size
-  let unit = units[0]
-  for (let index = 1; index < units.length && value >= 1024; index += 1) {
-    value /= 1024
-    unit = units[index]
-  }
-  return value >= 10 || unit === 'B' ? `${Math.round(value)} ${unit}` : `${value.toFixed(1)} ${unit}`
-}
-
-function formatEntryModified(modifiedMs: number | null): string {
-  if (modifiedMs === null) return '—'
-  try {
-    return dateFormatter.format(new Date(modifiedMs))
-  } catch {
-    return '—'
-  }
-}
-
-function normalizeFilesSettingsPath(path: string): string {
-  return path.replace(/\\/g, '/')
-}
-
-function normalizeDisplayName(entry: FileBrowserEntry): string {
-  return entry.name || entry.path
-}
-
-function fileBrowserEntryCanOpenInShell(entry: FileBrowserEntry): boolean {
-  if (fileBrowserEntryIsDirectory(entry)) return true
-  return (
-    isImageFilePath(entry.path) ||
-    isVideoFilePath(entry.path) ||
-    isTextEditorFilePath(entry.path) ||
-    isPdfFilePath(entry.path)
-  )
-}
-
-function customIconNameForPath(path: string, customIcons: Record<string, string>): string | null {
-  return customIcons[path] ?? customIcons[normalizeFilesSettingsPath(path)] ?? null
-}
-
-function fileBrowserIconForEntry(entry: FileBrowserEntry, customIcons: Record<string, string>, className = 'h-4 w-4') {
-  const customIcon = renderFileBrowserCustomIcon(customIconNameForPath(entry.path, customIcons), className)
-  if (customIcon) return customIcon
-  if (fileBrowserEntryIsDirectory(entry)) return <Folder class={className} stroke-width={2} />
-  const name = normalizeDisplayName(entry).toLowerCase()
-  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name)) return <Image class={className} stroke-width={2} />
-  if (/\.(mp4|webm|mov|mkv|avi|m4v)$/.test(name)) return <Video class={className} stroke-width={2} />
-  if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/.test(name)) return <Music class={className} stroke-width={2} />
-  if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(name)) return <Archive class={className} stroke-width={2} />
-  if (/\.(txt|md|json|toml|yaml|yml|rs|ts|tsx|js|jsx|css|html|pdf)$/.test(name)) return <FileText class={className} stroke-width={2} />
-  return <File class={className} stroke-width={2} />
-}
-
 function menuSeparator(): ShellContextMenuItem {
   return { separator: true, label: '', action: () => undefined }
 }
@@ -221,62 +150,8 @@ function tinyIcon(icon: typeof Folder) {
   return <Icon class="h-4 w-4" stroke-width={2} />
 }
 
-function rootLabelForPath(path: string, roots: readonly FileBrowserRoot[]): string | null {
-  const matches = roots
-    .filter((root) => pathWithinRoot(path, root.path))
-    .sort((a, b) => b.path.length - a.path.length)
-  return matches[0]?.label ?? null
-}
-
-function buildBreadcrumbs(path: string | null, roots: readonly FileBrowserRoot[]): Breadcrumb[] {
-  if (!path) return []
-  const rootLabel = rootLabelForPath(path, roots)
-  const matchingRoot = roots
-    .filter((root) => pathWithinRoot(path, root.path))
-    .sort((a, b) => b.path.length - a.path.length)[0]
-  if (matchingRoot) {
-    const out: Breadcrumb[] = [{ path: matchingRoot.path, label: rootLabel ?? matchingRoot.label }]
-    const suffix = path.slice(matchingRoot.path.length).replace(/^\/+/, '')
-    if (!suffix) return out
-    let current = matchingRoot.path.replace(/\/+$/, '') || '/'
-    for (const part of suffix.split('/')) {
-      current = current === '/' ? `/${part}` : `${current}/${part}`
-      out.push({ path: current, label: part })
-    }
-    return out
-  }
-  if (path === '/') return [{ path: '/', label: 'Computer' }]
-  const out: Breadcrumb[] = [{ path: '/', label: 'Computer' }]
-  let current = ''
-  for (const part of path.split('/').filter(Boolean)) {
-    current += `/${part}`
-    out.push({ path: current, label: part })
-  }
-  return out
-}
-
 function clipboardCanWritePath(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
-}
-
-function posixDirname(p: string): string {
-  const norm = p.replace(/\/+$/, '') || '/'
-  const i = norm.lastIndexOf('/')
-  if (i <= 0) return '/'
-  return norm.slice(0, i) || '/'
-}
-
-function posixBasename(p: string): string {
-  const norm = p.replace(/\/+$/, '') || '/'
-  const i = norm.lastIndexOf('/')
-  return norm.slice(i + 1) || norm
-}
-
-function fileBrowserTitleForPath(path: string | null): string {
-  if (!path) return 'Files'
-  if (path === FILE_BROWSER_FAVORITES_PATH) return 'Favorites'
-  const base = posixBasename(path)
-  return base === '/' ? 'Files' : base
 }
 
 type FileBrowserUiDialog =
@@ -472,8 +347,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   function openFilePathWithTarget(path: string, target: FileBrowserDefaultOpenTarget) {
     const directory = state.activePath ?? ''
     const context = { directory, showHidden: state.showHidden, isDirectory: false }
-    const shellOpenable =
-      isImageFilePath(path) || isVideoFilePath(path) || isTextEditorFilePath(path) || isPdfFilePath(path)
+    const shellOpenable = fileBrowserPathCanOpenInShell(path)
     if (target === 'tab' && shellOpenable && props.onOpenInTab) {
       props.onOpenInTab(path, context)
       return
