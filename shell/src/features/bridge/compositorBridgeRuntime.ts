@@ -706,6 +706,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     options.setCompositorSnapshotSequence(decoded.sequence)
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE =
       decoded.sequence
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
+      decoded.domainFlags
     applyCompositorSnapshot(decoded.details)
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })

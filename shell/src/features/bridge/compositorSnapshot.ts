@@ -26,6 +26,7 @@ const utf8 = new TextDecoder()
 
 type SnapshotDecodeResult = {
   sequence: number
+  domainFlags: number
   details: DerpShellDetail[]
 }
 
@@ -396,6 +397,7 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
   const magic = view.getUint32(0, true)
   const abiVersion = view.getUint32(4, true)
   const payloadLen = view.getUint32(8, true)
+  const domainFlags = view.getUint32(12, true)
   const sequence = view.getBigUint64(16, true)
   if (
     magic !== SNAPSHOT_MAGIC ||
@@ -464,6 +466,7 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
   }
   return {
     sequence: Number(sequence),
+    domainFlags,
     details,
   }
 }

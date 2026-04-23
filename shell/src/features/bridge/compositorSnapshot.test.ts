@@ -91,7 +91,7 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(0x44525053),
       ...u32(6),
       ...u32(payload.length),
-      ...u32(0),
+      ...u32((1 << 0) | (1 << 1) | (1 << 2)),
       ...u64(2n),
       ...u64(0n),
       ...payload,
@@ -101,6 +101,7 @@ describe('decodeCompositorSnapshot', () => {
 
     expect(decoded).toEqual({
       sequence: 2,
+      domainFlags: 7,
       details: [
         {
           type: 'output_geometry',
@@ -180,6 +181,7 @@ describe('decodeCompositorSnapshot', () => {
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
+      domainFlags: 0,
       details: [
         {
           type: 'output_layout',
@@ -242,6 +244,7 @@ describe('decodeCompositorSnapshot', () => {
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
+      domainFlags: 0,
       details: [
         {
           type: 'interaction_state',
@@ -287,6 +290,7 @@ describe('decodeCompositorSnapshot', () => {
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
+      domainFlags: 0,
       details: [
         {
           type: 'native_drag_preview',
@@ -317,6 +321,7 @@ describe('decodeCompositorSnapshot', () => {
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
+      domainFlags: 0,
       details: [
         {
           type: 'native_drag_preview',

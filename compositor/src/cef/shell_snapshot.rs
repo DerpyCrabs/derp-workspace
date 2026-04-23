@@ -430,7 +430,7 @@ impl SharedShellSnapshotWriter {
             last_payload: None,
             authoritative: SnapshotAuthoritativeState::default(),
         };
-        this.publish_payload_at(0, Vec::new())?;
+        this.publish_payload_at(0, 0, Vec::new())?;
         Ok(this)
     }
 
@@ -443,15 +443,25 @@ impl SharedShellSnapshotWriter {
         sequence: u64,
         messages: &[shell_wire::DecodedCompositorToShellMessage],
     ) -> Result<bool, String> {
+        let dirty_domains = snapshot_dirty_domains(messages);
         for message in messages {
             self.authoritative.apply(message);
         }
         let authoritative_messages = self.authoritative.messages();
         warn_snapshot_invariants(&authoritative_messages);
-        self.publish_payload_at(sequence, encode_payload_messages(&authoritative_messages)?)
+        self.publish_payload_at(
+            sequence,
+            dirty_domains,
+            encode_payload_messages(&authoritative_messages)?,
+        )
     }
 
-    fn publish_payload_at(&mut self, sequence: u64, payload: Vec<u8>) -> Result<bool, String> {
+    fn publish_payload_at(
+        &mut self,
+        sequence: u64,
+        flags: u32,
+        payload: Vec<u8>,
+    ) -> Result<bool, String> {
         if self.last_payload.as_deref() == Some(payload.as_slice()) {
             return Ok(false);
         }
@@ -478,7 +488,7 @@ impl SharedShellSnapshotWriter {
         };
         let start_seq = if end_seq == 0 { 1 } else { end_seq - 1 };
         let buf = self.mmap.as_slice_mut();
-        shell_wire::write_shared_snapshot_header(&mut buf[..header_len], start_seq, 0, 0)?;
+        shell_wire::write_shared_snapshot_header(&mut buf[..header_len], start_seq, 0, flags)?;
         fence(Ordering::Release);
         buf[header_len..header_len + payload.len()].copy_from_slice(&payload);
         fence(Ordering::Release);
@@ -486,7 +496,7 @@ impl SharedShellSnapshotWriter {
             &mut buf[..header_len],
             end_seq,
             payload.len() as u32,
-            0,
+            flags,
         )?;
         fence(Ordering::Release);
         self.sequence = end_seq;
@@ -503,6 +513,50 @@ fn encode_payload_messages(
         append_snapshot_message(&mut payload, msg)?;
     }
     Ok(payload)
+}
+
+fn snapshot_dirty_domains(messages: &[shell_wire::DecodedCompositorToShellMessage]) -> u32 {
+    let mut flags = 0u32;
+    for message in messages {
+        flags |= match message {
+            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+            }
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
+            }
+            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
+            }
+            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
+            }
+            shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION
+            }
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
+            }
+            shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_TRAY
+            }
+            _ => 0,
+        };
+    }
+    flags
 }
 
 fn extend_snapshot_packet(
@@ -971,5 +1025,42 @@ pub fn snapshot_read_if_changed(
             return Ok(None);
         }
         Ok(Some(out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot_dirty_domains;
+
+    #[test]
+    fn snapshot_dirty_domains_groups_transaction_changes() {
+        let flags = snapshot_dirty_domains(&[
+            shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
+                logical_w: 100,
+                logical_h: 100,
+                physical_w: 100,
+                physical_h: 100,
+            },
+            shell_wire::DecodedCompositorToShellMessage::WindowState {
+                window_id: 7,
+                minimized: true,
+            },
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+                surface_id: Some(9),
+                window_id: Some(7),
+            },
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+                revision: 3,
+                state_json: "{}".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            flags,
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
+        );
     }
 }
