@@ -10,6 +10,7 @@ export const X11_XTERM_APP_ID = 'derp-x11-xterm'
 export const SHELL_TEST_APP_ID = 'derp.test-shell'
 export const SHELL_UI_DEBUG_WINDOW_ID = 9001
 export const SHELL_UI_SETTINGS_WINDOW_ID = 9002
+export const SHELL_UI_PORTAL_PICKER_WINDOW_ID = 9004
 export const RED_NATIVE_TITLE = 'Derp Native Red'
 export const GREEN_NATIVE_TITLE = 'Derp Native Green'
 export const CRASH_NATIVE_TITLE = 'Derp Native Crash Probe'
@@ -236,6 +237,7 @@ export interface ShellWindowControls {
   dragging?: boolean
   hidden?: boolean
   frame_opacity?: number | null
+  frame_z?: number | null
   native_drag_preview_rect?: Rect | null
   native_drag_preview_generation?: number | null
   native_drag_preview_loaded?: boolean
@@ -312,6 +314,7 @@ export interface ShellControls {
   snap_picker_hgutter_col0?: Rect | null
   snap_picker_right_two_thirds?: Rect | null
   snap_picker_top_two_thirds_left?: Rect | null
+  snap_picker_hover_overlay?: Rect | null
   snap_picker_custom_zone?: Rect | null
   [key: string]: Rect | null | undefined
 }
@@ -428,6 +431,7 @@ export interface ShellSnapshot {
   snap_picker_window_id?: number | null
   snap_picker_source?: string | null
   snap_picker_monitor?: string | null
+  snap_picker_z?: number | null
   snap_preview_visible?: boolean
   snap_preview_rect?: Rect | null
   snap_hover_span?: AssistSpanSnapshot | null

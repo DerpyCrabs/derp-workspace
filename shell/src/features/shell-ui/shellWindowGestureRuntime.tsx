@@ -33,6 +33,7 @@ import {
   type CustomLayout,
 } from '@/features/tiling/customLayouts'
 import { SnapAssistPicker, type SnapPickerSelection } from '@/features/tiling/SnapAssistPicker'
+import { assistSpanFromMasterGridPoint } from '@/features/tiling/SnapAssistMasterGrid'
 import {
   hitTestSnapZoneGlobal,
   monitorTileFrameAreaGlobal,
@@ -56,7 +57,7 @@ import {
 } from '@/features/tiling/tilingConfig'
 import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_UI_PORTAL_PICKER_WINDOW_ID, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type {
   AssistOverlayState,
   LayoutScreen,
@@ -143,6 +144,7 @@ type ShellWindowGestureRuntimeOptions = {
 export function createShellWindowGestureRuntime(options: ShellWindowGestureRuntimeOptions) {
   const [assistOverlay, setAssistOverlay] = createSignal<AssistOverlayState | null>(null)
   const [snapAssistPicker, setSnapAssistPicker] = createSignal<SnapAssistPickerState | null>(null)
+  const [snapPickerHoverSelection, setSnapPickerHoverSelection] = createSignal<SnapPickerSelection | null>(null)
   const [dragWindowId, setDragWindowId] = createSignal<number | null>(null)
   const [dragWindowMoved, setDragWindowMoved] = createSignal(false)
   const dragPreTileSnapshot = new Map<number, WindowRect>()
@@ -152,7 +154,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   let activeSnapScreen: LayoutScreen | null = null
   let activeSnapWindowId: number | null = null
   let activeSnapLayout: MonitorSnapLayout | null = null
-  let activeSnapShape: AssistGridShape | null = null
   let tilePreviewRaf = 0
   let lastTilePreviewKey = ''
   let shellWindowDrag: {
@@ -216,7 +217,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     activeSnapScreen = null
     activeSnapWindowId = null
     activeSnapLayout = null
-    activeSnapShape = null
+    setSnapPickerHoverSelection(null)
   }
 
   function clearTilePreviewWire() {
@@ -278,14 +279,12 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     zone: SnapZone,
     previewRect: TileRect,
     snapLayout: MonitorSnapLayout,
-    shape: AssistGridShape | null,
   ) {
     const origin = options.layoutCanvasOrigin()
     activeSnapZone = zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
     activeSnapLayout = snapLayout
-    activeSnapShape = shape
     activeSnapPreviewGlobal = { ...previewRect }
     activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
       previewRect.x,
@@ -301,11 +300,11 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       clearSnapAssistSelection()
       return
     }
+    setSnapPickerHoverSelection(selection)
     activeSnapZone = selection.zone
     activeSnapScreen = context.screen
     activeSnapWindowId = context.windowId
     activeSnapLayout = selection.snapLayout
-    activeSnapShape = selection.shape
     activeSnapPreviewGlobal = { ...selection.previewRect }
     const origin = options.layoutCanvasOrigin()
     activeSnapPreviewCanvas = rectGlobalToCanvasLocal(
@@ -354,8 +353,14 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       return
     }
     const { zone, previewRect } = snapZoneAndPreviewFromAssistSpan(span, shape, context.workGlobal)
-    applySnapAssistZonePreview(context, zone, previewRect, assistMonitorSnapLayout(shape), shape)
-    activeSnapShape = shape
+    setSnapPickerHoverSelection({
+      zone,
+      previewRect,
+      snapLayout: assistMonitorSnapLayout(shape),
+      shape,
+      hoverSpan: span,
+    })
+    applySnapAssistZonePreview(context, zone, previewRect, assistMonitorSnapLayout(shape))
     if (showOverlay) {
       setAssistOverlayState({
         kind: 'assist',
@@ -386,7 +391,8 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       workRect,
       options.occupiedSnapZonesOnMonitor(context.screen, context.windowId),
     )
-    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, context.assistShape)
+    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout)
+    setSnapPickerHoverSelection(null)
     setAssistOverlayState(null)
     scheduleTilePreviewSync()
   }
@@ -411,7 +417,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       clearSnapAssistSelection()
       return
     }
-    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout, null)
+    applySnapAssistZonePreview(context, zone, previewRect, context.snapLayout)
     if (showOverlay) {
       setAssistOverlayState({
         kind: 'custom',
@@ -513,6 +519,33 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     }
   }
 
+  function assistGridShapeFromValue(value: string | null): AssistGridShape | null {
+    switch (value) {
+      case '3x2':
+      case '3x3':
+      case '2x2':
+      case '2x3':
+        return value
+      default:
+        return null
+    }
+  }
+
+  function assistSpanFromPickerPoint(
+    target: EventTarget | null,
+    pickerEl: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): AssistGridSpan | null {
+    if (!(target instanceof HTMLElement)) return null
+    const gridEl = target.closest('[data-assist-master-grid]')
+    if (!(gridEl instanceof HTMLElement) || !pickerEl.contains(gridEl)) return null
+    const shape = assistGridShapeFromValue(gridEl.getAttribute('data-assist-master-grid'))
+    if (!shape) return null
+    const gutterPx = Number(gridEl.getAttribute('data-assist-master-grid-gutter-px'))
+    return assistSpanFromMasterGridPoint(gridEl, clientX, clientY, shape, Number.isFinite(gutterPx) ? gutterPx : 0)
+  }
+
   function customSelectionFromPickerTarget(
     target: EventTarget | null,
     context: SnapAssistContext,
@@ -549,6 +582,11 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   ) {
     const targets = document.elementsFromPoint(clientX, clientY)
     for (const target of targets) {
+      const pointSpan = assistSpanFromPickerPoint(target, pickerEl, clientX, clientY)
+      if (pointSpan) {
+        updateSnapAssistFromSpan(context, pointSpan)
+        return true
+      }
       const span = assistSpanFromPickerTarget(target, pickerEl)
       if (span) {
         updateSnapAssistFromSpan(context, span)
@@ -1118,6 +1156,15 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   function SnapAssistPickerLayer() {
     const main = options.getMainRef()
     if (!main) return null
+    const getShellUiMeasureEnv = () => {
+      const output = options.outputGeom()
+      if (!output) return null
+      return {
+        main,
+        outputGeom: output,
+        origin: options.layoutCanvasOrigin(),
+      }
+    }
     return (
       <Show when={snapAssistPicker()} keyed>
         {(picker) => (
@@ -1135,21 +1182,11 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
               assistMonitorSnapLayout('3x2')
             }
             customLayouts={resolveSnapAssistContext(picker.windowId, picker.monitorName)?.customLayouts ?? []}
-            hoverSelection={
-              activeSnapZone && activeSnapPreviewGlobal
-                ? {
-                    zone: activeSnapZone,
-                    previewRect: activeSnapPreviewGlobal,
-                    snapLayout: activeSnapLayout ?? assistMonitorSnapLayout(activeSnapShape ?? '3x2'),
-                    shape: activeSnapShape,
-                    hoverSpan: (() => {
-                      const overlay = assistOverlay()
-                      return overlay?.kind === 'assist' ? overlay.hoverSpan : null
-                    })(),
-                  }
-                : null
-            }
+            hoverSelection={snapPickerHoverSelection()}
             autoHover={picker.autoHover}
+            shellUiWindowId={SHELL_UI_PORTAL_PICKER_WINDOW_ID}
+            shellUiWindowZ={1100000}
+            getShellUiMeasureEnv={getShellUiMeasureEnv}
             onHoverSelectionChange={(selection) => {
               const context = resolveSnapAssistContext(picker.windowId, picker.monitorName)
               if (!context) {

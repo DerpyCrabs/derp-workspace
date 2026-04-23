@@ -1573,7 +1573,10 @@ impl CompositorState {
     fn shell_hosted_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
         self.shell_visible_placements()
             .into_iter()
-            .filter(|w| self.window_registry.is_shell_hosted(w.id))
+            .filter(|w| {
+                self.window_registry.is_shell_hosted(w.id)
+                    || self.window_registry.window_info(w.id).is_none()
+            })
             .collect()
     }
 
@@ -1695,7 +1698,7 @@ impl CompositorState {
             let Some(gh) = cursor.read_u32() else {
                 return;
             };
-            let Some(_) = cursor.read_u32() else {
+            let Some(sent_z) = cursor.read_u32() else {
                 return;
             };
             let Some(_) = cursor.read_u32() else {
@@ -1704,13 +1707,15 @@ impl CompositorState {
             if id == 0 || gw == 0 || gh == 0 {
                 continue;
             }
+            let stack_z = self.shell_window_stack_z(id);
+            let z = if stack_z > 0 { stack_z } else { sent_z };
             rows.push((
                 id,
                 gx,
                 gy,
                 gw as i32,
                 gh as i32,
-                self.shell_window_stack_z(id),
+                z,
             ));
         }
         rows.sort_by(|a, b| a.5.cmp(&b.5).then_with(|| a.0.cmp(&b.0)));

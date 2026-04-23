@@ -1,6 +1,7 @@
 import {
   BTN_LEFT,
   BTN_RIGHT,
+  SHELL_UI_PORTAL_PICKER_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
   assert,
@@ -251,6 +252,27 @@ async function waitForPickerClosed(base: string, windowId: number): Promise<Shel
     },
     4000,
     100,
+  )
+}
+
+async function waitForPickerAboveWindow(base: string, shell: ShellSnapshot, windowId: number) {
+  const root = assertRectMinSize('picker root', shell.controls?.snap_picker_root, 48)
+  return waitFor(
+    'wait for snap picker above dragged window',
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const window = compositorWindowById(compositor, windowId)
+      const placement = compositor.shell_ui_windows?.find((entry) => entry.id === SHELL_UI_PORTAL_PICKER_WINDOW_ID)
+      if (!window || !placement) return null
+      if (placement.z <= (window.stack_z ?? 0)) return null
+      if (Math.abs(placement.global.x - root.global_x) > 3) return null
+      if (Math.abs(placement.global.y - root.global_y) > 3) return null
+      if (Math.abs(placement.global.width - root.width) > 3) return null
+      if (Math.abs(placement.global.height - root.height) > 3) return null
+      return { compositor, placement, window }
+    },
+    2000,
+    16,
   )
 }
 
@@ -523,6 +545,68 @@ export default defineGroup(import.meta.url, ({ test }) => {
         ),
       )
       await writeJsonArtifact('snap-assist-picker-native.json', snapped)
+    } finally {
+      await pointerButton(base, 0x110, 'release')
+      await keyAction(base, SUPER_KEYCODE, 'release')
+    }
+  })
+
+  test('super-drag picker stays above the dragged window and hovers non-custom divider spans', async ({ base, state }) => {
+    await selectSettingsSnapLayout(base, '3x2')
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    const focused = await focusNativeWindow(base, redId)
+    const controls = windowControls(focused.shell, redId)
+    assert(controls?.titlebar, 'missing red titlebar rect')
+    const titlebarCenter = rectGlobalCenter(controls.titlebar)
+    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
+    await pointerButton(base, 0x110, 'press')
+    await keyAction(base, SUPER_KEYCODE, 'press')
+    try {
+      const pickerOpen = await openPickerWhileDragging(base, redId)
+      await waitForPickerAboveWindow(base, pickerOpen, redId)
+      const draggingControls = windowControls(pickerOpen, redId)
+      assert(
+        (pickerOpen.snap_picker_z ?? 0) > (draggingControls?.frame_z ?? 0),
+        `snap picker z ${pickerOpen.snap_picker_z ?? 'missing'} must be above dragging frame z ${draggingControls?.frame_z ?? 'missing'}`,
+      )
+      const { rect: topTwoThirds } = await revealVisiblePickerControl(
+        base,
+        redId,
+        'snap_picker_top_two_thirds_left',
+        'drag picker 3x3 top two-thirds left divider',
+      )
+      const point = {
+        x: topTwoThirds.global_x + topTwoThirds.width / 2,
+        y: topTwoThirds.global_y + topTwoThirds.height + 8,
+      }
+      await movePoint(base, point.x, point.y)
+      const hovered = await waitFor(
+        'wait for drag picker expanded non-custom hover',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const span = shell.snap_hover_span
+          return span?.gridCols === 3 &&
+            span.gridRows === 3 &&
+            span.gc0 === 0 &&
+            span.gc1 === 0 &&
+            span.gr0 === 0 &&
+            span.gr1 === 1 &&
+            shell.controls?.snap_picker_hover_overlay
+            ? shell
+            : null
+        },
+        2000,
+        16,
+      )
+      const hoverScreenshot = await postJson<{ path?: string }>(base, '/test/screenshot', {})
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      await writeJsonArtifact('snap-assist-super-drag-picker-hover-visual.json', {
+        hoverScreenshot,
+        shell: hovered,
+        pickerPlacement: compositor.shell_ui_windows?.find((entry) => entry.id === SHELL_UI_PORTAL_PICKER_WINDOW_ID) ?? null,
+        draggedWindow: compositorWindowById(compositor, redId),
+      })
     } finally {
       await pointerButton(base, 0x110, 'release')
       await keyAction(base, SUPER_KEYCODE, 'release')

@@ -1,4 +1,4 @@
-import { Index, createMemo } from 'solid-js'
+import { Index, Show, createMemo } from 'solid-js'
 import {
   assistPickMatchesGridSpan,
   assistShapeToDims,
@@ -69,6 +69,70 @@ function buildPlacements(cols: number, rows: number): Placement[] {
   return out
 }
 
+function axisSpanFromPointer(
+  value: number,
+  total: number,
+  count: number,
+  gutterPx: number,
+): { i0: number; i1: number } | null {
+  if (count <= 0 || total <= 0) return null
+  const g = Math.max(0, gutterPx)
+  const cell = (total - (count - 1) * g) / count
+  if (cell <= 0) return null
+  const v = Math.max(0, Math.min(value, total - 1e-6))
+  const band = Math.max(g, Math.min(38, cell * 1.7))
+  for (let i = 0; i < count - 1; i += 1) {
+    const center = (i + 1) * cell + i * g + g / 2
+    if (Math.abs(v - center) <= band / 2) {
+      return { i0: i, i1: i + 1 }
+    }
+  }
+  const pitch = cell + g
+  let index = Math.max(0, Math.min(count - 1, Math.floor(v / pitch)))
+  const start = index * pitch
+  if (v > start + cell && index < count - 1) {
+    index = v < start + cell + g / 2 ? index : index + 1
+  }
+  return { i0: index, i1: index }
+}
+
+function parseCssPx(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function assistSpanFromMasterGridPoint(
+  grid: HTMLElement,
+  clientX: number,
+  clientY: number,
+  shape: AssistGridShape,
+  gutterPx: number,
+): AssistGridSpan | null {
+  const rect = grid.getBoundingClientRect()
+  const style = getComputedStyle(grid)
+  const left = parseCssPx(style.paddingLeft)
+  const right = parseCssPx(style.paddingRight)
+  const top = parseCssPx(style.paddingTop)
+  const bottom = parseCssPx(style.paddingBottom)
+  const width = rect.width - left - right
+  const height = rect.height - top - bottom
+  const x = clientX - rect.left - left
+  const y = clientY - rect.top - top
+  if (x < 0 || y < 0 || x > width || y > height) return null
+  const { cols, rows } = assistShapeToDims(shape)
+  const xs = axisSpanFromPointer(x, width, cols, gutterPx)
+  const ys = axisSpanFromPointer(y, height, rows, gutterPx)
+  if (!xs || !ys) return null
+  return {
+    gridCols: cols,
+    gridRows: rows,
+    gc0: xs.i0,
+    gc1: xs.i1,
+    gr0: ys.i0,
+    gr1: ys.i1,
+  }
+}
+
 function defaultShapeLabel(shape: AssistGridShape): string {
   switch (shape) {
     case '3x2':
@@ -118,6 +182,8 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
     return assistSpanToGridLines(h)
   })
   const title = createMemo(() => props.layoutLabel ?? defaultShapeLabel(props.shape))
+  const spanFromEvent = (event: PointerEvent) =>
+    assistSpanFromMasterGridPoint(event.currentTarget as HTMLElement, event.clientX, event.clientY, props.shape, props.gutterPx)
 
   return (
     <div
@@ -128,11 +194,23 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
         {title()}
       </div>
       <div
-        data-assist-master-grid
+        data-assist-master-grid={props.shape}
+        data-assist-master-grid-gutter-px={String(props.gutterPx)}
         class={`relative grid min-h-0 min-w-0 rounded-md border border-(--shell-border) bg-(--shell-surface-inset) p-1 shadow-md ${props.pickMode ? 'h-[112px]' : 'flex-1'}`}
         style={{
           'grid-template-columns': gridTemplate().colT,
           'grid-template-rows': gridTemplate().rowT,
+        }}
+        onPointerMove={(event) => {
+          if (!props.pickMode) return
+          props.onHoverSpan?.(spanFromEvent(event))
+        }}
+        onPointerDown={(event) => {
+          if (!props.pickMode) return
+          const span = spanFromEvent(event)
+          if (!span) return
+          event.preventDefault()
+          props.onPickSpan?.(span)
         }}
         onPointerLeave={() => props.onHoverSpan?.(null)}
       >
@@ -203,10 +281,6 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
                   'grid-row': String(p().gridRow),
                   ...(p().zIndex != null ? { 'z-index': String(p().zIndex) } : {}),
                 }}
-                onPointerDown={(event) => {
-                  event.preventDefault()
-                  props.onPickSpan?.(p().span)
-                }}
                 onPointerEnter={() => props.onHoverSpan?.(p().span)}
                 onFocus={() => props.onHoverSpan?.(p().span)}
                 onClick={(event) => {
@@ -217,19 +291,18 @@ export function SnapAssistMasterGrid(props: SnapAssistMasterGridProps) {
             )
           }}
         </Index>
-        {(() => {
-          const L = hoverLines()
-          if (!L) return null
-          return (
+        <Show when={hoverLines()} keyed>
+          {(L) => (
             <div
+              data-assist-grid-hover-overlay
               class="pointer-events-none z-20 rounded-md border-2 border-(--shell-preview-outline) bg-(--shell-accent-soft) shadow-md ring-2 ring-(--shell-preview-outline)"
               style={{
                 'grid-column': `${L.colStart} / ${L.colEnd}`,
                 'grid-row': `${L.rowStart} / ${L.rowEnd}`,
               }}
             />
-          )
-        })()}
+          )}
+        </Show>
       </div>
     </div>
   )

@@ -224,7 +224,7 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
       }}
       data-shell-snap-picker
       data-tiling-picker
-      class="fixed z-460200 max-h-[min(88vh,760px)] w-[min(360px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-(--shell-border) bg-(--shell-surface-panel) p-3 shadow-2xl"
+      class="fixed z-[1100000] max-h-[min(88vh,760px)] w-[min(360px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-(--shell-border) bg-(--shell-surface-panel) p-3 shadow-2xl"
       style={{
         left: `${position().left}px`,
         top: `${position().top}px`,

@@ -413,6 +413,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         const opacity = Number.parseFloat(getComputedStyle(frame).opacity)
         return Number.isFinite(opacity) ? opacity : null
       })(),
+      frame_z: (() => {
+        const frame = cache.queryAttr('data-shell-window-frame', window.window_id)
+        if (!frame) return null
+        const z = Number.parseInt(getComputedStyle(frame).zIndex, 10)
+        return Number.isFinite(z) ? z : null
+      })(),
       native_drag_preview_rect: snapshotRect(nativeDragPreviewEl, args.origin),
       native_drag_preview_generation: (() => {
         const raw = nativeDragPreviewEl?.getAttribute('data-shell-native-drag-preview-generation')
@@ -704,6 +710,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     snap_picker_window_id: args.snapAssistPicker?.windowId ?? null,
     snap_picker_source: args.snapAssistPicker?.source ?? null,
     snap_picker_monitor: args.snapAssistPicker?.monitorName ?? null,
+    snap_picker_z: (() => {
+      const picker = cache.query('[data-shell-snap-picker]')
+      if (!picker) return null
+      const z = Number.parseInt(getComputedStyle(picker).zIndex, 10)
+      return Number.isFinite(z) ? z : null
+    })(),
     snap_preview_visible: args.activeSnapPreviewCanvas !== null,
     snap_preview_rect: snapPreviewRect,
     snap_hover_span: args.assistOverlayHoverSpan,
@@ -890,6 +902,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       snap_picker_top_two_thirds_left: queryLargestRect(
         cache,
         '[data-shell-snap-picker] [data-assist-mini-grid="3x3"] [data-assist-grid-span][data-grid-cols="3"][data-gc0="0"][data-gc1="0"][data-gr0="0"][data-gr1="1"]',
+        args.origin,
+      ),
+      snap_picker_hover_overlay: queryRect(
+        cache,
+        '[data-shell-snap-picker] [data-assist-grid-hover-overlay]',
         args.origin,
       ),
       snap_picker_custom_zone: queryLargestRect(
