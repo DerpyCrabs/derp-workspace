@@ -375,6 +375,14 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     const hit = args.document.elementFromPoint(args.pointerClient.x, args.pointerClient.y)
     return !!(hit && windowInteractionCaptureEl.contains(hit))
   })()
+  const customLayoutOverlayEl = cache.query('[data-custom-layout-overlay]')
+  const customLayoutOverlayBlocksPointer =
+    customLayoutOverlayEl instanceof HTMLElement && getComputedStyle(customLayoutOverlayEl).pointerEvents !== 'none'
+  const customLayoutOverlayHitPointer = (() => {
+    if (!customLayoutOverlayEl || !args.pointerClient) return null
+    const hit = args.document.elementFromPoint(args.pointerClient.x, args.pointerClient.y)
+    return !!(hit && customLayoutOverlayEl.contains(hit))
+  })()
 
   const stackOrderedWindows = [...args.windows].sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
   const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-monitor').map((taskbarEl) => ({
@@ -740,6 +748,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     window_interaction_capture: windowInteractionCaptureRect,
     window_interaction_capture_blocks_pointer: windowInteractionCaptureBlocksPointer,
     window_interaction_capture_hit_pointer: windowInteractionCaptureHitPointer,
+    custom_layout_overlay_blocks_pointer: customLayoutOverlayBlocksPointer,
+    custom_layout_overlay_hit_pointer: customLayoutOverlayHitPointer,
     programs_menu_list_scroll: (() => {
       if (!args.programsMenuOpen) return null
       const el = cache.query('[data-programs-menu-scroll]')

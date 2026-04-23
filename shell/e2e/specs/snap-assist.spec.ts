@@ -1288,7 +1288,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(shell.controls?.custom_layout_overlay_add, 'missing overlay add control')
-    await clickRect(base, shell.controls.custom_layout_overlay_add)
+    const closeBeforeEdit = assertRectMinSize('custom layout overlay close before edit', shell.controls?.custom_layout_overlay_close, 12)
+    await movePoint(base, rectGlobalCenter(closeBeforeEdit).x, rectGlobalCenter(closeBeforeEdit).y)
+    shell = await waitFor(
+      'wait for custom layout overlay to own pointer hit test',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.custom_layout_overlay_blocks_pointer && next.custom_layout_overlay_hit_pointer ? next : null
+      },
+      1000,
+      16,
+    )
+    assert(shell.custom_layout_overlay_blocks_pointer, 'custom layout overlay root must accept pointer events')
+    assert(shell.custom_layout_overlay_hit_pointer, 'custom layout overlay root must be under the pointer over its controls')
+    await clickRect(base, assertRectMinSize('custom layout overlay add after hit test', shell.controls?.custom_layout_overlay_add, 12))
     shell = await waitFor(
       'wait for overlay zone after add',
       async () => {

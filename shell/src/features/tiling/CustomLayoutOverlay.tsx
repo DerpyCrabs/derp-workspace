@@ -769,7 +769,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
             data-shell-exclusion-floating
             data-custom-layout-overlay
             data-custom-layout-overlay-monitor={props.state()!.outputName}
-            class="absolute inset-0 z-[430000]"
+            class="pointer-events-auto absolute inset-0 z-[430000]"
             onContextMenu={(event) => event.preventDefault()}
           >
             <div class="absolute inset-0 bg-black/60" />

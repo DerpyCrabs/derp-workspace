@@ -474,6 +474,8 @@ export interface ShellSnapshot {
   window_interaction_capture?: Rect | null
   window_interaction_capture_blocks_pointer?: boolean
   window_interaction_capture_hit_pointer?: boolean | null
+  custom_layout_overlay_blocks_pointer?: boolean
+  custom_layout_overlay_hit_pointer?: boolean | null
   [key: string]: unknown
 }
 
