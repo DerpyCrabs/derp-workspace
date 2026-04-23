@@ -91,8 +91,9 @@ use crate::{
     desktop::exclusion_clip,
     session::workspace_model::{
         group_id_for_window, next_active_window_after_removal, reconcile_workspace_state,
-        WorkspaceMonitorLayoutState, WorkspaceMonitorLayoutType, WorkspaceMonitorTileEntry,
-        WorkspaceMonitorTileState, WorkspaceMutation, WorkspaceRect, WorkspaceState,
+        WorkspaceCustomAutoSlot, WorkspaceMonitorLayoutState, WorkspaceMonitorLayoutType,
+        WorkspaceMonitorTileEntry, WorkspaceMonitorTileState, WorkspaceMutation, WorkspaceRect,
+        WorkspaceSlotRule, WorkspaceSlotRuleField, WorkspaceSlotRuleOp, WorkspaceState,
     },
     shell::shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
@@ -3506,6 +3507,170 @@ impl CompositorState {
         ratio.clamp(0.01, 0.99)
     }
 
+    fn workspace_custom_auto_slots(
+        layout_state: &WorkspaceMonitorLayoutState,
+    ) -> Vec<WorkspaceCustomAutoSlot> {
+        let mut slots = Vec::new();
+        let mut seen = HashSet::new();
+        for slot in &layout_state.params.custom_slots {
+            if slot.slot_id.trim().is_empty() || !seen.insert(slot.slot_id.clone()) {
+                continue;
+            }
+            if !slot.x.is_finite()
+                || !slot.y.is_finite()
+                || !slot.width.is_finite()
+                || !slot.height.is_finite()
+                || slot.width <= 0.0
+                || slot.height <= 0.0
+            {
+                continue;
+            }
+            let mut next = slot.clone();
+            next.x = next.x.clamp(0.0, 0.999);
+            next.y = next.y.clamp(0.0, 0.999);
+            next.width = next.width.clamp(0.001, 1.0 - next.x);
+            next.height = next.height.clamp(0.001, 1.0 - next.y);
+            next.rules.retain(|rule| !rule.value.trim().is_empty());
+            slots.push(next);
+        }
+        slots
+    }
+
+    fn workspace_custom_auto_frame_rect(
+        slot: &WorkspaceCustomAutoSlot,
+        work_area: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Logical> {
+        let x = work_area.loc.x;
+        let y = work_area.loc.y;
+        let w = work_area.size.w.max(1);
+        let h = work_area.size.h.max(1);
+        let left = x.saturating_add((slot.x * f64::from(w)).round() as i32);
+        let top = y.saturating_add((slot.y * f64::from(h)).round() as i32);
+        let right = x.saturating_add(((slot.x + slot.width) * f64::from(w)).round() as i32);
+        let bottom = y.saturating_add(((slot.y + slot.height) * f64::from(h)).round() as i32);
+        Rectangle::new(
+            Point::from((left, top)),
+            Size::from((
+                right.saturating_sub(left).max(1),
+                bottom.saturating_sub(top).max(1),
+            )),
+        )
+    }
+
+    fn workspace_slot_rule_value(
+        &self,
+        window_id: u32,
+        info: &WindowInfo,
+        field: &WorkspaceSlotRuleField,
+    ) -> String {
+        match field {
+            WorkspaceSlotRuleField::AppId => info.app_id.clone(),
+            WorkspaceSlotRuleField::Title => info.title.clone(),
+            WorkspaceSlotRuleField::Kind => {
+                if self.window_registry.is_shell_hosted(window_id) {
+                    info.app_id
+                        .strip_prefix("derp.")
+                        .unwrap_or(info.app_id.as_str())
+                        .to_string()
+                } else {
+                    "native".into()
+                }
+            }
+            WorkspaceSlotRuleField::X11Class => self
+                .find_x11_window_by_window_id(window_id)
+                .map(|window| window.class())
+                .unwrap_or_default(),
+            WorkspaceSlotRuleField::X11Instance => self
+                .find_x11_window_by_window_id(window_id)
+                .map(|window| window.instance())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn workspace_slot_rule_matches(haystack: &str, rule: &WorkspaceSlotRule) -> bool {
+        let value = rule.value.trim();
+        if value.is_empty() {
+            return false;
+        }
+        match rule.op {
+            WorkspaceSlotRuleOp::Equals => haystack == value,
+            WorkspaceSlotRuleOp::Contains => haystack.contains(value),
+            WorkspaceSlotRuleOp::StartsWith => haystack.starts_with(value),
+        }
+    }
+
+    fn workspace_window_matches_slot_rules(
+        &self,
+        window_id: u32,
+        slot: &WorkspaceCustomAutoSlot,
+    ) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        slot.rules.iter().any(|rule| {
+            let value = self.workspace_slot_rule_value(window_id, &info, &rule.field);
+            Self::workspace_slot_rule_matches(&value, rule)
+        })
+    }
+
+    fn workspace_custom_auto_slot_for_window(
+        &self,
+        window_id: u32,
+        slots: &[WorkspaceCustomAutoSlot],
+    ) -> Option<usize> {
+        slots
+            .iter()
+            .position(|slot| self.workspace_window_matches_slot_rules(window_id, slot))
+    }
+
+    fn workspace_custom_auto_frame_rects_for_windows(
+        &self,
+        layout_state: &WorkspaceMonitorLayoutState,
+        window_ids: &[u32],
+        work_area: Rectangle<i32, Logical>,
+    ) -> HashMap<u32, Rectangle<i32, Logical>> {
+        let slots = Self::workspace_custom_auto_slots(layout_state);
+        let mut out = HashMap::new();
+        if slots.is_empty() || window_ids.is_empty() {
+            return out;
+        }
+        let mut assigned_windows = HashSet::new();
+        let mut assigned_slots: HashSet<usize> = HashSet::new();
+        for &window_id in window_ids {
+            let Some(slot_index) = self.workspace_custom_auto_slot_for_window(window_id, &slots)
+            else {
+                continue;
+            };
+            if !assigned_slots.insert(slot_index) {
+                continue;
+            }
+            assigned_windows.insert(window_id);
+            out.insert(
+                window_id,
+                Self::workspace_custom_auto_frame_rect(&slots[slot_index], work_area),
+            );
+        }
+        for &window_id in window_ids {
+            if assigned_windows.contains(&window_id) {
+                continue;
+            }
+            let Some(slot_index) = (0..slots.len()).find(|index| assigned_slots.insert(*index))
+            else {
+                let slot_index = slots.len().saturating_sub(1);
+                out.insert(
+                    window_id,
+                    Self::workspace_custom_auto_frame_rect(&slots[slot_index], work_area),
+                );
+                continue;
+            };
+            out.insert(
+                window_id,
+                Self::workspace_custom_auto_frame_rect(&slots[slot_index], work_area),
+            );
+        }
+        out
+    }
+
     fn workspace_compute_auto_layout_frame_rects(
         &self,
         layout_state: &WorkspaceMonitorLayoutState,
@@ -3522,6 +3687,13 @@ impl CompositorState {
         let h = work_area.size.h.max(1);
         match layout_state.layout {
             WorkspaceMonitorLayoutType::ManualSnap => {}
+            WorkspaceMonitorLayoutType::CustomAuto => {
+                out = self.workspace_custom_auto_frame_rects_for_windows(
+                    layout_state,
+                    window_ids,
+                    work_area,
+                );
+            }
             WorkspaceMonitorLayoutType::MasterStack => {
                 if window_ids.len() == 1 {
                     out.insert(
@@ -3716,6 +3888,294 @@ impl CompositorState {
         true
     }
 
+    fn workspace_custom_auto_group_ids_for_output(&self, output_name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for group in &self.workspace_state.groups {
+            let Some(visible_window_id) =
+                self.workspace_state.visible_window_id_for_group(&group.id)
+            else {
+                continue;
+            };
+            let Some(info) = self.window_registry.window_info(visible_window_id) else {
+                continue;
+            };
+            if !self.workspace_is_auto_layout_managed_window(&info) {
+                continue;
+            }
+            if self.workspace_window_output_name_for_auto_layout(&info) == output_name {
+                out.push(group.id.clone());
+            }
+        }
+        out
+    }
+
+    fn workspace_custom_auto_slot_for_group(
+        &self,
+        group_id: &str,
+        slots: &[WorkspaceCustomAutoSlot],
+    ) -> Option<usize> {
+        let group = self
+            .workspace_state
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)?;
+        slots.iter().position(|slot| {
+            group
+                .window_ids
+                .iter()
+                .any(|window_id| self.workspace_window_matches_slot_rules(*window_id, slot))
+        })
+    }
+
+    fn workspace_custom_auto_assignment(
+        &self,
+        output_name: &str,
+        slots: &[WorkspaceCustomAutoSlot],
+    ) -> (Vec<Option<String>>, Vec<String>) {
+        let group_ids = self.workspace_custom_auto_group_ids_for_output(output_name);
+        let mut slot_groups = vec![None; slots.len()];
+        let mut assigned_groups = HashSet::new();
+        for group_id in &group_ids {
+            let Some(slot_index) = self.workspace_custom_auto_slot_for_group(group_id, slots)
+            else {
+                continue;
+            };
+            if slot_groups[slot_index].is_none() {
+                slot_groups[slot_index] = Some(group_id.clone());
+                assigned_groups.insert(group_id.clone());
+            }
+        }
+        for group_id in &group_ids {
+            if assigned_groups.contains(group_id) {
+                continue;
+            }
+            let Some(slot_index) = slot_groups.iter().position(Option::is_none) else {
+                continue;
+            };
+            slot_groups[slot_index] = Some(group_id.clone());
+            assigned_groups.insert(group_id.clone());
+        }
+        let overflow = group_ids
+            .into_iter()
+            .filter(|group_id| !assigned_groups.contains(group_id))
+            .collect();
+        (slot_groups, overflow)
+    }
+
+    fn workspace_merge_group_into_group(&mut self, source_group_id: &str, target_group_id: &str) {
+        if source_group_id == target_group_id {
+            return;
+        }
+        let Some(source_index) = self
+            .workspace_state
+            .groups
+            .iter()
+            .position(|group| group.id == source_group_id)
+        else {
+            return;
+        };
+        let Some(target_index) = self
+            .workspace_state
+            .groups
+            .iter()
+            .position(|group| group.id == target_group_id)
+        else {
+            return;
+        };
+        let source = self.workspace_state.groups[source_index].clone();
+        let source_visible = self
+            .workspace_state
+            .visible_window_id_for_group(source_group_id)
+            .or_else(|| source.window_ids.first().copied());
+        for window_id in &source.window_ids {
+            if !self.workspace_state.groups[target_index]
+                .window_ids
+                .contains(window_id)
+            {
+                self.workspace_state.groups[target_index]
+                    .window_ids
+                    .push(*window_id);
+            }
+        }
+        if let Some(source_visible) = source_visible {
+            self.workspace_state
+                .active_tab_by_group_id
+                .insert(target_group_id.to_string(), source_visible);
+        }
+        self.workspace_state.groups.remove(source_index);
+        self.workspace_state
+            .active_tab_by_group_id
+            .remove(source_group_id);
+        self.workspace_state
+            .split_by_group_id
+            .remove(source_group_id);
+        self.workspace_state
+            .split_by_group_id
+            .remove(target_group_id);
+    }
+
+    fn workspace_custom_auto_overflow_target_slot(
+        &self,
+        slot_groups: &[Option<String>],
+    ) -> Option<usize> {
+        if let Some(focused) = self.logical_focused_window_id() {
+            if let Some(group_id) = group_id_for_window(&self.workspace_state, focused) {
+                if let Some(index) = slot_groups
+                    .iter()
+                    .position(|slot_group| slot_group.as_deref() == Some(group_id))
+                {
+                    return Some(index);
+                }
+            }
+        }
+        slot_groups.iter().rposition(Option::is_some)
+    }
+
+    fn workspace_apply_custom_auto_layout_for_output_name(
+        &mut self,
+        output_name: &str,
+        layout_state: &WorkspaceMonitorLayoutState,
+        work_area: Rectangle<i32, Logical>,
+    ) -> bool {
+        let slots = Self::workspace_custom_auto_slots(layout_state);
+        if slots.is_empty() {
+            return false;
+        }
+        let (mut slot_groups, overflow_groups) =
+            self.workspace_custom_auto_assignment(output_name, &slots);
+        if !overflow_groups.is_empty() {
+            let target_slot = self
+                .workspace_custom_auto_overflow_target_slot(&slot_groups)
+                .unwrap_or_else(|| slots.len().saturating_sub(1));
+            if slot_groups[target_slot].is_none() {
+                slot_groups[target_slot] = overflow_groups.first().cloned();
+            }
+            if let Some(target_group_id) = slot_groups[target_slot].clone() {
+                for source_group_id in overflow_groups {
+                    if source_group_id != target_group_id {
+                        self.workspace_merge_group_into_group(&source_group_id, &target_group_id);
+                    }
+                }
+            }
+        }
+        let mut frame_rects = HashMap::new();
+        let mut entries = Vec::new();
+        for (slot_index, group_id) in slot_groups.iter().enumerate() {
+            let Some(group_id) = group_id else {
+                continue;
+            };
+            let Some(window_id) = self.workspace_state.visible_window_id_for_group(group_id) else {
+                continue;
+            };
+            let rect = Self::workspace_custom_auto_frame_rect(&slots[slot_index], work_area);
+            frame_rects.insert(window_id, rect);
+            entries.push(WorkspaceMonitorTileEntry {
+                window_id,
+                zone: format!(
+                    "custom:{}:{}",
+                    layout_state
+                        .params
+                        .custom_layout_id
+                        .as_deref()
+                        .unwrap_or("auto"),
+                    slots[slot_index].slot_id
+                ),
+                bounds: WorkspaceRect {
+                    x: rect.loc.x,
+                    y: rect.loc.y,
+                    width: rect.size.w.max(1),
+                    height: rect.size.h.max(1),
+                },
+            });
+        }
+        entries.sort_by_key(|entry| entry.window_id);
+        self.workspace_state
+            .monitor_tiles
+            .retain(|monitor| monitor.output_name != output_name);
+        if !entries.is_empty() {
+            self.workspace_state
+                .monitor_tiles
+                .push(WorkspaceMonitorTileState {
+                    output_name: output_name.to_string(),
+                    entries,
+                });
+        }
+        for (window_id, frame_rect) in frame_rects {
+            let Some(info) = self.window_registry.window_info(window_id) else {
+                continue;
+            };
+            self.workspace_set_pre_tile_geometry(
+                window_id,
+                WorkspaceRect {
+                    x: info.x,
+                    y: info.y,
+                    width: info.width.max(1),
+                    height: info.height.max(1),
+                },
+            );
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            let target_x = client_rect.loc.x;
+            let target_y = client_rect.loc.y;
+            let target_w = client_rect.size.w.max(1);
+            let target_h = client_rect.size.h.max(1);
+            if self.window_registry.is_shell_hosted(window_id) {
+                let snap = self
+                    .window_registry
+                    .update_shell_hosted(window_id, |window_info, _| {
+                        window_info.x = target_x;
+                        window_info.y = target_y;
+                        window_info.width = target_w;
+                        window_info.height = target_h;
+                        window_info.output_name = output_name.to_string();
+                        window_info.maximized = false;
+                        window_info.fullscreen = false;
+                        window_info.clone()
+                    });
+                if let Some(snap) = snap {
+                    self.capture_refresh_window_source_cache(window_id);
+                    self.shell_backed_emit_geometry_messages(&snap);
+                }
+                continue;
+            }
+            self.clear_toplevel_layout_maps(window_id);
+            let Some(surface_id) = self.window_registry.surface_id_for_window(window_id) else {
+                continue;
+            };
+            if let Some(window) = self.find_window_by_surface_id(surface_id) {
+                let tl = window.toplevel().unwrap();
+                tl.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.fullscreen_output = None;
+                    state.states.unset(xdg_toplevel::State::Maximized);
+                    state.size = Some(Size::from((target_w, target_h)));
+                });
+                tl.send_pending_configure();
+                self.space.map_element(
+                    DerpSpaceElem::Wayland(window.clone()),
+                    (target_x, target_y),
+                    true,
+                );
+                self.shell_emit_requested_native_geometry(
+                    window_id,
+                    target_x,
+                    target_y,
+                    target_w,
+                    target_h,
+                    output_name.to_string(),
+                    false,
+                );
+                continue;
+            }
+            let Some(x11) = self.find_x11_window_by_surface_id(surface_id) else {
+                continue;
+            };
+            let rect = Rectangle::new(client_rect.loc, client_rect.size);
+            self.apply_x11_window_bounds(window_id, &x11, rect, false, false);
+        }
+        self.workspace_send_state();
+        true
+    }
+
     pub(crate) fn workspace_apply_auto_layout_for_output_name(
         &mut self,
         output_name: &str,
@@ -3740,6 +4200,13 @@ impl CompositorState {
         let Some(work_area) = self.workspace_auto_layout_frame_area_for_output(&output) else {
             return false;
         };
+        if layout_state.layout == WorkspaceMonitorLayoutType::CustomAuto {
+            return self.workspace_apply_custom_auto_layout_for_output_name(
+                output_name,
+                &layout_state,
+                work_area,
+            );
+        }
         let window_ids = self.workspace_auto_layout_window_ids_for_output(output_name, None);
         let frame_rects =
             self.workspace_compute_auto_layout_frame_rects(&layout_state, &window_ids, work_area);

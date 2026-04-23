@@ -2,8 +2,13 @@ import {
   DEFAULT_ASSIST_GRID_SHAPE,
   type AssistGridShape,
 } from './assistGrid'
-import { sanitizeCustomLayouts, type CustomLayout } from './customLayouts'
-import { createLayout, type LayoutParams, type LayoutType, type TilingLayout } from './layouts'
+import {
+  listCustomLayoutZones,
+  sanitizeCustomLayouts,
+  type CustomLayout,
+  type CustomLayoutSlotRule,
+} from './customLayouts'
+import { createLayout, type CustomAutoSlotParam, type LayoutParams, type LayoutType, type TilingLayout } from './layouts'
 
 const CUSTOM_SNAP_LAYOUT_PREFIX = 'custom:'
 
@@ -37,8 +42,46 @@ function isLayoutType(v: unknown): v is LayoutType {
     v === 'manual-snap' ||
     v === 'master-stack' ||
     v === 'columns' ||
-    v === 'grid'
+    v === 'grid' ||
+    v === 'custom-auto'
   )
+}
+
+function sanitizeCustomAutoSlots(value: unknown): CustomAutoSlotParam[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: CustomAutoSlotParam[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const row = entry as Record<string, unknown>
+    const slotId = typeof row.slotId === 'string' ? row.slotId.trim() : ''
+    if (!slotId || seen.has(slotId)) continue
+    const x = typeof row.x === 'number' ? row.x : Number(row.x)
+    const y = typeof row.y === 'number' ? row.y : Number(row.y)
+    const width = typeof row.width === 'number' ? row.width : Number(row.width)
+    const height = typeof row.height === 'number' ? row.height : Number(row.height)
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue
+    const rules = Array.isArray(row.rules)
+      ? row.rules
+          .filter((rule): rule is CustomLayoutSlotRule =>
+            !!rule &&
+            typeof rule === 'object' &&
+            !Array.isArray(rule) &&
+            typeof (rule as Record<string, unknown>).value === 'string',
+          )
+          .slice(0, 16)
+      : undefined
+    seen.add(slotId)
+    out.push({
+      slotId,
+      x,
+      y,
+      width,
+      height,
+      ...(rules && rules.length > 0 ? { rules } : {}),
+    })
+  }
+  return out.length > 0 ? out : undefined
 }
 
 export function assistMonitorSnapLayout(shape: AssistGridShape): MonitorSnapLayout {
@@ -123,6 +166,11 @@ function parseConfig(raw: string | null): TilingConfig {
         if (typeof p.maxColumns === 'number' && Number.isFinite(p.maxColumns)) {
           lp.maxColumns = Math.max(1, Math.floor(p.maxColumns))
         }
+        if (typeof p.customLayoutId === 'string' && p.customLayoutId.trim()) {
+          lp.customLayoutId = p.customLayoutId.trim()
+        }
+        const customSlots = sanitizeCustomAutoSlots(p.customSlots)
+        if (customSlots) lp.customSlots = customSlots
         if (Object.keys(lp).length > 0) cleaned.params = lp
       }
       const customLayouts = sanitizeCustomLayouts((el as { customLayouts?: unknown }).customLayouts)
@@ -142,6 +190,30 @@ function parseConfig(raw: string | null): TilingConfig {
     return out
   } catch {
     return defaultConfig()
+  }
+}
+
+export function customAutoLayoutParamsForMonitor(outputName: string): LayoutParams {
+  const monitor = getMonitorLayout(outputName)
+  const snapLayout = monitor.snapLayout
+  const selectedLayout =
+    snapLayout.kind === 'custom'
+      ? monitor.customLayouts.find((layout) => layout.id === snapLayout.layoutId)
+      : monitor.customLayouts[0]
+  if (!selectedLayout) return {}
+  const customSlots = listCustomLayoutZones(selectedLayout).map((zone) => ({
+    slotId: zone.zoneId,
+    x: zone.x,
+    y: zone.y,
+    width: zone.width,
+    height: zone.height,
+    ...(selectedLayout.slotRules?.[zone.zoneId]?.length
+      ? { rules: selectedLayout.slotRules[zone.zoneId] }
+      : {}),
+  }))
+  return {
+    customLayoutId: selectedLayout.id,
+    customSlots,
   }
 }
 

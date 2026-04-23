@@ -4,6 +4,7 @@ import {
   createMemo,
   createSignal,
   For,
+  Index,
   onCleanup,
   Show,
   type Accessor,
@@ -14,15 +15,20 @@ import { canvasRectToClientCss, rectGlobalToCanvasLocal } from '@/lib/shellCoord
 import {
   clampCustomLayoutRatio,
   createCustomLayout,
+  customLayoutSlotRules,
   firstLeafZoneId,
   listCustomLayoutMergePreviewZoneIds,
   listCustomLayoutSplitHandles,
   listCustomLayoutZones,
   mergeCustomLayoutZones,
   renameCustomLayout,
+  setCustomLayoutSlotRules,
   splitCustomLayoutZone,
   updateCustomLayoutSplitRatio,
   type CustomLayout,
+  type CustomLayoutSlotRule,
+  type CustomLayoutSlotRuleField,
+  type CustomLayoutSlotRuleOp,
   type CustomLayoutSplitAxis,
   type CustomLayoutSplitPlacement,
 } from './customLayouts'
@@ -78,10 +84,34 @@ const SPLIT_PREVIEW_RATIO_STEP = 0.005
 const RESIZE_RATIO_STEP = 0.01
 const SPLIT_STICKY_PX = 12
 const ZONE_EDGE_EPSILON = 0.0001
+const SLOT_RULE_FIELDS: CustomLayoutSlotRuleField[] = ['app_id', 'title', 'x11_class', 'x11_instance', 'kind']
+const SLOT_RULE_OPS: CustomLayoutSlotRuleOp[] = ['equals', 'contains', 'starts_with']
+const SLOT_RULE_CONTROL_WIDTH = 74
+const SLOT_RULE_CONTROL_HEIGHT = 32
+const SLOT_RULE_DROPDOWN_WIDTH = 420
+const SLOT_RULE_DROPDOWN_HEIGHT = 260
+
+type CssBox = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 function collectZoneIds(node: CustomLayout['root']): string[] {
   if (node.kind === 'leaf') return [node.zoneId]
   return [...collectZoneIds(node.first), ...collectZoneIds(node.second)]
+}
+
+function clampPx(value: number, min: number, max: number): number {
+  if (max < min) return min
+  return Math.max(min, Math.min(max, value))
+}
+
+function overlapArea(a: CssBox, b: CssBox): number {
+  const x = Math.max(0, Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left))
+  const y = Math.max(0, Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top))
+  return x * y
 }
 
 export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
@@ -93,6 +123,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
   const [resizePreview, setResizePreview] = createSignal<ResizePreviewState | null>(null)
   const [splitPreview, setSplitPreview] = createSignal<SplitPreviewState | null>(null)
   const [shiftPressed, setShiftPressed] = createSignal(false)
+  const [ruleEditorZoneId, setRuleEditorZoneId] = createSignal<string | null>(null)
   let cleanupPointerInteraction: (() => void) | null = null
   let hoverPreviewPoint: { x: number; y: number } | null = null
 
@@ -111,6 +142,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
     setMergeTargetZoneId(null)
     setResizePreview(null)
     setSplitPreview(null)
+    setRuleEditorZoneId(null)
     hoverPreviewPoint = null
   })
 
@@ -213,6 +245,77 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
     return { left, top, width }
   })
 
+  const panelWorkRect = createMemo(() => {
+    const panel = panelCss()
+    const css = overlayCss()
+    if (!panel || !css) return null
+    return {
+      left: panel.left - css.workCss.left - 12,
+      top: panel.top - css.workCss.top - 12,
+      width: panel.width + 24,
+      height: 420,
+    }
+  })
+
+  function slotRuleControlRect(zone: { x: number; y: number; width: number; height: number }): CssBox {
+    const css = overlayCss()
+    const panel = panelWorkRect()
+    const workWidth = css?.workCss.width ?? 1
+    const workHeight = css?.workCss.height ?? 1
+    const zoneLeft = zone.x * workWidth
+    const zoneTop = zone.y * workHeight
+    const zoneRight = (zone.x + zone.width) * workWidth
+    const zoneBottom = (zone.y + zone.height) * workHeight
+    const inset = 12
+    const minLeft = Math.max(4, zoneLeft + inset)
+    const maxLeft = Math.min(workWidth - SLOT_RULE_CONTROL_WIDTH - 4, zoneRight - SLOT_RULE_CONTROL_WIDTH - inset)
+    const minTop = Math.max(4, zoneTop + inset)
+    const maxTop = Math.min(workHeight - SLOT_RULE_CONTROL_HEIGHT - 4, zoneBottom - SLOT_RULE_CONTROL_HEIGHT - inset)
+    const candidates: CssBox[] = [
+      { left: minLeft, top: minTop, width: SLOT_RULE_CONTROL_WIDTH, height: SLOT_RULE_CONTROL_HEIGHT },
+      { left: maxLeft, top: minTop, width: SLOT_RULE_CONTROL_WIDTH, height: SLOT_RULE_CONTROL_HEIGHT },
+      { left: minLeft, top: maxTop, width: SLOT_RULE_CONTROL_WIDTH, height: SLOT_RULE_CONTROL_HEIGHT },
+      { left: maxLeft, top: maxTop, width: SLOT_RULE_CONTROL_WIDTH, height: SLOT_RULE_CONTROL_HEIGHT },
+    ].map((candidate) => ({
+      ...candidate,
+      left: clampPx(candidate.left, zoneLeft + 4, Math.max(zoneLeft + 4, zoneRight - SLOT_RULE_CONTROL_WIDTH - 4)),
+      top: clampPx(candidate.top, zoneTop + 4, Math.max(zoneTop + 4, zoneBottom - SLOT_RULE_CONTROL_HEIGHT - 4)),
+    }))
+    if (!panel) return candidates[0]
+    return candidates.reduce((best, candidate) => (overlapArea(candidate, panel) < overlapArea(best, panel) ? candidate : best))
+  }
+
+  function slotRuleControlStyle(zone: { x: number; y: number; width: number; height: number }) {
+    const rect = slotRuleControlRect(zone)
+    return {
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    }
+  }
+
+  function slotRuleDropdownStyle(zone: { x: number; y: number; width: number; height: number }) {
+    const css = overlayCss()
+    const workWidth = css?.workCss.width ?? SLOT_RULE_DROPDOWN_WIDTH
+    const workHeight = css?.workCss.height ?? SLOT_RULE_DROPDOWN_HEIGHT
+    const control = slotRuleControlRect(zone)
+    const width = Math.min(SLOT_RULE_DROPDOWN_WIDTH, Math.max(280, workWidth - 16))
+    const left = clampPx(control.left, 8, Math.max(8, workWidth - width - 8))
+    const belowTop = control.top + control.height + 8
+    const aboveTop = control.top - SLOT_RULE_DROPDOWN_HEIGHT - 8
+    const top =
+      belowTop + SLOT_RULE_DROPDOWN_HEIGHT <= workHeight - 8
+        ? belowTop
+        : clampPx(aboveTop, 8, Math.max(8, workHeight - SLOT_RULE_DROPDOWN_HEIGHT - 8))
+    return {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+      'max-height': `${Math.max(180, Math.min(SLOT_RULE_DROPDOWN_HEIGHT, workHeight - 16))}px`,
+    }
+  }
+
   const selectedLayout = createMemo(() => {
     const current = selectedLayoutId()
     return draftLayouts().find((layout) => layout.id === current) ?? draftLayouts()[0] ?? null
@@ -236,6 +339,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
     const zoneIds = collectZoneIds(current.root)
     const nextZoneId = selectedZoneId() && zoneIds.includes(selectedZoneId()!) ? selectedZoneId() : zoneIds[0] ?? null
     if (nextZoneId !== selectedZoneId()) setSelectedZoneId(nextZoneId)
+    if (ruleEditorZoneId() && !zoneIds.includes(ruleEditorZoneId()!)) setRuleEditorZoneId(null)
   })
 
   const editorZones = createMemo(() => {
@@ -314,6 +418,37 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
       draftLayouts().map((layout) => (layout.id === current.id ? nextLayout : layout)),
       current.id,
       nextZoneId,
+    )
+  }
+
+  function replaceSelectedZoneRules(zoneId: string, rules: CustomLayoutSlotRule[]) {
+    const current = selectedLayout()
+    if (!current) return
+    replaceSelectedLayout(setCustomLayoutSlotRules(current, zoneId, rules), zoneId)
+  }
+
+  function addRule(zoneId: string) {
+    replaceSelectedZoneRules(zoneId, [
+      ...customLayoutSlotRules(selectedLayout()!, zoneId),
+      { field: 'app_id', op: 'equals', value: '' },
+    ])
+  }
+
+  function updateRule(zoneId: string, index: number, patch: Partial<CustomLayoutSlotRule>) {
+    const layout = selectedLayout()
+    if (!layout) return
+    const rules = customLayoutSlotRules(layout, zoneId).map((rule, ruleIndex) =>
+      ruleIndex === index ? { ...rule, ...patch } : rule,
+    )
+    replaceSelectedZoneRules(zoneId, rules)
+  }
+
+  function removeRule(zoneId: string, index: number) {
+    const layout = selectedLayout()
+    if (!layout) return
+    replaceSelectedZoneRules(
+      zoneId,
+      customLayoutSlotRules(layout, zoneId).filter((_, ruleIndex) => ruleIndex !== index),
     )
   }
 
@@ -502,6 +637,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
     event.preventDefault()
     event.stopPropagation()
     setSelectedZoneId(zoneId)
+    setRuleEditorZoneId(null)
     setMergeDrag({
       sourceZoneId: zoneId,
       startClientX: event.clientX,
@@ -661,7 +797,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                     <Show when={selectedLayout()} fallback={<div class="h-full" />}>
                       {(_layout) => (
                         <div
-                          class="relative h-full overflow-hidden"
+                          class="relative h-full overflow-visible"
                           onPointerMove={(event) => {
                             if (resizePreview()) return
                             updateSplitPreviewForPointer(event.clientX, event.clientY, event.shiftKey)
@@ -673,12 +809,13 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                           }}
                         >
                           <For each={editorZones()}>
-                            {(zone, index) => {
+                            {(zone) => {
                               const mergeSource = () => mergeDrag()?.sourceZoneId === zone.zoneId
                               const mergeTarget = () => mergePreviewZoneIds().includes(zone.zoneId) && !mergeSource()
                               return (
-                                <button
-                                  type="button"
+                                <div
+                                  role="button"
+                                  tabIndex={0}
                                   data-custom-layout-overlay-zone={zone.zoneId}
                                   class="absolute overflow-hidden border text-left"
                                   classList={{
@@ -701,18 +838,159 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                                   onClick={(event) => event.preventDefault()}
                                   onFocus={() => setSelectedZoneId(zone.zoneId)}
                                 >
-                                  <span class="pointer-events-none absolute left-5 top-4 text-[0.9rem] font-semibold uppercase tracking-[0.14em] text-(--shell-text-dim)">
-                                    {index() + 1}
-                                  </span>
                                   <Show when={mergeTarget()}>
                                     <span class="pointer-events-none absolute inset-x-3 bottom-3 rounded-md bg-emerald-950/55 px-2 py-1 text-[0.7rem] font-semibold text-emerald-100">
                                       Merge
                                     </span>
                                   </Show>
-                                </button>
+                                </div>
                               )
                             }}
                           </For>
+
+                          <For each={editorZones()}>
+                            {(zone, index) => {
+                              const rules = () => selectedLayout() ? customLayoutSlotRules(selectedLayout()!, zone.zoneId) : []
+                              const selected = () => selectedZoneId() === zone.zoneId
+                              const open = () => ruleEditorZoneId() === zone.zoneId
+                              return (
+                                <div
+                                  class="absolute z-30 flex items-center gap-1 rounded-full border border-white/15 bg-black/45 p-0.5 shadow-[0_8px_24px_rgba(0,0,0,0.24)]"
+                                  style={slotRuleControlStyle(zone)}
+                                >
+                                  <button
+                                    type="button"
+                                    data-custom-layout-overlay-zone-label={zone.zoneId}
+                                    class="flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full px-1.5 text-[0.8rem] font-semibold text-white/88 hover:bg-white/12"
+                                    classList={{
+                                      'bg-(--shell-accent) text-(--shell-accent-foreground)': selected(),
+                                    }}
+                                    onPointerDown={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                    }}
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      setSelectedZoneId(zone.zoneId)
+                                    }}
+                                  >
+                                    {index() + 1}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    data-custom-layout-overlay-zone-rules={zone.zoneId}
+                                    data-custom-layout-overlay-zone-rules-selected={selected() ? '' : undefined}
+                                    aria-expanded={open()}
+                                    class="flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full border border-white/14 px-1.5 text-[0.68rem] font-semibold text-white/88 hover:bg-white/12"
+                                    classList={{
+                                      'bg-(--shell-accent) text-(--shell-accent-foreground)': open(),
+                                      'bg-emerald-500/75 text-white': !open() && rules().length > 0,
+                                      'bg-white/8': !open() && rules().length === 0,
+                                    }}
+                                    onPointerDown={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                    }}
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      setSelectedZoneId(zone.zoneId)
+                                      setRuleEditorZoneId(open() ? null : zone.zoneId)
+                                    }}
+                                  >
+                                    {rules().length > 0 ? rules().length : '+'}
+                                  </button>
+                                </div>
+                              )
+                            }}
+                          </For>
+
+                          <Show when={ruleEditorZoneId()}>
+                            {(zoneId) => {
+                              const zone = () => editorZones().find((entry) => entry.zoneId === zoneId())
+                              const layout = () => selectedLayout()
+                              const rules = () => {
+                                const current = layout()
+                                return current ? customLayoutSlotRules(current, zoneId()) : []
+                              }
+                              return (
+                                <Show when={zone() && layout()}>
+                                    <div
+                                      data-custom-layout-overlay-rules-panel={zoneId()}
+                                      class="absolute z-[430002] grid gap-2 overflow-auto rounded-xl border border-(--shell-border) bg-(--shell-overlay) p-3 text-(--shell-text) shadow-[0_18px_50px_rgba(0,0,0,0.36)]"
+                                      style={slotRuleDropdownStyle(zone()!)}
+                                      onPointerDown={(event) => event.stopPropagation()}
+                                    >
+                                      <div class="flex items-center justify-between gap-2">
+                                        <span class="text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-(--shell-text-dim)">
+                                          Slot {collectZoneIds(layout()!.root).indexOf(zoneId()) + 1} rules
+                                        </span>
+                                        <button
+                                          type="button"
+                                          data-custom-layout-overlay-rules-close
+                                          class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2 py-1 text-[0.7rem] font-medium"
+                                          onClick={() => setRuleEditorZoneId(null)}
+                                        >
+                                          Hide
+                                        </button>
+                                      </div>
+                                      <div class="grid gap-2">
+                                        <Index each={rules()}>
+                                          {(rule, ruleIndex) => (
+                                            <div class="grid gap-2 md:grid-cols-[minmax(0,7rem)_minmax(0,7rem)_minmax(0,1fr)_auto]">
+                                              <select
+                                                data-custom-layout-overlay-rule-field
+                                                class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) rounded-lg px-2 py-2 text-[0.76rem] outline-none"
+                                                value={rule().field}
+                                                onChange={(event) => updateRule(zoneId(), ruleIndex, { field: event.currentTarget.value as CustomLayoutSlotRuleField })}
+                                              >
+                                                <For each={SLOT_RULE_FIELDS}>
+                                                  {(field) => <option value={field}>{field}</option>}
+                                                </For>
+                                              </select>
+                                              <select
+                                                data-custom-layout-overlay-rule-op
+                                                class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) rounded-lg px-2 py-2 text-[0.76rem] outline-none"
+                                                value={rule().op}
+                                                onChange={(event) => updateRule(zoneId(), ruleIndex, { op: event.currentTarget.value as CustomLayoutSlotRuleOp })}
+                                              >
+                                                <For each={SLOT_RULE_OPS}>
+                                                  {(op) => <option value={op}>{op}</option>}
+                                                </For>
+                                              </select>
+                                              <input
+                                                data-custom-layout-overlay-rule-value
+                                                value={rule().value}
+                                                placeholder="org.desktop.telegram"
+                                                class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) rounded-lg px-2 py-2 text-[0.76rem] outline-none"
+                                                onInput={(event) => updateRule(zoneId(), ruleIndex, { value: event.currentTarget.value })}
+                                              />
+                                              <button
+                                                type="button"
+                                                data-custom-layout-overlay-rule-remove
+                                                class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2 py-2 text-[0.72rem] font-medium"
+                                                onClick={() => removeRule(zoneId(), ruleIndex)}
+                                              >
+                                                Remove
+                                              </button>
+                                            </div>
+                                          )}
+                                        </Index>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-custom-layout-overlay-rule-add
+                                        class="border border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover) cursor-pointer rounded-lg px-3 py-2 text-[0.76rem] font-medium"
+                                        onClick={() => addRule(zoneId())}
+                                      >
+                                        Add rule
+                                      </button>
+                                    </div>
+                                </Show>
+                              )
+                            }}
+                          </Show>
 
                           <Show when={splitPreviewRenderState()}>
                             {(state) => (
@@ -841,9 +1119,9 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                         <span class="text-[0.72rem] text-(--shell-text-muted)">{draftLayouts().length}</span>
                       </div>
                       <div class="flex max-h-[24rem] min-w-0 flex-col gap-2 overflow-y-auto pr-1">
-                        <For each={draftLayouts()}>
+                        <Index each={draftLayouts()}>
                           {(layout, index) => {
-                            const selected = () => selectedLayoutId() === layout.id
+                            const selected = () => selectedLayoutId() === layout().id
                             return (
                               <div
                                 class="rounded-xl border bg-(--shell-surface) transition-colors"
@@ -855,15 +1133,15 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                               >
                                 <button
                                   type="button"
-                                  data-custom-layout-overlay-layout={layout.id}
+                                  data-custom-layout-overlay-layout={layout().id}
                                   aria-pressed={selected()}
                                   class="hover:bg-(--shell-surface-elevated) cursor-pointer flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left transition-colors"
                                   classList={{
                                     'hover:bg-transparent': selected(),
                                   }}
                                   onClick={() => {
-                                    setSelectedLayoutId(layout.id)
-                                    setSelectedZoneId(firstLeafZoneId(layout.root))
+                                    setSelectedLayoutId(layout().id)
+                                    setSelectedZoneId(firstLeafZoneId(layout().root))
                                   }}
                                 >
                                   <div
@@ -873,18 +1151,18 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                                       'border-(--shell-border) bg-(--shell-surface-panel) text-(--shell-text-dim)': !selected(),
                                     }}
                                   >
-                                    {index() + 1}
+                                    {index + 1}
                                   </div>
                                   <div class="min-w-0 flex-1">
                                     <div class="flex items-center justify-between gap-3">
-                                      <span class="truncate text-[0.94rem] font-semibold text-(--shell-text)">{layout.name}</span>
+                                      <span class="truncate text-[0.94rem] font-semibold text-(--shell-text)">{layout().name}</span>
                                       <Show when={selected()}>
                                         <span class="rounded-full border border-(--shell-accent-border) bg-(--shell-accent) px-2.5 py-1 text-[0.68rem] font-semibold text-(--shell-accent-foreground)">
                                           Editing
                                         </span>
                                       </Show>
                                     </div>
-                                    <div class="mt-1 text-[0.76rem] text-(--shell-text-muted)">{collectZoneIds(layout.root).length} zones</div>
+                                    <div class="mt-1 text-[0.76rem] text-(--shell-text-muted)">{collectZoneIds(layout().root).length} zones</div>
                                   </div>
                                 </button>
                                 <Show when={selected()}>
@@ -892,7 +1170,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                                     <label class="grid gap-1.5">
                                       <span class="text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-(--shell-text-dim)">Rename</span>
                                       <input
-                                        value={layout.name}
+                                        value={layout().name}
                                         placeholder="Layout name"
                                         data-custom-layout-overlay-name
                                         class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) rounded-lg px-3 py-2 text-[0.84rem] outline-none"
@@ -901,11 +1179,11 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                                     </label>
                                     <div class="flex items-center justify-between gap-3">
                                       <div class="text-[0.76rem] text-(--shell-text-muted)">
-                                        {collectZoneIds(layout.root).length} zones
+                                        {collectZoneIds(layout().root).length} zones
                                       </div>
                                       <button
                                         type="button"
-                                        data-custom-layout-overlay-remove={layout.id}
+                                        data-custom-layout-overlay-remove={layout().id}
                                         class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-3 py-2 text-[0.76rem] font-medium"
                                         onClick={removeSelectedLayout}
                                       >
@@ -917,7 +1195,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
                               </div>
                             )
                           }}
-                        </For>
+                        </Index>
                       </div>
                     </div>
                   </div>

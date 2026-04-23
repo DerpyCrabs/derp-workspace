@@ -58,7 +58,8 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
                 </div>
                 <Show when={(() => {
                   props.tilingCfgRev()
-                  return getMonitorLayout(monitorName).layout.type === 'manual-snap'
+                  const type = getMonitorLayout(monitorName).layout.type
+                  return type === 'manual-snap' || type === 'custom-auto'
                 })()}>
                   <div class="grid gap-3">
                     <CustomLayoutEditor

@@ -291,6 +291,7 @@ export interface ShellControls {
   settings_scratchpad_list?: Rect | null
   settings_scratchpad_save?: Rect | null
   settings_tiling_layout_option_grid?: Rect | null
+  settings_tiling_layout_option_custom_auto?: Rect | null
   settings_tiling_layout_option_manual_snap?: Rect | null
   settings_snap_layout_option_2x2?: Rect | null
   settings_snap_layout_option_3x2?: Rect | null
@@ -300,6 +301,10 @@ export interface ShellControls {
   custom_layout_overlay_add?: Rect | null
   custom_layout_overlay_save?: Rect | null
   custom_layout_overlay_close?: Rect | null
+  custom_layout_overlay_zone_rules?: Rect | null
+  custom_layout_overlay_selected_zone_rules?: Rect | null
+  custom_layout_overlay_rule_add?: Rect | null
+  custom_layout_overlay_rule_value?: Rect | null
   settings_custom_layout_split_vertical?: Rect | null
   settings_custom_layout_split_horizontal?: Rect | null
   settings_custom_layout_delete_zone?: Rect | null
@@ -2247,6 +2252,7 @@ export function nativeBin(): string {
 
 export function buildNativeSpawnCommand({
   title,
+  appId = NATIVE_APP_ID,
   token,
   strip,
   width = 480,
@@ -2254,6 +2260,7 @@ export function buildNativeSpawnCommand({
   dropBufferAfterDraw = false,
 }: {
   title: string
+  appId?: string
   token: string
   strip: string
   width?: number
@@ -2265,7 +2272,7 @@ export function buildNativeSpawnCommand({
     '--title',
     shellQuote(title),
     '--app-id',
-    NATIVE_APP_ID,
+    shellQuote(appId),
     '--token',
     shellQuote(token),
     '--strip',
@@ -2288,16 +2295,17 @@ export async function spawnNativeWindow(
   knownWindowIds: Set<number>,
   {
     title,
+    appId = NATIVE_APP_ID,
     token,
     strip,
     width,
     height,
     dropBufferAfterDraw,
-  }: { title: string; token: string; strip: string; width?: number; height?: number; dropBufferAfterDraw?: boolean },
+  }: { title: string; appId?: string; token: string; strip: string; width?: number; height?: number; dropBufferAfterDraw?: boolean },
 ): Promise<NativeSpawnResult> {
-  const command = buildNativeSpawnCommand({ title, token, strip, width, height, dropBufferAfterDraw })
+  const command = buildNativeSpawnCommand({ title, appId, token, strip, width, height, dropBufferAfterDraw })
   await spawnCommand(base, command)
-  return waitForSpawnedWindow(base, knownWindowIds, { title, appId: NATIVE_APP_ID, command })
+  return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })
 }
 
 export async function waitForSpawnedWindow(

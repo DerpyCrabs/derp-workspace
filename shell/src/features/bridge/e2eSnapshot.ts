@@ -814,6 +814,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         '[data-settings-tiling-layout-option="grid"]',
         args.origin,
       ),
+      settings_tiling_layout_option_custom_auto: queryRect(
+        cache,
+        '[data-settings-tiling-layout-option="custom-auto"]',
+        args.origin,
+      ),
       settings_tiling_layout_option_manual_snap: queryRect(
         cache,
         '[data-settings-tiling-layout-option="manual-snap"]',
@@ -845,6 +850,26 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       custom_layout_overlay_add: queryRect(cache, '[data-custom-layout-overlay-add]', args.origin),
       custom_layout_overlay_save: queryRect(cache, '[data-custom-layout-overlay-save]', args.origin),
       custom_layout_overlay_close: queryRect(cache, '[data-custom-layout-overlay-close]', args.origin),
+      custom_layout_overlay_zone_rules: queryRect(
+        cache,
+        '[data-custom-layout-overlay-zone-rules]',
+        args.origin,
+      ),
+      custom_layout_overlay_selected_zone_rules: queryRect(
+        cache,
+        '[data-custom-layout-overlay-zone-rules][data-custom-layout-overlay-zone-rules-selected]',
+        args.origin,
+      ),
+      custom_layout_overlay_rule_add: queryRect(
+        cache,
+        '[data-custom-layout-overlay-rule-add]',
+        args.origin,
+      ),
+      custom_layout_overlay_rule_value: queryRect(
+        cache,
+        '[data-custom-layout-overlay-rule-value]',
+        args.origin,
+      ),
       settings_custom_layout_split_vertical: queryRect(
         cache,
         '[data-custom-layout-overlay-split-vertical]',

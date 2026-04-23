@@ -26,11 +26,28 @@ export type WorkspacePreTileGeometry = {
   bounds: Rect
 }
 
-export type WorkspaceMonitorLayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid'
+export type WorkspaceMonitorLayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid' | 'custom-auto'
+
+export type WorkspaceSlotRule = {
+  field: 'app_id' | 'title' | 'x11_class' | 'x11_instance' | 'kind'
+  op: 'equals' | 'contains' | 'starts_with'
+  value: string
+}
+
+export type WorkspaceCustomAutoSlot = {
+  slotId: string
+  x: number
+  y: number
+  width: number
+  height: number
+  rules?: WorkspaceSlotRule[]
+}
 
 export type WorkspaceMonitorLayoutParams = {
   masterRatio?: number
   maxColumns?: number
+  customLayoutId?: string
+  customSlots?: WorkspaceCustomAutoSlot[]
 }
 
 export type WorkspaceMonitorLayoutState = {
@@ -152,6 +169,16 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
     if (layoutA.layout !== layoutB.layout) return false
     if (layoutA.params.masterRatio !== layoutB.params.masterRatio) return false
     if (layoutA.params.maxColumns !== layoutB.params.maxColumns) return false
+    if (layoutA.params.customLayoutId !== layoutB.params.customLayoutId) return false
+    const slotsA = layoutA.params.customSlots ?? []
+    const slotsB = layoutB.params.customSlots ?? []
+    if (slotsA.length !== slotsB.length) return false
+    for (let slotIndex = 0; slotIndex < slotsA.length; slotIndex += 1) {
+      const slotA = slotsA[slotIndex]
+      const slotB = slotsB[slotIndex]
+      if (slotA.slotId !== slotB.slotId) return false
+      if (slotA.x !== slotB.x || slotA.y !== slotB.y || slotA.width !== slotB.width || slotA.height !== slotB.height) return false
+    }
   }
   if (a.preTileGeometry.length !== b.preTileGeometry.length) return false
   for (let entryIndex = 0; entryIndex < a.preTileGeometry.length; entryIndex += 1) {
@@ -295,7 +322,7 @@ function normalizePreTileGeometry(raw: unknown): WorkspacePreTileGeometry[] {
 }
 
 function isWorkspaceMonitorLayoutType(value: unknown): value is WorkspaceMonitorLayoutType {
-  return value === 'manual-snap' || value === 'master-stack' || value === 'columns' || value === 'grid'
+  return value === 'manual-snap' || value === 'master-stack' || value === 'columns' || value === 'grid' || value === 'custom-auto'
 }
 
 function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
@@ -327,6 +354,24 @@ function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
           : Number(paramsRecord.maxColumns)
       if (Number.isFinite(maxColumns) && Math.trunc(maxColumns) >= 1) {
         params.maxColumns = Math.trunc(maxColumns)
+      }
+      if (typeof paramsRecord.customLayoutId === 'string' && paramsRecord.customLayoutId.trim()) {
+        params.customLayoutId = paramsRecord.customLayoutId.trim()
+      }
+      if (Array.isArray(paramsRecord.customSlots)) {
+        const customSlots: WorkspaceCustomAutoSlot[] = []
+        for (const slot of paramsRecord.customSlots) {
+          if (!slot || typeof slot !== 'object' || Array.isArray(slot)) continue
+          const slotRecord = slot as Record<string, unknown>
+          const slotId = typeof slotRecord.slotId === 'string' ? slotRecord.slotId.trim() : ''
+          const x = typeof slotRecord.x === 'number' ? slotRecord.x : Number(slotRecord.x)
+          const y = typeof slotRecord.y === 'number' ? slotRecord.y : Number(slotRecord.y)
+          const width = typeof slotRecord.width === 'number' ? slotRecord.width : Number(slotRecord.width)
+          const height = typeof slotRecord.height === 'number' ? slotRecord.height : Number(slotRecord.height)
+          if (!slotId || ![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue
+          customSlots.push({ slotId, x, y, width, height })
+        }
+        if (customSlots.length > 0) params.customSlots = customSlots
       }
     }
     out.push({ outputName, layout, params })

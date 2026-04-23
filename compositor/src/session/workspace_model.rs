@@ -50,6 +50,46 @@ pub enum WorkspaceMonitorLayoutType {
     MasterStack,
     Columns,
     Grid,
+    CustomAuto,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSlotRuleField {
+    #[default]
+    AppId,
+    Title,
+    X11Class,
+    X11Instance,
+    Kind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSlotRuleOp {
+    #[default]
+    Equals,
+    Contains,
+    StartsWith,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSlotRule {
+    pub field: WorkspaceSlotRuleField,
+    pub op: WorkspaceSlotRuleOp,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceCustomAutoSlot {
+    #[serde(rename = "slotId")]
+    pub slot_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<WorkspaceSlotRule>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -66,6 +106,14 @@ pub struct WorkspaceMonitorLayoutParams {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_columns: Option<u32>,
+    #[serde(
+        default,
+        rename = "customLayoutId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub custom_layout_id: Option<String>,
+    #[serde(default, rename = "customSlots", skip_serializing_if = "Vec::is_empty")]
+    pub custom_slots: Vec<WorkspaceCustomAutoSlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

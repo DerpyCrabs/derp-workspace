@@ -1,6 +1,7 @@
 import {
   BTN_LEFT,
   BTN_RIGHT,
+  KEY,
   SHELL_UI_PORTAL_PICKER_WINDOW_ID,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
@@ -14,6 +15,7 @@ import {
   compositorWindowById,
   createTimingMarks,
   defineGroup,
+  discoverReadyBase,
   ensureNativePair,
   getJson,
   getShellHtml,
@@ -26,6 +28,8 @@ import {
   pointerWheel,
   postJson,
   runKeybind,
+  spawnNativeWindow,
+  tapKey,
   taskbarForMonitor,
   waitFor,
   waitForNativeFocus,
@@ -491,7 +495,280 @@ async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
   await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
+async function selectSettingsLayoutType(base: string, layout: 'manual-snap' | 'custom-auto') {
+  const opened = await openSettings(base, 'click')
+  await focusSettingsWindow(base)
+  if (opened.shell.controls?.settings_tab_tiling) {
+    await clickRect(base, opened.shell.controls.settings_tab_tiling)
+  }
+  let shell = await waitFor(
+    `wait for ${layout} layout trigger`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.settings_tiling_layout_trigger ? next : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('tiling layout trigger', shell.controls.settings_tiling_layout_trigger, 12))
+  shell = await waitFor(
+    `wait for ${layout} layout option`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const option =
+        layout === 'custom-auto'
+          ? next.controls?.settings_tiling_layout_option_custom_auto
+          : next.controls?.settings_tiling_layout_option_manual_snap
+      return option ? next : null
+    },
+    3000,
+    100,
+  )
+  const option =
+    layout === 'custom-auto'
+      ? shell.controls.settings_tiling_layout_option_custom_auto
+      : shell.controls.settings_tiling_layout_option_manual_snap
+  await clickRect(base, assertRectMinSize(`${layout} layout option`, option, 12))
+}
+
+async function configureCustomAutoRuleLayout(base: string): Promise<string> {
+  await selectSettingsLayoutType(base, 'manual-snap')
+  let shell = await waitFor(
+    'wait for custom layout add control for auto layout',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.settings_custom_layout_add ? next : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom layout add', shell.controls.settings_custom_layout_add, 12))
+  shell = await waitFor(
+    'wait for custom layout overlay add',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.custom_layout_overlay_add ? next : null
+    },
+    3000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom layout overlay add', shell.controls.custom_layout_overlay_add, 12))
+  shell = await waitFor(
+    'wait for custom layout editor zone for auto layout',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.settings_custom_layout_editor_zone ? next : null
+    },
+    3000,
+    100,
+  )
+  const firstZone = assertRectMinSize('custom layout zone before split', shell.controls.settings_custom_layout_editor_zone, 80)
+  await clickPoint(base, firstZone.global_x + firstZone.width * 0.5, firstZone.global_y + firstZone.height * 0.5)
+  shell = await waitFor(
+    'wait for custom layout selected slot rule button',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.custom_layout_overlay_selected_zone_rules ? next : null
+    },
+    3000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom layout selected zone rules', shell.controls.custom_layout_overlay_selected_zone_rules, 12))
+  shell = await waitFor(
+    'wait for custom layout add rule button',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.custom_layout_overlay_rule_add ? next : null
+    },
+    3000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom layout add rule', shell.controls.custom_layout_overlay_rule_add, 12))
+  shell = await waitFor(
+    'wait for custom layout rule value input',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.custom_layout_overlay_rule_value ? next : null
+    },
+    3000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom layout rule value', shell.controls.custom_layout_overlay_rule_value, 24))
+  await tapKey(base, KEY.backspace)
+  for (const char of 'derpautorule') {
+    await tapKey(base, KEY[char as keyof typeof KEY])
+  }
+  shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  await clickRect(base, assertRectMinSize('custom layout overlay save', shell.controls.custom_layout_overlay_save, 12))
+  shell = await waitFor(
+    'wait for custom layout overlay close before custom auto',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.controls?.custom_layout_overlay_root ? null : next
+    },
+    3000,
+    100,
+  )
+  await clickRect(base, assertRectMinSize('custom snap layout option', shell.controls.settings_snap_layout_option_custom, 12))
+  await selectSettingsLayoutType(base, 'custom-auto')
+  const configured = await getSnapshots(base)
+  const settingsWindow = compositorWindowById(configured.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+  const outputName = settingsWindow?.output_name || configured.compositor.outputs[0]?.name || ''
+  assert(outputName, 'missing configured custom auto output')
+  shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
+  await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
+  return outputName
+}
+
+function assertAutoSlotWindow(
+  window: WindowSnapshot,
+  outputName: string,
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+  slot: 'left-top' | 'left-bottom' | 'right',
+) {
+  const work = monitorFrameRect(outputName, compositor, shell)
+  const halfWidth = Math.round(work.width / 2)
+  const halfHeight = Math.round(work.height / 2)
+  const frame =
+    slot === 'right'
+      ? { x: work.x + halfWidth, y: work.y, width: work.width - halfWidth, height: work.height }
+      : {
+          x: work.x,
+          y: slot === 'left-top' ? work.y : work.y + halfHeight,
+          width: halfWidth,
+          height: slot === 'left-top' ? halfHeight : work.height - halfHeight,
+        }
+  assertWindowMatchesRect(
+    window,
+    tiledClientRectFromFrame(frame),
+    `custom auto ${slot}`,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
+  test('custom auto layout rules softly reserve slots and overflow into tabs', async ({ base, state }) => {
+    let currentBase = base
+    await postJson(currentBase, '/session_reload', { version: 1, shell: {} })
+    await waitFor(
+      'wait for custom auto clean shell restart',
+      async () => {
+        try {
+          await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
+          return null
+        } catch {
+          return true
+        }
+      },
+      5000,
+      100,
+    )
+    currentBase = await discoverReadyBase(45000)
+    state.base = currentBase
+    state.knownWindowIds = new Set()
+    state.spawnedNativeWindowIds.clear()
+    state.nativeLaunchByWindowId.clear()
+    const outputName = await configureCustomAutoRuleLayout(currentBase)
+    let completed = false
+    try {
+      const fillerA = await spawnNativeWindow(currentBase, state.knownWindowIds, {
+        title: 'Derp Auto Filler A',
+        token: 'auto-filler-a',
+        strip: '#b91c1c',
+      })
+      state.spawnedNativeWindowIds.add(fillerA.window.window_id)
+      const fillerB = await spawnNativeWindow(currentBase, state.knownWindowIds, {
+        title: 'Derp Auto Filler B',
+        token: 'auto-filler-b',
+        strip: '#15803d',
+      })
+      state.spawnedNativeWindowIds.add(fillerB.window.window_id)
+      const ruleWindow = await spawnNativeWindow(currentBase, state.knownWindowIds, {
+        title: 'derpautorule',
+        appId: 'derpautorule',
+        token: 'auto-rule',
+        strip: '#1d4ed8',
+      })
+      state.spawnedNativeWindowIds.add(ruleWindow.window.window_id)
+
+      const reserved = await waitFor(
+        'wait for custom auto reserved slot eviction',
+        async () => {
+          const { compositor, shell } = await getSnapshots(currentBase)
+          const a = compositorWindowById(compositor, fillerA.window.window_id)
+          const b = compositorWindowById(compositor, fillerB.window.window_id)
+          const rule = compositorWindowById(compositor, ruleWindow.window.window_id)
+          if (!a || !b || !rule) return null
+          try {
+            assertAutoSlotWindow(a, outputName, compositor, shell, 'left-top')
+            assertAutoSlotWindow(rule, outputName, compositor, shell, 'left-bottom')
+            assertAutoSlotWindow(b, outputName, compositor, shell, 'right')
+          } catch {
+            return null
+          }
+          return { compositor, shell, a, b, rule }
+        },
+        5000,
+        100,
+      )
+
+      const overflow = await spawnNativeWindow(currentBase, state.knownWindowIds, {
+        title: 'Derp Auto Overflow',
+        token: 'auto-overflow',
+        strip: '#a21caf',
+      })
+      state.spawnedNativeWindowIds.add(overflow.window.window_id)
+      const tabbed = await waitFor(
+        'wait for custom auto overflow tab',
+        async () => {
+          const { compositor, shell } = await getSnapshots(currentBase)
+          const group = shell.tab_groups?.find(
+            (entry) =>
+              entry.member_window_ids.includes(fillerB.window.window_id) &&
+              entry.member_window_ids.includes(overflow.window.window_id),
+          )
+          const visible = compositorWindowById(compositor, group?.visible_window_id ?? 0)
+          if (!group || !visible) return null
+          try {
+            assertAutoSlotWindow(visible, outputName, compositor, shell, 'right')
+          } catch {
+            return null
+          }
+          return { compositor, shell, group, visible }
+        },
+        5000,
+        100,
+      )
+
+      await writeJsonArtifact('custom-auto-layout-reserved-slots.json', reserved)
+      await writeJsonArtifact('custom-auto-layout-overflow-tab.json', tabbed)
+      completed = true
+    } finally {
+      if (completed) {
+        await postJson(currentBase, '/session_reload', { version: 1, shell: {} })
+        await waitFor(
+          'wait for custom auto cleanup shell restart',
+          async () => {
+            try {
+              await getJson<CompositorSnapshot>(currentBase, '/test/state/compositor')
+              return null
+            } catch {
+              return true
+            }
+          },
+          5000,
+          100,
+        )
+        state.base = await discoverReadyBase(45000)
+        state.knownWindowIds = new Set()
+        state.spawnedNativeWindowIds.clear()
+        state.nativeLaunchByWindowId.clear()
+        return
+      }
+    }
+  })
+
   test('dragging a native titlebar into the strip opens the picker without Win', async ({ base, state }) => {
     await selectSettingsSnapLayout(base, '3x2')
     const { red } = await ensureNativePair(base, state)

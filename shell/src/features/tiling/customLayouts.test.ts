@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  customLayoutSlotRules,
   listCustomLayoutMergePreviewZoneIds,
   listCustomLayoutZones,
   mergeCustomLayoutZones,
+  setCustomLayoutSlotRules,
   type CustomLayout,
 } from './customLayouts'
 
@@ -97,6 +99,20 @@ const currentScreenshotMergeLayout: CustomLayout = {
 }
 
 describe('customLayouts merge', () => {
+  it('stores slot rules and drops them when their zone disappears', () => {
+    const withRule = setCustomLayoutSlotRules(fourZoneMergeLayout, '2', [
+      { field: 'app_id', op: 'equals', value: 'org.desktop.telegram' },
+    ])
+
+    expect(customLayoutSlotRules(withRule, '2')).toEqual([
+      { field: 'app_id', op: 'equals', value: 'org.desktop.telegram' },
+    ])
+
+    const merged = mergeCustomLayoutZones(withRule, '1', '3').layout
+    expect(listCustomLayoutZones(merged).map((zone) => zone.zoneId)).toEqual(['1', '4'])
+    expect(customLayoutSlotRules(merged, '2')).toEqual([])
+  })
+
   it('previews only zones that share the source edge toward the target', () => {
     expect(listCustomLayoutMergePreviewZoneIds(fourZoneMergeLayout, '1', '3')).toEqual(['1', '2', '3'])
   })

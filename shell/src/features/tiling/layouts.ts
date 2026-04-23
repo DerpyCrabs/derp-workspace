@@ -1,8 +1,24 @@
 import type { Rect } from './tileZones'
 
-export type LayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid'
+import type { CustomLayoutSlotRule } from './customLayouts'
 
-export type LayoutParams = { masterRatio?: number; maxColumns?: number }
+export type LayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid' | 'custom-auto'
+
+export type CustomAutoSlotParam = {
+  slotId: string
+  x: number
+  y: number
+  width: number
+  height: number
+  rules?: CustomLayoutSlotRule[]
+}
+
+export type LayoutParams = {
+  masterRatio?: number
+  maxColumns?: number
+  customLayoutId?: string
+  customSlots?: CustomAutoSlotParam[]
+}
 
 export interface TilingLayout {
   type: LayoutType
@@ -57,6 +73,21 @@ function masterStackFromIds(windowIds: number[], workArea: Rect, masterRatio: nu
 
 export const ManualSnapLayout: TilingLayout = {
   type: 'manual-snap',
+  computeLayout() {
+    return new Map()
+  },
+  addWindow(_windowId, currentLayout) {
+    return new Map(currentLayout)
+  },
+  removeWindow(windowId, currentLayout) {
+    const m = new Map(currentLayout)
+    m.delete(windowId)
+    return m
+  },
+}
+
+export const CustomAutoLayout: TilingLayout = {
+  type: 'custom-auto',
   computeLayout() {
     return new Map()
   },
@@ -201,6 +232,8 @@ export function createLayout(type: LayoutType): TilingLayout {
       return ColumnsLayout
     case 'grid':
       return GridLayout
+    case 'custom-auto':
+      return CustomAutoLayout
     default: {
       const _exhaustive: never = type
       return _exhaustive

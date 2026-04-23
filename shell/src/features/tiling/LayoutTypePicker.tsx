@@ -3,7 +3,7 @@ import { Select } from '@/host/Select'
 import type { LayoutType } from './layouts'
 import { getMonitorLayout, setMonitorLayout } from './tilingConfig'
 
-const OPTIONS: LayoutType[] = ['manual-snap', 'master-stack', 'columns', 'grid']
+const OPTIONS: LayoutType[] = ['manual-snap', 'custom-auto', 'master-stack', 'columns', 'grid']
 
 export const LayoutTypePicker: Component<{
   outputName: string

@@ -20,6 +20,16 @@ export type CustomLayout = {
   id: string
   name: string
   root: CustomLayoutNode
+  slotRules?: Record<string, CustomLayoutSlotRule[]>
+}
+
+export type CustomLayoutSlotRuleField = 'app_id' | 'title' | 'x11_class' | 'x11_instance' | 'kind'
+export type CustomLayoutSlotRuleOp = 'equals' | 'contains' | 'starts_with'
+
+export type CustomLayoutSlotRule = {
+  field: CustomLayoutSlotRuleField
+  op: CustomLayoutSlotRuleOp
+  value: string
 }
 
 export type CustomLayoutZoneRect = {
@@ -48,6 +58,8 @@ const CUSTOM_LAYOUT_ID_PREFIX = 'custom-layout-'
 const CUSTOM_ZONE_ID_PREFIX = 'zone-'
 const CUSTOM_SNAP_ZONE_PREFIX = 'custom:'
 const CUSTOM_LAYOUT_EPSILON = 0.0001
+const CUSTOM_LAYOUT_RULE_FIELDS: CustomLayoutSlotRuleField[] = ['app_id', 'title', 'x11_class', 'x11_instance', 'kind']
+const CUSTOM_LAYOUT_RULE_OPS: CustomLayoutSlotRuleOp[] = ['equals', 'contains', 'starts_with']
 
 function nextId(prefix: string): string {
   return `${prefix}${Math.random().toString(36).slice(2, 10)}`
@@ -83,6 +95,64 @@ export function renameCustomLayout(layout: CustomLayout, name: string): CustomLa
   return {
     ...layout,
     name: nextName.length > 0 ? nextName : layout.name,
+  }
+}
+
+function sanitizeSlotRule(value: unknown): CustomLayoutSlotRule | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const field = typeof row.field === 'string' ? row.field : ''
+  const op = typeof row.op === 'string' ? row.op : ''
+  const rawValue = typeof row.value === 'string' ? row.value.trim() : ''
+  return {
+    field: CUSTOM_LAYOUT_RULE_FIELDS.includes(field as CustomLayoutSlotRuleField)
+      ? field as CustomLayoutSlotRuleField
+      : 'app_id',
+    op: CUSTOM_LAYOUT_RULE_OPS.includes(op as CustomLayoutSlotRuleOp)
+      ? op as CustomLayoutSlotRuleOp
+      : 'equals',
+    value: rawValue.slice(0, 256),
+  }
+}
+
+export function sanitizeCustomLayoutSlotRules(
+  value: unknown,
+  zoneIds: readonly string[],
+): Record<string, CustomLayoutSlotRule[]> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const zoneSet = new Set(zoneIds)
+  const out: Record<string, CustomLayoutSlotRule[]> = {}
+  for (const [zoneId, rawRules] of Object.entries(value as Record<string, unknown>)) {
+    if (!zoneSet.has(zoneId) || !Array.isArray(rawRules)) continue
+    const rules = rawRules
+      .map(sanitizeSlotRule)
+      .filter((rule): rule is CustomLayoutSlotRule => rule !== null)
+      .slice(0, 16)
+    if (rules.length > 0) out[zoneId] = rules
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+export function customLayoutSlotRules(
+  layout: CustomLayout,
+  zoneId: string,
+): CustomLayoutSlotRule[] {
+  return layout.slotRules?.[zoneId] ?? []
+}
+
+export function setCustomLayoutSlotRules(
+  layout: CustomLayout,
+  zoneId: string,
+  rules: CustomLayoutSlotRule[],
+): CustomLayout {
+  if (!containsZoneId(layout.root, zoneId)) return layout
+  const sanitized = sanitizeCustomLayoutSlotRules(
+    { ...(layout.slotRules ?? {}), [zoneId]: rules },
+    listCustomLayoutZones(layout).map((zone) => zone.zoneId),
+  )
+  return {
+    ...layout,
+    ...(sanitized ? { slotRules: sanitized } : { slotRules: undefined }),
   }
 }
 
@@ -212,10 +282,15 @@ export function removeCustomLayoutZone(
   if (!next.changed || next.node === null) {
     return { layout, nextZoneId: firstLeafZoneId(layout.root) }
   }
+  const nextLayout = {
+    ...layout,
+    root: next.node,
+  }
+  const zoneIds = listCustomLayoutZones(nextLayout).map((zone) => zone.zoneId)
   return {
     layout: {
-      ...layout,
-      root: next.node,
+      ...nextLayout,
+      slotRules: sanitizeCustomLayoutSlotRules(nextLayout.slotRules, zoneIds),
     },
     nextZoneId: next.siblingZoneId ?? firstLeafZoneId(next.node),
   }
@@ -525,6 +600,10 @@ export function mergeCustomLayoutZones(
     layout: {
       ...layout,
       root: next.nextRoot,
+      slotRules: sanitizeCustomLayoutSlotRules(
+        layout.slotRules,
+        listCustomLayoutZones({ ...layout, root: next.nextRoot }).map((zone) => zone.zoneId),
+      ),
     },
     nextZoneId: firstZoneId,
   }
@@ -642,7 +721,8 @@ export function sanitizeCustomLayouts(value: unknown): CustomLayout[] {
     }
     if (!valid || zones.length === 0) continue
     seenLayoutIds.add(id)
-    out.push({ id, name, root })
+    const slotRules = sanitizeCustomLayoutSlotRules(row.slotRules, zones.map((zone) => zone.zoneId))
+    out.push(slotRules ? { id, name, root, slotRules } : { id, name, root })
   }
   return out
 }

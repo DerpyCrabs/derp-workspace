@@ -31,7 +31,7 @@ import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/
 import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { CustomLayoutOverlay, type CustomLayoutOverlayState } from '@/features/tiling/CustomLayoutOverlay'
-import { getMonitorLayout, setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
+import { customAutoLayoutParamsForMonitor, getMonitorLayout, setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
@@ -729,13 +729,14 @@ function App() {
     const outputsKey = separator >= 0 ? spec.slice(separator + 1) : ''
     for (const outputName of outputsKey ? outputsKey.split('\0') : []) {
       const { layout, params } = getMonitorLayout(outputName)
+      const nextParams = layout.type === 'custom-auto' ? customAutoLayoutParamsForMonitor(outputName) : params
       shellWireSend(
         'workspace_mutation',
         JSON.stringify({
           type: 'set_monitor_layout',
           outputName,
           layout: layout.type,
-          params,
+          params: nextParams,
         }),
       )
     }

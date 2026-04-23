@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   customMonitorSnapLayout,
+  customAutoLayoutParamsForMonitor,
   getMonitorLayout,
   saveTilingConfig,
   setMonitorCustomLayouts,
   setMonitorLayout,
   setMonitorSnapLayout,
 } from './tilingConfig'
-import { createCustomLayout } from './customLayouts'
+import { createCustomLayout, setCustomLayoutSlotRules } from './customLayouts'
 
 function stubLocalStorage() {
   const store = new Map<string, string>()
@@ -74,6 +75,42 @@ describe('tilingConfig', () => {
     setMonitorSnapLayout('DP-1', customMonitorSnapLayout(customLayout.id))
 
     expect(getMonitorLayout('DP-1').snapLayout).toEqual(customMonitorSnapLayout(customLayout.id))
+  })
+
+  it('builds custom auto params from selected layout zones and rules', () => {
+    stubLocalStorage()
+
+    const customLayout = setCustomLayoutSlotRules(createCustomLayout('Zones'), 'zone-missing', [])
+    const layout = {
+      ...customLayout,
+      root: {
+        kind: 'split' as const,
+        axis: 'vertical' as const,
+        ratio: 0.5,
+        first: { kind: 'leaf' as const, zoneId: 'slot-1' },
+        second: { kind: 'leaf' as const, zoneId: 'slot-2' },
+      },
+      slotRules: {
+        'slot-2': [{ field: 'app_id' as const, op: 'equals' as const, value: 'org.desktop.telegram' }],
+      },
+    }
+    setMonitorCustomLayouts('DP-1', [layout])
+    setMonitorSnapLayout('DP-1', customMonitorSnapLayout(layout.id))
+
+    expect(customAutoLayoutParamsForMonitor('DP-1')).toEqual({
+      customLayoutId: layout.id,
+      customSlots: [
+        { slotId: 'slot-1', x: 0, y: 0, width: 0.5, height: 1 },
+        {
+          slotId: 'slot-2',
+          x: 0.5,
+          y: 0,
+          width: 0.5,
+          height: 1,
+          rules: [{ field: 'app_id', op: 'equals', value: 'org.desktop.telegram' }],
+        },
+      ],
+    })
   })
 
   it('falls back to default assist layout when selected custom layout disappears', () => {
