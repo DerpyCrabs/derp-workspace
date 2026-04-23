@@ -40,6 +40,7 @@ export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): Layo
   const loc = rectGlobalToCanvasLocal(s.x, s.y, s.width, s.height, origin)
   return {
     name: s.name,
+    identity: s.identity,
     x: loc.x,
     y: loc.y,
     width: loc.w,

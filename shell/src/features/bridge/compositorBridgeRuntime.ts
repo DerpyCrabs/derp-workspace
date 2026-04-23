@@ -11,20 +11,11 @@ import {
 import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
 import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
-import { findAdjacentMonitor, rectCanvasLocalToGlobal, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
-import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
-import { coerceShellWindowId, pickLayoutScreenForMove, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
+import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
-import {
-  monitorTileFrameAreaGlobal,
-  monitorWorkAreaGlobal,
-  tiledFrameRectToClientRect,
-} from '@/features/tiling/tileSnap'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
-import { snapZoneToBoundsWithOccupied } from '@/features/tiling/tileZones'
-import { workspaceGetTiledZone, workspaceIsWindowTiled, type WorkspaceState } from '@/features/workspace/workspaceState'
-import { SHELL_LAYOUT_FLOATING, SHELL_LAYOUT_MAXIMIZED } from '@/lib/chromeConstants'
+import type { WorkspaceState } from '@/features/workspace/workspaceState'
 
 type CompositorFollowup = {
   syncExclusion?: boolean
@@ -71,6 +62,7 @@ type CompositorRuntimeWireOp =
   | 'set_maximized'
   | 'set_geometry'
   | 'presentation_fullscreen'
+  | 'window_intent'
 
 type CompositorBridgeRuntimeOptions = {
   setKeyboardLayoutLabel: (label: string | null) => void
@@ -279,6 +271,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.setScreenDraftRows(
         d.screens.map((s) => ({
           name: s.name,
+          identity: s.identity,
           x: s.x,
           y: s.y,
           width: s.width,
@@ -411,10 +404,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>
     coerceShellWindowId(d.target_window_id) ?? focusedWindowId
 
+  const sendWindowIntent = (action: string, windowId: number) =>
+    options.shellWireSend('window_intent', JSON.stringify({ action, windowId }))
+
   const applyKeybindDetail = (d: Extract<DerpShellDetail, { type: 'keybind' }>) => {
     const action = typeof d.action === 'string' ? d.action : ''
     const fid = options.focusedWindowId()
-    const wmap = options.allWindowsMap()
     if (action === 'launch_terminal') {
       void options.spawnInCompositor('foot')
       return
@@ -446,133 +441,37 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (action === 'toggle_fullscreen') {
       const tidFs = keybindTargetWindowId(d, fid)
       if (tidFs === null) return
-      const w = wmap.get(tidFs)
-      if (!w) return
-      options.shellWireSend('set_fullscreen', tidFs, w.fullscreen ? 0 : 1)
+      sendWindowIntent(action, tidFs)
       return
     }
     if (action === 'toggle_maximize') {
       const tid = keybindTargetWindowId(d, fid)
       if (tid === null) return
-      options.toggleShellMaximizeForWindow(tid)
+      sendWindowIntent(action, tid)
       return
     }
     if (action === 'move_monitor_left' || action === 'move_monitor_right') {
-      const fromEv = coerceShellWindowId(d.target_window_id)
-      const tid = fromEv ?? fid
+      const tid = keybindTargetWindowId(d, fid)
       if (tid === null) return
-      const w = wmap.get(tid)
-      if (!w || w.minimized) return
-      if (fromEv === null && w.fullscreen) return
-      const co = options.layoutCanvasOrigin()
-      const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), co)
-      const curMon = pickLayoutScreenForMove(w, list, co)
-      if (!curMon) return
-      const tgtMon = findAdjacentMonitor(curMon, list, action === 'move_monitor_left' ? 'left' : 'right')
-      if (!tgtMon) return
-      const reserveCur = options.reserveTaskbarForMon(curMon)
-      const reserveTgt = options.reserveTaskbarForMon(tgtMon)
-      const glob = rectCanvasLocalToGlobal(w.x, w.y, w.width, w.height, co)
-      let gRect: { x: number; y: number; w: number; h: number }
-      let layoutFlag: typeof SHELL_LAYOUT_FLOATING | typeof SHELL_LAYOUT_MAXIMIZED
-      if (w.maximized) {
-        gRect = shellMaximizedWorkAreaGlobalRect(tgtMon, reserveTgt)
-        layoutFlag = SHELL_LAYOUT_MAXIMIZED
-      } else if (workspaceIsWindowTiled(options.workspaceState(), tid)) {
-        const zone = workspaceGetTiledZone(options.workspaceState(), tid)!
-        const tw = monitorTileFrameAreaGlobal(tgtMon, reserveTgt)
-        const workRect: TileRect = { x: tw.x, y: tw.y, width: tw.w, height: tw.h }
-        const occ = options.occupiedSnapZonesOnMonitor(tgtMon, tid)
-        const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
-        if (!options.sendSetMonitorTile(tid, tgtMon.name, zone, gb)) return
-        const clientRect = tiledFrameRectToClientRect(gb)
-        gRect = { x: clientRect.x, y: clientRect.y, w: clientRect.width, h: clientRect.height }
-        layoutFlag = SHELL_LAYOUT_FLOATING
-      } else {
-        const srcWork = monitorWorkAreaGlobal(curMon, reserveCur)
-        const tgtWork = monitorWorkAreaGlobal(tgtMon, reserveTgt)
-        const relY = glob.y - srcWork.y
-        const gw = Math.min(Math.max(1, glob.w), tgtWork.w)
-        const gh = Math.min(Math.max(1, glob.h), tgtWork.h)
-        let newGlobX = tgtWork.x + Math.floor((tgtWork.w - gw) / 2)
-        let newGlobY = tgtWork.y + relY
-        const maxX = tgtWork.x + tgtWork.w - gw
-        const maxY = tgtWork.y + tgtWork.h - gh
-        newGlobX = Math.max(tgtWork.x, Math.min(newGlobX, maxX))
-        newGlobY = Math.max(tgtWork.y, Math.min(newGlobY, maxY))
-        gRect = { x: newGlobX, y: newGlobY, w: gw, h: gh }
-        layoutFlag = SHELL_LAYOUT_FLOATING
-      }
-      const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
-      options.shellWireSend('set_geometry', tid, loc.x, loc.y, loc.w, loc.h, layoutFlag)
-      options.scheduleExclusionZonesSync()
-      options.bumpSnapChrome()
+      sendWindowIntent(action, tid)
       return
     }
     if (action === 'tile_left' || action === 'tile_right') {
       const tid = keybindTargetWindowId(d, fid)
       if (tid === null) return
-      const w = wmap.get(tid)
-      if (!w || w.minimized) return
-      const co = options.layoutCanvasOrigin()
-      const list = screensListForLayout(options.screenDraftRows(), options.outputGeom(), co)
-      const mon = pickLayoutScreenForMove(w, list, co)
-      if (!mon) return
-      const zone: SnapZone = action === 'tile_left' ? 'left-half' : 'right-half'
-      const reserveTb = options.reserveTaskbarForMon(mon)
-      const wr = monitorTileFrameAreaGlobal(mon, reserveTb)
-      const workRect: TileRect = { x: wr.x, y: wr.y, width: wr.w, height: wr.h }
-      const occ = options.occupiedSnapZonesOnMonitor(mon, tid)
-      const gb = snapZoneToBoundsWithOccupied(zone, workRect, occ)
-      const clientRect = tiledFrameRectToClientRect(gb)
-      const gRect = { x: clientRect.x, y: clientRect.y, w: clientRect.width, h: clientRect.height }
-      const loc = rectGlobalToCanvasLocal(gRect.x, gRect.y, gRect.w, gRect.h, co)
-      const preTile = w.maximized
-        ? (options.floatBeforeMaximize.get(tid) ?? {
-            x: w.x,
-            y: w.y,
-            w: w.width,
-            h: w.height,
-          })
-        : { x: w.x, y: w.y, w: w.width, h: w.height }
-      if (!options.sendSetPreTileGeometry(tid, preTile)) return
-      if (!options.sendSetMonitorTile(tid, mon.name, zone, gb)) return
-      if (w.maximized) options.floatBeforeMaximize.delete(tid)
-      options.shellWireSend('set_geometry', tid, loc.x, loc.y, loc.w, loc.h, SHELL_LAYOUT_FLOATING)
-      options.scheduleExclusionZonesSync()
-      options.bumpSnapChrome()
+      sendWindowIntent(action, tid)
       return
     }
     if (action === 'tile_up') {
       const tidUp = keybindTargetWindowId(d, fid)
       if (tidUp === null) return
-      options.toggleShellMaximizeForWindow(tidUp)
+      sendWindowIntent(action, tidUp)
       return
     }
     if (action === 'tile_down') {
       const tidDown = keybindTargetWindowId(d, fid)
       if (tidDown === null) return
-      const w = wmap.get(tidDown)
-      if (!w || w.minimized) return
-      if (w.maximized) {
-        options.floatBeforeMaximize.delete(tidDown)
-        options.shellWireSend('set_maximized', tidDown, 0)
-        options.scheduleExclusionZonesSync()
-        options.bumpSnapChrome()
-        return
-      }
-      if (workspaceIsWindowTiled(options.workspaceState(), tidDown)) {
-        const tr = options.workspacePreTileSnapshot(tidDown)
-        if (tr) {
-          options.shellWireSend('set_geometry', tidDown, tr.x, tr.y, tr.w, tr.h, SHELL_LAYOUT_FLOATING)
-        }
-        if (!options.sendRemoveMonitorTile(tidDown)) return
-        if (!options.sendClearPreTileGeometry(tidDown)) return
-        options.scheduleExclusionZonesSync()
-        options.bumpSnapChrome()
-        return
-      }
-      options.shellWireSend('set_maximized', tidDown, 0)
+      sendWindowIntent(action, tidDown)
     }
   }
 

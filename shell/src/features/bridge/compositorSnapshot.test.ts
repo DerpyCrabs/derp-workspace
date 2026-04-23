@@ -85,7 +85,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(5),
+      ...u32(6),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -138,6 +138,68 @@ describe('decodeCompositorSnapshot', () => {
     })
   })
 
+  it('decodes output layout identity', () => {
+    const name = bytesForString('DP-1')
+    const identity = bytesForString('Framework:Display:123:340x190')
+    const outputLayout = frame([
+      ...u32(44),
+      ...u32(3840),
+      ...u32(2160),
+      ...u32(3840),
+      ...u32(2160),
+      ...u32(1),
+      ...u32(name.length),
+      ...name,
+      ...u32(identity.length),
+      ...identity,
+      ...i32(-1920),
+      ...i32(0),
+      ...u32(1920),
+      ...u32(1080),
+      ...u32(0),
+      ...u32(60000),
+      ...u32(name.length),
+      ...name,
+    ])
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(6),
+      ...u32(outputLayout.length),
+      ...u32(0),
+      ...u64(2n),
+      ...u64(0n),
+      ...outputLayout,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      details: [
+        {
+          type: 'output_layout',
+          canvas_logical_width: 3840,
+          canvas_logical_height: 2160,
+          canvas_logical_origin_x: -1920,
+          canvas_logical_origin_y: 0,
+          canvas_physical_width: 3840,
+          canvas_physical_height: 2160,
+          screens: [
+            {
+              name: 'DP-1',
+              identity: 'Framework:Display:123:340x190',
+              x: -1920,
+              y: 0,
+              width: 1920,
+              height: 1080,
+              transform: 0,
+              refresh_milli_hz: 60000,
+            },
+          ],
+          shell_chrome_primary: 'DP-1',
+        },
+      ],
+    })
+  })
+
   it('decodes compositor interaction state', () => {
     const interactionState = frame([
       ...u32(60),
@@ -161,7 +223,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...interactionState]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(5),
+      ...u32(6),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -205,7 +267,7 @@ describe('decodeCompositorSnapshot', () => {
     ])
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(5),
+      ...u32(6),
       ...u32(preview.length),
       ...u32(0),
       ...u64(2n),
@@ -235,7 +297,7 @@ describe('decodeCompositorSnapshot', () => {
     ])
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(5),
+      ...u32(6),
       ...u32(preview.length),
       ...u32(0),
       ...u64(2n),

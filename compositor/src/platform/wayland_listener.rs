@@ -43,6 +43,7 @@ pub fn init_wayland_listener(
                     }
                 }
                 state.state.handle_pending_wayland_client_disconnects();
+                state.state.shell_process_deferred_native_focus();
                 Ok(PostAction::Continue)
             },
         )

@@ -258,6 +258,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_window_intent(&self, json: String) {
+        self.run(move |s| {
+            s.apply_shell_window_intent_json(&json);
+        });
+    }
+
     pub fn shell_set_desktop_background(&self, json: String) {
         self.run(move |s| {
             s.apply_shell_desktop_background_json(&json);

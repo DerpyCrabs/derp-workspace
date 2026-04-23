@@ -767,7 +767,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         return
       }
     }
-  })
+  }, { shellRestart: true })
 
   test('dragging a native titlebar into the strip opens the picker without Win', async ({ base, state }) => {
     await selectSettingsSnapLayout(base, '3x2')

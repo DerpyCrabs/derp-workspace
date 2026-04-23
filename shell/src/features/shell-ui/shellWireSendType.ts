@@ -27,6 +27,7 @@ export type ShellCompositorWireOp =
   | 'set_fullscreen'
   | 'set_maximized'
   | 'presentation_fullscreen'
+  | 'window_intent'
   | 'set_output_layout'
   | 'set_shell_primary'
   | 'set_ui_scale'

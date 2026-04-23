@@ -223,6 +223,8 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     fn(op, arg)
   } else if (op === 'workspace_mutation' && typeof arg === 'string') {
     fn(op, arg)
+  } else if (op === 'window_intent' && typeof arg === 'string') {
+    fn(op, arg)
   } else if ((op === 'shell_hosted_window_state' || op === 'shell_hosted_window_title') && typeof arg === 'string') {
     fn(op, arg)
   } else if (op === 'set_shell_primary' && typeof arg === 'string') {

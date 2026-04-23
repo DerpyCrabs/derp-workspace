@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, Ordering};
@@ -8,41 +8,6 @@ use std::sync::{Mutex, OnceLock};
 use std::os::fd::AsRawFd;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
-
-#[derive(Clone, Default)]
-struct SnapshotState {
-    output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
-    output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
-    windows: BTreeMap<u32, shell_wire::ShellWindowSnapshot>,
-    focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
-    workspace_state_json: Option<String>,
-    shell_hosted_app_state_json: Option<String>,
-    interaction_state: Option<SnapshotInteractionState>,
-    native_drag_preview: Option<SnapshotNativeDragPreview>,
-    keyboard_layout: Option<String>,
-    volume_overlay: Option<(u16, bool, bool)>,
-    tray_hints: Option<(u32, i32, u32)>,
-    tray_sni: Option<Vec<shell_wire::TraySniItemWire>>,
-}
-
-#[derive(Clone, Copy)]
-struct SnapshotInteractionState {
-    pointer_x: i32,
-    pointer_y: i32,
-    move_window_id: u32,
-    resize_window_id: u32,
-    move_proxy_window_id: u32,
-    move_capture_window_id: u32,
-    move_visual: Option<shell_wire::CompositorInteractionVisual>,
-    resize_visual: Option<shell_wire::CompositorInteractionVisual>,
-}
-
-#[derive(Clone)]
-struct SnapshotNativeDragPreview {
-    window_id: u32,
-    generation: u32,
-    image_path: String,
-}
 
 struct SharedMmapFile {
     _file: File,
@@ -185,28 +150,6 @@ fn snapshot_read_cache() -> &'static Mutex<SnapshotReadCache> {
     CACHE.get_or_init(|| Mutex::new(SnapshotReadCache::default()))
 }
 
-fn touch_focused_window_stack_order(
-    windows: &mut BTreeMap<u32, shell_wire::ShellWindowSnapshot>,
-    focused: u32,
-) {
-    if !windows.contains_key(&focused) {
-        return;
-    }
-    let mut ids: Vec<u32> = windows.keys().copied().collect();
-    ids.sort_by(|a, b| {
-        let za = windows.get(a).map(|w| w.stack_z).unwrap_or(0);
-        let zb = windows.get(b).map(|w| w.stack_z).unwrap_or(0);
-        za.cmp(&zb).then_with(|| a.cmp(b))
-    });
-    ids.retain(|id| *id != focused);
-    ids.push(focused);
-    for (zi, id) in ids.into_iter().enumerate() {
-        if let Some(w) = windows.get_mut(&id) {
-            w.stack_z = (zi + 1) as u32;
-        }
-    }
-}
-
 fn mapped_snapshot_header(
     mapped: &[u8],
 ) -> Result<[u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize], String> {
@@ -230,15 +173,11 @@ fn open_snapshot_file(path: &Path) -> Result<File, String> {
 pub struct SharedShellSnapshotWriter {
     path: PathBuf,
     mmap: SharedMmapFile,
-    state: SnapshotState,
     sequence: u64,
+    last_payload: Option<Vec<u8>>,
 }
 
 impl SharedShellSnapshotWriter {
-    fn stable_shell_flags(prev: Option<&shell_wire::ShellWindowSnapshot>) -> u32 {
-        prev.map(|row| row.shell_flags).unwrap_or(0)
-    }
-
     pub fn new(runtime_dir: PathBuf) -> Result<Self, String> {
         super::cleanup_shell_runtime_files(&runtime_dir);
         let path = runtime_dir.join(format!("derp-shell-snapshot-{}.bin", std::process::id()));
@@ -247,10 +186,10 @@ impl SharedShellSnapshotWriter {
         let mut this = Self {
             path,
             mmap,
-            state: SnapshotState::default(),
             sequence: 0,
+            last_payload: None,
         };
-        this.publish()?;
+        this.publish_payload(Vec::new())?;
         Ok(this)
     }
 
@@ -258,246 +197,18 @@ impl SharedShellSnapshotWriter {
         &self.path
     }
 
-    pub fn apply_message(
+    pub fn publish_messages(
         &mut self,
-        msg: &shell_wire::DecodedCompositorToShellMessage,
+        messages: &[shell_wire::DecodedCompositorToShellMessage],
     ) -> Result<bool, String> {
-        let changed = match msg {
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. } => {
-                self.state.output_geometry = Some(msg.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
-                self.state.output_layout = Some(msg.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-                window_id,
-                surface_id,
-                x,
-                y,
-                w,
-                h,
-                title,
-                app_id,
-                client_side_decoration,
-                output_name,
-            } => {
-                let prev = self.state.windows.get(window_id);
-                self.state.windows.insert(
-                    *window_id,
-                    shell_wire::ShellWindowSnapshot {
-                        window_id: *window_id,
-                        surface_id: *surface_id,
-                        stack_z: prev.map(|w| w.stack_z).unwrap_or(*window_id),
-                        x: *x,
-                        y: *y,
-                        w: *w,
-                        h: *h,
-                        minimized: prev.map(|w| w.minimized).unwrap_or(0),
-                        maximized: prev.map(|w| w.maximized).unwrap_or(0),
-                        fullscreen: prev.map(|w| w.fullscreen).unwrap_or(0),
-                        client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: Self::stable_shell_flags(prev),
-                        title: title.clone(),
-                        app_id: app_id.clone(),
-                        output_name: output_name.clone(),
-                        capture_identifier: prev
-                            .map(|w| w.capture_identifier.clone())
-                            .unwrap_or_default(),
-                        kind: prev.map(|w| w.kind.clone()).unwrap_or_default(),
-                        x11_class: prev.map(|w| w.x11_class.clone()).unwrap_or_default(),
-                        x11_instance: prev.map(|w| w.x11_instance.clone()).unwrap_or_default(),
-                    },
-                );
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
-                self.state.windows.remove(window_id).is_some()
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                window_id,
-                surface_id,
-                x,
-                y,
-                w,
-                h,
-                maximized,
-                fullscreen,
-                client_side_decoration,
-                output_name,
-            } => {
-                let prev = self.state.windows.get(window_id);
-                self.state.windows.insert(
-                    *window_id,
-                    shell_wire::ShellWindowSnapshot {
-                        window_id: *window_id,
-                        surface_id: *surface_id,
-                        stack_z: prev.map(|row| row.stack_z).unwrap_or(*window_id),
-                        x: *x,
-                        y: *y,
-                        w: *w,
-                        h: *h,
-                        minimized: prev.map(|row| row.minimized).unwrap_or(0),
-                        maximized: if *maximized { 1 } else { 0 },
-                        fullscreen: if *fullscreen { 1 } else { 0 },
-                        client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: Self::stable_shell_flags(prev),
-                        title: prev.map(|row| row.title.clone()).unwrap_or_default(),
-                        app_id: prev.map(|row| row.app_id.clone()).unwrap_or_default(),
-                        output_name: output_name.clone(),
-                        capture_identifier: prev
-                            .map(|row| row.capture_identifier.clone())
-                            .unwrap_or_default(),
-                        kind: prev.map(|row| row.kind.clone()).unwrap_or_default(),
-                        x11_class: prev.map(|row| row.x11_class.clone()).unwrap_or_default(),
-                        x11_instance: prev.map(|row| row.x11_instance.clone()).unwrap_or_default(),
-                    },
-                );
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-                window_id,
-                surface_id,
-                title,
-                app_id,
-            } => {
-                let prev = self.state.windows.get(window_id);
-                self.state.windows.insert(
-                    *window_id,
-                    shell_wire::ShellWindowSnapshot {
-                        window_id: *window_id,
-                        surface_id: *surface_id,
-                        stack_z: prev.map(|row| row.stack_z).unwrap_or(*window_id),
-                        x: prev.map(|row| row.x).unwrap_or(0),
-                        y: prev.map(|row| row.y).unwrap_or(0),
-                        w: prev.map(|row| row.w).unwrap_or(0),
-                        h: prev.map(|row| row.h).unwrap_or(0),
-                        minimized: prev.map(|row| row.minimized).unwrap_or(0),
-                        maximized: prev.map(|row| row.maximized).unwrap_or(0),
-                        fullscreen: prev.map(|row| row.fullscreen).unwrap_or(0),
-                        client_side_decoration: prev
-                            .map(|row| row.client_side_decoration)
-                            .unwrap_or(0),
-                        shell_flags: Self::stable_shell_flags(prev),
-                        title: title.clone(),
-                        app_id: app_id.clone(),
-                        output_name: prev.map(|row| row.output_name.clone()).unwrap_or_default(),
-                        capture_identifier: prev
-                            .map(|row| row.capture_identifier.clone())
-                            .unwrap_or_default(),
-                        kind: prev.map(|row| row.kind.clone()).unwrap_or_default(),
-                        x11_class: prev.map(|row| row.x11_class.clone()).unwrap_or_default(),
-                        x11_instance: prev.map(|row| row.x11_instance.clone()).unwrap_or_default(),
-                    },
-                );
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { window_id, .. } => {
-                if let Some(wid) = window_id {
-                    touch_focused_window_stack_order(&mut self.state.windows, *wid);
-                }
-                self.state.focus_changed = Some(msg.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
-                self.state.workspace_state_json = Some(state_json.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json } => {
-                self.state.shell_hosted_app_state_json = Some(state_json.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::InteractionState {
-                pointer_x,
-                pointer_y,
-                move_window_id,
-                resize_window_id,
-                move_proxy_window_id,
-                move_capture_window_id,
-                move_visual,
-                resize_visual,
-            } => {
-                self.state.interaction_state = Some(SnapshotInteractionState {
-                    pointer_x: *pointer_x,
-                    pointer_y: *pointer_y,
-                    move_window_id: *move_window_id,
-                    resize_window_id: *resize_window_id,
-                    move_proxy_window_id: *move_proxy_window_id,
-                    move_capture_window_id: *move_capture_window_id,
-                    move_visual: *move_visual,
-                    resize_visual: *resize_visual,
-                });
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
-                window_id,
-                generation,
-                image_path,
-            } => {
-                if image_path.is_empty() {
-                    self.state.native_drag_preview = None;
-                } else {
-                    self.state.native_drag_preview = Some(SnapshotNativeDragPreview {
-                        window_id: *window_id,
-                        generation: *generation,
-                        image_path: image_path.clone(),
-                    });
-                }
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
-                self.state.windows.clear();
-                for window in windows {
-                    self.state.windows.insert(window.window_id, window.clone());
-                }
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id,
-                minimized,
-            } => {
-                let Some(window) = self.state.windows.get_mut(window_id) else {
-                    return Ok(false);
-                };
-                window.minimized = if *minimized { 1 } else { 0 };
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
-                self.state.keyboard_layout = Some(label.clone());
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
-                volume_linear_percent_x100,
-                muted,
-                state_known,
-            } => {
-                self.state.volume_overlay =
-                    Some((*volume_linear_percent_x100, *muted, *state_known));
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::TrayHints {
-                slot_count,
-                slot_w,
-                reserved_w,
-            } => {
-                self.state.tray_hints = Some((*slot_count, *slot_w, *reserved_w));
-                true
-            }
-            shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
-                self.state.tray_sni = Some(items.clone());
-                true
-            }
-            _ => false,
-        };
-        if changed {
-            self.publish()?;
-        }
-        Ok(changed)
+        warn_snapshot_invariants(messages);
+        self.publish_payload(encode_payload_messages(messages)?)
     }
 
-    fn publish(&mut self) -> Result<(), String> {
-        let payload = self.encode_payload()?;
+    fn publish_payload(&mut self, payload: Vec<u8>) -> Result<bool, String> {
+        if self.last_payload.as_deref() == Some(payload.as_slice()) {
+            return Ok(false);
+        }
         let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
         if payload.len() + header_len > self.mmap.len {
             return Err(format!("snapshot payload too large: {}", payload.len()));
@@ -508,9 +219,6 @@ impl SharedShellSnapshotWriter {
         shell_wire::write_shared_snapshot_header(&mut buf[..header_len], start_seq, 0, 0)?;
         fence(Ordering::Release);
         buf[header_len..header_len + payload.len()].copy_from_slice(&payload);
-        if header_len + payload.len() < buf.len() {
-            buf[header_len + payload.len()..].fill(0);
-        }
         fence(Ordering::Release);
         shell_wire::write_shared_snapshot_header(
             &mut buf[..header_len],
@@ -520,18 +228,42 @@ impl SharedShellSnapshotWriter {
         )?;
         fence(Ordering::Release);
         self.sequence = end_seq;
-        Ok(())
+        self.last_payload = Some(payload);
+        Ok(true)
     }
+}
 
-    fn encode_payload(&self) -> Result<Vec<u8>, String> {
-        let mut payload = Vec::new();
-        if let Some(shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
+fn encode_payload_messages(
+    messages: &[shell_wire::DecodedCompositorToShellMessage],
+) -> Result<Vec<u8>, String> {
+    let mut payload = Vec::new();
+    for msg in messages {
+        append_snapshot_message(&mut payload, msg)?;
+    }
+    Ok(payload)
+}
+
+fn extend_snapshot_packet(
+    payload: &mut Vec<u8>,
+    packet: Option<Vec<u8>>,
+    label: &str,
+) -> Result<(), String> {
+    let packet = packet.ok_or_else(|| format!("encode {label} snapshot"))?;
+    payload.extend_from_slice(&packet);
+    Ok(())
+}
+
+fn append_snapshot_message(
+    payload: &mut Vec<u8>,
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+) -> Result<(), String> {
+    match msg {
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
             logical_w,
             logical_h,
             physical_w,
             physical_h,
-        }) = &self.state.output_geometry
-        {
+        } => {
             payload.extend_from_slice(&shell_wire::encode_output_geometry(
                 *logical_w,
                 *logical_h,
@@ -539,91 +271,324 @@ impl SharedShellSnapshotWriter {
                 *physical_h,
             ));
         }
-        if let Some(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+        shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
             screens,
             shell_chrome_primary,
-        }) = &self.state.output_layout
-        {
-            if let Some(bytes) = shell_wire::encode_output_layout(
+        } => extend_snapshot_packet(
+            payload,
+            shell_wire::encode_output_layout(
                 *canvas_logical_w,
                 *canvas_logical_h,
                 *canvas_physical_w,
                 *canvas_physical_h,
                 screens,
                 shell_chrome_primary.as_deref(),
-            ) {
-                payload.extend_from_slice(&bytes);
-            }
+            ),
+            "output layout",
+        )?,
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+            window_id,
+            surface_id,
+            x,
+            y,
+            w,
+            h,
+            title,
+            app_id,
+            client_side_decoration,
+            output_name,
+        } => extend_snapshot_packet(
+            payload,
+            shell_wire::encode_window_mapped(
+                *window_id,
+                *surface_id,
+                *x,
+                *y,
+                *w,
+                *h,
+                title,
+                app_id,
+                *client_side_decoration,
+                output_name,
+            ),
+            "window mapped",
+        )?,
+        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
+            payload.extend_from_slice(&shell_wire::encode_window_unmapped(*window_id));
         }
-        let windows: Vec<_> = self.state.windows.values().cloned().collect();
-        if let Some(bytes) = shell_wire::encode_window_list(&windows) {
-            payload.extend_from_slice(&bytes);
-        }
-        if let Some(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+        shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+            window_id,
+            surface_id,
+            x,
+            y,
+            w,
+            h,
+            maximized,
+            fullscreen,
+            client_side_decoration,
+            output_name,
+        } => extend_snapshot_packet(
+            payload,
+            shell_wire::encode_window_geometry(
+                *window_id,
+                *surface_id,
+                *x,
+                *y,
+                *w,
+                *h,
+                *maximized,
+                *fullscreen,
+                *client_side_decoration,
+                output_name,
+            ),
+            "window geometry",
+        )?,
+        shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+            window_id,
+            surface_id,
+            title,
+            app_id,
+        } => extend_snapshot_packet(
+            payload,
+            shell_wire::encode_window_metadata(*window_id, *surface_id, title, app_id),
+            "window metadata",
+        )?,
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,
-        }) = &self.state.focus_changed
-        {
+        } => {
             payload.extend_from_slice(&shell_wire::encode_focus_changed(*surface_id, *window_id));
         }
-        if let Some(state_json) = &self.state.workspace_state_json {
-            if let Some(bytes) = shell_wire::encode_compositor_workspace_state(state_json) {
-                payload.extend_from_slice(&bytes);
-            }
+        shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_window_list(windows),
+                "window list",
+            )?
         }
-        if let Some(state_json) = &self.state.shell_hosted_app_state_json {
-            if let Some(bytes) = shell_wire::encode_compositor_shell_hosted_app_state(state_json) {
-                payload.extend_from_slice(&bytes);
-            }
+        shell_wire::DecodedCompositorToShellMessage::WindowState {
+            window_id,
+            minimized,
+        } => {
+            payload.extend_from_slice(&shell_wire::encode_window_state(*window_id, *minimized));
         }
-        if let Some(interaction) = self.state.interaction_state {
-            payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
-                interaction.pointer_x,
-                interaction.pointer_y,
-                interaction.move_window_id,
-                interaction.resize_window_id,
-                interaction.move_proxy_window_id,
-                interaction.move_capture_window_id,
-                interaction.move_visual,
-                interaction.resize_visual,
-            ));
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_keyboard_layout(label),
+                "keyboard layout",
+            )?;
         }
-        if let Some(preview) = &self.state.native_drag_preview {
-            if let Some(bytes) = shell_wire::encode_compositor_native_drag_preview(
-                preview.window_id,
-                preview.generation,
-                &preview.image_path,
-            ) {
-                payload.extend_from_slice(&bytes);
-            }
-        }
-        if let Some(label) = &self.state.keyboard_layout {
-            if let Some(bytes) = shell_wire::encode_compositor_keyboard_layout(label) {
-                payload.extend_from_slice(&bytes);
-            }
-        }
-        if let Some((volume_linear_percent_x100, muted, state_known)) = self.state.volume_overlay {
+        shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
+            volume_linear_percent_x100,
+            muted,
+            state_known,
+        } => {
             payload.extend_from_slice(&shell_wire::encode_compositor_volume_overlay(
-                volume_linear_percent_x100,
-                muted,
-                state_known,
+                *volume_linear_percent_x100,
+                *muted,
+                *state_known,
             ));
         }
-        if let Some((slot_count, slot_w, reserved_w)) = self.state.tray_hints {
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_workspace_state(state_json),
+                "workspace state",
+            )?;
+        }
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_shell_hosted_app_state(state_json),
+                "shell hosted app state",
+            )?;
+        }
+        shell_wire::DecodedCompositorToShellMessage::InteractionState {
+            pointer_x,
+            pointer_y,
+            move_window_id,
+            resize_window_id,
+            move_proxy_window_id,
+            move_capture_window_id,
+            move_visual,
+            resize_visual,
+        } => {
+            payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
+                *pointer_x,
+                *pointer_y,
+                *move_window_id,
+                *resize_window_id,
+                *move_proxy_window_id,
+                *move_capture_window_id,
+                *move_visual,
+                *resize_visual,
+            ));
+        }
+        shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+            window_id,
+            generation,
+            image_path,
+        } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_native_drag_preview(
+                    *window_id,
+                    *generation,
+                    image_path,
+                ),
+                "native drag preview",
+            )?;
+        }
+        shell_wire::DecodedCompositorToShellMessage::TrayHints {
+            slot_count,
+            slot_w,
+            reserved_w,
+        } => {
             payload.extend_from_slice(&shell_wire::encode_compositor_tray_hints(
-                slot_count, slot_w, reserved_w,
+                *slot_count,
+                *slot_w,
+                *reserved_w,
             ));
         }
-        if let Some(items) = &self.state.tray_sni {
-            let bytes = shell_wire::encode_compositor_tray_sni(items)
-                .ok_or_else(|| "encode tray sni snapshot".to_string())?;
-            payload.extend_from_slice(&bytes);
+        shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_tray_sni(items),
+                "tray sni",
+            )?;
         }
-        Ok(payload)
+        _ => {}
+    }
+    Ok(())
+}
+
+fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMessage]) {
+    let mut window_ids = HashSet::new();
+    let mut output_names = HashSet::new();
+    let mut window_list_count = 0usize;
+    let mut focused_window_id = None;
+    let mut workspace_json = None;
+    for msg in messages {
+        match msg {
+            shell_wire::DecodedCompositorToShellMessage::OutputLayout { screens, .. } => {
+                for screen in screens {
+                    if !output_names.insert(screen.name.clone()) {
+                        tracing::warn!(output = %screen.name, "snapshot duplicate output");
+                    }
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+                window_list_count += 1;
+                for window in windows {
+                    if !window_ids.insert(window.window_id) {
+                        tracing::warn!(window_id = window.window_id, "snapshot duplicate window");
+                    }
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { window_id, .. } => {
+                focused_window_id = *window_id;
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+                workspace_json = Some(state_json.as_str());
+            }
+            _ => {}
+        }
+    }
+    if window_list_count != 1 {
+        tracing::warn!(count = window_list_count, "snapshot window list count");
+    }
+    if let Some(window_id) = focused_window_id {
+        if window_id != 0 && !window_ids.contains(&window_id) {
+            tracing::warn!(window_id, "snapshot focused window missing");
+        }
+    }
+    for msg in messages {
+        if let shell_wire::DecodedCompositorToShellMessage::WindowList { windows } = msg {
+            for window in windows {
+                if !window.output_name.is_empty()
+                    && !output_names.is_empty()
+                    && !output_names.contains(&window.output_name)
+                {
+                    tracing::warn!(
+                        window_id = window.window_id,
+                        output = %window.output_name,
+                        "snapshot window output missing"
+                    );
+                }
+            }
+        }
+    }
+    if let Some(state_json) = workspace_json {
+        warn_workspace_invariants(state_json, &window_ids, &output_names);
+    }
+}
+
+fn warn_workspace_window_ref(value: &serde_json::Value, field: &str, window_ids: &HashSet<u32>) {
+    if let Some(id) = value.as_u64().and_then(|id| u32::try_from(id).ok()) {
+        if id != 0 && !window_ids.contains(&id) {
+            tracing::warn!(field, window_id = id, "snapshot workspace window missing");
+        }
+    }
+}
+
+fn warn_workspace_invariants(
+    state_json: &str,
+    window_ids: &HashSet<u32>,
+    output_names: &HashSet<String>,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(state_json) else {
+        tracing::warn!("snapshot workspace json invalid");
+        return;
+    };
+    if let Some(groups) = value.get("groups").and_then(|v| v.as_array()) {
+        for group in groups {
+            if let Some(ids) = group.get("windowIds").and_then(|v| v.as_array()) {
+                for id in ids {
+                    warn_workspace_window_ref(id, "groups.windowIds", window_ids);
+                }
+            }
+        }
+    }
+    if let Some(ids) = value.get("pinnedWindowIds").and_then(|v| v.as_array()) {
+        for id in ids {
+            warn_workspace_window_ref(id, "pinnedWindowIds", window_ids);
+        }
+    }
+    if let Some(splits) = value.get("splitByGroupId").and_then(|v| v.as_object()) {
+        for split in splits.values() {
+            if let Some(id) = split.get("leftWindowId") {
+                warn_workspace_window_ref(id, "splitByGroupId.leftWindowId", window_ids);
+            }
+        }
+    }
+    if let Some(monitors) = value.get("monitorTiles").and_then(|v| v.as_array()) {
+        for monitor in monitors {
+            if let Some(output) = monitor.get("outputName").and_then(|v| v.as_str()) {
+                if !output.is_empty() && !output_names.is_empty() && !output_names.contains(output)
+                {
+                    tracing::warn!(output, "snapshot workspace output missing");
+                }
+            }
+            if let Some(entries) = monitor.get("entries").and_then(|v| v.as_array()) {
+                for entry in entries {
+                    if let Some(id) = entry.get("windowId") {
+                        warn_workspace_window_ref(id, "monitorTiles.entries.windowId", window_ids);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(entries) = value.get("preTileGeometry").and_then(|v| v.as_array()) {
+        for entry in entries {
+            if let Some(id) = entry.get("windowId") {
+                warn_workspace_window_ref(id, "preTileGeometry.windowId", window_ids);
+            }
+        }
     }
 }
 

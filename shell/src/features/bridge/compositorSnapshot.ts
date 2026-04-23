@@ -15,7 +15,7 @@ const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
 
 const SNAPSHOT_MAGIC = 0x44525053
-const SNAPSHOT_ABI = 5
+const SNAPSHOT_ABI = 6
 const SNAPSHOT_HEADER_BYTES = 32
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
@@ -77,6 +77,13 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     const name = readUtf8(bytes, cursor, nameLen)
     if (name == null) return null
     cursor += nameLen
+    if (cursor + 4 > view.byteLength) return null
+    const identityLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (identityLen > MAX_OUTPUT_LAYOUT_NAME_BYTES) return null
+    const identity = readUtf8(bytes, cursor, identityLen)
+    if (identity == null) return null
+    cursor += identityLen
     if (cursor + 24 > view.byteLength) return null
     const x = view.getInt32(cursor, true)
     const y = view.getInt32(cursor + 4, true)
@@ -87,6 +94,7 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     cursor += 24
     screens.push({
       name,
+      identity,
       x,
       y,
       width,

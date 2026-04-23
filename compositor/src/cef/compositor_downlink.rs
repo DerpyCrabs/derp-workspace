@@ -178,8 +178,17 @@ fn apply_message(
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
             *snapshot_dirty = true;
         }
-        shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
-            *snapshot_dirty = true;
+        shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+            window_id,
+            generation,
+            image_path,
+        } => {
+            pending_details.push(json!({
+                "type": "native_drag_preview",
+                "window_id": window_id,
+                "generation": generation,
+                "image_path": image_path,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
             flush_shell_updates(browser, pending_details, snapshot_dirty);
@@ -328,13 +337,24 @@ fn apply_message(
         }
         shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
         | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-        | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
         | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
         | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
         | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
         | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
             *snapshot_dirty = true;
+        }
+        shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
+            volume_linear_percent_x100,
+            muted,
+            state_known,
+        } => {
+            pending_details.push(json!({
+                "type": "volume_overlay",
+                "volume_linear_percent_x100": volume_linear_percent_x100,
+                "muted": muted,
+                "state_known": state_known,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::TraySniMenu { menu } => {
             let rows: Vec<Value> = menu

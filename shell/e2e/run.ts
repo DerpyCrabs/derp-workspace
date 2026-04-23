@@ -60,6 +60,16 @@ function selectGroups(selectors: string[], fallbackGroups = defaultGroups) {
   }
 }
 
+function filterShellRestartTests(groups: typeof allGroups, enabled: boolean) {
+  if (enabled) return groups
+  return groups
+    .map((group) => ({
+      ...group,
+      tests: group.tests.filter((entry) => !entry.shellRestart),
+    }))
+    .filter((group) => group.tests.length > 0)
+}
+
 function parseArgs(argv: string[]) {
   const selectors: string[] = []
   let showTimeLogs = true
@@ -82,7 +92,8 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   setTimingLogsEnabled(args.showTimeLogs)
   const selectors = args.selectors.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean)
-  const { selected, unmatched } = selectGroups(selectors, args.sessionRestore ? allGroups : defaultGroups)
+  const { selected: rawSelected, unmatched } = selectGroups(selectors, args.sessionRestore ? allGroups : defaultGroups)
+  const selected = filterShellRestartTests(rawSelected, args.sessionRestore)
   if (unmatched.length > 0) {
     throw new Error(`unknown e2e spec selector(s): ${unmatched.join(', ')}; available: ${allGroups.map((group) => group.name).join(', ')}`)
   }

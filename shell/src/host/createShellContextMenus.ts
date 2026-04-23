@@ -89,6 +89,7 @@ function layoutScreenCssRect(
   const oy = origin?.y ?? 0
   return {
     name: screen.name,
+    identity: screen.identity,
     x: screen.x - ox,
     y: screen.y - oy,
     width: screen.width,

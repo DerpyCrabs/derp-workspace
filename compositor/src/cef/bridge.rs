@@ -16,6 +16,7 @@ use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 struct PendingCompositorMessages {
     scheduled: bool,
     messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
+    snapshot: Option<Vec<shell_wire::DecodedCompositorToShellMessage>>,
 }
 
 fn is_window_delta(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
@@ -124,28 +125,43 @@ wrap_task! {
         pending_work: Arc<AtomicBool>,
         pending_begin_frame: Arc<AtomicBool>,
         pending_begin_frame_reschedule: Arc<AtomicBool>,
+        shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
     }
 
     impl Task {
         fn execute(&self) {
-            let messages = {
+            let (messages, snapshot_messages) = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() {
+                if guard.messages.is_empty() && guard.snapshot.is_none() {
                     guard.scheduled = false;
                     self.pending_work.store(false, Ordering::Relaxed);
                     return;
                 }
                 guard.scheduled = false;
-                std::mem::take(&mut guard.messages)
+                (
+                    std::mem::take(&mut guard.messages),
+                    guard.snapshot.take(),
+                )
             };
-            compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+            if let Some(snapshot_messages) = snapshot_messages {
+                if let Ok(mut snapshot) = self.shared_snapshot.lock() {
+                    if let Some(snapshot) = snapshot.as_mut() {
+                        if let Err(error) = snapshot.publish_messages(&snapshot_messages) {
+                            tracing::warn!(%error, "publish shell snapshot failed");
+                        }
+                    }
+                }
+            }
+            if !messages.is_empty() {
+                compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+            }
             let should_repost = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() {
+                if guard.messages.is_empty() && guard.snapshot.is_none() {
                     self.pending_work.store(false, Ordering::Relaxed);
                     false
                 } else if guard.scheduled {
@@ -163,6 +179,7 @@ wrap_task! {
                     self.pending_work.clone(),
                     self.pending_begin_frame.clone(),
                     self.pending_begin_frame_reschedule.clone(),
+                    self.shared_snapshot.clone(),
                 );
                 if post_task(ThreadId::UI, Some(&mut task)) == 0 {
                     if let Ok(mut guard) = self.pending_messages.lock() {
@@ -228,6 +245,7 @@ impl ShellToCefLink {
             pending_messages: Arc::new(Mutex::new(PendingCompositorMessages {
                 scheduled: false,
                 messages: Vec::new(),
+                snapshot: None,
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
@@ -248,15 +266,21 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
-        if let Ok(mut snapshot) = self.shared_snapshot.lock() {
-            if let Some(snapshot) = snapshot.as_mut() {
-                let _ = snapshot.apply_message(&msg);
-            }
-        }
+        self.send_with_snapshot(msg, None);
+    }
+
+    pub fn send_with_snapshot(
+        &self,
+        msg: shell_wire::DecodedCompositorToShellMessage,
+        snapshot: Option<Vec<shell_wire::DecodedCompositorToShellMessage>>,
+    ) {
         let should_post = {
             let Ok(mut guard) = self.pending_messages.lock() else {
                 return;
             };
+            if snapshot.is_some() {
+                guard.snapshot = snapshot;
+            }
             push_pending_message(&mut guard.messages, msg);
             self.pending_work.store(true, Ordering::Relaxed);
             if guard.scheduled {
@@ -318,6 +342,7 @@ impl ShellToCefLink {
             self.pending_work.clone(),
             self.pending_begin_frame.clone(),
             self.pending_begin_frame_reschedule.clone(),
+            self.shared_snapshot.clone(),
         );
         if post_task(ThreadId::UI, Some(&mut task)) == 0 {
             if let Ok(mut guard) = self.pending_messages.lock() {

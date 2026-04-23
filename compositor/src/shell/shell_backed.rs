@@ -610,6 +610,89 @@ impl CompositorState {
         }
     }
 
+    pub(crate) fn shell_backed_set_window_maximized_if_any(
+        &mut self,
+        window_id: u32,
+        enabled: bool,
+    ) -> bool {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if !self.window_registry.is_shell_hosted(window_id) {
+            return false;
+        }
+        if info.minimized {
+            return true;
+        }
+        if enabled {
+            let output = self
+                .output_for_window_position(info.x, info.y, info.width, info.height)
+                .and_then(|name| {
+                    self.space
+                        .outputs()
+                        .find(|output| output.name() == name)
+                        .cloned()
+                })
+                .or_else(|| {
+                    if info.output_name.is_empty() {
+                        None
+                    } else {
+                        self.space
+                            .outputs()
+                            .find(|output| output.name() == info.output_name)
+                            .cloned()
+                    }
+                })
+                .or_else(|| self.leftmost_output());
+            let Some(output) = output else {
+                return true;
+            };
+            let Some(work) = self.shell_maximize_work_area_global_for_output(&output) else {
+                return true;
+            };
+            let output_name = output.name().to_string();
+            let snap =
+                self.window_registry
+                    .update_shell_hosted(window_id, |info, float_restore| {
+                        if !info.maximized && float_restore.is_none() {
+                            *float_restore = Some(Self::shell_hosted_client_global_rect(info));
+                        }
+                        info.x = work.loc.x;
+                        info.y = work.loc.y;
+                        info.width = work.size.w.max(1);
+                        info.height = work.size.h.max(1);
+                        info.output_name = output_name;
+                        info.maximized = true;
+                        info.fullscreen = false;
+                        info.clone()
+                    });
+            if let Some(snap) = snap {
+                self.shell_backed_emit_geometry_messages(&snap);
+                self.shell_reply_window_list();
+                self.shell_exclusion_zones_need_full_damage = true;
+            }
+            return true;
+        }
+        let snap = self
+            .window_registry
+            .update_shell_hosted(window_id, |info, float_restore| {
+                if let Some(rect) = float_restore.take() {
+                    info.x = rect.loc.x;
+                    info.y = rect.loc.y;
+                    info.width = rect.size.w.max(1);
+                    info.height = rect.size.h.max(1);
+                }
+                info.maximized = false;
+                info.clone()
+            });
+        if let Some(snap) = snap {
+            self.shell_backed_emit_geometry_messages(&snap);
+            self.shell_reply_window_list();
+            self.shell_exclusion_zones_need_full_damage = true;
+        }
+        true
+    }
+
     pub(crate) fn shell_backed_set_window_geometry_ipc(
         &mut self,
         window_id: u32,
@@ -667,6 +750,7 @@ impl CompositorState {
             return false;
         };
         self.shell_backed_emit_geometry_messages(&snap);
+        self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
         true
     }

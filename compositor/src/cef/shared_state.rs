@@ -117,9 +117,6 @@ impl SharedStateWriter {
         fence(Ordering::Release);
         buf[SHELL_SHARED_STATE_HEADER_BYTES..SHELL_SHARED_STATE_HEADER_BYTES + payload.len()]
             .copy_from_slice(payload);
-        if SHELL_SHARED_STATE_HEADER_BYTES + payload.len() < buf.len() {
-            buf[SHELL_SHARED_STATE_HEADER_BYTES + payload.len()..].fill(0);
-        }
         fence(Ordering::Release);
         write_header(
             &mut buf[..SHELL_SHARED_STATE_HEADER_BYTES],

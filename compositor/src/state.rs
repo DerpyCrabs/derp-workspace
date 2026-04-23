@@ -510,6 +510,7 @@ pub struct CompositorState {
     pub(crate) shell_tray_strip_global: Option<Rectangle<i32, Logical>>,
     pub(crate) sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::tray::sni_tray::SniTrayCmd>>,
     pub(crate) sni_tray_slot_count: u32,
+    pub(crate) sni_tray_items: Vec<shell_wire::TraySniItemWire>,
 
     pub xwayland_shell_state: XWaylandShellState,
     pub x11_wm_slot: Option<(XwmId, X11Wm)>,
@@ -576,6 +577,7 @@ pub struct CompositorState {
     pub(crate) cursor_fallback_hotspot: (i32, i32),
     /// After [`Self::try_spawn_wayland_client_sh`]: focus the first new non-shell toplevel with a greater window id.
     shell_spawn_focus_above_window_id: Option<u32>,
+    shell_deferred_native_focus_window_id: Option<u32>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
@@ -1042,6 +1044,7 @@ impl CompositorState {
             shell_tray_strip_global: None,
             sni_tray_cmd_tx: Some(sni_cmd_tx),
             sni_tray_slot_count: 0,
+            sni_tray_items: Vec::new(),
             xwayland_shell_state,
             x11_wm_slot: None,
             x11_client: None,
@@ -1092,6 +1095,7 @@ impl CompositorState {
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
             shell_spawn_focus_above_window_id: None,
+            shell_deferred_native_focus_window_id: None,
             shell_minimized_windows: HashMap::new(),
             shell_minimized_x11_windows: HashMap::new(),
             shell_pending_native_focus_window_id: None,
@@ -2310,17 +2314,65 @@ impl CompositorState {
                 | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
                 | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
         );
+        if workspace_dirty {
+            self.workspace_sync_from_registry();
+        }
+        let authoritative_snapshot = if Self::shell_message_updates_authoritative_snapshot(&msg) {
+            Some(self.shell_authoritative_snapshot_messages())
+        } else {
+            None
+        };
         let Ok(g) = self.shell_to_cef.lock() else {
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.send(msg);
+            link.send_with_snapshot(msg, authoritative_snapshot);
         }
-        drop(g);
-        if workspace_dirty {
-            self.workspace_sync_from_registry();
-            self.workspace_send_state();
+    }
+
+    fn shell_message_updates_authoritative_snapshot(
+        msg: &shell_wire::DecodedCompositorToShellMessage,
+    ) -> bool {
+        matches!(
+            msg,
+            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+                | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+                | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+                | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+                | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+                | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+                | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
+                | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
+                | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+                | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
+        )
+    }
+
+    fn shell_authoritative_snapshot_messages(
+        &mut self,
+    ) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        self.workspace_sync_from_registry();
+        self.shell_clear_stale_primary_output();
+        let mut messages = Vec::new();
+        if let Some(output_layout) = self.shell_output_layout_message() {
+            messages.push(output_layout);
         }
+        messages.push(self.shell_window_list_message());
+        messages.push(self.shell_focus_message());
+        if let Some(workspace_state) = self.workspace_state_message() {
+            messages.push(workspace_state);
+        }
+        messages.push(self.shell_hosted_app_state_message());
+        messages.push(self.shell_interaction_state_message());
+        if let Some(preview) = self.shell_native_drag_preview_message() {
+            messages.push(preview);
+        }
+        if let Some(keyboard) = self.shell_keyboard_layout_message() {
+            messages.push(keyboard);
+        }
+        messages.push(self.shell_tray_hints_message());
+        messages.push(self.shell_tray_sni_message());
+        messages
     }
 
     const SHELL_BEGIN_FRAME_INTERACTION_HOLD: Duration = Duration::from_millis(160);
@@ -2674,7 +2726,25 @@ impl CompositorState {
             return;
         }
         self.shell_spawn_focus_above_window_id = None;
+        self.shell_deferred_native_focus_window_id = Some(window_id);
+        self.loop_signal.wakeup();
+    }
+
+    pub(crate) fn shell_process_deferred_native_focus(&mut self) {
+        let Some(window_id) = self.shell_deferred_native_focus_window_id.take() else {
+            return;
+        };
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return;
+        };
+        if info.minimized
+            || self.window_info_is_solid_shell_host(&info)
+            || !shell_window_row_should_show(&info)
+        {
+            return;
+        }
         self.shell_raise_and_focus_window(window_id);
+        self.shell_reply_window_list();
     }
 
     pub(crate) fn handle_pending_wayland_client_disconnects(&mut self) {
@@ -2791,10 +2861,13 @@ impl CompositorState {
                 }
             }
             "toggle_maximize" => {
-                self.shell_send_keybind_ex(
-                    "toggle_maximize",
-                    self.super_keybind_target_window_id(),
-                );
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    let maximized = self
+                        .window_registry
+                        .window_info(wid)
+                        .is_some_and(|info| info.maximized);
+                    self.shell_set_window_maximized(wid, !maximized);
+                }
             }
             "screenshot_region" => {
                 self.begin_screenshot_selection_mode();
@@ -2811,10 +2884,92 @@ impl CompositorState {
                 let id = action.trim_start_matches("toggle_scratchpad:");
                 self.toggle_scratchpad(id);
             }
-            "launch_terminal" | "open_settings" | "tile_left" | "tile_right" | "tile_up"
-            | "tile_down" | "tab_next" | "tab_previous" | "move_monitor_left"
-            | "move_monitor_right" => self.shell_send_keybind(action),
+            "tile_left" | "tile_right" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    if let Err(error) = self.super_tile_window_half(wid, action == "tile_right") {
+                        tracing::warn!(%error, action, window_id = wid, "super tile failed");
+                    }
+                }
+            }
+            "tile_up" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    let maximized = self
+                        .window_registry
+                        .window_info(wid)
+                        .is_some_and(|info| info.maximized);
+                    self.shell_set_window_maximized(wid, !maximized);
+                }
+            }
+            "tile_down" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    if let Err(error) = self.super_tile_down(wid) {
+                        tracing::warn!(%error, action, window_id = wid, "super tile down failed");
+                    }
+                }
+            }
+            "move_monitor_left" | "move_monitor_right" => {
+                if let Some(wid) = self.super_keybind_target_window_id() {
+                    if let Err(error) = self
+                        .super_move_window_to_adjacent_monitor(wid, action == "move_monitor_right")
+                    {
+                        tracing::warn!(%error, action, window_id = wid, "super move monitor failed");
+                    }
+                }
+            }
+            "launch_terminal" | "open_settings" | "tab_next" | "tab_previous" => {
+                self.shell_send_keybind(action)
+            }
             "cycle_keyboard_layout" => self.keyboard_cycle_layout_for_shortcut(),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn apply_shell_window_intent_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct WindowIntent {
+            action: String,
+            #[serde(rename = "windowId")]
+            window_id: u32,
+        }
+        let Ok(intent) = serde_json::from_str::<WindowIntent>(json) else {
+            tracing::warn!(target: "derp_window_intent", %json, "window intent parse failed");
+            return;
+        };
+        match intent.action.as_str() {
+            "toggle_fullscreen" => {
+                let fullscreen = self
+                    .window_registry
+                    .window_info(intent.window_id)
+                    .is_some_and(|info| info.fullscreen);
+                self.shell_set_window_fullscreen(intent.window_id, !fullscreen);
+            }
+            "toggle_maximize" | "tile_up" => {
+                let maximized = self
+                    .window_registry
+                    .window_info(intent.window_id)
+                    .is_some_and(|info| info.maximized);
+                self.shell_set_window_maximized(intent.window_id, !maximized);
+            }
+            "tile_left" | "tile_right" => {
+                if let Err(error) =
+                    self.super_tile_window_half(intent.window_id, intent.action == "tile_right")
+                {
+                    tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent tile failed");
+                }
+            }
+            "tile_down" => {
+                if let Err(error) = self.super_tile_down(intent.window_id) {
+                    tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent tile down failed");
+                }
+            }
+            "move_monitor_left" | "move_monitor_right" => {
+                if let Err(error) = self.super_move_window_to_adjacent_monitor(
+                    intent.window_id,
+                    intent.action == "move_monitor_right",
+                ) {
+                    tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent move monitor failed");
+                }
+            }
             _ => {}
         }
     }
@@ -3853,6 +4008,86 @@ impl CompositorState {
             .pre_tile_geometry
             .push(crate::session::workspace_model::WorkspacePreTileGeometry { window_id, bounds });
         true
+    }
+
+    fn workspace_pre_tile_geometry(&self, window_id: u32) -> Option<WorkspaceRect> {
+        self.workspace_state
+            .pre_tile_geometry
+            .iter()
+            .find(|entry| entry.window_id == window_id)
+            .map(|entry| entry.bounds.clone())
+    }
+
+    fn workspace_clear_pre_tile_geometry(&mut self, window_id: u32) -> bool {
+        let before = self.workspace_state.pre_tile_geometry.len();
+        self.workspace_state
+            .pre_tile_geometry
+            .retain(|entry| entry.window_id != window_id);
+        before != self.workspace_state.pre_tile_geometry.len()
+    }
+
+    fn workspace_monitor_tile_for_window(&self, window_id: u32) -> Option<(String, String)> {
+        for monitor in &self.workspace_state.monitor_tiles {
+            for entry in &monitor.entries {
+                if entry.window_id == window_id {
+                    return Some((monitor.output_name.clone(), entry.zone.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    fn workspace_set_monitor_tile(
+        &mut self,
+        output_name: &str,
+        window_id: u32,
+        zone: String,
+        bounds: WorkspaceRect,
+    ) -> bool {
+        for monitor in &mut self.workspace_state.monitor_tiles {
+            monitor.entries.retain(|entry| entry.window_id != window_id);
+        }
+        self.workspace_state
+            .monitor_tiles
+            .retain(|monitor| !monitor.entries.is_empty());
+        if let Some(monitor) = self
+            .workspace_state
+            .monitor_tiles
+            .iter_mut()
+            .find(|monitor| monitor.output_name == output_name)
+        {
+            monitor.entries.push(WorkspaceMonitorTileEntry {
+                window_id,
+                zone,
+                bounds,
+            });
+            monitor.entries.sort_by_key(|entry| entry.window_id);
+            return true;
+        }
+        self.workspace_state
+            .monitor_tiles
+            .push(WorkspaceMonitorTileState {
+                output_name: output_name.to_string(),
+                entries: vec![WorkspaceMonitorTileEntry {
+                    window_id,
+                    zone,
+                    bounds,
+                }],
+            });
+        true
+    }
+
+    fn workspace_remove_monitor_tile(&mut self, window_id: u32) -> bool {
+        let mut changed = false;
+        for monitor in &mut self.workspace_state.monitor_tiles {
+            let before = monitor.entries.len();
+            monitor.entries.retain(|entry| entry.window_id != window_id);
+            changed |= before != monitor.entries.len();
+        }
+        self.workspace_state
+            .monitor_tiles
+            .retain(|monitor| !monitor.entries.is_empty());
+        changed
     }
 
     fn workspace_set_auto_layout_tiles_for_output(
@@ -5924,7 +6159,7 @@ impl CompositorState {
         }
     }
 
-    pub fn send_shell_output_layout(&mut self) {
+    fn shell_clear_stale_primary_output(&mut self) -> bool {
         let cleared_stale_primary = if let Some(ref n) = self.shell_primary_output_name {
             if !self.space.outputs().any(|o| o.name() == n.as_str()) {
                 self.shell_primary_output_name = None;
@@ -5935,16 +6170,14 @@ impl CompositorState {
         } else {
             false
         };
+        cleared_stale_primary
+    }
+
+    fn shell_output_layout_message(
+        &mut self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
         if self.workspace_logical_bounds().is_none() {
-            tracing::warn!(
-                target: "derp_hotplug_shell",
-                cleared_stale_primary,
-                "send_shell_output_layout abort no workspace_logical_bounds"
-            );
-            if cleared_stale_primary {
-                self.resync_embedded_shell_host_after_ipc_connect();
-            }
-            return;
+            return None;
         }
         self.recompute_shell_canvas_from_outputs();
         let (lw, lh) = self.shell_canvas_logical_size;
@@ -5961,6 +6194,7 @@ impl CompositorState {
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
+                    identity: Self::shell_output_identity(o),
                     x: g.loc.x,
                     y: g.loc.y,
                     w: u32::try_from(g.size.w).ok()?.max(1),
@@ -5970,27 +6204,78 @@ impl CompositorState {
                 })
             })
             .collect();
-        let screen_names: Vec<&str> = screens.iter().map(|s| s.name.as_str()).collect();
-        tracing::warn!(
-            target: "derp_hotplug_shell",
-            lw,
-            lh,
-            physical_w,
-            physical_h,
-            n_screens = screens.len(),
-            ?screen_names,
-            primary = ?self.shell_primary_output_name,
-            suppressed = self.display_config_save_suppressed,
-            "send_shell_output_layout shell_send_to_cef OutputLayout"
-        );
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+        Some(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
             canvas_logical_w: lw.max(1),
             canvas_logical_h: lh.max(1),
             canvas_physical_w: physical_w,
             canvas_physical_h: physical_h,
             screens,
             shell_chrome_primary: self.shell_primary_output_name.clone(),
-        });
+        })
+    }
+
+    fn shell_output_identity(output: &Output) -> String {
+        let props = output.physical_properties();
+        let mut parts = Vec::new();
+        for part in [
+            props.make.as_str(),
+            props.model.as_str(),
+            props.serial_number.as_str(),
+        ] {
+            let part = part.trim();
+            if !part.is_empty() && part != "N/A" {
+                parts.push(part.to_string());
+            }
+        }
+        parts.push(format!("{}x{}", props.size.w.max(1), props.size.h.max(1)));
+        let mut identity = parts.join(":");
+        if identity.is_empty() {
+            identity = output.name();
+        }
+        while identity.len() > shell_wire::MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+            identity.pop();
+        }
+        identity
+    }
+
+    pub fn send_shell_output_layout(&mut self) {
+        let cleared_stale_primary = self.shell_clear_stale_primary_output();
+        let Some(msg) = self.shell_output_layout_message() else {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                cleared_stale_primary,
+                "send_shell_output_layout abort no workspace_logical_bounds"
+            );
+            if cleared_stale_primary {
+                self.resync_embedded_shell_host_after_ipc_connect();
+            }
+            return;
+        };
+        let shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            canvas_logical_w,
+            canvas_logical_h,
+            canvas_physical_w,
+            canvas_physical_h,
+            screens,
+            shell_chrome_primary,
+        } = &msg
+        else {
+            return;
+        };
+        let screen_names: Vec<&str> = screens.iter().map(|s| s.name.as_str()).collect();
+        tracing::warn!(
+            target: "derp_hotplug_shell",
+            lw = *canvas_logical_w,
+            lh = *canvas_logical_h,
+            physical_w = *canvas_physical_w,
+            physical_h = *canvas_physical_h,
+            n_screens = screens.len(),
+            ?screen_names,
+            primary = ?shell_chrome_primary,
+            suppressed = self.display_config_save_suppressed,
+            "send_shell_output_layout shell_send_to_cef OutputLayout"
+        );
+        self.shell_send_to_cef(msg);
         if cleared_stale_primary {
             self.resync_embedded_shell_host_after_ipc_connect();
         }
@@ -6297,26 +6582,12 @@ impl CompositorState {
     }
 
     pub(crate) fn sync_tray_hints_to_shell(&mut self) {
-        let sni_n = self.sni_tray_slot_count;
-        let slot_w: i32 = 40;
-        if self.shell_effective_primary_output().is_none() {
-            self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TrayHints {
-                slot_count: 0,
-                slot_w,
-                reserved_w: 0,
-            });
-            return;
-        }
-        let reserved_w = sni_n.saturating_mul(slot_w.max(1) as u32);
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TrayHints {
-            slot_count: sni_n,
-            slot_w,
-            reserved_w,
-        });
+        self.shell_send_to_cef(self.shell_tray_hints_message());
     }
 
     pub(crate) fn on_sni_tray_items_updated(&mut self, items: Vec<shell_wire::TraySniItemWire>) {
         self.sni_tray_slot_count = items.len() as u32;
+        self.sni_tray_items = items.clone();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TraySni { items });
         self.sync_tray_hints_to_shell();
     }
@@ -8242,10 +8513,7 @@ impl CompositorState {
         None
     }
 
-    /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
-    pub fn shell_reply_window_list(&mut self) {
-        crate::cef::begin_frame_diag::note_shell_reply_window_list();
-        self.workspace_sync_from_registry();
+    fn shell_window_list_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
         self.shell_window_stack_seed_known_windows();
         self.capture_sync_toplevel_handles();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = self
@@ -8315,8 +8583,21 @@ impl CompositorState {
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowList { windows });
-        self.workspace_send_state();
+        windows
+    }
+
+    fn shell_window_list_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowList {
+            windows: self.shell_window_list_rows(),
+        }
+    }
+
+    /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
+    pub fn shell_reply_window_list(&mut self) {
+        crate::cef::begin_frame_diag::note_shell_reply_window_list();
+        self.workspace_sync_from_registry();
+        let msg = self.shell_window_list_message();
+        self.shell_send_to_cef(msg);
     }
 
     fn workspace_live_window_ids(&self) -> Vec<u32> {
@@ -8348,7 +8629,7 @@ impl CompositorState {
     }
 
     fn workspace_send_state(&mut self) {
-        let Ok(state_json) = self.workspace_state.to_json() else {
+        let Some(msg) = self.workspace_state_message() else {
             return;
         };
         tracing::warn!(
@@ -8356,9 +8637,14 @@ impl CompositorState {
             groups = self.workspace_state.groups.len(),
             "workspace_send_state"
         );
-        self.shell_send_to_cef(
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json },
-        );
+        self.shell_send_to_cef(msg);
+    }
+
+    fn workspace_state_message(&self) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let Ok(state_json) = self.workspace_state.to_json() else {
+            return None;
+        };
+        Some(shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json })
     }
 
     fn shell_hosted_app_state_broadcast_json(&self) -> String {
@@ -8370,10 +8656,55 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_hosted_app_state_send(&mut self) {
+        self.shell_send_to_cef(self.shell_hosted_app_state_message());
+    }
+
+    fn shell_hosted_app_state_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
         let state_json = self.shell_hosted_app_state_broadcast_json();
-        self.shell_send_to_cef(
-            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json },
-        );
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json }
+    }
+
+    fn shell_focus_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
+        let window_id = self.logical_focused_window_id();
+        let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id,
+            window_id,
+        }
+    }
+
+    fn shell_keyboard_layout_message(
+        &mut self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        self.seat.get_keyboard()?;
+        let raw = self.keyboard_layout_active_name_raw();
+        let label = Self::keyboard_layout_label_short(&raw);
+        Some(shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label })
+    }
+
+    fn shell_tray_hints_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
+        let slot_w: i32 = 40;
+        if self.shell_effective_primary_output().is_none() {
+            return shell_wire::DecodedCompositorToShellMessage::TrayHints {
+                slot_count: 0,
+                slot_w,
+                reserved_w: 0,
+            };
+        }
+        let reserved_w = self
+            .sni_tray_slot_count
+            .saturating_mul(slot_w.max(1) as u32);
+        shell_wire::DecodedCompositorToShellMessage::TrayHints {
+            slot_count: self.sni_tray_slot_count,
+            slot_w,
+            reserved_w,
+        }
+    }
+
+    fn shell_tray_sni_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::TraySni {
+            items: self.sni_tray_items.clone(),
+        }
     }
 
     pub(crate) fn shell_native_drag_preview_begin(&mut self, window_id: u32) {
@@ -8610,14 +8941,11 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_native_drag_preview_state(&mut self) {
-        let Some((window_id, generation, image_path)) =
-            self.shell_native_drag_preview.as_ref().map(|preview| {
-                (
-                    preview.window_id,
-                    preview.generation,
-                    preview.image_path.clone().unwrap_or_default(),
-                )
-            })
+        let Some(shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+            window_id,
+            generation,
+            image_path,
+        }) = self.shell_native_drag_preview_message()
         else {
             return;
         };
@@ -8639,7 +8967,20 @@ impl CompositorState {
         );
     }
 
-    pub(crate) fn shell_send_interaction_state(&mut self) {
+    fn shell_native_drag_preview_message(
+        &self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let preview = self.shell_native_drag_preview.as_ref()?;
+        Some(
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
+                window_id: preview.window_id,
+                generation: preview.generation,
+                image_path: preview.image_path.clone().unwrap_or_default(),
+            },
+        )
+    }
+
+    fn shell_interaction_state_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
         let move_proxy_window_id = self
             .shell_move_proxy
             .as_ref()
@@ -8659,13 +9000,18 @@ impl CompositorState {
         let interaction_visual = |window_id: Option<u32>| {
             window_id
                 .and_then(|wid| self.window_registry.window_info(wid))
-                .map(|info| shell_wire::CompositorInteractionVisual {
-                    x: info.x,
-                    y: info.y,
-                    width: info.width.max(1),
-                    height: info.height.max(1),
-                    maximized: info.maximized,
-                    fullscreen: info.fullscreen,
+                .map(|info| {
+                    let i = self
+                        .shell_window_info_to_output_local_layout(&info)
+                        .unwrap_or_else(|| info.clone());
+                    shell_wire::CompositorInteractionVisual {
+                        x: i.x,
+                        y: i.y,
+                        width: i.width.max(1),
+                        height: i.height.max(1),
+                        maximized: i.maximized,
+                        fullscreen: i.fullscreen,
+                    }
                 })
         };
         let pointer = self
@@ -8673,18 +9019,20 @@ impl CompositorState {
             .get_pointer()
             .map(|pointer| pointer.current_location().to_i32_round())
             .unwrap_or_else(|| Point::from((0, 0)));
-        self.shell_send_to_cef(
-            shell_wire::DecodedCompositorToShellMessage::InteractionState {
-                pointer_x: pointer.x,
-                pointer_y: pointer.y,
-                move_window_id: self.shell_move_window_id.unwrap_or(0),
-                resize_window_id: self.shell_resize_window_id.unwrap_or(0),
-                move_proxy_window_id,
-                move_capture_window_id,
-                move_visual: interaction_visual(self.shell_move_window_id),
-                resize_visual: interaction_visual(self.shell_resize_window_id),
-            },
-        );
+        shell_wire::DecodedCompositorToShellMessage::InteractionState {
+            pointer_x: pointer.x,
+            pointer_y: pointer.y,
+            move_window_id: self.shell_move_window_id.unwrap_or(0),
+            resize_window_id: self.shell_resize_window_id.unwrap_or(0),
+            move_proxy_window_id,
+            move_capture_window_id,
+            move_visual: interaction_visual(self.shell_move_window_id),
+            resize_visual: interaction_visual(self.shell_resize_window_id),
+        }
+    }
+
+    pub(crate) fn shell_send_interaction_state(&mut self) {
+        self.shell_send_to_cef(self.shell_interaction_state_message());
     }
 
     pub(crate) fn hydrate_shell_hosted_app_state_from_session(&mut self) {
@@ -9056,6 +9404,26 @@ impl CompositorState {
             return Err("tgt work".into());
         };
         let (ox, oy) = self.shell_canvas_logical_origin;
+        if let Some((_, zone)) = self.workspace_monitor_tile_for_window(window_id) {
+            let Some(frame_rect) = self.shell_tile_frame_rect_for_output(&tgt_out, &zone) else {
+                return Err("tile target".into());
+            };
+            self.workspace_set_monitor_tile(
+                &tgt_name,
+                window_id,
+                zone,
+                WorkspaceRect {
+                    x: frame_rect.loc.x,
+                    y: frame_rect.loc.y,
+                    width: frame_rect.size.w.max(1),
+                    height: frame_rect.size.h.max(1),
+                },
+            );
+            let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+            self.shell_apply_global_client_rect(window_id, client_rect, 0);
+            self.workspace_send_state();
+            return Ok(());
+        }
         if info.maximized {
             let gx = tgt_work.loc.x;
             let gy = tgt_work.loc.y;
@@ -9100,6 +9468,147 @@ impl CompositorState {
             gh,
             0,
         );
+        Ok(())
+    }
+
+    fn shell_apply_global_client_rect(
+        &mut self,
+        window_id: u32,
+        rect: Rectangle<i32, Logical>,
+        layout_state: u32,
+    ) {
+        let (ox, oy) = self.shell_canvas_logical_origin;
+        self.shell_set_window_geometry(
+            window_id,
+            rect.loc.x.saturating_sub(ox),
+            rect.loc.y.saturating_sub(oy),
+            rect.size.w.max(1),
+            rect.size.h.max(1),
+            layout_state,
+        );
+    }
+
+    fn shell_tile_frame_rect_for_output(
+        &self,
+        output: &Output,
+        zone: &str,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let area = self.workspace_auto_layout_frame_area_for_output(output)?;
+        let half = area.size.w.max(1).saturating_div(2).max(1);
+        match zone {
+            "left-half" => Some(Rectangle::new(
+                area.loc,
+                Size::from((half, area.size.h.max(1))),
+            )),
+            "right-half" => {
+                let x = area.loc.x.saturating_add(half);
+                let w = area.size.w.saturating_sub(half).max(1);
+                Some(Rectangle::new(
+                    Point::from((x, area.loc.y)),
+                    Size::from((w, area.size.h.max(1))),
+                ))
+            }
+            _ => Some(area),
+        }
+    }
+
+    fn shell_output_for_window_info(&self, info: &WindowInfo) -> Option<Output> {
+        self.output_for_window_position(info.x, info.y, info.width, info.height)
+            .and_then(|name| {
+                self.space
+                    .outputs()
+                    .find(|output| output.name() == name)
+                    .cloned()
+            })
+            .or_else(|| {
+                if info.output_name.is_empty() {
+                    None
+                } else {
+                    self.space
+                        .outputs()
+                        .find(|output| output.name() == info.output_name)
+                        .cloned()
+                }
+            })
+            .or_else(|| self.leftmost_output())
+    }
+
+    fn super_tile_window_half(&mut self, window_id: u32, right: bool) -> Result<(), String> {
+        let info = self
+            .window_registry
+            .window_info(window_id)
+            .ok_or_else(|| "missing window".to_string())?;
+        if info.minimized || info.fullscreen || self.window_info_is_solid_shell_host(&info) {
+            return Err("window state".into());
+        }
+        let output = self
+            .shell_output_for_window_info(&info)
+            .ok_or_else(|| "output".to_string())?;
+        let output_name = output.name();
+        let zone = if right { "right-half" } else { "left-half" };
+        let frame_rect = self
+            .shell_tile_frame_rect_for_output(&output, zone)
+            .ok_or_else(|| "tile frame".to_string())?;
+        if !self.workspace_window_is_tiled(window_id) {
+            let local = self
+                .shell_window_info_to_output_local_layout(&info)
+                .unwrap_or_else(|| info.clone());
+            self.workspace_set_pre_tile_geometry(
+                window_id,
+                WorkspaceRect {
+                    x: local.x,
+                    y: local.y,
+                    width: local.width.max(1),
+                    height: local.height.max(1),
+                },
+            );
+        }
+        self.workspace_set_monitor_tile(
+            &output_name,
+            window_id,
+            zone.to_string(),
+            WorkspaceRect {
+                x: frame_rect.loc.x,
+                y: frame_rect.loc.y,
+                width: frame_rect.size.w.max(1),
+                height: frame_rect.size.h.max(1),
+            },
+        );
+        let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+        self.shell_apply_global_client_rect(window_id, client_rect, 0);
+        self.workspace_send_state();
+        Ok(())
+    }
+
+    fn super_tile_down(&mut self, window_id: u32) -> Result<(), String> {
+        let info = self
+            .window_registry
+            .window_info(window_id)
+            .ok_or_else(|| "missing window".to_string())?;
+        if info.minimized || self.window_info_is_solid_shell_host(&info) {
+            return Err("window state".into());
+        }
+        if info.maximized {
+            self.shell_set_window_maximized(window_id, false);
+            return Ok(());
+        }
+        if self.workspace_window_is_tiled(window_id) {
+            if let Some(bounds) = self.workspace_pre_tile_geometry(window_id) {
+                self.shell_set_window_geometry(
+                    window_id,
+                    bounds.x,
+                    bounds.y,
+                    bounds.width.max(1),
+                    bounds.height.max(1),
+                    0,
+                );
+            }
+            self.workspace_remove_monitor_tile(window_id);
+            self.workspace_clear_pre_tile_geometry(window_id);
+            self.workspace_send_state();
+            return Ok(());
+        }
+        self.shell_set_window_maximized(window_id, false);
         Ok(())
     }
 
@@ -9180,6 +9689,7 @@ impl CompositorState {
                     &previous_output_name,
                     &target_output_name,
                 );
+                self.shell_reply_window_list();
                 return;
             }
             if let Some(x11) = self.shell_minimized_x11_windows.get(&window_id).cloned() {
@@ -9226,6 +9736,7 @@ impl CompositorState {
                     &previous_output_name,
                     &target_output_name,
                 );
+                self.shell_reply_window_list();
                 return;
             }
         }
@@ -9276,6 +9787,7 @@ impl CompositorState {
                     &previous_output_name,
                     &target_output_name,
                 );
+                self.shell_reply_window_list();
                 return;
             }
 
@@ -9313,6 +9825,7 @@ impl CompositorState {
                 &previous_output_name,
                 &next_output_name,
             );
+            self.shell_reply_window_list();
             return;
         }
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
@@ -9362,6 +9875,7 @@ impl CompositorState {
                     &previous_output_name,
                     &target_output_name,
                 );
+                self.shell_reply_window_list();
             }
             return;
         }
@@ -9371,6 +9885,7 @@ impl CompositorState {
             &previous_output_name,
             &target_output_name,
         );
+        self.shell_reply_window_list();
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {
@@ -9600,12 +10115,16 @@ impl CompositorState {
                         }
                     }
                 }
-                self.apply_toplevel_fullscreen_layout(&window, None);
+                if self.apply_toplevel_fullscreen_layout(&window, None) {
+                    self.shell_reply_window_list();
+                }
             } else {
                 if !read_toplevel_tiling(wl).1 {
                     return;
                 }
-                let _ = self.toplevel_unfullscreen(&window);
+                if self.toplevel_unfullscreen(&window) {
+                    self.shell_reply_window_list();
+                }
             }
             return;
         }
@@ -9638,7 +10157,9 @@ impl CompositorState {
             let Some(rect) = self.space.output_geometry(&output) else {
                 return;
             };
-            self.apply_x11_window_bounds(window_id, &x11, rect, false, true);
+            if self.apply_x11_window_bounds(window_id, &x11, rect, false, true) {
+                self.shell_reply_window_list();
+            }
             return;
         }
         if !info.fullscreen {
@@ -9660,10 +10181,15 @@ impl CompositorState {
                     .unwrap_or(geometry.loc);
                 Rectangle::new(location, geometry.size)
             });
-        self.apply_x11_window_bounds(window_id, &x11, rect, false, false);
+        if self.apply_x11_window_bounds(window_id, &x11, rect, false, false) {
+            self.shell_reply_window_list();
+        }
     }
 
     pub fn shell_set_window_maximized(&mut self, window_id: u32, enabled: bool) {
+        if self.shell_backed_set_window_maximized_if_any(window_id, enabled) {
+            return;
+        }
         let Some(info) = self.window_registry.window_info(window_id) else {
             return;
         };
@@ -9676,12 +10202,24 @@ impl CompositorState {
         if let Some(window) = self.find_window_by_surface_id(sid) {
             let wl = window.toplevel().unwrap().wl_surface();
             if enabled {
-                return;
+                if read_toplevel_tiling(wl).0 || read_toplevel_tiling(wl).1 {
+                    return;
+                }
+                if !self.toplevel_floating_restore.contains_key(&window_id) {
+                    if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                        self.toplevel_floating_restore.insert(window_id, s);
+                    }
+                }
+                if self.apply_toplevel_maximize_layout(&window) {
+                    self.shell_reply_window_list();
+                }
             } else {
                 if !read_toplevel_tiling(wl).0 {
                     return;
                 }
-                let _ = self.toplevel_unmaximize(&window);
+                if self.toplevel_unmaximize(&window) {
+                    self.shell_reply_window_list();
+                }
             }
             return;
         }
@@ -9710,7 +10248,9 @@ impl CompositorState {
             let Some(rect) = self.shell_maximize_work_area_global_for_output(&output) else {
                 return;
             };
-            self.apply_x11_window_bounds(window_id, &x11, rect, true, false);
+            if self.apply_x11_window_bounds(window_id, &x11, rect, true, false) {
+                self.shell_reply_window_list();
+            }
             return;
         }
         if !info.maximized {
@@ -9728,7 +10268,9 @@ impl CompositorState {
                     .unwrap_or(geometry.loc);
                 Rectangle::new(location, geometry.size)
             });
-        self.apply_x11_window_bounds(window_id, &x11, rect, false, false);
+        if self.apply_x11_window_bounds(window_id, &x11, rect, false, false) {
+            self.shell_reply_window_list();
+        }
     }
 
     pub fn shell_set_presentation_fullscreen(&mut self, enabled: bool) {
@@ -9854,6 +10396,7 @@ impl CompositorState {
         if !output_name.is_empty() {
             let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
         }
+        self.shell_reply_window_list();
     }
 
     /// Hide a toplevel (xdg minimized + unmap); stash the [`Window`] for restore.
@@ -10717,6 +11260,9 @@ impl CompositorState {
         );
         unit_name.retain(|c| c.is_ascii_alphanumeric() || c == '-');
 
+        self.shell_spawn_focus_above_window_id =
+            Some(self.window_registry.highest_allocated_window_id());
+
         let mut launched_via_systemd = false;
         let mut systemd_run = std::process::Command::new("systemd-run");
         systemd_run
@@ -10752,14 +11298,18 @@ impl CompositorState {
             for (key, value) in &envs {
                 cmd.env(key, value);
             }
-            let child = cmd.spawn().map_err(|e| e.to_string())?;
+            let child = match cmd.spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    self.shell_spawn_focus_above_window_id = None;
+                    return Err(error.to_string());
+                }
+            };
             tracing::debug!(
                 pid = child.id(),
                 "spawned Wayland client via direct fallback"
             );
         }
-        self.shell_spawn_focus_above_window_id =
-            Some(self.window_registry.highest_allocated_window_id());
         Ok(())
     }
 }

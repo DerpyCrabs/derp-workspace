@@ -578,11 +578,16 @@ export interface TestContext {
 export interface TestEntry {
   name: string
   run: (context: TestContext) => Promise<void>
+  shellRestart?: boolean
 }
 
 export interface TestGroup {
   name: string
   tests: TestEntry[]
+}
+
+export type TestOptions = {
+  shellRestart?: boolean
 }
 
 export type PrimeStateOptions = {
@@ -757,11 +762,14 @@ export class SkipError extends Error {
   }
 }
 
-export function defineGroup(importMetaUrl: string, register: (api: { test: (name: string, run: (context: TestContext) => Promise<void>) => void }) => void): TestGroup {
+export function defineGroup(
+  importMetaUrl: string,
+  register: (api: { test: (name: string, run: (context: TestContext) => Promise<void>, options?: TestOptions) => void }) => void,
+): TestGroup {
   const tests: TestEntry[] = []
   register({
-    test(name, run) {
-      tests.push({ name, run })
+    test(name, run, options) {
+      tests.push({ name, run, shellRestart: options?.shellRestart })
     },
   })
   return {
@@ -1080,7 +1088,11 @@ export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
     async () => {
       const base = await discoverBase()
       try {
-        await Promise.all([getJson<CompositorSnapshot>(base, '/test/state/compositor'), getJson<ShellSnapshot>(base, '/test/state/shell')])
+        const [compositor, shell] = await Promise.all([
+          getJson<CompositorSnapshot>(base, '/test/state/compositor'),
+          getJson<ShellSnapshot>(base, '/test/state/shell'),
+        ])
+        if (!isShellUiReadyForE2e(compositor, shell)) return null
         return base
       } catch {
         return null
@@ -1088,6 +1100,19 @@ export async function discoverReadyBase(timeoutMs = 15000): Promise<string> {
     },
     timeoutMs,
     50,
+  )
+}
+
+function isShellUiReadyForE2e(compositor: CompositorSnapshot, shell: ShellSnapshot): boolean {
+  if (!Array.isArray(compositor.outputs) || compositor.outputs.length === 0) return false
+  if (!Array.isArray(shell.taskbars) || shell.taskbars.length === 0) return false
+  const controls = shell.controls
+  return Boolean(
+    controls?.taskbar_programs_toggle &&
+      controls.taskbar_settings_toggle &&
+      controls.taskbar_debug_toggle &&
+      controls.taskbar_volume_toggle &&
+      controls.taskbar_power_toggle,
   )
 }
 

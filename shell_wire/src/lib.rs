@@ -138,7 +138,7 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 5;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 6;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -294,6 +294,7 @@ pub fn encode_output_geometry(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputLayoutScreen {
     pub name: String,
+    pub identity: String,
     pub x: i32,
     pub y: i32,
     pub w: u32,
@@ -328,12 +329,15 @@ pub fn encode_output_layout(
     let mut body_sz: usize = 4 + 16 + 4;
     for s in screens {
         let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
-        if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES {
+        let il = u32::try_from(s.identity.as_bytes().len()).ok()?;
+        if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES || il > MAX_OUTPUT_LAYOUT_NAME_BYTES {
             return None;
         }
         body_sz = body_sz
             .checked_add(4)?
             .checked_add(nl as usize)?
+            .checked_add(4)?
+            .checked_add(il as usize)?
             .checked_add(24)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
@@ -352,8 +356,12 @@ pub fn encode_output_layout(
     for s in screens {
         let nb = s.name.as_bytes();
         let nl = nb.len() as u32;
+        let ib = s.identity.as_bytes();
+        let il = ib.len() as u32;
         v.extend_from_slice(&nl.to_le_bytes());
         v.extend_from_slice(nb);
+        v.extend_from_slice(&il.to_le_bytes());
+        v.extend_from_slice(ib);
         v.extend_from_slice(&s.x.to_le_bytes());
         v.extend_from_slice(&s.y.to_le_bytes());
         v.extend_from_slice(&s.w.to_le_bytes());
@@ -412,13 +420,25 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
-        if off + nl + 28 > body.len() {
+        if off + nl + 4 > body.len() {
             return Err(DecodeError::BadOutputLayoutPayload);
         }
         let name = std::str::from_utf8(&body[off..off + nl])
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
         off += nl;
+        let il = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if il > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        if off + il + 24 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let identity = std::str::from_utf8(&body[off..off + il])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += il;
         let x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
         let y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
         let w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
@@ -428,6 +448,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         off += 24;
         screens.push(OutputLayoutScreen {
             name,
+            identity,
             x,
             y,
             w,
@@ -2522,6 +2543,7 @@ mod tests {
             2160,
             &[OutputLayoutScreen {
                 name: "DP-1".into(),
+                identity: "make:model:serial".into(),
                 x: 0,
                 y: 0,
                 w: 3840,
@@ -2543,6 +2565,7 @@ mod tests {
                 canvas_physical_h: 2160,
                 screens: vec![OutputLayoutScreen {
                     name: "DP-1".into(),
+                    identity: "make:model:serial".into(),
                     x: 0,
                     y: 0,
                     w: 3840,

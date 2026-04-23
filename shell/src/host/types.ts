@@ -3,6 +3,7 @@ import type { CustomLayout } from '@/features/tiling/customLayouts'
 
 export type LayoutScreen = {
   name: string
+  identity?: string
   x: number
   y: number
   width: number

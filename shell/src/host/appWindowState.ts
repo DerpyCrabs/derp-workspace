@@ -15,6 +15,7 @@ export type DerpShellDetail =
       canvas_physical_height: number
       screens: Array<{
         name: string
+        identity?: string
         x: number
         y: number
         width: number
