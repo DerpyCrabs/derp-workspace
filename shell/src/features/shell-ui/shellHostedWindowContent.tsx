@@ -142,6 +142,7 @@ export function renderShellHostedWindowContent(
         setSessionAutoSaveEnabled={env.setSessionAutoSaveEnabled}
         defaultApps={env.defaultApps}
         desktopApps={env.desktopApps}
+        windowsList={env.windowsList}
       />
     )
   }

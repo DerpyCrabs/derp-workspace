@@ -410,6 +410,45 @@ async function focusNativeWindow(base: string, windowId: number): Promise<{ comp
   }
 }
 
+async function placeNativeWindowForPickerTest(base: string, windowId: number): Promise<void> {
+  const focused = await focusNativeWindow(base, windowId)
+  const window = compositorWindowById(focused.compositor, windowId)
+  assert(window, `missing native window ${windowId}`)
+  const output = focused.compositor.outputs.find((entry) => entry.name === window.output_name) ?? focused.compositor.outputs[0]
+  assert(output, 'missing output for picker placement')
+  const controls = windowControls(focused.shell, windowId)
+  assert(controls?.titlebar, `missing native titlebar ${windowId}`)
+  const from = rectGlobalCenter(controls.titlebar)
+  const to = {
+    x: output.x + Math.round(output.width * 0.45),
+    y: output.y + Math.min(260, Math.max(160, Math.round(output.height * 0.22))),
+  }
+  await movePoint(base, from.x, from.y)
+  await pointerButton(base, BTN_LEFT, 'press')
+  await postJson(base, '/test/input/pointer_move', to)
+  await pointerButton(base, BTN_LEFT, 'release')
+  await waitFor(
+    `wait for native picker placement ${windowId}`,
+    async () => {
+      const { compositor, shell } = await getSnapshots(base)
+      if (compositor.shell_pointer_grab_window_id !== null || compositor.shell_move_window_id !== null) return null
+      const next = compositorWindowById(compositor, windowId)
+      if (!next) return null
+      const nextControls = windowControls(shell, windowId)
+      if (!nextControls?.titlebar) return null
+      const nextOutput = compositor.outputs.find((entry) => entry.name === next.output_name) ?? output
+      const insideOutput =
+        next.x >= nextOutput.x + 24 &&
+        next.x + next.width <= nextOutput.x + nextOutput.width - 24 &&
+        next.y >= nextOutput.y + 80 &&
+        next.y + next.height <= nextOutput.y + nextOutput.height - 80
+      return insideOutput ? { compositor, shell, window: next } : null
+    },
+    2000,
+    40,
+  )
+}
+
 async function focusSettingsWindow(base: string) {
   const { compositor, shell } = await getSnapshots(base)
   if (compositor.focused_shell_ui_window_id === SHELL_UI_SETTINGS_WINDOW_ID) {
@@ -511,6 +550,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const timing = createTimingMarks('snap native picker')
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
+    await timing.step('place native window', () => placeNativeWindowForPickerTest(base, redId))
     await timing.step('focus native window', () => focusNativeWindow(base, redId))
     const shellFocused = await timing.step('read shell snapshot', () => getJson<ShellSnapshot>(base, '/test/state/shell'))
     const controls = windowControls(shellFocused, redId)

@@ -305,6 +305,9 @@ impl SharedShellSnapshotWriter {
                         capture_identifier: prev
                             .map(|w| w.capture_identifier.clone())
                             .unwrap_or_default(),
+                        kind: prev.map(|w| w.kind.clone()).unwrap_or_default(),
+                        x11_class: prev.map(|w| w.x11_class.clone()).unwrap_or_default(),
+                        x11_instance: prev.map(|w| w.x11_instance.clone()).unwrap_or_default(),
                     },
                 );
                 true
@@ -346,6 +349,9 @@ impl SharedShellSnapshotWriter {
                         capture_identifier: prev
                             .map(|row| row.capture_identifier.clone())
                             .unwrap_or_default(),
+                        kind: prev.map(|row| row.kind.clone()).unwrap_or_default(),
+                        x11_class: prev.map(|row| row.x11_class.clone()).unwrap_or_default(),
+                        x11_instance: prev.map(|row| row.x11_instance.clone()).unwrap_or_default(),
                     },
                 );
                 true
@@ -380,6 +386,9 @@ impl SharedShellSnapshotWriter {
                         capture_identifier: prev
                             .map(|row| row.capture_identifier.clone())
                             .unwrap_or_default(),
+                        kind: prev.map(|row| row.kind.clone()).unwrap_or_default(),
+                        x11_class: prev.map(|row| row.x11_class.clone()).unwrap_or_default(),
+                        x11_instance: prev.map(|row| row.x11_instance.clone()).unwrap_or_default(),
                     },
                 );
                 true

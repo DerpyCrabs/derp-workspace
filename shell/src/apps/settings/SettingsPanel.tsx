@@ -7,12 +7,14 @@ import { SettingsDisplaysPage } from './SettingsDisplaysPage'
 import { SettingsDefaultApplicationsPage } from './SettingsDefaultApplicationsPage'
 import { SettingsKeyboardPage } from './SettingsKeyboardPage'
 import { SettingsSoundPage } from './SettingsSoundPage'
+import { SettingsScratchpadsPage } from './SettingsScratchpadsPage'
 import { SettingsTilingPage } from './SettingsTilingPage'
 import { SettingsUserPage } from './SettingsUserPage'
 import { SettingsWifiPage } from './SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settingsTypes'
 import type { DefaultApplicationsController } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
+import type { DerpWindow } from '@/host/appWindowState'
 
 export type { SettingsLayoutScreen }
 
@@ -20,6 +22,7 @@ type SettingsPageId =
   | 'user'
   | 'displays'
   | 'tiling'
+  | 'scratchpads'
   | 'keyboard'
   | 'sound'
   | 'wifi'
@@ -31,6 +34,7 @@ const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'user', label: 'User' },
   { id: 'displays', label: 'Displays' },
   { id: 'tiling', label: 'Tiling' },
+  { id: 'scratchpads', label: 'Scratchpads' },
   { id: 'keyboard', label: 'Keyboard' },
   { id: 'sound', label: 'Sound' },
   { id: 'wifi', label: 'Wi-Fi' },
@@ -62,6 +66,7 @@ export type SettingsPanelProps = {
   setSessionAutoSaveEnabled: (enabled: boolean) => void
   defaultApps: DefaultApplicationsController
   desktopApps: DesktopApplicationsController
+  windowsList: Accessor<readonly DerpWindow[]>
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -100,7 +105,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </For>
       </nav>
       <div
-        class="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3"
+        class="min-h-0 min-w-0 flex-1 px-4 py-3"
+        classList={{
+          'flex flex-col overflow-hidden': activePage() === 'scratchpads',
+          'overflow-y-auto': activePage() !== 'scratchpads',
+        }}
         role="tabpanel"
         data-settings-active-page={activePage()}
       >
@@ -135,6 +144,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
             sessionAutoSaveEnabled={props.sessionAutoSaveEnabled}
             setSessionAutoSaveEnabled={props.setSessionAutoSaveEnabled}
           />
+        </Show>
+        <Show when={activePage() === 'scratchpads'}>
+          <SettingsScratchpadsPage windows={props.windowsList} />
         </Show>
         <Show when={activePage() === 'keyboard'}>
           <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} />

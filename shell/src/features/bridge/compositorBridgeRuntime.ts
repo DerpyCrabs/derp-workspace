@@ -68,6 +68,7 @@ type CompositorRuntimeWireOp =
   | 'shell_ipc_pong'
   | 'invalidate_view'
   | 'set_fullscreen'
+  | 'set_maximized'
   | 'set_geometry'
   | 'presentation_fullscreen'
 
@@ -554,14 +555,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       const w = wmap.get(tidDown)
       if (!w || w.minimized) return
       if (w.maximized) {
-        const rest = options.floatBeforeMaximize.get(tidDown) ?? {
-          x: w.x,
-          y: w.y,
-          w: w.width,
-          h: w.height,
-        }
         options.floatBeforeMaximize.delete(tidDown)
-        options.shellWireSend('set_geometry', tidDown, rest.x, rest.y, rest.w, rest.h, SHELL_LAYOUT_FLOATING)
+        options.shellWireSend('set_maximized', tidDown, 0)
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
         return
@@ -575,7 +570,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         if (!options.sendClearPreTileGeometry(tidDown)) return
         options.scheduleExclusionZonesSync()
         options.bumpSnapChrome()
+        return
       }
+      options.shellWireSend('set_maximized', tidDown, 0)
     }
   }
 

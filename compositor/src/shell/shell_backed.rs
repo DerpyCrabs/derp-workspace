@@ -243,10 +243,13 @@ impl CompositorState {
         let info = self.window_registry.window_info(id).expect("inserted");
         self.capture_refresh_window_source_cache(id);
         self.shell_backed_emit_mapped_metas(&info);
+        self.scratchpad_consider_window(id);
         self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
-        self.shell_focus_shell_ui_window(id);
-        let _ = self.workspace_apply_auto_layout_for_output_name(&info.output_name);
+        if !self.scratchpad_windows.contains_key(&id) {
+            self.shell_focus_shell_ui_window(id);
+            let _ = self.workspace_apply_auto_layout_for_output_name(&info.output_name);
+        }
     }
 
     pub(crate) fn shell_backed_set_title_json(&mut self, json: &str) {
@@ -277,6 +280,7 @@ impl CompositorState {
                 app_id: info.app_id,
             },
         );
+        self.scratchpad_consider_window(p.window_id);
         self.shell_reply_window_list();
     }
 
@@ -306,6 +310,7 @@ impl CompositorState {
             self.shell_ipc_keyboard_to_cef = false;
         }
         self.window_registry.remove_shell_hosted(window_id);
+        self.scratchpad_forget_window(window_id);
         self.capture_forget_window_source_cache(window_id);
         self.shell_window_stack_forget(window_id);
         self.shell_ui_pointer_grab = None;

@@ -5,7 +5,7 @@ import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { findMergeTarget, splitLeftWindowId, type TabMergeTarget } from './tabGroupOps'
 import { clampWorkspaceSplitPaneFraction, type WorkspaceState } from './workspaceState'
 import type { WorkspaceGroupModel } from './workspaceSelectors'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { SnapAssistPickerSource } from '@/host/types'
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show, type Accessor, type JSX } from 'solid-js'
@@ -1101,11 +1101,118 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           root = el
         }}
         data-shell-hosted-content-mount={props.windowId}
-        class={props.class}
+        class={`${props.class} [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0`}
         style={props.style}
         aria-hidden={props['aria-hidden']}
         onPointerDown={props.onPointerDown}
       />
+    )
+  }
+
+  const scratchpadWindowIds = createMemo(() =>
+    [...options.allWindowsMap().values()]
+      .filter((window) => (window.shell_flags & SHELL_WINDOW_FLAG_SCRATCHPAD) !== 0)
+      .sort((a, b) => a.stack_z - b.stack_z || a.window_id - b.window_id)
+      .map((window) => window.window_id),
+  )
+
+  function ScratchpadWindowFrame(props: { windowId: number }) {
+    const windowModel = createMemo(() => options.allWindowsMap().get(props.windowId))
+    const frameModel = createMemo((): ShellWindowModel | undefined => {
+      const window = windowModel()
+      if (!window) return undefined
+      const liveFrame = options.interactionFrameForWindow(window.window_id)
+      return liveFrame
+        ? {
+            ...window,
+            x: liveFrame.x,
+            y: liveFrame.y,
+            width: liveFrame.width,
+            height: liveFrame.height,
+            maximized: liveFrame.maximized,
+            fullscreen: liveFrame.fullscreen,
+            snap_tiled: false,
+          }
+        : { ...window, snap_tiled: false }
+    })
+    const shellHosted = createMemo(() => {
+      const window = windowModel()
+      return !!window && (window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED) !== 0
+    })
+    const stackZ = createMemo(() => {
+      const base = windowModel()?.stack_z ?? 0
+      return options.shellWindowDragId() === props.windowId && activeMoveProxyWindowId() !== props.windowId
+        ? base + 1_000_000
+        : base
+    })
+    const shellUiReg = createMemo(() => {
+      stackZ()
+      options.outputGeom()
+      options.layoutCanvasOrigin()
+      return {
+        id: props.windowId,
+        z: stackZ(),
+        getEnv: (): ShellUiMeasureEnv | null => {
+          const main = options.getMainRef()
+          const og = options.outputGeom()
+          const origin = options.layoutCanvasOrigin()
+          if (!main || !og || !origin) return null
+          return {
+            main,
+            outputGeom: { w: og.w, h: og.h },
+            origin,
+          }
+        },
+      }
+    })
+    const focused = createMemo(() => options.focusedWindowId() === props.windowId)
+    return (
+      <Show when={frameModel()}>
+        <ShellWindowFrame
+          win={frameModel}
+          repaintKey={options.snapChromeRev}
+          stackZ={stackZ}
+          focused={focused}
+          dragging={() => activeFrameDragWindowId() === props.windowId}
+          hidden={() => windowModel()?.minimized ?? true}
+          shellUiRegister={windowModel()?.minimized ? undefined : shellUiReg()}
+          contentPointerEvents={() => (shellHosted() ? 'auto' : 'none')}
+          contentBackground={() => (shellHosted() ? 'var(--shell-surface-inset)' : 'transparent')}
+          onFocusRequest={() => {
+            if (shellHosted()) options.focusShellUiWindow(props.windowId)
+            else options.focusWindowViaShell(props.windowId)
+          }}
+          onTitlebarPointerDown={(_, clientX, clientY) => {
+            options.beginShellWindowMove(props.windowId, clientX, clientY)
+          }}
+          onSnapAssistOpen={(anchorRect) => {
+            options.focusWindowViaShell(props.windowId)
+            options.openSnapAssistPicker(props.windowId, 'button', anchorRect)
+          }}
+          onResizeEdgeDown={(edges, _pointerId, clientX, clientY) => {
+            options.beginShellWindowResize(props.windowId, edges, clientX, clientY)
+          }}
+          onMinimize={() => {
+            options.focusWindowViaShell(props.windowId)
+            options.shellWireSend('minimize', props.windowId)
+          }}
+          onMaximize={() => {
+            options.focusWindowViaShell(props.windowId)
+            options.toggleShellMaximizeForWindow(props.windowId)
+          }}
+          onClose={() => {
+            options.focusWindowViaShell(props.windowId)
+            options.closeGroupWindow(props.windowId)
+          }}
+        >
+          <Show when={shellHosted()}>
+            <ShellHostedContentMount
+              windowId={props.windowId}
+              class="pointer-events-auto relative h-full min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
+            />
+          </Show>
+        </ShellWindowFrame>
+      </Show>
     )
   }
 
@@ -1286,6 +1393,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
 
   return {
     WorkspaceGroupFrame,
+    ScratchpadWindowFrame,
     ShellHostedWindowContentPortals,
     TabDragOverlay,
     WindowDragDropOverlay,
@@ -1296,6 +1404,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     finishWindowDragDrop,
     activeDragWindowId,
     activeDropTarget,
+    scratchpadWindowIds,
     splitGroupGesture,
     tabDragState,
   }

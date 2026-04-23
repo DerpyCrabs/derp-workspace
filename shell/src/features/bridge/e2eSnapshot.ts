@@ -1,7 +1,7 @@
 import type { AssistGridSpan } from '@/features/tiling/assistGrid'
 import type { DerpWindow } from '@/host/appWindowState'
 import { canvasOriginXY, canvasRectToClientCss, type CanvasOrigin } from '@/lib/shellCoords'
-import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
+import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { SessionSnapshot } from './sessionSnapshot'
 
 export type E2eRectSnapshot = {
@@ -756,6 +756,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       window_id: window.window_id,
       title: window.title,
       app_id: window.app_id,
+      kind: window.kind,
+      x11_class: window.x11_class,
+      x11_instance: window.x11_instance,
       output_name: window.output_name,
       stack_z: window.stack_z,
       x: window.x,
@@ -766,6 +769,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       maximized: window.maximized,
       fullscreen: window.fullscreen,
       shell_hosted: !!(window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED),
+      scratchpad: !!(window.shell_flags & SHELL_WINDOW_FLAG_SCRATCHPAD),
     })),
     controls: {
       taskbar_programs_toggle: queryRect(cache, '[data-shell-programs-toggle]', args.origin),
@@ -793,8 +797,17 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_user: queryRect(cache, '[data-settings-tab="user"]', args.origin),
       settings_tab_displays: queryRect(cache, '[data-settings-tab="displays"]', args.origin),
       settings_tab_tiling: queryRect(cache, '[data-settings-tab="tiling"]', args.origin),
+      settings_tab_scratchpads: queryRect(cache, '[data-settings-tab="scratchpads"]', args.origin),
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
       settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
+      settings_scratchpads_page: queryRect(cache, '[data-settings-scratchpads-page]', args.origin),
+      settings_scratchpad_window_inspector: queryRect(
+        cache,
+        '[data-settings-scratchpad-window-inspector]',
+        args.origin,
+      ),
+      settings_scratchpad_list: queryRect(cache, '[data-settings-scratchpad-list]', args.origin),
+      settings_scratchpad_save: queryRect(cache, '[data-settings-scratchpad-save]', args.origin),
       settings_tiling_layout_trigger: settingsTilingLayoutTriggerRect,
       settings_tiling_layout_option_grid: queryRect(
         cache,

@@ -169,8 +169,11 @@ impl XdgShellHandler for CompositorState {
             let spawn_focus_wid = info.window_id;
             let output_name = info.output_name.clone();
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
-            self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
-            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+            self.scratchpad_consider_window(spawn_focus_wid);
+            if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
+                self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+            }
         }
     }
 
@@ -246,7 +249,9 @@ impl XdgShellHandler for CompositorState {
             if new_shell && !old_shell {
                 self.shell_retract_phantom_shell_window(info.window_id);
             } else if !new_shell {
+                let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
+                self.scratchpad_consider_window(window_id);
             }
         }
         self.xdg_sync_pending_deferred_toplevel(wl);
@@ -269,7 +274,9 @@ impl XdgShellHandler for CompositorState {
             if new_shell && !old_shell {
                 self.shell_retract_phantom_shell_window(info.window_id);
             } else if !new_shell {
+                let window_id = info.window_id;
                 self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
+                self.scratchpad_consider_window(window_id);
             }
         }
         self.xdg_sync_pending_deferred_toplevel(wl);

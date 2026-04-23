@@ -88,6 +88,9 @@ export interface WindowSnapshot {
   window_id: number
   title: string
   app_id: string
+  kind?: string
+  x11_class?: string
+  x11_instance?: string
   xwayland_scale?: number | null
   output_name: string
   x: number
@@ -98,6 +101,7 @@ export interface WindowSnapshot {
   maximized: boolean
   fullscreen: boolean
   shell_hosted: boolean
+  scratchpad?: boolean
   stack_z?: number
   surface_id?: number
   client_side_decoration?: boolean
@@ -279,8 +283,13 @@ export interface ShellControls {
   settings_tab_user?: Rect | null
   settings_tab_displays?: Rect | null
   settings_tab_tiling?: Rect | null
+  settings_tab_scratchpads?: Rect | null
   settings_tab_keyboard?: Rect | null
   settings_tiling_layout_trigger?: Rect | null
+  settings_scratchpads_page?: Rect | null
+  settings_scratchpad_window_inspector?: Rect | null
+  settings_scratchpad_list?: Rect | null
+  settings_scratchpad_save?: Rect | null
   settings_tiling_layout_option_grid?: Rect | null
   settings_tiling_layout_option_manual_snap?: Rect | null
   settings_snap_layout_option_2x2?: Rect | null

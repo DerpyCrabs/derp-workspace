@@ -55,6 +55,92 @@ impl Default for DefaultApplicationsFile {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScratchpadRuleFieldFile {
+    #[default]
+    AppId,
+    Title,
+    X11Class,
+    X11Instance,
+    Kind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScratchpadRuleOpFile {
+    #[default]
+    Equals,
+    Contains,
+    StartsWith,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScratchpadRuleFile {
+    pub field: ScratchpadRuleFieldFile,
+    pub op: ScratchpadRuleOpFile,
+    pub value: String,
+}
+
+impl Default for ScratchpadRuleFile {
+    fn default() -> Self {
+        Self {
+            field: ScratchpadRuleFieldFile::AppId,
+            op: ScratchpadRuleOpFile::Equals,
+            value: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScratchpadPlacementFile {
+    pub monitor: String,
+    pub width_percent: u32,
+    pub height_percent: u32,
+}
+
+impl Default for ScratchpadPlacementFile {
+    fn default() -> Self {
+        Self {
+            monitor: "focused".into(),
+            width_percent: 80,
+            height_percent: 70,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScratchpadFile {
+    pub id: String,
+    pub name: String,
+    pub hotkey: String,
+    pub default_visible: bool,
+    pub placement: ScratchpadPlacementFile,
+    pub rules: Vec<ScratchpadRuleFile>,
+}
+
+impl Default for ScratchpadFile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            hotkey: String::new(),
+            default_visible: false,
+            placement: ScratchpadPlacementFile::default(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScratchpadSettingsFile {
+    pub items: Vec<ScratchpadFile>,
+}
+
 impl Default for KeyboardSettingsFile {
     fn default() -> Self {
         Self {
@@ -81,6 +167,7 @@ pub struct SettingsFile {
     pub theme: ThemeSettingsFile,
     pub keyboard: KeyboardSettingsFile,
     pub default_applications: DefaultApplicationsFile,
+    pub scratchpads: ScratchpadSettingsFile,
 }
 
 impl Default for SettingsFile {
@@ -90,6 +177,7 @@ impl Default for SettingsFile {
             theme: ThemeSettingsFile::default(),
             keyboard: KeyboardSettingsFile::default(),
             default_applications: DefaultApplicationsFile::default(),
+            scratchpads: ScratchpadSettingsFile::default(),
         }
     }
 }
@@ -192,6 +280,87 @@ pub fn sanitize_default_applications_settings(
         pdf: sanitize_default_app_token(&settings.pdf, &defaults.pdf),
         other: sanitize_default_app_token(&settings.other, &defaults.other),
     }
+}
+
+fn sanitize_scratchpad_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 48 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn sanitize_scratchpad_text(value: &str, max_len: usize) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(max_len)
+        .collect()
+}
+
+pub fn sanitize_scratchpad_settings(settings: ScratchpadSettingsFile) -> ScratchpadSettingsFile {
+    let mut items = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    for item in settings.items {
+        let Some(id) = sanitize_scratchpad_id(&item.id) else {
+            continue;
+        };
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        let name = sanitize_scratchpad_text(&item.name, 80);
+        let hotkey = sanitize_scratchpad_text(&item.hotkey, 80);
+        let monitor = match item.placement.monitor.trim() {
+            "" => "focused".to_string(),
+            "focused" | "pointer" | "primary" => item.placement.monitor.trim().to_string(),
+            value => sanitize_scratchpad_text(value, 80),
+        };
+        let mut rules = Vec::new();
+        for rule in item.rules {
+            let value = sanitize_scratchpad_text(&rule.value, 256);
+            if value.is_empty() {
+                continue;
+            }
+            rules.push(ScratchpadRuleFile {
+                field: rule.field,
+                op: rule.op,
+                value,
+            });
+            if rules.len() >= 16 {
+                break;
+            }
+        }
+        if rules.is_empty() {
+            continue;
+        }
+        items.push(ScratchpadFile {
+            id,
+            name: if name.is_empty() {
+                "Scratchpad".into()
+            } else {
+                name
+            },
+            hotkey,
+            default_visible: item.default_visible,
+            placement: ScratchpadPlacementFile {
+                monitor,
+                width_percent: item.placement.width_percent.clamp(20, 100),
+                height_percent: item.placement.height_percent.clamp(20, 100),
+            },
+            rules,
+        });
+        if items.len() >= 32 {
+            break;
+        }
+    }
+    ScratchpadSettingsFile { items }
 }
 
 fn keyboard_settings_from_display_defaults() -> KeyboardSettingsFile {
@@ -307,6 +476,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
             cfg.keyboard = sanitize_keyboard_settings(cfg.keyboard);
             cfg.default_applications =
                 sanitize_default_applications_settings(cfg.default_applications);
+            cfg.scratchpads = sanitize_scratchpad_settings(cfg.scratchpads);
             if cfg.version == 0 {
                 cfg.version = 1;
             }
@@ -322,6 +492,41 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
             SettingsFile::default()
         }
     }
+}
+
+pub fn read_scratchpad_settings() -> ScratchpadSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return ScratchpadSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).scratchpads
+}
+
+pub fn read_scratchpad_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_scratchpad_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_scratchpad_settings(settings: ScratchpadSettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let scratchpads = sanitize_scratchpad_settings(settings);
+    if cfg.version == 1 && cfg.scratchpads == scratchpads {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.scratchpads = scratchpads;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
 }
 
 pub fn read_theme_settings() -> ThemeSettingsFile {

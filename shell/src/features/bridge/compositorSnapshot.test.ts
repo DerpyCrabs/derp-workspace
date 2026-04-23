@@ -46,6 +46,9 @@ describe('decodeCompositorSnapshot', () => {
     const appId = bytesForString('foot')
     const outputName = bytesForString('HDMI-A-1')
     const captureIdentifier = bytesForString('cap-1')
+    const kind = bytesForString('native')
+    const x11Class = bytesForString('Foot')
+    const x11Instance = bytesForString('foot')
     const windowList = frame([
       ...u32(11),
       ...u32(1),
@@ -69,6 +72,12 @@ describe('decodeCompositorSnapshot', () => {
       ...outputName,
       ...u32(captureIdentifier.length),
       ...captureIdentifier,
+      ...u32(kind.length),
+      ...kind,
+      ...u32(x11Class.length),
+      ...x11Class,
+      ...u32(x11Instance.length),
+      ...x11Instance,
     ])
 
     const focusChanged = frame([...u32(10), ...u32(10), ...u32(9)])
@@ -76,7 +85,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(4),
+      ...u32(5),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -114,6 +123,9 @@ describe('decodeCompositorSnapshot', () => {
               app_id: 'foot',
               output_name: 'HDMI-A-1',
               capture_identifier: 'cap-1',
+              kind: 'native',
+              x11_class: 'Foot',
+              x11_instance: 'foot',
             },
           ],
         },
@@ -149,7 +161,7 @@ describe('decodeCompositorSnapshot', () => {
     const payload = [...interactionState]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(4),
+      ...u32(5),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -193,7 +205,7 @@ describe('decodeCompositorSnapshot', () => {
     ])
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(4),
+      ...u32(5),
       ...u32(preview.length),
       ...u32(0),
       ...u64(2n),
@@ -223,7 +235,7 @@ describe('decodeCompositorSnapshot', () => {
     ])
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(4),
+      ...u32(5),
       ...u32(preview.length),
       ...u32(0),
       ...u64(2n),

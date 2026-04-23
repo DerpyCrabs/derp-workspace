@@ -86,6 +86,13 @@ impl UplinkToCompositor {
         })
     }
 
+    pub fn settings_scratchpads_apply(
+        &self,
+        settings: crate::session::settings_config::ScratchpadSettingsFile,
+    ) -> Result<(), String> {
+        self.run_result(move |s| s.apply_scratchpad_settings(settings))
+    }
+
     pub fn spawn_wayland_client(&self, command: String) {
         self.run(move |s| {
             if let Err(e) = s.try_spawn_wayland_client_sh(&command) {

@@ -223,6 +223,11 @@ pub(crate) struct PendingDeferredToplevel {
     pub initial_client_rect: Option<Rectangle<i32, Logical>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ScratchpadWindowState {
+    pub scratchpad_id: String,
+}
+
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     smithay::wayland::compositor::with_states(wl, |states| {
         let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
@@ -551,6 +556,9 @@ pub struct CompositorState {
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
     pub(crate) shell_hosted_app_state: HashMap<u32, serde_json::Value>,
+    pub(crate) scratchpad_settings: crate::session::settings_config::ScratchpadSettingsFile,
+    pub(crate) scratchpad_windows: HashMap<u32, ScratchpadWindowState>,
+    pub(crate) scratchpad_last_window_by_id: HashMap<String, u32>,
     session_default_layout_index: u32,
     /// Latest pointer position as fraction of [`Self::shell_window_physical_px`] (0..1), window-local physical.
     pub(crate) shell_pointer_norm: Option<(f64, f64)>,
@@ -1068,6 +1076,9 @@ impl CompositorState {
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
             shell_hosted_app_state: HashMap::new(),
+            scratchpad_settings: crate::session::settings_config::read_scratchpad_settings(),
+            scratchpad_windows: HashMap::new(),
+            scratchpad_last_window_by_id: HashMap::new(),
             session_default_layout_index: 0,
             shell_pointer_norm: None,
             shell_initial_pointer_centered: false,
@@ -1709,14 +1720,7 @@ impl CompositorState {
             }
             let stack_z = self.shell_window_stack_z(id);
             let z = if stack_z > 0 { stack_z } else { sent_z };
-            rows.push((
-                id,
-                gx,
-                gy,
-                gw as i32,
-                gh as i32,
-                z,
-            ));
+            rows.push((id, gx, gy, gw as i32, gh as i32, z));
         }
         rows.sort_by(|a, b| a.5.cmp(&b.5).then_with(|| a.0.cmp(&b.0)));
         let mut out = Vec::new();
@@ -2801,6 +2805,10 @@ impl CompositorState {
             }
             "toggle_programs_menu" => {
                 self.programs_menu_toggle_from_super(SERIAL_COUNTER.next_serial());
+            }
+            action if action.starts_with("toggle_scratchpad:") => {
+                let id = action.trim_start_matches("toggle_scratchpad:");
+                self.toggle_scratchpad(id);
             }
             "launch_terminal" | "open_settings" | "tile_left" | "tile_right" | "tile_up"
             | "tile_down" | "tab_next" | "tab_previous" | "move_monitor_left"
@@ -4188,8 +4196,11 @@ impl CompositorState {
             let spawn_focus_wid = info.window_id;
             let output_name = info.output_name.clone();
             self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
-            self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
-            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+            self.scratchpad_consider_window(spawn_focus_wid);
+            if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
+                self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+            }
         }
     }
 
@@ -4638,6 +4649,7 @@ impl CompositorState {
         if self.shell_hosted_app_state.remove(&window_id).is_some() {
             self.shell_hosted_app_state_send();
         }
+        self.scratchpad_forget_window(window_id);
         let hint = removed_info.as_ref();
         self.shell_emit_chrome_event_inner(ChromeEvent::WindowUnmapped { window_id }, hint);
         self.shell_reply_window_list();
@@ -7431,6 +7443,338 @@ impl CompositorState {
         );
     }
 
+    fn scratchpad_rule_value(
+        &self,
+        window_id: u32,
+        info: &WindowInfo,
+        field: &crate::session::settings_config::ScratchpadRuleFieldFile,
+    ) -> String {
+        match field {
+            crate::session::settings_config::ScratchpadRuleFieldFile::AppId => info.app_id.clone(),
+            crate::session::settings_config::ScratchpadRuleFieldFile::Title => info.title.clone(),
+            crate::session::settings_config::ScratchpadRuleFieldFile::Kind => {
+                if self.window_registry.is_shell_hosted(window_id) {
+                    info.app_id
+                        .strip_prefix("derp.")
+                        .unwrap_or(info.app_id.as_str())
+                        .to_string()
+                } else {
+                    "native".into()
+                }
+            }
+            crate::session::settings_config::ScratchpadRuleFieldFile::X11Class => self
+                .find_x11_window_by_window_id(window_id)
+                .map(|window| window.class())
+                .unwrap_or_default(),
+            crate::session::settings_config::ScratchpadRuleFieldFile::X11Instance => self
+                .find_x11_window_by_window_id(window_id)
+                .map(|window| window.instance())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn scratchpad_rule_matches(
+        haystack: &str,
+        rule: &crate::session::settings_config::ScratchpadRuleFile,
+    ) -> bool {
+        let value = rule.value.trim();
+        if value.is_empty() {
+            return false;
+        }
+        match rule.op {
+            crate::session::settings_config::ScratchpadRuleOpFile::Equals => haystack == value,
+            crate::session::settings_config::ScratchpadRuleOpFile::Contains => {
+                haystack.contains(value)
+            }
+            crate::session::settings_config::ScratchpadRuleOpFile::StartsWith => {
+                haystack.starts_with(value)
+            }
+        }
+    }
+
+    fn scratchpad_match_for_window(&self, window_id: u32, info: &WindowInfo) -> Option<String> {
+        if self.window_info_is_solid_shell_host(info) || !shell_window_row_should_show(info) {
+            return None;
+        }
+        for scratchpad in &self.scratchpad_settings.items {
+            if scratchpad.rules.iter().any(|rule| {
+                let value = self.scratchpad_rule_value(window_id, info, &rule.field);
+                Self::scratchpad_rule_matches(&value, rule)
+            }) {
+                return Some(scratchpad.id.clone());
+            }
+        }
+        None
+    }
+
+    fn scratchpad_config_by_id(
+        &self,
+        scratchpad_id: &str,
+    ) -> Option<&crate::session::settings_config::ScratchpadFile> {
+        self.scratchpad_settings
+            .items
+            .iter()
+            .find(|item| item.id == scratchpad_id)
+    }
+
+    fn scratchpad_output(
+        &self,
+        cfg: &crate::session::settings_config::ScratchpadFile,
+    ) -> Option<Output> {
+        match cfg.placement.monitor.as_str() {
+            "primary" => self.shell_effective_primary_output(),
+            "pointer" => self
+                .seat
+                .get_pointer()
+                .and_then(|pointer| self.output_containing_global_point(pointer.current_location()))
+                .or_else(|| self.shell_effective_primary_output())
+                .or_else(|| self.leftmost_output()),
+            "focused" | "" => self.new_toplevel_placement_output(None),
+            name => self
+                .space
+                .outputs()
+                .find(|output| output.name() == name)
+                .cloned()
+                .or_else(|| self.new_toplevel_placement_output(None)),
+        }
+    }
+
+    fn scratchpad_place_window(&mut self, window_id: u32) {
+        let Some(sp) = self.scratchpad_windows.get(&window_id).cloned() else {
+            return;
+        };
+        let Some(cfg) = self.scratchpad_config_by_id(&sp.scratchpad_id).cloned() else {
+            return;
+        };
+        let Some(output) = self.scratchpad_output(&cfg) else {
+            return;
+        };
+        let Some(work) = self.shell_maximize_work_area_global_for_output(&output) else {
+            return;
+        };
+        let width = (work.size.w as i64)
+            .saturating_mul(cfg.placement.width_percent as i64)
+            .saturating_div(100)
+            .clamp(240, work.size.w.max(1) as i64) as i32;
+        let height = (work.size.h as i64)
+            .saturating_mul(cfg.placement.height_percent as i64)
+            .saturating_div(100)
+            .clamp(160, work.size.h.max(1) as i64) as i32;
+        let x = work.loc.x + (work.size.w - width) / 2;
+        let y = work.loc.y + (work.size.h - height) / 2;
+        let (ox, oy) = self.shell_canvas_logical_origin;
+        self.shell_set_window_geometry(
+            window_id,
+            x.saturating_sub(ox),
+            y.saturating_sub(oy),
+            width,
+            height,
+            0,
+        );
+    }
+
+    fn scratchpad_hide_window(&mut self, window_id: u32) {
+        if self.window_registry.is_shell_hosted(window_id) {
+            let _ = self.shell_backed_minimize_if_any(window_id);
+        } else {
+            self.shell_minimize_window(window_id);
+        }
+    }
+
+    fn scratchpad_show_window(&mut self, window_id: u32) {
+        self.scratchpad_place_window(window_id);
+        if self
+            .window_registry
+            .window_info(window_id)
+            .is_some_and(|info| info.minimized)
+        {
+            self.shell_restore_minimized_window(window_id);
+        } else {
+            self.shell_raise_and_focus_window(window_id);
+        }
+        if let Some(sp) = self.scratchpad_windows.get(&window_id) {
+            self.scratchpad_last_window_by_id
+                .insert(sp.scratchpad_id.clone(), window_id);
+        }
+        self.shell_reply_window_list();
+    }
+
+    pub(crate) fn scratchpad_consider_window(&mut self, window_id: u32) {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            self.scratchpad_forget_window(window_id);
+            return;
+        };
+        if self.wayland_window_id_is_pending_deferred_toplevel(window_id) {
+            return;
+        }
+        let matched = self.scratchpad_match_for_window(window_id, &info);
+        match matched {
+            Some(scratchpad_id) => {
+                let was = self
+                    .scratchpad_windows
+                    .get(&window_id)
+                    .map(|state| state.scratchpad_id.as_str());
+                let new_assignment = was != Some(scratchpad_id.as_str());
+                self.scratchpad_windows.insert(
+                    window_id,
+                    ScratchpadWindowState {
+                        scratchpad_id: scratchpad_id.clone(),
+                    },
+                );
+                self.workspace_sync_from_registry();
+                if new_assignment {
+                    let default_visible = self
+                        .scratchpad_config_by_id(&scratchpad_id)
+                        .map(|cfg| cfg.default_visible)
+                        .unwrap_or(false);
+                    if default_visible {
+                        self.scratchpad_show_window(window_id);
+                    } else {
+                        self.scratchpad_place_window(window_id);
+                        self.scratchpad_hide_window(window_id);
+                        self.shell_reply_window_list();
+                    }
+                }
+            }
+            None => {
+                if self.scratchpad_windows.remove(&window_id).is_some() {
+                    self.shell_reply_window_list();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn scratchpad_forget_window(&mut self, window_id: u32) {
+        self.scratchpad_windows.remove(&window_id);
+        self.scratchpad_last_window_by_id
+            .retain(|_, remembered| *remembered != window_id);
+    }
+
+    pub(crate) fn apply_scratchpad_settings(
+        &mut self,
+        settings: crate::session::settings_config::ScratchpadSettingsFile,
+    ) -> Result<(), String> {
+        let settings = crate::session::settings_config::sanitize_scratchpad_settings(settings);
+        crate::session::settings_config::write_scratchpad_settings(settings.clone())?;
+        self.scratchpad_settings = settings;
+        let window_ids: Vec<u32> = self
+            .window_registry
+            .all_infos()
+            .into_iter()
+            .map(|info| info.window_id)
+            .collect();
+        for window_id in window_ids {
+            self.scratchpad_consider_window(window_id);
+        }
+        self.shell_reply_window_list();
+        Ok(())
+    }
+
+    pub(crate) fn toggle_scratchpad(&mut self, scratchpad_id: &str) {
+        if self.scratchpad_config_by_id(scratchpad_id).is_none() {
+            return;
+        }
+        let mut windows: Vec<u32> = self
+            .scratchpad_windows
+            .iter()
+            .filter_map(|(window_id, state)| {
+                (state.scratchpad_id == scratchpad_id)
+                    .then_some(*window_id)
+                    .filter(|window_id| self.window_registry.window_info(*window_id).is_some())
+            })
+            .collect();
+        windows.sort_by_key(|window_id| self.shell_window_stack_z(*window_id));
+        if let Some(visible) = windows.iter().rev().copied().find(|window_id| {
+            self.window_registry
+                .window_info(*window_id)
+                .is_some_and(|info| !info.minimized)
+        }) {
+            self.scratchpad_hide_window(visible);
+            self.shell_reply_window_list();
+            return;
+        }
+        let preferred = self
+            .scratchpad_last_window_by_id
+            .get(scratchpad_id)
+            .copied()
+            .filter(|window_id| windows.contains(window_id))
+            .or_else(|| windows.first().copied());
+        if let Some(window_id) = preferred {
+            self.scratchpad_show_window(window_id);
+        }
+    }
+
+    fn scratchpad_key_token_matches(raw_sym: u32, token: &str) -> bool {
+        let t = token.trim().to_ascii_lowercase();
+        match t.as_str() {
+            "`" | "grave" | "backquote" => raw_sym == keysyms::KEY_grave,
+            "space" => raw_sym == keysyms::KEY_space,
+            "return" | "enter" => {
+                raw_sym == keysyms::KEY_Return || raw_sym == keysyms::KEY_KP_Enter
+            }
+            "tab" => raw_sym == keysyms::KEY_Tab,
+            "left" => raw_sym == keysyms::KEY_Left,
+            "right" => raw_sym == keysyms::KEY_Right,
+            "up" => raw_sym == keysyms::KEY_Up,
+            "down" => raw_sym == keysyms::KEY_Down,
+            "," | "comma" => raw_sym == keysyms::KEY_comma,
+            "." | "period" => raw_sym == keysyms::KEY_period,
+            "/" | "slash" => raw_sym == keysyms::KEY_slash,
+            ";" | "semicolon" => raw_sym == keysyms::KEY_semicolon,
+            "'" | "apostrophe" => raw_sym == keysyms::KEY_apostrophe,
+            "[" | "bracketleft" => raw_sym == keysyms::KEY_bracketleft,
+            "]" | "bracketright" => raw_sym == keysyms::KEY_bracketright,
+            _ if t.len() == 1 => {
+                let ch = t.as_bytes()[0];
+                if ch.is_ascii_lowercase() {
+                    raw_sym == keysyms::KEY_a + u32::from(ch - b'a')
+                        || raw_sym == keysyms::KEY_A + u32::from(ch - b'a')
+                } else if ch.is_ascii_digit() {
+                    raw_sym == keysyms::KEY_0 + u32::from(ch - b'0')
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn scratchpad_action_for_super_chord(
+        &self,
+        raw_sym: u32,
+        ctrl: bool,
+        shift: bool,
+    ) -> Option<String> {
+        for scratchpad in &self.scratchpad_settings.items {
+            let parts: Vec<String> = scratchpad
+                .hotkey
+                .split('+')
+                .map(|part| part.trim().to_ascii_lowercase())
+                .filter(|part| !part.is_empty())
+                .collect();
+            if parts.is_empty() || !parts.iter().any(|part| part == "super" || part == "mod4") {
+                continue;
+            }
+            let wants_ctrl = parts.iter().any(|part| part == "ctrl" || part == "control");
+            let wants_shift = parts.iter().any(|part| part == "shift");
+            if wants_ctrl != ctrl || wants_shift != shift {
+                continue;
+            }
+            let Some(key) = parts.iter().find(|part| {
+                !matches!(
+                    part.as_str(),
+                    "super" | "mod4" | "ctrl" | "control" | "shift"
+                )
+            }) else {
+                continue;
+            };
+            if Self::scratchpad_key_token_matches(raw_sym, key) {
+                return Some(format!("toggle_scratchpad:{}", scratchpad.id));
+            }
+        }
+        None
+    }
+
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
         crate::cef::begin_frame_diag::note_shell_reply_window_list();
@@ -7449,6 +7793,21 @@ impl CompositorState {
             })
             .map(|record| {
                 let info = record.info;
+                let kind = self.scratchpad_rule_value(
+                    info.window_id,
+                    &info,
+                    &crate::session::settings_config::ScratchpadRuleFieldFile::Kind,
+                );
+                let x11_class = self.scratchpad_rule_value(
+                    info.window_id,
+                    &info,
+                    &crate::session::settings_config::ScratchpadRuleFieldFile::X11Class,
+                );
+                let x11_instance = self.scratchpad_rule_value(
+                    info.window_id,
+                    &info,
+                    &crate::session::settings_config::ScratchpadRuleFieldFile::X11Instance,
+                );
                 let i = self
                     .shell_window_info_to_output_local_layout(&info)
                     .unwrap_or_else(|| info.clone());
@@ -7469,8 +7828,12 @@ impl CompositorState {
                     maximized: if i.maximized { 1 } else { 0 },
                     fullscreen: if i.fullscreen { 1 } else { 0 },
                     client_side_decoration: if i.client_side_decoration { 1 } else { 0 },
-                    shell_flags: if record.kind == WindowKind::ShellHosted {
+                    shell_flags: (if record.kind == WindowKind::ShellHosted {
                         shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
+                    } else {
+                        0
+                    }) | if self.scratchpad_windows.contains_key(&i.window_id) {
+                        shell_wire::SHELL_WINDOW_FLAG_SCRATCHPAD
                     } else {
                         0
                     },
@@ -7478,6 +7841,9 @@ impl CompositorState {
                     app_id: i.app_id,
                     output_name: i.output_name,
                     capture_identifier,
+                    kind,
+                    x11_class,
+                    x11_instance,
                 }
             })
             .collect();
@@ -7493,6 +7859,7 @@ impl CompositorState {
             .into_iter()
             .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
             .filter(|record| shell_window_row_should_show(&record.info))
+            .filter(|record| !self.scratchpad_windows.contains_key(&record.info.window_id))
             .filter(|record| {
                 record.kind == WindowKind::ShellHosted
                     || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
@@ -9950,7 +10317,10 @@ impl XWaylandShellHandler for CompositorState {
             let elem = DerpSpaceElem::X11(window.clone());
             if self.space.elements().any(|e| *e == elem) && !info.minimized {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
-                self.shell_consider_focus_spawned_toplevel(info.window_id);
+                self.scratchpad_consider_window(info.window_id);
+                if !self.scratchpad_windows.contains_key(&info.window_id) {
+                    self.shell_consider_focus_spawned_toplevel(info.window_id);
+                }
             }
         }
         self.loop_signal.wakeup();
@@ -10012,8 +10382,11 @@ impl XwmHandler for CompositorState {
                 if !was_mapped && !info.minimized {
                     let output_name = info.output_name.clone();
                     self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
-                    self.shell_consider_focus_spawned_toplevel(info.window_id);
-                    let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+                    self.scratchpad_consider_window(info.window_id);
+                    if !self.scratchpad_windows.contains_key(&info.window_id) {
+                        self.shell_consider_focus_spawned_toplevel(info.window_id);
+                        let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+                    }
                 } else {
                     self.emit_x11_window_updates(&window, true, true);
                 }
@@ -10145,7 +10518,12 @@ impl XwmHandler for CompositorState {
                 | smithay::xwayland::xwm::WmWindowProperty::MotifHints
                 | smithay::xwayland::xwm::WmWindowProperty::Pid
         );
-        self.emit_x11_window_updates(&window, false, force_metadata_emit);
+        let updated = self.emit_x11_window_updates(&window, false, force_metadata_emit);
+        if force_metadata_emit {
+            if let Some(info) = updated {
+                self.scratchpad_consider_window(info.window_id);
+            }
+        }
     }
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {

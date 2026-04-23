@@ -15,7 +15,7 @@ const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
 
 const SNAPSHOT_MAGIC = 0x44525053
-const SNAPSHOT_ABI = 4
+const SNAPSHOT_ABI = 5
 const SNAPSHOT_HEADER_BYTES = 32
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
@@ -168,6 +168,27 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     const captureIdentifier = readUtf8(bytes, cursor, captureLen)
     if (captureIdentifier == null) return null
     cursor += captureLen
+    if (cursor + 4 > view.byteLength) return null
+    const kindLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (kindLen > MAX_WINDOW_STRING_BYTES) return null
+    const kind = readUtf8(bytes, cursor, kindLen)
+    if (kind == null) return null
+    cursor += kindLen
+    if (cursor + 4 > view.byteLength) return null
+    const x11ClassLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (x11ClassLen > MAX_WINDOW_STRING_BYTES) return null
+    const x11Class = readUtf8(bytes, cursor, x11ClassLen)
+    if (x11Class == null) return null
+    cursor += x11ClassLen
+    if (cursor + 4 > view.byteLength) return null
+    const x11InstanceLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (x11InstanceLen > MAX_WINDOW_STRING_BYTES) return null
+    const x11Instance = readUtf8(bytes, cursor, x11InstanceLen)
+    if (x11Instance == null) return null
+    cursor += x11InstanceLen
     windows.push({
       window_id: windowId,
       surface_id: surfaceId,
@@ -185,6 +206,9 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       app_id: appId,
       output_name: outputName,
       capture_identifier: captureIdentifier,
+      kind,
+      x11_class: x11Class,
+      x11_instance: x11Instance,
     })
   }
   if (cursor !== view.byteLength) return null

@@ -8,6 +8,7 @@ export {
 } from './backedShellWindows'
 
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
+export const SHELL_WINDOW_FLAG_SCRATCHPAD = 2
 
 export type ShellUiMeasureEnv = {
   main: HTMLElement

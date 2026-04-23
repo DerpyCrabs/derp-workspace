@@ -138,7 +138,7 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 4;
+pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 5;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -706,6 +706,7 @@ pub fn encode_shell_resize_end(window_id: u32) -> Vec<u8> {
 }
 
 pub const SHELL_WINDOW_FLAG_SHELL_HOSTED: u32 = 1;
+pub const SHELL_WINDOW_FLAG_SCRATCHPAD: u32 = 2;
 
 /// One row in [`MSG_WINDOW_LIST`] / [`DecodedCompositorToShellMessage::WindowList`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -727,6 +728,9 @@ pub struct ShellWindowSnapshot {
     pub app_id: String,
     pub output_name: String,
     pub capture_identifier: String,
+    pub kind: String,
+    pub x11_class: String,
+    pub x11_instance: String,
 }
 
 pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
@@ -742,10 +746,16 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         let ab = w.app_id.as_bytes();
         let ob = w.output_name.as_bytes();
         let cb = w.capture_identifier.as_bytes();
+        let kb = w.kind.as_bytes();
+        let xcb = w.x11_class.as_bytes();
+        let xib = w.x11_instance.as_bytes();
         if tb.len() > MAX_WINDOW_STRING_BYTES as usize
             || ab.len() > MAX_WINDOW_STRING_BYTES as usize
             || ob.len() > MAX_WINDOW_STRING_BYTES as usize
             || cb.len() > MAX_WINDOW_STRING_BYTES as usize
+            || kb.len() > MAX_WINDOW_STRING_BYTES as usize
+            || xcb.len() > MAX_WINDOW_STRING_BYTES as usize
+            || xib.len() > MAX_WINDOW_STRING_BYTES as usize
         {
             return None;
         }
@@ -753,6 +763,9 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         let al = u32::try_from(ab.len()).ok()?;
         let olen = u32::try_from(ob.len()).ok()?;
         let clen = u32::try_from(cb.len()).ok()?;
+        let klen = u32::try_from(kb.len()).ok()?;
+        let xclen = u32::try_from(xcb.len()).ok()?;
+        let xilen = u32::try_from(xib.len()).ok()?;
         body.extend_from_slice(&w.window_id.to_le_bytes());
         body.extend_from_slice(&w.surface_id.to_le_bytes());
         body.extend_from_slice(&w.stack_z.to_le_bytes());
@@ -773,6 +786,12 @@ pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
         body.extend_from_slice(ob);
         body.extend_from_slice(&clen.to_le_bytes());
         body.extend_from_slice(cb);
+        body.extend_from_slice(&klen.to_le_bytes());
+        body.extend_from_slice(kb);
+        body.extend_from_slice(&xclen.to_le_bytes());
+        body.extend_from_slice(xcb);
+        body.extend_from_slice(&xilen.to_le_bytes());
+        body.extend_from_slice(xib);
     }
     let body_len = u32::try_from(body.len()).ok()?;
     if body_len > MAX_BODY_BYTES {
@@ -2387,6 +2406,51 @@ fn decode_window_list_compositor_body(
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
         off += capture_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let kind_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if kind_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        if off + kind_len > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let kind = std::str::from_utf8(&body[off..off + kind_len])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += kind_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let x11_class_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if x11_class_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        if off + x11_class_len > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let x11_class = std::str::from_utf8(&body[off..off + x11_class_len])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += x11_class_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let x11_instance_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if x11_instance_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        if off + x11_instance_len > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let x11_instance = std::str::from_utf8(&body[off..off + x11_instance_len])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += x11_instance_len;
         windows.push(ShellWindowSnapshot {
             window_id,
             surface_id,
@@ -2404,6 +2468,9 @@ fn decode_window_list_compositor_body(
             app_id,
             output_name,
             capture_identifier,
+            kind,
+            x11_class,
+            x11_instance,
         });
     }
     if off != body.len() {
@@ -2508,6 +2575,9 @@ mod tests {
             app_id: "app.example".to_string(),
             output_name: "DP-1".to_string(),
             capture_identifier: "capture-identifier-123".to_string(),
+            kind: "native".to_string(),
+            x11_class: "ExampleClass".to_string(),
+            x11_instance: "example-instance".to_string(),
         }])
         .unwrap();
         let mut buf = packet;
@@ -2532,6 +2602,9 @@ mod tests {
                     app_id: "app.example".to_string(),
                     output_name: "DP-1".to_string(),
                     capture_identifier: "capture-identifier-123".to_string(),
+                    kind: "native".to_string(),
+                    x11_class: "ExampleClass".to_string(),
+                    x11_instance: "example-instance".to_string(),
                 }]
             })
         );

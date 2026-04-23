@@ -862,6 +862,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_scratchpads" {
+        let json = crate::session::settings_config::read_scratchpad_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_user" {
         let json = crate::session::gdm_settings::read_gdm_autologin_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -929,6 +935,8 @@ fn handle_one(
 
     let max_content_length = if req_path == "/session_state" || req_path == "/session_reload" {
         512 * 1024
+    } else if req_path == "/settings_scratchpads" {
+        64 * 1024
     } else if req_path == "/file_browser/write" {
         (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_add(512 * 1024)
     } else {
@@ -1214,22 +1222,24 @@ fn handle_one(
             .get("action")
             .and_then(|x| x.as_str())
             .ok_or_else(|| "keybind: missing action".to_string())?;
-        match action {
-            "close_focused"
-            | "toggle_fullscreen"
-            | "toggle_maximize"
-            | "launch_terminal"
-            | "toggle_programs_menu"
-            | "open_settings"
-            | "tile_left"
-            | "tile_right"
-            | "tile_up"
-            | "tile_down"
-            | "tab_next"
-            | "tab_previous"
-            | "move_monitor_left"
-            | "move_monitor_right" => {}
-            _ => return Err("keybind: unsupported action".into()),
+        if !action.starts_with("toggle_scratchpad:") {
+            match action {
+                "close_focused"
+                | "toggle_fullscreen"
+                | "toggle_maximize"
+                | "launch_terminal"
+                | "toggle_programs_menu"
+                | "open_settings"
+                | "tile_left"
+                | "tile_right"
+                | "tile_up"
+                | "tile_down"
+                | "tab_next"
+                | "tab_previous"
+                | "move_monitor_left"
+                | "move_monitor_right" => {}
+                _ => return Err("keybind: unsupported action".into()),
+            }
         }
         let target_window_id = v
             .get("window_id")
@@ -1358,6 +1368,13 @@ fn handle_one(
             crate::session::settings_config::write_default_applications_settings(
                 default_applications,
             )?;
+        }
+        "/settings_scratchpads" => {
+            let scratchpads = serde_json::from_value::<
+                crate::session::settings_config::ScratchpadSettingsFile,
+            >(v)
+            .map_err(|e| format!("invalid scratchpad settings: {e}"))?;
+            uplink.settings_scratchpads_apply(scratchpads)?;
         }
         "/settings_user" => {
             let update =

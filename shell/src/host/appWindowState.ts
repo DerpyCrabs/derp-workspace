@@ -136,6 +136,9 @@ export type DerpWindow = {
   title: string
   app_id: string
   output_name: string
+  kind: string
+  x11_class: string
+  x11_instance: string
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
@@ -222,6 +225,9 @@ export function buildWindowsMapFromList(
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
       output_name: outputName,
+      kind: typeof r.kind === 'string' ? r.kind : (prev?.get(wid)?.kind ?? ''),
+      x11_class: typeof r.x11_class === 'string' ? r.x11_class : (prev?.get(wid)?.x11_class ?? ''),
+      x11_instance: typeof r.x11_instance === 'string' ? r.x11_instance : (prev?.get(wid)?.x11_instance ?? ''),
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
@@ -242,6 +248,9 @@ export function buildWindowsMapFromList(
       previousWindow.title === window.title &&
       previousWindow.app_id === window.app_id &&
       previousWindow.output_name === window.output_name &&
+      previousWindow.kind === window.kind &&
+      previousWindow.x11_class === window.x11_class &&
+      previousWindow.x11_instance === window.x11_instance &&
       previousWindow.minimized === window.minimized &&
       previousWindow.maximized === window.maximized &&
       previousWindow.fullscreen === window.fullscreen &&
@@ -317,6 +326,9 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         title: detail.title,
         app_id: detail.app_id,
         output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
+        kind: current?.kind ?? '',
+        x11_class: current?.x11_class ?? '',
+        x11_instance: current?.x11_instance ?? '',
         minimized: false,
         maximized: false,
         fullscreen: false,
@@ -334,6 +346,9 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         current.title === nextWindow.title &&
         current.app_id === nextWindow.app_id &&
         current.output_name === nextWindow.output_name &&
+        current.kind === nextWindow.kind &&
+        current.x11_class === nextWindow.x11_class &&
+        current.x11_instance === nextWindow.x11_instance &&
         current.minimized === nextWindow.minimized &&
         current.maximized === nextWindow.maximized &&
         current.fullscreen === nextWindow.fullscreen &&

@@ -8,6 +8,7 @@ import restartPersistenceGroup from './restart-persistence.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
 import shellChromeSessionGroup from './shell-chrome-session.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
+import scratchpadsGroup from './scratchpads.spec.ts'
 import tabGroupsGroup from './tab-groups.spec.ts'
 import taskbarMinimizeGroup from './taskbar-minimize.spec.ts'
 import taskbarCloseGroup from './taskbar-close.spec.ts'
@@ -22,6 +23,7 @@ export const defaultGroups = [
   windowParityGroup,
   x11WindowsGroup,
   snapAssistGroup,
+  scratchpadsGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,
   fileBrowserGroup,

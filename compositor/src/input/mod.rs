@@ -683,9 +683,12 @@ impl CompositorState {
                                 && !is_super
                                 && !state.seat.keyboard_shortcuts_inhibited()
                             {
-                                if let Some(action) =
+                                let scratchpad_action = state.scratchpad_action_for_super_chord(
+                                    raw_sym, mods.ctrl, mods.shift,
+                                );
+                                if let Some(action) = scratchpad_action.as_deref().or_else(|| {
                                     super_keybind_action(raw_sym, mods.ctrl, mods.shift)
-                                {
+                                }) {
                                     tracing::warn!(
                                         target: "derp_shell_menu",
                                         source = "libinput",

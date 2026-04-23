@@ -148,9 +148,10 @@ async function switchSettingsPage(
     | 'settings_tab_user'
     | 'settings_tab_displays'
     | 'settings_tab_tiling'
+    | 'settings_tab_scratchpads'
     | 'settings_tab_keyboard'
     | 'settings_tab_default_applications',
-  pageId: 'user' | 'displays' | 'tiling' | 'keyboard' | 'default-applications',
+  pageId: 'user' | 'displays' | 'tiling' | 'scratchpads' | 'keyboard' | 'default-applications',
   marker: string,
 ): Promise<string> {
   return waitFor(
@@ -407,6 +408,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const settingsOpen = await openSettings(base, 'click')
     assert(settingsOpen.shell.controls?.settings_tab_user, 'missing settings user tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
+    assert(settingsOpen.shell.controls?.settings_tab_scratchpads, 'missing settings scratchpads tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_displays, 'missing settings displays tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_keyboard, 'missing settings keyboard tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_default_applications, 'missing default applications tab rect')
@@ -488,6 +490,35 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(defaultAppsHtml.includes('Image Viewer'), 'expected shell image viewer default option')
     assert(defaultAppsHtml.includes('Text Editor'), 'expected shell text editor default option')
+    const scratchpadsHtml = await switchSettingsPage(
+      base,
+      'settings_tab_scratchpads',
+      'scratchpads',
+      'data-settings-scratchpads-page',
+    )
+    assert(scratchpadsHtml.includes('Apply scratchpads'), 'expected scratchpad apply action')
+    assert(scratchpadsHtml.includes('Open windows'), 'expected scratchpad open windows inspector')
+    assert(scratchpadsHtml.includes('app_id'), 'expected app_id rule field in scratchpad inspector')
+    assert(scratchpadsHtml.includes('kind'), 'expected kind rule field in scratchpad inspector')
+    const scratchpadsShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const settingsWindow = shellWindowById(scratchpadsShell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const scratchpadsPage = scratchpadsShell.controls?.settings_scratchpads_page
+    const scratchpadInspector = scratchpadsShell.controls?.settings_scratchpad_window_inspector
+    const scratchpadList = scratchpadsShell.controls?.settings_scratchpad_list
+    const scratchpadSave = scratchpadsShell.controls?.settings_scratchpad_save
+    assert(settingsWindow, 'missing settings window for scratchpad geometry')
+    assertRectMinSize('settings_scratchpads_page', scratchpadsPage, 120, 120)
+    assertRectMinSize('settings_scratchpad_window_inspector', scratchpadInspector, 120, 24)
+    assertRectMinSize('settings_scratchpad_list', scratchpadList, 120, 120)
+    assertRectMinSize('settings_scratchpad_save', scratchpadSave, 24, 18)
+    assert(
+      scratchpadsPage!.height >= settingsWindow.height - 40,
+      `scratchpad page should fill settings height (page ${scratchpadsPage!.height}, window ${settingsWindow.height})`,
+    )
+    assert(
+      scratchpadSave!.global_y + scratchpadSave!.height >= settingsWindow.y + settingsWindow.height - 18,
+      'scratchpad save action should sit near the bottom of the settings pane',
+    )
     const settingsHtml = await switchSettingsPage(
       base,
       'settings_tab_displays',
@@ -501,6 +532,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeTextArtifact('settings-user-page.html', userHtml)
     await writeTextArtifact('settings-keyboard-page.html', keyboardHtml)
     await writeTextArtifact('settings-tiling-grid-page.html', tilingGridHtml)
+    await writeTextArtifact('settings-scratchpads-page.html', scratchpadsHtml)
     await writeTextArtifact('settings-default-applications-page.html', defaultAppsHtml)
     await writeJsonArtifact('settings-keyboard.json', keyboardSettings)
     await writeJsonArtifact('settings-user.json', userSettings)

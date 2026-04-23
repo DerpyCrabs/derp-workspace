@@ -1696,6 +1696,10 @@ function App() {
         {(groupId) => <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />}
       </For>
 
+      <For each={workspaceChrome.scratchpadWindowIds()}>
+        {(windowId) => <workspaceChrome.ScratchpadWindowFrame windowId={windowId} />}
+      </For>
+
       <workspaceChrome.TabDragOverlay />
       <workspaceChrome.WindowDragDropOverlay />
 
