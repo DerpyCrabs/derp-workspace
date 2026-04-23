@@ -17,6 +17,7 @@ export type WorkspaceMonitorTileEntry = {
 }
 
 export type WorkspaceMonitorTileState = {
+  outputId?: string
   outputName: string
   entries: WorkspaceMonitorTileEntry[]
 }
@@ -51,6 +52,7 @@ export type WorkspaceMonitorLayoutParams = {
 }
 
 export type WorkspaceMonitorLayoutState = {
+  outputId?: string
   outputName: string
   layout: WorkspaceMonitorLayoutType
   params: WorkspaceMonitorLayoutParams
@@ -64,6 +66,10 @@ export type WorkspaceState = {
   monitorTiles: WorkspaceMonitorTileState[]
   monitorLayouts: WorkspaceMonitorLayoutState[]
   preTileGeometry: WorkspacePreTileGeometry[]
+  groupIdByWindowId?: Record<string, string>
+  visibleWindowIdByGroupId?: Record<string, number>
+  monitorNameByWindowId?: Record<string, string>
+  monitorIdByWindowId?: Record<string, string>
   nextGroupSeq: number
 }
 
@@ -86,6 +92,7 @@ function cloneState(state: WorkspaceState): WorkspaceState {
     pinnedWindowIds: [...(state.pinnedWindowIds ?? [])],
     splitByGroupId: { ...(state.splitByGroupId ?? {}) },
     monitorTiles: state.monitorTiles.map((monitor) => ({
+      outputId: monitor.outputId,
       outputName: monitor.outputName,
       entries: monitor.entries.map((entry) => ({
         windowId: entry.windowId,
@@ -94,6 +101,7 @@ function cloneState(state: WorkspaceState): WorkspaceState {
       })),
     })),
     monitorLayouts: state.monitorLayouts.map((entry) => ({
+      outputId: entry.outputId,
       outputName: entry.outputName,
       layout: entry.layout,
       params: { ...entry.params },
@@ -102,6 +110,10 @@ function cloneState(state: WorkspaceState): WorkspaceState {
       windowId: entry.windowId,
       bounds: { ...entry.bounds },
     })),
+    groupIdByWindowId: state.groupIdByWindowId ? { ...state.groupIdByWindowId } : undefined,
+    visibleWindowIdByGroupId: state.visibleWindowIdByGroupId ? { ...state.visibleWindowIdByGroupId } : undefined,
+    monitorNameByWindowId: state.monitorNameByWindowId ? { ...state.monitorNameByWindowId } : undefined,
+    monitorIdByWindowId: state.monitorIdByWindowId ? { ...state.monitorIdByWindowId } : undefined,
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -146,9 +158,10 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
   }
   if (a.monitorTiles.length !== b.monitorTiles.length) return false
   for (let monitorIndex = 0; monitorIndex < a.monitorTiles.length; monitorIndex += 1) {
-    const monitorA = a.monitorTiles[monitorIndex]
-    const monitorB = b.monitorTiles[monitorIndex]
-    if (monitorA.outputName !== monitorB.outputName) return false
+      const monitorA = a.monitorTiles[monitorIndex]
+      const monitorB = b.monitorTiles[monitorIndex]
+      if ((monitorA.outputId ?? '') !== (monitorB.outputId ?? '')) return false
+      if (monitorA.outputName !== monitorB.outputName) return false
     if (monitorA.entries.length !== monitorB.entries.length) return false
     for (let entryIndex = 0; entryIndex < monitorA.entries.length; entryIndex += 1) {
       const entryA = monitorA.entries[entryIndex]
@@ -165,6 +178,7 @@ export function workspaceStatesEqual(a: WorkspaceState, b: WorkspaceState): bool
   for (let layoutIndex = 0; layoutIndex < a.monitorLayouts.length; layoutIndex += 1) {
     const layoutA = a.monitorLayouts[layoutIndex]
     const layoutB = b.monitorLayouts[layoutIndex]
+    if ((layoutA.outputId ?? '') !== (layoutB.outputId ?? '')) return false
     if (layoutA.outputName !== layoutB.outputName) return false
     if (layoutA.layout !== layoutB.layout) return false
     if (layoutA.params.masterRatio !== layoutB.params.masterRatio) return false
@@ -283,6 +297,10 @@ function normalizeMonitorTiles(raw: unknown): WorkspaceMonitorTileState[] {
       typeof record.outputName === 'string' && record.outputName.trim().length > 0
         ? record.outputName.trim()
         : ''
+    const outputId =
+      typeof record.outputId === 'string' && record.outputId.trim().length > 0
+        ? record.outputId.trim()
+        : undefined
     if (!outputName) continue
     const entriesRaw = Array.isArray(record.entries) ? record.entries : []
     const entries: WorkspaceMonitorTileEntry[] = []
@@ -299,7 +317,7 @@ function normalizeMonitorTiles(raw: unknown): WorkspaceMonitorTileState[] {
       usedWindows.add(windowId)
       entries.push({ windowId, zone, bounds })
     }
-    if (entries.length > 0) out.push({ outputName, entries })
+    if (entries.length > 0) out.push({ outputId, outputName, entries })
   }
   return out
 }
@@ -336,6 +354,10 @@ function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
       typeof record.outputName === 'string' && record.outputName.trim().length > 0
         ? record.outputName.trim()
         : ''
+    const outputId =
+      typeof record.outputId === 'string' && record.outputId.trim().length > 0
+        ? record.outputId.trim()
+        : undefined
     const layout = isWorkspaceMonitorLayoutType(record.layout) ? record.layout : null
     if (!outputName || !layout || seen.has(outputName)) continue
     seen.add(outputName)
@@ -374,7 +396,7 @@ function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
         if (customSlots.length > 0) params.customSlots = customSlots
       }
     }
-    out.push({ outputName, layout, params })
+    out.push({ outputId, outputName, layout, params })
   }
   return out
 }
@@ -521,6 +543,8 @@ export function allWorkspaceWindowIds(state: WorkspaceState): number[] {
 }
 
 export function groupIdForWindow(state: WorkspaceState, windowId: number): string | null {
+  const derived = state.groupIdByWindowId?.[windowId]
+  if (typeof derived === 'string' && derived.length > 0) return derived
   for (const group of state.groups) {
     if (group.windowIds.includes(windowId)) return group.id
   }

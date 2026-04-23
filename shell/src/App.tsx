@@ -472,11 +472,12 @@ function App() {
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const [customLayoutOverlay, setCustomLayoutOverlay] = createSignal<CustomLayoutOverlayState | null>(null)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
+  const [compositorSnapshotSequence, setCompositorSnapshotSequence] = createSignal(0)
   let windowSyncRecoveryPending = false
   let windowSyncRecoveryRequestedAt = 0
   let lastAppliedOutputTopologyRevision = -1
   let nextClientMutationId = 1
-  const pendingClientMutationIds = new Map<number, number>()
+  const pendingClientMutationIds = new Map<number, { sentAt: number; snapshotEpoch: number | null }>()
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
   const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
@@ -494,32 +495,59 @@ function App() {
     setScreenDraft('rows', topology?.screens ?? [])
   })
 
+  createEffect(() => {
+    reconcilePendingClientMutations(compositorSnapshotSequence())
+  })
+
   function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
     const clientMutationId = nextClientMutationId++
     const ok = shellWireSend('workspace_mutation', JSON.stringify({ clientMutationId, mutation }))
-    if (ok) pendingClientMutationIds.set(clientMutationId, Date.now())
+    if (ok) pendingClientMutationIds.set(clientMutationId, { sentAt: Date.now(), snapshotEpoch: null })
     return ok
   }
 
   function sendWindowIntent(action: string, windowId: number): boolean {
     const clientMutationId = nextClientMutationId++
     const ok = shellWireSend('window_intent', JSON.stringify({ clientMutationId, action, windowId }))
-    if (ok) pendingClientMutationIds.set(clientMutationId, Date.now())
+    if (ok) pendingClientMutationIds.set(clientMutationId, { sentAt: Date.now(), snapshotEpoch: null })
     return ok
   }
 
-  function hasPendingClientMutation() {
+  function reconcilePendingClientMutations(snapshotSequence: number) {
     const now = Date.now()
-    for (const [clientMutationId, sentAt] of pendingClientMutationIds) {
-      if (now - sentAt <= 2000) continue
+    for (const [clientMutationId, state] of pendingClientMutationIds) {
+      if (state.snapshotEpoch !== null && snapshotSequence >= state.snapshotEpoch) {
+        pendingClientMutationIds.delete(clientMutationId)
+        continue
+      }
+      if (now - state.sentAt <= 2000) continue
       pendingClientMutationIds.delete(clientMutationId)
     }
+  }
+
+  function hasPendingClientMutation() {
+    reconcilePendingClientMutations(compositorSnapshotSequence())
     return pendingClientMutationIds.size > 0
   }
 
-  function handleMutationAck(detail: { client_mutation_id: number; status: string }) {
+  function handleMutationAck(detail: { client_mutation_id: number; status: string; snapshot_epoch?: number }) {
+    const pending = pendingClientMutationIds.get(detail.client_mutation_id)
+    if (detail.status === 'accepted') {
+      const snapshotEpoch =
+        typeof detail.snapshot_epoch === 'number' && Number.isFinite(detail.snapshot_epoch)
+          ? Math.max(0, Math.trunc(detail.snapshot_epoch))
+          : 0
+      if (pending && snapshotEpoch > compositorSnapshotSequence()) {
+        pendingClientMutationIds.set(detail.client_mutation_id, {
+          sentAt: pending.sentAt,
+          snapshotEpoch,
+        })
+      } else {
+        pendingClientMutationIds.delete(detail.client_mutation_id)
+      }
+      return
+    }
     pendingClientMutationIds.delete(detail.client_mutation_id)
-    if (detail.status === 'accepted') return
     requestWindowSyncRecovery()
   }
 
@@ -1716,6 +1744,7 @@ function App() {
         setTrayIconSlotPx,
         setSniTrayItems,
         setOutputTopology,
+        setCompositorSnapshotSequence,
         setCompositorInteractionState,
         setNativeDragPreview,
         getNativeDragPreview: nativeDragPreview,

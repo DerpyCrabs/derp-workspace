@@ -22,9 +22,10 @@ export type SharedShellExclusionTrayStrip = {
   h: number
 }
 
-const SHARED_STATE_ABI = 1
+const SHARED_STATE_ABI = 2
 const KIND_EXCLUSION_ZONES = 1
 const KIND_UI_WINDOWS = 2
+const SHARED_STATE_PREFIX_BYTES = 16
 
 function i32(value: number): number {
   return Number.isFinite(value) ? Math.trunc(value) : 0
@@ -38,6 +39,33 @@ function sharedStateAbi(): number {
   return typeof window.__DERP_SHELL_SHARED_STATE_ABI === 'number'
     ? window.__DERP_SHELL_SHARED_STATE_ABI
     : SHARED_STATE_ABI
+}
+
+function sharedSnapshotEpoch(): number {
+  return typeof (window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE === 'number'
+    ? Math.max(
+        0,
+        Math.trunc(
+          (window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE ?? 0,
+        ),
+      )
+    : 0
+}
+
+function sharedOutputLayoutRevision(): number {
+  return typeof (window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION === 'number'
+    ? Math.max(
+        0,
+        Math.trunc(
+          (window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION ?? 0,
+        ),
+      )
+    : 0
+}
+
+function setSharedPrefix(view: DataView): void {
+  view.setBigUint64(0, BigInt(sharedSnapshotEpoch()), true)
+  view.setBigUint64(8, BigInt(sharedOutputLayoutRevision()), true)
 }
 
 function writeSharedState(path: string | null | undefined, payload: ArrayBuffer, kind: number): boolean {
@@ -54,11 +82,12 @@ export function writeShellUiWindowsState(
   generation: number,
   windows: readonly SharedShellUiWindow[],
 ): boolean {
-  const payload = new ArrayBuffer(8 + windows.length * 28)
+  const payload = new ArrayBuffer(SHARED_STATE_PREFIX_BYTES + 8 + windows.length * 28)
   const view = new DataView(payload)
-  view.setUint32(0, u32(generation), true)
-  view.setUint32(4, u32(windows.length), true)
-  let offset = 8
+  setSharedPrefix(view)
+  view.setUint32(SHARED_STATE_PREFIX_BYTES + 0, u32(generation), true)
+  view.setUint32(SHARED_STATE_PREFIX_BYTES + 4, u32(windows.length), true)
+  let offset = SHARED_STATE_PREFIX_BYTES + 8
   for (const window of windows) {
     view.setUint32(offset, u32(window.id), true)
     view.setInt32(offset + 4, i32(window.gx), true)
@@ -79,12 +108,13 @@ export function writeShellExclusionState(
   floatingRects: readonly SharedShellExclusionRect[],
 ): boolean {
   const payload = new ArrayBuffer(
-    8 + rects.length * 20 + (trayStrip ? 16 : 0) + 8 + floatingRects.length * 20,
+    SHARED_STATE_PREFIX_BYTES + 8 + rects.length * 20 + (trayStrip ? 16 : 0) + 8 + floatingRects.length * 20,
   )
   const view = new DataView(payload)
-  view.setUint32(0, u32(rects.length), true)
-  view.setUint32(4, trayStrip ? 1 : 0, true)
-  let offset = 8
+  setSharedPrefix(view)
+  view.setUint32(SHARED_STATE_PREFIX_BYTES + 0, u32(rects.length), true)
+  view.setUint32(SHARED_STATE_PREFIX_BYTES + 4, trayStrip ? 1 : 0, true)
+  let offset = SHARED_STATE_PREFIX_BYTES + 8
   for (const rect of rects) {
     view.setInt32(offset, i32(rect.x), true)
     view.setInt32(offset + 4, i32(rect.y), true)

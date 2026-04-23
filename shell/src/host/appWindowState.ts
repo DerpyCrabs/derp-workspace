@@ -132,6 +132,7 @@ export type DerpShellDetail =
       domain: string
       client_mutation_id: number
       status: string
+      snapshot_epoch?: number
     }
 
 export type DerpWindow = {

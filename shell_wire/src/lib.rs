@@ -1243,6 +1243,7 @@ pub enum DecodedCompositorToShellMessage {
         domain: String,
         client_mutation_id: u64,
         status: String,
+        snapshot_epoch: u64,
     },
     TrayHints {
         slot_count: u32,

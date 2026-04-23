@@ -182,7 +182,8 @@ pub struct SharedShellSnapshotWriter {
 struct SnapshotAuthoritativeState {
     output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
-    window_list: Option<shell_wire::DecodedCompositorToShellMessage>,
+    window_list_revision: u64,
+    window_list_rows: Vec<shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state: Option<shell_wire::DecodedCompositorToShellMessage>,
@@ -194,6 +195,33 @@ struct SnapshotAuthoritativeState {
 }
 
 impl SnapshotAuthoritativeState {
+    fn next_window_list_revision(&mut self) -> u64 {
+        self.window_list_revision = self.window_list_revision.wrapping_add(1);
+        self.window_list_revision
+    }
+
+    fn next_window_stack_z(&self) -> u32 {
+        self.window_list_rows
+            .iter()
+            .map(|row| row.stack_z)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+
+    fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
+        self.window_list_rows
+            .iter_mut()
+            .find(|row| row.window_id == window_id)
+    }
+
+    fn window_row_remove(&mut self, window_id: u32) -> bool {
+        let before = self.window_list_rows.len();
+        self.window_list_rows
+            .retain(|row| row.window_id != window_id);
+        before != self.window_list_rows.len()
+    }
+
     fn apply(&mut self, message: &shell_wire::DecodedCompositorToShellMessage) {
         match message {
             shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. } => {
@@ -202,8 +230,111 @@ impl SnapshotAuthoritativeState {
             shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
                 self.output_layout = Some(message.clone());
             }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
-                self.window_list = Some(message.clone());
+            shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
+                self.window_list_revision = *revision;
+                self.window_list_rows = windows.clone();
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+                window_id,
+                surface_id,
+                x,
+                y,
+                w,
+                h,
+                title,
+                app_id,
+                client_side_decoration,
+                output_name,
+            } => {
+                if let Some(row) = self.window_row_mut(*window_id) {
+                    row.surface_id = *surface_id;
+                    row.x = *x;
+                    row.y = *y;
+                    row.w = *w;
+                    row.h = *h;
+                    row.title = title.clone();
+                    row.app_id = app_id.clone();
+                    row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
+                    row.output_name = output_name.clone();
+                    row.minimized = 0;
+                } else {
+                    self.window_list_rows.push(shell_wire::ShellWindowSnapshot {
+                        window_id: *window_id,
+                        surface_id: *surface_id,
+                        stack_z: self.next_window_stack_z(),
+                        x: *x,
+                        y: *y,
+                        w: *w,
+                        h: *h,
+                        minimized: 0,
+                        maximized: 0,
+                        fullscreen: 0,
+                        client_side_decoration: if *client_side_decoration { 1 } else { 0 },
+                        shell_flags: 0,
+                        title: title.clone(),
+                        app_id: app_id.clone(),
+                        output_name: output_name.clone(),
+                        capture_identifier: String::new(),
+                        kind: String::new(),
+                        x11_class: String::new(),
+                        x11_instance: String::new(),
+                    });
+                }
+                self.window_list_rows
+                    .sort_by(|a, b| a.window_id.cmp(&b.window_id));
+                self.next_window_list_revision();
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
+                if self.window_row_remove(*window_id) {
+                    self.next_window_list_revision();
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id,
+                surface_id,
+                x,
+                y,
+                w,
+                h,
+                maximized,
+                fullscreen,
+                client_side_decoration,
+                output_name,
+            } => {
+                if let Some(row) = self.window_row_mut(*window_id) {
+                    row.surface_id = *surface_id;
+                    row.x = *x;
+                    row.y = *y;
+                    row.w = *w;
+                    row.h = *h;
+                    row.maximized = if *maximized { 1 } else { 0 };
+                    row.fullscreen = if *fullscreen { 1 } else { 0 };
+                    row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
+                    row.output_name = output_name.clone();
+                    self.next_window_list_revision();
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                window_id,
+                surface_id,
+                title,
+                app_id,
+            } => {
+                if let Some(row) = self.window_row_mut(*window_id) {
+                    row.surface_id = *surface_id;
+                    row.title = title.clone();
+                    row.app_id = app_id.clone();
+                    self.next_window_list_revision();
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowState {
+                window_id,
+                minimized,
+            } => {
+                if let Some(row) = self.window_row_mut(*window_id) {
+                    row.minimized = if *minimized { 1 } else { 0 };
+                    self.next_window_list_revision();
+                }
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
                 self.focus_changed = Some(message.clone());
@@ -241,9 +372,10 @@ impl SnapshotAuthoritativeState {
         if let Some(message) = self.output_layout.clone() {
             messages.push(message);
         }
-        if let Some(message) = self.window_list.clone() {
-            messages.push(message);
-        }
+        messages.push(shell_wire::DecodedCompositorToShellMessage::WindowList {
+            revision: self.window_list_revision,
+            windows: self.window_list_rows.clone(),
+        });
         if let Some(message) = self.focus_changed.clone() {
             messages.push(message);
         }
@@ -285,7 +417,7 @@ impl SharedShellSnapshotWriter {
             last_payload: None,
             authoritative: SnapshotAuthoritativeState::default(),
         };
-        this.publish_payload(Vec::new())?;
+        this.publish_payload_at(0, Vec::new())?;
         Ok(this)
     }
 
@@ -295,6 +427,7 @@ impl SharedShellSnapshotWriter {
 
     pub fn publish_messages(
         &mut self,
+        sequence: u64,
         messages: &[shell_wire::DecodedCompositorToShellMessage],
     ) -> Result<bool, String> {
         for message in messages {
@@ -302,10 +435,10 @@ impl SharedShellSnapshotWriter {
         }
         let authoritative_messages = self.authoritative.messages();
         warn_snapshot_invariants(&authoritative_messages);
-        self.publish_payload(encode_payload_messages(&authoritative_messages)?)
+        self.publish_payload_at(sequence, encode_payload_messages(&authoritative_messages)?)
     }
 
-    fn publish_payload(&mut self, payload: Vec<u8>) -> Result<bool, String> {
+    fn publish_payload_at(&mut self, sequence: u64, payload: Vec<u8>) -> Result<bool, String> {
         if self.last_payload.as_deref() == Some(payload.as_slice()) {
             return Ok(false);
         }
@@ -313,8 +446,24 @@ impl SharedShellSnapshotWriter {
         if payload.len() + header_len > self.mmap.len {
             return Err(format!("snapshot payload too large: {}", payload.len()));
         }
-        let start_seq = self.sequence.wrapping_add(1) | 1;
-        let end_seq = start_seq.wrapping_add(1);
+        let end_seq = if sequence == 0 {
+            if !payload.is_empty() {
+                return Err("snapshot sequence missing for non-empty payload".to_string());
+            }
+            0
+        } else {
+            if sequence % 2 != 0 {
+                return Err(format!("snapshot sequence must be even: {sequence}"));
+            }
+            if sequence <= self.sequence {
+                return Err(format!(
+                    "snapshot sequence must advance: current={} next={sequence}",
+                    self.sequence
+                ));
+            }
+            sequence
+        };
+        let start_seq = if end_seq == 0 { 1 } else { end_seq - 1 };
         let buf = self.mmap.as_slice_mut();
         shell_wire::write_shared_snapshot_header(&mut buf[..header_len], start_seq, 0, 0)?;
         fence(Ordering::Release);

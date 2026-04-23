@@ -238,6 +238,18 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   })
 
   const workspaceGroupIdByWindowId = createMemo(() => {
+    const derived = options.workspaceState().groupIdByWindowId
+    if (derived && typeof derived === 'object') {
+      const map = new Map<number, string>()
+      for (const [windowId, groupId] of Object.entries(derived)) {
+        const parsedWindowId = Math.trunc(Number(windowId))
+        if (!Number.isFinite(parsedWindowId) || parsedWindowId <= 0 || typeof groupId !== 'string' || groupId.length === 0) {
+          continue
+        }
+        map.set(parsedWindowId, groupId)
+      }
+      return map
+    }
     const map = new Map<number, string>()
     for (const group of options.workspaceState().groups) {
       for (const windowId of group.windowIds) {

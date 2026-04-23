@@ -568,12 +568,14 @@ fn apply_message(
             domain,
             client_mutation_id,
             status,
+            snapshot_epoch,
         } => {
             pending_details.push(json!({
                 "type": "mutation_ack",
                 "domain": domain,
                 "client_mutation_id": client_mutation_id,
                 "status": status,
+                "snapshot_epoch": snapshot_epoch,
             }));
         }
         shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {

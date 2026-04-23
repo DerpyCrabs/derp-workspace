@@ -86,6 +86,7 @@ type CompositorBridgeRuntimeOptions = {
       | CompositorOutputTopology
       | ((prev: CompositorOutputTopology | null) => CompositorOutputTopology),
   ) => void
+  setCompositorSnapshotSequence: (value: number) => void
   setCompositorInteractionState: (value: CompositorInteractionState) => void
   setNativeDragPreview: (value: NativeDragPreviewState) => void
   getNativeDragPreview: () => NativeDragPreviewState
@@ -188,8 +189,6 @@ function traySniMenuEntriesFromDetail(detail: DerpShellDetail): {
 export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntimeOptions) {
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
-  let bootstrapSnapshotRetry = 0
-  let bootstrapSnapshotTimer: number | undefined
 
   const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
     const lw = Math.max(1, logicalWidth)
@@ -307,6 +306,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       screens,
       shellChromePrimaryName: pr,
     })
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION =
+      typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0
     options.scheduleCompositorFollowup({
       syncExclusion: true,
       flushWindows: true,
@@ -676,6 +677,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       markShellLatencySample(shellLatencySampleId, { decodedAt: performance.now() })
     }
     lastSnapshotSequence = decoded.sequence
+    options.setCompositorSnapshotSequence(decoded.sequence)
+    ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE =
+      decoded.sequence
     applyCompositorSnapshot(decoded.details)
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
@@ -704,27 +708,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   window.addEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
   window.addEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
 
-  const retryBootstrapSnapshot = () => {
-    if (syncCompositorSnapshot(true)) {
-      bootstrapSnapshotTimer = undefined
-      return
-    }
-    bootstrapSnapshotRetry += 1
-    if (bootstrapSnapshotRetry >= 40) {
-      bootstrapSnapshotTimer = undefined
-      return
-    }
-    bootstrapSnapshotTimer = window.setTimeout(retryBootstrapSnapshot, 100)
-  }
-
-  retryBootstrapSnapshot()
   queueMicrotask(() => {
     syncCompositorSnapshot(true)
   })
 
   return () => {
     if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
-    if (bootstrapSnapshotTimer !== undefined) clearTimeout(bootstrapSnapshotTimer)
     removeCompositorBatchHandler()
     removeCompositorSnapshotHandler()
     window.removeEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)

@@ -648,6 +648,7 @@ pub struct CompositorState {
     pub(crate) shell_workspace_revision: u64,
     pub(crate) shell_hosted_app_state_revision: u64,
     pub(crate) shell_interaction_revision: u64,
+    pub(crate) shell_snapshot_epoch: u64,
     pub(crate) workspace_state: WorkspaceState,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) shell_exclusion_shared_sequence: u64,
@@ -764,6 +765,14 @@ impl CompositorState {
         self.shell_interaction_revision
     }
 
+    fn next_shell_snapshot_epoch(&mut self) -> u64 {
+        self.shell_snapshot_epoch = self.shell_snapshot_epoch.wrapping_add(2).max(2);
+        if self.shell_snapshot_epoch % 2 != 0 {
+            self.shell_snapshot_epoch = self.shell_snapshot_epoch.wrapping_add(1);
+        }
+        self.shell_snapshot_epoch
+    }
+
     fn shell_send_mutation_ack(
         &mut self,
         domain: &str,
@@ -781,6 +790,7 @@ impl CompositorState {
             } else {
                 "rejected".to_string()
             },
+            snapshot_epoch: self.shell_snapshot_epoch,
         });
     }
 
@@ -1201,6 +1211,7 @@ impl CompositorState {
             shell_workspace_revision: 0,
             shell_hosted_app_state_revision: 0,
             shell_interaction_revision: 0,
+            shell_snapshot_epoch: 0,
             workspace_state: WorkspaceState::default(),
             shell_last_sent_ui_focus_id: None,
             shell_exclusion_shared_sequence: 0,
@@ -1731,6 +1742,24 @@ impl CompositorState {
     }
 
     pub fn apply_shell_ui_windows_payload(&mut self, payload: &[u8]) {
+        if payload.len() < 16 {
+            return;
+        }
+        let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+        let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+        if output_layout_revision > 0
+            && output_layout_revision < self.shell_output_topology_revision
+        {
+            tracing::warn!(
+                target: "derp_shell_shared_state",
+                snapshot_epoch,
+                output_layout_revision,
+                current_output_layout_revision = self.shell_output_topology_revision,
+                "ignoring stale shell ui windows payload"
+            );
+            return;
+        }
+        let payload = &payload[16..];
         const MAX: usize = shell_wire::MAX_SHELL_UI_WINDOWS as usize;
         if payload.len() < 8 {
             return;
@@ -1926,6 +1955,24 @@ impl CompositorState {
     }
 
     pub fn apply_shell_exclusion_zones_payload(&mut self, payload: &[u8]) {
+        if payload.len() < 16 {
+            return;
+        }
+        let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+        let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+        if output_layout_revision > 0
+            && output_layout_revision < self.shell_output_topology_revision
+        {
+            tracing::warn!(
+                target: "derp_shell_shared_state",
+                snapshot_epoch,
+                output_layout_revision,
+                current_output_layout_revision = self.shell_output_topology_revision,
+                "ignoring stale shell exclusion payload"
+            );
+            return;
+        }
+        let payload = &payload[16..];
         if payload.len() < 8 {
             return;
         }
@@ -2380,11 +2427,14 @@ impl CompositorState {
         } else {
             None
         };
+        let snapshot_epoch = authoritative_snapshot
+            .as_ref()
+            .map(|_| self.next_shell_snapshot_epoch());
         let Ok(g) = self.shell_to_cef.lock() else {
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.send_with_snapshot(msg, authoritative_snapshot);
+            link.send_with_snapshot(msg, authoritative_snapshot, snapshot_epoch);
             if let Some(workspace_state_message) = workspace_state_message {
                 link.send(workspace_state_message);
             }
@@ -3685,7 +3735,15 @@ impl CompositorState {
         &self,
         output_name: &str,
     ) -> Option<&WorkspaceMonitorLayoutState> {
-        self.workspace_state.monitor_layout_for_output(output_name)
+        self.workspace_state
+            .monitor_layout_for_output(output_name)
+            .or_else(|| {
+                let output_id = self.workspace_output_identity_for_name(output_name)?;
+                self.workspace_state
+                    .monitor_layouts
+                    .iter()
+                    .find(|entry| entry.output_id == output_id)
+            })
     }
 
     fn workspace_is_auto_layout_managed_window(&self, info: &WindowInfo) -> bool {
@@ -4144,6 +4202,9 @@ impl CompositorState {
         self.workspace_state
             .monitor_tiles
             .push(WorkspaceMonitorTileState {
+                output_id: self
+                    .workspace_output_identity_for_name(output_name)
+                    .unwrap_or_default(),
                 output_name: output_name.to_string(),
                 entries: vec![WorkspaceMonitorTileEntry {
                     window_id,
@@ -4193,6 +4254,9 @@ impl CompositorState {
             self.workspace_state
                 .monitor_tiles
                 .push(WorkspaceMonitorTileState {
+                    output_id: self
+                        .workspace_output_identity_for_name(output_name)
+                        .unwrap_or_default(),
                     output_name: output_name.to_string(),
                     entries,
                 });
@@ -4408,6 +4472,9 @@ impl CompositorState {
             self.workspace_state
                 .monitor_tiles
                 .push(WorkspaceMonitorTileState {
+                    output_id: self
+                        .workspace_output_identity_for_name(output_name)
+                        .unwrap_or_default(),
                     output_name: output_name.to_string(),
                     entries,
                 });
@@ -6315,6 +6382,13 @@ impl CompositorState {
             identity.pop();
         }
         identity
+    }
+
+    fn workspace_output_identity_for_name(&self, output_name: &str) -> Option<String> {
+        self.space
+            .outputs()
+            .find(|output| output.name() == output_name)
+            .map(Self::shell_output_identity)
     }
 
     pub fn send_shell_output_layout(&mut self) {
@@ -8732,7 +8806,34 @@ impl CompositorState {
     }
 
     fn workspace_state_message(&self) -> Option<shell_wire::DecodedCompositorToShellMessage> {
-        let Ok(state_json) = self.workspace_state.to_json() else {
+        let mut state = self.workspace_state.clone();
+        for monitor in &mut state.monitor_tiles {
+            if monitor.output_id.is_empty() {
+                continue;
+            }
+            if let Some(output_name) = self
+                .space
+                .outputs()
+                .find(|output| Self::shell_output_identity(output) == monitor.output_id)
+                .map(|output| output.name())
+            {
+                monitor.output_name = output_name;
+            }
+        }
+        for layout in &mut state.monitor_layouts {
+            if layout.output_id.is_empty() {
+                continue;
+            }
+            if let Some(output_name) = self
+                .space
+                .outputs()
+                .find(|output| Self::shell_output_identity(output) == layout.output_id)
+                .map(|output| output.name())
+            {
+                layout.output_name = output_name;
+            }
+        }
+        let Ok(state_json) = state.to_json() else {
             return None;
         };
         Some(
@@ -9995,8 +10096,8 @@ impl CompositorState {
     }
 
     fn shell_close_group_window(&mut self, window_id: u32) -> bool {
-        let group_window_ids = group_id_for_window(&self.workspace_state, window_id)
-            .and_then(|group_id| {
+        let group_window_ids =
+            group_id_for_window(&self.workspace_state, window_id).and_then(|group_id| {
                 self.workspace_state
                     .groups
                     .iter()

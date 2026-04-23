@@ -17,6 +17,7 @@ struct PendingCompositorMessages {
     scheduled: bool,
     messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
     snapshot: Vec<shell_wire::DecodedCompositorToShellMessage>,
+    snapshot_epoch: u64,
 }
 
 fn push_pending_message(
@@ -119,7 +120,7 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            let (messages, snapshot_messages) = {
+            let (messages, snapshot_messages, snapshot_epoch) = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
@@ -129,12 +130,18 @@ wrap_task! {
                     return;
                 }
                 guard.scheduled = false;
-                (std::mem::take(&mut guard.messages), std::mem::take(&mut guard.snapshot))
+                (
+                    std::mem::take(&mut guard.messages),
+                    std::mem::take(&mut guard.snapshot),
+                    std::mem::take(&mut guard.snapshot_epoch),
+                )
             };
             if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
-                        if let Err(error) = snapshot.publish_messages(&snapshot_messages) {
+                        if let Err(error) =
+                            snapshot.publish_messages(snapshot_epoch, &snapshot_messages)
+                        {
                             tracing::warn!(%error, "publish shell snapshot failed");
                         }
                     }
@@ -232,6 +239,7 @@ impl ShellToCefLink {
                 scheduled: false,
                 messages: Vec::new(),
                 snapshot: Vec::new(),
+                snapshot_epoch: 0,
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
@@ -252,13 +260,14 @@ impl ShellToCefLink {
     }
 
     pub fn send(&self, msg: shell_wire::DecodedCompositorToShellMessage) {
-        self.send_with_snapshot(msg, None);
+        self.send_with_snapshot(msg, None, None);
     }
 
     pub fn send_with_snapshot(
         &self,
         msg: shell_wire::DecodedCompositorToShellMessage,
         snapshot: Option<Vec<shell_wire::DecodedCompositorToShellMessage>>,
+        snapshot_epoch: Option<u64>,
     ) {
         let should_post = {
             let Ok(mut guard) = self.pending_messages.lock() else {
@@ -268,6 +277,9 @@ impl ShellToCefLink {
                 for snapshot_msg in snapshot {
                     push_pending_message(&mut guard.snapshot, snapshot_msg);
                 }
+            }
+            if let Some(snapshot_epoch) = snapshot_epoch {
+                guard.snapshot_epoch = guard.snapshot_epoch.max(snapshot_epoch);
             }
             push_pending_message(&mut guard.messages, msg);
             self.pending_work.store(true, Ordering::Relaxed);

@@ -31,6 +31,8 @@ pub struct WorkspaceMonitorTileEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceMonitorTileState {
+    #[serde(default, rename = "outputId", skip_serializing_if = "String::is_empty")]
+    pub output_id: String,
     #[serde(rename = "outputName")]
     pub output_name: String,
     pub entries: Vec<WorkspaceMonitorTileEntry>,
@@ -118,6 +120,8 @@ pub struct WorkspaceMonitorLayoutParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceMonitorLayoutState {
+    #[serde(default, rename = "outputId", skip_serializing_if = "String::is_empty")]
+    pub output_id: String,
     #[serde(rename = "outputName")]
     pub output_name: String,
     pub layout: WorkspaceMonitorLayoutType,
@@ -205,6 +209,8 @@ pub enum WorkspaceMutation {
         left_pane_fraction: f64,
     },
     SetMonitorTile {
+        #[serde(default, rename = "outputId")]
+        output_id: Option<String>,
         #[serde(rename = "outputName")]
         output_name: String,
         #[serde(rename = "windowId")]
@@ -217,6 +223,8 @@ pub enum WorkspaceMutation {
         window_id: u32,
     },
     ClearMonitorTiles {
+        #[serde(default, rename = "outputId")]
+        output_id: Option<String>,
         #[serde(rename = "outputName")]
         output_name: String,
     },
@@ -226,6 +234,8 @@ pub enum WorkspaceMutation {
         bounds: WorkspaceRect,
     },
     SetMonitorLayout {
+        #[serde(default, rename = "outputId")]
+        output_id: Option<String>,
         #[serde(rename = "outputName")]
         output_name: String,
         layout: WorkspaceMonitorLayoutType,
@@ -398,6 +408,22 @@ fn ensure_valid_split_state(state: &mut WorkspaceState) {
     state.split_by_group_id = next;
 }
 
+fn output_matches(
+    stored_name: &str,
+    stored_id: &str,
+    requested_name: &str,
+    requested_id: Option<&str>,
+) -> bool {
+    if !stored_id.is_empty() {
+        if let Some(requested_id) = requested_id {
+            if !requested_id.is_empty() {
+                return stored_id == requested_id;
+            }
+        }
+    }
+    stored_name == requested_name
+}
+
 pub fn reconcile_workspace_state(
     state: &WorkspaceState,
     live_window_ids: &[u32],
@@ -456,6 +482,7 @@ pub fn reconcile_workspace_state(
         .monitor_tiles
         .iter()
         .map(|monitor| WorkspaceMonitorTileState {
+            output_id: monitor.output_id.clone(),
             output_name: monitor.output_name.clone(),
             entries: monitor
                 .entries
@@ -907,6 +934,7 @@ impl WorkspaceState {
                 Some(next)
             }
             WorkspaceMutation::SetMonitorTile {
+                output_id,
                 output_name,
                 window_id,
                 zone,
@@ -920,11 +948,18 @@ impl WorkspaceState {
                 }
                 next.monitor_tiles
                     .retain(|monitor| !monitor.entries.is_empty());
-                if let Some(monitor) = next
-                    .monitor_tiles
-                    .iter_mut()
-                    .find(|monitor| monitor.output_name == *output_name)
-                {
+                if let Some(monitor) = next.monitor_tiles.iter_mut().find(|monitor| {
+                    output_matches(
+                        &monitor.output_name,
+                        &monitor.output_id,
+                        output_name,
+                        output_id.as_deref(),
+                    )
+                }) {
+                    monitor.output_id = output_id
+                        .clone()
+                        .unwrap_or_else(|| monitor.output_id.clone());
+                    monitor.output_name = output_name.clone();
                     monitor.entries.push(WorkspaceMonitorTileEntry {
                         window_id: *window_id,
                         zone: zone.clone(),
@@ -932,6 +967,7 @@ impl WorkspaceState {
                     });
                 } else {
                     next.monitor_tiles.push(WorkspaceMonitorTileState {
+                        output_id: output_id.clone().unwrap_or_default(),
                         output_name: output_name.clone(),
                         entries: vec![WorkspaceMonitorTileEntry {
                             window_id: *window_id,
@@ -959,10 +995,19 @@ impl WorkspaceState {
                 }
                 Some(next)
             }
-            WorkspaceMutation::ClearMonitorTiles { output_name } => {
+            WorkspaceMutation::ClearMonitorTiles {
+                output_id,
+                output_name,
+            } => {
                 let mut next = self.clone();
-                next.monitor_tiles
-                    .retain(|monitor| monitor.output_name != *output_name);
+                next.monitor_tiles.retain(|monitor| {
+                    !output_matches(
+                        &monitor.output_name,
+                        &monitor.output_id,
+                        output_name,
+                        output_id.as_deref(),
+                    )
+                });
                 if next == *self {
                     return None;
                 }
@@ -982,21 +1027,35 @@ impl WorkspaceState {
                 Some(next)
             }
             WorkspaceMutation::SetMonitorLayout {
+                output_id,
                 output_name,
                 layout,
                 params,
             } => {
                 let mut next = self.clone();
-                next.monitor_layouts
-                    .retain(|entry| entry.output_name != *output_name);
+                next.monitor_layouts.retain(|entry| {
+                    !output_matches(
+                        &entry.output_name,
+                        &entry.output_id,
+                        output_name,
+                        output_id.as_deref(),
+                    )
+                });
                 next.monitor_layouts.push(WorkspaceMonitorLayoutState {
+                    output_id: output_id.clone().unwrap_or_default(),
                     output_name: output_name.clone(),
                     layout: layout.clone(),
                     params: params.clone(),
                 });
                 if *layout == WorkspaceMonitorLayoutType::ManualSnap {
-                    next.monitor_tiles
-                        .retain(|monitor| monitor.output_name != *output_name);
+                    next.monitor_tiles.retain(|monitor| {
+                        !output_matches(
+                            &monitor.output_name,
+                            &monitor.output_id,
+                            output_name,
+                            output_id.as_deref(),
+                        )
+                    });
                 }
                 if next == *self {
                     return None;
@@ -1040,6 +1099,57 @@ impl WorkspaceState {
     }
 
     pub fn to_json(&self) -> Result<String, String> {
-        serde_json::to_string(self).map_err(|error| format!("serialize workspace state: {error}"))
+        let mut value = serde_json::to_value(self)
+            .map_err(|error| format!("serialize workspace state: {error}"))?;
+        let Some(object) = value.as_object_mut() else {
+            return Err("serialize workspace state: expected object".to_string());
+        };
+        let mut group_id_by_window_id = serde_json::Map::new();
+        let mut visible_window_id_by_group_id = serde_json::Map::new();
+        let mut monitor_name_by_window_id = serde_json::Map::new();
+        let mut monitor_id_by_window_id = serde_json::Map::new();
+        for group in &self.groups {
+            for window_id in &group.window_ids {
+                group_id_by_window_id.insert(
+                    window_id.to_string(),
+                    serde_json::Value::String(group.id.clone()),
+                );
+            }
+            if let Some(window_id) = self.visible_window_id_for_group(&group.id) {
+                visible_window_id_by_group_id
+                    .insert(group.id.clone(), serde_json::Value::from(window_id));
+            }
+        }
+        for monitor in &self.monitor_tiles {
+            for entry in &monitor.entries {
+                monitor_name_by_window_id.insert(
+                    entry.window_id.to_string(),
+                    serde_json::Value::String(monitor.output_name.clone()),
+                );
+                if !monitor.output_id.is_empty() {
+                    monitor_id_by_window_id.insert(
+                        entry.window_id.to_string(),
+                        serde_json::Value::String(monitor.output_id.clone()),
+                    );
+                }
+            }
+        }
+        object.insert(
+            "groupIdByWindowId".to_string(),
+            serde_json::Value::Object(group_id_by_window_id),
+        );
+        object.insert(
+            "visibleWindowIdByGroupId".to_string(),
+            serde_json::Value::Object(visible_window_id_by_group_id),
+        );
+        object.insert(
+            "monitorNameByWindowId".to_string(),
+            serde_json::Value::Object(monitor_name_by_window_id),
+        );
+        object.insert(
+            "monitorIdByWindowId".to_string(),
+            serde_json::Value::Object(monitor_id_by_window_id),
+        );
+        serde_json::to_string(&value).map_err(|error| format!("serialize workspace state: {error}"))
     }
 }
