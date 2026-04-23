@@ -130,7 +130,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const delta = diffPerfCounters(sample, idleSample)
         if (delta.shell_updates.window_mapped_messages < 3) return null
         if (delta.shell_sync.full_window_list_replies > 4) return null
-        if (delta.shell_sync.snapshot_notifies < 1) return null
+        if (delta.shell_updates.batch_count < 1) return null
         return sample
       },
       5000,
@@ -146,7 +146,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       openDelta.shell_sync.full_window_list_replies <= 4,
       `window open churn should not require repeated full window lists, got ${openDelta.shell_sync.full_window_list_replies}`,
     )
-    assert(openDelta.shell_sync.snapshot_notifies >= 1, 'window open churn should notify snapshot readers')
+    assert(openDelta.shell_updates.batch_count >= 1, 'window open churn should deliver compositor batches')
+    assert(
+      openDelta.shell_sync.snapshot_reads <= 1,
+      `window open churn should avoid snapshot read churn, got ${openDelta.shell_sync.snapshot_reads}`,
+    )
 
     const focusedShell = await focusNativeWindow(base, red.window.window_id)
     const controls = windowControls(focusedShell, red.window.window_id)

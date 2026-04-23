@@ -31,7 +31,12 @@ import type { ShellCompositorWireOp, ShellCompositorWireSend } from '@/features/
 import { createShellSurfaceRuntime } from '@/features/shell-ui/shellSurfaceRuntime'
 import { createShellWindowGestureRuntime } from '@/features/shell-ui/shellWindowGestureRuntime'
 import { CustomLayoutOverlay, type CustomLayoutOverlayState } from '@/features/tiling/CustomLayoutOverlay'
-import { customAutoLayoutParamsForMonitor, getMonitorLayout, setMonitorCustomLayouts } from '@/features/tiling/tilingConfig'
+import {
+  customAutoLayoutParamsForMonitor,
+  getMonitorLayout,
+  resetTilingConfig as resetPersistedTilingConfig,
+  setMonitorCustomLayouts,
+} from '@/features/tiling/tilingConfig'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { createShellOverlayRegistry } from '@/features/floating/shellOverlay'
@@ -85,6 +90,7 @@ import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
 import { createSessionPersistenceRuntime } from '@/features/bridge/sessionPersistenceRuntime'
 import { createSessionRuntime } from '@/features/bridge/sessionRuntime'
 import { createShellTransportBridge } from '@/features/bridge/shellTransportBridge'
+import type { CompositorOutputTopology } from '@/features/bridge/compositorBridgeRuntime'
 import { createWorkspaceActions } from '@/features/workspace/workspaceActions'
 import {
   getWorkspaceGroupSplit,
@@ -130,6 +136,7 @@ declare global {
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_OPEN_TEST_WINDOW_REQ?: (requestId: number) => void
+    __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void
   }
 }
 
@@ -335,6 +342,12 @@ function App() {
     muted: false,
     volumePercent: null,
   })
+  const [outputTopology, setOutputTopology] = createSignal<CompositorOutputTopology | null>(null)
+  const outputGeom = createMemo(() => outputTopology()?.logical ?? null)
+  const outputPhysical = createMemo(() => outputTopology()?.physical ?? null)
+  const layoutCanvasOrigin = createMemo(() => outputTopology()?.origin ?? null)
+  const uiScalePercent = createMemo(() => outputTopology()?.uiScalePercent ?? 150)
+  const shellChromePrimaryName = createMemo(() => outputTopology()?.shellChromePrimaryName ?? null)
   const nativeDragPreviewKey = createMemo(() => {
     const preview = nativeDragPreview()
     return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
@@ -450,16 +463,9 @@ function App() {
       </div>
     )
   })
-  const [outputGeom, setOutputGeom] = createSignal<{ w: number; h: number } | null>(null)
-  const [layoutCanvasOrigin, setLayoutCanvasOrigin] = createSignal<{ x: number; y: number } | null>(
-    null,
-  )
   const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
   const [tilingCfgRev, setTilingCfgRev] = createSignal(0)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
-  const [uiScalePercent, setUiScalePercent] = createSignal<100 | 150 | 200>(150)
-  const [shellChromePrimaryName, setShellChromePrimaryName] = createSignal<string | null>(null)
-  const [outputPhysical, setOutputPhysical] = createSignal<{ w: number; h: number } | null>(null)
   const [trayReservedPx, setTrayReservedPx] = createSignal(0)
   const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
   const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(40)
@@ -468,6 +474,9 @@ function App() {
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
   let windowSyncRecoveryPending = false
   let windowSyncRecoveryRequestedAt = 0
+  let lastAppliedOutputTopologyRevision = -1
+  let nextClientMutationId = 1
+  const pendingClientMutationIds = new Map<number, number>()
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
   const [nextNativeWindowSeq, setNextNativeWindowSeq] = createSignal(1)
   const floatingLayers = createFloatingLayerStore()
@@ -476,6 +485,44 @@ function App() {
   const pendingNativeLaunches: { windowRef: SessionWindowRef; launch: NativeLaunchMetadata }[] = []
   let mainRef: HTMLElement | undefined
   let shellUiWindowsInvalidateQueued = false
+
+  createEffect(() => {
+    const topology = outputTopology()
+    const revision = topology?.revision ?? -1
+    if (revision === lastAppliedOutputTopologyRevision) return
+    lastAppliedOutputTopologyRevision = revision
+    setScreenDraft('rows', topology?.screens ?? [])
+  })
+
+  function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
+    const clientMutationId = nextClientMutationId++
+    const ok = shellWireSend('workspace_mutation', JSON.stringify({ clientMutationId, mutation }))
+    if (ok) pendingClientMutationIds.set(clientMutationId, Date.now())
+    return ok
+  }
+
+  function sendWindowIntent(action: string, windowId: number): boolean {
+    const clientMutationId = nextClientMutationId++
+    const ok = shellWireSend('window_intent', JSON.stringify({ clientMutationId, action, windowId }))
+    if (ok) pendingClientMutationIds.set(clientMutationId, Date.now())
+    return ok
+  }
+
+  function hasPendingClientMutation() {
+    const now = Date.now()
+    for (const [clientMutationId, sentAt] of pendingClientMutationIds) {
+      if (now - sentAt <= 2000) continue
+      pendingClientMutationIds.delete(clientMutationId)
+    }
+    return pendingClientMutationIds.size > 0
+  }
+
+  function handleMutationAck(detail: { client_mutation_id: number; status: string }) {
+    pendingClientMutationIds.delete(detail.client_mutation_id)
+    if (detail.status === 'accepted') return
+    requestWindowSyncRecovery()
+  }
+
   function setNativeWindowRef(windowId: number, windowRef: SessionWindowRef) {
     setNativeWindowRefs((prev) => {
       if (prev.get(windowId) === windowRef) return prev
@@ -509,7 +556,7 @@ function App() {
     setNextNativeWindowSeq,
     reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
     rectFromWindow,
-    sendWorkspaceMutation: (mutation) => workspaceLayoutBridge.sendWorkspaceMutation(mutation),
+    sendWorkspaceMutation,
     sendSetPreTileGeometry: (windowId, bounds) => workspaceLayoutBridge.sendSetPreTileGeometry(windowId, bounds),
     sendSetMonitorTile: (windowId, outputName, zone, bounds) =>
       workspaceLayoutBridge.sendSetMonitorTile(windowId, outputName, zone, bounds),
@@ -739,15 +786,12 @@ function App() {
     for (const outputName of outputsKey ? outputsKey.split('\0') : []) {
       const { layout, params } = getMonitorLayout(outputName)
       const nextParams = layout.type === 'custom-auto' ? customAutoLayoutParamsForMonitor(outputName) : params
-      shellWireSend(
-        'workspace_mutation',
-        JSON.stringify({
-          type: 'set_monitor_layout',
-          outputName,
-          layout: layout.type,
-          params: nextParams,
-        }),
-      )
+      sendWorkspaceMutation({
+        type: 'set_monitor_layout',
+        outputName,
+        layout: layout.type,
+        params: nextParams,
+      })
     }
   })
 
@@ -809,6 +853,7 @@ function App() {
       shellHttpBase() !== null && sessionPersistenceRuntime.savedSessionAvailable() && !sessionRestoreSnapshot(),
     postSessionPower,
     canSessionControl,
+    scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
     exitSession: () => {
       if (shellWireSend('quit')) {
         clearShellActionIssue()
@@ -828,14 +873,11 @@ function App() {
           label: pinned ? 'Unpin tab' : 'Pin tab',
           action: () => {
             workspaceChrome.clearSuppressTabClickWindowId()
-            shellWireSend(
-              'workspace_mutation',
-              JSON.stringify({
-                type: 'set_window_pinned',
-                windowId,
-                pinned: !pinned,
-              }),
-            )
+            sendWorkspaceMutation({
+              type: 'set_window_pinned',
+              windowId,
+              pinned: !pinned,
+            })
           },
         },
       ]
@@ -912,6 +954,7 @@ function App() {
   const workspaceGroupIds = createMemo(() => workspaceGroups().map((group) => group.id))
 
   function requestWindowSyncRecovery() {
+    if (hasPendingClientMutation()) return
     const now = Date.now()
     if (windowSyncRecoveryPending && now - windowSyncRecoveryRequestedAt < 1000) return
     if (!shellWireSend('request_compositor_sync')) return
@@ -937,6 +980,7 @@ function App() {
     applyWindowDrop,
     detachGroupWindow,
     selectGroupWindow,
+    closeWindow,
     closeGroupWindow,
     cycleFocusedWorkspaceGroup,
     activateTaskbarGroup,
@@ -956,6 +1000,8 @@ function App() {
     focusShellUiWindow,
     activateWindowViaShell,
     activateTaskbarWindowViaShell,
+    sendWorkspaceMutation,
+    sendWindowIntent,
     shellWireSend,
   })
 
@@ -1024,15 +1070,12 @@ function App() {
         return
       }
       if (openedGroupId !== targetGroupId) {
-        shellWireSend(
-          'workspace_mutation',
-          JSON.stringify({
-            type: 'move_window_to_group',
-            windowId: openedWindowId,
-            targetGroupId,
-            insertIndex,
-          }),
-        )
+        sendWorkspaceMutation({
+          type: 'move_window_to_group',
+          windowId: openedWindowId,
+          targetGroupId,
+          insertIndex,
+        })
       }
       let selectFrames = 0
       const waitForMergedGroup = () => {
@@ -1042,10 +1085,7 @@ function App() {
           if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
           return
         }
-        shellWireSend(
-          'workspace_mutation',
-          JSON.stringify({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId }),
-        )
+        sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
       }
       waitForMergedGroup()
     }
@@ -1069,15 +1109,12 @@ function App() {
         return
       }
       if (openedGroupId !== targetGroupId) {
-        shellWireSend(
-          'workspace_mutation',
-          JSON.stringify({
-            type: 'move_window_to_group',
-            windowId: openedWindowId,
-            targetGroupId,
-            insertIndex: targetGroup.windowIds.length,
-          }),
-        )
+        sendWorkspaceMutation({
+          type: 'move_window_to_group',
+          windowId: openedWindowId,
+          targetGroupId,
+          insertIndex: targetGroup.windowIds.length,
+        })
       }
       let selectFrames = 0
       const waitForMergedGroup = () => {
@@ -1088,21 +1125,15 @@ function App() {
           return
         }
         if (mode === 'tab') {
-          shellWireSend(
-            'workspace_mutation',
-            JSON.stringify({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId }),
-          )
+          sendWorkspaceMutation({ type: 'select_tab', groupId: targetGroupId, windowId: openedWindowId })
           return
         }
-        shellWireSend(
-          'workspace_mutation',
-          JSON.stringify({
-            type: 'enter_split',
-            groupId: targetGroupId,
-            leftWindowId: sourceWindowId,
-            leftPaneFraction: 0.5,
-          }),
-        )
+        sendWorkspaceMutation({
+          type: 'enter_split',
+          groupId: targetGroupId,
+          leftWindowId: sourceWindowId,
+          leftPaneFraction: 0.5,
+        })
       }
       waitForMergedGroup()
     }
@@ -1324,6 +1355,7 @@ function App() {
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,
+    sendWorkspaceMutation,
     shellWireSend,
   })
 
@@ -1468,6 +1500,7 @@ function App() {
     adoptShellWindowMove: shellWindowGestureRuntime.adoptShellWindowMove,
     beginShellWindowResize: shellWindowGestureRuntime.beginShellWindowResize,
     toggleShellMaximizeForWindow: shellWindowGestureRuntime.toggleShellMaximizeForWindow,
+    closeWindow,
     closeGroupWindow,
     selectGroupWindow,
     setSplitGroupFraction,
@@ -1667,6 +1700,12 @@ function App() {
         projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
         isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceState(), windowId),
         openShellTestWindow,
+        resetTilingConfig: () => {
+          resetPersistedTilingConfig()
+          setTilingCfgRev((n) => n + 1)
+          bumpSnapChrome()
+          scheduleExclusionZonesSync()
+        },
         getMenuLayerHostEl: shellContextMenus.menuLayerHostEl,
       },
       registerCompositorBridgeRuntime: {
@@ -1676,13 +1715,7 @@ function App() {
         setTrayReservedPx,
         setTrayIconSlotPx,
         setSniTrayItems,
-        setOutputGeom,
-        setOutputPhysical,
-        setLayoutCanvasOrigin,
-        setUiScalePercent,
-        setScreenDraftRows: (rows) => setScreenDraft('rows', rows),
-        bumpTilingCfgRev: () => setTilingCfgRev((n) => n + 1),
-        setShellChromePrimaryName,
+        setOutputTopology,
         setCompositorInteractionState,
         setNativeDragPreview,
         getNativeDragPreview: nativeDragPreview,
@@ -1698,7 +1731,9 @@ function App() {
         hideContextMenu: shellContextMenus.hideContextMenu,
         toggleProgramsMenuMeta: shellContextMenus.toggleProgramsMenuMeta,
         applyTraySniMenuDetail: shellContextMenus.applyTraySniMenuDetail,
+        handleMutationAck,
         shellWireSend,
+        sendWindowIntent,
         requestCompositorSync,
         openSettingsShellWindow: backedShellWindowActions.openSettingsShellWindow,
         cycleFocusedWorkspaceGroup,

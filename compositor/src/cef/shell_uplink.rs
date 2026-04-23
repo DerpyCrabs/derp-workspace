@@ -316,6 +316,11 @@ fn handle_uplink_list(
             let ok = args.int(2) != 0;
             e2e_bridge::publish_shell_test_window_open(request_id, ok);
         }
+        "e2e_reset_tiling_config_response" => {
+            let request_id = args.int(1) as u64;
+            let ok = args.int(2) != 0;
+            e2e_bridge::publish_shell_reset_tiling_config(request_id, ok);
+        }
         _ => {}
     }
 }
@@ -692,6 +697,41 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                     let _ = list.set_int(2, ok);
                 }
+                "e2e_reset_tiling_config_response" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("e2e_reset_tiling_config_response requires request id");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("e2e_reset_tiling_config_response requires ok (0 or 1)");
+                    };
+                    let id = if a1.is_int() != 0 {
+                        a1.int_value()
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() as i32
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() as i32
+                    } else {
+                        return_exception!(
+                            "e2e_reset_tiling_config_response request id must be a number"
+                        );
+                    };
+                    if id < 0 {
+                        return_exception!(
+                            "e2e_reset_tiling_config_response request id must be non-negative"
+                        );
+                    }
+                    let ok = if a2.is_int() != 0 {
+                        a2.int_value()
+                    } else if a2.is_uint() != 0 {
+                        a2.uint_value() as i32
+                    } else if a2.is_double() != 0 {
+                        a2.double_value() as i32
+                    } else {
+                        return_exception!("e2e_reset_tiling_config_response ok must be a number");
+                    };
+                    let _ = list.set_int(1, id);
+                    let _ = list.set_int(2, ok);
+                }
                 "presentation_fullscreen" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("presentation_fullscreen requires enabled (0 or 1)");
@@ -913,7 +953,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_test_window_open_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

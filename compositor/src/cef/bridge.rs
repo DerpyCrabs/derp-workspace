@@ -16,23 +16,7 @@ use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 struct PendingCompositorMessages {
     scheduled: bool,
     messages: Vec<shell_wire::DecodedCompositorToShellMessage>,
-    snapshot: Option<Vec<shell_wire::DecodedCompositorToShellMessage>>,
-}
-
-fn is_window_delta(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
-    matches!(
-        msg,
-        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
-    )
+    snapshot: Vec<shell_wire::DecodedCompositorToShellMessage>,
 }
 
 fn push_pending_message(
@@ -87,7 +71,12 @@ fn push_pending_message(
             });
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
-            messages.retain(|pending| !is_window_delta(pending));
+            messages.retain(|pending| {
+                !matches!(
+                    pending,
+                    shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+                )
+            });
         }
         _ => {}
     }
@@ -134,18 +123,15 @@ wrap_task! {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() && guard.snapshot.is_none() {
+                if guard.messages.is_empty() && guard.snapshot.is_empty() {
                     guard.scheduled = false;
                     self.pending_work.store(false, Ordering::Relaxed);
                     return;
                 }
                 guard.scheduled = false;
-                (
-                    std::mem::take(&mut guard.messages),
-                    guard.snapshot.take(),
-                )
+                (std::mem::take(&mut guard.messages), std::mem::take(&mut guard.snapshot))
             };
-            if let Some(snapshot_messages) = snapshot_messages {
+            if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
                         if let Err(error) = snapshot.publish_messages(&snapshot_messages) {
@@ -161,7 +147,7 @@ wrap_task! {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() && guard.snapshot.is_none() {
+                if guard.messages.is_empty() && guard.snapshot.is_empty() {
                     self.pending_work.store(false, Ordering::Relaxed);
                     false
                 } else if guard.scheduled {
@@ -245,7 +231,7 @@ impl ShellToCefLink {
             pending_messages: Arc::new(Mutex::new(PendingCompositorMessages {
                 scheduled: false,
                 messages: Vec::new(),
-                snapshot: None,
+                snapshot: Vec::new(),
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
@@ -278,8 +264,10 @@ impl ShellToCefLink {
             let Ok(mut guard) = self.pending_messages.lock() else {
                 return;
             };
-            if snapshot.is_some() {
-                guard.snapshot = snapshot;
+            if let Some(snapshot) = snapshot {
+                for snapshot_msg in snapshot {
+                    push_pending_message(&mut guard.snapshot, snapshot_msg);
+                }
             }
             push_pending_message(&mut guard.messages, msg);
             self.pending_work.store(true, Ordering::Relaxed);
@@ -327,6 +315,10 @@ impl ShellToCefLink {
         } else if let Ok(mut guard) = self.pending_messages.lock() {
             guard.scheduled = false;
         }
+    }
+
+    pub fn delivery_ready(&self) -> bool {
+        self.delivery_ready.load(Ordering::Relaxed)
     }
 
     pub fn has_pending_shell_updates(&self) -> bool {

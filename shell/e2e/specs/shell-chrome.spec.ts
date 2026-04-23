@@ -546,6 +546,42 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('settings-shell.json', settingsFocused.shell)
   })
 
+  test('tiling layout persistence can be mutated within a test', async ({ base }) => {
+    await openSettings(base, 'click')
+    await selectSettingsTilingLayout(base, 'grid')
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const settingsWindow = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const monitorName = settingsWindow?.output_name
+    const sessionSnapshot = shell.session_snapshot as
+      | {
+          tilingConfig?: {
+            monitors?: Record<string, { layout?: string | null } | null> | null
+          } | null
+        }
+      | null
+    assert(monitorName, 'missing settings monitor name after tiling config mutation')
+    assert(
+      sessionSnapshot?.tilingConfig?.monitors?.[monitorName]?.layout === 'grid',
+      'expected grid tiling layout to persist during the test',
+    )
+  })
+
+  test('prime state clears persisted tiling config before the next test', async ({ base }) => {
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const sessionSnapshot = shell.session_snapshot as
+      | {
+          tilingConfig?: {
+            monitors?: Record<string, unknown> | null
+          } | null
+        }
+      | null
+    assert(sessionSnapshot, 'missing session snapshot after prime state')
+    assert(
+      Object.keys(sessionSnapshot.tilingConfig?.monitors ?? {}).length === 0,
+      'expected prime state to clear persisted tiling config',
+    )
+  })
+
   test('close_focused keybind closes focused shell window when native windows exist', async ({ base }) => {
     const before = await getSnapshots(base)
     const knownIds = new Set(before.compositor.windows.map((w) => w.window_id))

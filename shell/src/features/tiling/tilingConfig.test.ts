@@ -3,6 +3,7 @@ import {
   customMonitorSnapLayout,
   customAutoLayoutParamsForMonitor,
   getMonitorLayout,
+  resetTilingConfig,
   saveTilingConfig,
   setMonitorCustomLayouts,
   setMonitorLayout,
@@ -139,5 +140,15 @@ describe('tilingConfig', () => {
     )
 
     expect(getMonitorLayout('DP-1').snapLayout).toEqual({ kind: 'assist', shape: '2x2' })
+  })
+
+  it('clears persisted tiling config', () => {
+    const localStorage = stubLocalStorage()
+
+    setMonitorLayout('DP-1', 'grid', { maxColumns: 2 })
+    resetTilingConfig()
+
+    expect(localStorage.removeItem).toHaveBeenCalledWith('derp-tiling-config')
+    expect(getMonitorLayout('DP-1').layout.type).toBe('manual-snap')
   })
 })

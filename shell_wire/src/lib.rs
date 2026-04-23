@@ -304,6 +304,7 @@ pub struct OutputLayoutScreen {
 }
 
 pub fn encode_output_layout(
+    revision: u64,
     canvas_logical_w: u32,
     canvas_logical_h: u32,
     canvas_physical_w: u32,
@@ -326,7 +327,7 @@ pub fn encode_output_layout(
             b
         }
     };
-    let mut body_sz: usize = 4 + 16 + 4;
+    let mut body_sz: usize = 4 + 8 + 16 + 4;
     for s in screens {
         let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
         let il = u32::try_from(s.identity.as_bytes().len()).ok()?;
@@ -348,6 +349,7 @@ pub fn encode_output_layout(
     let mut v = Vec::with_capacity(4 + body_sz);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_OUTPUT_LAYOUT.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&canvas_logical_w.to_le_bytes());
     v.extend_from_slice(&canvas_logical_h.to_le_bytes());
     v.extend_from_slice(&canvas_physical_w.to_le_bytes());
@@ -394,22 +396,23 @@ pub fn encode_shell_set_output_layout_json(json: &str) -> Option<Vec<u8>> {
 }
 
 fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMessage, DecodeError> {
-    if body.len() < 24 {
+    if body.len() < 32 {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
     let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
     if msg != MSG_OUTPUT_LAYOUT {
         return Err(DecodeError::UnknownMsgType);
     }
-    let canvas_logical_w = u32::from_le_bytes(body[4..8].try_into().unwrap());
-    let canvas_logical_h = u32::from_le_bytes(body[8..12].try_into().unwrap());
-    let canvas_physical_w = u32::from_le_bytes(body[12..16].try_into().unwrap());
-    let canvas_physical_h = u32::from_le_bytes(body[16..20].try_into().unwrap());
-    let count = u32::from_le_bytes(body[20..24].try_into().unwrap());
+    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+    let canvas_logical_w = u32::from_le_bytes(body[12..16].try_into().unwrap());
+    let canvas_logical_h = u32::from_le_bytes(body[16..20].try_into().unwrap());
+    let canvas_physical_w = u32::from_le_bytes(body[20..24].try_into().unwrap());
+    let canvas_physical_h = u32::from_le_bytes(body[24..28].try_into().unwrap());
+    let count = u32::from_le_bytes(body[28..32].try_into().unwrap());
     if count == 0 || count > MAX_OUTPUT_LAYOUT_SCREENS {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
-    let mut off = 24usize;
+    let mut off = 32usize;
     let mut screens = Vec::with_capacity(count as usize);
     for _ in 0..count {
         if off + 4 > body.len() {
@@ -482,6 +485,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         return Err(DecodeError::BadOutputLayoutPayload);
     }
     Ok(DecodedCompositorToShellMessage::OutputLayout {
+        revision,
         canvas_logical_w: canvas_logical_w.max(1),
         canvas_logical_h: canvas_logical_h.max(1),
         canvas_physical_w: canvas_physical_w.max(1),
@@ -754,13 +758,14 @@ pub struct ShellWindowSnapshot {
     pub x11_instance: String,
 }
 
-pub fn encode_window_list(windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
+pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
     let count = u32::try_from(windows.len()).ok()?;
     if count > MAX_WINDOW_LIST_ENTRIES {
         return None;
     }
     let mut body: Vec<u8> = Vec::new();
     body.extend_from_slice(&MSG_WINDOW_LIST.to_le_bytes());
+    body.extend_from_slice(&revision.to_le_bytes());
     body.extend_from_slice(&count.to_le_bytes());
     for w in windows {
         let tb = w.title.as_bytes();
@@ -1140,6 +1145,7 @@ pub enum DecodedCompositorToShellMessage {
         physical_h: u32,
     },
     OutputLayout {
+        revision: u64,
         canvas_logical_w: u32,
         canvas_logical_h: u32,
         canvas_physical_w: u32,
@@ -1185,6 +1191,7 @@ pub enum DecodedCompositorToShellMessage {
         window_id: Option<u32>,
     },
     WindowList {
+        revision: u64,
         windows: Vec<ShellWindowSnapshot>,
     },
     WindowState {
@@ -1209,12 +1216,15 @@ pub enum DecodedCompositorToShellMessage {
         state_known: bool,
     },
     WorkspaceState {
+        revision: u64,
         state_json: String,
     },
     ShellHostedAppState {
+        revision: u64,
         state_json: String,
     },
     InteractionState {
+        revision: u64,
         pointer_x: i32,
         pointer_y: i32,
         move_window_id: u32,
@@ -1228,6 +1238,11 @@ pub enum DecodedCompositorToShellMessage {
         window_id: u32,
         generation: u32,
         image_path: String,
+    },
+    MutationAck {
+        domain: String,
+        client_mutation_id: u64,
+        status: String,
     },
     TrayHints {
         slot_count: u32,
@@ -1349,6 +1364,7 @@ pub fn encode_compositor_tray_hints(slot_count: u32, slot_w: i32, reserved_w: u3
 }
 
 pub fn encode_compositor_interaction_state(
+    revision: u64,
     pointer_x: i32,
     pointer_y: i32,
     move_window_id: u32,
@@ -1358,7 +1374,7 @@ pub fn encode_compositor_interaction_state(
     move_visual: Option<CompositorInteractionVisual>,
     resize_visual: Option<CompositorInteractionVisual>,
 ) -> Vec<u8> {
-    let body_len = 68u32;
+    let body_len = 76u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     let encode_visual =
         |out: &mut Vec<u8>, visual: Option<CompositorInteractionVisual>| match visual {
@@ -1386,6 +1402,7 @@ pub fn encode_compositor_interaction_state(
         };
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_INTERACTION_STATE.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&pointer_x.to_le_bytes());
     v.extend_from_slice(&pointer_y.to_le_bytes());
     v.extend_from_slice(&move_window_id.to_le_bytes());
@@ -1531,7 +1548,7 @@ pub fn encode_compositor_keyboard_layout(label: &str) -> Option<Vec<u8>> {
     Some(v)
 }
 
-pub fn encode_compositor_workspace_state(state_json: &str) -> Option<Vec<u8>> {
+pub fn encode_compositor_workspace_state(revision: u64, state_json: &str) -> Option<Vec<u8>> {
     let b = state_json.as_bytes();
     if b.is_empty() {
         return None;
@@ -1540,19 +1557,23 @@ pub fn encode_compositor_workspace_state(state_json: &str) -> Option<Vec<u8>> {
     if len > MAX_WORKSPACE_JSON_BYTES {
         return None;
     }
-    let body_len = 8u32.checked_add(len)?;
+    let body_len = 16u32.checked_add(len)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_WORKSPACE_STATE.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
     Some(v)
 }
 
-pub fn encode_compositor_shell_hosted_app_state(state_json: &str) -> Option<Vec<u8>> {
+pub fn encode_compositor_shell_hosted_app_state(
+    revision: u64,
+    state_json: &str,
+) -> Option<Vec<u8>> {
     let b = state_json.as_bytes();
     if b.is_empty() {
         return None;
@@ -1561,13 +1582,14 @@ pub fn encode_compositor_shell_hosted_app_state(state_json: &str) -> Option<Vec<
     if len > MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES {
         return None;
     }
-    let body_len = 8u32.checked_add(len)?;
+    let body_len = 16u32.checked_add(len)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
     Some(v)
@@ -2147,45 +2169,53 @@ fn decode_compositor_to_shell_body(
             })
         }
         MSG_COMPOSITOR_WORKSPACE_STATE => {
-            if body.len() < 8 {
+            if body.len() < 16 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+            let len = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
             if len == 0 || len > MAX_WORKSPACE_JSON_BYTES as usize {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let end = 8usize
+            let end = 16usize
                 .checked_add(len)
                 .ok_or(DecodeError::BadCompositorToShellPayload)?;
             if body.len() != end {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let state_json = std::str::from_utf8(&body[8..end])
+            let state_json = std::str::from_utf8(&body[16..end])
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
-            Ok(DecodedCompositorToShellMessage::WorkspaceState { state_json })
+            Ok(DecodedCompositorToShellMessage::WorkspaceState {
+                revision,
+                state_json,
+            })
         }
         MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE => {
-            if body.len() < 8 {
+            if body.len() < 16 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+            let len = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
             if len == 0 || len > MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES as usize {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let end = 8usize
+            let end = 16usize
                 .checked_add(len)
                 .ok_or(DecodeError::BadCompositorToShellPayload)?;
             if body.len() != end {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
-            let state_json = std::str::from_utf8(&body[8..end])
+            let state_json = std::str::from_utf8(&body[16..end])
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
-            Ok(DecodedCompositorToShellMessage::ShellHostedAppState { state_json })
+            Ok(DecodedCompositorToShellMessage::ShellHostedAppState {
+                revision,
+                state_json,
+            })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
-            if body.len() != 68 {
+            if body.len() != 76 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let decode_visual = |window_id: u32,
@@ -2203,21 +2233,23 @@ fn decode_compositor_to_shell_body(
                     }
                 })
             };
-            let pointer_x = i32::from_le_bytes(body[4..8].try_into().unwrap());
-            let pointer_y = i32::from_le_bytes(body[8..12].try_into().unwrap());
-            let move_window_id = u32::from_le_bytes(body[12..16].try_into().unwrap());
-            let resize_window_id = u32::from_le_bytes(body[16..20].try_into().unwrap());
-            let move_proxy_window_id = u32::from_le_bytes(body[20..24].try_into().unwrap());
-            let move_capture_window_id = u32::from_le_bytes(body[24..28].try_into().unwrap());
+            let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+            let pointer_x = i32::from_le_bytes(body[12..16].try_into().unwrap());
+            let pointer_y = i32::from_le_bytes(body[16..20].try_into().unwrap());
+            let move_window_id = u32::from_le_bytes(body[20..24].try_into().unwrap());
+            let resize_window_id = u32::from_le_bytes(body[24..28].try_into().unwrap());
+            let move_proxy_window_id = u32::from_le_bytes(body[28..32].try_into().unwrap());
+            let move_capture_window_id = u32::from_le_bytes(body[32..36].try_into().unwrap());
             Ok(DecodedCompositorToShellMessage::InteractionState {
+                revision,
                 pointer_x,
                 pointer_y,
                 move_window_id,
                 resize_window_id,
                 move_proxy_window_id,
                 move_capture_window_id,
-                move_visual: decode_visual(move_window_id, 28),
-                resize_visual: decode_visual(resize_window_id, 48),
+                move_visual: decode_visual(move_window_id, 36),
+                resize_visual: decode_visual(resize_window_id, 56),
             })
         }
         MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW => {
@@ -2340,18 +2372,19 @@ fn decode_compositor_to_shell_body(
 fn decode_window_list_compositor_body(
     body: &[u8],
 ) -> Result<DecodedCompositorToShellMessage, DecodeError> {
-    if body.len() < 8 {
+    if body.len() < 16 {
         return Err(DecodeError::BadWindowListPayload);
     }
     let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
     if msg != MSG_WINDOW_LIST {
         return Err(DecodeError::UnknownMsgType);
     }
-    let count = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+    let count = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
     if count > MAX_WINDOW_LIST_ENTRIES as usize {
         return Err(DecodeError::BadWindowListPayload);
     }
-    let mut off = 8usize;
+    let mut off = 16usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
         if off + 56 > body.len() {
@@ -2497,7 +2530,7 @@ fn decode_window_list_compositor_body(
     if off != body.len() {
         return Err(DecodeError::BadWindowListPayload);
     }
-    Ok(DecodedCompositorToShellMessage::WindowList { windows })
+    Ok(DecodedCompositorToShellMessage::WindowList { revision, windows })
 }
 
 pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeError> {
@@ -2537,6 +2570,7 @@ mod tests {
     #[test]
     fn output_layout_round_trip_preserves_primary_output() {
         let packet = encode_output_layout(
+            17,
             3840,
             2160,
             3840,
@@ -2559,6 +2593,7 @@ mod tests {
         assert_eq!(
             pop_compositor_to_shell_message(&mut buf).unwrap(),
             Some(DecodedCompositorToShellMessage::OutputLayout {
+                revision: 17,
                 canvas_logical_w: 3840,
                 canvas_logical_h: 2160,
                 canvas_physical_w: 3840,
@@ -2581,33 +2616,37 @@ mod tests {
 
     #[test]
     fn window_list_round_trip_preserves_capture_identifier() {
-        let packet = encode_window_list(&[ShellWindowSnapshot {
-            window_id: 7,
-            surface_id: 9,
-            stack_z: 11,
-            x: 13,
-            y: 15,
-            w: 640,
-            h: 480,
-            minimized: 0,
-            maximized: 1,
-            fullscreen: 0,
-            client_side_decoration: 1,
-            shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
-            title: "Example".to_string(),
-            app_id: "app.example".to_string(),
-            output_name: "DP-1".to_string(),
-            capture_identifier: "capture-identifier-123".to_string(),
-            kind: "native".to_string(),
-            x11_class: "ExampleClass".to_string(),
-            x11_instance: "example-instance".to_string(),
-        }])
+        let packet = encode_window_list(
+            23,
+            &[ShellWindowSnapshot {
+                window_id: 7,
+                surface_id: 9,
+                stack_z: 11,
+                x: 13,
+                y: 15,
+                w: 640,
+                h: 480,
+                minimized: 0,
+                maximized: 1,
+                fullscreen: 0,
+                client_side_decoration: 1,
+                shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
+                title: "Example".to_string(),
+                app_id: "app.example".to_string(),
+                output_name: "DP-1".to_string(),
+                capture_identifier: "capture-identifier-123".to_string(),
+                kind: "native".to_string(),
+                x11_class: "ExampleClass".to_string(),
+                x11_instance: "example-instance".to_string(),
+            }],
+        )
         .unwrap();
         let mut buf = packet;
 
         assert_eq!(
             pop_compositor_to_shell_message(&mut buf).unwrap(),
             Some(DecodedCompositorToShellMessage::WindowList {
+                revision: 23,
                 windows: vec![ShellWindowSnapshot {
                     window_id: 7,
                     surface_id: 9,

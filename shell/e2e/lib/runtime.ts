@@ -948,6 +948,32 @@ export async function normalizePersistentShellState(base: string): Promise<Shell
   return getJson<ShellSnapshot>(base, '/test/state/shell')
 }
 
+function tilingConfigCleared(shell: ShellSnapshot): boolean {
+  if (shell.session_snapshot_error) return false
+  const sessionSnapshot = shell.session_snapshot as
+    | {
+        tilingConfig?: {
+          monitors?: Record<string, unknown> | null
+        } | null
+      }
+    | null
+  const monitors = sessionSnapshot?.tilingConfig?.monitors
+  return !!monitors && Object.keys(monitors).length === 0
+}
+
+export async function resetShellTilingConfig(base: string): Promise<ShellSnapshot> {
+  await postJson(base, '/test/tiling/reset', {})
+  return waitFor(
+    'wait for persisted tiling config reset',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return tilingConfigCleared(shell) ? shell : null
+    },
+    5000,
+    100,
+  )
+}
+
 export async function ensureDesktopApps(base: string, state: E2eState): Promise<DesktopAppEntry[]> {
   if (state.desktopApps.length > 0) return state.desktopApps
   const desktopApplications = await getJson<{ apps?: DesktopAppEntry[] }>(base, '/desktop_applications')
@@ -1009,9 +1035,10 @@ export async function primeState(
   let recovered = false
   let shell: ShellSnapshot
   for (;;) {
-    await normalizeTransientShellState(base)
-    shell = await normalizePersistentShellState(base)
     try {
+      await resetShellTilingConfig(base)
+      await normalizeTransientShellState(base)
+      shell = await normalizePersistentShellState(base)
       if (shell.settings_window_visible) {
         await openSettings(base, 'click')
         await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
@@ -1021,7 +1048,7 @@ export async function primeState(
     } catch (error) {
       if (recovered) {
         throw new Error(
-          `primeState: failed to normalize settings window after session restart: ${
+          `primeState: failed to normalize shell state after session restart: ${
             error instanceof Error ? error.stack || error.message : String(error)
           }`,
         )

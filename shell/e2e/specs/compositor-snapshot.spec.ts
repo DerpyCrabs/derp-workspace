@@ -12,7 +12,7 @@ import {
 } from '../lib/runtime.ts'
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('native window churn refreshes shell through compositor snapshot reads', async ({ base, state }) => {
+  test('native window churn refreshes shell through direct compositor batches', async ({ base, state }) => {
     await resetPerfCounters(base)
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
@@ -37,7 +37,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(row, 'spawned native window missing from shell snapshot state')
 
     const perf = await getPerfCounters(base)
-    assert(perf.shell_sync.snapshot_notifies >= 1, 'expected compositor snapshot notify after native window spawn')
-    assert(perf.shell_sync.snapshot_reads >= 1, 'expected shell snapshot read after native window spawn')
+    assert(perf.shell_updates.batch_count >= 1, 'expected compositor batch delivery after native window spawn')
+    assert(perf.shell_updates.window_mapped_messages >= 1, 'expected mapped window detail after native window spawn')
+    assert(perf.shell_sync.snapshot_reads <= 1, `expected <= 1 snapshot read after native window spawn, got ${perf.shell_sync.snapshot_reads}`)
   })
 })

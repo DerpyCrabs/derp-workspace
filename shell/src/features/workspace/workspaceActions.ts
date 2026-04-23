@@ -25,12 +25,19 @@ type WorkspaceActionsOptions = {
   focusShellUiWindow: (windowId: number) => void
   activateWindowViaShell: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
+  sendWorkspaceMutation?: (mutation: Record<string, unknown>) => boolean
+  sendWindowIntent?: (action: string, windowId: number) => boolean
   shellWireSend: ShellCompositorWireSend
 }
 
 export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   const sendWorkspaceMutation = (mutation: Record<string, unknown>) =>
+    options.sendWorkspaceMutation?.(mutation) ??
     options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
+
+  const sendWindowIntent = (action: string, windowId: number) =>
+    options.sendWindowIntent?.(action, windowId) ??
+    options.shellWireSend('window_intent', JSON.stringify({ action, windowId }))
 
   const focusWindowViaShell = (windowId: number) => {
     const window = options.allWindowsMap().get(windowId)
@@ -141,13 +148,20 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     })
   }
 
-  const closeGroupWindow = (windowId: number) => {
+  const closeWindow = (windowId: number) => {
     if (typeof window !== 'undefined' && typeof window.__derpShellWireSend !== 'function') {
-      console.warn('[derp-shell] closeGroupWindow missing __derpShellWireSend', windowId)
+      console.warn('[derp-shell] closeWindow missing __derpShellWireSend', windowId)
     }
     const ok = options.shellWireSend('close', windowId)
     if (!ok) {
-      console.warn('[derp-shell] closeGroupWindow shellWireSend false', windowId)
+      console.warn('[derp-shell] closeWindow shellWireSend false', windowId)
+    }
+  }
+
+  const closeGroupWindow = (windowId: number) => {
+    const ok = sendWindowIntent('close_group', windowId)
+    if (!ok) {
+      console.warn('[derp-shell] closeGroupWindow sendWindowIntent false', windowId)
     }
   }
 
@@ -247,6 +261,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     applyWindowDrop,
     detachGroupWindow,
     selectGroupWindow,
+    closeWindow,
     closeGroupWindow,
     cycleFocusedWorkspaceGroup,
     activateTaskbarGroup,

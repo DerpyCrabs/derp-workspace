@@ -57,14 +57,15 @@ function decodeOutputGeometry(view: DataView, offset: number): DerpShellDetail |
 }
 
 function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 24 > view.byteLength) return null
-  const canvasLogicalWidth = view.getUint32(offset + 4, true)
-  const canvasLogicalHeight = view.getUint32(offset + 8, true)
-  const canvasPhysicalWidth = view.getUint32(offset + 12, true)
-  const canvasPhysicalHeight = view.getUint32(offset + 16, true)
-  const count = view.getUint32(offset + 20, true)
+  if (offset + 32 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const canvasLogicalWidth = view.getUint32(offset + 12, true)
+  const canvasLogicalHeight = view.getUint32(offset + 16, true)
+  const canvasPhysicalWidth = view.getUint32(offset + 20, true)
+  const canvasPhysicalHeight = view.getUint32(offset + 24, true)
+  const count = view.getUint32(offset + 28, true)
   if (count === 0 || count > MAX_OUTPUT_LAYOUT_SCREENS) return null
-  let cursor = offset + 24
+  let cursor = offset + 32
   const screens: NonNullable<Extract<DerpShellDetail, { type: 'output_layout' }>['screens']> = []
   let minX = 0
   let minY = 0
@@ -121,6 +122,7 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
   if (cursor !== view.byteLength) return null
   return {
     type: 'output_layout',
+    revision,
     canvas_logical_width: canvasLogicalWidth,
     canvas_logical_height: canvasLogicalHeight,
     canvas_logical_origin_x: minX,
@@ -133,10 +135,11 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
 }
 
 function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 8 > view.byteLength) return null
-  const count = view.getUint32(offset + 4, true)
+  if (offset + 16 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const count = view.getUint32(offset + 12, true)
   if (count > MAX_WINDOW_LIST_ENTRIES) return null
-  let cursor = offset + 8
+  let cursor = offset + 16
   const windows: unknown[] = []
   for (let i = 0; i < count; i += 1) {
     if (cursor + 56 > view.byteLength) return null
@@ -220,7 +223,7 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     })
   }
   if (cursor !== view.byteLength) return null
-  return { type: 'window_list', windows }
+  return { type: 'window_list', revision, windows }
 }
 
 function decodeFocusChanged(view: DataView, offset: number): DerpShellDetail | null {
@@ -297,28 +300,22 @@ function decodeTraySni(bytes: Uint8Array, view: DataView, offset: number): DerpS
 }
 
 function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 8 > view.byteLength) return null
-  const jsonLen = view.getUint32(offset + 4, true)
+  if (offset + 16 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const jsonLen = view.getUint32(offset + 12, true)
   if (jsonLen === 0) return null
-  const json = readUtf8(bytes, offset + 8, jsonLen)
-  if (json == null || offset + 8 + jsonLen !== view.byteLength) return null
+  const json = readUtf8(bytes, offset + 16, jsonLen)
+  if (json == null || offset + 16 + jsonLen !== view.byteLength) return null
   try {
-    const parsed = JSON.parse(json) as { byWindowId?: Record<string, unknown> }
-    const raw = parsed.byWindowId
-    if (!raw || typeof raw !== 'object') return null
-    const byWindowId: Record<number, unknown> = {}
-    for (const [k, v] of Object.entries(raw)) {
-      const id = Number(k)
-      if (Number.isFinite(id) && id > 0) byWindowId[id] = v
-    }
-    return { type: 'shell_hosted_app_state', byWindowId }
+    const state = JSON.parse(json) as { byWindowId?: Record<string, unknown> }
+    return { type: 'shell_hosted_app_state', revision, state }
   } catch {
     return null
   }
 }
 
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 68 !== view.byteLength) return null
+  if (offset + 76 !== view.byteLength) return null
   const decodeVisual = (windowId: number, base: number) => {
     if (windowId <= 0) return null
     const flags = view.getUint32(base + 16, true)
@@ -331,20 +328,22 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
       fullscreen: (flags & 2) !== 0,
     }
   }
-  const moveWindowId = view.getUint32(offset + 12, true)
-  const resizeWindowId = view.getUint32(offset + 16, true)
-  const moveProxyWindowId = view.getUint32(offset + 20, true)
-  const moveCaptureWindowId = view.getUint32(offset + 24, true)
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const moveWindowId = view.getUint32(offset + 20, true)
+  const resizeWindowId = view.getUint32(offset + 24, true)
+  const moveProxyWindowId = view.getUint32(offset + 28, true)
+  const moveCaptureWindowId = view.getUint32(offset + 32, true)
   return {
     type: 'interaction_state',
-    pointer_x: view.getInt32(offset + 4, true),
-    pointer_y: view.getInt32(offset + 8, true),
+    revision,
+    pointer_x: view.getInt32(offset + 12, true),
+    pointer_y: view.getInt32(offset + 16, true),
     move_window_id: moveWindowId > 0 ? moveWindowId : null,
     resize_window_id: resizeWindowId > 0 ? resizeWindowId : null,
     move_proxy_window_id: moveProxyWindowId > 0 ? moveProxyWindowId : null,
     move_capture_window_id: moveCaptureWindowId > 0 ? moveCaptureWindowId : null,
-    move_rect: decodeVisual(moveWindowId, offset + 28),
-    resize_rect: decodeVisual(resizeWindowId, offset + 48),
+    move_rect: decodeVisual(moveWindowId, offset + 36),
+    resize_rect: decodeVisual(resizeWindowId, offset + 56),
   }
 }
 
@@ -365,14 +364,16 @@ function decodeNativeDragPreview(bytes: Uint8Array, view: DataView, offset: numb
 }
 
 function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 8 > view.byteLength) return null
-  const jsonLen = view.getUint32(offset + 4, true)
+  if (offset + 16 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const jsonLen = view.getUint32(offset + 12, true)
   if (jsonLen === 0) return null
-  const json = readUtf8(bytes, offset + 8, jsonLen)
+  const json = readUtf8(bytes, offset + 16, jsonLen)
   if (json == null) return null
   try {
     return {
       type: 'workspace_state',
+      revision,
       state: JSON.parse(json) as WorkspaceState,
     }
   } catch {

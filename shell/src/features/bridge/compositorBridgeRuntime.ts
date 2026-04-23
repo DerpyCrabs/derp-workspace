@@ -64,6 +64,16 @@ type CompositorRuntimeWireOp =
   | 'presentation_fullscreen'
   | 'window_intent'
 
+export type CompositorOutputTopology = {
+  revision: number
+  logical: { w: number; h: number } | null
+  physical: { w: number; h: number } | null
+  origin: { x: number; y: number } | null
+  uiScalePercent: 100 | 150 | 200
+  screens: LayoutScreen[]
+  shellChromePrimaryName: string | null
+}
+
 type CompositorBridgeRuntimeOptions = {
   setKeyboardLayoutLabel: (label: string | null) => void
   setVolumeOverlay: (value: { linear: number; muted: boolean; stateKnown: boolean } | null) => void
@@ -71,13 +81,11 @@ type CompositorBridgeRuntimeOptions = {
   setTrayReservedPx: (value: number) => void
   setTrayIconSlotPx: (value: number) => void
   setSniTrayItems: (items: TaskbarSniItem[]) => void
-  setOutputGeom: (value: { w: number; h: number }) => void
-  setOutputPhysical: (value: { w: number; h: number }) => void
-  setLayoutCanvasOrigin: (value: { x: number; y: number } | null) => void
-  setUiScalePercent: (value: 100 | 150 | 200) => void
-  setScreenDraftRows: (rows: LayoutScreen[]) => void
-  bumpTilingCfgRev: () => void
-  setShellChromePrimaryName: (value: string | null) => void
+  setOutputTopology: (
+    value:
+      | CompositorOutputTopology
+      | ((prev: CompositorOutputTopology | null) => CompositorOutputTopology),
+  ) => void
   setCompositorInteractionState: (value: CompositorInteractionState) => void
   setNativeDragPreview: (value: NativeDragPreviewState) => void
   getNativeDragPreview: () => NativeDragPreviewState
@@ -102,6 +110,7 @@ type CompositorBridgeRuntimeOptions = {
     menu_path: string
     entries: TraySniMenuEntry[]
   }) => void
+  handleMutationAck: (detail: Extract<DerpShellDetail, { type: 'mutation_ack' }>) => void
   shellWireSend: (
     op: CompositorRuntimeWireOp,
     arg?: number | string,
@@ -111,6 +120,7 @@ type CompositorBridgeRuntimeOptions = {
     arg5?: number,
     arg6?: number,
   ) => boolean
+  sendWindowIntent?: (action: string, windowId: number) => boolean
   requestCompositorSync: () => void
   openSettingsShellWindow: () => void
   cycleFocusedWorkspaceGroup: (delta: 1 | -1) => void
@@ -181,6 +191,23 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let bootstrapSnapshotRetry = 0
   let bootstrapSnapshotTimer: number | undefined
 
+  const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
+    const lw = Math.max(1, logicalWidth)
+    const pw = Math.max(1, physicalWidth)
+    const s = (pw / lw) * 100
+    const candidates = [100, 150, 200] as const
+    let best: (typeof candidates)[number] = 150
+    let bestD = Number.POSITIVE_INFINITY
+    for (const c of candidates) {
+      const dist = Math.abs(s - c)
+      if (dist < bestD) {
+        bestD = dist
+        best = c
+      }
+    }
+    return best
+  }
+
   const applyKeyboardLayoutDetail = (d: Extract<DerpShellDetail, { type: 'keyboard_layout' }>) => {
     const label = typeof d.label === 'string' ? d.label.trim() : ''
     options.setKeyboardLayoutLabel(label.length > 0 ? label : null)
@@ -236,55 +263,49 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyOutputGeometryDetail = (d: Extract<DerpShellDetail, { type: 'output_geometry' }>) => {
-    options.setOutputGeom({ w: d.logical_width, h: d.logical_height })
+    options.setOutputTopology((prev) => ({
+      revision: prev?.revision ?? 0,
+      logical: { w: d.logical_width, h: d.logical_height },
+      physical: prev?.physical ?? null,
+      origin: prev?.origin ?? null,
+      uiScalePercent:
+        prev?.uiScalePercent ??
+        outputUiScalePercent(d.logical_width, prev?.physical?.w ?? d.logical_width),
+      screens: prev?.screens ?? [],
+      shellChromePrimaryName: prev?.shellChromePrimaryName ?? null,
+    }))
     options.scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
   }
 
   const applyOutputLayoutDetail = (d: Extract<DerpShellDetail, { type: 'output_layout' }>) => {
-    batch(() => {
-      options.setOutputGeom({ w: d.canvas_logical_width, h: d.canvas_logical_height })
-      options.setOutputPhysical({
+    const screens = d.screens.map((s) => ({
+      name: s.name,
+      identity: s.identity,
+      x: s.x,
+      y: s.y,
+      width: s.width,
+      height: s.height,
+      transform: s.transform,
+      refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
+    }))
+    const pr =
+      typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
+        ? d.shell_chrome_primary
+        : null
+    options.setOutputTopology({
+      revision: typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0,
+      logical: { w: d.canvas_logical_width, h: d.canvas_logical_height },
+      physical: {
         w: d.canvas_physical_width,
         h: d.canvas_physical_height,
-      })
-      if (typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number') {
-        options.setLayoutCanvasOrigin({ x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y })
-      } else {
-        options.setLayoutCanvasOrigin(null)
-      }
-      {
-        const lw = Math.max(1, d.canvas_logical_width)
-        const pw = Math.max(1, d.canvas_physical_width)
-        const s = (pw / lw) * 100
-        const candidates = [100, 150, 200] as const
-        let best: (typeof candidates)[number] = 150
-        let bestD = Number.POSITIVE_INFINITY
-        for (const c of candidates) {
-          const dist = Math.abs(s - c)
-          if (dist < bestD) {
-            bestD = dist
-            best = c
-          }
-        }
-        options.setUiScalePercent(best)
-      }
-      options.setScreenDraftRows(
-        d.screens.map((s) => ({
-          name: s.name,
-          identity: s.identity,
-          x: s.x,
-          y: s.y,
-          width: s.width,
-          height: s.height,
-          transform: s.transform,
-          refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
-        })),
-      )
-      const pr =
-        typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
-          ? d.shell_chrome_primary
-          : null
-      options.setShellChromePrimaryName(pr)
+      },
+      origin:
+        typeof d.canvas_logical_origin_x === 'number' && typeof d.canvas_logical_origin_y === 'number'
+          ? { x: d.canvas_logical_origin_x, y: d.canvas_logical_origin_y }
+          : null,
+      uiScalePercent: outputUiScalePercent(d.canvas_logical_width, d.canvas_physical_width),
+      screens,
+      shellChromePrimaryName: pr,
     })
     options.scheduleCompositorFollowup({
       syncExclusion: true,
@@ -405,6 +426,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     coerceShellWindowId(d.target_window_id) ?? focusedWindowId
 
   const sendWindowIntent = (action: string, windowId: number) =>
+    options.sendWindowIntent?.(action, windowId) ??
     options.shellWireSend('window_intent', JSON.stringify({ action, windowId }))
 
   const applyKeybindDetail = (d: Extract<DerpShellDetail, { type: 'keybind' }>) => {
@@ -509,6 +531,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       options.applyTraySniMenuDetail(traySniMenuEntriesFromDetail(d))
       return
     }
+    if (d.type === 'mutation_ack') {
+      options.handleMutationAck(d)
+      return
+    }
     if (d.type === 'keybind') {
       applyKeybindDetail(d)
       return
@@ -527,6 +553,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'output_layout') {
       applyOutputLayoutDetail(d)
+      return
+    }
+    if (d.type === 'interaction_state') {
+      applyInteractionStateDetail(d)
+      return
+    }
+    if (d.type === 'native_drag_preview') {
+      applyNativeDragPreviewDetail(d)
       return
     }
     if (d.type === 'window_list') {

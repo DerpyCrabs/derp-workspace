@@ -23,6 +23,7 @@ type WorkspaceLayoutBridgeOptions = {
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
+  sendWorkspaceMutation?: (mutation: Record<string, unknown>) => boolean
   shellWireSend: (op: 'workspace_mutation', arg?: number | string) => boolean
 }
 
@@ -33,7 +34,7 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
   let compositorFollowupResetScroll = false
 
   function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
-    return options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
+    return options.sendWorkspaceMutation?.(mutation) ?? options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
   }
 
   function sendSetMonitorTile(windowId: number, outputName: string, zone: SnapZone, bounds: TileRect): boolean {

@@ -643,6 +643,11 @@ pub struct CompositorState {
     pub(crate) shell_ui_windows_shared_sequence: u64,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
+    pub(crate) shell_output_topology_revision: u64,
+    pub(crate) shell_window_domain_revision: u64,
+    pub(crate) shell_workspace_revision: u64,
+    pub(crate) shell_hosted_app_state_revision: u64,
+    pub(crate) shell_interaction_revision: u64,
     pub(crate) workspace_state: WorkspaceState,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) shell_exclusion_shared_sequence: u64,
@@ -734,6 +739,51 @@ struct KeyboardLayoutFocusOp {
 }
 
 impl CompositorState {
+    fn next_shell_output_topology_revision(&mut self) -> u64 {
+        self.shell_output_topology_revision = self.shell_output_topology_revision.wrapping_add(1);
+        self.shell_output_topology_revision
+    }
+
+    fn next_shell_window_domain_revision(&mut self) -> u64 {
+        self.shell_window_domain_revision = self.shell_window_domain_revision.wrapping_add(1);
+        self.shell_window_domain_revision
+    }
+
+    fn next_shell_workspace_revision(&mut self) -> u64 {
+        self.shell_workspace_revision = self.shell_workspace_revision.wrapping_add(1);
+        self.shell_workspace_revision
+    }
+
+    fn next_shell_hosted_app_state_revision(&mut self) -> u64 {
+        self.shell_hosted_app_state_revision = self.shell_hosted_app_state_revision.wrapping_add(1);
+        self.shell_hosted_app_state_revision
+    }
+
+    fn next_shell_interaction_revision(&mut self) -> u64 {
+        self.shell_interaction_revision = self.shell_interaction_revision.wrapping_add(1);
+        self.shell_interaction_revision
+    }
+
+    fn shell_send_mutation_ack(
+        &mut self,
+        domain: &str,
+        client_mutation_id: Option<u64>,
+        accepted: bool,
+    ) {
+        let Some(client_mutation_id) = client_mutation_id else {
+            return;
+        };
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::MutationAck {
+            domain: domain.to_string(),
+            client_mutation_id,
+            status: if accepted {
+                "accepted".to_string()
+            } else {
+                "rejected".to_string()
+            },
+        });
+    }
+
     fn shell_window_stack_seed_known_windows(&mut self) {
         self.shell_window_stack_order
             .retain(|wid| self.window_registry.window_info(*wid).is_some());
@@ -1146,6 +1196,11 @@ impl CompositorState {
             shell_ui_windows_shared_sequence: 0,
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
+            shell_output_topology_revision: 0,
+            shell_window_domain_revision: 0,
+            shell_workspace_revision: 0,
+            shell_hosted_app_state_revision: 0,
+            shell_interaction_revision: 0,
             workspace_state: WorkspaceState::default(),
             shell_last_sent_ui_focus_id: None,
             shell_exclusion_shared_sequence: 0,
@@ -2314,11 +2369,14 @@ impl CompositorState {
                 | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
                 | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
         );
-        if workspace_dirty {
-            self.workspace_sync_from_registry();
+        let workspace_changed = workspace_dirty && self.workspace_sync_from_registry();
+        if workspace_changed {
+            self.next_shell_workspace_revision();
         }
-        let authoritative_snapshot = if Self::shell_message_updates_authoritative_snapshot(&msg) {
-            Some(self.shell_authoritative_snapshot_messages())
+        let authoritative_snapshot =
+            self.shell_authoritative_snapshot_delta_messages(&msg, workspace_changed);
+        let workspace_state_message = if workspace_changed {
+            self.workspace_state_message()
         } else {
             None
         };
@@ -2327,52 +2385,56 @@ impl CompositorState {
         };
         if let Some(link) = g.as_ref() {
             link.send_with_snapshot(msg, authoritative_snapshot);
+            if let Some(workspace_state_message) = workspace_state_message {
+                link.send(workspace_state_message);
+            }
         }
     }
 
-    fn shell_message_updates_authoritative_snapshot(
-        msg: &shell_wire::DecodedCompositorToShellMessage,
-    ) -> bool {
-        matches!(
-            msg,
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-                | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
-                | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-                | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-                | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
-                | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-                | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
-                | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
-                | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-                | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
-        )
-    }
-
-    fn shell_authoritative_snapshot_messages(
+    fn shell_authoritative_snapshot_delta_messages(
         &mut self,
-    ) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
-        self.workspace_sync_from_registry();
+        msg: &shell_wire::DecodedCompositorToShellMessage,
+        workspace_changed: bool,
+    ) -> Option<Vec<shell_wire::DecodedCompositorToShellMessage>> {
         self.shell_clear_stale_primary_output();
         let mut messages = Vec::new();
-        if let Some(output_layout) = self.shell_output_layout_message() {
-            messages.push(output_layout);
+        match msg {
+            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+            | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
+            | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+                messages.push(msg.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
+                messages.push(msg.clone());
+                messages.push(self.shell_focus_message());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+                messages.push(self.shell_window_list_message());
+                messages.push(self.shell_focus_message());
+            }
+            _ => {}
         }
-        messages.push(self.shell_window_list_message());
-        messages.push(self.shell_focus_message());
-        if let Some(workspace_state) = self.workspace_state_message() {
-            messages.push(workspace_state);
+        if workspace_changed {
+            if let Some(workspace_state) = self.workspace_state_message() {
+                messages.push(workspace_state);
+            }
         }
-        messages.push(self.shell_hosted_app_state_message());
-        messages.push(self.shell_interaction_state_message());
-        if let Some(preview) = self.shell_native_drag_preview_message() {
-            messages.push(preview);
+        if messages.is_empty() {
+            None
+        } else {
+            Some(messages)
         }
-        if let Some(keyboard) = self.shell_keyboard_layout_message() {
-            messages.push(keyboard);
-        }
-        messages.push(self.shell_tray_hints_message());
-        messages.push(self.shell_tray_sni_message());
-        messages
     }
 
     const SHELL_BEGIN_FRAME_INTERACTION_HOLD: Duration = Duration::from_millis(160);
@@ -2927,6 +2989,8 @@ impl CompositorState {
     pub(crate) fn apply_shell_window_intent_json(&mut self, json: &str) {
         #[derive(serde::Deserialize)]
         struct WindowIntent {
+            #[serde(rename = "clientMutationId")]
+            client_mutation_id: Option<u64>,
             action: String,
             #[serde(rename = "windowId")]
             window_id: u32,
@@ -2935,13 +2999,14 @@ impl CompositorState {
             tracing::warn!(target: "derp_window_intent", %json, "window intent parse failed");
             return;
         };
-        match intent.action.as_str() {
+        let accepted = match intent.action.as_str() {
             "toggle_fullscreen" => {
                 let fullscreen = self
                     .window_registry
                     .window_info(intent.window_id)
                     .is_some_and(|info| info.fullscreen);
                 self.shell_set_window_fullscreen(intent.window_id, !fullscreen);
+                true
             }
             "toggle_maximize" | "tile_up" => {
                 let maximized = self
@@ -2949,17 +3014,24 @@ impl CompositorState {
                     .window_info(intent.window_id)
                     .is_some_and(|info| info.maximized);
                 self.shell_set_window_maximized(intent.window_id, !maximized);
+                true
             }
             "tile_left" | "tile_right" => {
                 if let Err(error) =
                     self.super_tile_window_half(intent.window_id, intent.action == "tile_right")
                 {
                     tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent tile failed");
+                    false
+                } else {
+                    true
                 }
             }
             "tile_down" => {
                 if let Err(error) = self.super_tile_down(intent.window_id) {
                     tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent tile down failed");
+                    false
+                } else {
+                    true
                 }
             }
             "move_monitor_left" | "move_monitor_right" => {
@@ -2968,10 +3040,15 @@ impl CompositorState {
                     intent.action == "move_monitor_right",
                 ) {
                     tracing::warn!(%error, action = %intent.action, window_id = intent.window_id, "window intent move monitor failed");
+                    false
+                } else {
+                    true
                 }
             }
-            _ => {}
-        }
+            "close_group" => self.shell_close_group_window(intent.window_id),
+            _ => false,
+        };
+        self.shell_send_mutation_ack("window_intent", intent.client_mutation_id, accepted);
     }
 
     pub(crate) fn accept_shell_dmabuf_from_cef(
@@ -6179,6 +6256,7 @@ impl CompositorState {
         if self.workspace_logical_bounds().is_none() {
             return None;
         }
+        let revision = self.next_shell_output_topology_revision();
         self.recompute_shell_canvas_from_outputs();
         let (lw, lh) = self.shell_canvas_logical_size;
         let (pw, ph) = self.shell_window_physical_px;
@@ -6205,6 +6283,7 @@ impl CompositorState {
             })
             .collect();
         Some(shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            revision,
             canvas_logical_w: lw.max(1),
             canvas_logical_h: lh.max(1),
             canvas_physical_w: physical_w,
@@ -6252,6 +6331,7 @@ impl CompositorState {
             return;
         };
         let shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            revision: _,
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
@@ -6461,6 +6541,12 @@ impl CompositorState {
 
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
+        let was_delivery_ready = self
+            .shell_to_cef
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|link| link.delivery_ready()))
+            .unwrap_or(false);
         self.shell_embedded_initial_handshake_done = true;
         if let Ok(g) = self.shell_to_cef.lock() {
             if let Some(link) = g.as_ref() {
@@ -6472,6 +6558,9 @@ impl CompositorState {
         self.shell_ipc_last_pong = None;
         self.shell_ipc_unanswered_ping_since = None;
         self.shell_ipc_ping_late_warned_for = None;
+        if was_delivery_ready {
+            return;
+        }
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
@@ -8359,7 +8448,9 @@ impl CompositorState {
                         scratchpad_id: scratchpad_id.clone(),
                     },
                 );
-                self.workspace_sync_from_registry();
+                if self.workspace_sync_from_registry() {
+                    self.workspace_send_state();
+                }
                 if new_assignment {
                     let default_visible = self
                         .scratchpad_config_by_id(&scratchpad_id)
@@ -8588,6 +8679,7 @@ impl CompositorState {
 
     fn shell_window_list_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
         shell_wire::DecodedCompositorToShellMessage::WindowList {
+            revision: self.next_shell_window_domain_revision(),
             windows: self.shell_window_list_rows(),
         }
     }
@@ -8595,7 +8687,10 @@ impl CompositorState {
     /// Compositor → shell: full window list ([`shell_wire::MSG_WINDOW_LIST`]).
     pub fn shell_reply_window_list(&mut self) {
         crate::cef::begin_frame_diag::note_shell_reply_window_list();
-        self.workspace_sync_from_registry();
+        let workspace_changed = self.workspace_sync_from_registry();
+        if workspace_changed {
+            self.workspace_send_state();
+        }
         let msg = self.shell_window_list_message();
         self.shell_send_to_cef(msg);
     }
@@ -8619,8 +8714,8 @@ impl CompositorState {
     }
 
     fn workspace_sync_from_registry(&mut self) -> bool {
-        let next =
-            reconcile_workspace_state(&self.workspace_state, &self.workspace_live_window_ids());
+        let live_window_ids = self.workspace_live_window_ids();
+        let next = reconcile_workspace_state(&self.workspace_state, &live_window_ids);
         if next == self.workspace_state {
             return false;
         }
@@ -8629,14 +8724,10 @@ impl CompositorState {
     }
 
     fn workspace_send_state(&mut self) {
+        self.next_shell_workspace_revision();
         let Some(msg) = self.workspace_state_message() else {
             return;
         };
-        tracing::warn!(
-            target: "derp_workspace",
-            groups = self.workspace_state.groups.len(),
-            "workspace_send_state"
-        );
         self.shell_send_to_cef(msg);
     }
 
@@ -8644,7 +8735,12 @@ impl CompositorState {
         let Ok(state_json) = self.workspace_state.to_json() else {
             return None;
         };
-        Some(shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json })
+        Some(
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+                revision: self.shell_workspace_revision,
+                state_json,
+            },
+        )
     }
 
     fn shell_hosted_app_state_broadcast_json(&self) -> String {
@@ -8656,12 +8752,16 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_hosted_app_state_send(&mut self) {
+        self.next_shell_hosted_app_state_revision();
         self.shell_send_to_cef(self.shell_hosted_app_state_message());
     }
 
     fn shell_hosted_app_state_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
         let state_json = self.shell_hosted_app_state_broadcast_json();
-        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json }
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {
+            revision: self.shell_hosted_app_state_revision,
+            state_json,
+        }
     }
 
     fn shell_focus_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
@@ -8671,15 +8771,6 @@ impl CompositorState {
             surface_id,
             window_id,
         }
-    }
-
-    fn shell_keyboard_layout_message(
-        &mut self,
-    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
-        self.seat.get_keyboard()?;
-        let raw = self.keyboard_layout_active_name_raw();
-        let label = Self::keyboard_layout_label_short(&raw);
-        Some(shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label })
     }
 
     fn shell_tray_hints_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
@@ -8698,12 +8789,6 @@ impl CompositorState {
             slot_count: self.sni_tray_slot_count,
             slot_w,
             reserved_w,
-        }
-    }
-
-    fn shell_tray_sni_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
-        shell_wire::DecodedCompositorToShellMessage::TraySni {
-            items: self.sni_tray_items.clone(),
         }
     }
 
@@ -9020,6 +9105,7 @@ impl CompositorState {
             .map(|pointer| pointer.current_location().to_i32_round())
             .unwrap_or_else(|| Point::from((0, 0)));
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
+            revision: self.shell_interaction_revision,
             pointer_x: pointer.x,
             pointer_y: pointer.y,
             move_window_id: self.shell_move_window_id.unwrap_or(0),
@@ -9032,6 +9118,7 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_interaction_state(&mut self) {
+        self.next_shell_interaction_revision();
         self.shell_send_to_cef(self.shell_interaction_state_message());
     }
 
@@ -9151,8 +9238,25 @@ impl CompositorState {
     }
 
     pub(crate) fn apply_workspace_mutation_json(&mut self, mutation_json: &str) {
-        let Ok(mutation) = serde_json::from_str::<WorkspaceMutation>(mutation_json) else {
+        #[derive(serde::Deserialize)]
+        struct WorkspaceMutationEnvelope {
+            #[serde(rename = "clientMutationId")]
+            client_mutation_id: Option<u64>,
+            mutation: WorkspaceMutation,
+        }
+        let client_mutation_id = serde_json::from_str::<serde_json::Value>(mutation_json)
+            .ok()
+            .and_then(|value| value.get("clientMutationId").and_then(|v| v.as_u64()));
+        let Ok((mutation, client_mutation_id)) =
+            serde_json::from_str::<WorkspaceMutationEnvelope>(mutation_json)
+                .map(|envelope| (envelope.mutation, envelope.client_mutation_id))
+                .or_else(|_| {
+                    serde_json::from_str::<WorkspaceMutation>(mutation_json)
+                        .map(|mutation| (mutation, client_mutation_id))
+                })
+        else {
             tracing::warn!(target: "derp_workspace", %mutation_json, "workspace mutation parse failed");
+            self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, false);
             return;
         };
         tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation received");
@@ -9160,6 +9264,7 @@ impl CompositorState {
         let previous_state = self.workspace_state.clone();
         let Some(next_state) = previous_state.apply_mutation(&mutation) else {
             tracing::warn!(target: "derp_workspace", ?mutation, "workspace mutation produced no change");
+            self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, true);
             return;
         };
         let next_state = reconcile_workspace_state(&next_state, &self.workspace_live_window_ids());
@@ -9282,6 +9387,7 @@ impl CompositorState {
         } else if let Some(window_id) = activation_window_id {
             self.shell_activate_window(window_id);
         }
+        self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, true);
     }
 
     fn workspace_apply_close_side_effects(&mut self, window_id: u32) {
@@ -9886,6 +9992,32 @@ impl CompositorState {
             &target_output_name,
         );
         self.shell_reply_window_list();
+    }
+
+    fn shell_close_group_window(&mut self, window_id: u32) -> bool {
+        let group_window_ids = group_id_for_window(&self.workspace_state, window_id)
+            .and_then(|group_id| {
+                self.workspace_state
+                    .groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .map(|group| group.window_ids.clone())
+            });
+        let Some(group_window_ids) = group_window_ids else {
+            if self.window_registry.window_info(window_id).is_none() {
+                return false;
+            }
+            self.shell_close_window(window_id);
+            return true;
+        };
+        for member_window_id in group_window_ids.iter().copied() {
+            if member_window_id == window_id {
+                continue;
+            }
+            self.shell_close_window(member_window_id);
+        }
+        self.shell_close_window(window_id);
+        true
     }
 
     pub fn shell_close_window(&mut self, window_id: u32) {

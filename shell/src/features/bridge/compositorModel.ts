@@ -6,12 +6,7 @@ import {
   type DerpShellDetail,
   type DerpWindow,
 } from '@/host/appWindowState'
-import {
-  normalizeWorkspaceState,
-  createEmptyWorkspaceState,
-  workspaceStatesEqual,
-  type WorkspaceState,
-} from '@/features/workspace/workspaceState'
+import { createEmptyWorkspaceState, type WorkspaceState } from '@/features/workspace/workspaceState'
 
 export type CompositorFollowup = {
   flushWindows?: boolean
@@ -62,24 +57,61 @@ function requestRecovery(
 
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
-  windows?: unknown[]
-  workspaceState?: WorkspaceState
-  shellHostedAppByWindow?: Record<number, unknown>
+  windows?: { revision: number; rows: unknown[] }
+  workspaceState?: { revision: number; state: WorkspaceState }
+  shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
+}
+
+function coerceRevision(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  const revision = Math.trunc(n)
+  return Number.isFinite(revision) && revision >= 0 ? revision : 0
+}
+
+function collectWindowOrderIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return []
+  const ids: number[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue
+    const id = coerceShellWindowId((row as Record<string, unknown>).window_id)
+    if (id !== null) ids.push(id)
+  }
+  return ids
+}
+
+function shellHostedAppByWindowFromState(state: { byWindowId?: Record<string, unknown> } | null | undefined) {
+  const raw = state?.byWindowId
+  if (!raw || typeof raw !== 'object') return {}
+  const byWindowId: Record<number, unknown> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    const id = coerceShellWindowId(key)
+    if (id !== null) byWindowId[id] = value
+  }
+  return byWindowId
 }
 
 function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]): SnapshotAuthoritativeState {
   const next: SnapshotAuthoritativeState = {}
   for (const detail of details) {
     if (detail.type === 'window_list') {
-      next.windows = detail.windows
+      next.windows = {
+        revision: coerceRevision(detail.revision),
+        rows: detail.windows,
+      }
       continue
     }
     if (detail.type === 'workspace_state') {
-      next.workspaceState = normalizeWorkspaceState(detail.state)
+      next.workspaceState = {
+        revision: coerceRevision(detail.revision),
+        state: detail.state,
+      }
       continue
     }
     if (detail.type === 'shell_hosted_app_state') {
-      next.shellHostedAppByWindow = { ...detail.byWindowId }
+      next.shellHostedAppByWindow = {
+        revision: coerceRevision(detail.revision),
+        byWindowId: shellHostedAppByWindowFromState(detail.state),
+      }
       continue
     }
     if (detail.type === 'focus_changed') {
@@ -91,14 +123,18 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
 
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
+  const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
+  const [windowsRevision, setWindowsRevision] = createSignal(-1)
   const [workspaceState, setWorkspaceState] = createSignal<WorkspaceState>(
     options.initialWorkspaceState ?? createEmptyWorkspaceState(),
   )
+  const [workspaceRevision, setWorkspaceRevision] = createSignal(-1)
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [shellHostedAppByWindow, setShellHostedAppByWindow] = createSignal<Readonly<Record<number, unknown>>>({})
+  const [shellHostedAppRevision, setShellHostedAppRevision] = createSignal(-1)
 
   const allWindowsMap = createMemo(() => windows())
-  const windowsListIds = createMemo(() => Array.from(allWindowsMap().keys()).sort((a, b) => a - b))
+  const windowsListIds = createMemo(() => windowOrderIds())
   const windowsList = createMemo(() => {
     const out: DerpWindow[] = []
     for (const id of windowsListIds()) {
@@ -114,20 +150,31 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
     const authoritative = collectSnapshotAuthoritativeState(details)
+    let nextWindowsMap: Map<number, DerpWindow> | null = null
     if (authoritative.windows !== undefined) {
-      const nextWindows = buildWindowsMapFromList(authoritative.windows, windows())
-      setWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+      if (authoritative.windows.revision !== windowsRevision()) {
+        const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
+        setWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+        setWindowOrderIds(collectWindowOrderIds(authoritative.windows.rows))
+        setWindowsRevision(authoritative.windows.revision)
+        nextWindowsMap = nextWindows
+      }
       if (authoritative.focusedWindowId === undefined) {
-        setFocusedWindowId((prev) => (prev != null && nextWindows.has(prev) ? prev : null))
+        const map = nextWindowsMap ?? windows()
+        setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
       }
     }
     if (authoritative.workspaceState !== undefined) {
-      setWorkspaceState((prev) =>
-        workspaceStatesEqual(prev, authoritative.workspaceState!) ? prev : authoritative.workspaceState!,
-      )
+      if (authoritative.workspaceState.revision !== workspaceRevision()) {
+        setWorkspaceState(authoritative.workspaceState.state)
+        setWorkspaceRevision(authoritative.workspaceState.revision)
+      }
     }
     if (authoritative.shellHostedAppByWindow !== undefined) {
-      setShellHostedAppByWindow(authoritative.shellHostedAppByWindow)
+      if (authoritative.shellHostedAppByWindow.revision !== shellHostedAppRevision()) {
+        setShellHostedAppByWindow(authoritative.shellHostedAppByWindow.byWindowId)
+        setShellHostedAppRevision(authoritative.shellHostedAppByWindow.revision)
+      }
     }
     const nextFocusedWindowId = authoritative.focusedWindowId
     if (nextFocusedWindowId !== undefined) {
@@ -159,7 +206,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
 
     if (detail.type === 'window_list') {
-      setWindows((prev) => buildWindowsMapFromList(detail.windows, prev))
+      const revision = coerceRevision(detail.revision)
+      if (revision !== windowsRevision()) {
+        setWindows((prev) => buildWindowsMapFromList(detail.windows, prev))
+        setWindowOrderIds(collectWindowOrderIds(detail.windows))
+        setWindowsRevision(revision)
+      }
       return {
         kind: 'window_list',
         detailType: detail.type,
@@ -168,8 +220,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
 
     if (detail.type === 'workspace_state') {
-      const nextState = normalizeWorkspaceState(detail.state)
-      setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
+      const revision = coerceRevision(detail.revision)
+      if (revision !== workspaceRevision()) {
+        setWorkspaceState(detail.state)
+        setWorkspaceRevision(revision)
+      }
       return {
         kind: 'workspace_state',
         detailType: detail.type,
@@ -177,7 +232,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
 
     if (detail.type === 'shell_hosted_app_state') {
-      setShellHostedAppByWindow({ ...detail.byWindowId })
+      const revision = coerceRevision(detail.revision)
+      if (revision !== shellHostedAppRevision()) {
+        setShellHostedAppByWindow(shellHostedAppByWindowFromState(detail.state))
+        setShellHostedAppRevision(revision)
+      }
       return {
         kind: 'shell_hosted_app_state',
         detailType: detail.type,

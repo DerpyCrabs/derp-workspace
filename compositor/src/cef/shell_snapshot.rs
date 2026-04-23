@@ -175,6 +175,101 @@ pub struct SharedShellSnapshotWriter {
     mmap: SharedMmapFile,
     sequence: u64,
     last_payload: Option<Vec<u8>>,
+    authoritative: SnapshotAuthoritativeState,
+}
+
+#[derive(Default)]
+struct SnapshotAuthoritativeState {
+    output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
+    output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
+    window_list: Option<shell_wire::DecodedCompositorToShellMessage>,
+    focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
+    keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
+    workspace_state: Option<shell_wire::DecodedCompositorToShellMessage>,
+    shell_hosted_app_state: Option<shell_wire::DecodedCompositorToShellMessage>,
+    interaction_state: Option<shell_wire::DecodedCompositorToShellMessage>,
+    native_drag_preview: Option<shell_wire::DecodedCompositorToShellMessage>,
+    tray_hints: Option<shell_wire::DecodedCompositorToShellMessage>,
+    tray_sni: Option<shell_wire::DecodedCompositorToShellMessage>,
+}
+
+impl SnapshotAuthoritativeState {
+    fn apply(&mut self, message: &shell_wire::DecodedCompositorToShellMessage) {
+        match message {
+            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. } => {
+                self.output_geometry = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
+                self.output_layout = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
+                self.window_list = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+                self.focus_changed = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
+                self.keyboard_layout = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+                self.workspace_state = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
+                self.shell_hosted_app_state = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
+                self.interaction_state = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
+                self.native_drag_preview = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::TrayHints { .. } => {
+                self.tray_hints = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+                self.tray_sni = Some(message.clone());
+            }
+            _ => {}
+        }
+    }
+
+    fn messages(&self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        let mut messages = Vec::new();
+        if let Some(message) = self.output_geometry.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.output_layout.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.window_list.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.focus_changed.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.workspace_state.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.shell_hosted_app_state.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.interaction_state.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.native_drag_preview.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.keyboard_layout.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.tray_hints.clone() {
+            messages.push(message);
+        }
+        if let Some(message) = self.tray_sni.clone() {
+            messages.push(message);
+        }
+        messages
+    }
 }
 
 impl SharedShellSnapshotWriter {
@@ -188,6 +283,7 @@ impl SharedShellSnapshotWriter {
             mmap,
             sequence: 0,
             last_payload: None,
+            authoritative: SnapshotAuthoritativeState::default(),
         };
         this.publish_payload(Vec::new())?;
         Ok(this)
@@ -201,8 +297,12 @@ impl SharedShellSnapshotWriter {
         &mut self,
         messages: &[shell_wire::DecodedCompositorToShellMessage],
     ) -> Result<bool, String> {
-        warn_snapshot_invariants(messages);
-        self.publish_payload(encode_payload_messages(messages)?)
+        for message in messages {
+            self.authoritative.apply(message);
+        }
+        let authoritative_messages = self.authoritative.messages();
+        warn_snapshot_invariants(&authoritative_messages);
+        self.publish_payload(encode_payload_messages(&authoritative_messages)?)
     }
 
     fn publish_payload(&mut self, payload: Vec<u8>) -> Result<bool, String> {
@@ -272,6 +372,7 @@ fn append_snapshot_message(
             ));
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            revision,
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
@@ -281,6 +382,7 @@ fn append_snapshot_message(
         } => extend_snapshot_packet(
             payload,
             shell_wire::encode_output_layout(
+                *revision,
                 *canvas_logical_w,
                 *canvas_logical_h,
                 *canvas_physical_w,
@@ -363,10 +465,10 @@ fn append_snapshot_message(
         } => {
             payload.extend_from_slice(&shell_wire::encode_focus_changed(*surface_id, *window_id));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
             extend_snapshot_packet(
                 payload,
-                shell_wire::encode_window_list(windows),
+                shell_wire::encode_window_list(*revision, windows),
                 "window list",
             )?
         }
@@ -394,21 +496,28 @@ fn append_snapshot_message(
                 *state_known,
             ));
         }
-        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+            revision,
+            state_json,
+        } => {
             extend_snapshot_packet(
                 payload,
-                shell_wire::encode_compositor_workspace_state(state_json),
+                shell_wire::encode_compositor_workspace_state(*revision, state_json),
                 "workspace state",
             )?;
         }
-        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { state_json } => {
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {
+            revision,
+            state_json,
+        } => {
             extend_snapshot_packet(
                 payload,
-                shell_wire::encode_compositor_shell_hosted_app_state(state_json),
+                shell_wire::encode_compositor_shell_hosted_app_state(*revision, state_json),
                 "shell hosted app state",
             )?;
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
+            revision,
             pointer_x,
             pointer_y,
             move_window_id,
@@ -419,6 +528,7 @@ fn append_snapshot_message(
             resize_visual,
         } => {
             payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
+                *revision,
                 *pointer_x,
                 *pointer_y,
                 *move_window_id,
@@ -482,7 +592,7 @@ fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMess
                     }
                 }
             }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { windows } => {
+            shell_wire::DecodedCompositorToShellMessage::WindowList { windows, .. } => {
                 window_list_count += 1;
                 for window in windows {
                     if !window_ids.insert(window.window_id) {
@@ -493,7 +603,7 @@ fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMess
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { window_id, .. } => {
                 focused_window_id = *window_id;
             }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json } => {
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { state_json, .. } => {
                 workspace_json = Some(state_json.as_str());
             }
             _ => {}
@@ -508,7 +618,7 @@ fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMess
         }
     }
     for msg in messages {
-        if let shell_wire::DecodedCompositorToShellMessage::WindowList { windows } = msg {
+        if let shell_wire::DecodedCompositorToShellMessage::WindowList { windows, .. } = msg {
             for window in windows {
                 if !window.output_name.is_empty()
                     && !output_names.is_empty()

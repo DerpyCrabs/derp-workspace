@@ -229,6 +229,11 @@ export function saveTilingConfig(cfg: TilingConfig): void {
   localStorage.setItem(STORAGE_KEY, json)
 }
 
+export function resetTilingConfig(): void {
+  if (typeof localStorage === 'undefined') return
+  localStorage.removeItem(STORAGE_KEY)
+}
+
 export function getMonitorLayout(outputName: string): {
   layout: TilingLayout
   params: LayoutParams

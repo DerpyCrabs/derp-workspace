@@ -80,6 +80,7 @@ type RegisterShellE2eBridgeOptions = {
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
   isWorkspaceWindowPinned: (windowId: number) => boolean
   openShellTestWindow: () => boolean
+  resetTilingConfig: () => void
   getMenuLayerHostEl: () => HTMLElement | undefined
 }
 
@@ -173,10 +174,23 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
     }
     send('e2e_test_window_open_response', requestId, ok ? 1 : 0)
   }
+  window.__DERP_E2E_RESET_TILING_CONFIG_REQ = (requestId: number) => {
+    const send = window.__derpShellWireSend
+    if (!send) return
+    let ok = false
+    try {
+      options.resetTilingConfig()
+      ok = true
+    } catch {
+      ok = false
+    }
+    send('e2e_reset_tiling_config_response', requestId, ok ? 1 : 0)
+  }
 
   return () => {
     delete window.__DERP_E2E_REQUEST_SNAPSHOT
     delete window.__DERP_E2E_REQUEST_HTML
     delete window.__DERP_E2E_OPEN_TEST_WINDOW_REQ
+    delete window.__DERP_E2E_RESET_TILING_CONFIG_REQ
   }
 }

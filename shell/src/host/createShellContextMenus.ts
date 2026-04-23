@@ -63,6 +63,7 @@ type CreateShellContextMenusArgs = {
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
+  scheduleExclusionZonesSync?: () => void
 }
 
 export function shouldHandleContextMenuNavigationKey(nestedInteractiveFocus: boolean): boolean {
@@ -129,6 +130,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [menuLayerHost, setMenuLayerHost] = createSignal<HTMLElement | undefined>(undefined)
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
+  function scheduleOverlayExclusionSync() {
+    args.scheduleExclusionZonesSync?.()
+    queueMicrotask(() => args.scheduleExclusionZonesSync?.())
+    requestAnimationFrame(() => args.scheduleExclusionZonesSync?.())
+  }
+
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
   }
@@ -180,6 +187,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     if (!skipStore) {
       args.floatingLayers.closeBranch(ROOT_CONTEXT_MENU_LAYER_ID)
     }
+    scheduleOverlayExclusionSync()
   }
 
   function openRootContextMenu(trigger: object) {
@@ -193,6 +201,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     })
     setActiveMenuTrigger(trigger)
     setCtxMenuOpen(true)
+    scheduleOverlayExclusionSync()
   }
 
   function triggerIsOpen(trigger: object) {

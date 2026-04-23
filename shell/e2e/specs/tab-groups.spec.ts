@@ -2895,6 +2895,59 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
   })
 
+  test('grouped window frame close closes every member in the tab group', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-group-frame-close')
+    let jsWindowId: number | null = null
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const grouped = await timing.step('merge js tab into native tab', async () => {
+        await dragTabOntoTab(base, jsWindow.window.window_id, target.windowId)
+        return waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id], jsWindow.window.window_id)
+      })
+      const shellBeforeClose = grouped.shell
+      const controls = windowControls(shellBeforeClose, jsWindow.window.window_id)
+      assert(controls?.close, `missing close button for grouped window ${jsWindow.window.window_id}`)
+      await timing.step('click grouped frame close button', () => clickRect(base, controls.close!))
+      const closed = await timing.step('wait for grouped members closed', () =>
+        waitFor(
+          `wait for grouped windows ${target.windowId} and ${jsWindow.window.window_id} closed`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            if (compositorWindowById(compositor, target.windowId)) return null
+            if (compositorWindowById(compositor, jsWindow.window.window_id)) return null
+            if (shell.windows.some((window) => window.window_id === target.windowId)) return null
+            if (shell.windows.some((window) => window.window_id === jsWindow.window.window_id)) return null
+            if (taskbarEntry(shell, target.windowId)) return null
+            if (taskbarEntry(shell, jsWindow.window.window_id)) return null
+            return { compositor, shell }
+          },
+          5000,
+          125,
+        ),
+      )
+      jsWindowId = null
+      await timing.step('write frame close artifact', () =>
+        writeJsonArtifact('tab-groups-frame-close.json', {
+          targetWindowId: target.windowId,
+          jsWindowId: jsWindow.window.window_id,
+          closed,
+        }),
+      )
+    } finally {
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
   test('minimized grouped native tab tear-out restores near pointer', async ({ base, state }) => {
     const timing = createTimingMarks('tab-minimized-tear')
     let released = false

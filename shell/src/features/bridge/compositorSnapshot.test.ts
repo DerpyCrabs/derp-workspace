@@ -51,6 +51,7 @@ describe('decodeCompositorSnapshot', () => {
     const x11Instance = bytesForString('foot')
     const windowList = frame([
       ...u32(11),
+      ...u64(17n),
       ...u32(1),
       ...u32(9),
       ...u32(10),
@@ -105,6 +106,7 @@ describe('decodeCompositorSnapshot', () => {
         },
         {
           type: 'window_list',
+          revision: 17,
           windows: [
             {
               window_id: 9,
@@ -143,6 +145,7 @@ describe('decodeCompositorSnapshot', () => {
     const identity = bytesForString('Framework:Display:123:340x190')
     const outputLayout = frame([
       ...u32(44),
+      ...u64(23n),
       ...u32(3840),
       ...u32(2160),
       ...u32(3840),
@@ -176,6 +179,7 @@ describe('decodeCompositorSnapshot', () => {
       details: [
         {
           type: 'output_layout',
+          revision: 23,
           canvas_logical_width: 3840,
           canvas_logical_height: 2160,
           canvas_logical_origin_x: -1920,
@@ -203,6 +207,7 @@ describe('decodeCompositorSnapshot', () => {
   it('decodes compositor interaction state', () => {
     const interactionState = frame([
       ...u32(60),
+      ...u64(31n),
       ...i32(140),
       ...i32(220),
       ...u32(9),
@@ -236,6 +241,7 @@ describe('decodeCompositorSnapshot', () => {
       details: [
         {
           type: 'interaction_state',
+          revision: 31,
           pointer_x: 140,
           pointer_y: 220,
           move_window_id: 9,

@@ -22,7 +22,6 @@ fn apply_output_dimensions_to_osr(
     physical_h: u32,
     view_state: &Mutex<OsrViewState>,
     browser: Option<&Browser>,
-    snapshot_dirty: &mut bool,
 ) {
     if let Ok(mut g) = view_state.lock() {
         g.logical_width = logical_w.max(1) as i32;
@@ -41,7 +40,6 @@ fn apply_output_dimensions_to_osr(
             host.invalidate(cef::PaintElementType::VIEW);
         }
     }
-    *snapshot_dirty = true;
 }
 
 fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
@@ -128,21 +126,22 @@ fn apply_message(
             physical_h,
         } => {
             apply_output_dimensions_to_osr(
-                logical_w,
-                logical_h,
-                physical_w,
-                physical_h,
-                view_state,
-                browser,
-                snapshot_dirty,
+                logical_w, logical_h, physical_w, physical_h, view_state, browser,
             );
+            pending_details.push(json!({
+                "type": "output_geometry",
+                "logical_width": logical_w,
+                "logical_height": logical_h,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::OutputLayout {
+            revision,
             canvas_logical_w,
             canvas_logical_h,
             canvas_physical_w,
             canvas_physical_h,
-            ..
+            screens,
+            shell_chrome_primary,
         } => {
             apply_output_dimensions_to_osr(
                 canvas_logical_w,
@@ -151,32 +150,155 @@ fn apply_message(
                 canvas_physical_h,
                 view_state,
                 browser,
-                snapshot_dirty,
             );
+            let screens: Vec<Value> = screens
+                .into_iter()
+                .map(|screen| {
+                    json!({
+                        "name": screen.name,
+                        "identity": if screen.identity.is_empty() { Value::Null } else { Value::String(screen.identity) },
+                        "x": screen.x,
+                        "y": screen.y,
+                        "width": screen.w,
+                        "height": screen.h,
+                        "transform": screen.transform,
+                        "refresh_milli_hz": screen.refresh_milli_hz,
+                    })
+                })
+                .collect();
+            pending_details.push(json!({
+                "type": "output_layout",
+                "revision": revision,
+                "canvas_logical_width": canvas_logical_w,
+                "canvas_logical_height": canvas_logical_h,
+                "canvas_physical_width": canvas_physical_w,
+                "canvas_physical_height": canvas_physical_h,
+                "screens": screens,
+                "shell_chrome_primary": shell_chrome_primary,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped {
+            window_id,
+            surface_id,
+            x,
+            y,
+            w,
+            h,
+            title,
+            app_id,
+            output_name,
+            ..
+        } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
-            *snapshot_dirty = true;
+            pending_details.push(json!({
+                "type": "window_mapped",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+                "title": title,
+                "app_id": app_id,
+                "output_name": output_name,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+            window_id,
+            surface_id,
+            x,
+            y,
+            w,
+            h,
+            maximized,
+            fullscreen,
+            output_name,
+            ..
+        } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
-            *snapshot_dirty = true;
+            pending_details.push(json!({
+                "type": "window_geometry",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+                "output_name": output_name,
+                "maximized": maximized,
+                "fullscreen": fullscreen,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+            window_id,
+            surface_id,
+            title,
+            app_id,
+        } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
-            *snapshot_dirty = true;
+            pending_details.push(json!({
+                "type": "window_metadata",
+                "window_id": window_id,
+                "surface_id": surface_id,
+                "title": title,
+                "app_id": app_id,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_list();
-            *snapshot_dirty = true;
+            let windows: Vec<Value> = windows
+                .into_iter()
+                .map(|window| {
+                    json!({
+                        "window_id": window.window_id,
+                        "surface_id": window.surface_id,
+                        "stack_z": window.stack_z,
+                        "x": window.x,
+                        "y": window.y,
+                        "width": window.w,
+                        "height": window.h,
+                        "minimized": window.minimized != 0,
+                        "maximized": window.maximized != 0,
+                        "fullscreen": window.fullscreen != 0,
+                        "client_side_decoration": window.client_side_decoration != 0,
+                        "shell_flags": window.shell_flags,
+                        "title": window.title,
+                        "app_id": window.app_id,
+                        "output_name": window.output_name,
+                        "capture_identifier": window.capture_identifier,
+                        "kind": window.kind,
+                        "x11_class": window.x11_class,
+                        "x11_instance": window.x11_instance,
+                    })
+                })
+                .collect();
+            pending_details.push(json!({
+                "type": "window_list",
+                "revision": revision,
+                "windows": windows,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::WindowState {
+            window_id,
+            minimized,
+        } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_state();
-            *snapshot_dirty = true;
+            pending_details.push(json!({
+                "type": "window_state",
+                "window_id": window_id,
+                "minimized": minimized,
+            }));
         }
-        shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id,
+            window_id,
+        } => {
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
-            *snapshot_dirty = true;
+            pending_details.push(json!({
+                "type": "focus_changed",
+                "surface_id": surface_id,
+                "window_id": window_id,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {
             window_id,
@@ -335,14 +457,124 @@ fn apply_message(
                 "output_name": output_name,
             }));
         }
-        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-        | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-        | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
-        | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-        | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
-        | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-        | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
-            *snapshot_dirty = true;
+        shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
+            pending_details.push(json!({
+                "type": "window_unmapped",
+                "window_id": window_id,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { label } => {
+            pending_details.push(json!({
+                "type": "keyboard_layout",
+                "label": label,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
+            revision,
+            state_json,
+        } => {
+            let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
+                return;
+            };
+            pending_details.push(json!({
+                "type": "workspace_state",
+                "revision": revision,
+                "state": state,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {
+            revision,
+            state_json,
+        } => {
+            let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
+                return;
+            };
+            pending_details.push(json!({
+                "type": "shell_hosted_app_state",
+                "revision": revision,
+                "state": state,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::InteractionState {
+            revision,
+            pointer_x,
+            pointer_y,
+            move_window_id,
+            resize_window_id,
+            move_proxy_window_id,
+            move_capture_window_id,
+            move_visual,
+            resize_visual,
+        } => {
+            pending_details.push(json!({
+                "type": "interaction_state",
+                "revision": revision,
+                "pointer_x": pointer_x,
+                "pointer_y": pointer_y,
+                "move_window_id": move_window_id,
+                "resize_window_id": resize_window_id,
+                "move_proxy_window_id": move_proxy_window_id,
+                "move_capture_window_id": move_capture_window_id,
+                "move_rect": move_visual.map(|visual| json!({
+                    "x": visual.x,
+                    "y": visual.y,
+                    "width": visual.width,
+                    "height": visual.height,
+                    "maximized": visual.maximized,
+                    "fullscreen": visual.fullscreen,
+                })),
+                "resize_rect": resize_visual.map(|visual| json!({
+                    "x": visual.x,
+                    "y": visual.y,
+                    "width": visual.width,
+                    "height": visual.height,
+                    "maximized": visual.maximized,
+                    "fullscreen": visual.fullscreen,
+                })),
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::TrayHints {
+            slot_count,
+            slot_w,
+            reserved_w,
+        } => {
+            pending_details.push(json!({
+                "type": "tray_hints",
+                "slot_count": slot_count,
+                "slot_w": slot_w,
+                "reserved_w": reserved_w,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::TraySni { items } => {
+            let items: Vec<Value> = items
+                .into_iter()
+                .map(|item| {
+                    use base64::Engine as _;
+                    let icon_base64 =
+                        base64::engine::general_purpose::STANDARD.encode(item.icon_png);
+                    json!({
+                        "id": item.id,
+                        "title": item.title,
+                        "icon_base64": icon_base64,
+                    })
+                })
+                .collect();
+            pending_details.push(json!({
+                "type": "tray_sni",
+                "items": items,
+            }));
+        }
+        shell_wire::DecodedCompositorToShellMessage::MutationAck {
+            domain,
+            client_mutation_id,
+            status,
+        } => {
+            pending_details.push(json!({
+                "type": "mutation_ack",
+                "domain": domain,
+                "client_mutation_id": client_mutation_id,
+                "status": status,
+            }));
         }
         shell_wire::DecodedCompositorToShellMessage::VolumeOverlay {
             volume_linear_percent_x100,

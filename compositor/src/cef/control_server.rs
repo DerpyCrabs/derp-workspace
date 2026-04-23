@@ -417,6 +417,17 @@ fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), S
     e2e_bridge::wait_for_shell_test_window_open(request_id, Duration::from_secs(3))
 }
 
+fn reset_shell_tiling_config(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
+    let request_id = e2e_bridge::next_request_id();
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "window.__DERP_E2E_RESET_TILING_CONFIG_REQ&&window.__DERP_E2E_RESET_TILING_CONFIG_REQ({request_id});"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_reset_tiling_config(request_id, Duration::from_secs(3))
+}
+
 fn json_u64_field(v: &serde_json::Value, key: &str) -> Result<u64, String> {
     v.get(key)
         .and_then(|x| x.as_u64())
@@ -1111,6 +1122,12 @@ fn handle_one(
 
     if req_path == "/test/perf/reset" {
         crate::cef::begin_frame_diag::reset_perf_counters();
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/tiling/reset" {
+        reset_shell_tiling_config(browser)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

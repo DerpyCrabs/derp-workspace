@@ -1,12 +1,4 @@
-import {
-  type JSX,
-  type Accessor,
-  Show,
-  createEffect,
-  createMemo,
-  onCleanup,
-  onMount,
-} from 'solid-js'
+import { type JSX, type Accessor, Show, createEffect, createMemo, onCleanup } from 'solid-js'
 import {
   invalidateShellUiWindow,
   registerShellUiWindow,
@@ -125,12 +117,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     props.onResizeEdgeDown(edges, pointerId, clientX, clientY)
   }
 
-  onMount(() => {
-    if (!props.shellUiRegister) return
-    const unreg = registerShellUiWindow(props.shellUiRegister.id, () => {
-      const cfg = props.shellUiRegister
-      if (!cfg) return null
-      return shellUiWindowMeasureFromEnv(cfg.id, cfg.z, root, cfg.getEnv)
+  createEffect(() => {
+    const cfg = props.shellUiRegister
+    if (!cfg) return
+    const registeredId = cfg.id
+    const unreg = registerShellUiWindow(registeredId, () => {
+      const next = props.shellUiRegister
+      if (!next || next.id !== registeredId) return null
+      return shellUiWindowMeasureFromEnv(next.id, next.z, root, next.getEnv)
     })
     onCleanup(unreg)
   })

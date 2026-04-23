@@ -7,6 +7,7 @@ export type DerpShellDetail =
   | { type: 'output_geometry'; logical_width: number; logical_height: number }
   | {
       type: 'output_layout'
+      revision?: number
       canvas_logical_width: number
       canvas_logical_height: number
       canvas_logical_origin_x?: number
@@ -59,11 +60,12 @@ export type DerpShellDetail =
     }
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
-  | { type: 'window_list'; windows: unknown[] }
-  | { type: 'workspace_state'; state: WorkspaceState }
-  | { type: 'shell_hosted_app_state'; byWindowId: Record<number, unknown> }
+  | { type: 'window_list'; revision?: number; windows: unknown[] }
+  | { type: 'workspace_state'; revision?: number; state: WorkspaceState }
+  | { type: 'shell_hosted_app_state'; revision?: number; state: { byWindowId?: Record<string, unknown> } }
   | {
       type: 'interaction_state'
+      revision?: number
       pointer_x: number
       pointer_y: number
       move_window_id: number | null
@@ -124,6 +126,12 @@ export type DerpShellDetail =
         separator: boolean
         enabled: boolean
       }[]
+    }
+  | {
+      type: 'mutation_ack'
+      domain: string
+      client_mutation_id: number
+      status: string
     }
 
 export type DerpWindow = {

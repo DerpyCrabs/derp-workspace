@@ -112,6 +112,7 @@ type WorkspaceChromeOptions = {
   adoptShellWindowMove: (windowId: number, clientX: number, clientY: number, moved?: boolean) => boolean
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
+  closeWindow: (windowId: number) => void
   closeGroupWindow: (windowId: number) => void
   selectGroupWindow: (windowId: number) => boolean
   setSplitGroupFraction: (groupId: string, fraction: number) => void
@@ -926,7 +927,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                 onConsumeSuppressedClick={(windowId) => {
                   if (suppressTabClickWindowId() === windowId) setSuppressTabClickWindowId(null)
                 }}
-                onCloseTab={options.closeGroupWindow}
+                onCloseTab={options.closeWindow}
                 onTabPointerDown={startTabPointerGesture}
                 onTabContextMenu={(windowId, clientX, clientY) => {
                   options.shellContextOpenTabMenu(windowId, clientX, clientY)

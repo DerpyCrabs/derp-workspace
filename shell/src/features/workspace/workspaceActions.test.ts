@@ -51,6 +51,7 @@ function actionsFor(
   activateTaskbarWindowViaShell: ReturnType<typeof vi.fn>,
   activateWindowViaShell: ReturnType<typeof vi.fn>,
   workspaceStateValue: WorkspaceState = createEmptyWorkspaceState(),
+  sendWindowIntent?: ReturnType<typeof vi.fn>,
 ) {
   const workspaceGroups = group ? [group] : []
   const workspaceGroupsById = new Map(workspaceGroups.map((entry) => [entry.id, entry]))
@@ -69,6 +70,7 @@ function actionsFor(
     focusShellUiWindow: vi.fn() as (windowId: number) => void,
     activateWindowViaShell: activateWindowViaShell as (windowId: number) => void,
     activateTaskbarWindowViaShell: activateTaskbarWindowViaShell as (windowId: number) => void,
+    sendWindowIntent: sendWindowIntent as ((action: string, windowId: number) => boolean) | undefined,
     shellWireSend: shellWireSend as ShellCompositorWireSend,
   })
 }
@@ -159,6 +161,29 @@ describe('activateTaskbarGroup', () => {
     activateTaskbarGroup(30)
     expect(activateTaskbarWindowViaShell).toHaveBeenCalledWith(30)
     expect(shellWireSend).not.toHaveBeenCalledWith('minimize', 30)
+  })
+
+  it('sends close_group window intent for grouped window close', () => {
+    const w = baseWindow(40, false)
+    const group = singleGroup(w)
+    const shellWireSend = vi.fn(() => true)
+    const activateTaskbarWindowViaShell = vi.fn()
+    const activateWindowViaShell = vi.fn()
+    const sendWindowIntent = vi.fn(() => true)
+    const { closeGroupWindow, closeWindow } = actionsFor(
+      group,
+      'g1',
+      40,
+      shellWireSend,
+      activateTaskbarWindowViaShell,
+      activateWindowViaShell,
+      createEmptyWorkspaceState(),
+      sendWindowIntent,
+    )
+    closeGroupWindow(40)
+    closeWindow(40)
+    expect(sendWindowIntent).toHaveBeenCalledWith('close_group', 40)
+    expect(shellWireSend).toHaveBeenCalledWith('close', 40)
   })
 
   it('drops a multi-tab window as a whole group into another tab strip', () => {
