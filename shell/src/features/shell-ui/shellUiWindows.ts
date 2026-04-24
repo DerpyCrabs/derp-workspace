@@ -5,6 +5,7 @@ import {
   type ShellMeasureEnv,
   type ShellMeasureFrame,
 } from '@/features/bridge/shellMeasureFrame'
+import { noteShellDomMeasure } from '@/features/bridge/shellPerfCounters'
 import { sharedShellStateStampKey, writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -162,6 +163,7 @@ export function shellUiWindowMeasureFromEnv(
   const el = root
   const env = frame ?? currentShellMeasureFrame() ?? createShellMeasureFrame(getEnv())
   if (!el || !env) return null
+  noteShellDomMeasure()
   const r = el.getBoundingClientRect()
   if (r.width < 1 || r.height < 1) return null
   const logical = clientRectToGlobalLogical(env.mainRect, r, env.outputGeom.w, env.outputGeom.h, env.origin)

@@ -199,38 +199,6 @@ pub(crate) fn shell_dmabuf_dirty_buffer_to_physical(
     out
 }
 
-fn log_shell_dmabuf_import_context(
-    dmabuf: &smithay::backend::allocator::dmabuf::Dmabuf,
-    renderer: &GlesRenderer,
-) {
-    let fmt = dmabuf.format();
-    let sz = dmabuf.size();
-    let in_render = renderer
-        .egl_context()
-        .dmabuf_render_formats()
-        .contains(&fmt);
-    let in_texture = renderer.dmabuf_formats().contains(&fmt);
-    let strides: Vec<u32> = dmabuf.strides().collect();
-    let offsets: Vec<u32> = dmabuf.offsets().collect();
-    tracing::debug!(
-        target: "derp_shell_dmabuf",
-        w = sz.w,
-        h = sz.h,
-        fourcc = ?fmt.code,
-        drm_fourcc_hex = fmt.code as u32,
-        modifier = ?fmt.modifier,
-        modifier_u64 = u64::from(fmt.modifier),
-        planes = dmabuf.num_planes(),
-        strides = ?strides,
-        offsets = ?offsets,
-        y_inverted = dmabuf.y_inverted(),
-        has_modifier = dmabuf.has_modifier(),
-        in_egl_render_formats = in_render,
-        in_egl_texture_import_formats = in_texture,
-        "shell dma-buf → GLES import (see RUST_LOG=derp_shell_dmabuf=debug,trace)"
-    );
-}
-
 fn build_main_shell_dmabuf_element(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
@@ -267,8 +235,6 @@ fn build_main_shell_dmabuf_element(
             Some(mapped)
         }
     };
-
-    log_shell_dmabuf_import_context(dmabuf, renderer);
 
     match crate::desktop::desktop_stack::shell_dmabuf_overlay_element(
         renderer,

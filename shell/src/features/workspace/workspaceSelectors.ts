@@ -161,30 +161,37 @@ export function buildTaskbarRowsByMonitor(
     for (const row of rows) previousRowsByGroupId.set(row.group_id, row)
   }
   const groupsById = new Map(groups.map((group) => [group.id, group]))
+  const monitorKeyByWindowId = new Map<number, string>()
+  for (const monitor of workspaceSnapshot.monitorTiles) {
+    const key = monitor.outputName || monitor.outputId || fallbackMonitorKey
+    for (const entry of monitor.entries) monitorKeyByWindowId.set(entry.windowId, key)
+  }
   const groupsByMonitor = new Map<string, WorkspaceGroupModel[]>()
   for (const workspaceGroup of workspaceSnapshot.groups) {
     const group = groupsById.get(workspaceGroup.id)
     if (!group) continue
-    const tiledMonitor = workspaceSnapshot.monitorTiles.find((monitor) =>
-      monitor.entries.some((entry) => entry.windowId === group.visibleWindow.window_id),
-    )
     const key =
       group.visibleWindow.output_name ||
       group.visibleWindow.output_id ||
-      tiledMonitor?.outputName ||
-      tiledMonitor?.outputId ||
+      monitorKeyByWindowId.get(group.visibleWindow.window_id) ||
       fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)
     else groupsByMonitor.set(key, [group])
   }
   const rowsByMonitor = new Map<string, TaskbarWorkspaceRow[]>()
+  const desktopMatchByKey = new Map<string, ReturnType<typeof matchDesktopApplication>>()
   for (const [monitorName, monitorGroups] of groupsByMonitor) {
     const rows = buildTaskbarGroupRows(monitorGroups).map((row) => {
-      const match = matchDesktopApplication(apps, {
-        title: row.title,
-        app_id: row.app_id,
-      })
+      const matchKey = `${row.app_id}\u0000${row.title}`
+      let match = desktopMatchByKey.get(matchKey)
+      if (!desktopMatchByKey.has(matchKey)) {
+        match = matchDesktopApplication(apps, {
+          title: row.title,
+          app_id: row.app_id,
+        })
+        desktopMatchByKey.set(matchKey, match)
+      }
       const previousRow = previousRowsByGroupId.get(row.group_id)
       const appDisplayName = match?.full_name?.trim() || match?.name?.trim() || null
       const nextRow = {

@@ -92,21 +92,14 @@ function TaskbarWindowRows(props: {
     timing?: 'now' | 'frame',
   ) => void
 }) {
-  const windowsByGroupId = createMemo(() => {
-    const map = new Map<string, TaskbarWindowRow>()
-    for (const window of props.windows) map.set(window.group_id, window)
-    return map
-  })
-  const groupIds = createMemo(() => props.windows.map((window) => window.group_id))
   return (
-    <For each={groupIds()}>
-      {(groupId) => {
+    <For each={props.windows}>
+      {(row) => {
         let suppressClickAfterPointer = false
-        const w = () => windowsByGroupId().get(groupId)
         const active = () => {
-          const window = w()
-          return !!window && props.focusedWindowId === window.window_id && !window.minimized
+          return props.focusedWindowId === row.window_id && !row.minimized
         }
+        const label = () => taskbarWindowLabel(row)
         return (
           <div
             role="listitem"
@@ -114,15 +107,13 @@ function TaskbarWindowRows(props: {
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                 active(),
-              'text-(--shell-text-dim)': !!w()?.minimized && !active(),
+              'text-(--shell-text-dim)': row.minimized && !active(),
               'min-w-[132px] flex-[0_1_220px] px-2': props.compactMode === 'normal',
               'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
               'min-w-[52px] flex-[1_1_64px] px-1': props.compactMode === 'tight',
             }}
             onPointerEnter={(e) => {
-              const win = w()
-              if (!win) return
-              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget }, 'now')
+              props.reportRowHoverTip({ window: row, rowEl: e.currentTarget }, 'now')
             }}
             onPointerLeave={() => props.reportRowHoverTip(null)}
           >
@@ -134,46 +125,40 @@ function TaskbarWindowRows(props: {
                   'gap-1.5 px-0.5': props.compactMode !== 'tight',
                   'justify-center gap-0': props.compactMode === 'tight',
                 }}
-                data-shell-taskbar-group={w()!.group_id}
-                data-shell-taskbar-window-activate={w()!.window_id}
+                data-shell-taskbar-group={row.group_id}
+                data-shell-taskbar-window-activate={row.window_id}
                 aria-current={active() ? 'true' : undefined}
                 onPointerUp={(e) => {
                   if (e.button !== 0) return
-                  const win = w()
-                  if (!win) return
                   suppressClickAfterPointer = true
                   window.setTimeout(() => {
                     suppressClickAfterPointer = false
                   }, 0)
-                  props.onTaskbarActivate(win.window_id)
+                  props.onTaskbarActivate(row.window_id)
                 }}
                 onClick={() => {
                   if (suppressClickAfterPointer) return
-                  const win = w()
-                  if (!win) return
-                  props.onTaskbarActivate(win.window_id)
+                  props.onTaskbarActivate(row.window_id)
                 }}
                 onKeyDown={(e) => {
                   if (e.key !== 'Enter' && e.key !== ' ') return
                   e.preventDefault()
-                  const win = w()
-                  if (!win) return
-                  props.onTaskbarActivate(win.window_id)
+                  props.onTaskbarActivate(row.window_id)
                 }}
               >
                 <TaskbarWindowIcon
                   meta={{
-                    title: w()!.title,
-                    appId: w()!.app_id,
-                    desktopId: w()!.desktop_id ?? null,
-                    desktopIcon: w()!.desktop_icon ?? null,
-                    shellFilePath: w()!.shell_file_path ?? null,
+                    title: row.title,
+                    appId: row.app_id,
+                    desktopId: row.desktop_id ?? null,
+                    desktopIcon: row.desktop_icon ?? null,
+                    shellFilePath: row.shell_file_path ?? null,
                   }}
                   active={active()}
                   compact={props.compactMode !== 'normal'}
                 />
                 <Show when={props.compactMode !== 'tight'}>
-                  <span class="min-w-0 truncate">{taskbarWindowLabel(w()!)}</span>
+                  <span class="min-w-0 truncate">{label()}</span>
                 </Show>
               </button>
             </div>
@@ -185,15 +170,15 @@ function TaskbarWindowRows(props: {
                 'w-6': props.compactMode === 'tight',
                 'bg-(--shell-control-muted-hover)': active(),
               }}
-              data-shell-taskbar-window-close={w()!.window_id}
-              aria-label={`Close ${taskbarWindowLabel(w()!)}`}
-              title={`Close ${taskbarWindowLabel(w()!)}`}
+              data-shell-taskbar-window-close={row.window_id}
+              aria-label={`Close ${label()}`}
+              title={`Close ${label()}`}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerUp={(e) => {
                 if (e.button !== 0) return
                 e.preventDefault()
                 e.stopPropagation()
-                props.onTaskbarClose(w()!.window_id)
+                props.onTaskbarClose(row.window_id)
               }}
             >
               <X class="h-4 w-4" stroke-width={2} />
@@ -301,11 +286,6 @@ export function Taskbar(props: TaskbarProps) {
     rowHoverTipRaf = requestAnimationFrame(flushRowHoverTip)
   }
 
-  function registerTaskbarBase(el: HTMLElement) {
-    const registration = registerShellExclusionElement('base', `taskbar:${props.monitorName}`, el)
-    onCleanup(registration.unregister)
-  }
-
   function registerTrayStrip(el: HTMLElement) {
     const registration = registerShellExclusionElement('tray-strip', 'tray-strip', el)
     onCleanup(registration.unregister)
@@ -327,7 +307,6 @@ export function Taskbar(props: TaskbarProps) {
       data-shell-taskbar-exclude
       data-shell-taskbar-monitor={props.monitorName}
       class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
-      ref={registerTaskbarBase}
     >
       <Show
         when={props.isPrimary}
@@ -340,7 +319,6 @@ export function Taskbar(props: TaskbarProps) {
             aria-label="Windows"
             ref={(el) => {
               windowRailRef = el
-              registerTaskbarBase(el)
             }}
           >
             <TaskbarWindowRows
@@ -358,7 +336,6 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
           class="mr-1 flex h-full shrink-0 items-stretch"
-          ref={registerTaskbarBase}
         >
           <ProgramsTaskbarMenu>
             <TaskbarContextMenuTrigger>
@@ -391,7 +368,6 @@ export function Taskbar(props: TaskbarProps) {
           aria-label="Windows"
           ref={(el) => {
             windowRailRef = el
-            registerTaskbarBase(el)
           }}
         >
           <TaskbarWindowRows
@@ -407,7 +383,6 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
           class="ml-auto flex shrink-0 items-stretch"
-          ref={registerTaskbarBase}
         >
           <Show when={props.keyboardLayoutLabel}>
             <span

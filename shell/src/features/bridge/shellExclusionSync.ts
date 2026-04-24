@@ -9,12 +9,14 @@ import {
   currentShellMeasureFrame,
   type ShellMeasureFrame,
 } from './shellMeasureFrame'
+import { noteShellDomMeasure } from './shellPerfCounters'
 
 type ShellExclusionSyncOptions = {
   mainEl: Accessor<HTMLElement | undefined>
   outputGeom: Accessor<{ w: number; h: number } | null>
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   taskbarScreens: Accessor<readonly LayoutScreen[]>
+  taskbarHeight: number
   windows: Accessor<readonly DerpWindow[]>
   isWindowVisible?: (window: DerpWindow) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
@@ -111,6 +113,7 @@ function readShellExclusionRegistry(frame: ShellMeasureFrame) {
 
 function measureElement(frame: ShellMeasureFrame, el: Element): ShellExclusionRect | null {
   if (!el.isConnected) return null
+  noteShellDomMeasure()
   const r = el.getBoundingClientRect()
   if (r.width < 1 || r.height < 1) return null
   const z = clientRectToGlobalLogical(frame.mainRect, r, frame.outputGeom.w, frame.outputGeom.h, frame.origin)
@@ -157,16 +160,10 @@ export function registerShellExclusionElement(
   const resizeObserver =
     typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => registration.invalidate()) : null
   resizeObserver?.observe(el)
-  const mutationObserver =
-    typeof MutationObserver !== 'undefined'
-      ? new MutationObserver(() => registration.invalidate())
-      : null
-  mutationObserver?.observe(el, { attributes: true, attributeFilter: ['class', 'style'] })
   return {
     invalidate: registration.invalidate,
     unregister: () => {
       resizeObserver?.disconnect()
-      mutationObserver?.disconnect()
       registration.unregister()
     },
   }
@@ -183,15 +180,22 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
   const fullscreenTaskbarExclusionSig = () => {
-    const fullscreenOutputs = new Set<string>()
     for (const window of options.windows()) {
       if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
-      fullscreenOutputs.add(window.output_name)
     }
     return options
       .taskbarScreens()
-      .map((screen) => `${screen.name}:${fullscreenOutputs.has(screen.name) ? 1 : 0}`)
+      .map((screen) => `${screen.name}:${screenTaskbarHiddenForFullscreen(screen) ? 1 : 0}`)
       .join('|')
+  }
+
+  function screenTaskbarHiddenForFullscreen(screen: LayoutScreen) {
+    return options.windows().some((window) =>
+      isWindowVisible(window) &&
+      !window.minimized &&
+      window.fullscreen &&
+      (window.output_name === screen.name || (!!screen.identity && window.output_id === screen.identity)),
+    )
   }
 
   function syncExclusionZonesNow() {
@@ -217,9 +221,23 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const frame = currentShellMeasureFrame() ?? createShellMeasureFrame({ main, outputGeom: og, origin: co })
     if (!frame) return
     const snapshot = readShellExclusionRegistry(frame)
-    const rects = snapshot.base.map(({ label: _label, ...rect }) => rect)
+    const taskbarBase = options
+      .taskbarScreens()
+      .filter((screen) => !screenTaskbarHiddenForFullscreen(screen))
+      .map((screen) => ({
+        label: `taskbar:${screen.name}`,
+        x: screen.x,
+        y: screen.y + screen.height - options.taskbarHeight,
+        w: screen.width,
+        h: options.taskbarHeight,
+      }))
+    const rects = [
+      ...taskbarBase.map(({ label: _label, ...rect }) => rect),
+      ...snapshot.base.map(({ label: _label, ...rect }) => rect),
+    ]
     const floatingRaw = snapshot.floating.map(({ label: _label, ...rect }) => rect)
     const hud: ExclusionHudZone[] = [
+      ...taskbarBase.map(({ label, ...rect }) => ({ label, ...rect })),
       ...snapshot.base.map(({ label, ...rect }) => ({ label, ...rect })),
       ...snapshot.floating.map(({ label, ...rect }) => ({ label, ...rect })),
     ]

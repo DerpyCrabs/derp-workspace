@@ -683,6 +683,8 @@ pub struct CompositorState {
     pub(crate) shell_snapshot_epoch: u64,
     pub(crate) workspace_state: WorkspaceState,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
+    pub(crate) shell_last_sent_focus_pair: Option<(Option<u32>, Option<u32>)>,
+    pub(crate) shell_last_sent_window_order: Vec<(u32, u32)>,
     pub(crate) shell_exclusion_shared_sequence: u64,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
@@ -863,6 +865,7 @@ impl CompositorState {
     pub(crate) fn shell_note_non_shell_focus(&mut self) {
         self.shell_focused_ui_window_id = None;
         self.shell_last_sent_ui_focus_id = None;
+        self.shell_last_sent_focus_pair = None;
         self.shell_exclusion_zones_need_full_damage = true;
     }
 
@@ -1270,6 +1273,8 @@ impl CompositorState {
             shell_snapshot_epoch: 0,
             workspace_state: WorkspaceState::default(),
             shell_last_sent_ui_focus_id: None,
+            shell_last_sent_focus_pair: None,
+            shell_last_sent_window_order: Vec::new(),
             shell_exclusion_shared_sequence: 0,
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
@@ -2561,6 +2566,17 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_to_cef(&mut self, msg: shell_wire::DecodedCompositorToShellMessage) {
+        if let shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id,
+            window_id,
+        } = &msg
+        {
+            let pair = (*surface_id, *window_id);
+            if self.shell_last_sent_focus_pair == Some(pair) {
+                return;
+            }
+            self.shell_last_sent_focus_pair = Some(pair);
+        }
         let workspace_dirty = matches!(
             msg,
             shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
@@ -2619,7 +2635,9 @@ impl CompositorState {
                 messages.push(msg.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                messages.push(self.shell_window_order_message());
+                if let Some(window_order) = self.shell_window_order_message_if_changed() {
+                    messages.push(window_order);
+                }
                 messages.push(msg.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
@@ -2630,7 +2648,9 @@ impl CompositorState {
             shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
                 messages.push(msg.clone());
                 messages.push(self.shell_window_order_message());
-                messages.push(self.shell_focus_message());
+                if let Some(focus) = self.shell_focus_message_if_changed() {
+                    messages.push(focus);
+                }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
@@ -2638,7 +2658,9 @@ impl CompositorState {
             | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
                 messages.push(msg.clone());
-                messages.push(self.shell_focus_message());
+                if let Some(focus) = self.shell_focus_message_if_changed() {
+                    messages.push(focus);
+                }
             }
             _ => {}
         }
@@ -7857,6 +7879,7 @@ impl CompositorState {
                 .map_element(DerpSpaceElem::Wayland(window.clone()), after, true);
             self.shell_move_pending_delta = (0, 0);
             self.notify_geometry_for_window(&window, true);
+            self.shell_send_interaction_state();
             tracing::debug!(
                 target: "derp_shell_move",
                 wid,
@@ -7903,6 +7926,7 @@ impl CompositorState {
             .map_element(DerpSpaceElem::X11(x11.clone()), after, true);
         self.shell_move_pending_delta = (0, 0);
         self.emit_x11_window_updates(&x11, true, false);
+        self.shell_send_interaction_state();
         tracing::debug!(
             target: "derp_shell_move",
             wid,
@@ -9014,7 +9038,7 @@ impl CompositorState {
     }
 
     fn shell_window_order_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
-        let windows = self
+        let windows: Vec<shell_wire::ShellWindowOrderEntry> = self
             .shell_window_list_rows()
             .into_iter()
             .map(|window| shell_wire::ShellWindowOrderEntry {
@@ -9022,10 +9046,39 @@ impl CompositorState {
                 stack_z: window.stack_z,
             })
             .collect();
+        self.shell_last_sent_window_order = windows
+            .iter()
+            .map(|window| (window.window_id, window.stack_z))
+            .collect();
         shell_wire::DecodedCompositorToShellMessage::WindowOrder {
             revision: self.next_shell_window_domain_revision(),
             windows,
         }
+    }
+
+    fn shell_window_order_message_if_changed(
+        &mut self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let windows: Vec<_> = self
+            .shell_window_list_rows()
+            .into_iter()
+            .map(|window| shell_wire::ShellWindowOrderEntry {
+                window_id: window.window_id,
+                stack_z: window.stack_z,
+            })
+            .collect();
+        let signature: Vec<_> = windows
+            .iter()
+            .map(|window| (window.window_id, window.stack_z))
+            .collect();
+        if signature == self.shell_last_sent_window_order {
+            return None;
+        }
+        self.shell_last_sent_window_order = signature;
+        Some(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+            revision: self.next_shell_window_domain_revision(),
+            windows,
+        })
     }
 
     fn enrich_shell_live_message(
@@ -9289,6 +9342,22 @@ impl CompositorState {
             surface_id,
             window_id,
         }
+    }
+
+    fn shell_focus_message_if_changed(
+        &mut self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let window_id = self.logical_focused_window_id();
+        let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
+        let pair = (surface_id, window_id);
+        if self.shell_last_sent_focus_pair == Some(pair) {
+            return None;
+        }
+        self.shell_last_sent_focus_pair = Some(pair);
+        Some(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id,
+            window_id,
+        })
     }
 
     fn shell_tray_hints_message(&self) -> shell_wire::DecodedCompositorToShellMessage {

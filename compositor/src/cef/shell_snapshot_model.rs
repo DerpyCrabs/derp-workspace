@@ -244,91 +244,132 @@ impl ShellSnapshotModel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn messages(&self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
+        self.messages_for_domains((1u32 << shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT) - 1)
+    }
+
+    pub(crate) fn messages_for_domains(
+        &self,
+        domains: u32,
+    ) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
         let mut messages = Vec::new();
-        if let Some(message) = self.output_geometry.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS != 0 {
+            if let Some(message) = self.output_geometry.clone() {
+                messages.push(message);
+            }
+            if let Some(message) = self.output_layout.clone() {
+                messages.push(message);
+            }
         }
-        if let Some(message) = self.output_layout.clone() {
-            messages.push(message);
-        }
-        let mut windows: Vec<_> = self.window_rows_by_id.values().cloned().collect();
-        windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        messages.push(shell_wire::DecodedCompositorToShellMessage::WindowList {
-            revision: self.window_list_revision,
-            windows,
-        });
-        let mut order: Vec<_> = self
-            .window_rows_by_id
-            .values()
-            .map(|window| shell_wire::ShellWindowOrderEntry {
-                window_id: window.window_id,
-                stack_z: window.stack_z,
-            })
-            .collect();
-        order.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        messages.push(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
-            revision: self.window_order_revision,
-            windows: order,
-        });
-        let mut rows: Vec<_> = self.window_rows_by_id.values().cloned().collect();
-        rows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        for row in &rows {
-            messages.push(
-                shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                    window_id: row.window_id,
-                    surface_id: row.surface_id,
-                    x: row.x,
-                    y: row.y,
-                    w: row.w,
-                    h: row.h,
-                    maximized: row.maximized != 0,
-                    fullscreen: row.fullscreen != 0,
-                    client_side_decoration: row.client_side_decoration != 0,
-                    output_id: row.output_id.clone(),
-                    output_name: row.output_name.clone(),
-                },
-            );
-        }
-        for row in &rows {
-            messages.push(
-                shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-                    window_id: row.window_id,
-                    surface_id: row.surface_id,
-                    title: row.title.clone(),
-                    app_id: row.app_id.clone(),
-                },
-            );
-        }
-        for row in &rows {
-            messages.push(shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id: row.window_id,
-                minimized: row.minimized != 0,
+        let needs_rows = domains
+            & (shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE)
+            != 0;
+        let rows = if needs_rows {
+            let mut rows: Vec<_> = self.window_rows_by_id.values().collect();
+            rows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+            rows
+        } else {
+            Vec::new()
+        };
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS != 0 {
+            messages.push(shell_wire::DecodedCompositorToShellMessage::WindowList {
+                revision: self.window_list_revision,
+                windows: rows.iter().map(|row| (*row).clone()).collect(),
             });
         }
-        if let Some(message) = self.focus_changed.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER != 0 {
+            messages.push(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+                revision: self.window_order_revision,
+                windows: rows
+                    .iter()
+                    .map(|window| shell_wire::ShellWindowOrderEntry {
+                        window_id: window.window_id,
+                        stack_z: window.stack_z,
+                    })
+                    .collect(),
+            });
         }
-        if let Some(message) = self.workspace_state.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY != 0 {
+            for row in &rows {
+                messages.push(
+                    shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                        window_id: row.window_id,
+                        surface_id: row.surface_id,
+                        x: row.x,
+                        y: row.y,
+                        w: row.w,
+                        h: row.h,
+                        maximized: row.maximized != 0,
+                        fullscreen: row.fullscreen != 0,
+                        client_side_decoration: row.client_side_decoration != 0,
+                        output_id: row.output_id.clone(),
+                        output_name: row.output_name.clone(),
+                    },
+                );
+            }
         }
-        if let Some(message) = self.shell_hosted_app_state.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA != 0 {
+            for row in &rows {
+                messages.push(
+                    shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                        window_id: row.window_id,
+                        surface_id: row.surface_id,
+                        title: row.title.clone(),
+                        app_id: row.app_id.clone(),
+                    },
+                );
+            }
         }
-        if let Some(message) = self.interaction_state.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE != 0 {
+            for row in &rows {
+                messages.push(shell_wire::DecodedCompositorToShellMessage::WindowState {
+                    window_id: row.window_id,
+                    minimized: row.minimized != 0,
+                });
+            }
         }
-        if let Some(message) = self.native_drag_preview.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS != 0 {
+            if let Some(message) = self.focus_changed.clone() {
+                messages.push(message);
+            }
         }
-        if let Some(message) = self.keyboard_layout.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE != 0 {
+            if let Some(message) = self.workspace_state.clone() {
+                messages.push(message);
+            }
         }
-        if let Some(message) = self.tray_hints.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS != 0 {
+            if let Some(message) = self.shell_hosted_app_state.clone() {
+                messages.push(message);
+            }
         }
-        if let Some(message) = self.tray_sni.clone() {
-            messages.push(message);
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION != 0 {
+            if let Some(message) = self.interaction_state.clone() {
+                messages.push(message);
+            }
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW != 0 {
+            if let Some(message) = self.native_drag_preview.clone() {
+                messages.push(message);
+            }
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD != 0 {
+            if let Some(message) = self.keyboard_layout.clone() {
+                messages.push(message);
+            }
+        }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_TRAY != 0 {
+            if let Some(message) = self.tray_hints.clone() {
+                messages.push(message);
+            }
+            if let Some(message) = self.tray_sni.clone() {
+                messages.push(message);
+            }
         }
         messages
     }

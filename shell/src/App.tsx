@@ -143,8 +143,11 @@ declare global {
     ) => { status?: string; buffer?: ArrayBuffer } | ArrayBuffer | null
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
+    __DERP_E2E_REQUEST_PERF?: (requestId: number) => void
     __DERP_E2E_OPEN_TEST_WINDOW_REQ?: (requestId: number) => void
     __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void
+    __DERP_SHELL_PERF_SNAPSHOT?: () => Record<string, number>
+    __DERP_SHELL_PERF_RESET?: () => void
   }
 }
 
@@ -1395,6 +1398,7 @@ function App() {
     outputGeom,
     layoutCanvasOrigin,
     taskbarScreens,
+    taskbarHeight: TASKBAR_HEIGHT,
     windows: windowsList,
     isWindowVisible: (window) => shellExclusionVisibleWindowIds().has(window.window_id),
     onHudChange: debugHudRuntime.setExclusionZonesHud,

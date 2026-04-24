@@ -43,6 +43,7 @@ export type ShellCompositorWireOp =
   | 'backed_window_open'
   | 'e2e_snapshot_response'
   | 'e2e_html_response'
+  | 'e2e_perf_response'
   | 'e2e_test_window_open_response'
   | 'e2e_reset_tiling_config_response'
   | 'sni_tray_activate'

@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use crate::cef::shell_snapshot_model::{
     snapshot_dirty_domains, snapshot_domain_for_message, ShellSnapshotModel,
@@ -237,12 +238,20 @@ impl SharedShellSnapshotWriter {
         sequence: u64,
         messages: &[shell_wire::DecodedCompositorToShellMessage],
     ) -> Result<bool, String> {
+        let encode_start = Instant::now();
         let dirty_domains = snapshot_dirty_domains(messages);
         for message in messages {
             self.authoritative.apply(message);
         }
-        let authoritative_messages = self.authoritative.messages();
-        warn_snapshot_invariants(&authoritative_messages);
+        let refresh_domains = if self.domain_chunks_initialized {
+            dirty_domains
+        } else {
+            (1u32 << shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT) - 1
+        };
+        let authoritative_messages = self.authoritative.messages_for_domains(refresh_domains);
+        if !self.domain_chunks_initialized {
+            warn_snapshot_invariants(&authoritative_messages);
+        }
         let actual_dirty_domains = refresh_domain_chunk_cache(
             &mut self.domain_chunks,
             dirty_domains,
@@ -256,7 +265,7 @@ impl SharedShellSnapshotWriter {
         )?;
         self.bump_domain_revisions(actual_dirty_domains);
         self.domain_chunks_initialized = true;
-        self.publish_payload_at(
+        let published = self.publish_payload_at(
             sequence,
             actual_dirty_domains,
             encode_payload_chunks(
@@ -264,7 +273,12 @@ impl SharedShellSnapshotWriter {
                 &self.domain_chunks,
                 &self.domain_delta_chunks,
             )?,
-        )
+        );
+        crate::cef::begin_frame_diag::note_shell_snapshot_encode(
+            encode_start.elapsed(),
+            authoritative_messages.len(),
+        );
+        published
     }
 
     fn bump_domain_revisions(&mut self, dirty_domains: u32) {

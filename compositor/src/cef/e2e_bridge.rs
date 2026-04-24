@@ -8,6 +8,7 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 struct PendingShellResponseState {
     shell_snapshots: HashMap<u64, String>,
     shell_html: HashMap<u64, String>,
+    shell_perf: HashMap<u64, String>,
     shell_test_window_open: HashMap<u64, bool>,
     shell_reset_tiling_config: HashMap<u64, bool>,
 }
@@ -19,6 +20,7 @@ fn response_state() -> &'static (Mutex<PendingShellResponseState>, Condvar) {
             Mutex::new(PendingShellResponseState {
                 shell_snapshots: HashMap::new(),
                 shell_html: HashMap::new(),
+                shell_perf: HashMap::new(),
                 shell_test_window_open: HashMap::new(),
                 shell_reset_tiling_config: HashMap::new(),
             }),
@@ -42,6 +44,13 @@ pub(crate) fn publish_shell_html(request_id: u64, html: String) {
     let (lock, condvar) = response_state();
     let mut state = lock.lock().expect("e2e shell response state");
     state.shell_html.insert(request_id, html);
+    condvar.notify_all();
+}
+
+pub(crate) fn publish_shell_perf(request_id: u64, json: String) {
+    let (lock, condvar) = response_state();
+    let mut state = lock.lock().expect("e2e shell response state");
+    state.shell_perf.insert(request_id, json);
     condvar.notify_all();
 }
 
@@ -183,6 +192,31 @@ pub(crate) fn wait_for_shell_html(request_id: u64, timeout: Duration) -> Result<
         state = next_state;
         if wait_result.timed_out() && !state.shell_html.contains_key(&request_id) {
             return Err(format!("timed out waiting for shell html {request_id}"));
+        }
+    }
+}
+
+pub(crate) fn wait_for_shell_perf(request_id: u64, timeout: Duration) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let (lock, condvar) = response_state();
+    let mut state = lock
+        .lock()
+        .map_err(|_| "shell perf state poisoned".to_string())?;
+    loop {
+        if let Some(json) = state.shell_perf.remove(&request_id) {
+            return Ok(json);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!("timed out waiting for shell perf {request_id}"));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let (next_state, wait_result) = condvar
+            .wait_timeout(state, remaining)
+            .map_err(|_| "shell perf wait poisoned".to_string())?;
+        state = next_state;
+        if wait_result.timed_out() && !state.shell_perf.contains_key(&request_id) {
+            return Err(format!("timed out waiting for shell perf {request_id}"));
         }
     }
 }

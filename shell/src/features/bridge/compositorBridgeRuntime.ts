@@ -13,6 +13,12 @@ import {
   decodeCompositorSnapshot,
   type CompositorSnapshotDecodeCursor,
 } from '@/features/bridge/compositorSnapshot'
+import {
+  installShellRuntimePerfCounters,
+  noteShellBatchApply,
+  noteShellSnapshotApply,
+  noteShellSnapshotDecode,
+} from '@/features/bridge/shellPerfCounters'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
 import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
@@ -192,6 +198,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
+  const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
 
   const snapshotDomainOutputs = 1 << 0
   const snapshotDomainWindows = 1 << 1
@@ -743,11 +750,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
+    const applyStart = performance.now()
     batch(() => {
       for (const detail of details) {
         applyCompositorDetail(detail)
       }
     })
+    noteShellBatchApply(performance.now() - applyStart, details.length)
   }
 
   const snapshotDomainRevisionBuffer = (cursor: CompositorSnapshotDecodeCursor | undefined) => {
@@ -808,7 +817,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       raw = readSnapshot(path)
     }
     if (!(raw instanceof ArrayBuffer)) return false
+    const decodeStart = performance.now()
     const decoded = decodeCompositorSnapshot(raw, force ? undefined : lastSnapshotDecodeCursor)
+    noteShellSnapshotDecode(performance.now() - decodeStart, raw.byteLength)
     if (!decoded) return false
     lastSnapshotDecodeCursor = { domainRevisions: decoded.domainRevisions }
     const shouldTrace =
@@ -827,7 +838,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       decoded.sequence
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
       decoded.domainFlags
-    if (decoded.details.length > 0) applyCompositorSnapshot(decoded.details)
+    if (decoded.details.length > 0) {
+      const applyStart = performance.now()
+      applyCompositorSnapshot(decoded.details)
+      noteShellSnapshotApply(performance.now() - applyStart, decoded.details.length)
+    }
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
     }
@@ -863,6 +878,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (volumeOverlayHideTimer !== undefined) clearTimeout(volumeOverlayHideTimer)
     removeCompositorBatchHandler()
     removeCompositorSnapshotHandler()
+    removeShellRuntimePerfCounters()
     window.removeEventListener(DERP_SHELL_EVENT, onDerpShell as EventListener)
     window.removeEventListener(DERP_SHELL_SNAPSHOT_EVENT, onCompositorSnapshot as EventListener)
   }

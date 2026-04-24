@@ -47,6 +47,33 @@ fn send_snapshot_perf(frame: &Frame, kind: &str, payload_len: usize) {
     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
 }
 
+fn read_shared_u32(payload: &[u8], offset: usize) -> u32 {
+    payload
+        .get(offset..offset.saturating_add(4))
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
+}
+
+fn shared_state_row_count(kind: u32, payload: &[u8]) -> u64 {
+    if kind == shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS {
+        return read_shared_u32(payload, 20) as u64;
+    }
+    if kind != shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES {
+        return 0;
+    }
+    let rects = read_shared_u32(payload, 16) as usize;
+    let tray = read_shared_u32(payload, 20) != 0;
+    let mut offset = 24usize.saturating_add(rects.saturating_mul(20));
+    if tray {
+        offset = offset.saturating_add(16);
+    }
+    let floating = read_shared_u32(payload, offset.saturating_add(4)) as usize;
+    rects
+        .saturating_add(usize::from(tray))
+        .saturating_add(floating) as u64
+}
+
 fn dirty_snapshot_read_result_value(status: &str, bytes: Option<&[u8]>) -> Option<V8Value> {
     let object = v8_value_create_object(None, None)?;
     let attrs = sys::cef_v8_propertyattribute_t(0);
@@ -323,7 +350,12 @@ fn handle_uplink_list(
         "shared_state_sync" => {
             let kind = args.int(1) as u32;
             let payload_len = args.int(2).max(0) as usize;
-            crate::cef::begin_frame_diag::note_shell_shared_state_write(kind, payload_len);
+            let row_count = args.int(3).max(0) as u64;
+            crate::cef::begin_frame_diag::note_shell_shared_state_write(
+                kind,
+                payload_len,
+                row_count,
+            );
             uplink.shell_shared_state_sync(kind);
         }
         "snapshot_perf" => {
@@ -371,6 +403,11 @@ fn handle_uplink_list(
             let request_id = args.int(1) as u64;
             let html = cef_string_userfree_to_string(&args.string(2));
             e2e_bridge::publish_shell_html(request_id, html);
+        }
+        "e2e_perf_response" => {
+            let request_id = args.int(1) as u64;
+            let json = cef_string_userfree_to_string(&args.string(2));
+            e2e_bridge::publish_shell_perf(request_id, json);
         }
         "e2e_test_window_open_response" => {
             let request_id = args.int(1) as u64;
@@ -987,7 +1024,7 @@ wrap_v8_handler! {
                     let _ = list.set_string(2, Some(&CefString::from(menu_path.as_str())));
                     let _ = list.set_int(3, item_id);
                 }
-                "e2e_snapshot_response" | "e2e_html_response" => {
+                "e2e_snapshot_response" | "e2e_html_response" | "e2e_perf_response" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("e2e response requires request id");
                     };
@@ -1015,7 +1052,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }
@@ -1119,6 +1156,7 @@ wrap_v8_handler! {
             let _ = list.set_string(0, Some(&CefString::from("shared_state_sync")));
             let _ = list.set_int(1, kind as i32);
             let _ = list.set_int(2, payload_len.min(i32::MAX as usize) as i32);
+            let _ = list.set_int(3, shared_state_row_count(kind, payload).min(i32::MAX as u64) as i32);
             self.frame
                 .send_process_message(ProcessId::BROWSER, Some(&mut msg));
             if let Some(retval) = retval {

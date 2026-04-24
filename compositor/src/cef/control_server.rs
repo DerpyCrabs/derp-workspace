@@ -391,6 +391,31 @@ fn request_shell_html(
     e2e_bridge::wait_for_shell_html(request_id, Duration::from_secs(3))
 }
 
+fn request_shell_perf_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
+    let request_id = e2e_bridge::next_request_id();
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "(()=>{{const f=window.__DERP_E2E_REQUEST_PERF;if(typeof f==='function')f({request_id});else if(window.__derpShellWireSend)window.__derpShellWireSend('e2e_perf_response',{request_id},'{{}}');}})();"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_perf(request_id, Duration::from_secs(3))
+}
+
+fn perf_counter_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
+    let rust_json = crate::cef::begin_frame_diag::perf_counter_snapshot_json()?;
+    let mut value = serde_json::from_str::<serde_json::Value>(&rust_json)
+        .map_err(|e| format!("parse perf counter snapshot json: {e}"))?;
+    if let Ok(shell_json) = request_shell_perf_json(browser) {
+        if let Ok(shell_value) = serde_json::from_str::<serde_json::Value>(&shell_json) {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("shell_runtime".to_string(), shell_value);
+            }
+        }
+    }
+    Ok(value.to_string())
+}
+
 fn open_shell_test_window(browser: &Arc<Mutex<Option<Browser>>>) -> Result<(), String> {
     let request_id = e2e_bridge::next_request_id();
     execute_shell_bridge_js(
@@ -735,7 +760,7 @@ fn handle_one(
     }
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/test/perf" {
-        let json = crate::cef::begin_frame_diag::perf_counter_snapshot_json()?;
+        let json = perf_counter_snapshot_json(browser)?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1122,6 +1147,10 @@ fn handle_one(
 
     if req_path == "/test/perf/reset" {
         crate::cef::begin_frame_diag::reset_perf_counters();
+        let _ = execute_shell_bridge_js(
+            browser,
+            "window.__DERP_SHELL_PERF_RESET&&window.__DERP_SHELL_PERF_RESET();".to_string(),
+        );
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

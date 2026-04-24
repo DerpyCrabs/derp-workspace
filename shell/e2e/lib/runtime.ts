@@ -511,16 +511,35 @@ export interface PerfShellSyncSnapshot {
   snapshot_dirty_unchanged: number
   snapshot_dirty_fallbacks: number
   snapshot_dirty_bytes: number
+  snapshot_encode_count: number
+  snapshot_encode_us: number
+  snapshot_encode_messages: number
   shared_state_ui_window_writes: number
   shared_state_ui_window_bytes: number
+  shared_state_ui_window_rows: number
   shared_state_exclusion_writes: number
   shared_state_exclusion_bytes: number
+  shared_state_exclusion_rects: number
+}
+
+export interface PerfShellRuntimeSnapshot {
+  snapshot_decode_count: number
+  snapshot_decode_ms: number
+  snapshot_decode_bytes: number
+  snapshot_apply_count: number
+  snapshot_apply_ms: number
+  snapshot_apply_details: number
+  batch_apply_count: number
+  batch_apply_ms: number
+  batch_apply_details: number
+  dom_measure_count: number
 }
 
 export interface PerfCounterSnapshot {
   begin_frame: PerfBeginFrameSnapshot
   shell_updates: PerfShellUpdateSnapshot
   shell_sync: PerfShellSyncSnapshot
+  shell_runtime?: PerfShellRuntimeSnapshot
 }
 
 export interface FileBrowserFixturePaths {
@@ -1262,6 +1281,25 @@ export async function resetPerfCounters(base: string): Promise<void> {
 }
 
 export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapshot): PerfCounterSnapshot {
+  const shellRuntime =
+    after.shell_runtime && before.shell_runtime
+      ? {
+          snapshot_decode_count:
+            after.shell_runtime.snapshot_decode_count - before.shell_runtime.snapshot_decode_count,
+          snapshot_decode_ms: after.shell_runtime.snapshot_decode_ms - before.shell_runtime.snapshot_decode_ms,
+          snapshot_decode_bytes:
+            after.shell_runtime.snapshot_decode_bytes - before.shell_runtime.snapshot_decode_bytes,
+          snapshot_apply_count:
+            after.shell_runtime.snapshot_apply_count - before.shell_runtime.snapshot_apply_count,
+          snapshot_apply_ms: after.shell_runtime.snapshot_apply_ms - before.shell_runtime.snapshot_apply_ms,
+          snapshot_apply_details:
+            after.shell_runtime.snapshot_apply_details - before.shell_runtime.snapshot_apply_details,
+          batch_apply_count: after.shell_runtime.batch_apply_count - before.shell_runtime.batch_apply_count,
+          batch_apply_ms: after.shell_runtime.batch_apply_ms - before.shell_runtime.batch_apply_ms,
+          batch_apply_details: after.shell_runtime.batch_apply_details - before.shell_runtime.batch_apply_details,
+          dom_measure_count: after.shell_runtime.dom_measure_count - before.shell_runtime.dom_measure_count,
+        }
+      : undefined
   return {
     begin_frame: {
       compositor_schedules: after.begin_frame.compositor_schedules - before.begin_frame.compositor_schedules,
@@ -1296,15 +1334,24 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       snapshot_dirty_fallbacks:
         after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
       snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
+      snapshot_encode_count: after.shell_sync.snapshot_encode_count - before.shell_sync.snapshot_encode_count,
+      snapshot_encode_us: after.shell_sync.snapshot_encode_us - before.shell_sync.snapshot_encode_us,
+      snapshot_encode_messages:
+        after.shell_sync.snapshot_encode_messages - before.shell_sync.snapshot_encode_messages,
       shared_state_ui_window_writes:
         after.shell_sync.shared_state_ui_window_writes - before.shell_sync.shared_state_ui_window_writes,
       shared_state_ui_window_bytes:
         after.shell_sync.shared_state_ui_window_bytes - before.shell_sync.shared_state_ui_window_bytes,
+      shared_state_ui_window_rows:
+        after.shell_sync.shared_state_ui_window_rows - before.shell_sync.shared_state_ui_window_rows,
       shared_state_exclusion_writes:
         after.shell_sync.shared_state_exclusion_writes - before.shell_sync.shared_state_exclusion_writes,
       shared_state_exclusion_bytes:
         after.shell_sync.shared_state_exclusion_bytes - before.shell_sync.shared_state_exclusion_bytes,
+      shared_state_exclusion_rects:
+        after.shell_sync.shared_state_exclusion_rects - before.shell_sync.shared_state_exclusion_rects,
     },
+    ...(shellRuntime ? { shell_runtime: shellRuntime } : {}),
   }
 }
 
