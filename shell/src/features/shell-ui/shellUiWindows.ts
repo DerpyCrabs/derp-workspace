@@ -1,5 +1,5 @@
 import { clientRectToGlobalLogical } from '@/lib/shellCoords'
-import { writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
+import { sharedShellStateStampKey, writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
   SHELL_UI_PORTAL_PICKER_WINDOW_ID,
@@ -48,6 +48,7 @@ let structureDirty = false
 let lastWindows:
   | Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>
   | null = null
+let lastSharedStateStamp: string | null = null
 
 function sameWindows(
   left: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }>,
@@ -87,12 +88,14 @@ function flush() {
     if (e.cached) windows.push(e.cached)
   }
   windows.sort((a, b) => a.z - b.z || a.id - b.id)
-  if (sameWindows(windows, lastWindows)) return
+  const stamp = sharedShellStateStampKey()
+  if (sameWindows(windows, lastWindows) && stamp === lastSharedStateStamp) return
   const nextGeneration = generation + 1
   const sharedOk = writeShellUiWindowsState(nextGeneration, windows)
   if (!sharedOk) return
   generation = nextGeneration
   lastWindows = windows.map((window) => ({ ...window }))
+  lastSharedStateStamp = stamp
 }
 
 export function scheduleShellUiWindowsSync() {

@@ -1357,6 +1357,7 @@ function App() {
   })
 
   const exclusionReactiveDeps = createMemo(() => {
+    void compositorSnapshotSequence()
     void shellContextMenus.ctxMenuOpen()
     void shellContextMenus.programsMenuOpen()
     void shellContextMenus.powerMenuOpen()
@@ -1395,6 +1396,7 @@ function App() {
 
   createEffect(() => {
     void shellWireReadyRev()
+    void compositorSnapshotSequence()
     queueMicrotask(() => {
       flushShellUiWindowsSyncNow()
       syncExclusionZonesNow()

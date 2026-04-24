@@ -42,14 +42,24 @@ function sharedStateAbi(): number {
 }
 
 function sharedSnapshotEpoch(): number {
-  return typeof (window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE === 'number'
+  const w = window as Window & {
+    __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number
+    __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number
+  }
+  const snapshotSequence =
+    typeof w.__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE === 'number'
     ? Math.max(
         0,
         Math.trunc(
-          (window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE ?? 0,
+          w.__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE ?? 0,
         ),
       )
     : 0
+  const stateEpoch =
+    typeof w.__DERP_LAST_COMPOSITOR_STATE_EPOCH === 'number'
+      ? Math.max(0, Math.trunc(w.__DERP_LAST_COMPOSITOR_STATE_EPOCH ?? 0))
+      : 0
+  return Math.max(snapshotSequence, stateEpoch)
 }
 
 function sharedOutputLayoutRevision(): number {
@@ -61,6 +71,10 @@ function sharedOutputLayoutRevision(): number {
         ),
       )
     : 0
+}
+
+export function sharedShellStateStampKey(): string {
+  return `${sharedSnapshotEpoch()}:${sharedOutputLayoutRevision()}`
 }
 
 function setSharedPrefix(view: DataView): void {

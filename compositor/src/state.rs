@@ -113,6 +113,43 @@ struct X11SyncResult {
     state_changed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellSharedStateStaleReason {
+    OutputLayoutRevision {
+        payload_revision: u64,
+        current_revision: u64,
+    },
+    SnapshotEpoch {
+        payload_epoch: u64,
+        current_epoch: u64,
+    },
+}
+
+fn shell_shared_state_payload_stale_reason(
+    payload: &[u8],
+    current_output_layout_revision: u64,
+    current_snapshot_epoch: u64,
+) -> Option<ShellSharedStateStaleReason> {
+    if payload.len() < 16 {
+        return None;
+    }
+    let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    if output_layout_revision > 0 && output_layout_revision < current_output_layout_revision {
+        return Some(ShellSharedStateStaleReason::OutputLayoutRevision {
+            payload_revision: output_layout_revision,
+            current_revision: current_output_layout_revision,
+        });
+    }
+    if snapshot_epoch > 0 && snapshot_epoch < current_snapshot_epoch {
+        return Some(ShellSharedStateStaleReason::SnapshotEpoch {
+            payload_epoch: snapshot_epoch,
+            current_epoch: current_snapshot_epoch,
+        });
+    }
+    None
+}
+
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 26;
 pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
@@ -1477,26 +1514,54 @@ impl CompositorState {
         sequence: u64,
         payload: &[u8],
     ) -> bool {
-        if payload.len() < 16 {
-            return false;
+        match shell_shared_state_payload_stale_reason(
+            payload,
+            self.shell_output_topology_revision,
+            self.shell_snapshot_epoch,
+        ) {
+            Some(ShellSharedStateStaleReason::OutputLayoutRevision {
+                payload_revision,
+                current_revision,
+            }) => {
+                let snapshot_epoch = if payload.len() >= 8 {
+                    u64::from_le_bytes(payload[0..8].try_into().unwrap())
+                } else {
+                    0
+                };
+                tracing::warn!(
+                    target: "derp_shell_shared_state",
+                    kind,
+                    sequence,
+                    snapshot_epoch,
+                    output_layout_revision = payload_revision,
+                    current_output_layout_revision = current_revision,
+                    "rejected stale shell shared-state payload"
+                );
+                true
+            }
+            Some(ShellSharedStateStaleReason::SnapshotEpoch {
+                payload_epoch,
+                current_epoch,
+            }) => {
+                let output_layout_revision = if payload.len() >= 16 {
+                    u64::from_le_bytes(payload[8..16].try_into().unwrap())
+                } else {
+                    0
+                };
+                tracing::warn!(
+                    target: "derp_shell_shared_state",
+                    kind,
+                    sequence,
+                    snapshot_epoch = payload_epoch,
+                    current_snapshot_epoch = current_epoch,
+                    output_layout_revision,
+                    current_output_layout_revision = self.shell_output_topology_revision,
+                    "rejected stale shell shared-state payload"
+                );
+                true
+            }
+            None => false,
         }
-        let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-        let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
-        if output_layout_revision == 0
-            || output_layout_revision >= self.shell_output_topology_revision
-        {
-            return false;
-        }
-        tracing::warn!(
-            target: "derp_shell_shared_state",
-            kind,
-            sequence,
-            snapshot_epoch,
-            output_layout_revision,
-            current_output_layout_revision = self.shell_output_topology_revision,
-            "rejected stale shell shared-state payload"
-        );
-        true
     }
 
     pub fn sync_shell_shared_state(&mut self, kind: u32) {
@@ -12468,5 +12533,56 @@ mod output_name_pick_tests {
             pick_output_name_for_global_window_rect_from_output_rects(&pairs, 10, 10, 400, 300)
                 .unwrap();
         assert_eq!(got, "ONLY");
+    }
+}
+
+#[cfg(test)]
+mod shell_shared_state_tests {
+    use super::{shell_shared_state_payload_stale_reason, ShellSharedStateStaleReason};
+
+    fn payload(snapshot_epoch: u64, output_layout_revision: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&snapshot_epoch.to_le_bytes());
+        out.extend_from_slice(&output_layout_revision.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn rejects_payload_from_old_output_layout_revision() {
+        assert_eq!(
+            shell_shared_state_payload_stale_reason(&payload(20, 3), 4, 20),
+            Some(ShellSharedStateStaleReason::OutputLayoutRevision {
+                payload_revision: 3,
+                current_revision: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_payload_from_old_snapshot_epoch() {
+        assert_eq!(
+            shell_shared_state_payload_stale_reason(&payload(18, 4), 4, 20),
+            Some(ShellSharedStateStaleReason::SnapshotEpoch {
+                payload_epoch: 18,
+                current_epoch: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn allows_startup_epoch_zero_payloads() {
+        assert_eq!(
+            shell_shared_state_payload_stale_reason(&payload(0, 4), 4, 20),
+            None
+        );
+    }
+
+    #[test]
+    fn allows_current_payloads() {
+        assert_eq!(
+            shell_shared_state_payload_stale_reason(&payload(20, 4), 4, 20),
+            None
+        );
     }
 }

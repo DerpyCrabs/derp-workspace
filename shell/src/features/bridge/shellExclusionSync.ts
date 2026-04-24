@@ -3,7 +3,7 @@ import type { DerpWindow } from '@/host/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
 import { mergeExclusionRects } from '@/lib/exclusionRects'
 import { clientRectToGlobalLogical } from '@/lib/shellCoords'
-import { writeShellExclusionState } from './sharedShellState'
+import { sharedShellStateStampKey, writeShellExclusionState } from './sharedShellState'
 
 type ShellExclusionSyncOptions = {
   mainEl: Accessor<HTMLElement | undefined>
@@ -102,6 +102,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     }
     const floatingForPayload = mergeExclusionRects(floatingRaw)
     const payload = JSON.stringify({
+      stamp: sharedShellStateStampKey(),
       rects: mergedBase,
       tray_strip,
       overlayOpen,

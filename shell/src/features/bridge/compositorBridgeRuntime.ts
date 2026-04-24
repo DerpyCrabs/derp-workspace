@@ -200,6 +200,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return Math.max(0, Math.trunc(raw))
   }
 
+  const markCompositorStateEpoch = (epoch: number) => {
+    if (epoch <= 0) return
+    const w = window as Window & { __DERP_LAST_COMPOSITOR_STATE_EPOCH?: number }
+    w.__DERP_LAST_COMPOSITOR_STATE_EPOCH = Math.max(
+      typeof w.__DERP_LAST_COMPOSITOR_STATE_EPOCH === 'number' ? w.__DERP_LAST_COMPOSITOR_STATE_EPOCH : 0,
+      epoch,
+    )
+  }
+
   const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
     detail.type === 'window_list' ||
     detail.type === 'focus_changed' ||
@@ -529,6 +538,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         return
       }
     }
+    markCompositorStateEpoch(detailEpoch)
     if (d.type === 'context_menu_dismiss') {
       options.closeAllAtlasSelects()
       options.hideContextMenu()
@@ -707,6 +717,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       markShellLatencySample(shellLatencySampleId, { decodedAt: performance.now() })
     }
     lastSnapshotSequence = decoded.sequence
+    markCompositorStateEpoch(decoded.sequence)
     options.setCompositorSnapshotSequence(decoded.sequence)
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE =
       decoded.sequence
