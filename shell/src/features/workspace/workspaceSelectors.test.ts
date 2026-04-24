@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildTaskbarRowsByMonitor, buildWorkspaceGroups } from './workspaceSelectors'
+import { createRoot, createSignal } from 'solid-js'
+import { buildTaskbarRowsByMonitor, buildWorkspaceGroups, createWorkspaceSelectors } from './workspaceSelectors'
 import type { DerpWindow } from '@/host/appWindowState'
 import { createEmptyWorkspaceState, type WorkspaceState } from './workspaceState'
 
@@ -190,5 +191,44 @@ describe('workspaceSelectors', () => {
     expect(groups[0]?.splitLeftWindowId).toBe(1)
     expect(groups[0]?.visibleWindowIds).toEqual([1, 2])
     expect(groups[0]?.hiddenWindowIds).toEqual([])
+  })
+
+  it('reuses selector maps when workspace group members stay stable', () => {
+    createRoot((dispose) => {
+      const left = makeWindow(1)
+      const right = makeWindow(2)
+      const [windowsById, setWindowsById] = createSignal<ReadonlyMap<number, DerpWindow>>(
+        new Map([
+          [1, left],
+          [2, right],
+        ]),
+        { equals: false },
+      )
+      const selectors = createWorkspaceSelectors({
+        workspaceSnapshot: () => workspaceState,
+        windowsById,
+        windowsList: () => [...windowsById().values()],
+        focusedWindowId: () => null,
+        fallbackMonitorKey: () => 'HDMI-A-1',
+        desktopApps: () => [],
+        shellHostedAppByWindow: () => ({}),
+      })
+
+      const groupsById = selectors.workspaceGroupsById()
+      const groupIdByWindowId = selectors.workspaceGroupIdByWindowId()
+      const groupsByWindowId = selectors.workspaceGroupsByWindowId()
+
+      setWindowsById(
+        new Map([
+          [1, left],
+          [2, right],
+        ]),
+      )
+
+      expect(selectors.workspaceGroupsById()).toBe(groupsById)
+      expect(selectors.workspaceGroupIdByWindowId()).toBe(groupIdByWindowId)
+      expect(selectors.workspaceGroupsByWindowId()).toBe(groupsByWindowId)
+      dispose()
+    })
   })
 })

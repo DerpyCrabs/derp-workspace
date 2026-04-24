@@ -100,7 +100,7 @@ type ShellWindowGestureRuntimeOptions = {
   outputGeom: Accessor<{ w: number; h: number } | null>
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   screenDraftRows: Accessor<LayoutScreen[]>
-  allWindowsMap: Accessor<ReadonlyMap<number, DerpWindow>>
+  windowById: (windowId: number) => Accessor<DerpWindow | undefined>
   reserveTaskbarForMon: (mon: LayoutScreen) => boolean
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
   sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null) => boolean
@@ -168,6 +168,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   let shellMoveDeltaLogSeq = 0
   let shellWindowResize: ShellResizeSession | null = null
   let shellResizeDeltaLogSeq = 0
+  const readWindow = (windowId: number) => options.windowById(windowId)()
 
   function workCanvasEqual(
     a: { x: number; y: number; w: number; h: number },
@@ -243,7 +244,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     windowId: number,
     preferredMonitorName?: string | null,
   ): SnapAssistContext | null {
-    const window = options.allWindowsMap().get(windowId)
+    const window = readWindow(windowId)
     if (!window || window.minimized) return null
     const canvas = options.outputGeom()
     const origin = options.layoutCanvasOrigin()
@@ -444,7 +445,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       dragPreTileSnapshot.delete(snapWindowId)
       return
     }
-    const currentWindow = options.allWindowsMap().get(snapWindowId)
+    const currentWindow = readWindow(snapWindowId)
     const preTile =
       dragPreTileSnapshot.get(snapWindowId) ??
       options.workspacePreTileSnapshot(snapWindowId) ??
@@ -649,7 +650,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   }
 
   function toggleShellMaximizeForWindow(windowId: number) {
-    const window = options.allWindowsMap().get(windowId)
+    const window = readWindow(windowId)
     if (!window) return
     if (window.maximized) {
       options.shellWireSend('set_maximized', windowId, 0)
@@ -670,7 +671,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     clearTilePreviewWire()
     const main = options.getMainRef()
     const output = options.outputGeom()
-    const window = options.allWindowsMap().get(windowId)
+    const window = readWindow(windowId)
     if (main && output && window) {
       const mainRect = main.getBoundingClientRect()
       const pointerCanvas = clientPointToCanvasLocal(clientX, clientY, mainRect, output.w, output.h)
@@ -734,7 +735,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     }
     closeSnapAssistPicker()
     clearTilePreviewWire()
-    const window = options.allWindowsMap().get(windowId)
+    const window = readWindow(windowId)
     shellWindowDrag = {
       windowId,
       lastX: cx,

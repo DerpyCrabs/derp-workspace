@@ -40,6 +40,25 @@ function sameWindowIds(left: readonly number[], right: readonly number[]): boole
   return true
 }
 
+function sameGroupMap<T>(
+  left: ReadonlyMap<T, WorkspaceGroupModel>,
+  right: ReadonlyMap<T, WorkspaceGroupModel>,
+): boolean {
+  if (left.size !== right.size) return false
+  for (const [key, group] of right) {
+    if (left.get(key) !== group) return false
+  }
+  return true
+}
+
+function sameGroupIdMap<T>(left: ReadonlyMap<T, string>, right: ReadonlyMap<T, string>): boolean {
+  if (left.size !== right.size) return false
+  for (const [key, groupId] of right) {
+    if (left.get(key) !== groupId) return false
+  }
+  return true
+}
+
 export function buildWorkspaceGroups(
   workspaceSnapshot: WorkspaceSnapshot,
   windowsById: ReadonlyMap<number, DerpWindow>,
@@ -244,32 +263,32 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
     return previousWorkspaceGroups
   })
 
-  const workspaceGroupsById = createMemo(() => {
+  const workspaceGroupsById = createMemo((previous: ReadonlyMap<string, WorkspaceGroupModel> = new Map()) => {
     const map = new Map<string, WorkspaceGroupModel>()
     for (const group of workspaceGroups()) {
       map.set(group.id, group)
     }
-    return map
+    return sameGroupMap(previous, map) ? previous : map
   })
 
-  const workspaceGroupIdByWindowId = createMemo(() => {
+  const workspaceGroupIdByWindowId = createMemo((previous: ReadonlyMap<number, string> = new Map()) => {
     const map = new Map<number, string>()
     for (const group of options.workspaceSnapshot().groups) {
       for (const windowId of group.windowIds) {
         map.set(windowId, group.id)
       }
     }
-    return map
+    return sameGroupIdMap(previous, map) ? previous : map
   })
 
-  const workspaceGroupsByWindowId = createMemo(() => {
+  const workspaceGroupsByWindowId = createMemo((previous: ReadonlyMap<number, WorkspaceGroupModel> = new Map()) => {
     const map = new Map<number, WorkspaceGroupModel>()
     for (const group of workspaceGroups()) {
       for (const member of group.members) {
         map.set(member.window_id, group)
       }
     }
-    return map
+    return sameGroupMap(previous, map) ? previous : map
   })
 
   const activeWorkspaceGroupId = createMemo(() => {

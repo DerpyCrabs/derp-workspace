@@ -158,6 +158,14 @@ function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>
 
 const TASKBAR_HEIGHT = 44
 
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
 function shSingleQuotedForSpawn(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`
 }
@@ -995,7 +1003,10 @@ function App() {
     desktopApps: desktopApps.items,
     shellHostedAppByWindow,
   })
-  const workspaceGroupIds = createMemo(() => workspaceGroups().map((group) => group.id))
+  const workspaceGroupIds = createMemo((prev: readonly string[] = []) => {
+    const next = workspaceGroups().map((group) => group.id)
+    return sameStringList(prev, next) ? prev : next
+  })
 
   function requestWindowSyncRecovery() {
     if (hasPendingClientMutation()) return
@@ -1491,7 +1502,7 @@ function App() {
     outputGeom,
     layoutCanvasOrigin,
     screenDraftRows: liveScreenRows,
-    allWindowsMap,
+    windowById,
     reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
     occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
     sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,

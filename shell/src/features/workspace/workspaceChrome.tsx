@@ -1163,10 +1163,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             }
             return {
               position: 'absolute',
-              left: `${window.x}px`,
-              top: `${window.y}px`,
+              left: '0',
+              top: '0',
               width: `${window.width}px`,
               height: `${window.height}px`,
+              transform: `translate3d(${window.x}px, ${window.y}px, 0)`,
+              'will-change': 'transform',
+              contain: 'layout paint',
               'z-index': 1000 + window.stack_z,
               visibility: visible() ? 'visible' : 'hidden',
               'pointer-events': visible() ? 'auto' : 'none',
