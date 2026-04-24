@@ -65,7 +65,7 @@ type CreateShellContextMenusArgs = {
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
-  scheduleExclusionZonesSync?: () => void
+  scheduleOverlayExclusionSync?: () => void
 }
 
 export function shouldHandleContextMenuNavigationKey(nestedInteractiveFocus: boolean): boolean {
@@ -133,9 +133,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   let menuPanelRef: HTMLElement | undefined
   let programsMenuSearchRef: HTMLInputElement | undefined
   function scheduleOverlayExclusionSync() {
-    args.scheduleExclusionZonesSync?.()
-    queueMicrotask(() => args.scheduleExclusionZonesSync?.())
-    requestAnimationFrame(() => args.scheduleExclusionZonesSync?.())
+    args.scheduleOverlayExclusionSync?.()
   }
 
   function setMenuPanelRef(el: HTMLDivElement) {

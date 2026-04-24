@@ -8,6 +8,7 @@ import {
   type WorkspaceSnapshot,
 } from './workspaceSnapshot'
 import type { WorkspaceMutation } from './workspaceProtocol'
+import type { ShellSharedStateSyncRequest } from '@/features/bridge/shellSharedStateSync'
 
 type FollowupOptions = {
   flushWindows?: boolean
@@ -21,9 +22,7 @@ type WorkspaceLayoutBridgeOptions = {
   getWindowsByMonitor: () => ReadonlyMap<string, readonly DerpWindow[]>
   getTaskbarRowsByMonitor: () => ReadonlyMap<string, TaskbarWindowRow[]>
   getFallbackMonitorName: () => string
-  scheduleExclusionZonesSync: () => void
-  syncExclusionZonesNow: () => void
-  flushShellUiWindowsSyncNow: () => void
+  requestSharedStateSync: (request: ShellSharedStateSyncRequest, timing?: 'now' | 'microtask') => void
   sendWorkspaceMutation?: (mutation: WorkspaceMutation) => boolean
   shellWireSend: (op: 'workspace_mutation', arg?: number | string) => boolean
 }
@@ -150,13 +149,16 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
       compositorFollowupSyncExclusion = false
       compositorFollowupResetScroll = false
       try {
-        if (flushWindows) options.flushShellUiWindowsSyncNow()
         if (syncExclusion) {
-          if (flushWindows) {
-            options.syncExclusionZonesNow()
-          } else {
-            options.scheduleExclusionZonesSync()
-          }
+          options.requestSharedStateSync(
+            {
+              shellUi: flushWindows ? 'flush' : undefined,
+              exclusion: flushWindows ? 'sync' : 'schedule',
+            },
+            'now',
+          )
+        } else if (flushWindows) {
+          options.requestSharedStateSync({ shellUi: 'flush' }, 'now')
         }
         if (resetScroll) {
           window.scrollTo(0, 0)

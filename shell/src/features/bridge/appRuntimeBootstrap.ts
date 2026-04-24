@@ -1,5 +1,6 @@
 import { registerCompositorBridgeRuntime } from '@/features/bridge/compositorBridgeRuntime'
 import { registerShellE2eBridge } from '@/features/bridge/shellE2eBridge'
+import type { ShellSharedStateSyncRequest } from './shellSharedStateSync'
 
 type AppRuntimeBootstrapOptions = {
   startThemeDomSync: () => () => void
@@ -25,8 +26,7 @@ type AppRuntimeBootstrapOptions = {
   setPointerInMain: (value: { x: number; y: number } | null) => void
   getMainRef: () => HTMLElement | undefined
   onWindowBlur: (state: { dragWindowId: number | null; resizeWindowId: number | null }) => void
-  invalidateAllShellUiWindows: () => void
-  scheduleExclusionZonesSync: () => void
+  requestSharedStateSync: (request: ShellSharedStateSyncRequest, timing?: 'now' | 'microtask') => void
   shellWireSend: (
     op: 'presentation_fullscreen',
     arg?: number | string,
@@ -174,8 +174,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
 
   const onWindowResize = () => {
     syncViewport()
-    options.invalidateAllShellUiWindows()
-    options.scheduleExclusionZonesSync()
+    options.requestSharedStateSync({ shellUi: 'invalidate-all', exclusion: 'schedule' })
   }
 
   const onFullscreenChange = () => {

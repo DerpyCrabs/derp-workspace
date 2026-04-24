@@ -87,6 +87,7 @@ import { createCompositorModel } from '@/features/bridge/compositorModel'
 import { registerAppRuntimeBootstrap } from '@/features/bridge/appRuntimeBootstrap'
 import { createScreenshotPortalBridge } from '@/features/bridge/screenshotPortalBridge'
 import { createShellExclusionSync } from '@/features/bridge/shellExclusionSync'
+import { createShellSharedStateSync } from '@/features/bridge/shellSharedStateSync'
 import { createSessionPersistenceRuntime } from '@/features/bridge/sessionPersistenceRuntime'
 import { createSessionRuntime } from '@/features/bridge/sessionRuntime'
 import { createShellTransportBridge } from '@/features/bridge/shellTransportBridge'
@@ -903,7 +904,7 @@ function App() {
       shellHttpBase() !== null && sessionPersistenceRuntime.savedSessionAvailable() && !sessionRestoreSnapshot(),
     postSessionPower,
     canSessionControl,
-    scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
+    scheduleOverlayExclusionSync: () => shellSharedStateSync.scheduleOverlayExclusionSync(),
     focusedWindowId,
     shellWireSend: (op, arg) => shellWireSend(op, arg),
     exitSession: () => {
@@ -1399,6 +1400,12 @@ function App() {
     onHudChange: debugHudRuntime.setExclusionZonesHud,
     exclusionReactiveDeps,
   })
+  const shellSharedStateSync = createShellSharedStateSync({
+    invalidateAllShellUiWindows,
+    flushShellUiWindowsSyncNow,
+    scheduleExclusionZonesSync,
+    syncExclusionZonesNow,
+  })
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
     getWorkspaceState: workspaceSnapshot,
@@ -1406,19 +1413,14 @@ function App() {
     getWindowsByMonitor: windowsByMonitor,
     getTaskbarRowsByMonitor: taskbarRowsByMonitor,
     getFallbackMonitorName: fallbackMonitorName,
-    scheduleExclusionZonesSync,
-    syncExclusionZonesNow,
-    flushShellUiWindowsSyncNow,
+    requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
     sendWorkspaceMutation,
     shellWireSend,
   })
 
   createEffect(() => {
     void shellWireReadyRev()
-    queueMicrotask(() => {
-      flushShellUiWindowsSyncNow()
-      syncExclusionZonesNow()
-    })
+    shellSharedStateSync.requestSharedStateSync({ shellUi: 'flush', exclusion: 'sync' })
   })
 
   function isPrimaryTaskbarScreen(s: LayoutScreen, primary: LayoutScreen) {
@@ -1485,7 +1487,7 @@ function App() {
     shellUiWindowsInvalidateQueued = true
     queueMicrotask(() => {
       shellUiWindowsInvalidateQueued = false
-      invalidateAllShellUiWindows()
+      shellSharedStateSync.requestSharedStateSync({ shellUi: 'invalidate-all' }, 'now')
     })
   })
 
@@ -1521,9 +1523,7 @@ function App() {
         outputId: workspaceFindMonitorIdentityForTiledWindow(workspaceSnapshot(), windowId),
       }
     },
-    scheduleExclusionZonesSync,
-    syncExclusionZonesNow,
-    flushShellUiWindowsSyncNow,
+    requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
     bumpSnapChrome,
     shellWireSend,
     shellMoveLog,
@@ -1765,7 +1765,7 @@ function App() {
           resetPersistedTilingConfig()
           setTilingCfgRev((n) => n + 1)
           bumpSnapChrome()
-          scheduleExclusionZonesSync()
+          shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
         },
         getMenuLayerHostEl: shellContextMenus.menuLayerHostEl,
       },
@@ -1845,8 +1845,7 @@ function App() {
         if (screenshotMode()) stopScreenshotMode()
         if (portalPickerVisible()) closePortalPickerUi()
       },
-      invalidateAllShellUiWindows,
-      scheduleExclusionZonesSync,
+      requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
       shellWireSend,
     })
     onCleanup(disposeAppRuntimeBootstrap)
@@ -1915,7 +1914,7 @@ function App() {
       }}
       ref={(el) => {
         mainRef = el
-        queueMicrotask(() => scheduleExclusionZonesSync())
+        shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
       }}
       onPointerDown={() => debugHudRuntime.bumpRootPointerDowns()}
       onContextMenu={(e) => {
@@ -1977,7 +1976,7 @@ function App() {
           setMonitorCustomLayouts(outputName, layouts)
           setTilingCfgRev((n) => n + 1)
           bumpSnapChrome()
-          scheduleExclusionZonesSync()
+          shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })
         }}
         getMenuLayerHostEl={shellContextMenus.menuLayerHostEl}
         getMainEl={() => mainRef}
