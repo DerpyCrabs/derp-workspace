@@ -179,6 +179,8 @@ pub struct SharedShellSnapshotWriter {
     sequence: u64,
     last_payload: Option<Vec<u8>>,
     domain_revisions: [u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    domain_chunks: [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    domain_chunks_initialized: bool,
     authoritative: ShellSnapshotModel,
 }
 
@@ -194,6 +196,8 @@ impl SharedShellSnapshotWriter {
             sequence: 0,
             last_payload: None,
             domain_revisions: [0; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+            domain_chunks: std::array::from_fn(|_| Vec::new()),
+            domain_chunks_initialized: false,
             authoritative: ShellSnapshotModel::default(),
         };
         this.publish_payload_at(0, 0, Vec::new())?;
@@ -216,10 +220,17 @@ impl SharedShellSnapshotWriter {
         self.bump_domain_revisions(dirty_domains);
         let authoritative_messages = self.authoritative.messages();
         warn_snapshot_invariants(&authoritative_messages);
+        refresh_domain_chunk_cache(
+            &mut self.domain_chunks,
+            dirty_domains,
+            &authoritative_messages,
+            !self.domain_chunks_initialized,
+        )?;
+        self.domain_chunks_initialized = true;
         self.publish_payload_at(
             sequence,
             dirty_domains,
-            encode_payload_messages(&self.domain_revisions, &authoritative_messages)?,
+            encode_payload_chunks(&self.domain_revisions, &self.domain_chunks)?,
         )
     }
 
@@ -281,34 +292,29 @@ impl SharedShellSnapshotWriter {
     }
 }
 
-fn encode_payload_messages(
+fn encode_payload_chunks(
     domain_revisions: &[u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
-    messages: &[shell_wire::DecodedCompositorToShellMessage],
+    domain_chunks: &[Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
 ) -> Result<Vec<u8>, String> {
     let mut payload = Vec::new();
     for revision in domain_revisions {
         payload.extend_from_slice(&revision.to_le_bytes());
     }
-    let mut chunks: Vec<(u32, Vec<u8>)> = Vec::new();
-    for index in 0..shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT {
-        let domain = 1u32 << index;
-        let mut chunk = Vec::new();
-        for msg in messages {
-            if snapshot_dirty_domains(std::slice::from_ref(msg)) == domain {
-                append_snapshot_message(&mut chunk, msg)?;
-            }
-        }
-        if !chunk.is_empty() {
-            chunks.push((domain, chunk));
-        }
-    }
+    let chunks_len = domain_chunks
+        .iter()
+        .filter(|chunk| !chunk.is_empty())
+        .count();
     payload.extend_from_slice(&SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
     payload.extend_from_slice(
-        &u32::try_from(chunks.len())
+        &u32::try_from(chunks_len)
             .map_err(|_| "too many snapshot domain chunks".to_string())?
             .to_le_bytes(),
     );
-    for (domain, chunk) in chunks {
+    for (index, chunk) in domain_chunks.iter().enumerate() {
+        if chunk.is_empty() {
+            continue;
+        }
+        let domain = 1u32 << index;
         payload.extend_from_slice(&domain.to_le_bytes());
         payload.extend_from_slice(
             &u32::try_from(chunk.len())
@@ -318,6 +324,28 @@ fn encode_payload_messages(
         payload.extend_from_slice(&chunk);
     }
     Ok(payload)
+}
+
+fn refresh_domain_chunk_cache(
+    domain_chunks: &mut [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    dirty_domains: u32,
+    messages: &[shell_wire::DecodedCompositorToShellMessage],
+    force_all: bool,
+) -> Result<(), String> {
+    for (index, chunk) in domain_chunks.iter_mut().enumerate() {
+        let domain = 1u32 << index;
+        if !force_all && dirty_domains & domain == 0 {
+            continue;
+        }
+        let mut next = Vec::new();
+        for msg in messages {
+            if snapshot_dirty_domains(std::slice::from_ref(msg)) == domain {
+                append_snapshot_message(&mut next, msg)?;
+            }
+        }
+        *chunk = next;
+    }
+    Ok(())
 }
 
 fn extend_snapshot_packet(
@@ -1021,5 +1049,109 @@ pub fn snapshot_read_if_changed(
             return Ok(None);
         }
         Ok(Some(out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{encode_payload_chunks, refresh_domain_chunk_cache, SNAPSHOT_DOMAIN_CHUNKS_MAGIC};
+
+    fn chunks() -> [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] {
+        std::array::from_fn(|_| Vec::new())
+    }
+
+    fn output_geometry(w: u32) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
+            logical_w: w,
+            logical_h: 1080,
+            physical_w: w,
+            physical_h: 1080,
+        }
+    }
+
+    fn window_list(revision: u64) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowList {
+            revision,
+            windows: vec![shell_wire::ShellWindowSnapshot {
+                window_id: 9,
+                surface_id: 10,
+                stack_z: 9,
+                x: 20,
+                y: 30,
+                w: 800,
+                h: 600,
+                minimized: 0,
+                maximized: 0,
+                fullscreen: 0,
+                client_side_decoration: 1,
+                workspace_visible: 1,
+                shell_flags: 0,
+                title: "Terminal".to_string(),
+                app_id: "foot".to_string(),
+                output_id: "output-id".to_string(),
+                output_name: "DP-1".to_string(),
+                capture_identifier: "cap".to_string(),
+                kind: "native".to_string(),
+                x11_class: "Foot".to_string(),
+                x11_instance: "foot".to_string(),
+            }],
+        }
+    }
+
+    fn focus(window_id: u32) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+            surface_id: Some(window_id + 1),
+            window_id: Some(window_id),
+        }
+    }
+
+    #[test]
+    fn refresh_domain_chunk_cache_keeps_clean_chunks() {
+        let mut chunks = chunks();
+        let messages = vec![output_geometry(1920), window_list(4), focus(9)];
+        refresh_domain_chunk_cache(&mut chunks, 0, &messages, true).unwrap();
+        let output_chunk = chunks[0].clone();
+        let window_chunk = chunks[1].clone();
+        let focus_chunk = chunks[2].clone();
+        assert!(!output_chunk.is_empty());
+        assert!(!window_chunk.is_empty());
+        assert!(!focus_chunk.is_empty());
+
+        let messages = vec![output_geometry(2560), window_list(4), focus(9)];
+        refresh_domain_chunk_cache(
+            &mut chunks,
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS,
+            &messages,
+            false,
+        )
+        .unwrap();
+
+        assert_ne!(chunks[0], output_chunk);
+        assert_eq!(chunks[1], window_chunk);
+        assert_eq!(chunks[2], focus_chunk);
+    }
+
+    #[test]
+    fn encode_payload_chunks_keeps_full_payload_from_cached_chunks() {
+        let mut chunks = chunks();
+        refresh_domain_chunk_cache(
+            &mut chunks,
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS,
+            &[output_geometry(1920), window_list(1)],
+            true,
+        )
+        .unwrap();
+        let mut revisions = [0u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT];
+        revisions[0] = 1;
+        let payload = encode_payload_chunks(&revisions, &chunks).unwrap();
+        let header_len = shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES;
+        assert_eq!(
+            u32::from_le_bytes(payload[header_len..header_len + 4].try_into().unwrap()),
+            SNAPSHOT_DOMAIN_CHUNKS_MAGIC
+        );
+        assert_eq!(
+            u32::from_le_bytes(payload[header_len + 4..header_len + 8].try_into().unwrap()),
+            2
+        );
     }
 }

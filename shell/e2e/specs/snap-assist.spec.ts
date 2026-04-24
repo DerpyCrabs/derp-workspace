@@ -466,6 +466,34 @@ async function focusSettingsWindow(base: string) {
   return waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
 
+function settingsSnapLayout(shell: ShellSnapshot): string | null {
+  const settingsWindow = shell.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID)
+  const monitorName = settingsWindow?.output_name
+  const sessionSnapshot = shell.session_snapshot as
+    | {
+        tilingConfig?: {
+          monitors?: Record<string, { snapLayout?: string | null } | null> | null
+        } | null
+      }
+    | null
+  if (!monitorName) return null
+  return sessionSnapshot?.tilingConfig?.monitors?.[monitorName]?.snapLayout ?? null
+}
+
+async function waitForSettingsSnapLayout(base: string, layout: '2x2' | '3x2', requireTitlebar = false) {
+  return waitFor(
+    `wait for settings ${layout} snap layout selection`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+      if (settingsSnapLayout(shell) !== layout) return null
+      return requireTitlebar && !controls?.titlebar ? null : shell
+    },
+    2000,
+    125,
+  )
+}
+
 async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
   await openSettings(base, 'click')
   await focusSettingsWindow(base)
@@ -1116,6 +1144,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       125,
     )
     await clickRect(base, assertRectMinSize('settings 2x2 snap layout option', shell.controls?.settings_snap_layout_option_2x2, 12))
+    shell = await waitForSettingsSnapLayout(base, '2x2', true)
 
     let controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
     const titlebar2x2 = assertRectMinSize('settings titlebar after 2x2 snap', controls?.titlebar, 12)
