@@ -169,12 +169,6 @@ struct E2eShellUiWindowSnapshot {
 }
 
 #[derive(Serialize)]
-struct E2eWindowRectsSnapshot {
-    window_id: u32,
-    rects: Vec<E2eRectSnapshot>,
-}
-
-#[derive(Serialize)]
 struct E2eOutputWindowStackSnapshot {
     output_name: String,
     window_ids: Vec<u32>,
@@ -226,7 +220,6 @@ struct E2eCompositorSnapshot {
     shell_ui_windows_generation: u32,
     shell_ui_windows: Vec<E2eShellUiWindowSnapshot>,
     shell_exclusion_global: Vec<E2eRectSnapshot>,
-    shell_exclusion_decor: Vec<E2eWindowRectsSnapshot>,
     shell_native_drag_preview_window_id: Option<u32>,
     shell_native_drag_preview_generation: Option<u32>,
     shell_native_drag_preview_shell_ready: bool,
@@ -632,15 +625,6 @@ impl CompositorState {
             .copied()
             .map(Self::e2e_rect_snapshot)
             .collect();
-        let mut shell_exclusion_decor: Vec<E2eWindowRectsSnapshot> = self
-            .shell_exclusion_decor
-            .iter()
-            .map(|(window_id, rects)| E2eWindowRectsSnapshot {
-                window_id: *window_id,
-                rects: rects.iter().copied().map(Self::e2e_rect_snapshot).collect(),
-            })
-            .collect();
-        shell_exclusion_decor.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         let mut pending_deferred_window_ids: Vec<u32> = self
             .pending_deferred_toplevels
             .values()
@@ -783,7 +767,6 @@ impl CompositorState {
             shell_ui_windows_generation: self.shell_ui_windows_generation,
             shell_ui_windows,
             shell_exclusion_global,
-            shell_exclusion_decor,
             shell_native_drag_preview_window_id: self
                 .shell_native_drag_preview
                 .as_ref()

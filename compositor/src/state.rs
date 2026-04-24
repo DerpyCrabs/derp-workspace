@@ -630,7 +630,6 @@ pub struct CompositorState {
     /// When true, render OSR shell above native Wayland windows (HTML5 / presentation fullscreen).
     pub shell_presentation_fullscreen: bool,
     pub(crate) shell_exclusion_global: Vec<Rectangle<i32, Logical>>,
-    pub(crate) shell_exclusion_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>>,
     pub(crate) shell_exclusion_floating: Vec<Rectangle<i32, Logical>>,
     pub(crate) shell_exclusion_overlay_open: bool,
     pub(crate) shell_exclusion_zones_need_full_damage: bool,
@@ -1196,7 +1195,6 @@ impl CompositorState {
             toplevel_fullscreen_return_maximized: HashSet::new(),
             shell_presentation_fullscreen: false,
             shell_exclusion_global: Vec::new(),
-            shell_exclusion_decor: HashMap::new(),
             shell_exclusion_floating: Vec::new(),
             shell_exclusion_overlay_open: false,
             shell_exclusion_zones_need_full_damage: false,
@@ -2087,7 +2085,6 @@ impl CompositorState {
         }
         let Some(ws) = self.workspace_logical_bounds() else {
             self.shell_exclusion_global.clear();
-            self.shell_exclusion_decor.clear();
             self.shell_exclusion_floating.clear();
             self.shell_exclusion_overlay_open = false;
             self.shell_tray_strip_global = None;
@@ -2157,16 +2154,14 @@ impl CompositorState {
             }
         });
         let global_changed = next_global != self.shell_exclusion_global;
-        let decor_changed = !self.shell_exclusion_decor.is_empty();
         let tray_changed = next_tray_strip != self.shell_tray_strip_global;
         let floating_changed = next_floating != self.shell_exclusion_floating;
         let overlay_changed = overlay_open != self.shell_exclusion_overlay_open;
         self.shell_exclusion_global = next_global;
-        self.shell_exclusion_decor.clear();
         self.shell_exclusion_floating = next_floating;
         self.shell_exclusion_overlay_open = overlay_open;
         self.shell_tray_strip_global = next_tray_strip;
-        if global_changed || decor_changed || tray_changed || floating_changed || overlay_changed {
+        if global_changed || tray_changed || floating_changed || overlay_changed {
             self.shell_exclusion_zones_need_full_damage = true;
             self.shell_dmabuf_dirty_force_full = true;
         }
@@ -9853,9 +9848,6 @@ impl CompositorState {
                 auto_layout_all_outputs = true;
             }
             WorkspaceMutation::SetMonitorLayouts { .. } => {
-                auto_layout_all_outputs = true;
-            }
-            WorkspaceMutation::ReplaceState { .. } => {
                 auto_layout_all_outputs = true;
             }
             WorkspaceMutation::SetMonitorLayout {

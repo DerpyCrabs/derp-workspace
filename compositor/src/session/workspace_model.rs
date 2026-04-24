@@ -299,9 +299,6 @@ pub enum WorkspaceMutation {
         #[serde(default, rename = "nextGroupSeq")]
         next_group_seq: Option<u32>,
     },
-    ReplaceState {
-        state: WorkspaceState,
-    },
 }
 
 impl Default for WorkspaceState {
@@ -695,8 +692,7 @@ mod tests {
                     "set_monitor_layout",
                     "set_monitor_layouts",
                     "clear_pre_tile_geometry",
-                    "restore_session_workspace",
-                    "replace_state"
+                    "restore_session_workspace"
                 ]
             })
         );
@@ -1852,12 +1848,6 @@ impl WorkspaceState {
                     return None;
                 }
                 Some(next)
-            }
-            WorkspaceMutation::ReplaceState { state } => {
-                if *state == *self {
-                    return None;
-                }
-                Some(state.clone())
             }
         }
     }

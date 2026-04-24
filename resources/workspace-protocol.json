@@ -54,7 +54,6 @@
     "set_monitor_layout",
     "set_monitor_layouts",
     "clear_pre_tile_geometry",
-    "restore_session_workspace",
-    "replace_state"
+    "restore_session_workspace"
   ]
 }

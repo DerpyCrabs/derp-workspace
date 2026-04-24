@@ -51,7 +51,6 @@ export const WORKSPACE_MUTATION_TYPES = [
   'set_monitor_layouts',
   'clear_pre_tile_geometry',
   'restore_session_workspace',
-  'replace_state',
 ] as const
 
 export type WorkspaceMonitorLayoutType = (typeof WORKSPACE_MONITOR_LAYOUT_TYPES)[number]
@@ -201,4 +200,3 @@ export type WorkspaceMutation =
       preTileGeometry?: WorkspacePreTileGeometry[]
       nextGroupSeq?: number
     }
-  | { type: 'replace_state'; state: WorkspaceState }

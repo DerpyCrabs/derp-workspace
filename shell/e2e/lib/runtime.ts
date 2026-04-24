@@ -143,11 +143,6 @@ export interface CompositorShellUiWindowSnapshot {
   buffer: CompositorWorkspaceRect
 }
 
-export interface CompositorWindowRectsSnapshot {
-  window_id: number
-  rects: CompositorWorkspaceRect[]
-}
-
 export interface CompositorOutputWindowStackSnapshot {
   output_name: string
   window_ids: number[]
@@ -174,7 +169,6 @@ export interface CompositorSnapshot {
   shell_ui_windows_generation?: number
   shell_ui_windows?: CompositorShellUiWindowSnapshot[]
   shell_exclusion_global?: CompositorWorkspaceRect[]
-  shell_exclusion_decor?: CompositorWindowRectsSnapshot[]
   shell_native_drag_preview_window_id?: number | null
   shell_native_drag_preview_generation?: number | null
   shell_native_drag_preview_shell_ready?: boolean

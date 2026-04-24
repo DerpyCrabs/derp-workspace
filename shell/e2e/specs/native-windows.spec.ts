@@ -666,10 +666,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const movedWindow = compositorWindowById(compositor, windowId)
         const decorTop = nativeDecorTopRect(compositor, windowId)
         if (!movedWindow || !decorTop) return null
-        assert(
-          !(compositor.shell_exclusion_decor ?? []).some((entry) => entry.window_id === windowId),
-          'native decorations must not be exposed as exclusion rects',
-        )
+        assert(!('shell_exclusion_decor' in compositor), 'native decorations must not be exposed as exclusion rects')
         const expectedTopX = movedWindow.x - NATIVE_BORDER_PX
         const expectedTopY = movedWindow.y - NATIVE_TITLEBAR_PX
         if (Math.abs(decorTop.x - expectedTopX) > 8) return null
