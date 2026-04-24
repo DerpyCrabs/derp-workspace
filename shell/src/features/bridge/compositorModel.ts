@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from 'solid-js'
+import { createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
 import {
   applyDetail,
   buildWindowsMapFromList,
@@ -202,6 +202,10 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [workspaceWindows, setWorkspaceWindows] = createSignal<Map<number, DerpWindow>>(new Map())
+  const windowSignals = new Map<
+    number,
+    { get: Accessor<DerpWindow | undefined>; set: Setter<DerpWindow | undefined> }
+  >()
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
   const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
   const [windowsRevision, setWindowsRevision] = createSignal(-1)
@@ -213,10 +217,33 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const [shellHostedAppByWindow, setShellHostedAppByWindow] = createSignal<Readonly<Record<number, unknown>>>({})
   const [shellHostedAppRevision, setShellHostedAppRevision] = createSignal(-1)
 
+  const ensureWindowSignal = (windowId: number) => {
+    let signal = windowSignals.get(windowId)
+    if (!signal) {
+      const [get, set] = createSignal<DerpWindow | undefined>(windows().get(windowId), { equals: Object.is })
+      signal = { get, set }
+      windowSignals.set(windowId, signal)
+    }
+    return signal
+  }
+
+  const syncWindowSignals = (prev: ReadonlyMap<number, DerpWindow>, next: ReadonlyMap<number, DerpWindow>) => {
+    for (const [windowId, window] of next) {
+      if (prev.get(windowId) === window) continue
+      ensureWindowSignal(windowId).set(() => window)
+    }
+    for (const windowId of prev.keys()) {
+      if (next.has(windowId)) continue
+      const signal = windowSignals.get(windowId)
+      if (signal) signal.set(() => undefined)
+    }
+  }
+
   const commitWindows = (updater: (prev: Map<number, DerpWindow>) => Map<number, DerpWindow>) => {
     setWindows((prev) => {
       const next = updater(prev)
       if (next !== prev) {
+        syncWindowSignals(prev, next)
         setWorkspaceWindows((stablePrev) => buildWorkspaceWindowsMap(next, stablePrev))
       }
       return next
@@ -224,6 +251,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   }
 
   const allWindowsMap = createMemo(() => windows())
+  const windowById = (windowId: number) => ensureWindowSignal(windowId).get
   const workspaceWindowsMap = createMemo(() => workspaceWindows())
   const windowsListIds = createMemo(() => windowOrderIds())
   const windowsList = createMemo(() => {
@@ -463,6 +491,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     windows,
     setWindows: commitWindows,
     allWindowsMap,
+    windowById,
     workspaceWindowsMap,
     windowsListIds,
     windowsList,

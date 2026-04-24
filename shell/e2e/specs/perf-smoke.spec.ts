@@ -260,8 +260,28 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `long drag should not flood shell messages, got ${longDragSample.shell_updates.message_count}`,
     )
     assert(
+      longDragSample.begin_frame.compositor_schedules_forced <= 2,
+      `long drag should not rely on forced begin frames, got ${longDragSample.begin_frame.compositor_schedules_forced}`,
+    )
+    assert(
+      longDragSample.begin_frame.cef_send_external_begin_frame <= longDragSample.begin_frame.drm_render_ticks + 8,
+      `long drag begin frames regressed: expected <= drm ticks + 8, got begin=${longDragSample.begin_frame.cef_send_external_begin_frame} drm=${longDragSample.begin_frame.drm_render_ticks}`,
+    )
+    assert(
+      longDragSample.shell_sync.full_window_list_replies <= 2,
+      `long drag should not trigger repeated full window list replies, got ${longDragSample.shell_sync.full_window_list_replies}`,
+    )
+    assert(
       longDragSample.shell_sync.snapshot_notifies <= 4,
       `long drag should not trigger repeated snapshot notifications, got ${longDragSample.shell_sync.snapshot_notifies}`,
+    )
+    assert(
+      longDragSample.shell_sync.snapshot_reads <= 2,
+      `long drag should not require full snapshot reads, got ${longDragSample.shell_sync.snapshot_reads}`,
+    )
+    assert(
+      longDragSample.shell_sync.snapshot_dirty_fallbacks === 0,
+      `long drag dirty snapshots should not fall back to full payloads, got ${longDragSample.shell_sync.snapshot_dirty_fallbacks}`,
     )
     printNote(
       `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,

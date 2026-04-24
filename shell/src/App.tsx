@@ -285,6 +285,7 @@ function App() {
   const defaultApps = useDefaultApplicationsState()
   const {
     allWindowsMap: compositorWindowsMap,
+    windowById,
     windowsList: compositorWindowsList,
     workspaceWindowsMap,
     workspaceWindowsList,
@@ -1525,6 +1526,7 @@ function App() {
     activeWorkspaceGroupId,
     focusedWindowId,
     allWindowsMap,
+    windowById,
     outputGeom,
     layoutCanvasOrigin,
     getMainRef: () => mainRef,

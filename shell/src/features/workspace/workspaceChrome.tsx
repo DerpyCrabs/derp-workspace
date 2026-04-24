@@ -33,6 +33,14 @@ function isShellHostedWorkspaceWindow(window: DerpWindow | undefined): boolean {
   )
 }
 
+function sameWindowIdList(left: readonly number[], right: readonly number[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
 export type WorkspaceExternalTabDropDrag = {
   target: TabMergeTarget | null
   clientX: number
@@ -84,6 +92,7 @@ type WorkspaceChromeOptions = {
   activeWorkspaceGroupId: Accessor<string | null>
   focusedWindowId: Accessor<number | null>
   allWindowsMap: Accessor<ReadonlyMap<number, DerpWindow>>
+  windowById: (windowId: number) => Accessor<DerpWindow | undefined>
   outputGeom: Accessor<{ w: number; h: number } | null>
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   getMainRef: () => HTMLElement | undefined
@@ -710,11 +719,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
   function WorkspaceGroupFrame(props: { groupId: string }) {
     const group = createMemo(() => options.workspaceGroupsById().get(props.groupId) ?? null)
     const visibleWindowId = createMemo(() => group()?.visibleWindowId ?? null)
-    const visibleWindow = createMemo(() => {
+    const visibleWindowAccessor = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()
-      return currentVisibleWindowId == null
-        ? undefined
-        : options.allWindowsMap().get(currentVisibleWindowId)
+      return currentVisibleWindowId == null ? null : options.windowById(currentVisibleWindowId)
+    })
+    const visibleWindow = createMemo(() => {
+      const accessor = visibleWindowAccessor()
+      return accessor ? accessor() : undefined
     })
     const shellHostedMemberWindowIds = createMemo(() => {
       const g = group()
@@ -841,7 +852,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const stackZ = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()
       if (currentVisibleWindowId == null) return 0
-      const base = options.allWindowsMap().get(currentVisibleWindowId)?.stack_z ?? 0
+      const base = visibleWindow()?.stack_z ?? 0
       return options.shellWindowDragId() === currentVisibleWindowId &&
         activeMoveProxyWindowId() !== currentVisibleWindowId
         ? base + 1_000_000
@@ -884,7 +895,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       testId: string,
       extraAttrs: Record<string, string>,
     ) => {
-      const window = options.allWindowsMap().get(windowId)
+      const window = options.windowById(windowId)()
       const shellHosted = isShellHostedWorkspaceWindow(window)
       return (
         <div
@@ -964,7 +975,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                 ? options.focusedWindowId()
                 : visibleWindowId()
             if (currentVisibleWindowId == null) return
-            const window = options.allWindowsMap().get(currentVisibleWindowId)
+            const window = options.windowById(currentVisibleWindowId)()
             if (!window) return
             if (isShellHostedWorkspaceWindow(window)) {
               options.focusShellUiWindow(currentVisibleWindowId)
@@ -1119,12 +1130,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     )
   }
 
-  const persistentShellHostedWindowIds = createMemo(() =>
-    [...options.allWindowsMap().values()]
+  const persistentShellHostedWindowIds = createMemo((prev: readonly number[] = []) => {
+    const next = [...options.allWindowsMap().values()]
       .filter((window) => isShellHostedWorkspaceWindow(window))
       .sort((a, b) => a.window_id - b.window_id)
-      .map((window) => window.window_id),
-  )
+      .map((window) => window.window_id)
+    return sameWindowIdList(prev, next) ? prev : next
+  })
 
   function PersistentShellHostedContentHost() {
     const visibleIds = createMemo(() => {
@@ -1139,7 +1151,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     return (
       <For each={persistentShellHostedWindowIds()}>
         {(windowId) => {
-          const windowModel = createMemo(() => options.allWindowsMap().get(windowId))
+          const windowModel = options.windowById(windowId)
           const visible = createMemo(() => {
             const window = windowModel()
             return !!window && !window.minimized && window.workspace_visible && visibleIds().has(windowId)
@@ -1178,15 +1190,16 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     )
   }
 
-  const scratchpadWindowIds = createMemo(() =>
-    [...options.allWindowsMap().values()]
+  const scratchpadWindowIds = createMemo((prev: readonly number[] = []) => {
+    const next = [...options.allWindowsMap().values()]
       .filter((window) => (window.shell_flags & SHELL_WINDOW_FLAG_SCRATCHPAD) !== 0)
       .sort((a, b) => a.stack_z - b.stack_z || a.window_id - b.window_id)
-      .map((window) => window.window_id),
-  )
+      .map((window) => window.window_id)
+    return sameWindowIdList(prev, next) ? prev : next
+  })
 
   function ScratchpadWindowFrame(props: { windowId: number }) {
-    const windowModel = createMemo(() => options.allWindowsMap().get(props.windowId))
+    const windowModel = options.windowById(props.windowId)
     const frameModel = createMemo((): ShellWindowModel | undefined => {
       const window = windowModel()
       if (!window) return undefined
