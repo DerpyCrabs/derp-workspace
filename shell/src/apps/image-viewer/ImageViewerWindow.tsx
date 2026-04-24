@@ -28,7 +28,7 @@ type ImageViewerWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
-  allWindowsMap: () => Map<number, DerpWindow>
+  windowModel: Accessor<DerpWindow | undefined>
   onOpenContainingFolder?: (path: string) => void
   onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
@@ -165,10 +165,8 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
     setRotationDeg(0)
   })
 
-  const windowModel = createMemo(() => props.allWindowsMap().get(props.windowId))
-
   function toggleWindowFullscreen() {
-    const w = windowModel()
+    const w = props.windowModel()
     if (!w || w.minimized) return
     props.shellWireSend('set_fullscreen', props.windowId, w.fullscreen ? 0 : 1)
   }
@@ -340,11 +338,11 @@ export function ImageViewerWindow(props: ImageViewerWindowProps) {
               />
               <button
                 type="button"
-                title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                title={props.windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                 class="inline-flex h-7 w-7 items-center justify-center rounded-md text-white hover:bg-white/10"
                 onClick={() => toggleWindowFullscreen()}
               >
-                {windowModel()?.fullscreen ? (
+                {props.windowModel()?.fullscreen ? (
                   <Shrink class="h-3.5 w-3.5" stroke-width={2} />
                 ) : (
                   <Expand class="h-3.5 w-3.5" stroke-width={2} />

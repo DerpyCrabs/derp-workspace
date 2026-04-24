@@ -31,7 +31,7 @@ type TextEditorWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
   shellWireSend: ShellCompositorWireSend
-  allWindowsMap: () => Map<number, DerpWindow>
+  windowModel: Accessor<DerpWindow | undefined>
   onOpenContainingFolder?: (path: string) => void
   onOpenExternalFile?: (path: string, context: { directory: string; showHidden: boolean }) => void
 }
@@ -185,10 +185,8 @@ export function TextEditorWindow(props: TextEditorWindowProps) {
     setEditing(false)
   }
 
-  const windowModel = createMemo(() => props.allWindowsMap().get(props.windowId))
-
   function toggleWindowFullscreen() {
-    const w = windowModel()
+    const w = props.windowModel()
     if (!w || w.minimized) return
     props.shellWireSend('set_fullscreen', props.windowId, w.fullscreen ? 0 : 1)
   }
@@ -292,11 +290,11 @@ export function TextEditorWindow(props: TextEditorWindowProps) {
           />
           <button
             type="button"
-            title={windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            title={props.windowModel()?.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
             class="inline-flex h-7 w-7 items-center justify-center rounded-md text-(--shell-text-dim) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
             onClick={() => toggleWindowFullscreen()}
           >
-            {windowModel()?.fullscreen ? (
+            {props.windowModel()?.fullscreen ? (
               <Shrink class="h-3.5 w-3.5" stroke-width={2} />
             ) : (
               <Expand class="h-3.5 w-3.5" stroke-width={2} />

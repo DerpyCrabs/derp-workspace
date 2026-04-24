@@ -322,6 +322,8 @@ fn handle_uplink_list(
         }
         "shared_state_sync" => {
             let kind = args.int(1) as u32;
+            let payload_len = args.int(2).max(0) as usize;
+            crate::cef::begin_frame_diag::note_shell_shared_state_write(kind, payload_len);
             uplink.shell_shared_state_sync(kind);
         }
         "snapshot_perf" => {
@@ -1116,6 +1118,7 @@ wrap_v8_handler! {
             };
             let _ = list.set_string(0, Some(&CefString::from("shared_state_sync")));
             let _ = list.set_int(1, kind as i32);
+            let _ = list.set_int(2, payload_len.min(i32::MAX as usize) as i32);
             self.frame
                 .send_process_message(ProcessId::BROWSER, Some(&mut msg));
             if let Some(retval) = retval {

@@ -24,6 +24,10 @@ static SHELL_SNAPSHOT_DIRTY_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_DIRTY_BYTES: AtomicU64 = AtomicU64::new(0);
+static SHELL_SHARED_STATE_UI_WINDOW_WRITES: AtomicU64 = AtomicU64::new(0);
+static SHELL_SHARED_STATE_UI_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
+static SHELL_SHARED_STATE_EXCLUSION_WRITES: AtomicU64 = AtomicU64::new(0);
+static SHELL_SHARED_STATE_EXCLUSION_BYTES: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
@@ -144,6 +148,10 @@ struct ShellSyncSnapshot {
     snapshot_dirty_unchanged: u64,
     snapshot_dirty_fallbacks: u64,
     snapshot_dirty_bytes: u64,
+    shared_state_ui_window_writes: u64,
+    shared_state_ui_window_bytes: u64,
+    shared_state_exclusion_writes: u64,
+    shared_state_exclusion_bytes: u64,
 }
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
@@ -244,6 +252,20 @@ pub(crate) fn note_shell_dirty_snapshot_fallback(payload_len: usize) {
     SHELL_SNAPSHOT_FULL_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
 }
 
+pub(crate) fn note_shell_shared_state_write(kind: u32, payload_len: usize) {
+    match kind {
+        1 => {
+            SHELL_SHARED_STATE_EXCLUSION_WRITES.fetch_add(1, Ordering::Relaxed);
+            SHELL_SHARED_STATE_EXCLUSION_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
+        }
+        2 => {
+            SHELL_SHARED_STATE_UI_WINDOW_WRITES.fetch_add(1, Ordering::Relaxed);
+            SHELL_SHARED_STATE_UI_WINDOW_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn note_cef_message_pump_scheduled(delay_ms: i64) {
     if let Ok(mut latency) = LATENCY.lock() {
         latency.message_pump_at = Some(Instant::now());
@@ -305,6 +327,10 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             snapshot_dirty_unchanged: SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT.load(Ordering::Relaxed),
             snapshot_dirty_fallbacks: SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT.load(Ordering::Relaxed),
             snapshot_dirty_bytes: SHELL_SNAPSHOT_DIRTY_BYTES.load(Ordering::Relaxed),
+            shared_state_ui_window_writes: SHELL_SHARED_STATE_UI_WINDOW_WRITES.load(Ordering::Relaxed),
+            shared_state_ui_window_bytes: SHELL_SHARED_STATE_UI_WINDOW_BYTES.load(Ordering::Relaxed),
+            shared_state_exclusion_writes: SHELL_SHARED_STATE_EXCLUSION_WRITES.load(Ordering::Relaxed),
+            shared_state_exclusion_bytes: SHELL_SHARED_STATE_EXCLUSION_BYTES.load(Ordering::Relaxed),
         },
     }
 }
@@ -337,6 +363,10 @@ pub(crate) fn reset_perf_counters() {
     SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_DIRTY_BYTES.store(0, Ordering::Relaxed);
+    SHELL_SHARED_STATE_UI_WINDOW_WRITES.store(0, Ordering::Relaxed);
+    SHELL_SHARED_STATE_UI_WINDOW_BYTES.store(0, Ordering::Relaxed);
+    SHELL_SHARED_STATE_EXCLUSION_WRITES.store(0, Ordering::Relaxed);
+    SHELL_SHARED_STATE_EXCLUSION_BYTES.store(0, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }

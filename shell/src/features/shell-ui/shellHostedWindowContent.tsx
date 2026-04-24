@@ -32,7 +32,7 @@ import {
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 
 export type ShellHostedWindowContentEnv = {
-  allWindowsMap: () => Map<number, DerpWindow>
+  windowById: (windowId: number) => Accessor<DerpWindow | undefined>
   shellHostedAppByWindow: () => Record<number, unknown>
   shellWireSend: ShellCompositorWireSend
   onOpenFileBrowserInNewWindow: (path: string) => void
@@ -136,7 +136,7 @@ export function renderShellHostedWindowContent(
       <SettingsPanel
         screenDraft={env.screenDraft}
         setScreenDraft={env.setScreenDraft}
-        currentMonitorName={() => env.allWindowsMap().get(SHELL_UI_SETTINGS_WINDOW_ID)?.output_name ?? null}
+        currentMonitorName={() => env.windowById(SHELL_UI_SETTINGS_WINDOW_ID)()?.output_name ?? null}
         shellChromePrimaryName={env.shellChromePrimaryName}
         autoShellChromeMonitorName={env.autoShellChromeMonitorName}
         canSessionControl={env.canSessionControl}
@@ -161,7 +161,7 @@ export function renderShellHostedWindowContent(
     )
   }
   if (isShellTestWindowId(windowId)) {
-    const window = env.allWindowsMap().get(windowId)
+    const window = env.windowById(windowId)()
     return (
       <ShellTestWindowContent
         windowId={windowId}
@@ -224,7 +224,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            allWindowsMap={env.allWindowsMap}
+            windowModel={env.windowById(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -242,7 +242,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            allWindowsMap={env.allWindowsMap}
+            windowModel={env.windowById(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -260,7 +260,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            allWindowsMap={env.allWindowsMap}
+            windowModel={env.windowById(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)
@@ -278,7 +278,7 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
-            allWindowsMap={env.allWindowsMap}
+            windowModel={env.windowById(id)}
             onOpenContainingFolder={(path) => env.onOpenFileBrowserInNewWindow(path)}
             onOpenExternalFile={(path, context) =>
               env.onOpenFileWith(optionById('xdg-open', fileOpenCategoryForPath(path), env.desktopApps.items()), path, context)

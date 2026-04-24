@@ -511,6 +511,10 @@ export interface PerfShellSyncSnapshot {
   snapshot_dirty_unchanged: number
   snapshot_dirty_fallbacks: number
   snapshot_dirty_bytes: number
+  shared_state_ui_window_writes: number
+  shared_state_ui_window_bytes: number
+  shared_state_exclusion_writes: number
+  shared_state_exclusion_bytes: number
 }
 
 export interface PerfCounterSnapshot {

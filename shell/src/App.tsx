@@ -1296,7 +1296,7 @@ function App() {
 
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
     return renderShellHostedWindowContent(windowId, {
-      allWindowsMap,
+      windowById,
       shellHostedAppByWindow,
       shellWireSend,
       onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),

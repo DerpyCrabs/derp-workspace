@@ -53,6 +53,14 @@ function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapsho
       snapshot_dirty_fallbacks:
         after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
       snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
+      shared_state_ui_window_writes:
+        after.shell_sync.shared_state_ui_window_writes - before.shell_sync.shared_state_ui_window_writes,
+      shared_state_ui_window_bytes:
+        after.shell_sync.shared_state_ui_window_bytes - before.shell_sync.shared_state_ui_window_bytes,
+      shared_state_exclusion_writes:
+        after.shell_sync.shared_state_exclusion_writes - before.shell_sync.shared_state_exclusion_writes,
+      shared_state_exclusion_bytes:
+        after.shell_sync.shared_state_exclusion_bytes - before.shell_sync.shared_state_exclusion_bytes,
     },
   }
 }
@@ -283,8 +291,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
       longDragSample.shell_sync.snapshot_dirty_fallbacks === 0,
       `long drag dirty snapshots should not fall back to full payloads, got ${longDragSample.shell_sync.snapshot_dirty_fallbacks}`,
     )
+    assert(
+      longDragSample.shell_sync.shared_state_ui_window_writes <= 4,
+      `long drag should not repeatedly write shell-ui window placements, got ${longDragSample.shell_sync.shared_state_ui_window_writes}`,
+    )
+    assert(
+      longDragSample.shell_sync.shared_state_exclusion_writes <= 4,
+      `long drag should not repeatedly write exclusion zones, got ${longDragSample.shell_sync.shared_state_exclusion_writes}`,
+    )
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {

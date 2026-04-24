@@ -16,6 +16,7 @@ import {
   createTimingMarks,
   defineGroup,
   ensureNativePair,
+  getPerfCounters,
   getJson,
   getShellHtml,
   getSnapshots,
@@ -28,6 +29,7 @@ import {
   pointerButton,
   spawnCommand,
   rectCenter,
+  resetPerfCounters,
   rightClickRect,
   runKeybind,
   shellWindowById,
@@ -44,6 +46,7 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
   type E2eState,
+  type PerfCounterSnapshot,
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -72,6 +75,25 @@ async function waitForTabRect(base: string, windowId: number) {
     },
     3000,
     40,
+  )
+}
+
+function assertPointerInteractionPerfBudget(label: string, sample: PerfCounterSnapshot) {
+  assert(
+    sample.shell_sync.shared_state_ui_window_writes <= 24,
+    `${label} should not repeatedly write shell-ui window placements, got ${sample.shell_sync.shared_state_ui_window_writes}`,
+  )
+  assert(
+    sample.shell_sync.shared_state_exclusion_writes <= 12,
+    `${label} should not repeatedly write exclusion zones, got ${sample.shell_sync.shared_state_exclusion_writes}`,
+  )
+  assert(
+    sample.shell_sync.snapshot_dirty_fallbacks === 0,
+    `${label} dirty snapshots should not fall back to full payloads, got ${sample.shell_sync.snapshot_dirty_fallbacks}`,
+  )
+  assert(
+    sample.shell_sync.full_window_list_replies <= 5,
+    `${label} should not require repeated full window lists, got ${sample.shell_sync.full_window_list_replies}`,
   )
 }
 
@@ -834,6 +856,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const target = await timing.step('resolve visible native target', () =>
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
+      await resetPerfCounters(base)
       await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId))
       const merged = await timing.step('wait for merged group', () => waitFor(
         'wait for native/js group merge',
@@ -851,6 +874,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
         2000,
         125,
       ))
+      const mergePerf = await getPerfCounters(base)
+      assertPointerInteractionPerfBudget('tab merge drag', mergePerf)
       await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
       const jsVisible = await timing.step('wait for js tab visible', () => waitFor(
         'wait for js tab visible',
@@ -868,6 +893,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('write merge artifact', () => writeJsonArtifact('tab-groups-native-js-merged.json', {
         merged,
         jsVisible,
+        mergePerf,
       }))
     } finally {
       if (jsWindowId !== null) {
@@ -2725,6 +2751,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const start = rectCenter(divider)
     const dragMidX = Math.round(start.x + split.group.split_right_rect.width * 0.35)
     const dragEndX = Math.round(split.group.split_right_rect.x + split.group.split_right_rect.width * 0.7)
+    await resetPerfCounters(base)
     await timing.step('drag split divider', async () => {
       await movePoint(base, start.x, start.y)
       await pointerButton(base, BTN_LEFT, 'press')
@@ -2736,13 +2763,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const resized = await timing.step('wait for resized split panes', () =>
       waitForSplitGroup(base, target.windowId, target.windowId),
     )
+    const splitDragPerf = await getPerfCounters(base)
+    assertPointerInteractionPerfBudget('split divider drag', splitDragPerf)
     const left = resized.group.split_left_rect!
     const right = resized.group.split_right_rect!
     const rowWidth = left.width + right.width
     assert(left.width / rowWidth >= 0.28, `left pane too narrow: ${left.width}/${rowWidth}`)
     assert(right.width / rowWidth >= 0.28, `right pane too narrow: ${right.width}/${rowWidth}`)
     await timing.step('write split divider artifact', () =>
-      writeJsonArtifact('tab-groups-split-divider.json', resized),
+      writeJsonArtifact('tab-groups-split-divider.json', { ...resized, splitDragPerf }),
     )
   })
 
