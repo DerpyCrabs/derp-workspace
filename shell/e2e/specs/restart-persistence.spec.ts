@@ -28,6 +28,7 @@ import {
   tabGroupByWindow,
   tapKey,
   taskbarForMonitor,
+  typeText,
   waitFor,
   waitForSessionRestoreIdle,
   waitForTaskbarEntry,
@@ -65,8 +66,6 @@ function tabRect(shell: ShellSnapshot, windowId: number) {
 
 async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot) {
   assert(shell.controls?.programs_menu_search, 'missing programs menu search control')
-  const compositor = await getJson<Record<string, unknown>>(base, '/test/state/compositor')
-  if (compositor.shell_keyboard_focus) return shell
   await clickRect(base, shell.controls.programs_menu_search)
   await waitFor(
     'wait for launcher search focus',
@@ -91,8 +90,18 @@ async function openFileBrowserFromLauncher(
       .map((window) => window.window_id),
   )
   await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+  await typeText(base, 'shell')
+  await waitFor(
+    'wait for shell file browser launcher result',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_query === 'shell' && shell.controls?.programs_menu_first_item ? shell : null
+    },
+    2000,
+    50,
+  )
   await tapKey(base, KEY.enter)
-  const opened = await waitFor(
+  const openedWindow = await waitFor(
     'wait for file browser window',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -104,15 +113,31 @@ async function openFileBrowserFromLauncher(
           !entry.minimized,
       )
       if (!window) return null
-      if (!shell.file_browser?.active_path) return null
+      return { shell, window }
+    },
+    5000,
+    100,
+  )
+  spawnedShellWindowIds.add(openedWindow.window.window_id)
+  return waitFor(
+    'wait for file browser window ready',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const window = shell.windows.find(
+        (entry) =>
+          entry.window_id === openedWindow.window.window_id &&
+          entry.shell_hosted &&
+          entry.app_id === FILE_BROWSER_APP_ID &&
+          !entry.minimized,
+      )
+      if (!window) return null
+      if (!fileBrowserState(shell, window.window_id)?.active_path) return null
       if (shell.programs_menu_open) return null
       return { shell, window }
     },
     5000,
     100,
   )
-  spawnedShellWindowIds.add(opened.window.window_id)
-  return opened
 }
 
 async function waitForActivePath(base: string, expectedPath: string, windowId?: number) {

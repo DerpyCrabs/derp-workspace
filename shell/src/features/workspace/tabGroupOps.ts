@@ -9,11 +9,22 @@ export type GroupWindowLike = {
 
 export type TabMergeTarget = {
   groupId: string
+  targetWindowId: number
   insertIndex: number
 }
 
 const TAB_INSERT_BEFORE_FRACTION = 0.4
 const TAB_DROP_HIT_SLOP_PX = 8
+
+function targetWindowIdForGroup(state: WorkspaceState, groupId: string): number | null {
+  const group = state.groups.find((entry) => entry.id === groupId)
+  if (!group || group.windowIds.length === 0) return null
+  const visible = state.visibleWindowIdByGroupId?.[groupId]
+  if (typeof visible === 'number' && group.windowIds.includes(visible)) return visible
+  const active = state.activeTabByGroupId[groupId]
+  if (typeof active === 'number' && group.windowIds.includes(active)) return active
+  return group.windowIds[0]
+}
 
 export function tabsInGroup<T extends { window_id: number }>(
   windows: readonly T[],
@@ -80,16 +91,20 @@ export function clampTabInsertIndex(
   return pinned ? Math.min(clamped, pinnedCount) : Math.max(clamped, pinnedCount)
 }
 
-function parseDropSlotValue(value: string | null): TabMergeTarget | null {
+function parseDropSlotValue(value: string | null, state: WorkspaceState): TabMergeTarget | null {
   if (!value) return null
   const split = value.lastIndexOf(':')
   if (split <= 0 || split >= value.length - 1) return null
   const groupId = value.slice(0, split)
   const insertIndex = Number(value.slice(split + 1))
-  return Number.isFinite(insertIndex) ? { groupId, insertIndex: Math.max(0, Math.trunc(insertIndex)) } : null
+  const targetWindowId = targetWindowIdForGroup(state, groupId)
+  return Number.isFinite(insertIndex) && targetWindowId !== null
+    ? { groupId, targetWindowId, insertIndex: Math.max(0, Math.trunc(insertIndex)) }
+    : null
 }
 
 function mergeTargetFromDropSlotAtPoint(
+  state: WorkspaceState,
   draggedWindowId: number,
   clientX: number,
   clientY: number,
@@ -114,7 +129,7 @@ function mergeTargetFromDropSlotAtPoint(
     ) {
       continue
     }
-    const target = parseDropSlotValue(slot.getAttribute('data-tab-drop-slot'))
+    const target = parseDropSlotValue(slot.getAttribute('data-tab-drop-slot'), state)
     if (target) return target
   }
   return null
@@ -161,10 +176,13 @@ function mergeTargetFromTabStripAtPoint(
     }
     const groupId = strip.getAttribute('data-workspace-tab-strip')
     if (!groupId) continue
+    const targetWindowId = targetWindowIdForGroup(state, groupId)
+    if (targetWindowId === null) continue
     const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
     const rightStripIndex = rightStripSlotAtPoint(strip, clientX)
     return {
       groupId,
+      targetWindowId,
       insertIndex: clampTabInsertIndex(
         state,
         groupId,
@@ -216,7 +234,10 @@ export function mergeTargetFromElement(
   pointerClientX: number,
 ): TabMergeTarget | null {
   if (!(element instanceof Element)) return null
-  const slotTarget = parseDropSlotValue(element.closest('[data-tab-drop-slot]')?.getAttribute('data-tab-drop-slot') ?? null)
+  const slotTarget = parseDropSlotValue(
+    element.closest('[data-tab-drop-slot]')?.getAttribute('data-tab-drop-slot') ?? null,
+    state,
+  )
   if (slotTarget) return slotTarget
   const tabEl = element.closest('[data-workspace-tab]')
   if (!(tabEl instanceof Element)) return null
@@ -235,6 +256,7 @@ export function mergeTargetFromElement(
   const sourceGroupId = state.groups.find((entry) => entry.windowIds.includes(draggedWindowId))?.id
   return {
     groupId,
+    targetWindowId: Math.trunc(targetWindowId),
     insertIndex: clampTabInsertIndex(
       state,
       groupId,
@@ -269,6 +291,7 @@ export function findMergeTarget(
     if (target) return target
   }
   const slotTarget = mergeTargetFromDropSlotAtPoint(
+    state,
     draggedWindowId,
     clientX,
     clientY,

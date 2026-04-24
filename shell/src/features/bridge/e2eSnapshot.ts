@@ -169,6 +169,7 @@ function visibleClientRect(el: HTMLElement) {
       }
       if (right <= left || bottom <= top) return null
     }
+    if (style.position === 'fixed') break
     parent = parent.parentElement
   }
   return {
@@ -332,6 +333,15 @@ export function buildFileBrowserSnapshot(root: ParentNode, origin: CanvasOrigin)
     icon_options: iconOptions,
     open_target_options: openTargetOptions,
   }
+}
+
+function shellHostedWindowIdFromElement(el: Element): number | null {
+  const frameEl = el.closest('[data-shell-window-frame], [data-shell-hosted-content-mount]') as HTMLElement | null
+  if (!frameEl) return null
+  const rawWindowId = Number(
+    frameEl.getAttribute('data-shell-window-frame') ?? frameEl.getAttribute('data-shell-hosted-content-mount') ?? '',
+  )
+  return Number.isInteger(rawWindowId) && rawWindowId >= 1 ? rawWindowId : null
 }
 
 export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
@@ -550,10 +560,10 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const fileBrowserWindows = cache
     .queryAllAttr('data-file-browser-active-path')
     .map((el) => {
-      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
+      const frameEl = el.closest('[data-shell-window-frame], [data-shell-hosted-content-mount]') as HTMLElement | null
       if (!frameEl) return null
-      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
-      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const rawWindowId = shellHostedWindowIdFromElement(el)
+      if (rawWindowId === null) return null
       return {
         window_id: rawWindowId,
         ...buildFileBrowserSnapshot(frameEl, args.origin),
@@ -563,10 +573,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const textEditorWindows = cache
     .queryAllAttr('data-text-editor-root')
     .map((el) => {
-      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
-      if (!frameEl) return null
-      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
-      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const rawWindowId = shellHostedWindowIdFromElement(el)
+      if (rawWindowId === null) return null
       const img = el.querySelector('[data-text-editor-markdown] img')
       const editBtn = el.querySelector('[data-text-editor-edit]')
       const saveBtn = el.querySelector('[data-text-editor-save]')
@@ -596,10 +604,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const imageViewerWindows = cache
     .queryAllAttr('data-image-viewer-root')
     .map((el) => {
-      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
-      if (!frameEl) return null
-      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
-      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const rawWindowId = shellHostedWindowIdFromElement(el)
+      if (rawWindowId === null) return null
       const img = el.querySelector('[data-image-viewer-img]')
       const rotate = el.querySelector('[data-image-viewer-rotate]')
       const fit = el.querySelector('[data-image-viewer-fit]')
@@ -625,10 +631,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const pdfViewerWindows = cache
     .queryAllAttr('data-pdf-viewer-root')
     .map((el) => {
-      const frameEl = el.closest('[data-shell-window-frame]') as HTMLElement | null
-      if (!frameEl) return null
-      const rawWindowId = Number(frameEl.getAttribute('data-shell-window-frame') ?? '')
-      if (!Number.isInteger(rawWindowId) || rawWindowId < 1) return null
+      const rawWindowId = shellHostedWindowIdFromElement(el)
+      if (rawWindowId === null) return null
       const doc = el.querySelector('[data-pdf-viewer-document]')
       const title = el.querySelector('[data-pdf-viewer-title]')
       return {
@@ -983,7 +987,14 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
 
 export function buildE2eShellHtml(doc: Document, selector?: string | null): string {
   if (selector && selector.trim().length > 0) {
-    return (doc.querySelector(selector)?.outerHTML ?? '').toString()
+    const trimmed = selector.trim()
+    const frameMatch = trimmed.match(/^\[data-shell-window-frame="([^"]+)"\]$/)
+    if (frameMatch) {
+      const frame = doc.querySelector(trimmed)?.outerHTML ?? ''
+      const mount = doc.querySelector(`[data-shell-hosted-content-mount="${frameMatch[1]}"]`)?.outerHTML ?? ''
+      return `${frame}${mount}`
+    }
+    return (doc.querySelector(trimmed)?.outerHTML ?? '').toString()
   }
   return doc.documentElement.outerHTML
 }

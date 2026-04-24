@@ -105,6 +105,7 @@ pub const MSG_SHELL_WORKSPACE_MUTATION: u32 = 58;
 pub const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE: u32 = 59;
 pub const MSG_COMPOSITOR_INTERACTION_STATE: u32 = 60;
 pub const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW: u32 = 61;
+pub const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY: u32 = 62;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -136,6 +137,7 @@ pub const MAX_DMABUF_PLANES: u32 = 4;
 /// Max rows in [`MSG_SHELL_WINDOWS_SYNC`].
 pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
+pub const MAX_WORKSPACE_BINARY_BYTES: u32 = 256 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
@@ -755,6 +757,7 @@ pub struct ShellWindowSnapshot {
     pub maximized: u32,
     pub fullscreen: u32,
     pub client_side_decoration: u32,
+    pub workspace_visible: u32,
     pub shell_flags: u32,
     pub title: String,
     pub app_id: String,
@@ -814,6 +817,7 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         body.extend_from_slice(&w.maximized.to_le_bytes());
         body.extend_from_slice(&w.fullscreen.to_le_bytes());
         body.extend_from_slice(&w.client_side_decoration.to_le_bytes());
+        body.extend_from_slice(&w.workspace_visible.to_le_bytes());
         body.extend_from_slice(&w.shell_flags.to_le_bytes());
         body.extend_from_slice(&tl.to_le_bytes());
         body.extend_from_slice(&al.to_le_bytes());
@@ -2423,7 +2427,7 @@ fn decode_window_list_compositor_body(
     let mut off = 16usize;
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 56 > body.len() {
+        if off + 60 > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -2438,18 +2442,24 @@ fn decode_window_list_compositor_body(
         let fullscreen = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
         let client_side_decoration =
             u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
-        let shell_flags = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap());
-        if minimized > 1 || maximized > 1 || fullscreen > 1 || client_side_decoration > 1 {
+        let workspace_visible = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap());
+        let shell_flags = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap());
+        if minimized > 1
+            || maximized > 1
+            || fullscreen > 1
+            || client_side_decoration > 1
+            || workspace_visible > 1
+        {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize;
+        let title_len = u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize;
+        let app_len = u32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize
             || app_len > MAX_WINDOW_STRING_BYTES as usize
         {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 56;
+        off += 60;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -2568,6 +2578,7 @@ fn decode_window_list_compositor_body(
             maximized,
             fullscreen,
             client_side_decoration,
+            workspace_visible,
             shell_flags,
             title,
             app_id,
@@ -2682,6 +2693,7 @@ mod tests {
                 maximized: 1,
                 fullscreen: 0,
                 client_side_decoration: 1,
+                workspace_visible: 1,
                 shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
                 title: "Example".to_string(),
                 app_id: "app.example".to_string(),
@@ -2712,6 +2724,7 @@ mod tests {
                     maximized: 1,
                     fullscreen: 0,
                     client_side_decoration: 1,
+                    workspace_visible: 1,
                     shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
                     title: "Example".to_string(),
                     app_id: "app.example".to_string(),

@@ -49,6 +49,7 @@ export type DerpShellDetail = ({
       kind?: string
       x11_class?: string
       x11_instance?: string
+      workspace_visible?: boolean
     }
   | { type: 'window_unmapped'; window_id: number }
   | {
@@ -168,6 +169,7 @@ export type DerpWindow = {
   fullscreen: boolean
   shell_flags: number
   capture_identifier: string
+  workspace_visible: boolean
 }
 
 export function workspaceGroupWindowIds(state: WorkspaceState, windowId: number): number[] {
@@ -270,6 +272,10 @@ export function buildWindowsMapFromList(
         typeof r.capture_identifier === 'string'
           ? r.capture_identifier
           : (prev?.get(wid)?.capture_identifier ?? ''),
+      workspace_visible:
+        typeof r.workspace_visible === 'boolean'
+          ? r.workspace_visible
+          : (prev?.get(wid)?.workspace_visible ?? true),
     }
     const sameAsPrevious =
       previousWindow !== undefined &&
@@ -290,7 +296,8 @@ export function buildWindowsMapFromList(
       previousWindow.maximized === window.maximized &&
       previousWindow.fullscreen === window.fullscreen &&
       previousWindow.shell_flags === window.shell_flags &&
-      previousWindow.capture_identifier === window.capture_identifier
+      previousWindow.capture_identifier === window.capture_identifier &&
+      previousWindow.workspace_visible === window.workspace_visible
     const stableWindow = sameAsPrevious ? previousWindow : window
     next.set(wid, stableWindow)
     if (identical) {
@@ -370,6 +377,7 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
           typeof detail.capture_identifier === 'string'
             ? detail.capture_identifier
             : (current?.capture_identifier ?? ''),
+        workspace_visible: detail.workspace_visible ?? current?.workspace_visible ?? true,
       }
       if (
         current &&
@@ -390,7 +398,8 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
         current.maximized === nextWindow.maximized &&
         current.fullscreen === nextWindow.fullscreen &&
         current.shell_flags === nextWindow.shell_flags &&
-        current.capture_identifier === nextWindow.capture_identifier
+        current.capture_identifier === nextWindow.capture_identifier &&
+        current.workspace_visible === nextWindow.workspace_visible
       ) {
         return map
       }

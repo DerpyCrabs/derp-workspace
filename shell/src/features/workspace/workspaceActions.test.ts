@@ -27,6 +27,7 @@ function baseWindow(id: number, shellHosted: boolean): DerpWindow {
     fullscreen: false,
     shell_flags: shellHosted ? SHELL_WINDOW_FLAG_SHELL_HOSTED : 0,
     capture_identifier: '',
+    workspace_visible: true,
   }
 }
 
@@ -282,14 +283,14 @@ describe('activateTaskbarGroup', () => {
       activateTaskbarWindowViaShell: activateTaskbarWindowViaShell as (windowId: number) => void,
       shellWireSend: shellWireSend as ShellCompositorWireSend,
     })
-    actions.applyWindowDrop(1, { groupId: 'g-target', insertIndex: 1 })
+    actions.applyWindowDrop(1, { groupId: 'g-target', targetWindowId: 3, insertIndex: 1 })
     expect(shellWireSend).toHaveBeenCalledWith(
       'workspace_mutation',
       JSON.stringify({
-        type: 'move_group_to_group',
-        sourceGroupId: 'g-source',
-        targetGroupId: 'g-target',
+        type: 'move_group_to_window',
         insertIndex: 1,
+        sourceWindowId: 1,
+        targetWindowId: 3,
       }),
     )
   })

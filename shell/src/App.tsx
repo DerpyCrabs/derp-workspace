@@ -1376,7 +1376,6 @@ function App() {
     taskbarScreens,
     windows: windowsList,
     isWindowVisible: (window) => shellExclusionVisibleWindowIds().has(window.window_id),
-    isWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
     onHudChange: debugHudRuntime.setExclusionZonesHud,
     exclusionReactiveDeps,
   })
@@ -1912,8 +1911,6 @@ function App() {
         )}
       </Show>
 
-      <workspaceChrome.ShellHostedWindowContentPortals />
-
       <For each={workspaceGroupIds()}>
         {(groupId) => <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />}
       </For>
@@ -1921,6 +1918,8 @@ function App() {
       <For each={workspaceChrome.scratchpadWindowIds()}>
         {(windowId) => <workspaceChrome.ScratchpadWindowFrame windowId={windowId} />}
       </For>
+
+      <workspaceChrome.PersistentShellHostedContentHost />
 
       <workspaceChrome.TabDragOverlay />
       <workspaceChrome.WindowDragDropOverlay />

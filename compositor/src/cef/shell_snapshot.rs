@@ -10,6 +10,7 @@ use crate::cef::shell_snapshot_model::{snapshot_dirty_domains, ShellSnapshotMode
 use std::os::fd::AsRawFd;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
+const SNAPSHOT_DOMAIN_CHUNKS_MAGIC: u32 = 0x4452_444d;
 
 struct SharedMmapFile {
     _file: File,
@@ -288,8 +289,33 @@ fn encode_payload_messages(
     for revision in domain_revisions {
         payload.extend_from_slice(&revision.to_le_bytes());
     }
-    for msg in messages {
-        append_snapshot_message(&mut payload, msg)?;
+    let mut chunks: Vec<(u32, Vec<u8>)> = Vec::new();
+    for index in 0..shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT {
+        let domain = 1u32 << index;
+        let mut chunk = Vec::new();
+        for msg in messages {
+            if snapshot_dirty_domains(std::slice::from_ref(msg)) == domain {
+                append_snapshot_message(&mut chunk, msg)?;
+            }
+        }
+        if !chunk.is_empty() {
+            chunks.push((domain, chunk));
+        }
+    }
+    payload.extend_from_slice(&SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
+    payload.extend_from_slice(
+        &u32::try_from(chunks.len())
+            .map_err(|_| "too many snapshot domain chunks".to_string())?
+            .to_le_bytes(),
+    );
+    for (domain, chunk) in chunks {
+        payload.extend_from_slice(&domain.to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(chunk.len())
+                .map_err(|_| "snapshot domain chunk too large".to_string())?
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(&chunk);
     }
     Ok(payload)
 }
@@ -302,6 +328,200 @@ fn extend_snapshot_packet(
     let packet = packet.ok_or_else(|| format!("encode {label} snapshot"))?;
     payload.extend_from_slice(&packet);
     Ok(())
+}
+
+fn push_json_string(out: &mut Vec<u8>, value: Option<&serde_json::Value>) -> Option<()> {
+    let s = value.and_then(|v| v.as_str()).unwrap_or_default();
+    let bytes = s.as_bytes();
+    out.extend_from_slice(&u32::try_from(bytes.len()).ok()?.to_le_bytes());
+    out.extend_from_slice(bytes);
+    Some(())
+}
+
+fn push_json_u32(out: &mut Vec<u8>, value: Option<&serde_json::Value>) -> Option<()> {
+    out.extend_from_slice(
+        &(value.and_then(|v| v.as_u64()).unwrap_or_default() as u32).to_le_bytes(),
+    );
+    Some(())
+}
+
+fn push_json_i32(out: &mut Vec<u8>, value: Option<&serde_json::Value>) -> Option<()> {
+    out.extend_from_slice(
+        &(value.and_then(|v| v.as_i64()).unwrap_or_default() as i32).to_le_bytes(),
+    );
+    Some(())
+}
+
+fn push_json_f64(out: &mut Vec<u8>, value: Option<&serde_json::Value>) -> Option<()> {
+    out.extend_from_slice(
+        &value
+            .and_then(|v| v.as_f64())
+            .unwrap_or_default()
+            .to_le_bytes(),
+    );
+    Some(())
+}
+
+fn json_array(value: Option<&serde_json::Value>) -> &[serde_json::Value] {
+    value
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn json_object(
+    value: Option<&serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    value.and_then(|v| v.as_object())
+}
+
+fn layout_code(value: Option<&serde_json::Value>) -> u32 {
+    match value.and_then(|v| v.as_str()).unwrap_or_default() {
+        "master-stack" => 1,
+        "columns" => 2,
+        "grid" => 3,
+        "custom-auto" => 4,
+        _ => 0,
+    }
+}
+
+fn rule_field_code(value: Option<&serde_json::Value>) -> u32 {
+    match value.and_then(|v| v.as_str()).unwrap_or_default() {
+        "title" => 1,
+        "x11_class" => 2,
+        "x11_instance" => 3,
+        "kind" => 4,
+        _ => 0,
+    }
+}
+
+fn rule_op_code(value: Option<&serde_json::Value>) -> u32 {
+    match value.and_then(|v| v.as_str()).unwrap_or_default() {
+        "contains" => 1,
+        "starts_with" => 2,
+        _ => 0,
+    }
+}
+
+fn encode_workspace_state_binary(revision: u64, state_json: &str) -> Option<Vec<u8>> {
+    let root: serde_json::Value = serde_json::from_str(state_json).ok()?;
+    let object = root.as_object()?;
+    let mut body = Vec::new();
+    body.extend_from_slice(&shell_wire::MSG_COMPOSITOR_WORKSPACE_STATE_BINARY.to_le_bytes());
+    body.extend_from_slice(&revision.to_le_bytes());
+    let groups = json_array(object.get("groups"));
+    body.extend_from_slice(&u32::try_from(groups.len()).ok()?.to_le_bytes());
+    for group in groups {
+        let group = group.as_object()?;
+        push_json_string(&mut body, group.get("id"))?;
+        let window_ids = json_array(group.get("windowIds"));
+        body.extend_from_slice(&u32::try_from(window_ids.len()).ok()?.to_le_bytes());
+        for window_id in window_ids {
+            push_json_u32(&mut body, Some(window_id))?;
+        }
+    }
+    let active = json_object(object.get("activeTabByGroupId"));
+    body.extend_from_slice(
+        &u32::try_from(active.map(|v| v.len()).unwrap_or(0))
+            .ok()?
+            .to_le_bytes(),
+    );
+    if let Some(active) = active {
+        for (group_id, window_id) in active {
+            let group_value = serde_json::Value::String(group_id.clone());
+            push_json_string(&mut body, Some(&group_value))?;
+            push_json_u32(&mut body, Some(window_id))?;
+        }
+    }
+    let pinned = json_array(object.get("pinnedWindowIds"));
+    body.extend_from_slice(&u32::try_from(pinned.len()).ok()?.to_le_bytes());
+    for window_id in pinned {
+        push_json_u32(&mut body, Some(window_id))?;
+    }
+    let splits = json_object(object.get("splitByGroupId"));
+    body.extend_from_slice(
+        &u32::try_from(splits.map(|v| v.len()).unwrap_or(0))
+            .ok()?
+            .to_le_bytes(),
+    );
+    if let Some(splits) = splits {
+        for (group_id, split) in splits {
+            let group_value = serde_json::Value::String(group_id.clone());
+            let split = split.as_object()?;
+            push_json_string(&mut body, Some(&group_value))?;
+            push_json_u32(&mut body, split.get("leftWindowId"))?;
+            push_json_f64(&mut body, split.get("leftPaneFraction"))?;
+        }
+    }
+    let monitor_tiles = json_array(object.get("monitorTiles"));
+    body.extend_from_slice(&u32::try_from(monitor_tiles.len()).ok()?.to_le_bytes());
+    for monitor in monitor_tiles {
+        let monitor = monitor.as_object()?;
+        push_json_string(&mut body, monitor.get("outputId"))?;
+        push_json_string(&mut body, monitor.get("outputName"))?;
+        let entries = json_array(monitor.get("entries"));
+        body.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());
+        for entry in entries {
+            let entry = entry.as_object()?;
+            let bounds = entry.get("bounds").and_then(|v| v.as_object())?;
+            push_json_u32(&mut body, entry.get("windowId"))?;
+            push_json_string(&mut body, entry.get("zone"))?;
+            push_json_i32(&mut body, bounds.get("x"))?;
+            push_json_i32(&mut body, bounds.get("y"))?;
+            push_json_i32(&mut body, bounds.get("width"))?;
+            push_json_i32(&mut body, bounds.get("height"))?;
+        }
+    }
+    let monitor_layouts = json_array(object.get("monitorLayouts"));
+    body.extend_from_slice(&u32::try_from(monitor_layouts.len()).ok()?.to_le_bytes());
+    for layout in monitor_layouts {
+        let layout = layout.as_object()?;
+        let params = layout.get("params").and_then(|v| v.as_object());
+        push_json_string(&mut body, layout.get("outputId"))?;
+        push_json_string(&mut body, layout.get("outputName"))?;
+        body.extend_from_slice(&layout_code(layout.get("layout")).to_le_bytes());
+        push_json_f64(&mut body, params.and_then(|p| p.get("masterRatio")))?;
+        push_json_u32(&mut body, params.and_then(|p| p.get("maxColumns")))?;
+        push_json_string(&mut body, params.and_then(|p| p.get("customLayoutId")))?;
+        let slots = json_array(params.and_then(|p| p.get("customSlots")));
+        body.extend_from_slice(&u32::try_from(slots.len()).ok()?.to_le_bytes());
+        for slot in slots {
+            let slot = slot.as_object()?;
+            push_json_string(&mut body, slot.get("slotId"))?;
+            push_json_f64(&mut body, slot.get("x"))?;
+            push_json_f64(&mut body, slot.get("y"))?;
+            push_json_f64(&mut body, slot.get("width"))?;
+            push_json_f64(&mut body, slot.get("height"))?;
+            let rules = json_array(slot.get("rules"));
+            body.extend_from_slice(&u32::try_from(rules.len()).ok()?.to_le_bytes());
+            for rule in rules {
+                let rule = rule.as_object()?;
+                body.extend_from_slice(&rule_field_code(rule.get("field")).to_le_bytes());
+                body.extend_from_slice(&rule_op_code(rule.get("op")).to_le_bytes());
+                push_json_string(&mut body, rule.get("value"))?;
+            }
+        }
+    }
+    let pre_tiles = json_array(object.get("preTileGeometry"));
+    body.extend_from_slice(&u32::try_from(pre_tiles.len()).ok()?.to_le_bytes());
+    for entry in pre_tiles {
+        let entry = entry.as_object()?;
+        let bounds = entry.get("bounds").and_then(|v| v.as_object())?;
+        push_json_u32(&mut body, entry.get("windowId"))?;
+        push_json_i32(&mut body, bounds.get("x"))?;
+        push_json_i32(&mut body, bounds.get("y"))?;
+        push_json_i32(&mut body, bounds.get("width"))?;
+        push_json_i32(&mut body, bounds.get("height"))?;
+    }
+    push_json_u32(&mut body, object.get("nextGroupSeq"))?;
+    if body.len() > shell_wire::MAX_WORKSPACE_BINARY_BYTES as usize {
+        return None;
+    }
+    let body_len = u32::try_from(body.len()).ok()?;
+    let mut packet = Vec::with_capacity(4 + body.len());
+    packet.extend_from_slice(&body_len.to_le_bytes());
+    packet.extend_from_slice(&body);
+    Some(packet)
 }
 
 fn append_snapshot_message(
@@ -455,7 +675,9 @@ fn append_snapshot_message(
         } => {
             extend_snapshot_packet(
                 payload,
-                shell_wire::encode_compositor_workspace_state(*revision, state_json),
+                encode_workspace_state_binary(*revision, state_json).or_else(|| {
+                    shell_wire::encode_compositor_workspace_state(*revision, state_json)
+                }),
                 "workspace state",
             )?;
         }

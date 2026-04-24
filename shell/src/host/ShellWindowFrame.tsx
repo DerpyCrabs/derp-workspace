@@ -48,8 +48,10 @@ type ShellWindowFrameProps = {
   dragging?: MaybeAcc<boolean>
   dragOpacity?: MaybeAcc<number>
   hidden?: MaybeAcc<boolean>
+  frameVisible?: MaybeAcc<boolean>
   contentPointerEvents?: MaybeAcc<'auto' | 'none'>
   contentBackground?: MaybeAcc<string>
+  contentVisible?: MaybeAcc<boolean>
   onFocusRequest?: () => void
   onTitlebarPointerDown: (pointerId: number, clientX: number, clientY: number) => void
   onSnapAssistOpen?: (anchorRect: DOMRect) => void
@@ -116,6 +118,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const startResize = (edges: number, pointerId: number, clientX: number, clientY: number) => {
     props.onResizeEdgeDown(edges, pointerId, clientX, clientY)
   }
+  const frameVisible = () => props.frameVisible === undefined || readAcc(props.frameVisible)
+  const chromeHidden = () =>
+    (props.hidden !== undefined && readAcc(props.hidden)) || !frameVisible()
 
   createEffect(() => {
     const cfg = props.shellUiRegister
@@ -124,6 +129,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     const unreg = registerShellUiWindow(registeredId, () => {
       const next = props.shellUiRegister
       if (!next || next.id !== registeredId) return null
+      if (!frameVisible()) return null
       return shellUiWindowMeasureFromEnv(next.id, next.z, root, next.getEnv)
     })
     onCleanup(unreg)
@@ -131,6 +137,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
 
   createEffect(() => {
     if (!props.shellUiRegister) return
+    frameVisible()
     const w = model()
     if (w) {
       w.x
@@ -151,7 +158,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       }}
       data-shell-window-frame={model()?.window_id ?? 0}
       data-shell-window-hidden={
-        props.hidden !== undefined && readAcc(props.hidden) ? 'true' : 'false'
+        chromeHidden() ? 'true' : 'false'
       }
       data-shell-window-dragging={
         props.dragging !== undefined && readAcc(props.dragging) ? 'true' : 'false'
@@ -170,11 +177,11 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         'box-sizing': 'border-box',
         'pointer-events': 'none',
         contain: 'layout paint',
-        background: 'var(--shell-chrome-bg)',
+        background: 'transparent',
         '--shell-chrome-bg': chromeBg(),
-        visibility: props.hidden !== undefined && readAcc(props.hidden) ? 'hidden' : 'visible',
+        visibility: chromeHidden() ? 'hidden' : 'visible',
         opacity:
-          props.hidden !== undefined && readAcc(props.hidden)
+          chromeHidden()
             ? '0'
             : props.dragOpacity !== undefined
               ? String(readAcc(props.dragOpacity))
@@ -183,7 +190,36 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
               : '1',
       }}
     >
-      <Show when={props.children}>
+      <Show when={layout().showBorderChrome}>
+        <div
+          class="absolute z-2 box-border bg-(--shell-chrome-bg)"
+          style={{
+            left: '0',
+            top: `${layout().insetTop + layout().th}px`,
+            width: `${layout().inset}px`,
+            bottom: '0',
+          }}
+        />
+        <div
+          class="absolute z-2 box-border bg-(--shell-chrome-bg)"
+          style={{
+            right: '0',
+            top: `${layout().insetTop + layout().th}px`,
+            width: `${layout().inset}px`,
+            bottom: '0',
+          }}
+        />
+        <div
+          class="absolute z-2 box-border bg-(--shell-chrome-bg)"
+          style={{
+            left: `${layout().inset}px`,
+            right: `${layout().inset}px`,
+            bottom: '0',
+            height: `${layout().inset}px`,
+          }}
+        />
+      </Show>
+      <Show when={props.contentVisible !== undefined ? readAcc(props.contentVisible) : props.children}>
         <div
           class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
           style={{

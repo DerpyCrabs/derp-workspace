@@ -33,8 +33,11 @@ export const WORKSPACE_SLOT_RULE_OPS = ['equals', 'contains', 'starts_with'] as 
 
 export const WORKSPACE_MUTATION_TYPES = [
   'select_tab',
+  'select_window_tab',
   'move_window_to_group',
+  'move_window_to_window',
   'move_group_to_group',
+  'move_group_to_window',
   'split_window_to_own_group',
   'set_window_pinned',
   'enter_split',
@@ -137,8 +140,34 @@ export type WorkspaceRestoreGroup = {
 
 export type WorkspaceMutation =
   | { type: 'select_tab'; groupId: string; windowId: number }
-  | { type: 'move_window_to_group'; windowId: number; targetGroupId: string; insertIndex: number }
-  | { type: 'move_group_to_group'; sourceGroupId: string; targetGroupId: string; insertIndex: number }
+  | { type: 'select_window_tab'; windowId: number }
+  | {
+      type: 'move_window_to_group'
+      windowId: number
+      targetGroupId: string
+      insertIndex: number
+      targetWindowId?: number
+    }
+  | {
+      type: 'move_window_to_window'
+      windowId: number
+      targetWindowId: number
+      insertIndex: number
+    }
+  | {
+      type: 'move_group_to_group'
+      sourceGroupId: string
+      targetGroupId: string
+      insertIndex: number
+      sourceWindowId?: number
+      targetWindowId?: number
+    }
+  | {
+      type: 'move_group_to_window'
+      sourceWindowId: number
+      targetWindowId: number
+      insertIndex: number
+    }
   | { type: 'split_window_to_own_group'; windowId: number }
   | { type: 'set_window_pinned'; windowId: number; pinned: boolean }
   | { type: 'enter_split'; groupId: string; leftWindowId: number; leftPaneFraction: number }

@@ -52,7 +52,12 @@ export function buildWorkspaceGroups(
       .map((windowId) => windowsById.get(windowId))
       .filter((window): window is DerpWindow => !!window)
     if (members.length === 0) continue
-    const visibleWindowId = resolveGroupVisibleWindowId(workspaceState, group.id, members)
+    const compositorVisibleMembers = members.filter((window) => window.workspace_visible)
+    const visibleMemberIds = compositorVisibleMembers.map((window) => window.window_id)
+    const visibleWindowId =
+      visibleMemberIds.find((windowId) => windowId === resolveGroupVisibleWindowId(workspaceState, group.id, members)) ??
+      visibleMemberIds[0] ??
+      resolveGroupVisibleWindowId(workspaceState, group.id, members)
     const visibleWindow =
       members.find((window) => window.window_id === visibleWindowId) ??
       members.find((window) => !window.minimized) ??
@@ -61,10 +66,12 @@ export function buildWorkspaceGroups(
     const split = getWorkspaceGroupSplit(workspaceState, group.id)
     const splitLeftWindow =
       split ? members.find((window) => window.window_id === split.leftWindowId) ?? null : null
-    const visibleWindowIds = [
-      ...(splitLeftWindow ? [splitLeftWindow.window_id] : []),
-      visibleWindow.window_id,
-    ].filter((windowId, index, all) => all.indexOf(windowId) === index)
+    const visibleWindowIds = visibleMemberIds.length > 0
+      ? visibleMemberIds
+      : [
+          ...(splitLeftWindow ? [splitLeftWindow.window_id] : []),
+          visibleWindow.window_id,
+        ].filter((windowId, index, all) => all.indexOf(windowId) === index)
     const hiddenWindowIds = members
       .map((window) => window.window_id)
       .filter((windowId) => !visibleWindowIds.includes(windowId))

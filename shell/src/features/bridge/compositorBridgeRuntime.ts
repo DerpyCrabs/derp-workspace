@@ -200,11 +200,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return Math.max(0, Math.trunc(raw))
   }
 
-  const shouldApplyLiveDetail = (detail: DerpShellDetail) => {
-    const epoch = detailSnapshotEpoch(detail)
-    return epoch === 0 || epoch >= lastSnapshotSequence
-  }
-
   const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
     detail.type === 'window_list' ||
     detail.type === 'focus_changed' ||
@@ -524,11 +519,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyCompositorDetail = (d: DerpShellDetail) => {
-    if (!shouldApplyLiveDetail(d)) return
     const detailEpoch = detailSnapshotEpoch(d)
-    if (detailEpoch > lastSnapshotSequence && detailCanBeSupersededBySnapshot(d)) {
-      syncCompositorSnapshot()
-      if (lastSnapshotSequence >= detailEpoch) return
+    if (detailCanBeSupersededBySnapshot(d)) {
+      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
+      const hadSnapshot = syncCompositorSnapshot()
+      if (hadSnapshot || (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch)) return
+      if (detailEpoch > lastSnapshotSequence && typeof window.__DERP_COMPOSITOR_SNAPSHOT_PATH === 'string' && window.__DERP_COMPOSITOR_SNAPSHOT_PATH.length > 0) {
+        options.requestCompositorSync()
+        return
+      }
     }
     if (d.type === 'context_menu_dismiss') {
       options.closeAllAtlasSelects()
@@ -572,7 +571,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       return
     }
     if (d.type === 'focus_changed') {
-      if (syncCompositorSnapshot()) return
       const result = options.applyModelCompositorDetail(d, {
         fallbackMonitorKey: options.fallbackMonitorKey,
         requestWindowSyncRecovery: options.requestWindowSyncRecovery,

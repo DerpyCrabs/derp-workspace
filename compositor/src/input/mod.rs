@@ -156,7 +156,7 @@ impl CompositorState {
                 if let Some((window_id, start)) = self.shell_backed_move_candidate {
                     let travel = ((pos.x - start.x).powi(2) + (pos.y - start.y).powi(2)).sqrt();
                     if travel >= 8.0 {
-                        self.shell_move_try_begin_backed(window_id);
+                        self.shell_move_begin(window_id);
                         self.shell_backed_move_candidate = None;
                     }
                 }
@@ -401,7 +401,9 @@ impl CompositorState {
         if take_shell {
             if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
                 if preserve_native_shell_ui_focus {
-                    self.shell_backed_move_candidate = None;
+                    self.shell_backed_move_candidate = self
+                        .shell_backed_titlebar_window_at(pos)
+                        .map(|window_id| (window_id, pos));
                 } else {
                     self.space.elements().for_each(|e| {
                         e.set_activate(false);
@@ -420,19 +422,21 @@ impl CompositorState {
                     }
                 }
             }
-            pointer.button(
-                self,
-                &ButtonEvent {
-                    button,
-                    state: button_state,
-                    serial,
-                    time: time_msec,
-                },
-            );
-            pointer.frame(self);
+            if !in_shell_ui {
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time: time_msec,
+                    },
+                );
+                pointer.frame(self);
+            }
             if (route_cef || self.shell_ui_pointer_grab_active()) && self.shell_cef_active() {
                 if let Some((bx, by)) = cef_ipc {
-                    if button_state == ButtonState::Pressed && !preserve_native_shell_ui_focus {
+                    if button_state == ButtonState::Pressed {
                         self.shell_ipc_keyboard_to_cef = true;
                     }
                     const BTN_RIGHT: u32 = 0x111;

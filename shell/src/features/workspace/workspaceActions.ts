@@ -51,37 +51,22 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   }
 
   const applyTabDrop = (sourceWindowId: number, target: TabMergeTarget) => {
-    const prevState = options.workspaceState()
-    const sourceGroupId = groupIdForWindow(prevState, sourceWindowId)
-    const targetGroup = options.workspaceGroupsById().get(target.groupId) ?? null
-    if (!sourceGroupId || !targetGroup) return false
+    if (sourceWindowId === target.targetWindowId) return false
     return sendWorkspaceMutation({
-      type: 'move_window_to_group',
+      type: 'move_window_to_window',
       windowId: sourceWindowId,
-      targetGroupId: target.groupId,
+      targetWindowId: target.targetWindowId,
       insertIndex: target.insertIndex,
     })
   }
 
   const applyWindowDrop = (sourceWindowId: number, target: TabMergeTarget) => {
-    const prevState = options.workspaceState()
-    const sourceGroupId = groupIdForWindow(prevState, sourceWindowId)
-    const sourceGroup = options.groupForWindow(sourceWindowId)
-    const targetGroup = options.workspaceGroupsById().get(target.groupId) ?? null
-    if (!sourceGroupId || !sourceGroup || !targetGroup || sourceGroupId === target.groupId) return false
-    if (sourceGroup.members.length <= 1) {
-      return sendWorkspaceMutation({
-        type: 'move_window_to_group',
-        windowId: sourceWindowId,
-        targetGroupId: target.groupId,
-        insertIndex: target.insertIndex,
-      })
-    }
+    if (sourceWindowId === target.targetWindowId) return false
     return sendWorkspaceMutation({
-      type: 'move_group_to_group',
-      sourceGroupId,
-      targetGroupId: target.groupId,
+      type: 'move_group_to_window',
       insertIndex: target.insertIndex,
+      sourceWindowId,
+      targetWindowId: target.targetWindowId,
     })
   }
 
@@ -138,8 +123,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
       return focusWindowViaShell(windowId)
     }
     return sendWorkspaceMutation({
-      type: 'select_tab',
-      groupId,
+      type: 'select_window_tab',
       windowId: windowId,
     })
   }

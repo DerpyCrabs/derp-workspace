@@ -144,7 +144,7 @@ describe('tabGroupOps', () => {
         },
       })
       const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
-      expect(mergeTargetFromElement(slot, state, 1, 0)).toEqual({ groupId: 'group-2', insertIndex: 3 })
+      expect(mergeTargetFromElement(slot, state, 1, 0)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 3 })
     } finally {
       globalThis.Element = OrigElement
     }
@@ -180,8 +180,8 @@ describe('tabGroupOps', () => {
           } as DOMRect
         },
       })
-      expect(mergeTargetFromElement(tab, state, 3, 140)).toEqual({ groupId: 'group-2', insertIndex: 0 })
-      expect(mergeTargetFromElement(tab, state, 3, 141)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+      expect(mergeTargetFromElement(tab, state, 3, 140)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 0 })
+      expect(mergeTargetFromElement(tab, state, 3, 141)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
     } finally {
       globalThis.Element = OrigElement
     }
@@ -207,7 +207,7 @@ describe('tabGroupOps', () => {
     docAny.elementsFromPoint = () => [slot]
     try {
       const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
-      expect(findMergeTarget(state, 1, 10, 10)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+      expect(findMergeTarget(state, 1, 10, 10)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
     } finally {
       if (orig) docAny.elementsFromPoint = orig
       else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
@@ -257,7 +257,7 @@ describe('tabGroupOps', () => {
     docAny.querySelectorAll = (() => [slot] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
     try {
       const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2])
-      expect(findMergeTarget(state, 1, 108, 40)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+      expect(findMergeTarget(state, 1, 108, 40)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
     } finally {
       if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
       else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
@@ -315,7 +315,7 @@ describe('tabGroupOps', () => {
     docAny.querySelectorAll = (() => [tab] as unknown as ReturnType<Document['querySelectorAll']>) as Document['querySelectorAll']
     try {
       const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
-      expect(findMergeTarget(state, 3, 180, 40)).toEqual({ groupId: 'group-2', insertIndex: 1 })
+      expect(findMergeTarget(state, 3, 180, 40)).toEqual({ groupId: 'group-2', targetWindowId: 2, insertIndex: 1 })
     } finally {
       if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
       else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]
@@ -415,7 +415,7 @@ describe('tabGroupOps', () => {
     }) as Document['querySelectorAll']
     try {
       const state = mergeWorkspaceGroups(reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3]), 1, 2)
-      expect(findMergeTarget(state, 3, 292, 40)).toEqual({ groupId: 'group-2', insertIndex: 2 })
+      expect(findMergeTarget(state, 3, 292, 40)).toEqual({ groupId: 'group-2', targetWindowId: 1, insertIndex: 2 })
     } finally {
       if (origElementsFromPoint) docAny.elementsFromPoint = origElementsFromPoint
       else docAny.elementsFromPoint = (() => []) as (x: number, y: number) => Element[]

@@ -25,6 +25,7 @@ function makeWindow(window_id: number, patch: Partial<DerpWindow> = {}): DerpWin
     fullscreen: patch.fullscreen ?? false,
     shell_flags: patch.shell_flags ?? 0,
     capture_identifier: patch.capture_identifier ?? `capture-${window_id}`,
+    workspace_visible: patch.workspace_visible ?? true,
   }
 }
 

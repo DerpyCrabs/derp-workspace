@@ -37,8 +37,11 @@
   ],
   "mutationTypes": [
     "select_tab",
+    "select_window_tab",
     "move_window_to_group",
+    "move_window_to_window",
     "move_group_to_group",
+    "move_group_to_window",
     "split_window_to_own_group",
     "set_window_pinned",
     "enter_split",

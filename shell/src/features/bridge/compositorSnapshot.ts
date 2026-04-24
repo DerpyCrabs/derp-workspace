@@ -13,8 +13,10 @@ const MSG_COMPOSITOR_WORKSPACE_STATE = 57
 const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE = 59
 const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
+const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY = 62
 
 const SNAPSHOT_MAGIC = 0x44525053
+const SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 0x4452444d
 const SNAPSHOT_HEADER_BYTES = 32
 const SNAPSHOT_DOMAIN_COUNT = 9
 const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
@@ -158,7 +160,7 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
   let cursor = offset + 16
   const windows: unknown[] = []
   for (let i = 0; i < count; i += 1) {
-    if (cursor + 56 > view.byteLength) return null
+    if (cursor + 60 > view.byteLength) return null
     const windowId = view.getUint32(cursor, true)
     const surfaceId = view.getUint32(cursor + 4, true)
     const stackZ = view.getUint32(cursor + 8, true)
@@ -170,10 +172,11 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     const maximized = view.getUint32(cursor + 32, true) !== 0
     const fullscreen = view.getUint32(cursor + 36, true) !== 0
     const clientSideDecoration = view.getUint32(cursor + 40, true) !== 0
-    const shellFlags = view.getUint32(cursor + 44, true)
-    const titleLen = view.getUint32(cursor + 48, true)
-    const appLen = view.getUint32(cursor + 52, true)
-    cursor += 56
+    const workspaceVisible = view.getUint32(cursor + 44, true) !== 0
+    const shellFlags = view.getUint32(cursor + 48, true)
+    const titleLen = view.getUint32(cursor + 52, true)
+    const appLen = view.getUint32(cursor + 56, true)
+    cursor += 60
     if (titleLen > MAX_WINDOW_STRING_BYTES || appLen > MAX_WINDOW_STRING_BYTES) return null
     const title = readUtf8(bytes, cursor, titleLen)
     if (title == null) return null
@@ -235,6 +238,7 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       maximized,
       fullscreen,
       client_side_decoration: clientSideDecoration,
+      workspace_visible: workspaceVisible,
       shell_flags: shellFlags,
       title,
       app_id: appId,
@@ -417,6 +421,7 @@ function domainForMessageType(msgType: number): number {
     case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
       return SNAPSHOT_DOMAIN_KEYBOARD
     case MSG_COMPOSITOR_WORKSPACE_STATE:
+    case MSG_COMPOSITOR_WORKSPACE_STATE_BINARY:
       return SNAPSHOT_DOMAIN_WORKSPACE
     case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
       return SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
@@ -429,6 +434,245 @@ function domainForMessageType(msgType: number): number {
       return SNAPSHOT_DOMAIN_TRAY
     default:
       return 0
+  }
+}
+
+class BinaryCursor {
+  bytes: Uint8Array
+  view: DataView
+  offset: number
+
+  constructor(bytes: Uint8Array, view: DataView, offset: number) {
+    this.bytes = bytes
+    this.view = view
+    this.offset = offset
+  }
+
+  u32(): number | null {
+    if (this.offset + 4 > this.view.byteLength) return null
+    const value = this.view.getUint32(this.offset, true)
+    this.offset += 4
+    return value
+  }
+
+  i32(): number | null {
+    if (this.offset + 4 > this.view.byteLength) return null
+    const value = this.view.getInt32(this.offset, true)
+    this.offset += 4
+    return value
+  }
+
+  f64(): number | null {
+    if (this.offset + 8 > this.view.byteLength) return null
+    const value = this.view.getFloat64(this.offset, true)
+    this.offset += 8
+    return value
+  }
+
+  string(max = MAX_WINDOW_STRING_BYTES): string | null {
+    const len = this.u32()
+    if (len === null || len > max) return null
+    const value = readUtf8(this.bytes, this.offset, len)
+    if (value === null) return null
+    this.offset += len
+    return value
+  }
+}
+
+function layoutTypeFromCode(code: number): 'manual-snap' | 'master-stack' | 'columns' | 'grid' | 'custom-auto' {
+  if (code === 1) return 'master-stack'
+  if (code === 2) return 'columns'
+  if (code === 3) return 'grid'
+  if (code === 4) return 'custom-auto'
+  return 'manual-snap'
+}
+
+function ruleFieldFromCode(code: number): 'app_id' | 'title' | 'x11_class' | 'x11_instance' | 'kind' {
+  if (code === 1) return 'title'
+  if (code === 2) return 'x11_class'
+  if (code === 3) return 'x11_instance'
+  if (code === 4) return 'kind'
+  return 'app_id'
+}
+
+function ruleOpFromCode(code: number): 'equals' | 'contains' | 'starts_with' {
+  if (code === 1) return 'contains'
+  if (code === 2) return 'starts_with'
+  return 'equals'
+}
+
+function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 12 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const cursor = new BinaryCursor(bytes, view, offset + 12)
+  const groupsCount = cursor.u32()
+  if (groupsCount === null) return null
+  const groups: unknown[] = []
+  for (let i = 0; i < groupsCount; i += 1) {
+    const id = cursor.string()
+    const count = cursor.u32()
+    if (id === null || count === null) return null
+    const windowIds: number[] = []
+    for (let index = 0; index < count; index += 1) {
+      const windowId = cursor.u32()
+      if (windowId === null) return null
+      windowIds.push(windowId)
+    }
+    groups.push({ id, windowIds })
+  }
+  const activeCount = cursor.u32()
+  if (activeCount === null) return null
+  const activeTabByGroupId: Record<string, number> = {}
+  for (let i = 0; i < activeCount; i += 1) {
+    const groupId = cursor.string()
+    const windowId = cursor.u32()
+    if (groupId === null || windowId === null) return null
+    activeTabByGroupId[groupId] = windowId
+  }
+  const pinnedCount = cursor.u32()
+  if (pinnedCount === null) return null
+  const pinnedWindowIds: number[] = []
+  for (let i = 0; i < pinnedCount; i += 1) {
+    const windowId = cursor.u32()
+    if (windowId === null) return null
+    pinnedWindowIds.push(windowId)
+  }
+  const splitCount = cursor.u32()
+  if (splitCount === null) return null
+  const splitByGroupId: Record<string, unknown> = {}
+  for (let i = 0; i < splitCount; i += 1) {
+    const groupId = cursor.string()
+    const leftWindowId = cursor.u32()
+    const leftPaneFraction = cursor.f64()
+    if (groupId === null || leftWindowId === null || leftPaneFraction === null) return null
+    splitByGroupId[groupId] = { leftWindowId, leftPaneFraction }
+  }
+  const monitorTileCount = cursor.u32()
+  if (monitorTileCount === null) return null
+  const monitorTiles: unknown[] = []
+  for (let i = 0; i < monitorTileCount; i += 1) {
+    const outputId = cursor.string()
+    const outputName = cursor.string()
+    const entryCount = cursor.u32()
+    if (outputId === null || outputName === null || entryCount === null) return null
+    const entries: unknown[] = []
+    for (let index = 0; index < entryCount; index += 1) {
+      const windowId = cursor.u32()
+      const zone = cursor.string()
+      const x = cursor.i32()
+      const y = cursor.i32()
+      const width = cursor.i32()
+      const height = cursor.i32()
+      if (windowId === null || zone === null || x === null || y === null || width === null || height === null) return null
+      entries.push({ windowId, zone, bounds: { x, y, width, height } })
+    }
+    monitorTiles.push({ outputId, outputName, entries })
+  }
+  const monitorLayoutCount = cursor.u32()
+  if (monitorLayoutCount === null) return null
+  const monitorLayouts: unknown[] = []
+  for (let i = 0; i < monitorLayoutCount; i += 1) {
+    const outputId = cursor.string()
+    const outputName = cursor.string()
+    const layoutCode = cursor.u32()
+    const masterRatio = cursor.f64()
+    const maxColumns = cursor.u32()
+    const customLayoutId = cursor.string()
+    const slotCount = cursor.u32()
+    if (outputId === null || outputName === null || layoutCode === null || masterRatio === null || maxColumns === null || customLayoutId === null || slotCount === null) return null
+    const customSlots: unknown[] = []
+    for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+      const slotId = cursor.string()
+      const x = cursor.f64()
+      const y = cursor.f64()
+      const width = cursor.f64()
+      const height = cursor.f64()
+      const ruleCount = cursor.u32()
+      if (slotId === null || x === null || y === null || width === null || height === null || ruleCount === null) return null
+      const rules: unknown[] = []
+      for (let ruleIndex = 0; ruleIndex < ruleCount; ruleIndex += 1) {
+        const field = cursor.u32()
+        const op = cursor.u32()
+        const value = cursor.string()
+        if (field === null || op === null || value === null) return null
+        rules.push({ field: ruleFieldFromCode(field), op: ruleOpFromCode(op), value })
+      }
+      customSlots.push({ slotId, x, y, width, height, rules })
+    }
+    monitorLayouts.push({
+      outputId,
+      outputName,
+      layout: layoutTypeFromCode(layoutCode),
+      params: {
+        ...(masterRatio > 0 ? { masterRatio } : {}),
+        ...(maxColumns > 0 ? { maxColumns } : {}),
+        ...(customLayoutId ? { customLayoutId } : {}),
+        ...(customSlots.length > 0 ? { customSlots } : {}),
+      },
+    })
+  }
+  const preTileCount = cursor.u32()
+  if (preTileCount === null) return null
+  const preTileGeometry: unknown[] = []
+  for (let i = 0; i < preTileCount; i += 1) {
+    const windowId = cursor.u32()
+    const x = cursor.i32()
+    const y = cursor.i32()
+    const width = cursor.i32()
+    const height = cursor.i32()
+    if (windowId === null || x === null || y === null || width === null || height === null) return null
+    preTileGeometry.push({ windowId, bounds: { x, y, width, height } })
+  }
+  const nextGroupSeq = cursor.u32()
+  if (nextGroupSeq === null || cursor.offset !== view.byteLength) return null
+  return {
+    type: 'workspace_state',
+    revision,
+    state: normalizeWorkspaceState({
+      groups,
+      activeTabByGroupId,
+      pinnedWindowIds,
+      splitByGroupId,
+      monitorTiles,
+      monitorLayouts,
+      preTileGeometry,
+      nextGroupSeq,
+    }),
+  }
+}
+
+function decodeSnapshotPacket(bodyBytes: Uint8Array, bodyView: DataView): DerpShellDetail | null {
+  if (bodyView.byteLength < 4) return null
+  const msgType = bodyView.getUint32(0, true)
+  switch (msgType) {
+    case MSG_OUTPUT_GEOMETRY:
+      return decodeOutputGeometry(bodyView, 0)
+    case MSG_OUTPUT_LAYOUT:
+      return decodeOutputLayout(bodyBytes, bodyView, 0)
+    case MSG_WINDOW_LIST:
+      return decodeWindowList(bodyBytes, bodyView, 0)
+    case MSG_FOCUS_CHANGED:
+      return decodeFocusChanged(bodyView, 0)
+    case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
+      return decodeKeyboardLayout(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_VOLUME_OVERLAY:
+      return decodeVolumeOverlay(bodyView, 0)
+    case MSG_COMPOSITOR_TRAY_HINTS:
+      return decodeTrayHints(bodyView, 0)
+    case MSG_COMPOSITOR_TRAY_SNI:
+      return decodeTraySni(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_WORKSPACE_STATE:
+      return decodeWorkspaceState(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_WORKSPACE_STATE_BINARY:
+      return decodeWorkspaceStateBinary(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
+      return decodeShellHostedAppState(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_INTERACTION_STATE:
+      return decodeInteractionState(bodyView, 0)
+    case MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW:
+      return decodeNativeDragPreview(bodyBytes, bodyView, 0)
+    default:
+      return null
   }
 }
 
@@ -475,6 +719,43 @@ export function decodeCompositorSnapshot(
     for (let index = 0; index < SNAPSHOT_DOMAIN_COUNT; index += 1) domainRevisions.push(0)
   }
   const details: DerpShellDetail[] = []
+  if (offset + 8 <= payloadEnd && view.getUint32(offset, true) === SNAPSHOT_DOMAIN_CHUNKS_MAGIC) {
+    const chunkCount = view.getUint32(offset + 4, true)
+    offset += 8
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      if (offset + 8 > payloadEnd) return null
+      const domain = view.getUint32(offset, true)
+      const chunkLen = view.getUint32(offset + 4, true)
+      const chunkStart = offset + 8
+      const chunkEnd = chunkStart + chunkLen
+      if (chunkEnd > payloadEnd) return null
+      if (domain !== 0 && !domainChanged(domain, domainRevisions, previous)) {
+        offset = chunkEnd
+        continue
+      }
+      let packetOffset = chunkStart
+      while (packetOffset < chunkEnd) {
+        if (packetOffset + 8 > chunkEnd) return null
+        const bodyLen = view.getUint32(packetOffset, true)
+        const bodyStart = packetOffset + 4
+        const bodyEnd = bodyStart + bodyLen
+        if (bodyEnd > chunkEnd || bodyStart + 4 > bodyEnd) return null
+        const bodyBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + bodyStart, bodyLen)
+        const bodyView = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
+        const detail = decodeSnapshotPacket(bodyBytes, bodyView)
+        if (detail) details.push(detail)
+        packetOffset = bodyEnd
+      }
+      offset = chunkEnd
+    }
+    if (offset !== payloadEnd) return null
+    return {
+      sequence: Number(sequence),
+      domainFlags,
+      domainRevisions,
+      details,
+    }
+  }
   while (offset < payloadEnd) {
     if (offset + 8 > payloadEnd) return null
     const bodyLen = view.getUint32(offset, true)
@@ -489,47 +770,7 @@ export function decodeCompositorSnapshot(
     }
     const bodyBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + bodyStart, bodyLen)
     const bodyView = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
-    let detail: DerpShellDetail | null = null
-    switch (msgType) {
-      case MSG_OUTPUT_GEOMETRY:
-        detail = decodeOutputGeometry(bodyView, 0)
-        break
-      case MSG_OUTPUT_LAYOUT:
-        detail = decodeOutputLayout(bodyBytes, bodyView, 0)
-        break
-      case MSG_WINDOW_LIST:
-        detail = decodeWindowList(bodyBytes, bodyView, 0)
-        break
-      case MSG_FOCUS_CHANGED:
-        detail = decodeFocusChanged(bodyView, 0)
-        break
-      case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
-        detail = decodeKeyboardLayout(bodyBytes, bodyView, 0)
-        break
-      case MSG_COMPOSITOR_VOLUME_OVERLAY:
-        detail = decodeVolumeOverlay(bodyView, 0)
-        break
-      case MSG_COMPOSITOR_TRAY_HINTS:
-        detail = decodeTrayHints(bodyView, 0)
-        break
-      case MSG_COMPOSITOR_TRAY_SNI:
-        detail = decodeTraySni(bodyBytes, bodyView, 0)
-        break
-      case MSG_COMPOSITOR_WORKSPACE_STATE:
-        detail = decodeWorkspaceState(bodyBytes, bodyView, 0)
-        break
-      case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
-        detail = decodeShellHostedAppState(bodyBytes, bodyView, 0)
-        break
-      case MSG_COMPOSITOR_INTERACTION_STATE:
-        detail = decodeInteractionState(bodyView, 0)
-        break
-      case MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW:
-        detail = decodeNativeDragPreview(bodyBytes, bodyView, 0)
-        break
-      default:
-        break
-    }
+    const detail = decodeSnapshotPacket(bodyBytes, bodyView)
     if (detail) details.push(detail)
     offset = bodyEnd
   }

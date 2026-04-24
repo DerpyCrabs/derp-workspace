@@ -1,8 +1,8 @@
 import { createEffect, onCleanup, type Accessor } from 'solid-js'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
-import { mergeExclusionRects, ssdDecorationExclusionRects } from '@/lib/exclusionRects'
-import { clientRectToGlobalLogical, rectCanvasLocalToGlobal } from '@/lib/shellCoords'
+import { mergeExclusionRects } from '@/lib/exclusionRects'
+import { clientRectToGlobalLogical } from '@/lib/shellCoords'
 import { writeShellExclusionState } from './sharedShellState'
 
 type ShellExclusionSyncOptions = {
@@ -12,7 +12,6 @@ type ShellExclusionSyncOptions = {
   taskbarScreens: Accessor<readonly LayoutScreen[]>
   windows: Accessor<readonly DerpWindow[]>
   isWindowVisible?: (window: DerpWindow) => boolean
-  isWindowTiled: (windowId: number) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
   exclusionReactiveDeps: Accessor<unknown>
 }
@@ -21,45 +20,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let exclusionZonesRaf = 0
   let lastExclusionZonesJson: string | null = null
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
-
-  const exclusionWindows = () => {
-    const next = options.windows()
-      .filter((window) => isWindowVisible(window))
-      .map((window) => ({
-        window_id: window.window_id,
-        stack_z: window.stack_z,
-        x: window.x,
-        y: window.y,
-        width: window.width,
-        height: window.height,
-        output_name: window.output_name,
-        minimized: window.minimized,
-        maximized: window.maximized,
-        fullscreen: window.fullscreen,
-        snap_tiled: options.isWindowTiled(window.window_id),
-      }))
-    next.sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
-    return next
-  }
-
-  const exclusionWindowsSig = () =>
-    exclusionWindows()
-      .map((window) =>
-        [
-          window.window_id,
-          window.stack_z,
-          window.x,
-          window.y,
-          window.width,
-          window.height,
-          window.output_name,
-          window.minimized ? 1 : 0,
-          window.maximized ? 1 : 0,
-          window.fullscreen ? 1 : 0,
-          window.snap_tiled ? 1 : 0,
-        ].join(':'),
-      )
-      .join('|')
 
   const fullscreenTaskbarExclusionSig = () => {
     const fullscreenOutputs = new Set<string>()
@@ -110,18 +70,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     }
     addEl(main.querySelector('[data-shell-snap-picker]'), 'snap-picker')
     addEl(main.querySelector('[data-shell-snap-strip-trigger]'), 'snap-strip')
-    const stripLabels = ['t', 'l', 'r', 'b'] as const
-    for (const window of exclusionWindows()) {
-      if (window.minimized) continue
-      const deco = ssdDecorationExclusionRects(window)
-      for (let index = 0; index < deco.length; index += 1) {
-        const rect = deco[index]
-        const tag = stripLabels[index] ?? `${index}`
-        const z = rectCanvasLocalToGlobal(rect.x, rect.y, rect.w, rect.h, co)
-        hud.push({ label: `w${window.window_id}-deco-${tag}`, x: z.x, y: z.y, w: z.w, h: z.h })
-        rects.push({ x: z.x, y: z.y, w: z.w, h: z.h, window_id: window.window_id })
-      }
-    }
     const floatingRaw: typeof rects = []
     const floatingEls = new Set<Element>()
     for (const el of main.querySelectorAll('[data-shell-exclusion-floating]')) {
@@ -171,11 +119,6 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       syncExclusionZonesNow()
     })
   }
-
-  createEffect(() => {
-    exclusionWindowsSig()
-    queueMicrotask(() => scheduleExclusionZonesSync())
-  })
 
   createEffect(() => {
     fullscreenTaskbarExclusionSig()

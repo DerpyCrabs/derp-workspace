@@ -44,6 +44,7 @@ function shellWindow(windowId: number, outputName = 'DP-1'): DerpWindow {
     fullscreen: false,
     shell_flags: 0,
     capture_identifier: `capture-${windowId}`,
+    workspace_visible: true,
   }
 }
 

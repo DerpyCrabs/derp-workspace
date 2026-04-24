@@ -49,8 +49,9 @@ impl CompositorState {
     ) -> Rectangle<i32, Logical> {
         let th = self.shell_chrome_titlebar_h.max(0);
         let bd = self.shell_chrome_border_w.max(0);
-        let inset_side = if info.maximized { 0 } else { bd };
-        let inset_top = if info.maximized {
+        let no_outer_border = info.maximized || info.fullscreen;
+        let inset_side = if no_outer_border { 0 } else { bd };
+        let inset_top = if no_outer_border {
             0
         } else {
             SHELL_BORDER_TOP_THICKNESS
@@ -73,7 +74,7 @@ impl CompositorState {
             return None;
         }
         let outer = self.shell_backed_outer_global_rect(&info);
-        let border = if info.maximized {
+        let border = if info.maximized || info.fullscreen {
             0
         } else {
             self.shell_chrome_border_w.max(0)
@@ -88,7 +89,7 @@ impl CompositorState {
             .loc
             .x
             .saturating_add(outer.size.w.saturating_sub(border)) as f64;
-        let inset_top = if info.maximized {
+        let inset_top = if info.maximized || info.fullscreen {
             0
         } else {
             SHELL_BORDER_TOP_THICKNESS

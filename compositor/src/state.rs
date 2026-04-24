@@ -1554,7 +1554,7 @@ impl CompositorState {
     pub(crate) fn point_in_shell_exclusion_zones(&self, pos: Point<f64, Logical>) -> bool {
         let px = pos.x;
         let py = pos.y;
-        if self.shell_exclusion_global.is_empty() && self.shell_exclusion_decor.is_empty() {
+        if self.shell_exclusion_global.is_empty() && self.shell_exclusion_floating.is_empty() {
             return false;
         }
         for r in &self.shell_exclusion_global {
@@ -1566,15 +1566,13 @@ impl CompositorState {
                 return true;
             }
         }
-        for rs in self.shell_exclusion_decor.values() {
-            for r in rs {
-                let x1 = r.loc.x as f64;
-                let y1 = r.loc.y as f64;
-                let x2 = x1 + r.size.w.max(0) as f64;
-                let y2 = y1 + r.size.h.max(0) as f64;
-                if px >= x1 && px < x2 && py >= y1 && py < y2 {
-                    return true;
-                }
+        for r in &self.shell_exclusion_floating {
+            let x1 = r.loc.x as f64;
+            let y1 = r.loc.y as f64;
+            let x2 = x1 + r.size.w.max(0) as f64;
+            let y2 = y1 + r.size.h.max(0) as f64;
+            if px >= x1 && px < x2 && py >= y1 && py < y2 {
+                return true;
             }
         }
         false
@@ -1605,7 +1603,7 @@ impl CompositorState {
         placement_z > native_z || (placement_z == native_z && placement.id > window_id)
     }
 
-    fn shell_placement_stack_z(&self, placement: &ShellUiWindowPlacement) -> u32 {
+    pub(crate) fn shell_placement_stack_z(&self, placement: &ShellUiWindowPlacement) -> u32 {
         let stack_z = self.shell_window_stack_z(placement.id);
         if stack_z > 0 {
             stack_z
@@ -1621,7 +1619,7 @@ impl CompositorState {
         let px = pos.x;
         let py = pos.y;
         let mut best: Option<ShellUiWindowPlacement> = None;
-        let placements = self.shell_hosted_visible_placements();
+        let placements = self.shell_visible_placements();
         for w in &placements {
             let g = &w.global_rect;
             let x2 = g.loc.x.saturating_add(g.size.w) as f64;
@@ -1693,7 +1691,7 @@ impl CompositorState {
             .then_some(placement)
     }
 
-    fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
+    pub(crate) fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
         let mut placements = self.shell_ui_windows.clone();
         let shell_ids: HashSet<u32> = placements.iter().map(|w| w.id).collect();
         placements.extend(
@@ -2098,7 +2096,6 @@ impl CompositorState {
             return;
         };
         let mut next_global: Vec<Rectangle<i32, Logical>> = Vec::new();
-        let mut next_decor: HashMap<u32, Vec<Rectangle<i32, Logical>>> = HashMap::new();
         for _ in 0..rect_count {
             let Some(x) = cursor.read_i32() else {
                 return;
@@ -2124,8 +2121,6 @@ impl CompositorState {
             };
             if window_id == 0 {
                 next_global.push(clamped);
-            } else {
-                next_decor.entry(window_id).or_default().push(clamped);
             }
         }
         let next_tray_strip = if has_tray_strip == 0 {
@@ -2162,12 +2157,12 @@ impl CompositorState {
             }
         });
         let global_changed = next_global != self.shell_exclusion_global;
-        let decor_changed = next_decor != self.shell_exclusion_decor;
+        let decor_changed = !self.shell_exclusion_decor.is_empty();
         let tray_changed = next_tray_strip != self.shell_tray_strip_global;
         let floating_changed = next_floating != self.shell_exclusion_floating;
         let overlay_changed = overlay_open != self.shell_exclusion_overlay_open;
         self.shell_exclusion_global = next_global;
-        self.shell_exclusion_decor = next_decor;
+        self.shell_exclusion_decor.clear();
         self.shell_exclusion_floating = next_floating;
         self.shell_exclusion_overlay_open = overlay_open;
         self.shell_tray_strip_global = next_tray_strip;
@@ -2332,6 +2327,61 @@ impl CompositorState {
         &ordered_window_ids[(idx + 1)..]
     }
 
+    fn shell_decoration_clip_rects_for_window(
+        &self,
+        window_id: u32,
+    ) -> Vec<Rectangle<i32, Logical>> {
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return Vec::new();
+        };
+        if info.minimized || !self.workspace_window_is_visible_during_render(window_id) {
+            return Vec::new();
+        }
+        if !self
+            .shell_ui_windows
+            .iter()
+            .any(|placement| placement.id == window_id)
+        {
+            return Vec::new();
+        }
+        let outer = self.shell_backed_outer_global_rect(&info);
+        let titlebar_h = self.shell_chrome_titlebar_h.max(0);
+        if titlebar_h <= 0 {
+            return Vec::new();
+        }
+        let no_outer_border = info.maximized || info.fullscreen;
+        let border = if no_outer_border {
+            0
+        } else {
+            self.shell_chrome_border_w.max(0)
+        };
+        let inset_top = if no_outer_border {
+            0
+        } else {
+            SHELL_BORDER_TOP_THICKNESS
+        };
+        let mut out = vec![Rectangle::new(
+            outer.loc,
+            Size::from((outer.size.w.max(1), titlebar_h.saturating_add(inset_top))),
+        )];
+        if self.window_registry.is_shell_hosted(window_id) && border > 0 {
+            let client = Self::shell_hosted_client_global_rect(&info);
+            out.push(Rectangle::new(
+                Point::from((outer.loc.x, client.loc.y)),
+                Size::from((border, client.size.h.max(1))),
+            ));
+            out.push(Rectangle::new(
+                Point::from((client.loc.x.saturating_add(client.size.w), client.loc.y)),
+                Size::from((border, client.size.h.max(1))),
+            ));
+            out.push(Rectangle::new(
+                Point::from((outer.loc.x, client.loc.y.saturating_add(client.size.h))),
+                Size::from((outer.size.w.max(1), border)),
+            ));
+        }
+        out
+    }
+
     pub(crate) fn shell_exclusion_clip_rects_logical(
         &self,
         output: &Output,
@@ -2367,8 +2417,8 @@ impl CompositorState {
         let placements = self.shell_hosted_clip_placements(elem_window);
         match elem_window {
             None => {
-                for rs in self.shell_exclusion_decor.values() {
-                    for r in rs {
+                for placement in &self.shell_ui_windows {
+                    for r in self.shell_decoration_clip_rects_for_window(placement.id) {
                         if let Some(i) = r.intersection(visible) {
                             out.push(i);
                         }
@@ -2388,20 +2438,16 @@ impl CompositorState {
                 for &ow in
                     self.window_ids_strictly_above_in_stack(ordered_window_ids_on_output, self_id)
                 {
-                    if let Some(rs) = self.shell_exclusion_decor.get(&ow) {
-                        for r in rs {
-                            if let Some(i) = r.intersection(visible) {
-                                out.push(i);
-                            }
+                    for r in self.shell_decoration_clip_rects_for_window(ow) {
+                        if let Some(i) = r.intersection(visible) {
+                            out.push(i);
                         }
                     }
                 }
                 if include_self_decor {
-                    if let Some(rs) = self.shell_exclusion_decor.get(&self_id) {
-                        for r in rs {
-                            if let Some(i) = r.intersection(visible) {
-                                out.push(i);
-                            }
+                    for r in self.shell_decoration_clip_rects_for_window(self_id) {
+                        if let Some(i) = r.intersection(visible) {
+                            out.push(i);
                         }
                     }
                 }
@@ -8806,6 +8852,11 @@ impl CompositorState {
             maximized: if info.maximized { 1 } else { 0 },
             fullscreen: if info.fullscreen { 1 } else { 0 },
             client_side_decoration: if info.client_side_decoration { 1 } else { 0 },
+            workspace_visible: if self.workspace_window_is_visible_during_render(info.window_id) {
+                1
+            } else {
+                0
+            },
             shell_flags: (if kind == WindowKind::ShellHosted {
                 shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
             } else {
@@ -9621,37 +9672,154 @@ impl CompositorState {
                     }
                 }
             }
-            WorkspaceMutation::MoveWindowToGroup {
+            WorkspaceMutation::SelectWindowTab { window_id } => {
+                if let Some(group_id) = group_id_for_window(&previous_state, *window_id) {
+                    let previous_visible = previous_state.visible_window_id_for_group(group_id);
+                    let next_visible = next_state.visible_window_id_for_group(group_id);
+                    if let (Some(previous_visible), Some(next_visible)) =
+                        (previous_visible, next_visible)
+                    {
+                        if previous_visible != next_visible {
+                            self.workspace_copy_window_geometry(next_visible, previous_visible);
+                            activation_window_id = Some(next_visible);
+                            activate_before_workspace_state =
+                                !self.window_registry.is_shell_hosted(next_visible);
+                            if !activate_before_workspace_state {
+                                copy_geometry_after_activation =
+                                    Some((next_visible, previous_visible));
+                            }
+                        }
+                    }
+                }
+            }
+            WorkspaceMutation::MoveWindowToWindow {
                 window_id,
-                target_group_id,
+                target_window_id,
                 ..
             } => {
                 let source_group_id =
                     group_id_for_window(&previous_state, *window_id).map(str::to_string);
-                if source_group_id.as_deref() != Some(target_group_id.as_str()) {
+                let resolved_target_group_id =
+                    group_id_for_window(&previous_state, *target_window_id);
+                if source_group_id.as_deref() != resolved_target_group_id {
+                    self.workspace_copy_window_geometry(*window_id, *target_window_id);
+                    activation_window_id = Some(*window_id);
+                }
+            }
+            WorkspaceMutation::MoveWindowToGroup {
+                window_id,
+                target_group_id,
+                target_window_id,
+                ..
+            } => {
+                let source_group_id =
+                    group_id_for_window(&previous_state, *window_id).map(str::to_string);
+                let requested_target_group = previous_state
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id);
+                let resolved_target_group_id = if let Some(target_window_id) = target_window_id {
+                    if requested_target_group
+                        .is_none_or(|group| !group.window_ids.contains(target_window_id))
+                    {
+                        group_id_for_window(&previous_state, *target_window_id)
+                            .unwrap_or(target_group_id)
+                    } else {
+                        target_group_id.as_str()
+                    }
+                } else if requested_target_group.is_some() {
+                    target_group_id.as_str()
+                } else {
+                    target_group_id
+                };
+                if source_group_id.as_deref() != Some(resolved_target_group_id) {
                     if let Some(target_visible) =
-                        previous_state.visible_window_id_for_group(target_group_id)
+                        previous_state.visible_window_id_for_group(resolved_target_group_id)
                     {
                         self.workspace_copy_window_geometry(*window_id, target_visible);
                         activation_window_id = Some(*window_id);
                     }
                 }
             }
-            WorkspaceMutation::MoveGroupToGroup {
-                source_group_id,
-                target_group_id,
+            WorkspaceMutation::MoveGroupToWindow {
+                source_window_id,
+                target_window_id,
                 ..
             } => {
-                if source_group_id != target_group_id {
-                    if let Some(target_visible) =
-                        previous_state.visible_window_id_for_group(target_group_id)
-                    {
-                        let source_visible =
-                            previous_state.visible_window_id_for_group(source_group_id);
+                let resolved_source_group_id =
+                    group_id_for_window(&previous_state, *source_window_id);
+                let resolved_target_group_id =
+                    group_id_for_window(&previous_state, *target_window_id);
+                if resolved_source_group_id != resolved_target_group_id {
+                    if let Some(source_group_id) = resolved_source_group_id {
                         if let Some(source_group) = previous_state
                             .groups
                             .iter()
-                            .find(|group| group.id == *source_group_id)
+                            .find(|group| group.id == source_group_id)
+                        {
+                            for window_id in &source_group.window_ids {
+                                self.workspace_copy_window_geometry(*window_id, *target_window_id);
+                            }
+                        }
+                        let source_visible =
+                            previous_state.visible_window_id_for_group(source_group_id);
+                        activation_window_id = source_visible.or(Some(*target_window_id));
+                    }
+                }
+            }
+            WorkspaceMutation::MoveGroupToGroup {
+                source_group_id,
+                target_group_id,
+                source_window_id,
+                target_window_id,
+                ..
+            } => {
+                let requested_source_group = previous_state
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *source_group_id);
+                let resolved_source_group_id = if let Some(source_window_id) = source_window_id {
+                    if requested_source_group
+                        .is_none_or(|group| !group.window_ids.contains(source_window_id))
+                    {
+                        group_id_for_window(&previous_state, *source_window_id)
+                            .unwrap_or(source_group_id)
+                    } else {
+                        source_group_id.as_str()
+                    }
+                } else if requested_source_group.is_some() {
+                    source_group_id.as_str()
+                } else {
+                    source_group_id
+                };
+                let requested_target_group = previous_state
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id);
+                let resolved_target_group_id = if let Some(target_window_id) = target_window_id {
+                    if requested_target_group
+                        .is_none_or(|group| !group.window_ids.contains(target_window_id))
+                    {
+                        group_id_for_window(&previous_state, *target_window_id)
+                            .unwrap_or(target_group_id)
+                    } else {
+                        target_group_id.as_str()
+                    }
+                } else if requested_target_group.is_some() {
+                    target_group_id.as_str()
+                } else {
+                    target_group_id
+                };
+                if resolved_source_group_id != resolved_target_group_id {
+                    if let Some(target_visible) =
+                        previous_state.visible_window_id_for_group(resolved_target_group_id)
+                    {
+                        let source_visible =
+                            previous_state.visible_window_id_for_group(resolved_source_group_id);
+                        if let Some(source_group) = previous_state
+                            .groups
+                            .iter()
+                            .find(|group| group.id == resolved_source_group_id)
                         {
                             for window_id in &source_group.window_ids {
                                 self.workspace_copy_window_geometry(*window_id, target_visible);

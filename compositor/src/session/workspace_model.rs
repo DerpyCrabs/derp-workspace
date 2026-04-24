@@ -178,11 +178,25 @@ pub enum WorkspaceMutation {
         #[serde(rename = "windowId")]
         window_id: u32,
     },
+    SelectWindowTab {
+        #[serde(rename = "windowId")]
+        window_id: u32,
+    },
     MoveWindowToGroup {
         #[serde(rename = "windowId")]
         window_id: u32,
         #[serde(rename = "targetGroupId")]
         target_group_id: String,
+        #[serde(rename = "insertIndex")]
+        insert_index: usize,
+        #[serde(default, rename = "targetWindowId")]
+        target_window_id: Option<u32>,
+    },
+    MoveWindowToWindow {
+        #[serde(rename = "windowId")]
+        window_id: u32,
+        #[serde(rename = "targetWindowId")]
+        target_window_id: u32,
         #[serde(rename = "insertIndex")]
         insert_index: usize,
     },
@@ -191,6 +205,18 @@ pub enum WorkspaceMutation {
         source_group_id: String,
         #[serde(rename = "targetGroupId")]
         target_group_id: String,
+        #[serde(rename = "insertIndex")]
+        insert_index: usize,
+        #[serde(default, rename = "sourceWindowId")]
+        source_window_id: Option<u32>,
+        #[serde(default, rename = "targetWindowId")]
+        target_window_id: Option<u32>,
+    },
+    MoveGroupToWindow {
+        #[serde(rename = "sourceWindowId")]
+        source_window_id: u32,
+        #[serde(rename = "targetWindowId")]
+        target_window_id: u32,
         #[serde(rename = "insertIndex")]
         insert_index: usize,
     },
@@ -554,6 +580,59 @@ mod tests {
     }
 
     #[test]
+    fn move_window_to_group_prefers_target_window_anchor_over_stale_group_id() {
+        let state = WorkspaceState {
+            groups: vec![group("stale-target", &[1]), group("actual-target", &[2])],
+            active_tab_by_group_id: HashMap::from([
+                ("stale-target".to_string(), 1),
+                ("actual-target".to_string(), 2),
+            ]),
+            ..WorkspaceState::default()
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::MoveWindowToGroup {
+                window_id: 1,
+                target_group_id: "stale-target".to_string(),
+                insert_index: 1,
+                target_window_id: Some(2),
+            })
+            .expect("anchored target changes state");
+        assert_eq!(group_id_for_window(&next, 1), Some("actual-target"));
+        assert_eq!(next.groups.len(), 1);
+        assert_eq!(next.groups[0].window_ids, vec![2, 1]);
+    }
+
+    #[test]
+    fn move_group_to_group_prefers_window_anchors_over_stale_group_ids() {
+        let state = WorkspaceState {
+            groups: vec![
+                group("stale-source", &[1]),
+                group("actual-source", &[2, 3]),
+                group("actual-target", &[4]),
+            ],
+            active_tab_by_group_id: HashMap::from([
+                ("stale-source".to_string(), 1),
+                ("actual-source".to_string(), 2),
+                ("actual-target".to_string(), 4),
+            ]),
+            ..WorkspaceState::default()
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::MoveGroupToGroup {
+                source_group_id: "stale-source".to_string(),
+                target_group_id: "stale-source".to_string(),
+                insert_index: 1,
+                source_window_id: Some(2),
+                target_window_id: Some(4),
+            })
+            .expect("anchored groups change state");
+        assert_eq!(group_id_for_window(&next, 2), Some("actual-target"));
+        assert_eq!(group_id_for_window(&next, 3), Some("actual-target"));
+        assert_eq!(next.groups.len(), 2);
+        assert_eq!(next.groups[1].window_ids, vec![4, 2, 3]);
+    }
+
+    #[test]
     fn workspace_protocol_manifest_matches_rust_model() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../../resources/workspace-protocol.json"))
@@ -599,8 +678,11 @@ mod tests {
                 ],
                 "mutationTypes": [
                     "select_tab",
+                    "select_window_tab",
                     "move_window_to_group",
+                    "move_window_to_window",
                     "move_group_to_group",
+                    "move_group_to_window",
                     "split_window_to_own_group",
                     "set_window_pinned",
                     "enter_split",
@@ -774,6 +856,10 @@ fn output_matches(
             if !requested_id.is_empty() {
                 return stored_id == requested_id;
             }
+        }
+    } else if let Some(requested_id) = requested_id {
+        if !requested_id.is_empty() && stored_name != requested_name {
+            return stored_id == requested_id;
         }
     }
     stored_name == requested_name
@@ -1142,19 +1228,57 @@ impl WorkspaceState {
                     .insert(group_id.clone(), next_window_id);
                 Some(next)
             }
+            WorkspaceMutation::SelectWindowTab { window_id } => {
+                let group_id = group_id_for_window(self, *window_id)?.to_string();
+                self.apply_mutation(&WorkspaceMutation::SelectTab {
+                    group_id,
+                    window_id: *window_id,
+                })
+            }
+            WorkspaceMutation::MoveWindowToWindow {
+                window_id,
+                target_window_id,
+                insert_index,
+            } => {
+                let target_group_id = group_id_for_window(self, *target_window_id)?.to_string();
+                self.apply_mutation(&WorkspaceMutation::MoveWindowToGroup {
+                    window_id: *window_id,
+                    target_group_id,
+                    insert_index: *insert_index,
+                    target_window_id: Some(*target_window_id),
+                })
+            }
             WorkspaceMutation::MoveWindowToGroup {
                 window_id,
                 target_group_id,
                 insert_index,
+                target_window_id,
             } => {
                 let source_group_id = group_id_for_window(self, *window_id)?.to_string();
-                if source_group_id == *target_group_id {
+                let requested_target_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id);
+                let resolved_target_group_id = if let Some(target_window_id) = target_window_id {
+                    if requested_target_group
+                        .is_none_or(|group| !group.window_ids.contains(target_window_id))
+                    {
+                        group_id_for_window(self, *target_window_id).unwrap_or(target_group_id)
+                    } else {
+                        target_group_id.as_str()
+                    }
+                } else if requested_target_group.is_some() {
+                    target_group_id.as_str()
+                } else {
+                    target_group_id
+                };
+                if source_group_id == resolved_target_group_id {
                     let mut next = self.clone();
                     let snapshot = next.clone();
                     let group = next
                         .groups
                         .iter_mut()
-                        .find(|group| group.id == *target_group_id)?;
+                        .find(|group| group.id == resolved_target_group_id)?;
                     let before = group.window_ids.clone();
                     insert_into_group(&snapshot, group, *window_id, *insert_index);
                     if group.window_ids == before {
@@ -1170,7 +1294,7 @@ impl WorkspaceState {
                 let target_index = next
                     .groups
                     .iter()
-                    .position(|group| group.id == *target_group_id)?;
+                    .position(|group| group.id == resolved_target_group_id)?;
                 if !next.groups[source_index].window_ids.contains(window_id) {
                     return None;
                 }
@@ -1208,14 +1332,14 @@ impl WorkspaceState {
                     );
                 }
                 next.split_by_group_id =
-                    without_group_split(&next.split_by_group_id, target_group_id);
+                    without_group_split(&next.split_by_group_id, resolved_target_group_id);
                 if let Some(target_group) = next
                     .groups
                     .iter()
-                    .find(|group| group.id == *target_group_id)
+                    .find(|group| group.id == resolved_target_group_id)
                 {
                     next.active_tab_by_group_id.insert(
-                        target_group_id.clone(),
+                        resolved_target_group_id.to_string(),
                         if target_group.window_ids.contains(window_id) {
                             *window_id
                         } else {
@@ -1226,28 +1350,79 @@ impl WorkspaceState {
                 ensure_valid_split_state(&mut next);
                 Some(next)
             }
+            WorkspaceMutation::MoveGroupToWindow {
+                source_window_id,
+                target_window_id,
+                insert_index,
+            } => {
+                let source_group_id = group_id_for_window(self, *source_window_id)?.to_string();
+                let target_group_id = group_id_for_window(self, *target_window_id)?.to_string();
+                self.apply_mutation(&WorkspaceMutation::MoveGroupToGroup {
+                    source_group_id,
+                    target_group_id,
+                    insert_index: *insert_index,
+                    source_window_id: Some(*source_window_id),
+                    target_window_id: Some(*target_window_id),
+                })
+            }
             WorkspaceMutation::MoveGroupToGroup {
                 source_group_id,
                 target_group_id,
                 insert_index,
+                source_window_id,
+                target_window_id,
             } => {
-                if source_group_id == target_group_id {
+                let requested_source_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *source_group_id);
+                let resolved_source_group_id = if let Some(source_window_id) = source_window_id {
+                    if requested_source_group
+                        .is_none_or(|group| !group.window_ids.contains(source_window_id))
+                    {
+                        group_id_for_window(self, *source_window_id).unwrap_or(source_group_id)
+                    } else {
+                        source_group_id.as_str()
+                    }
+                } else if requested_source_group.is_some() {
+                    source_group_id.as_str()
+                } else {
+                    source_group_id
+                };
+                let requested_target_group = self
+                    .groups
+                    .iter()
+                    .find(|group| group.id == *target_group_id);
+                let resolved_target_group_id = if let Some(target_window_id) = target_window_id {
+                    if requested_target_group
+                        .is_none_or(|group| !group.window_ids.contains(target_window_id))
+                    {
+                        group_id_for_window(self, *target_window_id).unwrap_or(target_group_id)
+                    } else {
+                        target_group_id.as_str()
+                    }
+                } else if requested_target_group.is_some() {
+                    target_group_id.as_str()
+                } else {
+                    target_group_id
+                };
+                if resolved_source_group_id == resolved_target_group_id {
                     return None;
                 }
                 let source_group = self
                     .groups
                     .iter()
-                    .find(|group| group.id == *source_group_id)?;
+                    .find(|group| group.id == resolved_source_group_id)?;
                 let target_group = self
                     .groups
                     .iter()
-                    .find(|group| group.id == *target_group_id)?;
+                    .find(|group| group.id == resolved_target_group_id)?;
                 if source_group.window_ids.is_empty() || target_group.window_ids.is_empty() {
                     return None;
                 }
                 let moving_window_ids = source_group.window_ids.clone();
                 let source_visible_window_id = self
-                    .visible_window_id_for_group(source_group_id)
+                    .visible_window_id_for_group(resolved_source_group_id)
                     .or_else(|| source_group.window_ids.first().copied())?;
                 let moving_pinned_window_ids: Vec<u32> = moving_window_ids
                     .iter()
@@ -1263,11 +1438,11 @@ impl WorkspaceState {
                 let source_index = next
                     .groups
                     .iter()
-                    .position(|group| group.id == *source_group_id)?;
+                    .position(|group| group.id == resolved_source_group_id)?;
                 let target_index = next
                     .groups
                     .iter()
-                    .position(|group| group.id == *target_group_id)?;
+                    .position(|group| group.id == resolved_target_group_id)?;
                 next.groups[source_index].window_ids.clear();
                 let clamped_insert_index =
                     (*insert_index).min(next.groups[target_index].window_ids.len());
@@ -1305,19 +1480,20 @@ impl WorkspaceState {
                     );
                     unpinned_insert_index = unpinned_insert_index.saturating_add(1);
                 }
-                next.groups.retain(|group| group.id != *source_group_id);
-                next.active_tab_by_group_id.remove(source_group_id);
+                next.groups
+                    .retain(|group| group.id != resolved_source_group_id);
+                next.active_tab_by_group_id.remove(resolved_source_group_id);
                 next.split_by_group_id =
-                    without_group_split(&next.split_by_group_id, source_group_id);
+                    without_group_split(&next.split_by_group_id, resolved_source_group_id);
                 next.split_by_group_id =
-                    without_group_split(&next.split_by_group_id, target_group_id);
+                    without_group_split(&next.split_by_group_id, resolved_target_group_id);
                 if let Some(target_group) = next
                     .groups
                     .iter()
-                    .find(|group| group.id == *target_group_id)
+                    .find(|group| group.id == resolved_target_group_id)
                 {
                     next.active_tab_by_group_id.insert(
-                        target_group_id.clone(),
+                        resolved_target_group_id.to_string(),
                         if target_group.window_ids.contains(&source_visible_window_id) {
                             source_visible_window_id
                         } else {

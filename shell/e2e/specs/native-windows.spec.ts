@@ -92,13 +92,7 @@ function nativeDecorTopRect(
   compositor: CompositorSnapshot,
   windowId: number,
 ): CompositorWorkspaceRect | null {
-  const row = compositor.shell_exclusion_decor?.find((entry) => entry.window_id === windowId)
-  if (!row) return null
-  return (
-    row.rects
-      .filter((rect) => rect.height >= NATIVE_TITLEBAR_PX)
-      .sort((a, b) => a.y - b.y || b.width - a.width)[0] ?? null
-  )
+  return compositor.shell_ui_windows?.find((entry) => entry.id === windowId)?.global ?? null
 }
 
 function nativeFrameTopLeftFromVisual(visual: {
@@ -627,11 +621,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
-  test('native decoration exclusion keeps up during active drag', async ({ base, state }) => {
+  test('native decoration placement keeps up during active drag', async ({ base, state }) => {
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: `Derp Native Drag Exclusion ${stamp}`,
-      token: `native-drag-exclusion-${stamp}`,
+      title: `Derp Native Drag Placement ${stamp}`,
+      token: `native-drag-placement-${stamp}`,
       strip: 'green',
     })
     state.spawnedNativeWindowIds.add(spawned.window.window_id)
@@ -639,7 +633,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForWindowRaised(base, windowId)
     await waitForNativeFocus(base, windowId, 4000)
     const shellReady = await waitFor(
-      'wait for native drag exclusion titlebar',
+      'wait for native drag placement titlebar',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         const controls = windowControls(shell, windowId)
@@ -648,7 +642,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    const titlebar = assertRectMinSize('native drag exclusion titlebar', shellReady, 80, 16)
+    const titlebar = assertRectMinSize('native drag placement titlebar', shellReady, 80, 16)
     const startX = Math.round(titlebar.global_x + Math.min(140, Math.max(40, titlebar.width * 0.35)))
     const startY = Math.round(titlebar.global_y + titlebar.height / 2)
 
@@ -666,12 +660,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
 
     const duringDrag = await waitFor(
-      'wait for native exclusion decor during active drag',
+      'wait for native decoration placement during active drag',
       async () => {
         const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
         const movedWindow = compositorWindowById(compositor, windowId)
         const decorTop = nativeDecorTopRect(compositor, windowId)
         if (!movedWindow || !decorTop) return null
+        assert(
+          !(compositor.shell_exclusion_decor ?? []).some((entry) => entry.window_id === windowId),
+          'native decorations must not be exposed as exclusion rects',
+        )
         const expectedTopX = movedWindow.x - NATIVE_BORDER_PX
         const expectedTopY = movedWindow.y - NATIVE_TITLEBAR_PX
         if (Math.abs(decorTop.x - expectedTopX) > 8) return null
@@ -685,7 +683,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await pointerButton(base, BTN_LEFT, 'release')
     await syncTest(base)
 
-    await writeJsonArtifact('native-drag-exclusion-live.json', {
+    await writeJsonArtifact('native-drag-decoration-live.json', {
       windowId,
       titlebar: {
         x: titlebar.global_x,

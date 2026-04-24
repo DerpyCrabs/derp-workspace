@@ -9,6 +9,7 @@ import {
   getJson,
   openProgramsMenu,
   tapKey,
+  typeText,
   waitFor,
   type FileBrowserFixturePaths,
   type FileBrowserSnapshot,
@@ -34,8 +35,6 @@ export function fileBrowserAction(shell: ShellSnapshot, id: string, windowId?: n
 
 async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot) {
   assert(shell.controls?.programs_menu_search, 'missing programs menu search control')
-  const compositor = await getJson<Record<string, unknown>>(base, '/test/state/compositor')
-  if (compositor.shell_keyboard_focus) return shell
   await clickRect(base, shell.controls.programs_menu_search)
   await waitFor(
     'wait for launcher search focus',
@@ -59,10 +58,20 @@ export async function openFileBrowserFromLauncher(
       .filter((window) => window.shell_hosted && window.app_id === FILE_BROWSER_APP_ID)
       .map((window) => window.window_id),
   )
-  const readyMenu = await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
-  assert(readyMenu.controls?.programs_menu_first_item, 'missing first launcher item')
-  await clickRect(base, assertRectMinSize('launcher first item', readyMenu.controls.programs_menu_first_item, 24, 18))
-  const opened = await waitFor(
+  await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+  await typeText(base, 'shell')
+  const readyMenu = await waitFor(
+    'wait for shell file browser launcher result',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_query === 'shell' && shell.controls?.programs_menu_first_item ? shell : null
+    },
+    2000,
+    50,
+  )
+  assertRectMinSize('launcher shell file browser item', readyMenu.controls.programs_menu_first_item, 24, 18)
+  await tapKey(base, KEY.enter)
+  const openedWindow = await waitFor(
     'wait for file browser window',
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
@@ -74,6 +83,20 @@ export async function openFileBrowserFromLauncher(
           !entry.minimized,
       )
       if (!window) return null
+      return { shell, windowId: window.window_id }
+    },
+    5000,
+    100,
+  )
+  spawnedShellWindowIds.add(openedWindow.windowId)
+  return waitFor(
+    'wait for file browser window ready',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const window = shell.windows.find(
+        (entry) => entry.window_id === openedWindow.windowId && entry.shell_hosted && entry.app_id === FILE_BROWSER_APP_ID && !entry.minimized,
+      )
+      if (!window) return null
       const fb = fileBrowserSnapshot(shell, window.window_id)
       if (!fb?.active_path) return null
       if (shell.programs_menu_open) return null
@@ -82,8 +105,6 @@ export async function openFileBrowserFromLauncher(
     5000,
     100,
   )
-  spawnedShellWindowIds.add(opened.windowId)
-  return opened
 }
 
 export async function waitForActivePath(base: string, expectedPath: string, windowId?: number) {

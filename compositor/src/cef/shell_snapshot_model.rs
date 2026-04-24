@@ -103,6 +103,7 @@ impl ShellSnapshotModel {
                             maximized: if *maximized { 1 } else { 0 },
                             fullscreen: if *fullscreen { 1 } else { 0 },
                             client_side_decoration: if *client_side_decoration { 1 } else { 0 },
+                            workspace_visible: 1,
                             shell_flags: *shell_flags,
                             title: title.clone(),
                             app_id: app_id.clone(),

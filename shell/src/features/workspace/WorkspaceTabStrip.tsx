@@ -79,7 +79,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
         />
       </Show>
       <div
-        class="group flex min-h-0 min-w-0 max-w-[240px] flex-[0_1_auto] items-stretch overflow-hidden border-r border-(--shell-border) transition-colors"
+        class="group flex min-h-0 min-w-0 flex-[0_1_auto] items-stretch overflow-hidden border-r border-(--shell-border) transition-colors"
         draggable={false}
         style={{ '-webkit-user-drag': 'none' }}
         classList={{
@@ -90,6 +90,8 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
             props.dragWindowId === tab().window_id,
           'rounded-l-md border-l border-(--shell-border) bg-[color-mix(in_srgb,var(--shell-control-muted-bg)_55%,transparent)]':
             splitLeft,
+          'max-w-[104px]': props.splitLeftWindowId !== null,
+          'max-w-[240px]': props.splitLeftWindowId === null,
         }}
       >
         <button
@@ -112,6 +114,7 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
             if (event.button === 0) event.preventDefault()
             event.stopPropagation()
             if (splitLeft) return
+            if (event.button !== 0) return
             props.onTabPointerDown(
               tab().window_id,
               event.pointerId,

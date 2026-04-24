@@ -309,6 +309,7 @@ fn apply_message(
                         "maximized": window.maximized != 0,
                         "fullscreen": window.fullscreen != 0,
                         "client_side_decoration": window.client_side_decoration != 0,
+                        "workspace_visible": window.workspace_visible != 0,
                         "shell_flags": window.shell_flags,
                         "title": window.title,
                         "app_id": window.app_id,
