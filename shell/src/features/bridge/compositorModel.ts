@@ -1,6 +1,7 @@
 import { batch, createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
 import {
   applyDetail,
+  applyDetailMutable,
   buildWindowsMapFromList,
   coerceShellWindowId,
   type DerpShellDetail,
@@ -108,10 +109,6 @@ function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolea
     left.window_id === right.window_id &&
     left.surface_id === right.surface_id &&
     left.stack_z === right.stack_z &&
-    left.x === right.x &&
-    left.y === right.y &&
-    left.width === right.width &&
-    left.height === right.height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.output_id === right.output_id &&
@@ -158,11 +155,16 @@ function applyWindowSnapshotDetailsFromSnapshot(
   details: readonly DerpShellDetail[],
 ): Map<number, DerpWindow> {
   let next = map
+  let mutated = false
   for (const detail of details) {
     if (!isWindowSnapshotDetail(detail)) continue
-    next = applyDetail(next, detail)
+    if (!mutated) {
+      next = new Map(next)
+      mutated = true
+    }
+    applyDetailMutable(next, detail)
   }
-  return next
+  return mutated ? next : map
 }
 
 function shellHostedAppByWindowFromState(state: { byWindowId?: Record<string, unknown> } | null | undefined) {
@@ -267,6 +269,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       return next
     })
   }
+  const publishWindows = (prev: ReadonlyMap<number, DerpWindow>, next: Map<number, DerpWindow>) => {
+    if (next === prev) return
+    syncWindowSignals(prev, next)
+    setWindows(next)
+    setWorkspaceWindows((stablePrev) => buildWorkspaceWindowsMap(next, stablePrev))
+  }
 
   const allWindowsMap = createMemo(() => windows())
   const windowById = (windowId: number) => ensureWindowSignal(windowId).get
@@ -291,6 +299,195 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const liveFocusedWindowId = createMemo(() => {
     const windowId = focusedWindowId()
     return windowId !== null && windows().has(windowId) ? windowId : null
+  })
+
+  const applyCompositorDetails = (
+    details: readonly DerpShellDetail[],
+    applyOptions: ApplyCompositorDetailOptions,
+  ): CompositorApplyResult[] => batch(() => {
+    const results: CompositorApplyResult[] = []
+    const baseWindows = windows()
+    let nextWindows = baseWindows
+    let windowsMutated = false
+    const currentWindows = () => nextWindows
+    const ensureMutableWindows = () => {
+      if (!windowsMutated) {
+        nextWindows = new Map(nextWindows)
+        windowsMutated = true
+      }
+      return nextWindows
+    }
+
+    for (const detail of details) {
+      if (detail.type === 'focus_changed') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        if (windowId !== null) {
+          if (!currentWindows().has(windowId)) {
+            results.push(requestRecovery(detail, applyOptions, windowId))
+            continue
+          }
+          setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
+        } else {
+          setFocusedWindowId(null)
+        }
+        results.push({
+          kind: 'focus_changed',
+          detailType: detail.type,
+          windowId,
+          followup: { syncExclusion: true, flushWindows: true },
+        })
+        continue
+      }
+
+      if (detail.type === 'window_list') {
+        const revision = coerceRevision(detail.revision)
+        if (revision !== windowsRevision()) {
+          nextWindows = buildWindowsMapFromList(detail.windows, currentWindows())
+          windowsMutated = nextWindows !== baseWindows
+          const nextOrderIds = collectWindowOrderIds(detail.windows)
+          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+          setWindowsRevision(revision)
+        }
+        results.push({
+          kind: 'window_list',
+          detailType: detail.type,
+          followup: { syncExclusion: true, flushWindows: true },
+        })
+        continue
+      }
+
+      if (detail.type === 'window_order') {
+        const revision = coerceRevision(detail.revision)
+        if (revision !== windowOrderRevision()) {
+          const mutableWindows = ensureMutableWindows()
+          applyDetailMutable(mutableWindows, detail)
+          const nextOrderIds = collectWindowOrderIds(detail.windows)
+          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+          setWindowOrderRevision(revision)
+        }
+        results.push({
+          kind: 'window_order',
+          detailType: detail.type,
+          followup: { syncExclusion: true, flushWindows: true },
+        })
+        continue
+      }
+
+      if (detail.type === 'workspace_state') {
+        const revision = coerceRevision(detail.revision)
+        if (revision !== workspaceRevision()) {
+          const nextState = normalizeWorkspaceSnapshot(detail.state)
+          setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
+          setWorkspaceRevision(revision)
+        }
+        results.push({
+          kind: 'workspace_state',
+          detailType: detail.type,
+        })
+        continue
+      }
+
+      if (detail.type === 'shell_hosted_app_state') {
+        const revision = coerceRevision(detail.revision)
+        if (revision !== shellHostedAppRevision()) {
+          setShellHostedAppByWindow(shellHostedAppByWindowFromState(detail.state))
+          setShellHostedAppRevision(revision)
+        }
+        results.push({
+          kind: 'shell_hosted_app_state',
+          detailType: detail.type,
+        })
+        continue
+      }
+
+      if (detail.type === 'window_state') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
+        if (windowId !== null && !previousWindow) {
+          results.push(requestRecovery(detail, applyOptions, windowId))
+          continue
+        }
+        if (detail.minimized && windowId !== null) {
+          setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+        }
+        applyDetailMutable(ensureMutableWindows(), detail)
+        results.push({
+          kind: 'window_state',
+          detailType: detail.type,
+          windowId,
+          previousWindow,
+          followup: { flushWindows: true },
+        })
+        continue
+      }
+
+      if (detail.type === 'window_unmapped') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
+        if (windowId !== null) {
+          setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+        }
+        applyDetailMutable(ensureMutableWindows(), detail)
+        results.push({
+          kind: 'window_unmapped',
+          detailType: detail.type,
+          windowId,
+          previousWindow,
+          followup: { flushWindows: true },
+        })
+        continue
+      }
+
+      if (detail.type === 'window_geometry') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
+        if (windowId !== null && !previousWindow) {
+          results.push(requestRecovery(detail, applyOptions, windowId))
+          continue
+        }
+        applyDetailMutable(ensureMutableWindows(), detail)
+        results.push({
+          kind: 'window_geometry',
+          detailType: detail.type,
+          windowId,
+          previousWindow,
+        })
+        continue
+      }
+
+      if (detail.type === 'window_mapped') {
+        applyDetailMutable(ensureMutableWindows(), detail)
+        results.push({
+          kind: 'window_mapped',
+          detailType: detail.type,
+          windowId: detail.window_id,
+        })
+        continue
+      }
+
+      if (detail.type === 'window_metadata') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        if (windowId !== null && !currentWindows().has(windowId)) {
+          results.push(requestRecovery(detail, applyOptions, windowId))
+          continue
+        }
+        applyDetailMutable(ensureMutableWindows(), detail)
+        results.push({
+          kind: 'window_metadata',
+          detailType: detail.type,
+          windowId,
+        })
+        continue
+      }
+
+      results.push({
+        kind: 'ignored',
+        detailType: detail.type,
+      })
+    }
+
+    if (windowsMutated) publishWindows(baseWindows, nextWindows)
+    return results
   })
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
@@ -360,160 +557,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const applyCompositorDetail = (
     detail: DerpShellDetail,
     applyOptions: ApplyCompositorDetailOptions,
-  ): CompositorApplyResult => batch(() => {
-    if (detail.type === 'focus_changed') {
-      const windowId = coerceShellWindowId(detail.window_id)
-      if (windowId !== null) {
-        if (!windows().has(windowId)) {
-          return requestRecovery(detail, applyOptions, windowId)
-        }
-        setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
-        commitWindows((map) => applyDetail(map, detail))
-      } else {
-        setFocusedWindowId(null)
-      }
-      return {
-        kind: 'focus_changed',
-        detailType: detail.type,
-        windowId,
-        followup: { syncExclusion: true, flushWindows: true },
-      }
-    }
-
-    if (detail.type === 'window_list') {
-      const revision = coerceRevision(detail.revision)
-      if (revision !== windowsRevision()) {
-        commitWindows((prev) => buildWindowsMapFromList(detail.windows, prev))
-        const nextOrderIds = collectWindowOrderIds(detail.windows)
-        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-        setWindowsRevision(revision)
-      }
-      return {
-        kind: 'window_list',
-        detailType: detail.type,
-        followup: { syncExclusion: true, flushWindows: true },
-      }
-    }
-
-    if (detail.type === 'window_order') {
-      const revision = coerceRevision(detail.revision)
-      if (revision !== windowOrderRevision()) {
-        commitWindows((map) => applyDetail(map, detail))
-        const nextOrderIds = collectWindowOrderIds(detail.windows)
-        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-        setWindowOrderRevision(revision)
-      }
-      return {
-        kind: 'window_order',
-        detailType: detail.type,
-        followup: { syncExclusion: true, flushWindows: true },
-      }
-    }
-
-    if (detail.type === 'workspace_state') {
-      const revision = coerceRevision(detail.revision)
-      if (revision !== workspaceRevision()) {
-        const nextState = normalizeWorkspaceSnapshot(detail.state)
-        setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
-        setWorkspaceRevision(revision)
-      }
-      return {
-        kind: 'workspace_state',
-        detailType: detail.type,
-      }
-    }
-
-    if (detail.type === 'shell_hosted_app_state') {
-      const revision = coerceRevision(detail.revision)
-      if (revision !== shellHostedAppRevision()) {
-        setShellHostedAppByWindow(shellHostedAppByWindowFromState(detail.state))
-        setShellHostedAppRevision(revision)
-      }
-      return {
-        kind: 'shell_hosted_app_state',
-        detailType: detail.type,
-      }
-    }
-
-    if (detail.type === 'window_state') {
-      const windowId = coerceShellWindowId(detail.window_id)
-      const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
-      if (windowId !== null) {
-        if (!previousWindow) {
-          return requestRecovery(detail, applyOptions, windowId)
-        }
-      }
-      if (detail.minimized && windowId !== null) {
-        setFocusedWindowId((prev) => (prev === windowId ? null : prev))
-      }
-      commitWindows((map) => applyDetail(map, detail))
-      return {
-        kind: 'window_state',
-        detailType: detail.type,
-        windowId,
-        previousWindow,
-        followup: { flushWindows: true },
-      }
-    }
-
-    if (detail.type === 'window_unmapped') {
-      const windowId = coerceShellWindowId(detail.window_id)
-      const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
-      if (windowId !== null) {
-        setFocusedWindowId((prev) => (prev === windowId ? null : prev))
-      }
-      commitWindows((map) => applyDetail(map, detail))
-      return {
-        kind: 'window_unmapped',
-        detailType: detail.type,
-        windowId,
-        previousWindow,
-        followup: { flushWindows: true },
-      }
-    }
-
-    if (detail.type === 'window_geometry') {
-      const windowId = coerceShellWindowId(detail.window_id)
-      const previousWindow = windowId !== null ? windows().get(windowId) ?? null : null
-      if (windowId !== null && !previousWindow) {
-        return requestRecovery(detail, applyOptions, windowId)
-      }
-      commitWindows((map) => applyDetail(map, detail))
-      return {
-        kind: 'window_geometry',
-        detailType: detail.type,
-        windowId,
-        previousWindow,
-      }
-    }
-
-    if (detail.type === 'window_mapped') {
-      commitWindows((map) => applyDetail(map, detail))
-      return {
-        kind: 'window_mapped',
-        detailType: detail.type,
-        windowId: detail.window_id,
-      }
-    }
-
-    if (detail.type === 'window_metadata') {
-      const windowId = coerceShellWindowId(detail.window_id)
-      if (windowId !== null && !windows().has(windowId)) {
-        return requestRecovery(detail, applyOptions, windowId)
-      }
-      commitWindows((map) => applyDetail(map, detail))
-      return {
-        kind: 'window_metadata',
-        detailType: detail.type,
-        windowId,
-      }
-    }
-
-    return {
-      kind: 'ignored',
-      detailType: detail.type,
-    }
-  })
+  ): CompositorApplyResult => applyCompositorDetails([detail], applyOptions)[0]!
 
   return {
     windows,
@@ -530,6 +574,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     setFocusedWindowId,
     shellHostedAppByWindow,
     applyCompositorSnapshot,
+    applyCompositorDetails,
     applyCompositorDetail,
   }
 }

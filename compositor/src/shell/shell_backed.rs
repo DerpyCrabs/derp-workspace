@@ -157,6 +157,12 @@ impl CompositorState {
         let Some(loc) = self.shell_window_info_to_output_local_layout(&info) else {
             return;
         };
+        let shell_flags = shell_wire::SHELL_WINDOW_FLAG_SHELL_HOSTED
+            | if self.scratchpad_windows.contains_key(&loc.window_id) {
+                shell_wire::SHELL_WINDOW_FLAG_SCRATCHPAD
+            } else {
+                0
+            };
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowMapped {
             window_id: loc.window_id,
             surface_id: loc.surface_id,
@@ -171,7 +177,7 @@ impl CompositorState {
             title: loc.title.clone(),
             app_id: loc.app_id.clone(),
             client_side_decoration: false,
-            shell_flags: 0,
+            shell_flags,
             output_id: String::new(),
             output_name: loc.output_name.clone(),
             capture_identifier: String::new(),
@@ -254,13 +260,17 @@ impl CompositorState {
         }
         let info = self.window_registry.window_info(id).expect("inserted");
         self.capture_refresh_window_source_cache(id);
-        self.shell_backed_emit_mapped_metas(&info);
         self.scratchpad_consider_window(id);
+        let current_info = self.window_registry.window_info(id).unwrap_or(info);
+        if !(self.scratchpad_windows.contains_key(&id) && current_info.minimized) {
+            self.shell_backed_emit_mapped_metas(&current_info);
+        }
         self.shell_reply_window_list();
         self.shell_exclusion_zones_need_full_damage = true;
         if !self.scratchpad_windows.contains_key(&id) {
+            let output_name = current_info.output_name.clone();
             self.shell_focus_shell_ui_window(id);
-            let _ = self.workspace_apply_auto_layout_for_output_name(&info.output_name);
+            let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
         }
     }
 

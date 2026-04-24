@@ -62,6 +62,7 @@ pub struct WindowRegistry {
     next_surface_token: u32,
     by_surface: HashMap<Key, WindowId>,
     records: HashMap<WindowId, WindowRecord>,
+    revision: u64,
 }
 
 impl WindowRegistry {
@@ -69,8 +70,17 @@ impl WindowRegistry {
         Self {
             next_id: 1,
             next_surface_token: 1,
+            revision: 0,
             ..Default::default()
         }
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn register_toplevel(
@@ -106,6 +116,7 @@ impl WindowRegistry {
         };
         self.by_surface.insert(k, window_id);
         self.records.insert(window_id, WindowRecord::native(info));
+        self.bump_revision();
         window_id
     }
 
@@ -143,6 +154,7 @@ impl WindowRegistry {
             window_id,
             WindowRecord::shell_hosted(info, Some(client_global)),
         );
+        self.bump_revision();
         Some(true)
     }
 
@@ -150,6 +162,7 @@ impl WindowRegistry {
         let k = key(wl)?;
         let wid = self.by_surface.remove(&k)?;
         self.records.remove(&wid);
+        self.bump_revision();
         Some(wid)
     }
 
@@ -195,6 +208,9 @@ impl WindowRegistry {
                 removed.push(record.info);
             }
         }
+        if !removed.is_empty() {
+            self.bump_revision();
+        }
         removed
     }
 
@@ -214,6 +230,9 @@ impl WindowRegistry {
         let info = &mut self.records.get_mut(&wid)?.info;
         let changed = info.title != title;
         info.title = title;
+        if changed {
+            self.bump_revision();
+        }
         Some(changed)
     }
 
@@ -222,6 +241,9 @@ impl WindowRegistry {
         let info = &mut self.records.get_mut(&wid)?.info;
         let changed = info.app_id != app_id;
         info.app_id = app_id;
+        if changed {
+            self.bump_revision();
+        }
         Some(changed)
     }
 
@@ -230,6 +252,9 @@ impl WindowRegistry {
         let info = &mut self.records.get_mut(&wid)?.info;
         let changed = info.output_name != output_name;
         info.output_name = output_name;
+        if changed {
+            self.bump_revision();
+        }
         Some(changed)
     }
 
@@ -254,6 +279,9 @@ impl WindowRegistry {
         info.width = width;
         info.height = height;
         info.output_name = output_name;
+        if changed {
+            self.bump_revision();
+        }
         Some(changed)
     }
 
@@ -287,10 +315,15 @@ impl WindowRegistry {
     }
 
     pub fn remove_shell_hosted(&mut self, window_id: WindowId) -> Option<WindowInfo> {
-        self.is_shell_hosted(window_id)
+        let removed = self
+            .is_shell_hosted(window_id)
             .then(|| self.records.remove(&window_id))
             .flatten()
-            .map(|record| record.info)
+            .map(|record| record.info);
+        if removed.is_some() {
+            self.bump_revision();
+        }
+        removed
     }
 
     pub fn update_shell_hosted<F, T>(&mut self, window_id: WindowId, f: F) -> Option<T>
@@ -301,7 +334,9 @@ impl WindowRegistry {
         if record.kind != WindowKind::ShellHosted {
             return None;
         }
-        Some(f(&mut record.info, &mut record.shell_hosted_float_restore))
+        let result = f(&mut record.info, &mut record.shell_hosted_float_restore);
+        self.bump_revision();
+        Some(result)
     }
 
     pub fn update_native<F, T>(&mut self, window_id: WindowId, f: F) -> Option<T>
@@ -312,7 +347,9 @@ impl WindowRegistry {
         if record.kind != WindowKind::Native {
             return None;
         }
-        Some(f(&mut record.info))
+        let result = f(&mut record.info);
+        self.bump_revision();
+        Some(result)
     }
 
     pub fn shell_hosted_infos(&self) -> Vec<WindowInfo> {
@@ -336,7 +373,11 @@ impl WindowRegistry {
 
     pub fn set_minimized(&mut self, window_id: WindowId, minimized: bool) -> Option<()> {
         let info = &mut self.records.get_mut(&window_id)?.info;
+        if info.minimized == minimized {
+            return Some(());
+        }
         info.minimized = minimized;
+        self.bump_revision();
         Some(())
     }
 
@@ -351,6 +392,9 @@ impl WindowRegistry {
         let changed = info.maximized != maximized || info.fullscreen != fullscreen;
         info.maximized = maximized;
         info.fullscreen = fullscreen;
+        if changed {
+            self.bump_revision();
+        }
         Some(changed)
     }
 }

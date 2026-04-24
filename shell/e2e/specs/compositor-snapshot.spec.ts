@@ -64,6 +64,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     assert(moved.row.x !== row.x, 'shell snapshot did not receive moved window geometry')
     const movePerf = await getPerfCounters(base)
+    assert(
+      (movePerf.shell_runtime?.batch_apply_count ?? 0) >= 1,
+      `expected batched shell detail apply after native window geometry change, got ${movePerf.shell_runtime?.batch_apply_count ?? 0}`,
+    )
+    assert(
+      (movePerf.shell_runtime?.batch_apply_details ?? 0) >= 1,
+      `expected batched shell detail apply details after native window geometry change, got ${movePerf.shell_runtime?.batch_apply_details ?? 0}`,
+    )
     assert(movePerf.shell_sync.snapshot_dirty_reads >= 1, 'expected dirty snapshot read after native window geometry change')
     assert(
       movePerf.shell_sync.snapshot_reads <= 1,

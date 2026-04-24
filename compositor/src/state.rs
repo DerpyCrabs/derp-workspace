@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::Write,
@@ -673,6 +674,7 @@ pub struct CompositorState {
     pub(crate) shell_ui_windows_shared_sequence: u64,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
+    pub(crate) shell_window_stack_revision: u64,
     pub(crate) shell_output_topology_revision: u64,
     pub(crate) shell_window_domain_revision: u64,
     pub(crate) shell_workspace_revision: u64,
@@ -685,6 +687,7 @@ pub struct CompositorState {
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) shell_last_sent_focus_pair: Option<(Option<u32>, Option<u32>)>,
     pub(crate) shell_last_sent_window_order: Vec<(u32, u32)>,
+    shell_visible_placements_cache: RefCell<Option<ShellVisiblePlacementsCache>>,
     pub(crate) shell_exclusion_shared_sequence: u64,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
@@ -721,6 +724,22 @@ pub(crate) struct ShellUiWindowPlacement {
     pub z: u32,
     pub global_rect: Rectangle<i32, Logical>,
     pub buffer_rect: Rectangle<i32, Buffer>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ShellVisiblePlacementsStamp {
+    ui_generation: u32,
+    window_registry_revision: u64,
+    window_stack_revision: u64,
+    output_topology_revision: u64,
+    workspace_revision: u64,
+}
+
+#[derive(Clone)]
+struct ShellVisiblePlacementsCache {
+    stamp: ShellVisiblePlacementsStamp,
+    all: Vec<ShellUiWindowPlacement>,
+    frames: Vec<ShellUiWindowPlacement>,
 }
 
 pub(crate) struct ShellMoveProxyState {
@@ -784,6 +803,11 @@ impl CompositorState {
         self.shell_window_domain_revision
     }
 
+    fn next_shell_window_stack_revision(&mut self) -> u64 {
+        self.shell_window_stack_revision = self.shell_window_stack_revision.wrapping_add(1);
+        self.shell_window_stack_revision
+    }
+
     fn next_shell_workspace_revision(&mut self) -> u64 {
         self.shell_workspace_revision = self.shell_workspace_revision.wrapping_add(1);
         self.shell_workspace_revision
@@ -829,6 +853,7 @@ impl CompositorState {
     }
 
     fn shell_window_stack_seed_known_windows(&mut self) {
+        let before = self.shell_window_stack_order.clone();
         self.shell_window_stack_order
             .retain(|wid| self.window_registry.window_info(*wid).is_some());
         let current = self.shell_window_stack_order.clone();
@@ -846,20 +871,31 @@ impl CompositorState {
             .collect();
         missing.extend(current);
         self.shell_window_stack_order = missing;
+        if self.shell_window_stack_order != before {
+            self.next_shell_window_stack_revision();
+        }
     }
 
     pub(crate) fn shell_window_stack_touch(&mut self, window_id: u32) {
         if window_id == 0 || self.window_registry.window_info(window_id).is_none() {
             return;
         }
+        let before = self.shell_window_stack_order.clone();
         self.shell_window_stack_order
             .retain(|wid| *wid != window_id);
         self.shell_window_stack_order.push(window_id);
+        if self.shell_window_stack_order != before {
+            self.next_shell_window_stack_revision();
+        }
     }
 
     pub(crate) fn shell_window_stack_forget(&mut self, window_id: u32) {
+        let before_len = self.shell_window_stack_order.len();
         self.shell_window_stack_order
             .retain(|wid| *wid != window_id);
+        if self.shell_window_stack_order.len() != before_len {
+            self.next_shell_window_stack_revision();
+        }
     }
 
     pub(crate) fn shell_note_non_shell_focus(&mut self) {
@@ -1263,6 +1299,7 @@ impl CompositorState {
             shell_ui_windows_shared_sequence: 0,
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
+            shell_window_stack_revision: 0,
             shell_output_topology_revision: 0,
             shell_window_domain_revision: 0,
             shell_workspace_revision: 0,
@@ -1275,6 +1312,7 @@ impl CompositorState {
             shell_last_sent_ui_focus_id: None,
             shell_last_sent_focus_pair: None,
             shell_last_sent_window_order: Vec::new(),
+            shell_visible_placements_cache: RefCell::new(None),
             shell_exclusion_shared_sequence: 0,
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
@@ -1758,26 +1796,56 @@ impl CompositorState {
             .then_some(placement)
     }
 
+    fn shell_visible_placements_stamp(&self) -> ShellVisiblePlacementsStamp {
+        ShellVisiblePlacementsStamp {
+            ui_generation: self.shell_ui_windows_generation,
+            window_registry_revision: self.window_registry.revision(),
+            window_stack_revision: self.shell_window_stack_revision,
+            output_topology_revision: self.shell_output_topology_revision,
+            workspace_revision: self.shell_workspace_revision,
+        }
+    }
+
+    fn rebuild_shell_visible_placements_cache(&self) -> ShellVisiblePlacementsCache {
+        let mut frames = self.shell_backed_placements();
+        frames.extend(self.shell_native_frame_placements());
+        let mut all = self.shell_ui_windows.clone();
+        let shell_ids: HashSet<u32> = all.iter().map(|w| w.id).collect();
+        all.extend(
+            frames
+                .iter()
+                .filter(|w| !shell_ids.contains(&w.id))
+                .cloned(),
+        );
+        ShellVisiblePlacementsCache {
+            stamp: self.shell_visible_placements_stamp(),
+            all,
+            frames,
+        }
+    }
+
+    fn shell_visible_placements_cache(&self) -> ShellVisiblePlacementsCache {
+        let stamp = self.shell_visible_placements_stamp();
+        if let Some(cache) = self
+            .shell_visible_placements_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| cache.stamp == stamp)
+            .cloned()
+        {
+            return cache;
+        }
+        let cache = self.rebuild_shell_visible_placements_cache();
+        *self.shell_visible_placements_cache.borrow_mut() = Some(cache.clone());
+        cache
+    }
+
     pub(crate) fn shell_visible_placements(&self) -> Vec<ShellUiWindowPlacement> {
-        let mut placements = self.shell_ui_windows.clone();
-        let shell_ids: HashSet<u32> = placements.iter().map(|w| w.id).collect();
-        placements.extend(
-            self.shell_backed_placements()
-                .into_iter()
-                .filter(|w| !shell_ids.contains(&w.id)),
-        );
-        placements.extend(
-            self.shell_native_frame_placements()
-                .into_iter()
-                .filter(|w| !shell_ids.contains(&w.id)),
-        );
-        placements
+        self.shell_visible_placements_cache().all
     }
 
     pub(crate) fn shell_window_frame_placements(&self) -> Vec<ShellUiWindowPlacement> {
-        let mut placements = self.shell_backed_placements();
-        placements.extend(self.shell_native_frame_placements());
-        placements
+        self.shell_visible_placements_cache().frames
     }
 
     fn shell_native_frame_placements(&self) -> Vec<ShellUiWindowPlacement> {
@@ -5321,20 +5389,16 @@ impl CompositorState {
                 .window_registry
                 .snapshot_for_wl_surface(&wl0)
                 .expect("pending map: registry row");
-            tracing::warn!(
-                target: "derp_toplevel",
-                window_id = info.window_id,
-                title = %info.title,
-                app_id = %info.app_id,
-                wl_surface_protocol_id = wl0.id().protocol_id(),
-                map_x,
-                map_y,
-                "deferred toplevel mapped WindowMapped emitted"
-            );
             let spawn_focus_wid = info.window_id;
-            let output_name = info.output_name.clone();
-            self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
             self.scratchpad_consider_window(spawn_focus_wid);
+            let current_info = self
+                .window_registry
+                .window_info(spawn_focus_wid)
+                .unwrap_or(info);
+            let output_name = current_info.output_name.clone();
+            if !(self.scratchpad_windows.contains_key(&spawn_focus_wid) && current_info.minimized) {
+                self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
+            }
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
                 self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
@@ -12254,10 +12318,14 @@ impl XWaylandShellHandler for CompositorState {
             }
             let elem = DerpSpaceElem::X11(window.clone());
             if self.space.elements().any(|e| *e == elem) && !info.minimized {
-                self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
-                self.scratchpad_consider_window(info.window_id);
-                if !self.scratchpad_windows.contains_key(&info.window_id) {
-                    self.shell_consider_focus_spawned_toplevel(info.window_id);
+                let window_id = info.window_id;
+                self.scratchpad_consider_window(window_id);
+                let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+                if !(self.scratchpad_windows.contains_key(&window_id) && current_info.minimized) {
+                    self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
+                }
+                if !self.scratchpad_windows.contains_key(&window_id) {
+                    self.shell_consider_focus_spawned_toplevel(window_id);
                 }
             }
         }
@@ -12318,11 +12386,18 @@ impl XwmHandler for CompositorState {
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
                 if !was_mapped && !info.minimized {
-                    let output_name = info.output_name.clone();
-                    self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: info.clone() });
-                    self.scratchpad_consider_window(info.window_id);
-                    if !self.scratchpad_windows.contains_key(&info.window_id) {
-                        self.shell_consider_focus_spawned_toplevel(info.window_id);
+                    let window_id = info.window_id;
+                    self.scratchpad_consider_window(window_id);
+                    let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+                    let output_name = current_info.output_name.clone();
+                    if !(self.scratchpad_windows.contains_key(&window_id) && current_info.minimized)
+                    {
+                        self.shell_emit_chrome_event(ChromeEvent::WindowMapped {
+                            info: current_info,
+                        });
+                    }
+                    if !self.scratchpad_windows.contains_key(&window_id) {
+                        self.shell_consider_focus_spawned_toplevel(window_id);
                         let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
                     }
                 } else {

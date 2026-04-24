@@ -236,6 +236,74 @@ describe('createCompositorModel', () => {
     })
   })
 
+  it('applies incremental detail batches against one evolving window map', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_mapped',
+            window_id: 7,
+            surface_id: 70,
+            stack_z: 1,
+            x: 10,
+            y: 20,
+            width: 300,
+            height: 200,
+            minimized: false,
+            maximized: false,
+            fullscreen: false,
+            title: 'Batch',
+            app_id: 'batch.app',
+            output_id: 'output-a',
+            output_name: 'DP-1',
+            workspace_visible: true,
+          },
+          {
+            type: 'window_geometry',
+            window_id: 7,
+            surface_id: 70,
+            x: 40,
+            y: 50,
+            width: 640,
+            height: 480,
+            output_id: 'output-b',
+            output_name: 'DP-2',
+            maximized: true,
+            fullscreen: false,
+          },
+          {
+            type: 'window_metadata',
+            window_id: 7,
+            surface_id: 70,
+            title: 'Batch Updated',
+            app_id: 'batch.updated',
+          },
+          {
+            type: 'focus_changed',
+            surface_id: 70,
+            window_id: 7,
+          },
+        ],
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+
+      expect(model.windows().get(7)).toMatchObject({
+        x: 40,
+        y: 50,
+        width: 640,
+        height: 480,
+        output_id: 'output-b',
+        output_name: 'DP-2',
+        maximized: true,
+        title: 'Batch Updated',
+        app_id: 'batch.updated',
+      })
+      expect(model.focusedWindowId()).toBe(7)
+      dispose()
+    })
+  })
+
   it('evicts unmapped per-window accessors instead of reusing stale signals', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()

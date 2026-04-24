@@ -104,6 +104,13 @@ type CompositorBridgeRuntimeOptions = {
   scheduleExclusionZonesSync: () => void
   scheduleCompositorFollowup: (options?: CompositorFollowup) => void
   applyModelCompositorSnapshot: (details: readonly DerpShellDetail[]) => void
+  applyModelCompositorDetails: (
+    details: readonly DerpShellDetail[],
+    options: {
+      fallbackMonitorKey: () => string
+      requestWindowSyncRecovery: () => void
+    },
+  ) => readonly CompositorApplyResult[]
   applyModelCompositorDetail: (
     detail: DerpShellDetail,
     options: {
@@ -515,6 +522,38 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (sawFocusChanged) queueMicrotask(() => options.shellWireSend('invalidate_view'))
   }
 
+  const modelDetailOptions = () => ({
+    fallbackMonitorKey: options.fallbackMonitorKey,
+    requestWindowSyncRecovery: options.requestWindowSyncRecovery,
+  })
+
+  const applyModelCompositorDetailsBatch = (details: readonly DerpShellDetail[]) => {
+    if (details.length === 0) return
+    let sawWindowList = false
+    let sawWindowSync = false
+    let sawFocusChanged = false
+    for (const detail of details) {
+      if (detail.type === 'window_list') sawWindowList = true
+      if (
+        detail.type === 'window_state' ||
+        detail.type === 'window_unmapped' ||
+        detail.type === 'window_geometry' ||
+        detail.type === 'window_mapped' ||
+        detail.type === 'window_metadata'
+      ) {
+        sawWindowSync = true
+      }
+      if (detail.type === 'focus_changed') sawFocusChanged = true
+    }
+    if (sawWindowList || sawWindowSync) options.markHasSeenCompositorWindowSync()
+    if (sawWindowList) options.clearWindowSyncRecoveryPending()
+    const results = options.applyModelCompositorDetails(details, modelDetailOptions())
+    for (const result of results) {
+      if (result.followup) options.scheduleCompositorFollowup(result.followup)
+    }
+    if (sawFocusChanged) queueMicrotask(() => options.shellWireSend('invalidate_view'))
+  }
+
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>
     coerceShellWindowId(d.target_window_id) ?? focusedWindowId
 
@@ -748,13 +787,66 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
   }
 
+  const detailUsesBatchedModelApply = (d: DerpShellDetail) =>
+    d.type === 'focus_changed' ||
+    d.type === 'window_list' ||
+    d.type === 'window_order' ||
+    d.type === 'workspace_state' ||
+    d.type === 'shell_hosted_app_state' ||
+    d.type === 'window_state' ||
+    d.type === 'window_unmapped' ||
+    d.type === 'window_geometry' ||
+    d.type === 'window_mapped' ||
+    d.type === 'window_metadata'
+
+  const applyCompositorBatchDetail = (
+    d: DerpShellDetail,
+    pendingModelDetails: DerpShellDetail[],
+    flushPendingModelDetails: () => void,
+  ) => {
+    const detailEpoch = detailSnapshotEpoch(d)
+    if (hotWindowDetailCanBeStale(d) && detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
+    if (detailCanBeSupersededBySnapshot(d)) {
+      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
+      const hadSnapshot = syncCompositorSnapshot()
+      if (hadSnapshot) {
+        const detailDomains = detailSnapshotDomainFlags(d)
+        if (detailDomains !== 0 && (hadSnapshot.domainFlags & detailDomains) !== 0) return
+      }
+      if (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch) return
+      if (
+        detailEpoch > lastSnapshotSequence &&
+        typeof window.__DERP_COMPOSITOR_SNAPSHOT_PATH === 'string' &&
+        window.__DERP_COMPOSITOR_SNAPSHOT_PATH.length > 0
+      ) {
+        options.requestCompositorSync()
+        return
+      }
+    }
+    markCompositorStateEpoch(detailEpoch)
+    if (detailUsesBatchedModelApply(d)) {
+      pendingModelDetails.push(d)
+      return
+    }
+    flushPendingModelDetails()
+    applyCompositorDetail(d)
+  }
+
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
     batch(() => {
-      for (const detail of details) {
-        applyCompositorDetail(detail)
+      const pendingModelDetails: DerpShellDetail[] = []
+      const flushPendingModelDetails = () => {
+        if (pendingModelDetails.length === 0) return
+        const nextDetails = pendingModelDetails.slice()
+        pendingModelDetails.length = 0
+        applyModelCompositorDetailsBatch(nextDetails)
       }
+      for (const detail of details) {
+        applyCompositorBatchDetail(detail, pendingModelDetails, flushPendingModelDetails)
+      }
+      flushPendingModelDetails()
     })
     noteShellBatchApply(performance.now() - applyStart, details.length)
   }

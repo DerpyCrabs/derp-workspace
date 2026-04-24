@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -15,8 +16,8 @@ use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 
 struct PendingCompositorMessages {
     scheduled: bool,
-    messages: Vec<PendingCompositorMessage>,
-    snapshot: Vec<PendingCompositorMessage>,
+    messages: PendingCompositorMessageQueue,
+    snapshot: PendingCompositorMessageQueue,
     snapshot_epoch: u64,
 }
 
@@ -25,71 +26,134 @@ pub(crate) struct PendingCompositorMessage {
     pub(crate) msg: shell_wire::DecodedCompositorToShellMessage,
 }
 
-fn push_pending_message(
-    messages: &mut Vec<PendingCompositorMessage>,
-    pending_message: PendingCompositorMessage,
-) {
-    let msg = &pending_message.msg;
-    match &msg {
-        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-        | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
-        | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
-        | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
-        | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-        | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
-        | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-        | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
-        | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
-        | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
-        | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-        | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
-            let keep = std::mem::discriminant(msg);
-            messages.retain(|pending| std::mem::discriminant(&pending.msg) != keep);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PendingCompositorMessageStaticKey {
+    OutputGeometry,
+    OutputLayout,
+    FocusChanged,
+    WindowOrder,
+    KeyboardLayout,
+    VolumeOverlay,
+    TrayHints,
+    TraySni,
+    WorkspaceState,
+    WorkspaceStateBinary,
+    ShellHostedAppState,
+    InteractionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum PendingCompositorMessageDedupKey {
+    Static(PendingCompositorMessageStaticKey),
+    WindowGeometry(u32),
+    WindowMetadata(u32),
+    WindowState(u32),
+    WindowList,
+}
+
+#[derive(Default)]
+struct PendingCompositorMessageQueue {
+    next_sequence: u64,
+    ordered: BTreeMap<u64, PendingCompositorMessage>,
+    dedup_sequences: HashMap<PendingCompositorMessageDedupKey, u64>,
+}
+
+impl PendingCompositorMessageQueue {
+    fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+
+    fn push(&mut self, pending_message: PendingCompositorMessage) {
+        let sequence = self.next_sequence.wrapping_add(1).max(1);
+        self.next_sequence = sequence;
+        if let Some(key) = pending_message_dedup_key(&pending_message.msg) {
+            if let Some(previous_sequence) = self.dedup_sequences.insert(key, sequence) {
+                self.ordered.remove(&previous_sequence);
+            }
+        }
+        self.ordered.insert(sequence, pending_message);
+    }
+
+    fn take_all(&mut self) -> Vec<PendingCompositorMessage> {
+        self.dedup_sequences.clear();
+        std::mem::take(&mut self.ordered).into_values().collect()
+    }
+}
+
+fn pending_message_dedup_key(
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+) -> Option<PendingCompositorMessageDedupKey> {
+    match msg {
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::OutputGeometry,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::OutputLayout,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::FocusChanged,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::WindowOrder,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::KeyboardLayout,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::VolumeOverlay,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::TrayHints { .. } => Some(
+            PendingCompositorMessageDedupKey::Static(PendingCompositorMessageStaticKey::TrayHints),
+        ),
+        shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => Some(
+            PendingCompositorMessageDedupKey::Static(PendingCompositorMessageStaticKey::TraySni),
+        ),
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::WorkspaceState,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::WorkspaceStateBinary,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::ShellHostedAppState,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::InteractionState,
+            ))
         }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } => {
-            messages.retain(|pending| {
-                !matches!(
-                    pending.msg,
-                    shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                        window_id: pending_window_id,
-                        ..
-                    } if pending_window_id == *window_id
-                )
-            });
+            Some(PendingCompositorMessageDedupKey::WindowGeometry(*window_id))
         }
         shell_wire::DecodedCompositorToShellMessage::WindowMetadata { window_id, .. } => {
-            messages.retain(|pending| {
-                !matches!(
-                    pending.msg,
-                    shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-                        window_id: pending_window_id,
-                        ..
-                    } if pending_window_id == *window_id
-                )
-            });
+            Some(PendingCompositorMessageDedupKey::WindowMetadata(*window_id))
         }
         shell_wire::DecodedCompositorToShellMessage::WindowState { window_id, .. } => {
-            messages.retain(|pending| {
-                !matches!(
-                    pending.msg,
-                    shell_wire::DecodedCompositorToShellMessage::WindowState {
-                        window_id: pending_window_id,
-                        ..
-                    } if pending_window_id == *window_id
-                )
-            });
+            Some(PendingCompositorMessageDedupKey::WindowState(*window_id))
         }
         shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
-            messages.retain(|pending| {
-                !matches!(
-                    pending.msg,
-                    shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-                )
-            });
+            Some(PendingCompositorMessageDedupKey::WindowList)
         }
-        _ => {}
+        _ => None,
     }
-    messages.push(pending_message);
 }
 
 fn post_external_begin_frame_task(
@@ -139,8 +203,8 @@ wrap_task! {
                 }
                 guard.scheduled = false;
                 (
-                    std::mem::take(&mut guard.messages),
-                    std::mem::take(&mut guard.snapshot),
+                    guard.messages.take_all(),
+                    guard.snapshot.take_all(),
                     std::mem::take(&mut guard.snapshot_epoch),
                 )
             };
@@ -247,8 +311,8 @@ impl ShellToCefLink {
             view_state,
             pending_messages: Arc::new(Mutex::new(PendingCompositorMessages {
                 scheduled: false,
-                messages: Vec::new(),
-                snapshot: Vec::new(),
+                messages: PendingCompositorMessageQueue::default(),
+                snapshot: PendingCompositorMessageQueue::default(),
                 snapshot_epoch: 0,
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
@@ -286,25 +350,19 @@ impl ShellToCefLink {
             };
             if let Some(snapshot) = snapshot {
                 for snapshot_msg in snapshot {
-                    push_pending_message(
-                        &mut guard.snapshot,
-                        PendingCompositorMessage {
-                            snapshot_epoch: 0,
-                            msg: snapshot_msg,
-                        },
-                    );
+                    guard.snapshot.push(PendingCompositorMessage {
+                        snapshot_epoch: 0,
+                        msg: snapshot_msg,
+                    });
                 }
             }
             if let Some(snapshot_epoch) = snapshot_epoch {
                 guard.snapshot_epoch = guard.snapshot_epoch.max(snapshot_epoch);
             }
-            push_pending_message(
-                &mut guard.messages,
-                PendingCompositorMessage {
-                    snapshot_epoch: msg_epoch.unwrap_or_default(),
-                    msg,
-                },
-            );
+            guard.messages.push(PendingCompositorMessage {
+                snapshot_epoch: msg_epoch.unwrap_or_default(),
+                msg,
+            });
             self.pending_work.store(true, Ordering::Relaxed);
             if guard.scheduled {
                 false
@@ -376,5 +434,90 @@ impl ShellToCefLink {
                 guard.scheduled = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        pending_message_dedup_key, PendingCompositorMessage, PendingCompositorMessageDedupKey,
+        PendingCompositorMessageQueue,
+    };
+
+    #[test]
+    fn pending_queue_replaces_window_geometry_without_scanning_previous_entries() {
+        let mut queue = PendingCompositorMessageQueue::default();
+        queue.push(PendingCompositorMessage {
+            snapshot_epoch: 2,
+            msg: shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id: 7,
+                surface_id: 70,
+                x: 10,
+                y: 20,
+                w: 300,
+                h: 200,
+                maximized: false,
+                fullscreen: false,
+                client_side_decoration: false,
+                output_id: String::new(),
+                output_name: "DP-1".to_string(),
+            },
+        });
+        queue.push(PendingCompositorMessage {
+            snapshot_epoch: 4,
+            msg: shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id: 7,
+                surface_id: 70,
+                x: 40,
+                y: 50,
+                w: 640,
+                h: 480,
+                maximized: true,
+                fullscreen: false,
+                client_side_decoration: false,
+                output_id: String::new(),
+                output_name: "DP-2".to_string(),
+            },
+        });
+
+        let drained = queue.take_all();
+        assert_eq!(drained.len(), 1);
+        match &drained[0].msg {
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { x, y, w, h, .. } => {
+                assert_eq!((*x, *y, *w, *h), (40, 50, 640, 480));
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pending_queue_keeps_non_deduped_messages_in_order() {
+        let mut queue = PendingCompositorMessageQueue::default();
+        queue.push(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle,
+        });
+        queue.push(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::Ping,
+        });
+
+        let drained = queue.take_all();
+        assert!(matches!(
+            drained[0].msg,
+            shell_wire::DecodedCompositorToShellMessage::ProgramsMenuToggle
+        ));
+        assert!(matches!(
+            drained[1].msg,
+            shell_wire::DecodedCompositorToShellMessage::Ping
+        ));
+        assert_eq!(pending_message_dedup_key(&drained[0].msg), None);
+        assert_eq!(
+            pending_message_dedup_key(&shell_wire::DecodedCompositorToShellMessage::WindowList {
+                revision: 1,
+                windows: Vec::new(),
+            }),
+            Some(PendingCompositorMessageDedupKey::WindowList)
+        );
     }
 }

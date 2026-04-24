@@ -63,6 +63,9 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
     scheduleExclusionZonesSync: vi.fn(),
     scheduleCompositorFollowup: vi.fn(),
     applyModelCompositorSnapshot: vi.fn(),
+    applyModelCompositorDetails: vi.fn((details: readonly DerpShellDetail[]) =>
+      details.map((detail) => applyModelCompositorDetail(detail)),
+    ),
     applyModelCompositorDetail,
     closeAllAtlasSelects: vi.fn(() => false),
     hideContextMenu: vi.fn(),

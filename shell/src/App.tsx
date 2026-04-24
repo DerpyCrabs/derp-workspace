@@ -305,6 +305,7 @@ function App() {
     focusedWindowId,
     shellHostedAppByWindow,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
+    applyCompositorDetails: applyModelCompositorDetails,
     applyCompositorDetail: applyModelCompositorDetail,
   } = createCompositorModel()
   const allWindowsMap = compositorWindowsMap
@@ -1801,6 +1802,7 @@ function App() {
         scheduleExclusionZonesSync,
         scheduleCompositorFollowup: workspaceLayoutBridge.scheduleCompositorFollowup,
         applyModelCompositorSnapshot,
+        applyModelCompositorDetails,
         applyModelCompositorDetail,
         closeAllAtlasSelects,
         hideContextMenu: shellContextMenus.hideContextMenu,

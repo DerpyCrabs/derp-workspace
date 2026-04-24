@@ -167,9 +167,15 @@ impl XdgShellHandler for CompositorState {
                 "xdg new_toplevel emitted WindowMapped immediate map"
             );
             let spawn_focus_wid = info.window_id;
-            let output_name = info.output_name.clone();
-            self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info });
             self.scratchpad_consider_window(spawn_focus_wid);
+            let current_info = self
+                .window_registry
+                .window_info(spawn_focus_wid)
+                .unwrap_or(info);
+            let output_name = current_info.output_name.clone();
+            if !(self.scratchpad_windows.contains_key(&spawn_focus_wid) && current_info.minimized) {
+                self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
+            }
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
                 self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);

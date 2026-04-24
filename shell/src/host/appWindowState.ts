@@ -278,27 +278,7 @@ export function buildWindowsMapFromList(
           ? r.workspace_visible
           : (prev?.get(wid)?.workspace_visible ?? true),
     }
-    const sameAsPrevious =
-      previousWindow !== undefined &&
-      previousWindow.surface_id === window.surface_id &&
-      previousWindow.stack_z === window.stack_z &&
-      previousWindow.x === window.x &&
-      previousWindow.y === window.y &&
-      previousWindow.width === window.width &&
-      previousWindow.height === window.height &&
-      previousWindow.title === window.title &&
-      previousWindow.app_id === window.app_id &&
-      previousWindow.output_id === window.output_id &&
-      previousWindow.output_name === window.output_name &&
-      previousWindow.kind === window.kind &&
-      previousWindow.x11_class === window.x11_class &&
-      previousWindow.x11_instance === window.x11_instance &&
-      previousWindow.minimized === window.minimized &&
-      previousWindow.maximized === window.maximized &&
-      previousWindow.fullscreen === window.fullscreen &&
-      previousWindow.shell_flags === window.shell_flags &&
-      previousWindow.capture_identifier === window.capture_identifier &&
-      previousWindow.workspace_visible === window.workspace_visible
+    const sameAsPrevious = previousWindow !== undefined && sameDerpWindow(previousWindow, window)
     const stableWindow = sameAsPrevious ? previousWindow : window
     next.set(wid, stableWindow)
     if (identical) {
@@ -318,6 +298,165 @@ function nextStackZ(map: Map<number, DerpWindow>, excludeWindowId?: number): num
     if (window.stack_z > max) max = window.stack_z
   }
   return max + 1
+}
+
+function sameDerpWindow(left: DerpWindow, right: DerpWindow): boolean {
+  return (
+    left.window_id === right.window_id &&
+    left.surface_id === right.surface_id &&
+    left.stack_z === right.stack_z &&
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.title === right.title &&
+    left.app_id === right.app_id &&
+    left.output_id === right.output_id &&
+    left.output_name === right.output_name &&
+    left.kind === right.kind &&
+    left.x11_class === right.x11_class &&
+    left.x11_instance === right.x11_instance &&
+    left.minimized === right.minimized &&
+    left.maximized === right.maximized &&
+    left.fullscreen === right.fullscreen &&
+    left.shell_flags === right.shell_flags &&
+    left.capture_identifier === right.capture_identifier &&
+    left.workspace_visible === right.workspace_visible
+  )
+}
+
+function mappedWindow(detail: Extract<DerpShellDetail, { type: 'window_mapped' }>, map: Map<number, DerpWindow>) {
+  const wid = coerceShellWindowId(detail.window_id)
+  const sid = coerceShellWindowId(detail.surface_id)
+  if (wid === null || sid === null) return null
+  const current = map.get(wid)
+  const shell_flags =
+    typeof detail.shell_flags === 'number' && Number.isFinite(detail.shell_flags)
+      ? Math.trunc(detail.shell_flags)
+      : (current?.shell_flags ?? 0)
+  const stack_z =
+    typeof detail.stack_z === 'number' && Number.isFinite(detail.stack_z)
+      ? Math.trunc(detail.stack_z)
+      : nextStackZ(map, wid)
+  return {
+    window_id: wid,
+    surface_id: sid,
+    stack_z,
+    x: detail.x,
+    y: detail.y,
+    width: detail.width,
+    height: detail.height,
+    title: detail.title,
+    app_id: detail.app_id,
+    output_id: coerceOutputId(detail.output_id, current?.output_id ?? ''),
+    output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
+    kind: typeof detail.kind === 'string' ? detail.kind : (current?.kind ?? ''),
+    x11_class: typeof detail.x11_class === 'string' ? detail.x11_class : (current?.x11_class ?? ''),
+    x11_instance: typeof detail.x11_instance === 'string' ? detail.x11_instance : (current?.x11_instance ?? ''),
+    minimized: detail.minimized ?? false,
+    maximized: detail.maximized ?? false,
+    fullscreen: detail.fullscreen ?? false,
+    shell_flags,
+    capture_identifier:
+      typeof detail.capture_identifier === 'string'
+        ? detail.capture_identifier
+        : (current?.capture_identifier ?? ''),
+    workspace_visible: detail.workspace_visible ?? current?.workspace_visible ?? true,
+  } satisfies DerpWindow
+}
+
+export function applyDetailMutable(map: Map<number, DerpWindow>, detail: DerpShellDetail): boolean {
+  switch (detail.type) {
+    case 'window_mapped': {
+      const nextWindow = mappedWindow(detail, map)
+      if (!nextWindow) break
+      const current = map.get(nextWindow.window_id)
+      if (current && sameDerpWindow(current, nextWindow)) return false
+      map.set(nextWindow.window_id, nextWindow)
+      return true
+    }
+    case 'window_unmapped': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null || !map.has(wid)) break
+      map.delete(wid)
+      return true
+    }
+    case 'window_geometry': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = map.get(wid)
+      if (!w) break
+      const nextWindow = {
+        ...w,
+        x: detail.x,
+        y: detail.y,
+        width: detail.width,
+        height: detail.height,
+        output_id:
+          detail.output_id !== undefined
+            ? coerceOutputId(detail.output_id, w.output_id)
+            : w.output_id,
+        output_name:
+          detail.output_name !== undefined
+            ? coerceOutputName(detail.output_name, w.output_name)
+            : w.output_name,
+        maximized: detail.maximized ?? w.maximized,
+        fullscreen: detail.fullscreen ?? w.fullscreen,
+      }
+      if (
+        nextWindow.x === w.x &&
+        nextWindow.y === w.y &&
+        nextWindow.width === w.width &&
+        nextWindow.height === w.height &&
+        nextWindow.output_id === w.output_id &&
+        nextWindow.output_name === w.output_name &&
+        nextWindow.maximized === w.maximized &&
+        nextWindow.fullscreen === w.fullscreen
+      ) {
+        return false
+      }
+      map.set(wid, nextWindow)
+      return true
+    }
+    case 'window_state': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = map.get(wid)
+      if (!w || w.minimized === detail.minimized) break
+      map.set(wid, { ...w, minimized: detail.minimized })
+      return true
+    }
+    case 'window_metadata': {
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = map.get(wid)
+      if (!w) break
+      if (w.title === detail.title && w.app_id === detail.app_id) return false
+      map.set(wid, { ...w, title: detail.title, app_id: detail.app_id })
+      return true
+    }
+    case 'window_order': {
+      if (!Array.isArray(detail.windows)) break
+      let changed = false
+      for (const row of detail.windows) {
+        if (!row || typeof row !== 'object') continue
+        const r = row as Record<string, unknown>
+        const wid = coerceShellWindowId(r.window_id)
+        const stackRaw = r.stack_z
+        if (wid === null || typeof stackRaw !== 'number' || !Number.isFinite(stackRaw)) continue
+        const window = map.get(wid)
+        if (!window) continue
+        const stack_z = Math.trunc(stackRaw)
+        if (window.stack_z === stack_z) continue
+        map.set(wid, { ...window, stack_z })
+        changed = true
+      }
+      return changed
+    }
+    default:
+      break
+  }
+  return false
 }
 
 export function switchVisibleWindowLocally(
@@ -343,69 +482,12 @@ export function switchVisibleWindowLocally(
 export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetail): Map<number, DerpWindow> {
   switch (detail.type) {
     case 'window_mapped': {
-      const wid = coerceShellWindowId(detail.window_id)
-      const sid = coerceShellWindowId(detail.surface_id)
-      if (wid === null || sid === null) break
-      const current = map.get(wid)
-      const shell_flags =
-        typeof detail.shell_flags === 'number' && Number.isFinite(detail.shell_flags)
-          ? Math.trunc(detail.shell_flags)
-          : (current?.shell_flags ?? 0)
-      const stack_z =
-        typeof detail.stack_z === 'number' && Number.isFinite(detail.stack_z)
-          ? Math.trunc(detail.stack_z)
-          : nextStackZ(map, wid)
-      const nextWindow: DerpWindow = {
-        window_id: wid,
-        surface_id: sid,
-        stack_z,
-        x: detail.x,
-        y: detail.y,
-        width: detail.width,
-        height: detail.height,
-        title: detail.title,
-        app_id: detail.app_id,
-        output_id: coerceOutputId(detail.output_id, current?.output_id ?? ''),
-        output_name: coerceOutputName(detail.output_name, current?.output_name ?? ''),
-        kind: typeof detail.kind === 'string' ? detail.kind : (current?.kind ?? ''),
-        x11_class: typeof detail.x11_class === 'string' ? detail.x11_class : (current?.x11_class ?? ''),
-        x11_instance: typeof detail.x11_instance === 'string' ? detail.x11_instance : (current?.x11_instance ?? ''),
-        minimized: detail.minimized ?? false,
-        maximized: detail.maximized ?? false,
-        fullscreen: detail.fullscreen ?? false,
-        shell_flags,
-        capture_identifier:
-          typeof detail.capture_identifier === 'string'
-            ? detail.capture_identifier
-            : (current?.capture_identifier ?? ''),
-        workspace_visible: detail.workspace_visible ?? current?.workspace_visible ?? true,
-      }
-      if (
-        current &&
-        current.surface_id === nextWindow.surface_id &&
-        current.stack_z === nextWindow.stack_z &&
-        current.x === nextWindow.x &&
-        current.y === nextWindow.y &&
-        current.width === nextWindow.width &&
-        current.height === nextWindow.height &&
-        current.title === nextWindow.title &&
-        current.app_id === nextWindow.app_id &&
-        current.output_id === nextWindow.output_id &&
-        current.output_name === nextWindow.output_name &&
-        current.kind === nextWindow.kind &&
-        current.x11_class === nextWindow.x11_class &&
-        current.x11_instance === nextWindow.x11_instance &&
-        current.minimized === nextWindow.minimized &&
-        current.maximized === nextWindow.maximized &&
-        current.fullscreen === nextWindow.fullscreen &&
-        current.shell_flags === nextWindow.shell_flags &&
-        current.capture_identifier === nextWindow.capture_identifier &&
-        current.workspace_visible === nextWindow.workspace_visible
-      ) {
-        return map
-      }
+      const nextWindow = mappedWindow(detail, map)
+      if (!nextWindow) break
+      const current = map.get(nextWindow.window_id)
+      if (current && sameDerpWindow(current, nextWindow)) return map
       const next = new Map(map)
-      next.set(wid, nextWindow)
+      next.set(nextWindow.window_id, nextWindow)
       return next
     }
     case 'window_unmapped': {
