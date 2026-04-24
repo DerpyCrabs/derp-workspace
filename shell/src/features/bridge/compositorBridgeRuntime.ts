@@ -9,7 +9,10 @@ import {
   markShellLatencySample,
 } from '@/features/bridge/compositorEvents'
 import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
-import { compositorSnapshotAbi, decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
+import {
+  decodeCompositorSnapshot,
+  type CompositorSnapshotDecodeCursor,
+} from '@/features/bridge/compositorSnapshot'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
 import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
@@ -189,6 +192,7 @@ function traySniMenuEntriesFromDetail(detail: DerpShellDetail): {
 export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntimeOptions) {
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
+  let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
 
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
@@ -676,25 +680,25 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const readSnapshot = window.__derpCompositorSnapshotRead
     if (typeof readSnapshot !== 'function') return false
     const readSnapshotIfChanged = window.__derpCompositorSnapshotReadIfChanged
-    const abi = window.__DERP_COMPOSITOR_SNAPSHOT_ABI ?? compositorSnapshotAbi()
     let raw: ArrayBuffer | null = null
     if (!force && typeof readSnapshotIfChanged === 'function') {
-      raw = readSnapshotIfChanged(path, lastSnapshotSequence, abi)
+      raw = readSnapshotIfChanged(path, lastSnapshotSequence)
     } else if (!force) {
       const snapshotVersion = window.__derpCompositorSnapshotVersion
       if (typeof snapshotVersion === 'function') {
-        const version = snapshotVersion(path, abi)
+        const version = snapshotVersion(path)
         if (typeof version === 'number' && Number.isFinite(version) && version === lastSnapshotSequence) {
           return false
         }
       }
-      raw = readSnapshot(path, abi)
+      raw = readSnapshot(path)
     } else {
-      raw = readSnapshot(path, abi)
+      raw = readSnapshot(path)
     }
     if (!(raw instanceof ArrayBuffer)) return false
-    const decoded = decodeCompositorSnapshot(raw)
-    if (!decoded || decoded.details.length === 0) return false
+    const decoded = decodeCompositorSnapshot(raw, force ? undefined : lastSnapshotDecodeCursor)
+    if (!decoded) return false
+    lastSnapshotDecodeCursor = { domainRevisions: decoded.domainRevisions }
     const shouldTrace =
       decoded.details.some((detail) => detail.type.startsWith('window_')) ||
       decoded.details.some((detail) => detail.type === 'focus_changed' || detail.type === 'workspace_state')
@@ -710,7 +714,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       decoded.sequence
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
       decoded.domainFlags
-    applyCompositorSnapshot(decoded.details)
+    if (decoded.details.length > 0) applyCompositorSnapshot(decoded.details)
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
     }

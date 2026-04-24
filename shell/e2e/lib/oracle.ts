@@ -38,6 +38,7 @@ export {
   topmostCompositorFloatingLayer,
   windowControls,
   writeJsonArtifact,
+  writeStateDiffArtifact,
   writeTextArtifact,
 } from './runtime.ts'
 

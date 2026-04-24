@@ -15,8 +15,18 @@ const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
 
 const SNAPSHOT_MAGIC = 0x44525053
-const SNAPSHOT_ABI = 6
 const SNAPSHOT_HEADER_BYTES = 32
+const SNAPSHOT_DOMAIN_COUNT = 9
+const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
+const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0
+const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
+const SNAPSHOT_DOMAIN_FOCUS = 1 << 2
+const SNAPSHOT_DOMAIN_KEYBOARD = 1 << 3
+const SNAPSHOT_DOMAIN_WORKSPACE = 1 << 4
+const SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS = 1 << 5
+const SNAPSHOT_DOMAIN_INTERACTION = 1 << 6
+const SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW = 1 << 7
+const SNAPSHOT_DOMAIN_TRAY = 1 << 8
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
@@ -27,7 +37,12 @@ const utf8 = new TextDecoder()
 type SnapshotDecodeResult = {
   sequence: number
   domainFlags: number
+  domainRevisions: readonly number[]
   details: DerpShellDetail[]
+}
+
+export type CompositorSnapshotDecodeCursor = {
+  domainRevisions: readonly number[]
 }
 
 function readUtf8(bytes: Uint8Array, start: number, len: number): string | null {
@@ -390,27 +405,76 @@ function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number)
   }
 }
 
-export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecodeResult | null {
+function domainForMessageType(msgType: number): number {
+  switch (msgType) {
+    case MSG_OUTPUT_GEOMETRY:
+    case MSG_OUTPUT_LAYOUT:
+      return SNAPSHOT_DOMAIN_OUTPUTS
+    case MSG_WINDOW_LIST:
+      return SNAPSHOT_DOMAIN_WINDOWS
+    case MSG_FOCUS_CHANGED:
+      return SNAPSHOT_DOMAIN_FOCUS
+    case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
+      return SNAPSHOT_DOMAIN_KEYBOARD
+    case MSG_COMPOSITOR_WORKSPACE_STATE:
+      return SNAPSHOT_DOMAIN_WORKSPACE
+    case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
+      return SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
+    case MSG_COMPOSITOR_INTERACTION_STATE:
+      return SNAPSHOT_DOMAIN_INTERACTION
+    case MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW:
+      return SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
+    case MSG_COMPOSITOR_TRAY_HINTS:
+    case MSG_COMPOSITOR_TRAY_SNI:
+      return SNAPSHOT_DOMAIN_TRAY
+    default:
+      return 0
+  }
+}
+
+function domainIndex(domain: number): number {
+  if (domain <= 0) return -1
+  return Math.trunc(Math.log2(domain))
+}
+
+function domainChanged(domain: number, revisions: readonly number[], previous?: CompositorSnapshotDecodeCursor): boolean {
+  const index = domainIndex(domain)
+  if (index < 0) return true
+  return previous?.domainRevisions[index] !== revisions[index]
+}
+
+export function decodeCompositorSnapshot(
+  buffer: ArrayBufferLike,
+  previous?: CompositorSnapshotDecodeCursor,
+): SnapshotDecodeResult | null {
   const bytes = new Uint8Array(buffer)
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   if (view.byteLength < SNAPSHOT_HEADER_BYTES) return null
   const magic = view.getUint32(0, true)
-  const abiVersion = view.getUint32(4, true)
   const payloadLen = view.getUint32(8, true)
   const domainFlags = view.getUint32(12, true)
   const sequence = view.getBigUint64(16, true)
   if (
     magic !== SNAPSHOT_MAGIC ||
-    abiVersion !== SNAPSHOT_ABI ||
     sequence % 2n !== 0n ||
     SNAPSHOT_HEADER_BYTES + payloadLen > view.byteLength
   ) {
     return null
   }
+  if (payloadLen !== 0 && payloadLen < SNAPSHOT_DOMAIN_REVISION_BYTES) return null
   const payloadStart = SNAPSHOT_HEADER_BYTES
   const payloadEnd = payloadStart + payloadLen
-  const details: DerpShellDetail[] = []
+  const domainRevisions: number[] = []
   let offset = payloadStart
+  if (payloadLen >= SNAPSHOT_DOMAIN_REVISION_BYTES) {
+    for (let index = 0; index < SNAPSHOT_DOMAIN_COUNT; index += 1) {
+      domainRevisions.push(Number(view.getBigUint64(offset + index * 8, true)))
+    }
+    offset += SNAPSHOT_DOMAIN_REVISION_BYTES
+  } else {
+    for (let index = 0; index < SNAPSHOT_DOMAIN_COUNT; index += 1) domainRevisions.push(0)
+  }
+  const details: DerpShellDetail[] = []
   while (offset < payloadEnd) {
     if (offset + 8 > payloadEnd) return null
     const bodyLen = view.getUint32(offset, true)
@@ -418,6 +482,11 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
     const bodyEnd = bodyStart + bodyLen
     if (bodyEnd > payloadEnd || bodyStart + 4 > bodyEnd) return null
     const msgType = view.getUint32(bodyStart, true)
+    const domain = domainForMessageType(msgType)
+    if (domain !== 0 && !domainChanged(domain, domainRevisions, previous)) {
+      offset = bodyEnd
+      continue
+    }
     const bodyBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + bodyStart, bodyLen)
     const bodyView = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
     let detail: DerpShellDetail | null = null
@@ -467,10 +536,7 @@ export function decodeCompositorSnapshot(buffer: ArrayBufferLike): SnapshotDecod
   return {
     sequence: Number(sequence),
     domainFlags,
+    domainRevisions,
     details,
   }
-}
-
-export function compositorSnapshotAbi(): number {
-  return SNAPSHOT_ABI
 }

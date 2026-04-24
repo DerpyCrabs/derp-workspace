@@ -14,8 +14,11 @@ import {
   defineGroup,
   ensureWorkspaceTabShowsWindow,
   getJson,
+  getShellHtml,
+  movePoint,
   openShellTestWindow,
   prepareFileBrowserFixtures,
+  rectCenter,
   shellWindowStack,
   taskbarEntry,
   waitFor,
@@ -114,5 +117,43 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assertRectMinSize('crowded taskbar close', row.close, 4, 4)
     await closeTaskbarWindow(base, shell0, wid)
     await waitForWindowGone(base, wid, 5000)
+  })
+
+  test('taskbar row tooltip clears when hovered window closes', async ({ base, state }) => {
+    const target = await openShellTestWindow(base, state)
+    const wid = target.window.window_id
+    const shell0 = await waitFor(
+      'wait taskbar row for tooltip close target',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return taskbarEntry(shell, wid)?.activate ? shell : null
+      },
+      5000,
+      100,
+    )
+    const row = taskbarEntry(shell0, wid)
+    assert(row?.activate, 'missing taskbar activate rect for tooltip close target')
+    const center = rectCenter(row.activate)
+    await movePoint(base, center.x, center.y)
+    await waitFor(
+      'wait taskbar tooltip before close',
+      async () => {
+        const html = await getShellHtml(base, '[data-shell-taskbar-row-tooltip]')
+        return html.includes(target.window.title) ? html : null
+      },
+      3000,
+      40,
+    )
+    await closeTaskbarWindow(base, shell0, wid)
+    await waitForWindowGone(base, wid, 5000)
+    await waitFor(
+      'wait taskbar tooltip clears after close',
+      async () => {
+        const html = await getShellHtml(base, '[data-shell-taskbar-row-tooltip]')
+        return html.length === 0 ? true : null
+      },
+      3000,
+      40,
+    )
   })
 })

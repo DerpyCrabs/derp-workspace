@@ -11,6 +11,7 @@ import {
   clickRect,
   closeWindow,
   compositorWindowById,
+  compositorWindowStack,
   copyArtifactFile,
   createTimingMarks,
   defineGroup,
@@ -26,7 +27,6 @@ import {
   pickMonitorMove,
   pointerButton,
   spawnCommand,
-  syncTest,
   rectCenter,
   rightClickRect,
   runKeybind,
@@ -42,6 +42,7 @@ import {
   waitForWindowMinimized,
   windowControls,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type E2eState,
   type Rect,
   type ShellSnapshot,
@@ -343,6 +344,19 @@ async function dragWindowHandleOntoTab(
   targetWindowId: number,
   dropPoint?: { x: number; y: number },
 ) {
+  const before = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  if (before.shell_context_menu_visible) {
+    await tapKey(base, KEY.escape)
+    await waitFor(
+      'wait for shell context menu dismissed before window drag',
+      async () => {
+        const next = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        return next.shell_context_menu_visible ? null : next
+      },
+      1000,
+      40,
+    )
+  }
   const target = await waitForTabRect(base, targetWindowId)
   await movePoint(base, start.x, start.y)
   await pointerButton(base, BTN_LEFT, 'press')
@@ -386,7 +400,28 @@ async function dragWindowHandleOntoTab(
 }
 
 async function dragTabOntoTab(base: string, sourceWindowId: number, targetWindowId: number) {
-  const source = await waitForTabRect(base, sourceWindowId)
+  let source: ReturnType<typeof tabRect>
+  try {
+    source = await waitForTabRect(base, sourceWindowId)
+  } catch (error) {
+    const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    const window = compositorWindowById(compositor, sourceWindowId)
+    if (window?.minimized) {
+      const shellWithTaskbarRow = await waitFor(
+        `wait for minimized source taskbar row ${sourceWindowId}`,
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          return taskbarEntry(next, sourceWindowId)?.activate ? next : null
+        },
+        2000,
+        40,
+      )
+      await activateTaskbarWindow(base, shellWithTaskbarRow, sourceWindowId)
+      source = await waitForTabRect(base, sourceWindowId)
+    } else {
+      throw error
+    }
+  }
   const target = await waitForTabRect(base, targetWindowId)
   const start = rectCenter(source.tab.rect!)
   await movePoint(base, start.x, start.y)
@@ -1655,26 +1690,34 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       footWindowId = footWindow.window_id
       state.spawnedNativeWindowIds.add(footWindowId)
-      const footAboveFileBrowser = (shell: ShellSnapshot) => {
-        const foot = shell.windows.find((entry) => entry.window_id === footWindowId)
-        const fileBrowser = shell.windows.find((entry) => entry.window_id === fileBrowserWindowId)
-        if (!foot || !fileBrowser) return null
-        if ((foot.stack_z ?? 0) <= (fileBrowser.stack_z ?? 0)) return null
-        return shell
+      const compositorFootAboveFileBrowser = (compositor: CompositorSnapshot) => {
+        const stack = compositorWindowStack(compositor)
+        const footIndex = stack.indexOf(footWindowId!)
+        const fileBrowserIndex = stack.indexOf(fileBrowserWindowId)
+        if (footIndex < 0 || fileBrowserIndex < 0) return null
+        return footIndex < fileBrowserIndex ? compositor : null
       }
-      await timing.step('wait for spawned foot above file browser', () =>
-        waitFor(
-          'wait for spawned foot above file browser',
-          async () => footAboveFileBrowser((await syncTest(base)).shell),
-          3000,
-          40,
-        ),
-      )
+      await timing.step('raise spawned foot above file browser', async () => {
+        const snapshots = await getSnapshots(base)
+        if (
+          !compositorFootAboveFileBrowser(snapshots.compositor) &&
+          snapshots.compositor.focused_window_id !== footWindowId &&
+          snapshots.shell.focused_window_id !== footWindowId
+        ) {
+          const shellWithTaskbarRow = await waitFor(
+            `wait for foot taskbar row ${footWindowId}`,
+            async () => {
+              const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+              return taskbarEntry(next, footWindowId!)?.activate ? next : null
+            },
+            2000,
+            40,
+          )
+          await activateTaskbarWindow(base, shellWithTaskbarRow, footWindowId!)
+        }
+      })
       await timing.step('merge foot window into file browser tab', async () => {
-        const shell = footAboveFileBrowser((await syncTest(base)).shell)
-        assert(shell, 'missing foot above file browser before merge')
-        await dragWindowHandleOntoTab(base, footWindowId!, titlebarDragPoint(shell, footWindowId!), fileBrowserWindowId)
-        await finishDrag(base)
+        await dragTabOntoTab(base, footWindowId!, fileBrowserWindowId)
       })
       const merged = await timing.step('wait for file browser and foot grouped', () =>
         waitForGroupedMembers(base, [fileBrowserWindowId, footWindowId!], footWindowId!),
@@ -2571,9 +2614,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
             if (!vis.includes(hiddenRightWindowId)) return null
             if (!group.split_left_rect || !group.split_right_rect || !group.split_divider_rect) return null
             const width =
-              group.split_left_rect.width +
-              group.split_right_rect.width +
-              group.split_divider_rect.width
+              group.split_left_rect.width + group.split_right_rect.width + group.split_divider_rect.width
             const tol = 56
             if (Math.abs(width - initialWidth) > tol) return null
             return { shell, group }

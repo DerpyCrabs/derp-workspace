@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 #[derive(Default)]
 pub(crate) struct ShellSnapshotModel {
     output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     window_list_revision: u64,
-    window_list_rows: Vec<shell_wire::ShellWindowSnapshot>,
+    window_rows_by_id: HashMap<u32, shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state: Option<shell_wire::DecodedCompositorToShellMessage>,
@@ -21,16 +23,11 @@ impl ShellSnapshotModel {
     }
 
     fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
-        self.window_list_rows
-            .iter_mut()
-            .find(|row| row.window_id == window_id)
+        self.window_rows_by_id.get_mut(&window_id)
     }
 
     fn window_row_remove(&mut self, window_id: u32) -> bool {
-        let before = self.window_list_rows.len();
-        self.window_list_rows
-            .retain(|row| row.window_id != window_id);
-        before != self.window_list_rows.len()
+        self.window_rows_by_id.remove(&window_id).is_some()
     }
 
     pub(crate) fn apply(&mut self, message: &shell_wire::DecodedCompositorToShellMessage) {
@@ -43,7 +40,11 @@ impl ShellSnapshotModel {
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
                 self.window_list_revision = *revision;
-                self.window_list_rows = windows.clone();
+                self.window_rows_by_id.clear();
+                for window in windows {
+                    self.window_rows_by_id
+                        .insert(window.window_id, window.clone());
+                }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMapped {
                 window_id,
@@ -88,31 +89,32 @@ impl ShellSnapshotModel {
                     row.x11_class = x11_class.clone();
                     row.x11_instance = x11_instance.clone();
                 } else {
-                    self.window_list_rows.push(shell_wire::ShellWindowSnapshot {
-                        window_id: *window_id,
-                        surface_id: *surface_id,
-                        stack_z: *stack_z,
-                        x: *x,
-                        y: *y,
-                        w: *w,
-                        h: *h,
-                        minimized: if *minimized { 1 } else { 0 },
-                        maximized: if *maximized { 1 } else { 0 },
-                        fullscreen: if *fullscreen { 1 } else { 0 },
-                        client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: *shell_flags,
-                        title: title.clone(),
-                        app_id: app_id.clone(),
-                        output_id: output_id.clone(),
-                        output_name: output_name.clone(),
-                        capture_identifier: capture_identifier.clone(),
-                        kind: kind.clone(),
-                        x11_class: x11_class.clone(),
-                        x11_instance: x11_instance.clone(),
-                    });
+                    self.window_rows_by_id.insert(
+                        *window_id,
+                        shell_wire::ShellWindowSnapshot {
+                            window_id: *window_id,
+                            surface_id: *surface_id,
+                            stack_z: *stack_z,
+                            x: *x,
+                            y: *y,
+                            w: *w,
+                            h: *h,
+                            minimized: if *minimized { 1 } else { 0 },
+                            maximized: if *maximized { 1 } else { 0 },
+                            fullscreen: if *fullscreen { 1 } else { 0 },
+                            client_side_decoration: if *client_side_decoration { 1 } else { 0 },
+                            shell_flags: *shell_flags,
+                            title: title.clone(),
+                            app_id: app_id.clone(),
+                            output_id: output_id.clone(),
+                            output_name: output_name.clone(),
+                            capture_identifier: capture_identifier.clone(),
+                            kind: kind.clone(),
+                            x11_class: x11_class.clone(),
+                            x11_instance: x11_instance.clone(),
+                        },
+                    );
                 }
-                self.window_list_rows
-                    .sort_by(|a, b| a.window_id.cmp(&b.window_id));
                 self.next_window_list_revision();
             }
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
@@ -205,9 +207,11 @@ impl ShellSnapshotModel {
         if let Some(message) = self.output_layout.clone() {
             messages.push(message);
         }
+        let mut windows: Vec<_> = self.window_rows_by_id.values().cloned().collect();
+        windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
         messages.push(shell_wire::DecodedCompositorToShellMessage::WindowList {
             revision: self.window_list_revision,
-            windows: self.window_list_rows.clone(),
+            windows,
         });
         if let Some(message) = self.focus_changed.clone() {
             messages.push(message);

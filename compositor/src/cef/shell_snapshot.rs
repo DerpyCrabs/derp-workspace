@@ -177,6 +177,7 @@ pub struct SharedShellSnapshotWriter {
     mmap: SharedMmapFile,
     sequence: u64,
     last_payload: Option<Vec<u8>>,
+    domain_revisions: [u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
     authoritative: ShellSnapshotModel,
 }
 
@@ -191,6 +192,7 @@ impl SharedShellSnapshotWriter {
             mmap,
             sequence: 0,
             last_payload: None,
+            domain_revisions: [0; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
             authoritative: ShellSnapshotModel::default(),
         };
         this.publish_payload_at(0, 0, Vec::new())?;
@@ -210,13 +212,23 @@ impl SharedShellSnapshotWriter {
         for message in messages {
             self.authoritative.apply(message);
         }
+        self.bump_domain_revisions(dirty_domains);
         let authoritative_messages = self.authoritative.messages();
         warn_snapshot_invariants(&authoritative_messages);
         self.publish_payload_at(
             sequence,
             dirty_domains,
-            encode_payload_messages(&authoritative_messages)?,
+            encode_payload_messages(&self.domain_revisions, &authoritative_messages)?,
         )
+    }
+
+    fn bump_domain_revisions(&mut self, dirty_domains: u32) {
+        for (index, revision) in self.domain_revisions.iter_mut().enumerate() {
+            let bit = 1u32 << index;
+            if dirty_domains & bit != 0 {
+                *revision = revision.wrapping_add(1).max(1);
+            }
+        }
     }
 
     fn publish_payload_at(
@@ -269,9 +281,13 @@ impl SharedShellSnapshotWriter {
 }
 
 fn encode_payload_messages(
+    domain_revisions: &[u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
     messages: &[shell_wire::DecodedCompositorToShellMessage],
 ) -> Result<Vec<u8>, String> {
     let mut payload = Vec::new();
+    for revision in domain_revisions {
+        payload.extend_from_slice(&revision.to_le_bytes());
+    }
     for msg in messages {
         append_snapshot_message(&mut payload, msg)?;
     }
@@ -686,10 +702,10 @@ fn warn_workspace_invariants(
     }
 }
 
-pub fn snapshot_version(path: &Path, expected_abi: u32) -> Result<Option<u64>, String> {
+pub fn snapshot_version(path: &Path) -> Result<Option<u64>, String> {
     #[cfg(not(unix))]
     {
-        let _ = (path, expected_abi);
+        let _ = path;
         return Err("shared snapshots require unix reads".to_string());
     }
     #[cfg(unix)]
@@ -702,19 +718,16 @@ pub fn snapshot_version(path: &Path, expected_abi: u32) -> Result<Option<u64>, S
     };
     #[cfg(unix)]
     let header = shell_wire::read_shared_snapshot_header(&header_bytes)?;
-    if header.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
-        || header.abi_version != expected_abi
-        || header.sequence % 2 != 0
-    {
+    if header.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC || header.sequence % 2 != 0 {
         return Ok(None);
     }
     Ok(Some(header.sequence))
 }
 
-pub fn snapshot_read(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, String> {
+pub fn snapshot_read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     #[cfg(not(unix))]
     {
-        let _ = (path, expected_abi);
+        let _ = path;
         return Err("shared snapshots require unix reads".to_string());
     }
     let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
@@ -726,10 +739,7 @@ pub fn snapshot_read(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, 
         let mapped = cache.mapped_slice(path)?;
         let head_a_bytes = mapped_snapshot_header(mapped)?;
         let head_a = shell_wire::read_shared_snapshot_header(&head_a_bytes)?;
-        if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
-            || head_a.abi_version != expected_abi
-            || head_a.sequence % 2 != 0
-        {
+        if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC || head_a.sequence % 2 != 0 {
             return Ok(None);
         }
         let payload_len = head_a.payload_len as usize;
@@ -752,12 +762,11 @@ pub fn snapshot_read(path: &Path, expected_abi: u32) -> Result<Option<Vec<u8>>, 
 
 pub fn snapshot_read_if_changed(
     path: &Path,
-    expected_abi: u32,
     last_sequence: u64,
 ) -> Result<Option<Vec<u8>>, String> {
     #[cfg(not(unix))]
     {
-        let _ = (path, expected_abi, last_sequence);
+        let _ = (path, last_sequence);
         return Err("shared snapshots require unix reads".to_string());
     }
     let header_len = shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize;
@@ -770,7 +779,6 @@ pub fn snapshot_read_if_changed(
         let head_a_bytes = mapped_snapshot_header(mapped)?;
         let head_a = shell_wire::read_shared_snapshot_header(&head_a_bytes)?;
         if head_a.magic != shell_wire::SHELL_SHARED_SNAPSHOT_MAGIC
-            || head_a.abi_version != expected_abi
             || head_a.sequence % 2 != 0
             || head_a.sequence == last_sequence
         {

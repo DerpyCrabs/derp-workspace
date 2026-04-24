@@ -9600,6 +9600,7 @@ impl CompositorState {
         let mut detached_window_drag = None;
         let mut activate_before_workspace_state = false;
         let mut detached_drag_before_workspace_state = false;
+        let mut copy_geometry_after_activation = None;
         let mut auto_layout_output_name = None;
         let mut auto_layout_all_outputs = false;
         match &mutation {
@@ -9614,6 +9615,9 @@ impl CompositorState {
                         activation_window_id = Some(next_visible);
                         activate_before_workspace_state =
                             !self.window_registry.is_shell_hosted(next_visible);
+                        if !activate_before_workspace_state {
+                            copy_geometry_after_activation = Some((next_visible, previous_visible));
+                        }
                     }
                 }
             }
@@ -9721,6 +9725,9 @@ impl CompositorState {
             self.workspace_begin_detached_window_drag(window_id);
         } else if let Some(window_id) = activation_window_id {
             self.shell_activate_window(window_id);
+            if let Some((target_window_id, source_window_id)) = copy_geometry_after_activation {
+                self.workspace_copy_window_geometry(target_window_id, source_window_id);
+            }
         }
         self.shell_send_mutation_ack("workspace_mutation", client_mutation_id, true);
     }

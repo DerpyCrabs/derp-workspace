@@ -138,7 +138,6 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
-pub const SHELL_SHARED_SNAPSHOT_ABI_VERSION: u32 = 6;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 pub const SHELL_SNAPSHOT_DOMAIN_OUTPUTS: u32 = 1 << 0;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOWS: u32 = 1 << 1;
@@ -149,6 +148,8 @@ pub const SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS: u32 = 1 << 5;
 pub const SHELL_SNAPSHOT_DOMAIN_INTERACTION: u32 = 1 << 6;
 pub const SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW: u32 = 1 << 7;
 pub const SHELL_SNAPSHOT_DOMAIN_TRAY: u32 = 1 << 8;
+pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 9;
+pub const SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES: usize = SHELL_SNAPSHOT_DOMAIN_COUNT * 8;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
 pub const DMABUF_FLAG_Y_INVERT: u32 = 1;
@@ -179,7 +180,6 @@ impl<'a> WireCursor<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedSnapshotHeader {
     pub magic: u32,
-    pub abi_version: u32,
     pub payload_len: u32,
     pub flags: u32,
     pub sequence: u64,
@@ -196,7 +196,6 @@ pub fn write_shared_snapshot_header(
     }
     dst[..SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize].fill(0);
     dst[0..4].copy_from_slice(&SHELL_SHARED_SNAPSHOT_MAGIC.to_le_bytes());
-    dst[4..8].copy_from_slice(&SHELL_SHARED_SNAPSHOT_ABI_VERSION.to_le_bytes());
     dst[8..12].copy_from_slice(&payload_len.to_le_bytes());
     dst[12..16].copy_from_slice(&flags.to_le_bytes());
     dst[16..24].copy_from_slice(&sequence.to_le_bytes());
@@ -209,7 +208,6 @@ pub fn read_shared_snapshot_header(src: &[u8]) -> Result<SharedSnapshotHeader, S
     }
     Ok(SharedSnapshotHeader {
         magic: u32::from_le_bytes(src[0..4].try_into().unwrap()),
-        abi_version: u32::from_le_bytes(src[4..8].try_into().unwrap()),
         payload_len: u32::from_le_bytes(src[8..12].try_into().unwrap()),
         flags: u32::from_le_bytes(src[12..16].try_into().unwrap()),
         sequence: u64::from_le_bytes(src[16..24].try_into().unwrap()),

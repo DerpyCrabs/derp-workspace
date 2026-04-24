@@ -1896,6 +1896,64 @@ export async function getSnapshots(base: string): Promise<{ compositor: Composit
   return { compositor, shell }
 }
 
+export async function writeStateDiffArtifact(
+  base: string,
+  name: string,
+  before?: { compositor: CompositorSnapshot; shell: ShellSnapshot },
+): Promise<{ compositor: CompositorSnapshot; shell: ShellSnapshot }> {
+  const after = await getSnapshots(base)
+  const summarize = (snapshot: { compositor: CompositorSnapshot; shell: ShellSnapshot }) => ({
+    compositor: {
+      focused_window_id: snapshot.compositor.focused_window_id,
+      outputs: snapshot.compositor.outputs.map((output) => ({
+        name: output.name,
+        x: output.x,
+        y: output.y,
+        width: output.width,
+        height: output.height,
+      })),
+      windows: snapshot.compositor.windows.map((window) => ({
+        window_id: window.window_id,
+        title: window.title,
+        app_id: window.app_id,
+        kind: window.kind,
+        output_name: window.output_name,
+        minimized: window.minimized,
+        maximized: window.maximized,
+        fullscreen: window.fullscreen,
+        stack_z: window.stack_z,
+      })),
+      window_stack_order: snapshot.compositor.window_stack_order ?? [],
+      interaction: {
+        shell_move_proxy_window_id: snapshot.compositor.shell_move_proxy_window_id ?? null,
+        shell_native_drag_preview_window_id: snapshot.compositor.shell_native_drag_preview_window_id ?? null,
+      },
+    },
+    shell: {
+      focused_window_id: snapshot.shell.focused_window_id ?? null,
+      taskbars: snapshot.shell.taskbars.map((taskbar) => taskbar.monitor),
+      taskbar_windows: snapshot.shell.taskbar_windows.map((row) => ({
+        group_id: row.group_id,
+        window_id: row.window_id,
+        tab_count: row.tab_count,
+      })),
+      tab_groups: (snapshot.shell.tab_groups ?? []).map((group) => ({
+        group_id: group.group_id,
+        visible_window_id: group.visible_window_id,
+        split_left_window_id: group.split_left_window_id ?? null,
+        member_window_ids: group.member_window_ids,
+        hidden_window_ids: group.hidden_window_ids,
+      })),
+      compositor_interaction_state: snapshot.shell.compositor_interaction_state ?? null,
+    },
+  })
+  await writeJsonArtifact(name, {
+    before: before ? summarize(before) : null,
+    after: summarize(after),
+  })
+  return after
+}
+
 export async function getShellHtml(base: string, selector?: string): Promise<string> {
   const suffix = selector ? `?selector=${encodeURIComponent(selector)}` : ''
   return getText(base, `/test/state/html${suffix}`)

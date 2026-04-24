@@ -116,7 +116,6 @@ declare global {
     __DERP_SPAWN_URL?: string
     __DERP_SHELL_HTTP?: string
     __DERP_COMPOSITOR_SNAPSHOT_PATH?: string | null
-    __DERP_COMPOSITOR_SNAPSHOT_ABI?: number
     __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null
     __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
     __DERP_SHELL_SHARED_STATE_ABI?: number

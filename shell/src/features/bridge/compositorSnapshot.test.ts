@@ -32,6 +32,14 @@ function frame(body: number[]): number[] {
   return [...u32(body.length), ...body]
 }
 
+function domainRevisions(values: number[] = []): number[] {
+  const out: number[] = []
+  for (let index = 0; index < 9; index += 1) {
+    out.push(...u64(BigInt(values[index] ?? 1)))
+  }
+  return out
+}
+
 describe('decodeCompositorSnapshot', () => {
   it('decodes a snapshot header and payload messages', () => {
     const outputGeometry = frame([
@@ -86,10 +94,10 @@ describe('decodeCompositorSnapshot', () => {
 
     const focusChanged = frame([...u32(10), ...u32(10), ...u32(9)])
 
-    const payload = [...outputGeometry, ...windowList, ...focusChanged]
+    const payload = [...domainRevisions([1, 1, 1]), ...outputGeometry, ...windowList, ...focusChanged]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(6),
+      ...u32(0),
       ...u32(payload.length),
       ...u32((1 << 0) | (1 << 1) | (1 << 2)),
       ...u64(2n),
@@ -102,6 +110,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decoded).toEqual({
       sequence: 2,
       domainFlags: 7,
+      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1],
       details: [
         {
           type: 'output_geometry',
@@ -169,19 +178,21 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(name.length),
       ...name,
     ])
+    const payload = [...domainRevisions([1]), ...outputLayout]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(6),
-      ...u32(outputLayout.length),
+      ...u32(0),
+      ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
       ...u64(0n),
-      ...outputLayout,
+      ...payload,
     ])
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
+      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1],
       details: [
         {
           type: 'output_layout',
@@ -231,10 +242,10 @@ describe('decodeCompositorSnapshot', () => {
       ...i32(0),
       ...u32(0),
     ])
-    const payload = [...interactionState]
+    const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 1]), ...interactionState]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(6),
+      ...u32(0),
       ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
@@ -245,6 +256,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
+      domainRevisions: [0, 0, 0, 0, 0, 0, 1, 1, 1],
       details: [
         {
           type: 'interaction_state',
@@ -278,19 +290,21 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(path.length),
       ...path,
     ])
+    const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 0, 1]), ...preview]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(6),
-      ...u32(preview.length),
+      ...u32(0),
+      ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
       ...u64(0n),
-      ...preview,
+      ...payload,
     ])
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
+      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1],
       details: [
         {
           type: 'native_drag_preview',
@@ -309,19 +323,21 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(3),
       ...u32(0),
     ])
+    const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 0, 1]), ...preview]
     const bytes = new Uint8Array([
       ...u32(0x44525053),
-      ...u32(6),
-      ...u32(preview.length),
+      ...u32(0),
+      ...u32(payload.length),
       ...u32(0),
       ...u64(2n),
       ...u64(0n),
-      ...preview,
+      ...payload,
     ])
 
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
+      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1],
       details: [
         {
           type: 'native_drag_preview',

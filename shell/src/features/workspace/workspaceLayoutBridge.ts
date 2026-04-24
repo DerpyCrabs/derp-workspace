@@ -98,12 +98,17 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
   }
 
   function taskbarRowsForScreen(screen: LayoutScreen) {
-    const rows = options.getTaskbarRowsByMonitor().get(screen.name)
+    const rows =
+      (screen.identity ? options.getTaskbarRowsByMonitor().get(screen.identity) : undefined) ??
+      options.getTaskbarRowsByMonitor().get(screen.name)
     return rows ? [...rows] : []
   }
 
   function screenTaskbarHiddenForFullscreen(screen: LayoutScreen) {
-    const rows = options.getWindowsByMonitor().get(screen.name) ?? []
+    const rows =
+      (screen.identity ? options.getWindowsByMonitor().get(screen.identity) : undefined) ??
+      options.getWindowsByMonitor().get(screen.name) ??
+      []
     return rows.some((window) => window.fullscreen && !window.minimized)
   }
 

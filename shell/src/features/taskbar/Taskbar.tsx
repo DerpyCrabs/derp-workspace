@@ -73,7 +73,7 @@ const clockDateFormatter = new Intl.DateTimeFormat([], {
   day: 'numeric',
 })
 
-type TaskbarRowHoverTip = { text: string; left: number; top: number }
+type TaskbarRowHoverTip = { groupId: string; windowId: number; text: string; left: number; top: number }
 
 function keyboardIndicator(label: string) {
   const compact = label.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -86,7 +86,7 @@ function TaskbarWindowRows(props: {
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
-  reportRowHoverTip: (payload: { text: string; rowEl: HTMLElement } | null) => void
+  reportRowHoverTip: (payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null) => void
 }) {
   const windowsByGroupId = createMemo(() => {
     const map = new Map<string, TaskbarWindowRow>()
@@ -118,12 +118,12 @@ function TaskbarWindowRows(props: {
             onPointerEnter={(e) => {
               const win = w()
               if (!win) return
-              props.reportRowHoverTip({ text: taskbarRowTooltip(win), rowEl: e.currentTarget })
+              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget })
             }}
             onPointerMove={(e) => {
               const win = w()
               if (!win) return
-              props.reportRowHoverTip({ text: taskbarRowTooltip(win), rowEl: e.currentTarget })
+              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget })
             }}
             onPointerLeave={() => props.reportRowHoverTip(null)}
           >
@@ -243,13 +243,28 @@ export function Taskbar(props: TaskbarProps) {
     onCleanup(() => observer.disconnect())
   })
 
-  function reportRowHoverTip(payload: { text: string; rowEl: HTMLElement } | null) {
+  createEffect(() => {
+    const tip = rowHoverTip()
+    if (!tip) return
+    const exists = props.windows.some(
+      (window) => window.group_id === tip.groupId && window.window_id === tip.windowId,
+    )
+    if (!exists) setRowHoverTip(null)
+  })
+
+  function reportRowHoverTip(payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null) {
     if (!payload) {
       setRowHoverTip(null)
       return
     }
     const r = payload.rowEl.getBoundingClientRect()
-    setRowHoverTip({ text: payload.text, left: r.left + r.width / 2, top: r.top - 8 })
+    setRowHoverTip({
+      groupId: payload.window.group_id,
+      windowId: payload.window.window_id,
+      text: taskbarRowTooltip(payload.window),
+      left: r.left + r.width / 2,
+      top: r.top - 8,
+    })
   }
 
   onCleanup(() => setRowHoverTip(null))

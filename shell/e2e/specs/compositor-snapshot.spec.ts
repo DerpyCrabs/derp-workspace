@@ -8,6 +8,7 @@ import {
   spawnNativeWindow,
   waitFor,
   waitForTaskbarEntry,
+  writeStateDiffArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -35,6 +36,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const row = shellWindowById(shell, spawned.window.window_id)
     assert(row, 'spawned native window missing from shell snapshot state')
+    await writeStateDiffArtifact(base, 'compositor-snapshot-domain-state-diff.json')
 
     const perf = await getPerfCounters(base)
     assert(perf.shell_updates.batch_count >= 1, 'expected compositor batch delivery after native window spawn')

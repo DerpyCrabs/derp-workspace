@@ -1100,14 +1100,7 @@ wrap_v8_handler! {
             if path.is_empty() {
                 return_exception!("snapshot path must not be empty");
             }
-            let abi = match args.get(1).and_then(|a| a.as_ref()) {
-                Some(v) if v.is_uint() != 0 => v.uint_value(),
-                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
-                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
-                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
-                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
-            };
-            let value = match shell_snapshot::snapshot_version(std::path::Path::new(&path), abi) {
+            let value = match shell_snapshot::snapshot_version(std::path::Path::new(&path)) {
                 Ok(Some(sequence)) => v8_value_create_double(sequence as f64),
                 Ok(None) => v8_value_create_null(),
                 Err(_) => v8_value_create_null(),
@@ -1154,14 +1147,7 @@ wrap_v8_handler! {
             if path.is_empty() {
                 return_exception!("snapshot path must not be empty");
             }
-            let abi = match args.get(1).and_then(|a| a.as_ref()) {
-                Some(v) if v.is_uint() != 0 => v.uint_value(),
-                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
-                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
-                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
-                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
-            };
-            let value = match shell_snapshot::snapshot_read(std::path::Path::new(&path), abi) {
+            let value = match shell_snapshot::snapshot_read(std::path::Path::new(&path)) {
                 Ok(Some(bytes)) => {
                     crate::cef::begin_frame_diag::note_shell_snapshot_read();
                     v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
@@ -1223,16 +1209,8 @@ wrap_v8_handler! {
             } else {
                 return_exception!("last snapshot sequence must be a non-negative number");
             };
-            let abi = match args.get(2).and_then(|a| a.as_ref()) {
-                Some(v) if v.is_uint() != 0 => v.uint_value(),
-                Some(v) if v.is_int() != 0 && v.int_value() >= 0 => v.int_value() as u32,
-                Some(v) if v.is_double() != 0 && v.double_value() >= 0.0 => v.double_value() as u32,
-                Some(_) => return_exception!("snapshot abi must be a non-negative number"),
-                None => shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
-            };
             let value = match shell_snapshot::snapshot_read_if_changed(
                 std::path::Path::new(&path),
-                abi,
                 last_sequence,
             ) {
                 Ok(Some(bytes)) => {

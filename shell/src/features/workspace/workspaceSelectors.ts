@@ -114,7 +114,7 @@ export function buildWindowsByMonitor(
 ): Map<string, DerpWindow[]> {
   const map = new Map<string, DerpWindow[]>()
   for (const window of windows) {
-    const key = window.output_name || fallbackMonitorKey
+    const key = window.output_id || window.output_name || fallbackMonitorKey
     const bucket = map.get(key)
     if (bucket) bucket.push(window)
     else map.set(key, [window])
@@ -139,9 +139,12 @@ export function buildTaskbarRowsByMonitor(
   for (const workspaceGroup of workspaceState.groups) {
     const group = groupsById.get(workspaceGroup.id)
     if (!group) continue
+    const windowKey = String(group.visibleWindow.window_id)
     const key =
-      workspaceState.monitorNameByWindowId?.[String(group.visibleWindow.window_id)] ||
       group.visibleWindow.output_name ||
+      workspaceState.monitorNameByWindowId?.[windowKey] ||
+      group.visibleWindow.output_id ||
+      workspaceState.monitorIdByWindowId?.[windowKey] ||
       fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)

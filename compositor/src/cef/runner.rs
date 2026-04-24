@@ -825,8 +825,7 @@ fn run_cef(
                 ))
                 .unwrap_or_else(|_| "null".to_string());
             Some(format!(
-                "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_COMPOSITOR_SNAPSHOT_ABI={};window.__DERP_SHELL_EXCLUSION_STATE_PATH={exclusion_state_path_js};window.__DERP_SHELL_UI_WINDOWS_STATE_PATH={ui_windows_state_path_js};window.__DERP_SHELL_SHARED_STATE_ABI={};",
-                shell_wire::SHELL_SHARED_SNAPSHOT_ABI_VERSION,
+                "window.__DERP_SPAWN_URL={spawn_js};window.__DERP_SHELL_HTTP={base_js};window.__DERP_COMPOSITOR_SNAPSHOT_PATH={snapshot_path_js};window.__DERP_SHELL_EXCLUSION_STATE_PATH={exclusion_state_path_js};window.__DERP_SHELL_UI_WINDOWS_STATE_PATH={ui_windows_state_path_js};window.__DERP_SHELL_SHARED_STATE_ABI={};",
                 crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
             ))
         }
