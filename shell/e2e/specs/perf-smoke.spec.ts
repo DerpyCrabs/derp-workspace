@@ -7,16 +7,20 @@ import {
   getPerfCounters,
   keyAction,
   measurePointerInteractionPerf,
+  outputForWindow,
+  pickMonitorMove,
   printNote,
   postJson,
   raiseTaskbarWindow,
   rectCenter,
   resetPerfCounters,
+  runKeybind,
   spawnNativeWindow,
   waitFor,
   waitForTaskbarEntry,
   windowControls,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -328,8 +332,77 @@ export default defineGroup(import.meta.url, ({ test }) => {
       menuChurnSample.shell_sync.shared_state_ui_window_writes <= 24,
       `programs menu churn should coalesce shell ui writes, got ${menuChurnSample.shell_sync.shared_state_ui_window_writes}`,
     )
+
+    const beforeScale = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    await resetPerfCounters(base)
+    const scaleWindows = []
+    for (let index = 0; index < 20; index += 1) {
+      const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: `Derp Perf Scale ${stamp}-${index}`,
+        token: `perf-scale-${stamp}-${index}`,
+        strip: index % 2 === 0 ? 'red' : 'green',
+        width: 260,
+        height: 180,
+      })
+      state.spawnedNativeWindowIds.add(spawned.window.window_id)
+      await waitForTaskbarEntry(base, spawned.window.window_id)
+      scaleWindows.push(spawned)
+    }
+    const scaleOpenSample = await getPerfCounters(base)
+    assert(
+      scaleOpenSample.shell_sync.snapshot_dirty_fallbacks === 0,
+      `20-window churn dirty snapshots should not fall back to full payloads, got ${scaleOpenSample.shell_sync.snapshot_dirty_fallbacks}`,
+    )
+    assert(
+      scaleOpenSample.shell_sync.full_window_list_replies <= 28,
+      `20-window churn should keep full window lists bounded, got ${scaleOpenSample.shell_sync.full_window_list_replies}`,
+    )
+    assert(
+      scaleOpenSample.shell_sync.shared_state_ui_window_writes <= 48,
+      `20-window churn should coalesce shell ui writes, got ${scaleOpenSample.shell_sync.shared_state_ui_window_writes}`,
+    )
+    assert(
+      scaleOpenSample.shell_sync.shared_state_exclusion_writes <= 16,
+      `20-window churn should keep tray/taskbar exclusion writes bounded, got ${scaleOpenSample.shell_sync.shared_state_exclusion_writes}`,
+    )
+
+    let scaleMonitorMoveSample = null
+    if (beforeScale.outputs.length >= 2 && scaleWindows.length > 0) {
+      const latest = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const first = scaleWindows[0]!
+      const current = latest.windows.find((window) => window.window_id === first.window.window_id) ?? first.window
+      const currentOutput = outputForWindow(latest, current)
+      const move = currentOutput ? pickMonitorMove(latest.outputs, currentOutput.name) : null
+      if (move) {
+        await resetPerfCounters(base)
+        await runKeybind(base, move.action, current.window_id)
+        await waitFor(
+          'wait for scaled window monitor move',
+          async () => {
+            const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+            const moved = compositor.windows.find((window) => window.window_id === current.window_id)
+            return moved?.output_name === move.target.name ? compositor : null
+          },
+          5000,
+          100,
+        )
+        scaleMonitorMoveSample = await getPerfCounters(base)
+        assert(
+          scaleMonitorMoveSample.shell_sync.snapshot_dirty_fallbacks === 0,
+          `20-window multimonitor move should not fall back to full snapshots, got ${scaleMonitorMoveSample.shell_sync.snapshot_dirty_fallbacks}`,
+        )
+        assert(
+          scaleMonitorMoveSample.shell_sync.full_window_list_replies <= 4,
+          `20-window multimonitor move should keep full window lists bounded, got ${scaleMonitorMoveSample.shell_sync.full_window_list_replies}`,
+        )
+        assert(
+          scaleMonitorMoveSample.shell_sync.shared_state_exclusion_writes <= 6,
+          `20-window multimonitor move should keep tray/taskbar exclusion writes bounded, got ${scaleMonitorMoveSample.shell_sync.shared_state_exclusion_writes}`,
+        )
+      }
+    }
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -343,11 +416,14 @@ export default defineGroup(import.meta.url, ({ test }) => {
         long_move: longDragSample,
         stress_move: stressDragSample,
         programs_menu_churn: menuChurnSample,
+        scale_open: scaleOpenSample,
+        scale_monitor_move: scaleMonitorMoveSample,
       },
       windows: {
         red: red.window,
         green: green.window,
         mover: mover.window,
+        scale: scaleWindows.map((entry) => entry.window),
       },
     })
   })

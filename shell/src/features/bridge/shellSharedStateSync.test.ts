@@ -28,7 +28,7 @@ describe('createShellSharedStateSync', () => {
     expect(calls).toEqual(['flush', 'sync'])
   })
 
-  it('keeps overlay exclusion scheduling in now microtask and frame phases', async () => {
+  it('coalesces overlay exclusion scheduling into microtask and frame phases', async () => {
     vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => {
       fn(0)
       return 1
@@ -42,9 +42,9 @@ describe('createShellSharedStateSync', () => {
     })
 
     sync.scheduleOverlayExclusionSync()
-    expect(calls).toEqual(['schedule', 'schedule'])
+    expect(calls).toEqual(['schedule'])
     await flushMicrotasks()
-    expect(calls).toEqual(['schedule', 'schedule', 'schedule'])
+    expect(calls).toEqual(['schedule', 'schedule'])
   })
 
   it('shares one measurement frame across immediate shell ui and exclusion sync', () => {

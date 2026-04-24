@@ -27,6 +27,8 @@ type WorkspaceLayoutBridgeOptions = {
   shellWireSend: (op: 'workspace_mutation', arg?: number | string) => boolean
 }
 
+const EMPTY_TASKBAR_ROWS: TaskbarWindowRow[] = []
+
 export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOptions) {
   let compositorFollowupQueued = false
   let compositorFollowupFlushWindows = false
@@ -100,7 +102,7 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
     const rows =
       (screen.identity ? options.getTaskbarRowsByMonitor().get(screen.identity) : undefined) ??
       options.getTaskbarRowsByMonitor().get(screen.name)
-    return rows ? [...rows] : []
+    return rows ?? EMPTY_TASKBAR_ROWS
   }
 
   function screenTaskbarHiddenForFullscreen(screen: LayoutScreen) {

@@ -117,6 +117,37 @@ function measureElement(frame: ShellMeasureFrame, el: Element): ShellExclusionRe
   return { x: z.x, y: z.y, w: z.w, h: z.h }
 }
 
+function sameExclusionRect(left: ShellExclusionRect, right: ShellExclusionRect): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.w === right.w &&
+    left.h === right.h &&
+    (left.window_id ?? 0) === (right.window_id ?? 0)
+  )
+}
+
+function sameExclusionRectArray(
+  left: readonly ShellExclusionRect[],
+  right: readonly ShellExclusionRect[],
+): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (!sameExclusionRect(left[index]!, right[index]!)) return false
+  }
+  return true
+}
+
+function sameTrayStrip(left: ShellExclusionRect | null, right: ShellExclusionRect | null): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return sameExclusionRect(left, right)
+}
+
+function cloneExclusionRectArray(rects: readonly ShellExclusionRect[]): ShellExclusionRect[] {
+  return rects.map((rect) => ({ ...rect }))
+}
+
 export function registerShellExclusionElement(
   kind: ShellExclusionKind,
   label: string,
@@ -143,7 +174,11 @@ export function registerShellExclusionElement(
 
 export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let exclusionZonesRaf = 0
-  let lastExclusionZonesJson: string | null = null
+  let lastExclusionStamp: string | null = null
+  let lastExclusionBase: ShellExclusionRect[] | null = null
+  let lastExclusionTrayStrip: ShellExclusionRect | null = null
+  let lastExclusionOverlayOpen = false
+  let lastExclusionFloating: ShellExclusionRect[] | null = null
   let pendingExclusionStateWrite = false
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
@@ -165,7 +200,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       !pendingExclusionStateWrite &&
       !exclusionStructureDirty &&
       dirtyExclusionTokens.size === 0 &&
-      lastExclusionZonesJson !== null
+      lastExclusionBase !== null
     )
       return
     const main = options.mainEl()
@@ -192,14 +227,17 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const mergedBase = mergeExclusionRects([...rects, ...floatingRaw])
     options.onHudChange(hud)
     const floatingForPayload = mergeExclusionRects(floatingRaw)
-    const payload = JSON.stringify({
-      stamp: sharedShellStateStampKey(),
-      rects: mergedBase,
-      tray_strip: snapshot.tray_strip,
-      overlayOpen,
-      floating: floatingForPayload,
-    })
-    if (payload === lastExclusionZonesJson) {
+    const stamp = sharedShellStateStampKey()
+    if (
+      !pendingExclusionStateWrite &&
+      lastExclusionBase !== null &&
+      lastExclusionFloating !== null &&
+      stamp === lastExclusionStamp &&
+      overlayOpen === lastExclusionOverlayOpen &&
+      sameTrayStrip(snapshot.tray_strip, lastExclusionTrayStrip) &&
+      sameExclusionRectArray(mergedBase, lastExclusionBase) &&
+      sameExclusionRectArray(floatingForPayload, lastExclusionFloating)
+    ) {
       pendingExclusionStateWrite = false
       return
     }
@@ -208,7 +246,11 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       return
     }
     pendingExclusionStateWrite = false
-    lastExclusionZonesJson = payload
+    lastExclusionStamp = stamp
+    lastExclusionBase = cloneExclusionRectArray(mergedBase)
+    lastExclusionTrayStrip = snapshot.tray_strip ? { ...snapshot.tray_strip } : null
+    lastExclusionOverlayOpen = overlayOpen
+    lastExclusionFloating = cloneExclusionRectArray(floatingForPayload)
   }
 
   function scheduleExclusionZonesSync() {

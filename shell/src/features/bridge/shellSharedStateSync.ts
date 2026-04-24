@@ -31,6 +31,7 @@ function mergeExclusion(
 
 export function createShellSharedStateSync(options: ShellSharedStateSyncOptions) {
   let microtaskQueued = false
+  let overlayExclusionRaf = 0
   let queuedShellUi: ShellSharedStateSyncRequest['shellUi'] | undefined
   let queuedExclusion: ShellSharedStateSyncRequest['exclusion'] | undefined
 
@@ -78,9 +79,12 @@ export function createShellSharedStateSync(options: ShellSharedStateSyncOptions)
   }
 
   const scheduleOverlayExclusionSync = () => {
-    requestSharedStateSync({ exclusion: 'schedule' }, 'now')
     requestSharedStateSync({ exclusion: 'schedule' })
-    requestAnimationFrame(() => requestSharedStateSync({ exclusion: 'schedule' }, 'now'))
+    if (overlayExclusionRaf) return
+    overlayExclusionRaf = requestAnimationFrame(() => {
+      overlayExclusionRaf = 0
+      requestSharedStateSync({ exclusion: 'schedule' }, 'now')
+    })
   }
 
   return {

@@ -87,7 +87,10 @@ function TaskbarWindowRows(props: {
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
-  reportRowHoverTip: (payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null) => void
+  reportRowHoverTip: (
+    payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null,
+    timing?: 'now' | 'frame',
+  ) => void
 }) {
   const windowsByGroupId = createMemo(() => {
     const map = new Map<string, TaskbarWindowRow>()
@@ -119,12 +122,7 @@ function TaskbarWindowRows(props: {
             onPointerEnter={(e) => {
               const win = w()
               if (!win) return
-              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget })
-            }}
-            onPointerMove={(e) => {
-              const win = w()
-              if (!win) return
-              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget })
+              props.reportRowHoverTip({ window: win, rowEl: e.currentTarget }, 'now')
             }}
             onPointerLeave={() => props.reportRowHoverTip(null)}
           >
@@ -212,6 +210,8 @@ export function Taskbar(props: TaskbarProps) {
   const [windowRailWidth, setWindowRailWidth] = createSignal(0)
   const [rowHoverTip, setRowHoverTip] = createSignal<TaskbarRowHoverTip | null>(null)
   let windowRailRef: HTMLDivElement | undefined
+  let rowHoverTipRaf = 0
+  let pendingRowHoverTip: { window: TaskbarWindowRow; rowEl: HTMLElement } | null = null
   let suppressSettingsClick = false
   let suppressDebugClick = false
   const volumeIcon = () => {
@@ -253,19 +253,52 @@ export function Taskbar(props: TaskbarProps) {
     if (!exists) setRowHoverTip(null)
   })
 
-  function reportRowHoverTip(payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null) {
+  function applyRowHoverTip(payload: { window: TaskbarWindowRow; rowEl: HTMLElement }) {
+    const r = payload.rowEl.getBoundingClientRect()
+    setRowHoverTip((prev) => {
+      const next = {
+        groupId: payload.window.group_id,
+        windowId: payload.window.window_id,
+        text: taskbarRowTooltip(payload.window),
+        left: r.left + r.width / 2,
+        top: r.top - 8,
+      }
+      return prev &&
+        prev.groupId === next.groupId &&
+        prev.windowId === next.windowId &&
+        prev.text === next.text &&
+        prev.left === next.left &&
+        prev.top === next.top
+        ? prev
+        : next
+    })
+  }
+
+  function flushRowHoverTip() {
+    rowHoverTipRaf = 0
+    const payload = pendingRowHoverTip
+    pendingRowHoverTip = null
+    if (payload) applyRowHoverTip(payload)
+  }
+
+  function reportRowHoverTip(payload: { window: TaskbarWindowRow; rowEl: HTMLElement } | null, timing: 'now' | 'frame' = 'frame') {
     if (!payload) {
+      pendingRowHoverTip = null
+      if (rowHoverTipRaf) {
+        cancelAnimationFrame(rowHoverTipRaf)
+        rowHoverTipRaf = 0
+      }
       setRowHoverTip(null)
       return
     }
-    const r = payload.rowEl.getBoundingClientRect()
-    setRowHoverTip({
-      groupId: payload.window.group_id,
-      windowId: payload.window.window_id,
-      text: taskbarRowTooltip(payload.window),
-      left: r.left + r.width / 2,
-      top: r.top - 8,
-    })
+    if (timing === 'now') {
+      pendingRowHoverTip = null
+      applyRowHoverTip(payload)
+      return
+    }
+    pendingRowHoverTip = payload
+    if (rowHoverTipRaf) return
+    rowHoverTipRaf = requestAnimationFrame(flushRowHoverTip)
   }
 
   function registerTaskbarBase(el: HTMLElement) {
@@ -283,7 +316,10 @@ export function Taskbar(props: TaskbarProps) {
     onCleanup(registration.unregister)
   }
 
-  onCleanup(() => setRowHoverTip(null))
+  onCleanup(() => {
+    if (rowHoverTipRaf) cancelAnimationFrame(rowHoverTipRaf)
+    setRowHoverTip(null)
+  })
 
   return (
     <>

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
+import { batch, createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
 import {
   applyDetail,
   buildWindowsMapFromList,
@@ -88,6 +88,14 @@ function collectWindowOrderIds(raw: unknown): number[] {
 
 function sameNumberArray(left: readonly number[], right: readonly number[]): boolean {
   if (left === right) return true
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
+function sameWindowArray(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
   if (left.length !== right.length) return false
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) return false
@@ -257,21 +265,21 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const windowById = (windowId: number) => ensureWindowSignal(windowId).get
   const workspaceWindowsMap = createMemo(() => workspaceWindows())
   const windowsListIds = createMemo(() => windowOrderIds())
-  const windowsList = createMemo(() => {
+  const windowsList = createMemo((prev: DerpWindow[] = []) => {
     const out: DerpWindow[] = []
     for (const id of windowsListIds()) {
       const window = allWindowsMap().get(id)
       if (window) out.push(window)
     }
-    return out
+    return sameWindowArray(prev, out) ? prev : out
   })
-  const workspaceWindowsList = createMemo(() => {
+  const workspaceWindowsList = createMemo((prev: DerpWindow[] = []) => {
     const out: DerpWindow[] = []
     for (const id of windowsListIds()) {
       const window = workspaceWindowsMap().get(id)
       if (window) out.push(window)
     }
-    return out
+    return sameWindowArray(prev, out) ? prev : out
   })
   const liveFocusedWindowId = createMemo(() => {
     const windowId = focusedWindowId()
@@ -279,6 +287,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   })
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
+    batch(() => {
     const authoritative = collectSnapshotAuthoritativeState(details)
     let nextWindowsMap: Map<number, DerpWindow> | null = null
     if (authoritative.windows !== undefined) {
@@ -330,12 +339,13 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (windowId !== null) setFocusedWindowId((prev) => (prev === windowId ? null : prev))
       }
     }
+    })
   }
 
   const applyCompositorDetail = (
     detail: DerpShellDetail,
     applyOptions: ApplyCompositorDetailOptions,
-  ): CompositorApplyResult => {
+  ): CompositorApplyResult => batch(() => {
     if (detail.type === 'focus_changed') {
       const windowId = coerceShellWindowId(detail.window_id)
       if (windowId !== null) {
@@ -488,7 +498,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       kind: 'ignored',
       detailType: detail.type,
     }
-  }
+  })
 
   return {
     windows,

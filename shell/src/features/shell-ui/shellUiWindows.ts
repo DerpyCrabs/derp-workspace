@@ -74,18 +74,25 @@ function sameWindows(
   return true
 }
 
-function flush() {
-  raf = 0
+function flush(keepDirtyForRaf = false) {
+  const hasPendingRaf = raf !== 0
+  if (!keepDirtyForRaf) raf = 0
   microtaskQueued = false
   if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) return
   const frame = currentShellMeasureFrame()
+  const dirtyTokens = [...dirtyRegistryTokens]
   for (const token of dirtyRegistryTokens) {
     const entry = registry.get(token)
     if (!entry) continue
     entry.cached = entry.measure(frame)
   }
-  dirtyRegistryTokens.clear()
-  structureDirty = false
+  if (keepDirtyForRaf && hasPendingRaf) {
+    dirtyRegistryTokens.clear()
+    for (const token of dirtyTokens) dirtyRegistryTokens.add(token)
+  } else {
+    dirtyRegistryTokens.clear()
+    structureDirty = false
+  }
   const windows: Array<{ id: number; z: number; gx: number; gy: number; gw: number; gh: number }> = []
   for (const [, e] of registry) {
     if (e.cached) windows.push(e.cached)
@@ -104,10 +111,10 @@ function flush() {
 export function scheduleShellUiWindowsSync() {
   if (!microtaskQueued) {
     microtaskQueued = true
-    queueMicrotask(flush)
+    queueMicrotask(() => flush(true))
   }
   if (raf) return
-  raf = requestAnimationFrame(flush)
+  raf = requestAnimationFrame(() => flush())
 }
 
 export function flushShellUiWindowsSyncNow() {
