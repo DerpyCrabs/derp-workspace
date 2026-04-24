@@ -39,6 +39,7 @@ const [loaded, setLoaded] = createSignal(false)
 const [busy, setBusy] = createSignal(false)
 const [err, setErr] = createSignal<string | null>(null)
 let refreshPromise: Promise<void> | null = null
+let settingsRevision = 0
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -86,12 +87,14 @@ function sanitizeSettings(value: unknown): FileBrowserFilesSettings {
 }
 
 async function persist(next: FileBrowserFilesSettings): Promise<void> {
+  settingsRevision += 1
   setSettings(next)
   await postShellJson('/settings_files', next, shellHttpBase())
 }
 
 async function refresh(): Promise<void> {
   if (refreshPromise) return refreshPromise
+  const refreshRevision = settingsRevision
   refreshPromise = (async () => {
     const base = shellHttpBase()
     setBusy(true)
@@ -103,7 +106,8 @@ async function refresh(): Promise<void> {
     }
     setErr(null)
     try {
-      setSettings(sanitizeSettings(await getShellJson('/settings_files', base)))
+      const next = sanitizeSettings(await getShellJson('/settings_files', base))
+      if (refreshRevision === settingsRevision) setSettings(next)
       setLoaded(true)
       setErr(null)
     } catch (error) {

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, Ordering};
@@ -517,6 +517,7 @@ fn append_snapshot_message(
 fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMessage]) {
     let mut window_ids = HashSet::new();
     let mut output_names = HashSet::new();
+    let mut output_ids = HashSet::new();
     let mut window_list_count = 0usize;
     let mut focused_window_id = None;
     let mut workspace_json = None;
@@ -526,6 +527,9 @@ fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMess
                 for screen in screens {
                     if !output_names.insert(screen.name.clone()) {
                         tracing::warn!(output = %screen.name, "snapshot duplicate output");
+                    }
+                    if !screen.identity.is_empty() && !output_ids.insert(screen.identity.clone()) {
+                        tracing::warn!(output_id = %screen.identity, "snapshot duplicate output identity");
                     }
                 }
             }
@@ -571,7 +575,7 @@ fn warn_snapshot_invariants(messages: &[shell_wire::DecodedCompositorToShellMess
         }
     }
     if let Some(state_json) = workspace_json {
-        warn_workspace_invariants(state_json, &window_ids, &output_names);
+        warn_workspace_invariants(state_json, &window_ids, &output_names, &output_ids);
     }
 }
 
@@ -587,16 +591,35 @@ fn warn_workspace_invariants(
     state_json: &str,
     window_ids: &HashSet<u32>,
     output_names: &HashSet<String>,
+    output_ids: &HashSet<String>,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(state_json) else {
         tracing::warn!("snapshot workspace json invalid");
         return;
     };
+    let mut group_window_owner = HashMap::<u32, String>::new();
     if let Some(groups) = value.get("groups").and_then(|v| v.as_array()) {
         for group in groups {
+            let group_id = group
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
             if let Some(ids) = group.get("windowIds").and_then(|v| v.as_array()) {
                 for id in ids {
                     warn_workspace_window_ref(id, "groups.windowIds", window_ids);
+                    if let Some(window_id) = id.as_u64().and_then(|id| u32::try_from(id).ok()) {
+                        if let Some(previous_group_id) =
+                            group_window_owner.insert(window_id, group_id.clone())
+                        {
+                            tracing::warn!(
+                                window_id,
+                                group_id = %group_id,
+                                previous_group_id = %previous_group_id,
+                                "snapshot workspace duplicate group window"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -614,7 +637,19 @@ fn warn_workspace_invariants(
         }
     }
     if let Some(monitors) = value.get("monitorTiles").and_then(|v| v.as_array()) {
+        let mut tiled_window_owner = HashMap::<u32, String>::new();
         for monitor in monitors {
+            let output_name = monitor
+                .get("outputName")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let output_id = monitor
+                .get("outputId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if !output_id.is_empty() && !output_ids.is_empty() && !output_ids.contains(output_id) {
+                tracing::warn!(output_id, "snapshot workspace output identity missing");
+            }
             if let Some(output) = monitor.get("outputName").and_then(|v| v.as_str()) {
                 if !output.is_empty() && !output_names.is_empty() && !output_names.contains(output)
                 {
@@ -625,6 +660,18 @@ fn warn_workspace_invariants(
                 for entry in entries {
                     if let Some(id) = entry.get("windowId") {
                         warn_workspace_window_ref(id, "monitorTiles.entries.windowId", window_ids);
+                        if let Some(window_id) = id.as_u64().and_then(|id| u32::try_from(id).ok()) {
+                            if let Some(previous_output) =
+                                tiled_window_owner.insert(window_id, output_name.to_string())
+                            {
+                                tracing::warn!(
+                                    window_id,
+                                    output = %output_name,
+                                    previous_output = %previous_output,
+                                    "snapshot workspace duplicate tiled window"
+                                );
+                            }
+                        }
                     }
                 }
             }

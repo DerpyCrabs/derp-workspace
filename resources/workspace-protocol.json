@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "workspaceStateFields": [
+    "groups",
+    "activeTabByGroupId",
+    "pinnedWindowIds",
+    "splitByGroupId",
+    "monitorTiles",
+    "monitorLayouts",
+    "preTileGeometry",
+    "nextGroupSeq"
+  ],
+  "workspaceDerivedFields": [
+    "groupIdByWindowId",
+    "visibleWindowIdByGroupId",
+    "monitorNameByWindowId",
+    "monitorIdByWindowId"
+  ],
+  "monitorLayoutTypes": [
+    "manual-snap",
+    "master-stack",
+    "columns",
+    "grid",
+    "custom-auto"
+  ],
+  "slotRuleFields": [
+    "app_id",
+    "title",
+    "x11_class",
+    "x11_instance",
+    "kind"
+  ],
+  "slotRuleOps": [
+    "equals",
+    "contains",
+    "starts_with"
+  ],
+  "mutationTypes": [
+    "select_tab",
+    "move_window_to_group",
+    "move_group_to_group",
+    "split_window_to_own_group",
+    "set_window_pinned",
+    "enter_split",
+    "exit_split",
+    "set_split_fraction",
+    "set_monitor_tile",
+    "remove_monitor_tile",
+    "clear_monitor_tiles",
+    "set_pre_tile_geometry",
+    "set_monitor_layout",
+    "set_monitor_layouts",
+    "clear_pre_tile_geometry",
+    "restore_session_workspace",
+    "replace_state"
+  ]
+}

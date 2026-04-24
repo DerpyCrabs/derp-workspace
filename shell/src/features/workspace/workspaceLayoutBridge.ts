@@ -7,6 +7,7 @@ import {
   workspaceMonitorTileEntries,
   type WorkspaceState,
 } from './workspaceState'
+import type { WorkspaceMutation } from './workspaceProtocol'
 
 type FollowupOptions = {
   flushWindows?: boolean
@@ -23,7 +24,7 @@ type WorkspaceLayoutBridgeOptions = {
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
-  sendWorkspaceMutation?: (mutation: Record<string, unknown>) => boolean
+  sendWorkspaceMutation?: (mutation: WorkspaceMutation) => boolean
   shellWireSend: (op: 'workspace_mutation', arg?: number | string) => boolean
 }
 
@@ -33,14 +34,15 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
   let compositorFollowupSyncExclusion = false
   let compositorFollowupResetScroll = false
 
-  function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
+  function sendWorkspaceMutation(mutation: WorkspaceMutation): boolean {
     return options.sendWorkspaceMutation?.(mutation) ?? options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
   }
 
-  function sendSetMonitorTile(windowId: number, outputName: string, zone: SnapZone, bounds: TileRect): boolean {
+  function sendSetMonitorTile(windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null): boolean {
     return sendWorkspaceMutation({
       type: 'set_monitor_tile',
       windowId,
+      ...(outputId ? { outputId } : {}),
       outputName,
       zone,
       bounds: {
@@ -56,8 +58,8 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
     return sendWorkspaceMutation({ type: 'remove_monitor_tile', windowId })
   }
 
-  function sendClearMonitorTiles(outputName: string): boolean {
-    return sendWorkspaceMutation({ type: 'clear_monitor_tiles', outputName })
+  function sendClearMonitorTiles(outputName: string, outputId?: string | null): boolean {
+    return sendWorkspaceMutation({ type: 'clear_monitor_tiles', ...(outputId ? { outputId } : {}), outputName })
   }
 
   function sendSetPreTileGeometry(windowId: number, bounds: { x: number; y: number; w: number; h: number }): boolean {
@@ -82,17 +84,17 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
     return bounds ? { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height } : null
   }
 
-  function workspaceTiledRectMap(outputName: string): Map<number, TileRect> {
+  function workspaceTiledRectMap(outputName: string, outputId?: string | null): Map<number, TileRect> {
     return new Map(
-      workspaceMonitorTileEntries(options.getWorkspaceState(), outputName).map((entry) => [
+      workspaceMonitorTileEntries(options.getWorkspaceState(), outputName, outputId).map((entry) => [
         entry.windowId,
         { ...entry.bounds },
       ]),
     )
   }
 
-  function clearMonitorTiles(outputName: string) {
-    sendClearMonitorTiles(outputName)
+  function clearMonitorTiles(outputName: string, outputId?: string | null) {
+    sendClearMonitorTiles(outputName, outputId)
   }
 
   function taskbarRowsForScreen(screen: LayoutScreen) {
@@ -114,7 +116,7 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
     excludeWindowId: number,
   ): { zone: SnapZone; bounds: TileRect }[] {
     const out: { zone: SnapZone; bounds: TileRect }[] = []
-    for (const entry of workspaceMonitorTileEntries(options.getWorkspaceState(), screen.name)) {
+    for (const entry of workspaceMonitorTileEntries(options.getWorkspaceState(), screen.name, screen.identity)) {
       const windowId = entry.windowId
       if (windowId === excludeWindowId) continue
       const window = options.getAllWindowsMap().get(windowId)

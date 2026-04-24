@@ -157,6 +157,19 @@ pub struct WorkspaceState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceRestoreGroup {
+    pub id: String,
+    #[serde(rename = "windowIds")]
+    pub window_ids: Vec<u32>,
+    #[serde(rename = "activeWindowId")]
+    pub active_window_id: u32,
+    #[serde(default, rename = "splitLeftWindowId")]
+    pub split_left_window_id: Option<u32>,
+    #[serde(default, rename = "leftPaneFraction")]
+    pub left_pane_fraction: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceMutation {
     SelectTab {
@@ -242,9 +255,23 @@ pub enum WorkspaceMutation {
         #[serde(default)]
         params: WorkspaceMonitorLayoutParams,
     },
+    SetMonitorLayouts {
+        layouts: Vec<WorkspaceMonitorLayoutState>,
+    },
     ClearPreTileGeometry {
         #[serde(rename = "windowId")]
         window_id: u32,
+    },
+    RestoreSessionWorkspace {
+        groups: Vec<WorkspaceRestoreGroup>,
+        #[serde(default, rename = "pinnedWindowIds")]
+        pinned_window_ids: Vec<u32>,
+        #[serde(default, rename = "monitorTiles")]
+        monitor_tiles: Vec<WorkspaceMonitorTileState>,
+        #[serde(default, rename = "preTileGeometry")]
+        pre_tile_geometry: Vec<WorkspacePreTileGeometry>,
+        #[serde(default, rename = "nextGroupSeq")]
+        next_group_seq: Option<u32>,
     },
     ReplaceState {
         state: WorkspaceState,
@@ -263,6 +290,334 @@ impl Default for WorkspaceState {
             pre_tile_geometry: Vec::new(),
             next_group_seq: 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn group(id: &str, window_ids: &[u32]) -> WorkspaceGroupState {
+        WorkspaceGroupState {
+            id: id.to_string(),
+            window_ids: window_ids.to_vec(),
+        }
+    }
+
+    #[test]
+    fn restore_session_workspace_resolves_groups_in_compositor() {
+        let mut state = WorkspaceState {
+            groups: vec![group("group-1", &[1, 2]), group("group-2", &[3])],
+            active_tab_by_group_id: HashMap::from([
+                ("group-1".to_string(), 1),
+                ("group-2".to_string(), 3),
+            ]),
+            pinned_window_ids: vec![1, 3],
+            split_by_group_id: HashMap::new(),
+            monitor_tiles: vec![WorkspaceMonitorTileState {
+                output_id: "old-id".to_string(),
+                output_name: "DP-1".to_string(),
+                entries: vec![WorkspaceMonitorTileEntry {
+                    window_id: 1,
+                    zone: "left".to_string(),
+                    bounds: WorkspaceRect {
+                        x: 0,
+                        y: 0,
+                        width: 100,
+                        height: 100,
+                    },
+                }],
+            }],
+            monitor_layouts: vec![WorkspaceMonitorLayoutState {
+                output_id: "layout-id".to_string(),
+                output_name: "DP-1".to_string(),
+                layout: WorkspaceMonitorLayoutType::Columns,
+                params: WorkspaceMonitorLayoutParams::default(),
+            }],
+            pre_tile_geometry: Vec::new(),
+            next_group_seq: 3,
+        };
+        let mutation = WorkspaceMutation::RestoreSessionWorkspace {
+            groups: vec![WorkspaceRestoreGroup {
+                id: "saved-group".to_string(),
+                window_ids: vec![2, 1],
+                active_window_id: 1,
+                split_left_window_id: Some(2),
+                left_pane_fraction: Some(0.65),
+            }],
+            pinned_window_ids: vec![2],
+            monitor_tiles: vec![WorkspaceMonitorTileState {
+                output_id: "new-id".to_string(),
+                output_name: "DP-1".to_string(),
+                entries: vec![WorkspaceMonitorTileEntry {
+                    window_id: 2,
+                    zone: "right".to_string(),
+                    bounds: WorkspaceRect {
+                        x: 10,
+                        y: 20,
+                        width: 300,
+                        height: 400,
+                    },
+                }],
+            }],
+            pre_tile_geometry: vec![WorkspacePreTileGeometry {
+                window_id: 2,
+                bounds: WorkspaceRect {
+                    x: 5,
+                    y: 6,
+                    width: 700,
+                    height: 800,
+                },
+            }],
+            next_group_seq: Some(9),
+        };
+        state = state
+            .apply_mutation(&mutation)
+            .expect("restore changes state");
+        assert_eq!(
+            state.groups,
+            vec![group("saved-group", &[2, 1]), group("group-2", &[3])]
+        );
+        assert_eq!(state.active_tab_by_group_id["saved-group"], 1);
+        assert_eq!(state.pinned_window_ids, vec![3, 2]);
+        assert_eq!(
+            state.split_by_group_id["saved-group"],
+            WorkspaceGroupSplitState {
+                left_window_id: 2,
+                left_pane_fraction: 0.65,
+            }
+        );
+        assert_eq!(state.monitor_tiles[0].output_id, "new-id");
+        assert_eq!(state.monitor_tiles[0].entries[0].window_id, 2);
+        assert_eq!(state.pre_tile_geometry[0].window_id, 2);
+        assert_eq!(state.monitor_layouts[0].output_id, "layout-id");
+        assert_eq!(state.next_group_seq, 9);
+    }
+
+    #[test]
+    fn restore_session_workspace_filters_stale_and_duplicate_windows() {
+        let state = WorkspaceState {
+            groups: vec![group("group-1", &[1]), group("group-2", &[2])],
+            active_tab_by_group_id: HashMap::from([
+                ("group-1".to_string(), 1),
+                ("group-2".to_string(), 2),
+            ]),
+            pinned_window_ids: Vec::new(),
+            split_by_group_id: HashMap::new(),
+            monitor_tiles: Vec::new(),
+            monitor_layouts: Vec::new(),
+            pre_tile_geometry: Vec::new(),
+            next_group_seq: 3,
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::RestoreSessionWorkspace {
+                groups: vec![WorkspaceRestoreGroup {
+                    id: "restored".to_string(),
+                    window_ids: vec![2, 2, 99],
+                    active_window_id: 99,
+                    split_left_window_id: Some(99),
+                    left_pane_fraction: Some(0.1),
+                }],
+                pinned_window_ids: vec![2, 99],
+                monitor_tiles: vec![WorkspaceMonitorTileState {
+                    output_id: "id".to_string(),
+                    output_name: "DP-1".to_string(),
+                    entries: vec![
+                        WorkspaceMonitorTileEntry {
+                            window_id: 2,
+                            zone: "left".to_string(),
+                            bounds: WorkspaceRect {
+                                x: 0,
+                                y: 0,
+                                width: 10,
+                                height: 10,
+                            },
+                        },
+                        WorkspaceMonitorTileEntry {
+                            window_id: 99,
+                            zone: "right".to_string(),
+                            bounds: WorkspaceRect {
+                                x: 0,
+                                y: 0,
+                                width: 10,
+                                height: 10,
+                            },
+                        },
+                    ],
+                }],
+                pre_tile_geometry: vec![WorkspacePreTileGeometry {
+                    window_id: 99,
+                    bounds: WorkspaceRect {
+                        x: 0,
+                        y: 0,
+                        width: 10,
+                        height: 10,
+                    },
+                }],
+                next_group_seq: None,
+            })
+            .expect("restore changes state");
+        assert_eq!(
+            next.groups,
+            vec![group("restored", &[2]), group("group-1", &[1])]
+        );
+        assert_eq!(next.active_tab_by_group_id["restored"], 2);
+        assert!(!next.split_by_group_id.contains_key("restored"));
+        assert_eq!(next.pinned_window_ids, vec![2]);
+        assert_eq!(next.monitor_tiles[0].entries.len(), 1);
+        assert!(next.pre_tile_geometry.is_empty());
+    }
+
+    #[test]
+    fn set_monitor_layouts_replaces_layouts_and_clears_manual_tiles() {
+        let state = WorkspaceState {
+            groups: vec![group("group-1", &[1])],
+            active_tab_by_group_id: HashMap::from([("group-1".to_string(), 1)]),
+            pinned_window_ids: Vec::new(),
+            split_by_group_id: HashMap::new(),
+            monitor_tiles: vec![
+                WorkspaceMonitorTileState {
+                    output_id: "manual-id".to_string(),
+                    output_name: "DP-1".to_string(),
+                    entries: vec![WorkspaceMonitorTileEntry {
+                        window_id: 1,
+                        zone: "left".to_string(),
+                        bounds: WorkspaceRect {
+                            x: 0,
+                            y: 0,
+                            width: 100,
+                            height: 100,
+                        },
+                    }],
+                },
+                WorkspaceMonitorTileState {
+                    output_id: "auto-id".to_string(),
+                    output_name: "DP-2".to_string(),
+                    entries: vec![WorkspaceMonitorTileEntry {
+                        window_id: 1,
+                        zone: "right".to_string(),
+                        bounds: WorkspaceRect {
+                            x: 100,
+                            y: 0,
+                            width: 100,
+                            height: 100,
+                        },
+                    }],
+                },
+            ],
+            monitor_layouts: vec![WorkspaceMonitorLayoutState {
+                output_id: "old-id".to_string(),
+                output_name: "HDMI-A-1".to_string(),
+                layout: WorkspaceMonitorLayoutType::Grid,
+                params: WorkspaceMonitorLayoutParams::default(),
+            }],
+            pre_tile_geometry: Vec::new(),
+            next_group_seq: 2,
+        };
+        let next = state
+            .apply_mutation(&WorkspaceMutation::SetMonitorLayouts {
+                layouts: vec![
+                    WorkspaceMonitorLayoutState {
+                        output_id: "manual-id".to_string(),
+                        output_name: "DP-1".to_string(),
+                        layout: WorkspaceMonitorLayoutType::ManualSnap,
+                        params: WorkspaceMonitorLayoutParams::default(),
+                    },
+                    WorkspaceMonitorLayoutState {
+                        output_id: "auto-id".to_string(),
+                        output_name: "DP-2".to_string(),
+                        layout: WorkspaceMonitorLayoutType::Columns,
+                        params: WorkspaceMonitorLayoutParams {
+                            max_columns: Some(2),
+                            ..WorkspaceMonitorLayoutParams::default()
+                        },
+                    },
+                    WorkspaceMonitorLayoutState {
+                        output_id: "auto-id".to_string(),
+                        output_name: "DP-2-renamed".to_string(),
+                        layout: WorkspaceMonitorLayoutType::Grid,
+                        params: WorkspaceMonitorLayoutParams::default(),
+                    },
+                ],
+            })
+            .expect("layout set changes state");
+        assert_eq!(next.monitor_layouts.len(), 2);
+        assert_eq!(next.monitor_layouts[0].output_id, "manual-id");
+        assert_eq!(next.monitor_layouts[1].output_id, "auto-id");
+        assert_eq!(
+            next.monitor_layouts[1].layout,
+            WorkspaceMonitorLayoutType::Columns
+        );
+        assert_eq!(next.monitor_tiles.len(), 1);
+        assert_eq!(next.monitor_tiles[0].output_id, "auto-id");
+    }
+
+    #[test]
+    fn workspace_protocol_manifest_matches_rust_model() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../resources/workspace-protocol.json"))
+                .expect("workspace protocol manifest json");
+        assert_eq!(
+            manifest,
+            json!({
+                "version": 1,
+                "workspaceStateFields": [
+                    "groups",
+                    "activeTabByGroupId",
+                    "pinnedWindowIds",
+                    "splitByGroupId",
+                    "monitorTiles",
+                    "monitorLayouts",
+                    "preTileGeometry",
+                    "nextGroupSeq"
+                ],
+                "workspaceDerivedFields": [
+                    "groupIdByWindowId",
+                    "visibleWindowIdByGroupId",
+                    "monitorNameByWindowId",
+                    "monitorIdByWindowId"
+                ],
+                "monitorLayoutTypes": [
+                    "manual-snap",
+                    "master-stack",
+                    "columns",
+                    "grid",
+                    "custom-auto"
+                ],
+                "slotRuleFields": [
+                    "app_id",
+                    "title",
+                    "x11_class",
+                    "x11_instance",
+                    "kind"
+                ],
+                "slotRuleOps": [
+                    "equals",
+                    "contains",
+                    "starts_with"
+                ],
+                "mutationTypes": [
+                    "select_tab",
+                    "move_window_to_group",
+                    "move_group_to_group",
+                    "split_window_to_own_group",
+                    "set_window_pinned",
+                    "enter_split",
+                    "exit_split",
+                    "set_split_fraction",
+                    "set_monitor_tile",
+                    "remove_monitor_tile",
+                    "clear_monitor_tiles",
+                    "set_pre_tile_geometry",
+                    "set_monitor_layout",
+                    "set_monitor_layouts",
+                    "clear_pre_tile_geometry",
+                    "restore_session_workspace",
+                    "replace_state"
+                ]
+            })
+        );
     }
 }
 
@@ -424,6 +779,14 @@ fn output_matches(
     stored_name == requested_name
 }
 
+fn output_key(output_name: &str, output_id: &str) -> String {
+    if output_id.is_empty() {
+        format!("name:{output_name}")
+    } else {
+        format!("id:{output_id}")
+    }
+}
+
 pub fn reconcile_workspace_state(
     state: &WorkspaceState,
     live_window_ids: &[u32],
@@ -503,6 +866,198 @@ pub fn reconcile_workspace_state(
     ensure_pinned_window_ids(&mut next);
     ensure_valid_split_state(&mut next);
     next
+}
+
+fn workspace_group_seq_floor(state: &WorkspaceState) -> u32 {
+    let mut next_group_seq = state.next_group_seq.max(1);
+    for group in &state.groups {
+        let Some(suffix) = group.id.strip_prefix("group-") else {
+            continue;
+        };
+        if let Ok(seq) = suffix.parse::<u32>() {
+            next_group_seq = next_group_seq.max(seq.saturating_add(1));
+        }
+    }
+    next_group_seq
+}
+
+fn next_unique_workspace_group_id(used: &HashSet<String>, next_group_seq: &mut u32) -> String {
+    loop {
+        let group_id = format!("group-{}", *next_group_seq);
+        *next_group_seq = next_group_seq.saturating_add(1);
+        if !used.contains(&group_id) {
+            return group_id;
+        }
+    }
+}
+
+fn restore_session_workspace_state(
+    current: &WorkspaceState,
+    groups: &[WorkspaceRestoreGroup],
+    pinned_window_ids: &[u32],
+    monitor_tiles: &[WorkspaceMonitorTileState],
+    pre_tile_geometry: &[WorkspacePreTileGeometry],
+    requested_next_group_seq: Option<u32>,
+) -> WorkspaceState {
+    let live_window_ids = all_workspace_window_ids(current);
+    let live: HashSet<u32> = live_window_ids.iter().copied().collect();
+    let mut next_group_seq = workspace_group_seq_floor(current);
+    if let Some(requested_next_group_seq) = requested_next_group_seq {
+        next_group_seq = next_group_seq.max(requested_next_group_seq.max(1));
+    }
+    let mut next = WorkspaceState {
+        groups: Vec::new(),
+        active_tab_by_group_id: HashMap::new(),
+        pinned_window_ids: Vec::new(),
+        split_by_group_id: HashMap::new(),
+        monitor_tiles: Vec::new(),
+        monitor_layouts: current.monitor_layouts.clone(),
+        pre_tile_geometry: Vec::new(),
+        next_group_seq,
+    };
+    let mut assigned = HashSet::new();
+    let mut used_group_ids = HashSet::new();
+    for group in groups {
+        let mut window_ids = Vec::new();
+        for window_id in &group.window_ids {
+            if *window_id > 0 && live.contains(window_id) && assigned.insert(*window_id) {
+                window_ids.push(*window_id);
+            }
+        }
+        if window_ids.is_empty() {
+            continue;
+        }
+        let group_id = if group.id.is_empty() || used_group_ids.contains(&group.id) {
+            next_unique_workspace_group_id(&used_group_ids, &mut next.next_group_seq)
+        } else {
+            group.id.clone()
+        };
+        used_group_ids.insert(group_id.clone());
+        let active_window_id = if window_ids.contains(&group.active_window_id) {
+            group.active_window_id
+        } else {
+            window_ids[0]
+        };
+        if let Some(split_left_window_id) = group.split_left_window_id {
+            if window_ids.contains(&split_left_window_id)
+                && window_ids
+                    .iter()
+                    .any(|window_id| *window_id != split_left_window_id)
+            {
+                next.split_by_group_id.insert(
+                    group_id.clone(),
+                    WorkspaceGroupSplitState {
+                        left_window_id: split_left_window_id,
+                        left_pane_fraction: clamp_workspace_split_pane_fraction(
+                            group
+                                .left_pane_fraction
+                                .unwrap_or(WORKSPACE_SPLIT_PANE_FRACTION_DEFAULT),
+                        ),
+                    },
+                );
+            }
+        }
+        next.active_tab_by_group_id
+            .insert(group_id.clone(), active_window_id);
+        next.groups.push(WorkspaceGroupState {
+            id: group_id,
+            window_ids,
+        });
+    }
+    for group in &current.groups {
+        let window_ids: Vec<u32> = group
+            .window_ids
+            .iter()
+            .copied()
+            .filter(|window_id| live.contains(window_id) && assigned.insert(*window_id))
+            .collect();
+        if window_ids.is_empty() {
+            continue;
+        }
+        let group_id = if group.id.is_empty() || used_group_ids.contains(&group.id) {
+            next_unique_workspace_group_id(&used_group_ids, &mut next.next_group_seq)
+        } else {
+            group.id.clone()
+        };
+        used_group_ids.insert(group_id.clone());
+        let active_window_id = current
+            .active_tab_by_group_id
+            .get(&group.id)
+            .copied()
+            .filter(|window_id| window_ids.contains(window_id))
+            .unwrap_or(window_ids[0]);
+        if let Some(split) = current.split_by_group_id.get(&group.id) {
+            if window_ids.contains(&split.left_window_id)
+                && window_ids
+                    .iter()
+                    .any(|window_id| *window_id != split.left_window_id)
+            {
+                next.split_by_group_id.insert(
+                    group_id.clone(),
+                    WorkspaceGroupSplitState {
+                        left_window_id: split.left_window_id,
+                        left_pane_fraction: clamp_workspace_split_pane_fraction(
+                            split.left_pane_fraction,
+                        ),
+                    },
+                );
+            }
+        }
+        next.active_tab_by_group_id
+            .insert(group_id.clone(), active_window_id);
+        next.groups.push(WorkspaceGroupState {
+            id: group_id,
+            window_ids,
+        });
+    }
+    let restored_window_ids: HashSet<u32> = groups
+        .iter()
+        .flat_map(|group| group.window_ids.iter().copied())
+        .filter(|window_id| live.contains(window_id))
+        .collect();
+    let desired_pinned: HashSet<u32> = pinned_window_ids
+        .iter()
+        .copied()
+        .filter(|window_id| live.contains(window_id))
+        .collect();
+    let mut seen_pinned = HashSet::new();
+    for window_id in &current.pinned_window_ids {
+        if !restored_window_ids.contains(window_id) && live.contains(window_id) {
+            seen_pinned.insert(*window_id);
+            next.pinned_window_ids.push(*window_id);
+        }
+    }
+    for window_id in pinned_window_ids {
+        if desired_pinned.contains(window_id) && seen_pinned.insert(*window_id) {
+            next.pinned_window_ids.push(*window_id);
+        }
+    }
+    let mut tiled_windows = HashSet::new();
+    for monitor in monitor_tiles {
+        let entries: Vec<WorkspaceMonitorTileEntry> = monitor
+            .entries
+            .iter()
+            .filter(|entry| {
+                live.contains(&entry.window_id) && tiled_windows.insert(entry.window_id)
+            })
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        next.monitor_tiles.push(WorkspaceMonitorTileState {
+            output_id: monitor.output_id.clone(),
+            output_name: monitor.output_name.clone(),
+            entries,
+        });
+    }
+    let mut pre_tile_windows = HashSet::new();
+    next.pre_tile_geometry = pre_tile_geometry
+        .iter()
+        .filter(|entry| live.contains(&entry.window_id) && pre_tile_windows.insert(entry.window_id))
+        .cloned()
+        .collect();
+    reconcile_workspace_state(&next, &live_window_ids)
 }
 
 pub fn next_active_window_after_removal(
@@ -1062,10 +1617,61 @@ impl WorkspaceState {
                 }
                 Some(next)
             }
+            WorkspaceMutation::SetMonitorLayouts { layouts } => {
+                let mut next = self.clone();
+                let mut seen = HashSet::new();
+                next.monitor_layouts = layouts
+                    .iter()
+                    .filter(|entry| {
+                        if entry.output_name.is_empty() && entry.output_id.is_empty() {
+                            return false;
+                        }
+                        seen.insert(output_key(&entry.output_name, &entry.output_id))
+                    })
+                    .cloned()
+                    .collect();
+                for layout in &next.monitor_layouts {
+                    if layout.layout != WorkspaceMonitorLayoutType::ManualSnap {
+                        continue;
+                    }
+                    next.monitor_tiles.retain(|monitor| {
+                        !output_matches(
+                            &monitor.output_name,
+                            &monitor.output_id,
+                            &layout.output_name,
+                            Some(&layout.output_id),
+                        )
+                    });
+                }
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
             WorkspaceMutation::ClearPreTileGeometry { window_id } => {
                 let mut next = self.clone();
                 next.pre_tile_geometry
                     .retain(|entry| entry.window_id != *window_id);
+                if next == *self {
+                    return None;
+                }
+                Some(next)
+            }
+            WorkspaceMutation::RestoreSessionWorkspace {
+                groups,
+                pinned_window_ids,
+                monitor_tiles,
+                pre_tile_geometry,
+                next_group_seq,
+            } => {
+                let next = restore_session_workspace_state(
+                    self,
+                    groups,
+                    pinned_window_ids,
+                    monitor_tiles,
+                    pre_tile_geometry,
+                    *next_group_seq,
+                );
                 if next == *self {
                     return None;
                 }

@@ -1670,7 +1670,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
           40,
         ),
       )
-      await timing.step('merge foot tab into file browser tab', () => dragTabOntoTab(base, footWindowId!, fileBrowserWindowId))
+      await timing.step('merge foot window into file browser tab', async () => {
+        const shell = footAboveFileBrowser((await syncTest(base)).shell)
+        assert(shell, 'missing foot above file browser before merge')
+        await dragWindowHandleOntoTab(base, footWindowId!, titlebarDragPoint(shell, footWindowId!), fileBrowserWindowId)
+        await finishDrag(base)
+      })
       const merged = await timing.step('wait for file browser and foot grouped', () =>
         waitForGroupedMembers(base, [fileBrowserWindowId, footWindowId!], footWindowId!),
       )

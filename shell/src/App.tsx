@@ -96,9 +96,11 @@ import {
   getWorkspaceGroupSplit,
   isWorkspaceWindowPinned,
   workspaceFindMonitorForTiledWindow,
+  workspaceFindMonitorIdentityForTiledWindow,
   workspaceGetTiledZone,
   workspaceIsWindowTiled,
 } from '@/features/workspace/workspaceState'
+import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import { findMergeTarget, type TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import { createWorkspaceSelectors } from '@/features/workspace/workspaceSelectors'
 import { createWorkspaceChrome, type WorkspaceExternalTabDropDrag } from '@/features/workspace/workspaceChrome'
@@ -280,7 +282,6 @@ function App() {
   const defaultApps = useDefaultApplicationsState()
   const {
     allWindowsMap: compositorWindowsMap,
-    windowsListIds: compositorWindowsListIds,
     windowsList: compositorWindowsList,
     workspaceState,
     focusedWindowId,
@@ -290,7 +291,6 @@ function App() {
   } = createCompositorModel()
   const allWindowsMap = compositorWindowsMap
   const windows = compositorWindowsMap
-  const windowsListIds = compositorWindowsListIds
   const windowsList = compositorWindowsList
   const [compositorInteractionState, setCompositorInteractionState] = createSignal<{
     pointer_x: number
@@ -501,7 +501,7 @@ function App() {
 
   const liveScreenRows = createMemo(() => outputTopology()?.screens ?? [])
 
-  function sendWorkspaceMutation(mutation: Record<string, unknown>): boolean {
+  function sendWorkspaceMutation(mutation: WorkspaceMutation): boolean {
     const clientMutationId = nextClientMutationId++
     const ok = shellWireSend('workspace_mutation', JSON.stringify({ clientMutationId, mutation }))
     if (ok) pendingClientMutationIds.set(clientMutationId, { sentAt: Date.now(), snapshotEpoch: null })
@@ -574,7 +574,6 @@ function App() {
   } = createSessionRuntime({
     getAllWindowsMap: allWindowsMap,
     getWindowsList: windowsList,
-    getWindowsListIds: windowsListIds,
     getWorkspaceState: workspaceState,
     getTaskbarScreens: () => taskbarScreens(),
     getLayoutCanvasOrigin: layoutCanvasOrigin,
@@ -587,9 +586,6 @@ function App() {
     reserveTaskbarForMon: (screen) => workspaceLayoutBridge.reserveTaskbarForMon(screen),
     rectFromWindow,
     sendWorkspaceMutation,
-    sendSetPreTileGeometry: (windowId, bounds) => workspaceLayoutBridge.sendSetPreTileGeometry(windowId, bounds),
-    sendSetMonitorTile: (windowId, outputName, zone, bounds) =>
-      workspaceLayoutBridge.sendSetMonitorTile(windowId, outputName, zone, bounds),
     shellWireSend,
     bumpSnapChrome,
     scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
@@ -807,22 +803,32 @@ function App() {
     return part.primary.name || liveScreenRows().find((row) => row.name)?.name || ''
   })
 
-  const monitorLayoutSyncSpec = createMemo(() => `${tilingCfgRev()}\u001e${liveScreenRows().map((row) => row.name).join('\0')}`)
+  const monitorLayoutSyncSpec = createMemo(() =>
+    `${tilingCfgRev()}\u001e${liveScreenRows().map((row) => `${row.identity ?? ''}\u001f${row.name}`).join('\0')}`,
+  )
 
   createEffect(() => {
     const spec = monitorLayoutSyncSpec()
     const separator = spec.indexOf('\u001e')
     const outputsKey = separator >= 0 ? spec.slice(separator + 1) : ''
-    for (const outputName of outputsKey ? outputsKey.split('\0') : []) {
+    if (!outputsKey) return
+    const layouts = []
+    for (const output of outputsKey ? outputsKey.split('\0') : []) {
+      const [outputId, outputName] = output.split('\u001f')
+      if (!outputName) continue
       const { layout, params } = getMonitorLayout(outputName)
       const nextParams = layout.type === 'custom-auto' ? customAutoLayoutParamsForMonitor(outputName) : params
-      sendWorkspaceMutation({
-        type: 'set_monitor_layout',
+      layouts.push({
+        ...(outputId ? { outputId } : {}),
         outputName,
         layout: layout.type,
         params: nextParams,
       })
     }
+    sendWorkspaceMutation({
+      type: 'set_monitor_layouts',
+      layouts,
+    })
   })
 
   let shellContextMenus!: ReturnType<typeof createShellContextMenus>
@@ -1489,7 +1495,14 @@ function App() {
     workspaceTiledRectMap: workspaceLayoutBridge.workspaceTiledRectMap,
     workspaceTiledZone: (windowId) => workspaceGetTiledZone(workspaceState(), windowId) ?? null,
     isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
-    workspaceFindMonitorForTiledWindow: (windowId) => workspaceFindMonitorForTiledWindow(workspaceState(), windowId),
+    workspaceFindMonitorForTiledWindow: (windowId) => {
+      const outputName = workspaceFindMonitorForTiledWindow(workspaceState(), windowId)
+      if (outputName === null) return null
+      return {
+        outputName,
+        outputId: workspaceFindMonitorIdentityForTiledWindow(workspaceState(), windowId),
+      }
+    },
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,

@@ -285,6 +285,10 @@ function sanitizeMonitorTileState(value: unknown): SavedMonitorTileState | null 
   return entries.length > 0 ? { outputId: outputId || undefined, outputName, entries } : null
 }
 
+function savedMonitorKey(outputName: string, outputId?: string): string {
+  return outputId ? `id:${outputId}` : `name:${outputName}`
+}
+
 function sanitizePreTileGeometry(value: unknown): SavedPreTileGeometry | null {
   if (!isObject(value)) return null
   const windowRef = sanitizeWindowRef(value.windowRef)
@@ -334,11 +338,13 @@ export function sanitizeSessionSnapshot(value: unknown): SessionSnapshot {
   }
   const monitorTilesRaw = Array.isArray(value.monitorTiles) ? value.monitorTiles : []
   const monitorTiles: SavedMonitorTileState[] = []
-  const seenMonitorNames = new Set<string>()
+  const seenMonitorKeys = new Set<string>()
   for (const rawMonitor of monitorTilesRaw) {
     const monitor = sanitizeMonitorTileState(rawMonitor)
-    if (!monitor || seenMonitorNames.has(monitor.outputName)) continue
-    seenMonitorNames.add(monitor.outputName)
+    if (!monitor) continue
+    const monitorKey = savedMonitorKey(monitor.outputName, monitor.outputId)
+    if (seenMonitorKeys.has(monitorKey)) continue
+    seenMonitorKeys.add(monitorKey)
     monitorTiles.push(monitor)
   }
   const preTileRaw = Array.isArray(value.preTileGeometry) ? value.preTileGeometry : []

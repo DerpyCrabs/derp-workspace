@@ -91,6 +91,7 @@ type ShellResizeSession =
       accumDy: number
       initialRects: Map<number, TileRect>
       outputName: string
+      outputId: string | null
     }
 
 type WindowRect = { x: number; y: number; w: number; h: number }
@@ -103,15 +104,15 @@ type ShellWindowGestureRuntimeOptions = {
   allWindowsMap: Accessor<ReadonlyMap<number, DerpWindow>>
   reserveTaskbarForMon: (mon: LayoutScreen) => boolean
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
-  sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect) => boolean
+  sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null) => boolean
   sendSetPreTileGeometry: (windowId: number, bounds: WindowRect) => boolean
   sendRemoveMonitorTile: (windowId: number) => boolean
   sendClearPreTileGeometry: (windowId: number) => boolean
   workspacePreTileSnapshot: (windowId: number) => WindowRect | null
-  workspaceTiledRectMap: (outputName: string) => Map<number, TileRect>
+  workspaceTiledRectMap: (outputName: string, outputId?: string | null) => Map<number, TileRect>
   workspaceTiledZone: (windowId: number) => SnapZone | null
   isWorkspaceWindowTiled: (windowId: number) => boolean
-  workspaceFindMonitorForTiledWindow: (windowId: number) => string | null
+  workspaceFindMonitorForTiledWindow: (windowId: number) => { outputName: string; outputId: string | null } | null
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
@@ -475,7 +476,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     ) {
       return
     }
-    if (!options.sendSetMonitorTile(snapWindowId, snapScreen.name, droppedZone, globalBounds)) return
+    if (!options.sendSetMonitorTile(snapWindowId, snapScreen.name, droppedZone, globalBounds, snapScreen.identity)) return
     const clientBounds = tiledFrameRectToClientRect(globalBounds)
     const localBounds = rectGlobalToCanvasLocal(
       clientBounds.x,
@@ -965,12 +966,12 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   function beginShellWindowResize(windowId: number, edges: number, clientX: number, clientY: number) {
     if (shellWindowResize !== null || shellWindowDrag !== null) return
     shellResizeDeltaLogSeq = 0
-    const monitorName = options.workspaceFindMonitorForTiledWindow(windowId)
+    const monitor = options.workspaceFindMonitorForTiledWindow(windowId)
     const tolerance = TILE_RESIZE_EDGE_ALIGN_PX
     let useTiledPropagate = false
     const initialRects = new Map<number, TileRect>()
-    if (monitorName !== null) {
-      const rects = options.workspaceTiledRectMap(monitorName)
+    if (monitor !== null) {
+      const rects = options.workspaceTiledRectMap(monitor.outputName, monitor.outputId)
       const dirs: Array<'left' | 'right' | 'top' | 'bottom'> = []
       if (edges & SHELL_RESIZE_LEFT) dirs.push('left')
       if (edges & SHELL_RESIZE_RIGHT) dirs.push('right')
@@ -990,7 +991,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         }
       }
     }
-    if (useTiledPropagate && monitorName !== null) {
+    if (useTiledPropagate && monitor !== null) {
       if (!options.shellWireSend('resize_shell_grab_begin', windowId)) return
       shellWindowResize = {
         kind: 'tiled',
@@ -1001,7 +1002,8 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         accumDx: 0,
         accumDy: 0,
         initialRects,
-        outputName: monitorName,
+        outputName: monitor.outputName,
+        outputId: monitor.outputId,
       }
       options.shellMoveLog('resize_begin_tiled', { windowId, edges, clientX, clientY })
       return
@@ -1111,6 +1113,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
           resizeSession.outputName,
           options.workspaceTiledZone(nextWindowId) ?? 'auto-fill',
           bounds,
+          resizeSession.outputId,
         )
       ) {
         return

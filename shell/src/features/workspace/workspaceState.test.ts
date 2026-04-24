@@ -8,11 +8,14 @@ import {
   mergeWorkspaceGroups,
   moveWorkspaceGroupToGroup,
   moveWorkspaceWindowToGroup,
+  normalizeWorkspaceState,
   reconcileWorkspaceState,
   reorderWorkspaceWindowInGroup,
   splitWorkspaceWindowToOwnGroup,
   setWorkspaceActiveTab,
   setWorkspaceWindowPinned,
+  workspaceFindMonitorIdentityForTiledWindow,
+  workspaceMonitorTileEntries,
   type WorkspaceState,
 } from './workspaceState'
 
@@ -209,6 +212,72 @@ describe('workspaceState', () => {
     ])
     expect(next.activeTabByGroupId[sourceGroupId]).toBeUndefined()
     expect(next.activeTabByGroupId[targetGroupId]).toBe(2)
+  })
+
+  it('prefers output identity when reading monitor tile entries', () => {
+    const state: WorkspaceState = {
+      ...createEmptyWorkspaceState(),
+      monitorTiles: [
+        {
+          outputId: 'make:model:serial-a',
+          outputName: 'DP-1',
+          entries: [
+            {
+              windowId: 1,
+              zone: 'left-half',
+              bounds: { x: 0, y: 0, width: 960, height: 1040 },
+            },
+          ],
+        },
+        {
+          outputId: 'make:model:serial-b',
+          outputName: 'DP-1',
+          entries: [
+            {
+              windowId: 2,
+              zone: 'right-half',
+              bounds: { x: 960, y: 0, width: 960, height: 1040 },
+            },
+          ],
+        },
+      ],
+    }
+    expect(workspaceMonitorTileEntries(state, 'DP-1', 'make:model:serial-b').map((entry) => entry.windowId)).toEqual([2])
+    expect(workspaceFindMonitorIdentityForTiledWindow(state, 2)).toBe('make:model:serial-b')
+  })
+
+  it('keeps monitor layouts distinct when output names collide but identities differ', () => {
+    const state = normalizeWorkspaceState({
+      monitorLayouts: [
+        {
+          outputId: 'make:model:serial-a',
+          outputName: 'DP-1',
+          layout: 'grid',
+          params: { maxColumns: 2 },
+        },
+        {
+          outputId: 'make:model:serial-b',
+          outputName: 'DP-1',
+          layout: 'columns',
+          params: { maxColumns: 3 },
+        },
+      ],
+    })
+
+    expect(state.monitorLayouts).toEqual([
+      {
+        outputId: 'make:model:serial-a',
+        outputName: 'DP-1',
+        layout: 'grid',
+        params: { maxColumns: 2 },
+      },
+      {
+        outputId: 'make:model:serial-b',
+        outputName: 'DP-1',
+        layout: 'columns',
+        params: { maxColumns: 3 },
+      },
+    ])
   })
 
 })

@@ -4,12 +4,8 @@ import type { DerpWindow } from '@/host/appWindowState'
 import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
 import type { WorkspaceState } from './workspaceState'
-import {
-  cycleWorkspaceTab,
-  groupIdForWindow,
-  getWorkspaceGroupSplit,
-  workspaceStatesEqual,
-} from './workspaceState'
+import { groupIdForWindow, getWorkspaceGroupSplit } from './workspaceState'
+import type { WorkspaceMutation } from './workspaceProtocol'
 import type { WorkspaceGroupModel } from './workspaceSelectors'
 
 type WorkspaceActionsOptions = {
@@ -25,13 +21,13 @@ type WorkspaceActionsOptions = {
   focusShellUiWindow: (windowId: number) => void
   activateWindowViaShell: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
-  sendWorkspaceMutation?: (mutation: Record<string, unknown>) => boolean
+  sendWorkspaceMutation?: (mutation: WorkspaceMutation) => boolean
   sendWindowIntent?: (action: string, windowId: number) => boolean
   shellWireSend: ShellCompositorWireSend
 }
 
 export function createWorkspaceActions(options: WorkspaceActionsOptions) {
-  const sendWorkspaceMutation = (mutation: Record<string, unknown>) =>
+  const sendWorkspaceMutation = (mutation: WorkspaceMutation) =>
     options.sendWorkspaceMutation?.(mutation) ??
     options.shellWireSend('workspace_mutation', JSON.stringify(mutation))
 
@@ -169,9 +165,15 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     const fallbackWindowId = options.focusedTaskbarWindowId() ?? options.workspaceGroups()[0]?.visibleWindowId ?? null
     const groupId = options.activeWorkspaceGroupId() ?? options.groupIdForWindow(fallbackWindowId)
     if (!groupId) return false
-    const next = cycleWorkspaceTab(options.workspaceState(), groupId, delta)
-    if (workspaceStatesEqual(next, options.workspaceState())) return false
-    const nextWindowId = next.activeTabByGroupId[groupId]
+    const group = options.workspaceGroupsById().get(groupId)
+    if (!group || group.members.length < 2) return false
+    const currentIndex = Math.max(
+      0,
+      group.members.findIndex((member) => member.window_id === group.visibleWindowId),
+    )
+    const nextIndex = (currentIndex + delta + group.members.length) % group.members.length
+    const nextWindowId = group.members[nextIndex]?.window_id
+    if (!nextWindowId || nextWindowId === group.visibleWindowId) return false
     return selectGroupWindow(nextWindowId)
   }
 

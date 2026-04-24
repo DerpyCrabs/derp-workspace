@@ -2,22 +2,11 @@ import { backedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui/shellHostedAppsRegistry'
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { monitorWorkAreaGlobal, tiledFrameRectToClientRect } from '@/features/tiling/tileSnap'
-import type { SnapZone } from '@/features/tiling/tileZones'
 import { loadTilingConfig } from '@/features/tiling/tilingConfig'
 import {
-  enterWorkspaceSplitView,
-  exitWorkspaceSplitView,
-  getWorkspaceGroupSplit,
-  groupIdForWindow as workspaceStateGroupIdForWindow,
-  isWorkspaceWindowPinned,
-  moveWorkspaceWindowToGroup,
-  reconcileWorkspaceState,
-  setWorkspaceActiveTab,
-  setWorkspaceSplitFraction,
-  setWorkspaceWindowPinned,
-  splitWorkspaceWindowToOwnGroup,
   type WorkspaceState,
 } from '@/features/workspace/workspaceState'
+import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import type { DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
@@ -44,7 +33,6 @@ type NativeLaunchQueueEntry = {
 type SessionRuntimeOptions = {
   getAllWindowsMap: () => ReadonlyMap<number, DerpWindow>
   getWindowsList: () => readonly DerpWindow[]
-  getWindowsListIds: () => number[]
   getWorkspaceState: () => WorkspaceState
   getTaskbarScreens: () => LayoutScreen[]
   getLayoutCanvasOrigin: () => { x: number; y: number } | null
@@ -56,14 +44,7 @@ type SessionRuntimeOptions = {
   setNextNativeWindowSeq: (value: number | ((prev: number) => number)) => void
   reserveTaskbarForMon: (screen: LayoutScreen) => boolean
   rectFromWindow: (window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>) => SavedRect
-  sendWorkspaceMutation: (mutation: { type: 'replace_state'; state: WorkspaceState }) => boolean
-  sendSetPreTileGeometry: (windowId: number, bounds: { x: number; y: number; w: number; h: number }) => boolean
-  sendSetMonitorTile: (
-    windowId: number,
-    outputName: string,
-    zone: SnapZone,
-    bounds: { x: number; y: number; width: number; height: number },
-  ) => boolean
+  sendWorkspaceMutation: (mutation: WorkspaceMutation) => boolean
   shellWireSend: (
     op: 'backed_window_open' | 'minimize' | 'set_fullscreen' | 'set_geometry' | 'set_maximized',
     arg?: number | string,
@@ -275,8 +256,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
           id: group.id,
           windowIds,
           activeWindowId,
-          splitLeftWindowId:
-            splitLeftWindowId !== null && windowIds.includes(splitLeftWindowId) ? splitLeftWindowId : null,
+          splitLeftWindowId: splitLeftWindowId !== null && windowIds.includes(splitLeftWindowId) ? splitLeftWindowId : null,
           leftPaneFraction: group.leftPaneFraction,
         }
       })
@@ -294,105 +274,53 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     const pinnedWindowIds = snapshot.workspace.pinnedWindowRefs
       .map((windowRef) => liveWindowIdForRef(windowRef))
       .filter((windowId): windowId is number => windowId !== null)
-    let planned = reconcileWorkspaceState(options.getWorkspaceState(), options.getWindowsListIds())
-    const restoredWindowIds = new Set(groups.flatMap((group) => group.windowIds))
-    const desiredGroupByWindowId = new Map<number, string>()
-    for (const group of groups) {
-      for (const windowId of group.windowIds) desiredGroupByWindowId.set(windowId, group.id)
-    }
-    for (const windowId of [...planned.pinnedWindowIds]) {
-      if (!restoredWindowIds.has(windowId)) continue
-      planned = setWorkspaceWindowPinned(planned, windowId, false)
-    }
-
-    for (const group of groups) {
-      const anchorWindowId = group.windowIds[0]
-      const sourceGroupId = workspaceStateGroupIdForWindow(planned, anchorWindowId)
-      const currentGroupId = sourceGroupId ?? null
-      const currentGroup = currentGroupId
-        ? planned.groups.find((entry) => entry.id === currentGroupId) ?? null
-        : null
-      const needsOwnGroup =
-        !currentGroup ||
-        currentGroup.windowIds.length !== 1 ||
-        currentGroup.windowIds[0] !== anchorWindowId ||
-        currentGroup.windowIds.some((windowId) => desiredGroupByWindowId.get(windowId) !== group.id)
-      if (needsOwnGroup) {
-        planned = splitWorkspaceWindowToOwnGroup(planned, anchorWindowId)
-      }
-      let targetGroupId = planned.groups.find((entry) => entry.windowIds[0] === anchorWindowId)?.id ?? null
-      if (!targetGroupId) continue
-      for (let index = 1; index < group.windowIds.length; index += 1) {
-        const windowId = group.windowIds[index]
-        const targetGroup = planned.groups.find((entry) => entry.id === targetGroupId) ?? null
-        const sameGroup = workspaceStateGroupIdForWindow(planned, windowId) === targetGroupId
-        const sameIndex = targetGroup?.windowIds[index] === windowId
-        if (!sameGroup || !sameIndex) {
-          planned = moveWorkspaceWindowToGroup(planned, windowId, targetGroupId, index)
-          targetGroupId =
-            planned.groups.find((entry) => entry.windowIds.includes(anchorWindowId))?.id ?? targetGroupId
-        }
-      }
-      const split = getWorkspaceGroupSplit(planned, targetGroupId)
-      if (group.splitLeftWindowId !== null) {
-        if (!split || split.leftWindowId !== group.splitLeftWindowId) {
-          const leftPaneFraction = group.leftPaneFraction ?? 0.5
-          planned = enterWorkspaceSplitView(planned, targetGroupId, group.splitLeftWindowId, leftPaneFraction)
-        } else if (split.leftPaneFraction !== (group.leftPaneFraction ?? 0.5)) {
-          const leftPaneFraction = group.leftPaneFraction ?? 0.5
-          planned = setWorkspaceSplitFraction(planned, targetGroupId, leftPaneFraction)
-        }
-      } else if (split) {
-        planned = exitWorkspaceSplitView(planned, targetGroupId)
-      }
-      const normalizedActiveWindowId =
-        planned.groups.find((entry) => entry.id === targetGroupId)?.windowIds.includes(group.activeWindowId)
-          ? setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId).activeTabByGroupId[targetGroupId]
-          : planned.activeTabByGroupId[targetGroupId]
-      if (normalizedActiveWindowId !== planned.activeTabByGroupId[targetGroupId]) {
-        planned = setWorkspaceActiveTab(planned, targetGroupId, group.activeWindowId)
-      }
-    }
-
-    const desiredPinned = new Set(pinnedWindowIds)
-    for (const windowId of restoredWindowIds) {
-      const pinned = desiredPinned.has(windowId)
-      if (isWorkspaceWindowPinned(planned, windowId) === pinned) continue
-      planned = setWorkspaceWindowPinned(planned, windowId, pinned)
-    }
-    planned = {
-      ...planned,
-      monitorTiles: [],
-      preTileGeometry: [],
-    }
-    if (!options.sendWorkspaceMutation({ type: 'replace_state', state: planned })) return
-
-    for (const entry of snapshot.preTileGeometry) {
+    const preTileGeometry = snapshot.preTileGeometry.flatMap((entry) => {
       const windowId = liveWindowIdForRef(entry.windowRef)
-      if (windowId === null) continue
-      if (
-        !options.sendSetPreTileGeometry(windowId, {
-          x: entry.bounds.x,
-          y: entry.bounds.y,
-          w: entry.bounds.width,
-          h: entry.bounds.height,
-        })
-      ) {
-        return
-      }
-    }
+      return windowId === null
+        ? []
+        : [
+            {
+              windowId,
+              bounds: {
+                x: entry.bounds.x,
+                y: entry.bounds.y,
+                width: entry.bounds.width,
+                height: entry.bounds.height,
+              },
+            },
+          ]
+    })
     const screens = options.getTaskbarScreens()
+    const monitorTiles: Array<{
+      outputId?: string
+      outputName: string
+      entries: Array<{
+        windowId: number
+        zone: string
+        bounds: { x: number; y: number; width: number; height: number }
+      }>
+    }> = []
+    const tiledGeometry: Array<{
+      windowId: number
+      x: number
+      y: number
+      w: number
+      h: number
+    }> = []
     if (screens.length > 0) {
       for (const monitorState of snapshot.monitorTiles) {
         const targetMonitor =
           screenBySavedOutput(monitorState.outputId ?? '', monitorState.outputName)
         if (!targetMonitor) continue
+        const entries: Array<{
+          windowId: number
+          zone: string
+          bounds: { x: number; y: number; width: number; height: number }
+        }> = []
         for (const entry of monitorState.entries) {
           const windowId = liveWindowIdForRef(entry.windowRef)
           if (windowId === null) continue
-          if (!options.sendSetMonitorTile(windowId, targetMonitor.name, entry.zone, entry.bounds)) {
-            return
-          }
+          entries.push({ windowId, zone: entry.zone, bounds: entry.bounds })
           const clientBounds = tiledFrameRectToClientRect(entry.bounds)
           const localBounds = rectGlobalToCanvasLocal(
             clientBounds.x,
@@ -401,17 +329,45 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
             clientBounds.height,
             options.getLayoutCanvasOrigin(),
           )
-          options.shellWireSend(
-            'set_geometry',
+          tiledGeometry.push({
             windowId,
-            localBounds.x,
-            localBounds.y,
-            localBounds.w,
-            localBounds.h,
-            SHELL_LAYOUT_FLOATING,
-          )
+            x: localBounds.x,
+            y: localBounds.y,
+            w: localBounds.w,
+            h: localBounds.h,
+          })
+        }
+        if (entries.length > 0) {
+          monitorTiles.push({
+            outputId: targetMonitor.identity,
+            outputName: targetMonitor.name,
+            entries,
+          })
         }
       }
+    }
+    if (
+      !options.sendWorkspaceMutation({
+        type: 'restore_session_workspace',
+        groups,
+        pinnedWindowIds,
+        monitorTiles,
+        preTileGeometry,
+        nextGroupSeq: snapshot.workspace.nextGroupSeq,
+      })
+    ) {
+      return
+    }
+    for (const geometry of tiledGeometry) {
+      options.shellWireSend(
+        'set_geometry',
+        geometry.windowId,
+        geometry.x,
+        geometry.y,
+        geometry.w,
+        geometry.h,
+        SHELL_LAYOUT_FLOATING,
+      )
     }
     options.bumpSnapChrome()
     options.scheduleExclusionZonesSync()

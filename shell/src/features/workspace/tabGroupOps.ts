@@ -13,6 +13,7 @@ export type TabMergeTarget = {
 }
 
 const TAB_INSERT_BEFORE_FRACTION = 0.4
+const TAB_DROP_HIT_SLOP_PX = 8
 
 export function tabsInGroup<T extends { window_id: number }>(
   windows: readonly T[],
@@ -106,10 +107,10 @@ function mergeTargetFromDropSlotAtPoint(
     }
     const rect = slot.getBoundingClientRect()
     if (
-      clientX < rect.left ||
-      clientX > rect.right ||
-      clientY < rect.top ||
-      clientY > rect.bottom
+      clientX < rect.left - TAB_DROP_HIT_SLOP_PX ||
+      clientX > rect.right + TAB_DROP_HIT_SLOP_PX ||
+      clientY < rect.top - TAB_DROP_HIT_SLOP_PX ||
+      clientY > rect.bottom + TAB_DROP_HIT_SLOP_PX
     ) {
       continue
     }
@@ -151,10 +152,10 @@ function mergeTargetFromTabStripAtPoint(
     }
     const rect = strip.getBoundingClientRect()
     if (
-      clientX < rect.left ||
-      clientX > rect.right ||
-      clientY < rect.top ||
-      clientY > rect.bottom
+      clientX < rect.left - TAB_DROP_HIT_SLOP_PX ||
+      clientX > rect.right + TAB_DROP_HIT_SLOP_PX ||
+      clientY < rect.top - TAB_DROP_HIT_SLOP_PX ||
+      clientY > rect.bottom + TAB_DROP_HIT_SLOP_PX
     ) {
       continue
     }
@@ -195,10 +196,10 @@ function mergeTargetFromTabAtPoint(
     }
     const rect = tab.getBoundingClientRect()
     if (
-      clientX < rect.left ||
-      clientX > rect.right ||
-      clientY < rect.top ||
-      clientY > rect.bottom
+      clientX < rect.left - TAB_DROP_HIT_SLOP_PX ||
+      clientX > rect.right + TAB_DROP_HIT_SLOP_PX ||
+      clientY < rect.top - TAB_DROP_HIT_SLOP_PX ||
+      clientY > rect.bottom + TAB_DROP_HIT_SLOP_PX
     ) {
       continue
     }

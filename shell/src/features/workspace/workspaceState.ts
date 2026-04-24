@@ -1,77 +1,29 @@
 import type { Rect, SnapZone } from '@/features/tiling/tileZones'
+import {
+  WORKSPACE_MONITOR_LAYOUT_TYPES,
+  type WorkspaceCustomAutoSlot,
+  type WorkspaceGroupSplitState,
+  type WorkspaceGroupState,
+  type WorkspaceMonitorLayoutParams,
+  type WorkspaceMonitorLayoutState,
+  type WorkspaceMonitorLayoutType,
+  type WorkspaceMonitorTileEntry,
+  type WorkspaceMonitorTileState,
+  type WorkspacePreTileGeometry,
+  type WorkspaceState,
+} from './workspaceProtocol'
 
-export type WorkspaceGroupState = {
-  id: string
-  windowIds: number[]
-}
-
-export type WorkspaceGroupSplitState = {
-  leftWindowId: number
-  leftPaneFraction: number
-}
-
-export type WorkspaceMonitorTileEntry = {
-  windowId: number
-  zone: SnapZone
-  bounds: Rect
-}
-
-export type WorkspaceMonitorTileState = {
-  outputId?: string
-  outputName: string
-  entries: WorkspaceMonitorTileEntry[]
-}
-
-export type WorkspacePreTileGeometry = {
-  windowId: number
-  bounds: Rect
-}
-
-export type WorkspaceMonitorLayoutType = 'manual-snap' | 'master-stack' | 'columns' | 'grid' | 'custom-auto'
-
-export type WorkspaceSlotRule = {
-  field: 'app_id' | 'title' | 'x11_class' | 'x11_instance' | 'kind'
-  op: 'equals' | 'contains' | 'starts_with'
-  value: string
-}
-
-export type WorkspaceCustomAutoSlot = {
-  slotId: string
-  x: number
-  y: number
-  width: number
-  height: number
-  rules?: WorkspaceSlotRule[]
-}
-
-export type WorkspaceMonitorLayoutParams = {
-  masterRatio?: number
-  maxColumns?: number
-  customLayoutId?: string
-  customSlots?: WorkspaceCustomAutoSlot[]
-}
-
-export type WorkspaceMonitorLayoutState = {
-  outputId?: string
-  outputName: string
-  layout: WorkspaceMonitorLayoutType
-  params: WorkspaceMonitorLayoutParams
-}
-
-export type WorkspaceState = {
-  groups: WorkspaceGroupState[]
-  activeTabByGroupId: Record<string, number>
-  pinnedWindowIds: number[]
-  splitByGroupId: Record<string, WorkspaceGroupSplitState>
-  monitorTiles: WorkspaceMonitorTileState[]
-  monitorLayouts: WorkspaceMonitorLayoutState[]
-  preTileGeometry: WorkspacePreTileGeometry[]
-  groupIdByWindowId?: Record<string, string>
-  visibleWindowIdByGroupId?: Record<string, number>
-  monitorNameByWindowId?: Record<string, string>
-  monitorIdByWindowId?: Record<string, string>
-  nextGroupSeq: number
-}
+export type {
+  WorkspaceGroupSplitState,
+  WorkspaceGroupState,
+  WorkspaceMonitorLayoutParams,
+  WorkspaceMonitorLayoutState,
+  WorkspaceMonitorLayoutType,
+  WorkspaceMonitorTileEntry,
+  WorkspaceMonitorTileState,
+  WorkspacePreTileGeometry,
+  WorkspaceState,
+} from './workspaceProtocol'
 
 export const WORKSPACE_SPLIT_PANE_FRACTION_MIN = 0.3
 export const WORKSPACE_SPLIT_PANE_FRACTION_MAX = 0.7
@@ -357,7 +309,11 @@ function normalizePreTileGeometry(raw: unknown): WorkspacePreTileGeometry[] {
 }
 
 function isWorkspaceMonitorLayoutType(value: unknown): value is WorkspaceMonitorLayoutType {
-  return value === 'manual-snap' || value === 'master-stack' || value === 'columns' || value === 'grid' || value === 'custom-auto'
+  return typeof value === 'string' && WORKSPACE_MONITOR_LAYOUT_TYPES.includes(value as WorkspaceMonitorLayoutType)
+}
+
+function workspaceOutputKey(outputName: string, outputId?: string): string {
+  return outputId ? `id:${outputId}` : `name:${outputName}`
 }
 
 function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
@@ -376,8 +332,9 @@ function normalizeMonitorLayouts(raw: unknown): WorkspaceMonitorLayoutState[] {
         ? record.outputId.trim()
         : undefined
     const layout = isWorkspaceMonitorLayoutType(record.layout) ? record.layout : null
-    if (!outputName || !layout || seen.has(outputName)) continue
-    seen.add(outputName)
+    const outputKey = workspaceOutputKey(outputName, outputId)
+    if (!outputName || !layout || seen.has(outputKey)) continue
+    seen.add(outputKey)
     const paramsRaw = record.params
     const params: WorkspaceMonitorLayoutParams = {}
     if (paramsRaw && typeof paramsRaw === 'object' && !Array.isArray(paramsRaw)) {
@@ -868,6 +825,13 @@ export function workspaceFindMonitorForTiledWindow(state: WorkspaceState, window
   return null
 }
 
+export function workspaceFindMonitorIdentityForTiledWindow(state: WorkspaceState, windowId: number): string | null {
+  for (const monitor of state.monitorTiles) {
+    if (monitor.entries.some((entry) => entry.windowId === windowId)) return monitor.outputId || null
+  }
+  return null
+}
+
 export function workspaceGetTiledZone(state: WorkspaceState, windowId: number): SnapZone | undefined {
   for (const monitor of state.monitorTiles) {
     const entry = monitor.entries.find((candidate) => candidate.windowId === windowId)
@@ -883,8 +847,11 @@ export function workspaceGetPreTileGeometry(state: WorkspaceState, windowId: num
 export function workspaceMonitorTileEntries(
   state: WorkspaceState,
   outputName: string,
+  outputId?: string | null,
 ): WorkspaceMonitorTileEntry[] {
-  return state.monitorTiles.find((monitor) => monitor.outputName === outputName)?.entries ?? []
+  return state.monitorTiles.find((monitor) =>
+    outputId && monitor.outputId ? monitor.outputId === outputId : monitor.outputName === outputName,
+  )?.entries ?? []
 }
 
 export function enterWorkspaceSplitView(

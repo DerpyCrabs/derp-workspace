@@ -2509,7 +2509,6 @@ impl CompositorState {
         match msg {
             shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
             | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
-            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
             | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
             | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
             | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
@@ -2517,6 +2516,10 @@ impl CompositorState {
             | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
             | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
             | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+                messages.push(msg.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+                messages.push(self.shell_window_list_message());
                 messages.push(msg.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
@@ -9674,6 +9677,12 @@ impl CompositorState {
             | WorkspaceMutation::ClearMonitorTiles { .. }
             | WorkspaceMutation::SetPreTileGeometry { .. }
             | WorkspaceMutation::ClearPreTileGeometry { .. } => {}
+            WorkspaceMutation::RestoreSessionWorkspace { .. } => {
+                auto_layout_all_outputs = true;
+            }
+            WorkspaceMutation::SetMonitorLayouts { .. } => {
+                auto_layout_all_outputs = true;
+            }
             WorkspaceMutation::ReplaceState { .. } => {
                 auto_layout_all_outputs = true;
             }

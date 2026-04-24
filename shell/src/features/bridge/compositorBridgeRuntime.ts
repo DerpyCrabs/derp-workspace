@@ -137,7 +137,7 @@ type CompositorBridgeRuntimeOptions = {
   reserveTaskbarForMon: (mon: LayoutScreen) => boolean
   workspaceState: () => WorkspaceState
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
-  sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect) => boolean
+  sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null) => boolean
   bumpSnapChrome: () => void
   sendSetPreTileGeometry: (windowId: number, bounds: { x: number; y: number; w: number; h: number }) => boolean
   floatBeforeMaximize: Map<number, { x: number; y: number; w: number; h: number }>
@@ -203,6 +203,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
     detail.type === 'window_list' ||
+    detail.type === 'focus_changed' ||
     detail.type === 'workspace_state' ||
     detail.type === 'shell_hosted_app_state' ||
     detail.type === 'output_layout' ||
@@ -567,6 +568,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       return
     }
     if (d.type === 'focus_changed') {
+      if (syncCompositorSnapshot()) return
       const result = options.applyModelCompositorDetail(d, {
         fallbackMonitorKey: options.fallbackMonitorKey,
         requestWindowSyncRecovery: options.requestWindowSyncRecovery,

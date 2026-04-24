@@ -105,4 +105,58 @@ describe('sessionSnapshot', () => {
       ],
     })
   })
+
+  it('keeps monitor tile snapshots distinct when output names collide but identities differ', () => {
+    expect(
+      sanitizeSessionSnapshot({
+        monitorTiles: [
+          {
+            outputId: 'make:model:serial-a',
+            outputName: 'DP-1',
+            entries: [
+              {
+                windowRef: shellWindowRef(9001),
+                zone: 'left-half',
+                bounds: { x: 0, y: 0, width: 960, height: 1040 },
+              },
+            ],
+          },
+          {
+            outputId: 'make:model:serial-b',
+            outputName: 'DP-1',
+            entries: [
+              {
+                windowRef: shellWindowRef(9002),
+                zone: 'right-half',
+                bounds: { x: 960, y: 0, width: 960, height: 1040 },
+              },
+            ],
+          },
+        ],
+      }).monitorTiles,
+    ).toEqual([
+      {
+        outputId: 'make:model:serial-a',
+        outputName: 'DP-1',
+        entries: [
+          {
+            windowRef: shellWindowRef(9001),
+            zone: 'left-half',
+            bounds: { x: 0, y: 0, width: 960, height: 1040 },
+          },
+        ],
+      },
+      {
+        outputId: 'make:model:serial-b',
+        outputName: 'DP-1',
+        entries: [
+          {
+            windowRef: shellWindowRef(9002),
+            zone: 'right-half',
+            bounds: { x: 960, y: 0, width: 960, height: 1040 },
+          },
+        ],
+      },
+    ])
+  })
 })
