@@ -1,17 +1,5 @@
-import { CHROME_TASKBAR_RESERVE_PX, CHROME_TITLEBAR_PX } from '@/lib/chromeConstants'
 import { canvasOriginXY, rectGlobalToCanvasLocal, type CanvasOrigin } from '@/lib/shellCoords'
 import type { LayoutScreen } from './types'
-
-export function shellMaximizedWorkAreaGlobalRect(mon: LayoutScreen, reserveTaskbar: boolean) {
-  const th = CHROME_TITLEBAR_PX
-  const tb = reserveTaskbar ? CHROME_TASKBAR_RESERVE_PX : 0
-  return {
-    x: mon.x,
-    y: mon.y + th,
-    w: Math.max(1, mon.width),
-    h: Math.max(1, mon.height - th - tb),
-  }
-}
 
 export function screensListForLayout(
   rows: LayoutScreen[],

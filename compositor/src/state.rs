@@ -484,6 +484,13 @@ pub(crate) fn normalize_capture_dmabuf_format(format: Format) -> Format {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShellKeyboardCapture {
+    None,
+    ShellUi,
+    ProgramsMenu { restore_window_id: Option<u32> },
+}
+
 pub struct CompositorState {
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
@@ -571,8 +578,7 @@ pub struct CompositorState {
     pub(crate) touch_emulation_slot: Option<TouchSlot>,
     /// First-finger touch is translated to [`shell_wire::MSG_COMPOSITOR_TOUCH`] (no synthetic LMB to CEF).
     pub(crate) touch_routes_to_cef: bool,
-    /// Typing and shortcuts go to `cef_host` after interacting with the Solid shell layer.
-    pub(crate) shell_ipc_keyboard_to_cef: bool,
+    pub(crate) shell_keyboard_capture: ShellKeyboardCapture,
     shell_cef_repeat_token: Option<RegistrationToken>,
     pub(crate) shell_cef_repeat_keycode: Option<Keycode>,
     shell_cef_repeat_sym_raw: Option<u32>,
@@ -580,7 +586,6 @@ pub struct CompositorState {
     pub(crate) programs_menu_super_armed: bool,
     pub(crate) programs_menu_super_chord: bool,
     pub(crate) programs_menu_super_pending_toggle: bool,
-    pub(crate) programs_menu_restore_focus_window_id: Option<u32>,
     keyboard_layout_by_window: HashMap<u32, u32>,
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
@@ -861,14 +866,30 @@ impl CompositorState {
         self.shell_exclusion_zones_need_full_damage = true;
     }
 
+    pub(crate) fn shell_keyboard_capture_active(&self) -> bool {
+        self.shell_keyboard_capture != ShellKeyboardCapture::None
+    }
+
+    pub(crate) fn shell_keyboard_capture_shell_ui(&mut self) {
+        self.shell_keyboard_capture = ShellKeyboardCapture::ShellUi;
+    }
+
+    pub(crate) fn shell_keyboard_capture_programs_menu(&mut self, restore_window_id: Option<u32>) {
+        self.shell_keyboard_capture = ShellKeyboardCapture::ProgramsMenu { restore_window_id };
+    }
+
+    pub(crate) fn shell_keyboard_capture_clear(&mut self) {
+        self.shell_keyboard_capture = ShellKeyboardCapture::None;
+    }
+
     pub(crate) fn logical_focused_window_id(&self) -> Option<u32> {
-        if self.shell_ipc_keyboard_to_cef {
-            return self.shell_focused_ui_window_id.or_else(|| {
-                self.programs_menu_restore_focus_window_id
-                    .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
-            });
+        match self.shell_keyboard_capture {
+            ShellKeyboardCapture::None => self.keyboard_focused_window_id(),
+            ShellKeyboardCapture::ShellUi => self.shell_focused_ui_window_id,
+            ShellKeyboardCapture::ProgramsMenu { restore_window_id } => restore_window_id
+                .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+                .or(self.shell_focused_ui_window_id),
         }
-        self.keyboard_focused_window_id()
     }
 
     pub(crate) fn shell_taskbar_should_toggle_minimize(&self, window_id: u32) -> bool {
@@ -1163,14 +1184,13 @@ impl CompositorState {
             touch_abs_is_window_pixels: false,
             touch_emulation_slot: None,
             touch_routes_to_cef: false,
-            shell_ipc_keyboard_to_cef: false,
+            shell_keyboard_capture: ShellKeyboardCapture::None,
             shell_cef_repeat_token: None,
             shell_cef_repeat_keycode: None,
             shell_cef_repeat_sym_raw: None,
             programs_menu_super_armed: false,
             programs_menu_super_chord: false,
             programs_menu_super_pending_toggle: false,
-            programs_menu_restore_focus_window_id: None,
             keyboard_layout_by_window: HashMap::new(),
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
@@ -2022,7 +2042,7 @@ impl CompositorState {
         keyboard.set_focus(self, Option::<WlSurface>::None, k_serial);
         self.keyboard_on_focus_surface_changed(None);
         self.shell_pending_native_focus_window_id = None;
-        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_keyboard_capture_shell_ui();
         self.shell_window_stack_touch(window_id);
         self.shell_emit_shell_ui_focus_if_changed(Some(window_id));
         self.shell_reply_window_list();
@@ -2031,7 +2051,7 @@ impl CompositorState {
     pub(crate) fn shell_blur_shell_ui_focus(&mut self) {
         self.shell_ui_pointer_grab = None;
         self.shell_emit_shell_ui_focus_if_changed(None);
-        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_keyboard_capture_clear();
         let k_serial = SERIAL_COUNTER.next_serial();
         self.seat
             .get_keyboard()
@@ -2698,20 +2718,24 @@ impl CompositorState {
         let restore_from_shell = (restore_window_id != 0
             && self.logical_focus_target_is_valid(restore_window_id))
         .then_some(restore_window_id);
-        self.programs_menu_restore_focus_window_id = restore_from_shell.or_else(|| {
+        let restore_window_id = restore_from_shell.or_else(|| {
             self.logical_focused_window_id()
                 .or_else(|| self.keyboard_focused_window_id())
                 .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
         });
-        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_keyboard_capture_programs_menu(restore_window_id);
         self.shell_send_to_cef(self.shell_focus_message());
     }
 
     pub(crate) fn programs_menu_closed_from_shell(&mut self) {
-        let restore_window_id = self.programs_menu_restore_focus_window_id.take();
+        let restore_window_id = match self.shell_keyboard_capture {
+            ShellKeyboardCapture::ProgramsMenu { restore_window_id } => restore_window_id,
+            _ => None,
+        };
         self.programs_menu_super_armed = false;
         self.programs_menu_super_chord = false;
         self.programs_menu_super_pending_toggle = false;
+        self.shell_keyboard_capture_clear();
         if let Some(window_id) = restore_window_id {
             if self.logical_focus_target_is_valid(window_id) {
                 self.focus_logical_window(window_id);
@@ -2719,7 +2743,6 @@ impl CompositorState {
                 return;
             }
         }
-        self.shell_ipc_keyboard_to_cef = false;
         self.shell_send_to_cef(self.shell_focus_message());
     }
 
@@ -2781,7 +2804,7 @@ impl CompositorState {
         self.screenshot_overlay_needs_full_damage = true;
         self.programs_menu_super_armed = false;
         self.programs_menu_super_chord = false;
-        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_keyboard_capture_clear();
         self.shell_emit_shell_ui_focus_if_changed(None);
         self.loop_signal.wakeup();
     }
@@ -6872,7 +6895,7 @@ impl CompositorState {
             target: "derp_shell_menu",
             pending_toggle = self.programs_menu_super_pending_toggle,
             shell_has_frame = self.shell_has_frame,
-            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
+            shell_keyboard_capture = ?self.shell_keyboard_capture,
             "shell_ipc_on_shell_load_success"
         );
         if self.programs_menu_super_pending_toggle {
@@ -7394,7 +7417,7 @@ impl CompositorState {
         self.shell_move_pending_delta = initial_pending_delta;
         self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
-        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_keyboard_capture_shell_ui();
         if initial_pending_delta != (0, 0) {
             self.shell_move_flush_pending_deltas_backed();
         }
@@ -11101,7 +11124,7 @@ impl CompositorState {
         let Some(sid) = self.window_registry.surface_id_for_window(window_id) else {
             return;
         };
-        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_keyboard_capture_clear();
         self.shell_note_non_shell_focus();
         self.space.elements().for_each(|e| {
             e.set_activate(false);
@@ -11270,7 +11293,7 @@ impl CompositorState {
             return;
         }
         if let Some(window) = self.shell_minimized_windows.remove(&window_id) {
-            self.shell_ipc_keyboard_to_cef = false;
+            self.shell_keyboard_capture_clear();
             self.space.elements().for_each(|e| {
                 e.set_activate(false);
                 if let DerpSpaceElem::Wayland(w) = e {
@@ -11309,7 +11332,7 @@ impl CompositorState {
             return;
         };
 
-        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_keyboard_capture_clear();
         self.space.elements().for_each(|e| {
             e.set_activate(false);
             if let DerpSpaceElem::Wayland(w) = e {
@@ -11772,7 +11795,10 @@ impl CompositorState {
             self.shell_cef_repeat_clear(lh);
             return TimeoutAction::Drop;
         }
-        if !self.shell_ipc_keyboard_to_cef || !self.shell_cef_active() || !self.shell_has_frame {
+        if !self.shell_keyboard_capture_active()
+            || !self.shell_cef_active()
+            || !self.shell_has_frame
+        {
             self.shell_cef_repeat_clear(lh);
             return TimeoutAction::Drop;
         }

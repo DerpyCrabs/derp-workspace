@@ -19,5 +19,3 @@ export const CHROME_TASKBAR_RESERVE_PX = 44
 
 /** `layout_state` tail on [`MSG_SHELL_SET_GEOMETRY`]: normal floating geometry. */
 export const SHELL_LAYOUT_FLOATING = 0
-/** `layout_state`: tiled maximize (xdg maximized + shell-chosen bounds). */
-export const SHELL_LAYOUT_MAXIMIZED = 1

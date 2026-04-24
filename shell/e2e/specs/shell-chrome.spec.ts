@@ -106,6 +106,52 @@ async function waitForPointerIdle(base: string) {
   )
 }
 
+async function ensureProgramsMenuClosedForFocusTest(base: string) {
+  const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (before.programs_menu_open) {
+    await runKeybind(base, 'toggle_programs_menu')
+    await waitForProgramsMenuClosed(base)
+  }
+}
+
+async function waitForProgramsMenuOpenWithNativeOwner(
+  base: string,
+  windowId: number,
+  label: string,
+  requireNativeKeyboardFocus: boolean,
+) {
+  return waitFor(
+    label,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      if (!snapshots.shell.programs_menu_open) return null
+      if (snapshots.shell.focused_window_id !== windowId) return null
+      if (snapshots.compositor.shell_keyboard_focus !== true) return null
+      if (requireNativeKeyboardFocus && snapshots.compositor.focused_window_id !== windowId) return null
+      if (!requireNativeKeyboardFocus && snapshots.compositor.focused_window_id !== null && snapshots.compositor.focused_window_id !== windowId) return null
+      return snapshots
+    },
+    5000,
+    100,
+  )
+}
+
+async function waitForProgramsMenuClosedWithNativeFocus(base: string, windowId: number, label: string) {
+  return waitFor(
+    label,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      if (snapshots.shell.programs_menu_open) return null
+      if (snapshots.compositor.focused_window_id !== windowId) return null
+      if (snapshots.shell.focused_window_id !== windowId) return null
+      if (snapshots.compositor.shell_keyboard_focus === true) return null
+      return snapshots
+    },
+    5000,
+    100,
+  )
+}
+
 function pointCoveredByShellExclusion(compositor: CompositorSnapshot, point: { x: number; y: number }) {
   return (compositor.shell_exclusion_global ?? []).some(
     (rect) =>
@@ -343,11 +389,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('programs menu super toggle preserves focused native window when dismissed', async ({ base, state }) => {
-    const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (before.programs_menu_open) {
-      await runKeybind(base, 'toggle_programs_menu')
-      await waitForProgramsMenuClosed(base)
-    }
+    await ensureProgramsMenuClosedForFocusTest(base)
     const stamp = Date.now()
     const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
       title: `Derp Launcher Focus ${stamp}`,
@@ -359,35 +401,51 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForNativeFocus(base, windowId)
 
     await keyAction(base, 125, 'tap')
-    const opened = await waitFor(
+    const opened = await waitForProgramsMenuOpenWithNativeOwner(
+      base,
+      windowId,
       'wait for programs menu open without native focus loss',
-      async () => {
-        const snapshots = await getSnapshots(base)
-        if (!snapshots.shell.programs_menu_open) return null
-        if (snapshots.compositor.focused_window_id !== windowId) return null
-        if (snapshots.shell.focused_window_id !== windowId) return null
-        return snapshots
-      },
-      5000,
-      100,
+      true,
     )
     assert(opened.compositor.shell_keyboard_focus === true, 'programs menu should capture shell keyboard while native focus is preserved logically')
 
     await keyAction(base, 125, 'tap')
-    const closed = await waitFor(
+    const closed = await waitForProgramsMenuClosedWithNativeFocus(
+      base,
+      windowId,
       'wait for programs menu close without native focus loss',
-      async () => {
-        const snapshots = await getSnapshots(base)
-        if (snapshots.shell.programs_menu_open) return null
-        if (snapshots.compositor.focused_window_id !== windowId) return null
-        if (snapshots.shell.focused_window_id !== windowId) return null
-        if (snapshots.compositor.shell_keyboard_focus === true) return null
-        return snapshots
-      },
-      5000,
-      100,
     )
     assert(closed.compositor.focused_window_id === windowId, 'native window should remain focused after closing programs menu')
+  })
+
+  test('programs menu click open restores focused native window when dismissed by super', async ({ base, state }) => {
+    await ensureProgramsMenuClosedForFocusTest(base)
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Launcher Click Focus ${stamp}`,
+      token: `launcher-click-focus-${stamp}`,
+      strip: 'green',
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForNativeFocus(base, windowId)
+
+    await openProgramsMenu(base, 'click')
+    const opened = await waitForProgramsMenuOpenWithNativeOwner(
+      base,
+      windowId,
+      'wait for click-opened programs menu to keep native logical owner',
+      false,
+    )
+    assert(opened.shell.focused_window_id === windowId, 'shell logical focus should stay on native window while programs menu is open')
+
+    await keyAction(base, 125, 'tap')
+    const closed = await waitForProgramsMenuClosedWithNativeFocus(
+      base,
+      windowId,
+      'wait for click-opened programs menu dismissal to restore native focus',
+    )
+    assert(closed.compositor.focused_window_id === windowId, 'native window should regain keyboard focus after click-opened programs menu closes')
   })
 
   test('programs menu list scrolls with pointer wheel over launcher', async ({ base, state }) => {

@@ -319,7 +319,7 @@ impl CompositorState {
         if self.shell_focused_ui_window_id == Some(window_id) {
             self.shell_ui_pointer_grab = None;
             self.shell_emit_shell_ui_focus_if_changed(None);
-            self.shell_ipc_keyboard_to_cef = false;
+            self.shell_keyboard_capture_clear();
         }
         self.window_registry.remove_shell_hosted(window_id);
         self.scratchpad_forget_window(window_id);
@@ -429,7 +429,7 @@ impl CompositorState {
         }
         self.shell_move_deferred_cancel(None);
         self.shell_resize_end_active();
-        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_keyboard_capture_shell_ui();
         self.shell_focus_shell_ui_window(window_id);
         self.shell_move_activate_backed_now(window_id, (0, 0));
         true
@@ -525,7 +525,7 @@ impl CompositorState {
         self.shell_resize_edges = Some(edges);
         self.shell_resize_initial_rect = Some(r);
         self.shell_resize_accum = (0.0, 0.0);
-        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_keyboard_capture_shell_ui();
         self.shell_focus_shell_ui_window(window_id);
         self.shell_send_interaction_state();
         true

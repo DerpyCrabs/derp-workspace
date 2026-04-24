@@ -454,7 +454,7 @@ impl CompositorState {
                         return FilterResult::Intercept(());
                     }
                 }
-                if state.shell_ipc_keyboard_to_cef
+                if state.shell_keyboard_capture_active()
                     && state.shell_cef_active()
                     && state.shell_has_frame
                 {
@@ -670,7 +670,7 @@ impl CompositorState {
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
             session_power_action: self.e2e_last_session_power_action.clone(),
             session_power_requested_at_ms: self.e2e_last_session_power_requested_at_ms,
-            shell_keyboard_focus: self.shell_ipc_keyboard_to_cef,
+            shell_keyboard_focus: self.shell_keyboard_capture_active(),
             screenshot_selection_active: self.screenshot_selection_active,
             shell_context_menu_visible: self.shell_exclusion_overlay_open
                 && !self.shell_exclusion_floating.is_empty(),

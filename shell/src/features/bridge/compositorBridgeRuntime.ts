@@ -143,7 +143,6 @@ type CompositorBridgeRuntimeOptions = {
   sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null) => boolean
   bumpSnapChrome: () => void
   sendSetPreTileGeometry: (windowId: number, bounds: { x: number; y: number; w: number; h: number }) => boolean
-  floatBeforeMaximize: Map<number, { x: number; y: number; w: number; h: number }>
   workspacePreTileSnapshot: (windowId: number) => { x: number; y: number; w: number; h: number } | null
   sendRemoveMonitorTile: (windowId: number) => boolean
   sendClearPreTileGeometry: (windowId: number) => boolean

@@ -156,8 +156,6 @@ function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>
   }
 }
 
-const floatBeforeMaximize = new Map<number, { x: number; y: number; w: number; h: number }>()
-
 const TASKBAR_HEIGHT = 44
 
 function shSingleQuotedForSpawn(text: string): string {
@@ -1515,7 +1513,6 @@ function App() {
     syncExclusionZonesNow,
     flushShellUiWindowsSyncNow,
     bumpSnapChrome,
-    floatBeforeMaximize,
     shellWireSend,
     shellMoveLog,
     clearNativeDragPreview: () => setNativeDragPreview(null),
@@ -1804,7 +1801,6 @@ function App() {
         sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
         bumpSnapChrome,
         sendSetPreTileGeometry: workspaceLayoutBridge.sendSetPreTileGeometry,
-        floatBeforeMaximize,
         workspacePreTileSnapshot: workspaceLayoutBridge.workspacePreTileSnapshot,
         sendRemoveMonitorTile: workspaceLayoutBridge.sendRemoveMonitorTile,
         sendClearPreTileGeometry: workspaceLayoutBridge.sendClearPreTileGeometry,

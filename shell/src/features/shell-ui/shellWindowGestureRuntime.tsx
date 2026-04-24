@@ -2,7 +2,6 @@ import {
   CHROME_BORDER_PX,
   CHROME_BORDER_TOP_PX,
   SHELL_LAYOUT_FLOATING,
-  SHELL_LAYOUT_MAXIMIZED,
   SHELL_RESIZE_BOTTOM,
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
@@ -55,7 +54,7 @@ import {
   setMonitorSnapLayout,
   type MonitorSnapLayout,
 } from '@/features/tiling/tilingConfig'
-import { screensListForLayout, shellMaximizedWorkAreaGlobalRect } from '@/host/appLayout'
+import { screensListForLayout } from '@/host/appLayout'
 import type { DerpWindow } from '@/host/appWindowState'
 import { SHELL_UI_PORTAL_PICKER_WINDOW_ID, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type {
@@ -117,7 +116,6 @@ type ShellWindowGestureRuntimeOptions = {
   syncExclusionZonesNow: () => void
   flushShellUiWindowsSyncNow: () => void
   bumpSnapChrome: () => void
-  floatBeforeMaximize: Map<number, WindowRect>
   shellWireSend: (
     op:
       | 'move_begin'
@@ -654,7 +652,6 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const window = options.allWindowsMap().get(windowId)
     if (!window) return
     if (window.maximized) {
-      options.floatBeforeMaximize.delete(windowId)
       options.shellWireSend('set_maximized', windowId, 0)
       return
     }
@@ -662,22 +659,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     if (!options.sendClearPreTileGeometry(windowId)) return
     options.bumpSnapChrome()
     options.scheduleExclusionZonesSync()
-    options.floatBeforeMaximize.set(windowId, {
-      x: window.x,
-      y: window.y,
-      w: window.width,
-      h: window.height,
-    })
-    const list = screensListForLayout(
-      options.screenDraftRows(),
-      options.outputGeom(),
-      options.layoutCanvasOrigin(),
-    )
-    const monitor = pickScreenForWindow(window, list, options.layoutCanvasOrigin()) ?? list[0] ?? null
-    if (!monitor) return
-    const reserveTaskbar = options.reserveTaskbarForMon(monitor)
-    const rect = shellMaximizedWorkAreaGlobalRect(monitor, reserveTaskbar)
-    options.shellWireSend('set_geometry', windowId, rect.x, rect.y, rect.w, rect.h, SHELL_LAYOUT_MAXIMIZED)
+    options.shellWireSend('set_maximized', windowId, 1)
   }
 
   function beginShellWindowMove(windowId: number, clientX: number, clientY: number) {

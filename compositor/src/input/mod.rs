@@ -412,7 +412,7 @@ impl CompositorState {
                     });
                     keyboard.set_focus(self, Option::<WlSurface>::None, serial);
                     self.keyboard_on_focus_surface_changed(None);
-                    self.shell_ipc_keyboard_to_cef = true;
+                    self.shell_keyboard_capture_shell_ui();
                     self.shell_emit_shell_ui_focus_from_point(pos);
                     if button == BTN_LEFT {
                         self.shell_backed_move_candidate = self
@@ -436,7 +436,7 @@ impl CompositorState {
             if (route_cef || self.shell_ui_pointer_grab_active()) && self.shell_cef_active() {
                 if let Some((bx, by)) = cef_ipc {
                     if button_state == ButtonState::Pressed {
-                        self.shell_ipc_keyboard_to_cef = true;
+                        self.shell_keyboard_capture_shell_ui();
                     }
                     const BTN_RIGHT: u32 = 0x111;
                     const BTN_MIDDLE: u32 = 0x112;
@@ -492,7 +492,7 @@ impl CompositorState {
         }
 
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-            self.shell_ipc_keyboard_to_cef = false;
+            self.shell_keyboard_capture_clear();
             let pos = pointer.current_location();
             if let Some((elem, _loc)) = self.element_under_respecting_shell_exclusions(pos) {
                 let shell_ui_focus = self
@@ -711,7 +711,7 @@ impl CompositorState {
                                 return FilterResult::Intercept(());
                             }
                         }
-                        if state.shell_ipc_keyboard_to_cef
+                        if state.shell_keyboard_capture_active()
                             && state.shell_cef_active()
                             && state.shell_has_frame
                         {
@@ -869,7 +869,7 @@ impl CompositorState {
                             },
                         );
                     }
-                    self.shell_ipc_keyboard_to_cef = true;
+                    self.shell_keyboard_capture_shell_ui();
                     self.shell_emit_shell_ui_focus_from_point(pos);
                 } else {
                     self.process_pointer_button(0x110, ButtonState::Pressed, time);

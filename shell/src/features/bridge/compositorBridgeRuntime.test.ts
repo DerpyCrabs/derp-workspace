@@ -97,7 +97,6 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
     sendSetMonitorTile: vi.fn(() => true),
     bumpSnapChrome: vi.fn(),
     sendSetPreTileGeometry: vi.fn(() => true),
-    floatBeforeMaximize: new Map(),
     workspacePreTileSnapshot: () => null,
     sendRemoveMonitorTile: vi.fn(() => true),
     sendClearPreTileGeometry: vi.fn(() => true),
