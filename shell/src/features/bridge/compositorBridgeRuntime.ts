@@ -203,6 +203,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainInteraction = 1 << 6
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
+  const snapshotDomainWindowOrder = 1 << 9
 
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
@@ -221,6 +222,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
     detail.type === 'window_list' ||
+    detail.type === 'window_order' ||
     detail.type === 'focus_changed' ||
     detail.type === 'workspace_state' ||
     detail.type === 'shell_hosted_app_state' ||
@@ -236,6 +238,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         return snapshotDomainOutputs
       case 'window_list':
         return snapshotDomainWindows
+      case 'window_order':
+        return snapshotDomainWindowOrder
       case 'focus_changed':
         return snapshotDomainFocus
       case 'keyboard_layout':
@@ -653,6 +657,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         requestWindowSyncRecovery: options.requestWindowSyncRecovery,
       })
       if (result.followup) options.scheduleCompositorFollowup(result.followup)
+      return
+    }
+    if (d.type === 'window_order') {
+      options.applyModelCompositorDetail(d, {
+        fallbackMonitorKey: options.fallbackMonitorKey,
+        requestWindowSyncRecovery: options.requestWindowSyncRecovery,
+      })
       return
     }
     if (d.type === 'workspace_state') {

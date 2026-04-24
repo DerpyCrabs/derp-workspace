@@ -5,6 +5,7 @@ pub(crate) struct ShellSnapshotModel {
     output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     window_list_revision: u64,
+    window_order_revision: u64,
     window_rows_by_id: HashMap<u32, shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
@@ -20,6 +21,11 @@ impl ShellSnapshotModel {
     fn next_window_list_revision(&mut self) -> u64 {
         self.window_list_revision = self.window_list_revision.wrapping_add(1);
         self.window_list_revision
+    }
+
+    fn next_window_order_revision(&mut self) -> u64 {
+        self.window_order_revision = self.window_order_revision.wrapping_add(1);
+        self.window_order_revision
     }
 
     fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
@@ -40,10 +46,19 @@ impl ShellSnapshotModel {
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
                 self.window_list_revision = *revision;
+                self.window_order_revision = self.window_order_revision.max(*revision);
                 self.window_rows_by_id.clear();
                 for window in windows {
                     self.window_rows_by_id
                         .insert(window.window_id, window.clone());
+                }
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowOrder { revision, windows } => {
+                self.window_order_revision = *revision;
+                for window in windows {
+                    if let Some(row) = self.window_row_mut(window.window_id) {
+                        row.stack_z = window.stack_z;
+                    }
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMapped {
@@ -117,10 +132,12 @@ impl ShellSnapshotModel {
                     );
                 }
                 self.next_window_list_revision();
+                self.next_window_order_revision();
             }
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
                 if self.window_row_remove(*window_id) {
                     self.next_window_list_revision();
+                    self.next_window_order_revision();
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
@@ -214,6 +231,19 @@ impl ShellSnapshotModel {
             revision: self.window_list_revision,
             windows,
         });
+        let mut order: Vec<_> = self
+            .window_rows_by_id
+            .values()
+            .map(|window| shell_wire::ShellWindowOrderEntry {
+                window_id: window.window_id,
+                stack_z: window.stack_z,
+            })
+            .collect();
+        order.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+        messages.push(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+            revision: self.window_order_revision,
+            windows: order,
+        });
         if let Some(message) = self.focus_changed.clone() {
             messages.push(message);
         }
@@ -259,6 +289,9 @@ pub(crate) fn snapshot_dirty_domains(
             | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS

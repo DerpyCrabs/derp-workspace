@@ -34,6 +34,7 @@ fn push_pending_message(
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
         | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
         | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
         | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
         | shell_wire::DecodedCompositorToShellMessage::VolumeOverlay { .. }
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }

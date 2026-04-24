@@ -75,6 +75,7 @@ export type DerpShellDetail = ({
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; revision?: number; windows: unknown[] }
+  | { type: 'window_order'; revision?: number; windows: unknown[] }
   | { type: 'workspace_state'; revision?: number; state: WorkspaceSnapshot }
   | { type: 'shell_hosted_app_state'; revision?: number; state: { byWindowId?: Record<string, unknown> } }
   | {
@@ -493,13 +494,26 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
     case 'focus_changed': {
       const wid = coerceShellWindowId(detail.window_id)
       if (wid === null) break
-      const w = map.get(wid)
-      if (!w) break
-      const stack_z = nextStackZ(map, wid)
-      if (w.stack_z >= stack_z) return map
-      const next = new Map(map)
-      next.set(wid, { ...w, stack_z })
-      return next
+      if (!map.has(wid)) break
+      return map
+    }
+    case 'window_order': {
+      if (!Array.isArray(detail.windows)) break
+      let next: Map<number, DerpWindow> | null = null
+      for (const row of detail.windows) {
+        if (!row || typeof row !== 'object') continue
+        const r = row as Record<string, unknown>
+        const wid = coerceShellWindowId(r.window_id)
+        const stackRaw = r.stack_z
+        if (wid === null || typeof stackRaw !== 'number' || !Number.isFinite(stackRaw)) continue
+        const window = (next ?? map).get(wid)
+        if (!window) continue
+        const stack_z = Math.trunc(stackRaw)
+        if (window.stack_z === stack_z) continue
+        if (!next) next = new Map(map)
+        next.set(wid, { ...window, stack_z })
+      }
+      return next ?? map
     }
     default:
       break

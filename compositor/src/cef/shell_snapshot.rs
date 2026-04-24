@@ -809,6 +809,13 @@ fn append_snapshot_message(
                 "window list",
             )?
         }
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder { revision, windows } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_window_order(*revision, windows),
+                "window order",
+            )?
+        }
         shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,
             minimized,

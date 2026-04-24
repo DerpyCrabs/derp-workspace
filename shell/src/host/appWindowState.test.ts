@@ -195,7 +195,7 @@ describe('appWindowState', () => {
     expect(stateNext.get(2)?.minimized).toBe(true)
   })
 
-  it('raises the focused window from a live focus change', () => {
+  it('does not infer stack order from focus changes', () => {
     const left = makeWindow(1, { stack_z: 3 })
     const right = makeWindow(2, { stack_z: 4 })
     const previous = new Map<number, DerpWindow>([
@@ -209,7 +209,29 @@ describe('appWindowState', () => {
       window_id: 1,
     })
 
-    expect(next.get(1)?.stack_z).toBe(5)
+    expect(next).toBe(previous)
+    expect(next.get(1)?.stack_z).toBe(3)
+    expect(next.get(2)).toBe(right)
+  })
+
+  it('updates stack order from compositor window order', () => {
+    const left = makeWindow(1, { stack_z: 3 })
+    const right = makeWindow(2, { stack_z: 4 })
+    const previous = new Map<number, DerpWindow>([
+      [left.window_id, left],
+      [right.window_id, right],
+    ])
+
+    const next = applyDetail(previous, {
+      type: 'window_order',
+      revision: 5,
+      windows: [
+        { window_id: 1, stack_z: 6 },
+        { window_id: 2, stack_z: 4 },
+      ],
+    })
+
+    expect(next.get(1)?.stack_z).toBe(6)
     expect(next.get(2)).toBe(right)
   })
 

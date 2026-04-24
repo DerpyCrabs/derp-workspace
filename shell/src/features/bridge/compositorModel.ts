@@ -22,6 +22,7 @@ export type CompositorApplyResult = {
   kind:
     | 'focus_changed'
     | 'window_list'
+    | 'window_order'
     | 'workspace_state'
     | 'window_state'
     | 'window_unmapped'
@@ -62,6 +63,7 @@ function requestRecovery(
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
+  windowOrder?: { revision: number; rows: unknown[] }
   workspaceSnapshot?: { revision: number; state: WorkspaceSnapshot }
   shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
 }
@@ -113,6 +115,13 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
       }
       continue
     }
+    if (detail.type === 'window_order') {
+      next.windowOrder = {
+        revision: coerceRevision(detail.revision),
+        rows: detail.windows,
+      }
+      continue
+    }
     if (detail.type === 'workspace_state') {
       next.workspaceSnapshot = {
         revision: coerceRevision(detail.revision),
@@ -137,6 +146,7 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
+  const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
   const [windowsRevision, setWindowsRevision] = createSignal(-1)
   const [workspaceSnapshot, setWorkspaceSnapshot] = createSignal<WorkspaceSnapshot>(
     options.initialWorkspaceState ?? createEmptyWorkspaceSnapshot(),
@@ -176,6 +186,15 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       if (authoritative.focusedWindowId === undefined) {
         const map = nextWindowsMap ?? windows()
         setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
+      }
+    }
+    if (authoritative.windowOrder !== undefined) {
+      const windowOrder = authoritative.windowOrder
+      if (windowOrder.revision !== windowOrderRevision()) {
+        setWindows((map) => applyDetail(map, { type: 'window_order', windows: windowOrder.rows }))
+        const nextOrderIds = collectWindowOrderIds(windowOrder.rows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        setWindowOrderRevision(windowOrder.revision)
       }
     }
     if (authoritative.workspaceSnapshot !== undefined) {
@@ -230,6 +249,21 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       }
       return {
         kind: 'window_list',
+        detailType: detail.type,
+        followup: { syncExclusion: true, flushWindows: true },
+      }
+    }
+
+    if (detail.type === 'window_order') {
+      const revision = coerceRevision(detail.revision)
+      if (revision !== windowOrderRevision()) {
+        setWindows((map) => applyDetail(map, detail))
+        const nextOrderIds = collectWindowOrderIds(detail.windows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        setWindowOrderRevision(revision)
+      }
+      return {
+        kind: 'window_order',
         detailType: detail.type,
         followup: { syncExclusion: true, flushWindows: true },
       }

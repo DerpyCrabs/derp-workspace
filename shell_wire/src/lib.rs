@@ -106,6 +106,7 @@ pub const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE: u32 = 59;
 pub const MSG_COMPOSITOR_INTERACTION_STATE: u32 = 60;
 pub const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW: u32 = 61;
 pub const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY: u32 = 62;
+pub const MSG_WINDOW_ORDER: u32 = 63;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -150,7 +151,8 @@ pub const SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS: u32 = 1 << 5;
 pub const SHELL_SNAPSHOT_DOMAIN_INTERACTION: u32 = 1 << 6;
 pub const SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW: u32 = 1 << 7;
 pub const SHELL_SNAPSHOT_DOMAIN_TRAY: u32 = 1 << 8;
-pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 9;
+pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER: u32 = 1 << 9;
+pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 10;
 pub const SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES: usize = SHELL_SNAPSHOT_DOMAIN_COUNT * 8;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -769,6 +771,12 @@ pub struct ShellWindowSnapshot {
     pub x11_instance: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellWindowOrderEntry {
+    pub window_id: u32,
+    pub stack_z: u32,
+}
+
 pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Option<Vec<u8>> {
     let count = u32::try_from(windows.len()).ok()?;
     if count > MAX_WINDOW_LIST_ENTRIES {
@@ -843,6 +851,27 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
     let mut v = Vec::with_capacity(4 + body.len());
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&body);
+    Some(v)
+}
+
+pub fn encode_window_order(revision: u64, windows: &[ShellWindowOrderEntry]) -> Option<Vec<u8>> {
+    let count = u32::try_from(windows.len()).ok()?;
+    if count > MAX_WINDOW_LIST_ENTRIES {
+        return None;
+    }
+    let body_len = 16u32.checked_add(count.checked_mul(8)?)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_WINDOW_ORDER.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
+    v.extend_from_slice(&count.to_le_bytes());
+    for window in windows {
+        v.extend_from_slice(&window.window_id.to_le_bytes());
+        v.extend_from_slice(&window.stack_z.to_le_bytes());
+    }
     Some(v)
 }
 
@@ -1107,6 +1136,7 @@ pub enum DecodeError {
     BadCompositorToShellPayload,
     BadWindowPayload,
     BadWindowListPayload,
+    BadWindowOrderPayload,
     BadDmabufCommitPayload,
     BadOutputLayoutPayload,
     BadShellWindowsPayload,
@@ -1221,6 +1251,10 @@ pub enum DecodedCompositorToShellMessage {
     WindowList {
         revision: u64,
         windows: Vec<ShellWindowSnapshot>,
+    },
+    WindowOrder {
+        revision: u64,
+        windows: Vec<ShellWindowOrderEntry>,
     },
     WindowState {
         window_id: u32,
@@ -2112,6 +2146,7 @@ fn decode_compositor_to_shell_body(
             })
         }
         MSG_WINDOW_LIST => decode_window_list_compositor_body(body),
+        MSG_WINDOW_ORDER => decode_window_order_compositor_body(body),
         MSG_COMPOSITOR_PING => {
             if body.len() != 4 {
                 return Err(DecodeError::BadCompositorToShellPayload);
@@ -2596,6 +2631,43 @@ fn decode_window_list_compositor_body(
     Ok(DecodedCompositorToShellMessage::WindowList { revision, windows })
 }
 
+fn decode_window_order_compositor_body(
+    body: &[u8],
+) -> Result<DecodedCompositorToShellMessage, DecodeError> {
+    if body.len() < 16 {
+        return Err(DecodeError::BadWindowOrderPayload);
+    }
+    let msg = u32::from_le_bytes(body[0..4].try_into().unwrap());
+    if msg != MSG_WINDOW_ORDER {
+        return Err(DecodeError::UnknownMsgType);
+    }
+    let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+    let count = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+    if count > MAX_WINDOW_LIST_ENTRIES as usize {
+        return Err(DecodeError::BadWindowOrderPayload);
+    }
+    let expected = 16usize
+        .checked_add(
+            count
+                .checked_mul(8)
+                .ok_or(DecodeError::BadWindowOrderPayload)?,
+        )
+        .ok_or(DecodeError::BadWindowOrderPayload)?;
+    if body.len() != expected {
+        return Err(DecodeError::BadWindowOrderPayload);
+    }
+    let mut off = 16usize;
+    let mut windows = Vec::with_capacity(count);
+    for _ in 0..count {
+        windows.push(ShellWindowOrderEntry {
+            window_id: u32::from_le_bytes(body[off..off + 4].try_into().unwrap()),
+            stack_z: u32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap()),
+        });
+        off += 8;
+    }
+    Ok(DecodedCompositorToShellMessage::WindowOrder { revision, windows })
+}
+
 pub fn pop_message(buf: &mut Vec<u8>) -> Result<Option<DecodedMessage>, DecodeError> {
     if buf.len() < 4 {
         return Ok(None);
@@ -2735,6 +2807,43 @@ mod tests {
                     x11_class: "ExampleClass".to_string(),
                     x11_instance: "example-instance".to_string(),
                 }]
+            })
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn window_order_round_trip_preserves_stack_values() {
+        let packet = encode_window_order(
+            31,
+            &[
+                ShellWindowOrderEntry {
+                    window_id: 7,
+                    stack_z: 12,
+                },
+                ShellWindowOrderEntry {
+                    window_id: 9,
+                    stack_z: 14,
+                },
+            ],
+        )
+        .unwrap();
+        let mut buf = packet;
+
+        assert_eq!(
+            pop_compositor_to_shell_message(&mut buf).unwrap(),
+            Some(DecodedCompositorToShellMessage::WindowOrder {
+                revision: 31,
+                windows: vec![
+                    ShellWindowOrderEntry {
+                        window_id: 7,
+                        stack_z: 12,
+                    },
+                    ShellWindowOrderEntry {
+                        window_id: 9,
+                        stack_z: 14,
+                    },
+                ],
             })
         );
         assert!(buf.is_empty());

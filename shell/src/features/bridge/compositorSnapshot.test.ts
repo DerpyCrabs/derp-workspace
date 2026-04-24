@@ -34,7 +34,7 @@ function frame(body: number[]): number[] {
 
 function domainRevisions(values: number[] = []): number[] {
   const out: number[] = []
-  for (let index = 0; index < 9; index += 1) {
+  for (let index = 0; index < 10; index += 1) {
     out.push(...u64(BigInt(values[index] ?? 1)))
   }
   return out
@@ -111,7 +111,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decoded).toEqual({
       sequence: 2,
       domainFlags: 7,
-      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1],
+      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
       details: [
         {
           type: 'output_geometry',
@@ -194,7 +194,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1],
+      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
       details: [
         {
           type: 'output_layout',
@@ -218,6 +218,44 @@ describe('decodeCompositorSnapshot', () => {
             },
           ],
           shell_chrome_primary: 'DP-1',
+        },
+      ],
+    })
+  })
+
+  it('decodes window order snapshots', () => {
+    const windowOrder = frame([
+      ...u32(63),
+      ...u64(19n),
+      ...u32(2),
+      ...u32(7),
+      ...u32(12),
+      ...u32(9),
+      ...u32(13),
+    ])
+    const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 0, 0, 0, 2]), ...windowOrder]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(0),
+      ...u32(payload.length),
+      ...u32(1 << 9),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      domainFlags: 1 << 9,
+      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+      details: [
+        {
+          type: 'window_order',
+          revision: 19,
+          windows: [
+            { window_id: 7, stack_z: 12 },
+            { window_id: 9, stack_z: 13 },
+          ],
         },
       ],
     })
@@ -258,7 +296,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 1, 1, 1],
+      domainRevisions: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1],
       details: [
         {
           type: 'interaction_state',
@@ -306,7 +344,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1],
+      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
       details: [
         {
           type: 'native_drag_preview',
@@ -339,7 +377,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1],
+      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
       details: [
         {
           type: 'native_drag_preview',

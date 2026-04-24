@@ -2621,15 +2621,17 @@ impl CompositorState {
             | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
             | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
             | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
                 messages.push(msg.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                messages.push(self.shell_window_list_message());
+                messages.push(self.shell_window_order_message());
                 messages.push(msg.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
                 messages.push(msg.clone());
+                messages.push(self.shell_window_order_message());
                 messages.push(self.shell_focus_message());
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
@@ -8967,6 +8969,21 @@ impl CompositorState {
         shell_wire::DecodedCompositorToShellMessage::WindowList {
             revision: self.next_shell_window_domain_revision(),
             windows: self.shell_window_list_rows(),
+        }
+    }
+
+    fn shell_window_order_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
+        let windows = self
+            .shell_window_list_rows()
+            .into_iter()
+            .map(|window| shell_wire::ShellWindowOrderEntry {
+                window_id: window.window_id,
+                stack_z: window.stack_z,
+            })
+            .collect();
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+            revision: self.next_shell_window_domain_revision(),
+            windows,
         }
     }
 

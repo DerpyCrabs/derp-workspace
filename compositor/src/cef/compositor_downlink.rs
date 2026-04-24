@@ -345,6 +345,25 @@ fn apply_message(
                 message_snapshot_epoch,
             ));
         }
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder { revision, windows } => {
+            let windows: Vec<Value> = windows
+                .into_iter()
+                .map(|window| {
+                    json!({
+                        "window_id": window.window_id,
+                        "stack_z": window.stack_z,
+                    })
+                })
+                .collect();
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "window_order",
+                    "revision": revision,
+                    "windows": windows,
+                }),
+                message_snapshot_epoch,
+            ));
+        }
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,

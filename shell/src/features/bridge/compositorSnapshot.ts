@@ -14,11 +14,12 @@ const MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE = 59
 const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
 const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY = 62
+const MSG_WINDOW_ORDER = 63
 
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 0x4452444d
 const SNAPSHOT_HEADER_BYTES = 32
-const SNAPSHOT_DOMAIN_COUNT = 9
+const SNAPSHOT_DOMAIN_COUNT = 10
 const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
 const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
@@ -29,6 +30,7 @@ const SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS = 1 << 5
 const SNAPSHOT_DOMAIN_INTERACTION = 1 << 6
 const SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW = 1 << 7
 const SNAPSHOT_DOMAIN_TRAY = 1 << 8
+const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
@@ -265,6 +267,23 @@ function decodeFocusChanged(view: DataView, offset: number): DerpShellDetail | n
   }
 }
 
+function decodeWindowOrder(view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 16 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const count = view.getUint32(offset + 12, true)
+  if (count > MAX_WINDOW_LIST_ENTRIES || offset + 16 + count * 8 !== view.byteLength) return null
+  const windows: unknown[] = []
+  let cursor = offset + 16
+  for (let index = 0; index < count; index += 1) {
+    windows.push({
+      window_id: view.getUint32(cursor, true),
+      stack_z: view.getUint32(cursor + 4, true),
+    })
+    cursor += 8
+  }
+  return { type: 'window_order', revision, windows }
+}
+
 function decodeKeyboardLayout(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
   if (offset + 8 > view.byteLength) return null
   const labelLen = view.getUint32(offset + 4, true)
@@ -416,6 +435,8 @@ function domainForMessageType(msgType: number): number {
       return SNAPSHOT_DOMAIN_OUTPUTS
     case MSG_WINDOW_LIST:
       return SNAPSHOT_DOMAIN_WINDOWS
+    case MSG_WINDOW_ORDER:
+      return SNAPSHOT_DOMAIN_WINDOW_ORDER
     case MSG_FOCUS_CHANGED:
       return SNAPSHOT_DOMAIN_FOCUS
     case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
@@ -651,6 +672,8 @@ function decodeSnapshotPacket(bodyBytes: Uint8Array, bodyView: DataView): DerpSh
       return decodeOutputLayout(bodyBytes, bodyView, 0)
     case MSG_WINDOW_LIST:
       return decodeWindowList(bodyBytes, bodyView, 0)
+    case MSG_WINDOW_ORDER:
+      return decodeWindowOrder(bodyView, 0)
     case MSG_FOCUS_CHANGED:
       return decodeFocusChanged(bodyView, 0)
     case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
