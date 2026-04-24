@@ -3,13 +3,13 @@ import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
 import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import type { ShellCompositorWireSend } from '@/features/shell-ui/shellWireSendType'
-import type { WorkspaceState } from './workspaceState'
-import { groupIdForWindow, getWorkspaceGroupSplit } from './workspaceState'
+import type { WorkspaceSnapshot } from './workspaceSnapshot'
+import { groupIdForWindow, getWorkspaceGroupSplit } from './workspaceSnapshot'
 import type { WorkspaceMutation } from './workspaceProtocol'
 import type { WorkspaceGroupModel } from './workspaceSelectors'
 
 type WorkspaceActionsOptions = {
-  workspaceState: Accessor<WorkspaceState>
+  workspaceSnapshot: Accessor<WorkspaceSnapshot>
   allWindowsMap: Accessor<ReadonlyMap<number, DerpWindow>>
   workspaceGroups: Accessor<WorkspaceGroupModel[]>
   workspaceGroupsById: Accessor<ReadonlyMap<string, WorkspaceGroupModel>>
@@ -71,7 +71,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
   }
 
   const detachGroupWindow = (windowId: number, _clientX: number, _clientY: number) => {
-    const prevState = options.workspaceState()
+    const prevState = options.workspaceSnapshot()
     const sourceGroupId = groupIdForWindow(prevState, windowId)
     const sourceGroup = options.groupForWindow(windowId)
     if (!sourceGroupId || !sourceGroup || sourceGroup.members.length < 2) return false
@@ -194,7 +194,7 @@ export function createWorkspaceActions(options: WorkspaceActionsOptions) {
     const groupId = options.groupIdForWindow(windowId)
     if (!groupId) return false
     const group = options.groupForWindow(windowId)
-    const split = getWorkspaceGroupSplit(options.workspaceState(), groupId)
+    const split = getWorkspaceGroupSplit(options.workspaceSnapshot(), groupId)
     const leftWindow = group?.splitLeftWindow ?? null
     const rightWindow = group?.visibleWindow ?? null
     const restoreRect =

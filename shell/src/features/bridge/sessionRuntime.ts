@@ -3,9 +3,7 @@ import { shellHostedKindUsesCompositorSessionCapture } from '@/features/shell-ui
 import { captureShellWindowState, primeShellWindowState } from '@/features/shell-ui/shellWindowState'
 import { monitorWorkAreaGlobal, tiledFrameRectToClientRect } from '@/features/tiling/tileSnap'
 import { loadTilingConfig } from '@/features/tiling/tilingConfig'
-import {
-  type WorkspaceState,
-} from '@/features/workspace/workspaceState'
+import type { WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import type { DerpWindow } from '@/host/appWindowState'
 import { windowIsShellHosted } from '@/host/appWindowState'
@@ -33,7 +31,7 @@ type NativeLaunchQueueEntry = {
 type SessionRuntimeOptions = {
   getAllWindowsMap: () => ReadonlyMap<number, DerpWindow>
   getWindowsList: () => readonly DerpWindow[]
-  getWorkspaceState: () => WorkspaceState
+  getWorkspaceState: () => WorkspaceSnapshot
   getTaskbarScreens: () => LayoutScreen[]
   getLayoutCanvasOrigin: () => { x: number; y: number } | null
   getNativeWindowRefs: () => ReadonlyMap<number, SessionWindowRef>

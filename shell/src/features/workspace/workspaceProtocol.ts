@@ -129,6 +129,8 @@ export type WorkspaceState = {
   nextGroupSeq: number
 }
 
+export type WorkspaceSnapshot = WorkspaceState
+
 export type WorkspaceRestoreGroup = {
   id: string
   windowIds: number[]

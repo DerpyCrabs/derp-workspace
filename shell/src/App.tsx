@@ -99,7 +99,7 @@ import {
   workspaceFindMonitorIdentityForTiledWindow,
   workspaceGetTiledZone,
   workspaceIsWindowTiled,
-} from '@/features/workspace/workspaceState'
+} from '@/features/workspace/workspaceSnapshot'
 import type { WorkspaceMutation } from '@/features/workspace/workspaceProtocol'
 import { findMergeTarget, type TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import { createWorkspaceSelectors } from '@/features/workspace/workspaceSelectors'
@@ -282,7 +282,7 @@ function App() {
   const {
     allWindowsMap: compositorWindowsMap,
     windowsList: compositorWindowsList,
-    workspaceState,
+    workspaceSnapshot,
     focusedWindowId,
     shellHostedAppByWindow,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
@@ -573,7 +573,7 @@ function App() {
   } = createSessionRuntime({
     getAllWindowsMap: allWindowsMap,
     getWindowsList: windowsList,
-    getWorkspaceState: workspaceState,
+    getWorkspaceState: workspaceSnapshot,
     getTaskbarScreens: () => taskbarScreens(),
     getLayoutCanvasOrigin: layoutCanvasOrigin,
     getNativeWindowRefs: nativeWindowRefs,
@@ -622,7 +622,7 @@ function App() {
   const sessionPersistenceRuntime = createSessionPersistenceRuntime({
     sessionRestoreSnapshot,
     windows,
-    workspaceState,
+    workspaceSnapshot,
     nativeWindowRefs,
     tilingCfgRev,
     buildSessionSnapshot,
@@ -900,8 +900,8 @@ function App() {
     },
     tabMenuItems: (windowId: number) => {
       const groupId = workspaceGroupIdForWindow(windowId)
-      const split = groupId ? getWorkspaceGroupSplit(workspaceState(), groupId) : undefined
-      const pinned = isWorkspaceWindowPinned(workspaceState(), windowId)
+      const split = groupId ? getWorkspaceGroupSplit(workspaceSnapshot(), groupId) : undefined
+      const pinned = isWorkspaceWindowPinned(workspaceSnapshot(), windowId)
       const items = [
         {
           actionId: pinned ? 'unpin' : 'pin',
@@ -978,7 +978,7 @@ function App() {
     windowsByMonitor,
     taskbarRowsByMonitor,
   } = createWorkspaceSelectors({
-    workspaceState,
+    workspaceSnapshot,
     windowsById: compositorWindowsMap,
     windowsList: compositorWindowsList,
     focusedWindowId,
@@ -1023,7 +1023,7 @@ function App() {
     exitSplitGroupWindow,
     setSplitGroupFraction,
   } = createWorkspaceActions({
-    workspaceState,
+    workspaceSnapshot,
     allWindowsMap,
     workspaceGroups,
     workspaceGroupsById,
@@ -1099,7 +1099,7 @@ function App() {
     const waitForOpenedGroup = () => {
       mergeFrames += 1
       const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
-      const targetGroup = workspaceState().groups.find((group) => group.id === targetGroupId)
+      const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
       if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
         if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
         return
@@ -1115,7 +1115,7 @@ function App() {
       let selectFrames = 0
       const waitForMergedGroup = () => {
         selectFrames += 1
-        const group = workspaceState().groups.find((entry) => entry.id === targetGroupId)
+        const group = workspaceSnapshot().groups.find((entry) => entry.id === targetGroupId)
         if (!group?.windowIds.includes(openedWindowId)) {
           if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
           return
@@ -1138,7 +1138,7 @@ function App() {
     const waitForOpenedGroup = () => {
       mergeFrames += 1
       const openedGroupId = workspaceGroupIdForWindow(openedWindowId)
-      const targetGroup = workspaceState().groups.find((group) => group.id === targetGroupId)
+      const targetGroup = workspaceSnapshot().groups.find((group) => group.id === targetGroupId)
       if (!allWindowsMap().has(openedWindowId) || !openedGroupId || !targetGroup) {
         if (mergeFrames < 120) requestAnimationFrame(waitForOpenedGroup)
         return
@@ -1154,7 +1154,7 @@ function App() {
       let selectFrames = 0
       const waitForMergedGroup = () => {
         selectFrames += 1
-        const group = workspaceState().groups.find((entry) => entry.id === targetGroupId)
+        const group = workspaceSnapshot().groups.find((entry) => entry.id === targetGroupId)
         if (!group?.windowIds.includes(openedWindowId)) {
           if (selectFrames < 120) requestAnimationFrame(waitForMergedGroup)
           return
@@ -1211,7 +1211,7 @@ function App() {
     clientY: number,
   ): boolean {
     const canOpen = fileBrowserEntryHasShellTabApp(path, context)
-    const target = canOpen ? findMergeTarget(workspaceState(), 0, clientX, clientY, false) : null
+    const target = canOpen ? findMergeTarget(workspaceSnapshot(), 0, clientX, clientY, false) : null
     setFileTabDropDrag({
       target,
       clientX,
@@ -1233,7 +1233,7 @@ function App() {
     clientY: number,
   ): boolean {
     clearFileBrowserTabDropPreview()
-    const target = findMergeTarget(workspaceState(), 0, clientX, clientY, false)
+    const target = findMergeTarget(workspaceSnapshot(), 0, clientX, clientY, false)
     if (!target) return false
     return openFileBrowserEntryInWorkspaceTarget(path, context, target)
   }
@@ -1381,7 +1381,7 @@ function App() {
   })
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({
-    getWorkspaceState: workspaceState,
+    getWorkspaceState: workspaceSnapshot,
     getAllWindowsMap: allWindowsMap,
     getWindowsByMonitor: windowsByMonitor,
     getTaskbarRowsByMonitor: taskbarRowsByMonitor,
@@ -1491,14 +1491,14 @@ function App() {
     sendClearPreTileGeometry: workspaceLayoutBridge.sendClearPreTileGeometry,
     workspacePreTileSnapshot: workspaceLayoutBridge.workspacePreTileSnapshot,
     workspaceTiledRectMap: workspaceLayoutBridge.workspaceTiledRectMap,
-    workspaceTiledZone: (windowId) => workspaceGetTiledZone(workspaceState(), windowId) ?? null,
-    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
+    workspaceTiledZone: (windowId) => workspaceGetTiledZone(workspaceSnapshot(), windowId) ?? null,
+    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceSnapshot(), windowId),
     workspaceFindMonitorForTiledWindow: (windowId) => {
-      const outputName = workspaceFindMonitorForTiledWindow(workspaceState(), windowId)
+      const outputName = workspaceFindMonitorForTiledWindow(workspaceSnapshot(), windowId)
       if (outputName === null) return null
       return {
         outputName,
-        outputId: workspaceFindMonitorIdentityForTiledWindow(workspaceState(), windowId),
+        outputId: workspaceFindMonitorIdentityForTiledWindow(workspaceSnapshot(), windowId),
       }
     },
     scheduleExclusionZonesSync,
@@ -1512,7 +1512,7 @@ function App() {
   })
 
   const workspaceChrome = createWorkspaceChrome({
-    workspaceState,
+    workspaceSnapshot,
     workspaceGroupsById,
     workspaceGroups,
     activeWorkspaceGroupId,
@@ -1549,8 +1549,8 @@ function App() {
     applyWindowDrop,
     detachGroupWindow,
     workspaceGroupIdForWindow,
-    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceState(), windowId),
-    isWorkspaceWindowPinned: (windowId) => isWorkspaceWindowPinned(workspaceState(), windowId),
+    isWorkspaceWindowTiled: (windowId) => workspaceIsWindowTiled(workspaceSnapshot(), windowId),
+    isWorkspaceWindowPinned: (windowId) => isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
     openSnapAssistPicker: shellWindowGestureRuntime.openSnapAssistPicker,
     shellContextOpenTabMenu: shellContextMenus.openTabMenu,
     shellContextHideMenu: shellContextMenus.hideContextMenu,
@@ -1739,7 +1739,7 @@ function App() {
         getFloatingLayers: floatingLayers.layers,
         getTabDragTarget: e2eTabDragTarget,
         projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
-        isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceState(), windowId),
+        isWorkspaceWindowPinned: (windowId: number) => isWorkspaceWindowPinned(workspaceSnapshot(), windowId),
         openShellTestWindow,
         resetTilingConfig: () => {
           resetPersistedTilingConfig()
@@ -1789,7 +1789,7 @@ function App() {
         screenDraftRows: liveScreenRows,
         outputGeom,
         reserveTaskbarForMon: workspaceLayoutBridge.reserveTaskbarForMon,
-        workspaceState,
+        workspaceSnapshot,
         occupiedSnapZonesOnMonitor: workspaceLayoutBridge.occupiedSnapZonesOnMonitor,
         sendSetMonitorTile: workspaceLayoutBridge.sendSetMonitorTile,
         bumpSnapChrome,

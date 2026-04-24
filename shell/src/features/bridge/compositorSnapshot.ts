@@ -1,5 +1,5 @@
 import type { DerpShellDetail } from '@/host/appWindowState'
-import { normalizeWorkspaceState } from '@/features/workspace/workspaceState'
+import { normalizeWorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 
 const MSG_OUTPUT_GEOMETRY = 5
 const MSG_FOCUS_CHANGED = 10
@@ -402,7 +402,7 @@ function decodeWorkspaceState(bytes: Uint8Array, view: DataView, offset: number)
     return {
       type: 'workspace_state',
       revision,
-      state: normalizeWorkspaceState(JSON.parse(json)),
+      state: normalizeWorkspaceSnapshot(JSON.parse(json)),
     }
   } catch {
     return null
@@ -628,7 +628,7 @@ function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: n
   return {
     type: 'workspace_state',
     revision,
-    state: normalizeWorkspaceState({
+    state: normalizeWorkspaceSnapshot({
       groups,
       activeTabByGroupId,
       pinnedWindowIds,

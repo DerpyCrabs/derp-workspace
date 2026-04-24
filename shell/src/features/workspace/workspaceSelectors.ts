@@ -3,7 +3,7 @@ import { matchDesktopApplication, type DesktopAppMatchCandidate } from '@/featur
 import { buildTaskbarGroupRows, type TaskbarGroupRow } from '@/features/taskbar/taskbarGroups'
 import { resolveGroupVisibleWindowId } from '@/features/workspace/tabGroupOps'
 import type { DerpWindow } from '@/host/appWindowState'
-import { getWorkspaceGroupSplit, type WorkspaceState } from './workspaceState'
+import { getWorkspaceGroupSplit, type WorkspaceSnapshot } from './workspaceSnapshot'
 
 export type WorkspaceGroupModel = {
   id: string
@@ -41,13 +41,13 @@ function sameWindowIds(left: readonly number[], right: readonly number[]): boole
 }
 
 export function buildWorkspaceGroups(
-  workspaceState: WorkspaceState,
+  workspaceSnapshot: WorkspaceSnapshot,
   windowsById: ReadonlyMap<number, DerpWindow>,
   previous: WorkspaceGroupModel[] = [],
 ): WorkspaceGroupModel[] {
   const previousById = new Map(previous.map((group) => [group.id, group]))
   const groups: WorkspaceGroupModel[] = []
-  for (const group of workspaceState.groups) {
+  for (const group of workspaceSnapshot.groups) {
     const members = group.windowIds
       .map((windowId) => windowsById.get(windowId))
       .filter((window): window is DerpWindow => !!window)
@@ -55,15 +55,15 @@ export function buildWorkspaceGroups(
     const compositorVisibleMembers = members.filter((window) => window.workspace_visible)
     const visibleMemberIds = compositorVisibleMembers.map((window) => window.window_id)
     const visibleWindowId =
-      visibleMemberIds.find((windowId) => windowId === resolveGroupVisibleWindowId(workspaceState, group.id, members)) ??
+      visibleMemberIds.find((windowId) => windowId === resolveGroupVisibleWindowId(workspaceSnapshot, group.id, members)) ??
       visibleMemberIds[0] ??
-      resolveGroupVisibleWindowId(workspaceState, group.id, members)
+      resolveGroupVisibleWindowId(workspaceSnapshot, group.id, members)
     const visibleWindow =
       members.find((window) => window.window_id === visibleWindowId) ??
       members.find((window) => !window.minimized) ??
       members[0]
     if (!visibleWindow) continue
-    const split = getWorkspaceGroupSplit(workspaceState, group.id)
+    const split = getWorkspaceGroupSplit(workspaceSnapshot, group.id)
     const splitLeftWindow =
       split ? members.find((window) => window.window_id === split.leftWindowId) ?? null : null
     const visibleWindowIds = visibleMemberIds.length > 0
@@ -130,7 +130,7 @@ export function buildWindowsByMonitor(
 }
 
 export function buildTaskbarRowsByMonitor(
-  workspaceState: WorkspaceState,
+  workspaceSnapshot: WorkspaceSnapshot,
   groups: readonly WorkspaceGroupModel[],
   apps: readonly DesktopAppMatchCandidate[],
   fallbackMonitorKey: string,
@@ -143,15 +143,15 @@ export function buildTaskbarRowsByMonitor(
   }
   const groupsById = new Map(groups.map((group) => [group.id, group]))
   const groupsByMonitor = new Map<string, WorkspaceGroupModel[]>()
-  for (const workspaceGroup of workspaceState.groups) {
+  for (const workspaceGroup of workspaceSnapshot.groups) {
     const group = groupsById.get(workspaceGroup.id)
     if (!group) continue
     const windowKey = String(group.visibleWindow.window_id)
     const key =
       group.visibleWindow.output_name ||
-      workspaceState.monitorNameByWindowId?.[windowKey] ||
+      workspaceSnapshot.monitorNameByWindowId?.[windowKey] ||
       group.visibleWindow.output_id ||
-      workspaceState.monitorIdByWindowId?.[windowKey] ||
+      workspaceSnapshot.monitorIdByWindowId?.[windowKey] ||
       fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)
@@ -211,7 +211,7 @@ export function buildTaskbarRowsByMonitor(
 }
 
 type CreateWorkspaceSelectorsOptions = {
-  workspaceState: Accessor<WorkspaceState>
+  workspaceSnapshot: Accessor<WorkspaceSnapshot>
   windowsById: Accessor<ReadonlyMap<number, DerpWindow>>
   windowsList: Accessor<readonly DerpWindow[]>
   focusedWindowId: Accessor<number | null>
@@ -235,7 +235,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   let previousWorkspaceGroups: WorkspaceGroupModel[] = []
   const workspaceGroups = createMemo(() => {
     previousWorkspaceGroups = buildWorkspaceGroups(
-      options.workspaceState(),
+      options.workspaceSnapshot(),
       options.windowsById(),
       previousWorkspaceGroups,
     )
@@ -251,7 +251,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   })
 
   const workspaceGroupIdByWindowId = createMemo(() => {
-    const derived = options.workspaceState().groupIdByWindowId
+    const derived = options.workspaceSnapshot().groupIdByWindowId
     if (derived && typeof derived === 'object') {
       const map = new Map<number, string>()
       for (const [windowId, groupId] of Object.entries(derived)) {
@@ -264,7 +264,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
       return map
     }
     const map = new Map<number, string>()
-    for (const group of options.workspaceState().groups) {
+    for (const group of options.workspaceSnapshot().groups) {
       for (const windowId of group.windowIds) {
         map.set(windowId, group.id)
       }
@@ -300,7 +300,7 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   let previousTaskbarRowsByMonitor: ReadonlyMap<string, readonly TaskbarWorkspaceRow[]> = new Map()
   const taskbarRowsByMonitor = createMemo(() => {
     previousTaskbarRowsByMonitor = buildTaskbarRowsByMonitor(
-      options.workspaceState(),
+      options.workspaceSnapshot(),
       workspaceGroups(),
       options.desktopApps(),
       options.fallbackMonitorKey(),

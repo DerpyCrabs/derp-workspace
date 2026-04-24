@@ -7,10 +7,10 @@ import {
   type DerpWindow,
 } from '@/host/appWindowState'
 import {
-  createEmptyWorkspaceState,
-  workspaceStatesEqual,
-  type WorkspaceState,
-} from '@/features/workspace/workspaceState'
+  createEmptyWorkspaceSnapshot,
+  workspaceSnapshotsEqual,
+  type WorkspaceSnapshot,
+} from '@/features/workspace/workspaceSnapshot'
 
 export type CompositorFollowup = {
   flushWindows?: boolean
@@ -38,7 +38,7 @@ export type CompositorApplyResult = {
 }
 
 type CreateCompositorModelOptions = {
-  initialWorkspaceState?: WorkspaceState
+  initialWorkspaceState?: WorkspaceSnapshot
 }
 
 type ApplyCompositorDetailOptions = {
@@ -62,7 +62,7 @@ function requestRecovery(
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
-  workspaceState?: { revision: number; state: WorkspaceState }
+  workspaceSnapshot?: { revision: number; state: WorkspaceSnapshot }
   shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
 }
 
@@ -114,7 +114,7 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
       continue
     }
     if (detail.type === 'workspace_state') {
-      next.workspaceState = {
+      next.workspaceSnapshot = {
         revision: coerceRevision(detail.revision),
         state: detail.state,
       }
@@ -138,8 +138,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
   const [windowsRevision, setWindowsRevision] = createSignal(-1)
-  const [workspaceState, setWorkspaceState] = createSignal<WorkspaceState>(
-    options.initialWorkspaceState ?? createEmptyWorkspaceState(),
+  const [workspaceSnapshot, setWorkspaceSnapshot] = createSignal<WorkspaceSnapshot>(
+    options.initialWorkspaceState ?? createEmptyWorkspaceSnapshot(),
   )
   const [workspaceRevision, setWorkspaceRevision] = createSignal(-1)
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
@@ -178,11 +178,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
       }
     }
-    if (authoritative.workspaceState !== undefined) {
-      if (authoritative.workspaceState.revision !== workspaceRevision()) {
-        const nextState = authoritative.workspaceState.state
-        setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
-        setWorkspaceRevision(authoritative.workspaceState.revision)
+    if (authoritative.workspaceSnapshot !== undefined) {
+      if (authoritative.workspaceSnapshot.revision !== workspaceRevision()) {
+        const nextState = authoritative.workspaceSnapshot.state
+        setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
+        setWorkspaceRevision(authoritative.workspaceSnapshot.revision)
       }
     }
     if (authoritative.shellHostedAppByWindow !== undefined) {
@@ -239,7 +239,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const revision = coerceRevision(detail.revision)
       if (revision !== workspaceRevision()) {
         const nextState = detail.state
-        setWorkspaceState((prev) => (workspaceStatesEqual(prev, nextState) ? prev : nextState))
+        setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
         setWorkspaceRevision(revision)
       }
       return {
@@ -346,8 +346,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     allWindowsMap,
     windowsListIds,
     windowsList,
-    workspaceState,
-    setWorkspaceState,
+    workspaceSnapshot,
+    setWorkspaceSnapshot,
     focusedWindowId: liveFocusedWindowId,
     setFocusedWindowId,
     shellHostedAppByWindow,

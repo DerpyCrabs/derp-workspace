@@ -58,7 +58,7 @@ function actionsFor(
   const workspaceGroups = group ? [group] : []
   const workspaceGroupsById = new Map(workspaceGroups.map((entry) => [entry.id, entry]))
   return createWorkspaceActions({
-    workspaceState: () => workspaceStateValue,
+    workspaceSnapshot: () => workspaceStateValue,
     allWindowsMap: () => new Map<number, DerpWindow>(),
     workspaceGroups: () => workspaceGroups,
     workspaceGroupsById: () => workspaceGroupsById,
@@ -219,7 +219,7 @@ describe('activateTaskbarGroup', () => {
     const activateTaskbarWindowViaShell = vi.fn()
     const activateWindowViaShell = vi.fn()
     const actions = createWorkspaceActions({
-      workspaceState: () => workspaceStateValue,
+      workspaceSnapshot: () => workspaceStateValue,
       allWindowsMap: () => new Map<number, DerpWindow>([
         [1, a],
         [2, b],
@@ -319,7 +319,7 @@ describe('activateTaskbarGroup', () => {
     const activateTaskbarWindowViaShell = vi.fn()
     const activateWindowViaShell = vi.fn()
     const actions = createWorkspaceActions({
-      workspaceState: () => workspaceStateValue,
+      workspaceSnapshot: () => workspaceStateValue,
       allWindowsMap: () => new Map<number, DerpWindow>([
         [1, a],
         [2, b],

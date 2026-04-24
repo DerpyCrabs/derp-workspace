@@ -18,7 +18,7 @@ type SessionPersistenceBridgeOptions = {
   savedSessionAvailable: Accessor<boolean>
   hasSeenCompositorWindowSync: Accessor<boolean>
   windows: Accessor<ReadonlyMap<number, unknown>>
-  workspaceState: Accessor<unknown>
+  workspaceSnapshot: Accessor<unknown>
   nativeWindowRefs: Accessor<ReadonlyMap<number, SessionWindowRef>>
   tilingCfgRev: Accessor<number>
   shellWindowStateRev: Accessor<number>
@@ -207,7 +207,7 @@ export function createSessionPersistenceBridge(options: SessionPersistenceBridge
     options.sessionPersistenceReady()
     options.sessionRestoreSnapshot()
     options.windows()
-    options.workspaceState()
+    options.workspaceSnapshot()
     options.nativeWindowRefs()
     options.tilingCfgRev()
     options.shellWindowStateRev()

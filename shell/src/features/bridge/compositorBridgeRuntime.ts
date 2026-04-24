@@ -18,7 +18,7 @@ import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/ho
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
-import type { WorkspaceState } from '@/features/workspace/workspaceState'
+import type { WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 
 type CompositorFollowup = {
   syncExclusion?: boolean
@@ -138,7 +138,7 @@ type CompositorBridgeRuntimeOptions = {
   screenDraftRows: () => LayoutScreen[]
   outputGeom: () => { w: number; h: number } | null
   reserveTaskbarForMon: (mon: LayoutScreen) => boolean
-  workspaceState: () => WorkspaceState
+  workspaceSnapshot: () => WorkspaceSnapshot
   occupiedSnapZonesOnMonitor: (mon: LayoutScreen, excludeWindowId: number) => { zone: SnapZone; bounds: TileRect }[]
   sendSetMonitorTile: (windowId: number, outputName: string, zone: SnapZone, bounds: TileRect, outputId?: string | null) => boolean
   bumpSnapChrome: () => void

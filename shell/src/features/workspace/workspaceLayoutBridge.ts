@@ -5,8 +5,8 @@ import type { LayoutScreen } from '@/host/types'
 import {
   workspaceGetPreTileGeometry,
   workspaceMonitorTileEntries,
-  type WorkspaceState,
-} from './workspaceState'
+  type WorkspaceSnapshot,
+} from './workspaceSnapshot'
 import type { WorkspaceMutation } from './workspaceProtocol'
 
 type FollowupOptions = {
@@ -16,7 +16,7 @@ type FollowupOptions = {
 }
 
 type WorkspaceLayoutBridgeOptions = {
-  getWorkspaceState: () => WorkspaceState
+  getWorkspaceState: () => WorkspaceSnapshot
   getAllWindowsMap: () => ReadonlyMap<number, DerpWindow>
   getWindowsByMonitor: () => ReadonlyMap<string, readonly DerpWindow[]>
   getTaskbarRowsByMonitor: () => ReadonlyMap<string, TaskbarWindowRow[]>

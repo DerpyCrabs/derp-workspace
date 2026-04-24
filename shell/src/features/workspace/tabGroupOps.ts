@@ -1,4 +1,4 @@
-import { getWorkspaceGroupSplit, type WorkspaceState } from '@/features/workspace/workspaceState'
+import { getWorkspaceGroupSplit, type WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 
 export type GroupWindowLike = {
   window_id: number
@@ -16,7 +16,7 @@ export type TabMergeTarget = {
 const TAB_INSERT_BEFORE_FRACTION = 0.4
 const TAB_DROP_HIT_SLOP_PX = 8
 
-function targetWindowIdForGroup(state: WorkspaceState, groupId: string): number | null {
+function targetWindowIdForGroup(state: WorkspaceSnapshot, groupId: string): number | null {
   const group = state.groups.find((entry) => entry.id === groupId)
   if (!group || group.windowIds.length === 0) return null
   const visible = state.visibleWindowIdByGroupId?.[groupId]
@@ -28,7 +28,7 @@ function targetWindowIdForGroup(state: WorkspaceState, groupId: string): number 
 
 export function tabsInGroup<T extends { window_id: number }>(
   windows: readonly T[],
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
 ): T[] {
   const group = state.groups.find((entry) => entry.id === groupId)
@@ -37,21 +37,21 @@ export function tabsInGroup<T extends { window_id: number }>(
   return group.windowIds.map((windowId) => windowsById.get(windowId)).filter((window): window is T => !!window)
 }
 
-export function isTabPinned(state: WorkspaceState, windowId: number): boolean {
+export function isTabPinned(state: WorkspaceSnapshot, windowId: number): boolean {
   return state.pinnedWindowIds.includes(windowId)
 }
 
-export function splitLeftWindowId(state: WorkspaceState, groupId: string): number | null {
+export function splitLeftWindowId(state: WorkspaceSnapshot, groupId: string): number | null {
   return getWorkspaceGroupSplit(state, groupId)?.leftWindowId ?? null
 }
 
-export function isSplitLeftWindow(state: WorkspaceState, groupId: string, windowId: number): boolean {
+export function isSplitLeftWindow(state: WorkspaceSnapshot, groupId: string, windowId: number): boolean {
   return splitLeftWindowId(state, groupId) === windowId
 }
 
 export function rightTabsInGroup<T extends { window_id: number }>(
   windows: readonly T[],
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
 ): T[] {
   const leftWindowId = splitLeftWindowId(state, groupId)
@@ -61,7 +61,7 @@ export function rightTabsInGroup<T extends { window_id: number }>(
 }
 
 export function leadingPinnedTabCount(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   excludeWindowId?: number,
 ): number {
@@ -77,7 +77,7 @@ export function leadingPinnedTabCount(
 }
 
 export function clampTabInsertIndex(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   insertIndex: number,
   pinned: boolean,
@@ -91,7 +91,7 @@ export function clampTabInsertIndex(
   return pinned ? Math.min(clamped, pinnedCount) : Math.max(clamped, pinnedCount)
 }
 
-function parseDropSlotValue(value: string | null, state: WorkspaceState): TabMergeTarget | null {
+function parseDropSlotValue(value: string | null, state: WorkspaceSnapshot): TabMergeTarget | null {
   if (!value) return null
   const split = value.lastIndexOf(':')
   if (split <= 0 || split >= value.length - 1) return null
@@ -104,7 +104,7 @@ function parseDropSlotValue(value: string | null, state: WorkspaceState): TabMer
 }
 
 function mergeTargetFromDropSlotAtPoint(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   draggedWindowId: number,
   clientX: number,
   clientY: number,
@@ -149,7 +149,7 @@ function rightStripSlotAtPoint(strip: Element, clientX: number): number {
 }
 
 function mergeTargetFromTabStripAtPoint(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   draggedWindowId: number,
   clientX: number,
   clientY: number,
@@ -196,7 +196,7 @@ function mergeTargetFromTabStripAtPoint(
 }
 
 function mergeTargetFromTabAtPoint(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   draggedWindowId: number,
   clientX: number,
   clientY: number,
@@ -229,7 +229,7 @@ function mergeTargetFromTabAtPoint(
 
 export function mergeTargetFromElement(
   element: Element | null,
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   draggedWindowId: number,
   pointerClientX: number,
 ): TabMergeTarget | null {
@@ -268,7 +268,7 @@ export function mergeTargetFromElement(
 }
 
 export function findMergeTarget(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   draggedWindowId: number,
   clientX: number,
   clientY: number,
@@ -316,7 +316,7 @@ export function findMergeTarget(
 }
 
 export function resolveGroupVisibleWindowId(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   windows: readonly GroupWindowLike[],
 ): number | null {
@@ -346,7 +346,7 @@ export function resolveGroupVisibleWindowId(
 }
 
 export function nextActiveWindowAfterRemoval(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   removedWindowId: number,
 ): number | null {
@@ -369,7 +369,7 @@ export function nextActiveWindowAfterRemoval(
   return remaining[nextIndex] ?? remaining[remaining.length - 1] ?? null
 }
 
-export function insertIndexAfterAllRightTabs(state: WorkspaceState, groupId: string): number {
+export function insertIndexAfterAllRightTabs(state: WorkspaceSnapshot, groupId: string): number {
   const group = state.groups.find((entry) => entry.id === groupId)
   if (!group) return 0
   const leftWindowId = splitLeftWindowId(state, groupId)
@@ -382,7 +382,7 @@ export function insertIndexAfterAllRightTabs(state: WorkspaceState, groupId: str
 }
 
 export function rightStripIndexToGroupInsertIndex(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   rightStripIndex: number,
 ): number {
@@ -398,7 +398,7 @@ export function rightStripIndexToGroupInsertIndex(
 }
 
 export function mergeInsertIndexToRightStripSlot(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   fullGroupInsertIndex: number,
 ): number {
@@ -418,7 +418,7 @@ export function windowLabel(window: Pick<GroupWindowLike, 'window_id' | 'title' 
 }
 
 export function groupTaskbarLabel(
-  state: WorkspaceState,
+  state: WorkspaceSnapshot,
   groupId: string,
   windows: readonly GroupWindowLike[],
 ): string {

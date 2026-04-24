@@ -1,6 +1,6 @@
 import { pickScreenForWindow, type CanvasOrigin } from '@/lib/shellCoords'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
-import { groupIdForWindow, type WorkspaceState } from '@/features/workspace/workspaceState'
+import { groupIdForWindow, type WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 import type { LayoutScreen } from './types'
 
 export type DerpShellDetail = ({
@@ -75,7 +75,7 @@ export type DerpShellDetail = ({
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
   | { type: 'window_list'; revision?: number; windows: unknown[] }
-  | { type: 'workspace_state'; revision?: number; state: WorkspaceState }
+  | { type: 'workspace_state'; revision?: number; state: WorkspaceSnapshot }
   | { type: 'shell_hosted_app_state'; revision?: number; state: { byWindowId?: Record<string, unknown> } }
   | {
       type: 'interaction_state'
@@ -172,7 +172,7 @@ export type DerpWindow = {
   workspace_visible: boolean
 }
 
-export function workspaceGroupWindowIds(state: WorkspaceState, windowId: number): number[] {
+export function workspaceGroupWindowIds(state: WorkspaceSnapshot, windowId: number): number[] {
   const groupId = groupIdForWindow(state, windowId)
   return groupId ? state.groups.find((group) => group.id === groupId)?.windowIds ?? [windowId] : [windowId]
 }

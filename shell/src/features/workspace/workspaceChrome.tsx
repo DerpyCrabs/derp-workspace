@@ -3,7 +3,7 @@ import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
 import { ShellWindowFrame, type ShellWindowModel } from '@/host/ShellWindowFrame'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { findMergeTarget, splitLeftWindowId, type TabMergeTarget } from './tabGroupOps'
-import { clampWorkspaceSplitPaneFraction, type WorkspaceState } from './workspaceState'
+import { clampWorkspaceSplitPaneFraction, type WorkspaceSnapshot } from './workspaceSnapshot'
 import type { WorkspaceGroupModel } from './workspaceSelectors'
 import { isShellTestWindowId, SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/backedShellWindows'
 import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED, type ShellUiMeasureEnv } from '@/features/shell-ui/shellUiWindows'
@@ -78,7 +78,7 @@ const WORKSPACE_SPLIT_MIN_PANE_PX = 160
 const WORKSPACE_SPLIT_MIN_HEIGHT_PX = 140
 
 type WorkspaceChromeOptions = {
-  workspaceState: Accessor<WorkspaceState>
+  workspaceSnapshot: Accessor<WorkspaceSnapshot>
   workspaceGroupsById: Accessor<ReadonlyMap<string, WorkspaceGroupModel>>
   workspaceGroups: Accessor<readonly WorkspaceGroupModel[]>
   activeWorkspaceGroupId: Accessor<string | null>
@@ -220,7 +220,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     overrideGroupRect?: SplitGroupRect,
   ): SplitLayoutRects | null {
     if (!group.splitLeftWindow || group.splitPaneFraction === null) return null
-    const stateGroup = options.workspaceState().groups.find((entry) => entry.id === group.id)
+    const stateGroup = options.workspaceSnapshot().groups.find((entry) => entry.id === group.id)
     if (!stateGroup) return null
     const rightWindowIds = stateGroup.windowIds.filter((windowId) => windowId !== group.splitLeftWindowId)
     if (rightWindowIds.length === 0) return null
@@ -308,7 +308,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     clientY: number,
     ignoreDraggedWindowFrame: boolean,
   ) {
-    const state = options.workspaceState()
+    const state = options.workspaceSnapshot()
     const direct = findMergeTarget(state, windowId, clientX, clientY, ignoreDraggedWindowFrame)
     if (direct) return direct
     const main = options.getMainRef()
@@ -375,7 +375,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     if (button !== 0) return
     const sourceGroupId = options.workspaceGroupIdForWindow(windowId)
     if (!sourceGroupId) return
-    if (splitLeftWindowId(options.workspaceState(), sourceGroupId) === windowId) return
+    if (splitLeftWindowId(options.workspaceSnapshot(), sourceGroupId) === windowId) return
     const sourceGroup = options.workspaceGroupsById().get(sourceGroupId) ?? null
     if (sourceGroup && sourceGroup.members.length <= 1) {
       options.beginShellWindowMove(windowId, clientX, clientY)
@@ -543,7 +543,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const target = dragging
       ? findTabMergeTargetFromPointer(prev.windowId, event.clientX, event.clientY, ignoreDraggedWindowFrame)
       : null
-    const state = options.workspaceState()
+    const state = options.workspaceSnapshot()
     const splitLeftTabEl =
       typeof document !== 'undefined'
         ? document.querySelector(
