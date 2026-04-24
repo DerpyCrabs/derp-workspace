@@ -8,6 +8,7 @@ import {
 } from '@/host/appWindowState'
 import {
   createEmptyWorkspaceSnapshot,
+  normalizeWorkspaceSnapshot,
   workspaceSnapshotsEqual,
   type WorkspaceSnapshot,
 } from '@/features/workspace/workspaceSnapshot'
@@ -199,7 +200,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
     if (authoritative.workspaceSnapshot !== undefined) {
       if (authoritative.workspaceSnapshot.revision !== workspaceRevision()) {
-        const nextState = authoritative.workspaceSnapshot.state
+        const nextState = normalizeWorkspaceSnapshot(authoritative.workspaceSnapshot.state)
         setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
         setWorkspaceRevision(authoritative.workspaceSnapshot.revision)
       }
@@ -213,6 +214,22 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     const nextFocusedWindowId = authoritative.focusedWindowId
     if (nextFocusedWindowId !== undefined) {
       setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
+    }
+    for (const detail of details) {
+      if (
+        detail.type !== 'window_geometry' &&
+        detail.type !== 'window_metadata' &&
+        detail.type !== 'window_state' &&
+        detail.type !== 'window_mapped' &&
+        detail.type !== 'window_unmapped'
+      ) {
+        continue
+      }
+      setWindows((map) => applyDetail(map, detail))
+      if (detail.type === 'window_unmapped') {
+        const windowId = coerceShellWindowId(detail.window_id)
+        if (windowId !== null) setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+      }
     }
   }
 
@@ -272,7 +289,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (detail.type === 'workspace_state') {
       const revision = coerceRevision(detail.revision)
       if (revision !== workspaceRevision()) {
-        const nextState = detail.state
+        const nextState = normalizeWorkspaceSnapshot(detail.state)
         setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
         setWorkspaceRevision(revision)
       }

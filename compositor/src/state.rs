@@ -2616,7 +2616,7 @@ impl CompositorState {
             shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
             | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
             | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
             | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
             | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
             | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
@@ -2628,6 +2628,11 @@ impl CompositorState {
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
                 messages.push(self.shell_window_order_message());
                 messages.push(msg.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+                if let Some(workspace_state) = self.workspace_state_binary_message() {
+                    messages.push(workspace_state);
+                }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
                 messages.push(msg.clone());
@@ -2645,7 +2650,7 @@ impl CompositorState {
             _ => {}
         }
         if workspace_changed {
-            if let Some(workspace_state) = self.workspace_state_message() {
+            if let Some(workspace_state) = self.workspace_state_binary_message() {
                 messages.push(workspace_state);
             }
         }
@@ -9163,7 +9168,7 @@ impl CompositorState {
         self.shell_send_to_cef(msg);
     }
 
-    fn workspace_state_message(&self) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+    fn workspace_state_for_shell(&self) -> WorkspaceState {
         let mut state = self.workspace_state.clone();
         for monitor in &mut state.monitor_tiles {
             if monitor.output_id.is_empty() {
@@ -9191,6 +9196,24 @@ impl CompositorState {
                 layout.output_name = output_name;
             }
         }
+        state
+    }
+
+    fn workspace_state_binary_message(
+        &self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let state = self.workspace_state_for_shell();
+        let state = crate::cef::shell_snapshot::encode_workspace_state_binary_payload(&state)?;
+        Some(
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary {
+                revision: self.shell_workspace_revision,
+                state,
+            },
+        )
+    }
+
+    fn workspace_state_message(&self) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        let state = self.workspace_state_for_shell();
         let Ok(state_json) = state.to_json() else {
             return None;
         };

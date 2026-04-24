@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { decodeCompositorSnapshot } from './compositorSnapshot'
 
 const encoder = new TextEncoder()
+const DOMAIN_COUNT = 13
 
 function u32(value: number): number[] {
   return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]
@@ -34,10 +35,14 @@ function frame(body: number[]): number[] {
 
 function domainRevisions(values: number[] = []): number[] {
   const out: number[] = []
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < DOMAIN_COUNT; index += 1) {
     out.push(...u64(BigInt(values[index] ?? 1)))
   }
   return out
+}
+
+function expectedDomainRevisions(values: number[] = []): number[] {
+  return Array.from({ length: DOMAIN_COUNT }, (_, index) => values[index] ?? 1)
 }
 
 describe('decodeCompositorSnapshot', () => {
@@ -111,7 +116,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decoded).toEqual({
       sequence: 2,
       domainFlags: 7,
-      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      domainRevisions: expectedDomainRevisions(),
       details: [
         {
           type: 'output_geometry',
@@ -194,7 +199,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      domainRevisions: expectedDomainRevisions(),
       details: [
         {
           type: 'output_layout',
@@ -247,7 +252,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 1 << 9,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
       details: [
         {
           type: 'window_order',
@@ -256,6 +261,134 @@ describe('decodeCompositorSnapshot', () => {
             { window_id: 7, stack_z: 12 },
             { window_id: 9, stack_z: 13 },
           ],
+        },
+      ],
+    })
+  })
+
+  it('decodes hot window geometry snapshots separately from the window list', () => {
+    const outputName = bytesForString('DP-1')
+    const geometry = frame([
+      ...u32(8),
+      ...u32(7),
+      ...u32(70),
+      ...i32(11),
+      ...i32(12),
+      ...i32(640),
+      ...i32(480),
+      ...u32(1),
+      ...u32(0),
+      ...u32(1),
+      ...u32(outputName.length),
+      ...outputName,
+    ])
+    const payload = [
+      ...domainRevisions([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]),
+      ...geometry,
+    ]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(0),
+      ...u32(payload.length),
+      ...u32(1 << 10),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      domainFlags: 1 << 10,
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]),
+      details: [
+        {
+          type: 'window_geometry',
+          window_id: 7,
+          surface_id: 70,
+          x: 11,
+          y: 12,
+          width: 640,
+          height: 480,
+          output_id: '',
+          output_name: 'DP-1',
+          maximized: true,
+          fullscreen: false,
+        },
+      ],
+    })
+  })
+
+  it('decodes binary workspace state without derived wire fields', () => {
+    const groupId = bytesForString('group-1')
+    const outputName = bytesForString('DP-1')
+    const zone = bytesForString('left')
+    const workspace = frame([
+      ...u32(62),
+      ...u64(41n),
+      ...u32(1),
+      ...u32(groupId.length),
+      ...groupId,
+      ...u32(1),
+      ...u32(7),
+      ...u32(1),
+      ...u32(groupId.length),
+      ...groupId,
+      ...u32(7),
+      ...u32(0),
+      ...u32(0),
+      ...u32(1),
+      ...u32(0),
+      ...u32(outputName.length),
+      ...outputName,
+      ...u32(1),
+      ...u32(7),
+      ...u32(zone.length),
+      ...zone,
+      ...i32(0),
+      ...i32(0),
+      ...i32(100),
+      ...i32(200),
+      ...u32(0),
+      ...u32(0),
+      ...u32(2),
+    ])
+    const payload = [...domainRevisions([0, 0, 0, 0, 5]), ...workspace]
+    const bytes = new Uint8Array([
+      ...u32(0x44525053),
+      ...u32(0),
+      ...u32(payload.length),
+      ...u32(1 << 4),
+      ...u64(2n),
+      ...u64(0n),
+      ...payload,
+    ])
+
+    expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
+      sequence: 2,
+      domainFlags: 1 << 4,
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 5]),
+      details: [
+        {
+          type: 'workspace_state',
+          revision: 41,
+          state: {
+            groups: [{ id: 'group-1', windowIds: [7] }],
+            activeTabByGroupId: { 'group-1': 7 },
+            pinnedWindowIds: [],
+            splitByGroupId: {},
+            monitorTiles: [
+              {
+                outputName: 'DP-1',
+                entries: [{ windowId: 7, zone: 'left', bounds: { x: 0, y: 0, width: 100, height: 200 } }],
+              },
+            ],
+            monitorLayouts: [],
+            preTileGeometry: [],
+            groupIdByWindowId: { '7': 'group-1' },
+            visibleWindowIdByGroupId: { 'group-1': 7 },
+            monitorNameByWindowId: { '7': 'DP-1' },
+            nextGroupSeq: 2,
+          },
         },
       ],
     })
@@ -296,7 +429,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1],
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 0, 0, 1]),
       details: [
         {
           type: 'interaction_state',
@@ -344,7 +477,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 0, 0, 0, 1]),
       details: [
         {
           type: 'native_drag_preview',
@@ -377,7 +510,7 @@ describe('decodeCompositorSnapshot', () => {
     expect(decodeCompositorSnapshot(bytes.buffer)).toEqual({
       sequence: 2,
       domainFlags: 0,
-      domainRevisions: [0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+      domainRevisions: expectedDomainRevisions([0, 0, 0, 0, 0, 0, 0, 1]),
       details: [
         {
           type: 'native_drag_preview',

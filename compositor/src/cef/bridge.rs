@@ -40,6 +40,7 @@ fn push_pending_message(
         | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
         | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
         | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
         | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
         | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
             let keep = std::mem::discriminant(msg);

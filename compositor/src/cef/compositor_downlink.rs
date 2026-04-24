@@ -563,6 +563,7 @@ fn apply_message(
                 message_snapshot_epoch,
             ));
         }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {}
         shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {
             revision,
             state_json,

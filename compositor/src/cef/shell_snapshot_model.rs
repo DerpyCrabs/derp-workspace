@@ -6,6 +6,9 @@ pub(crate) struct ShellSnapshotModel {
     output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     window_list_revision: u64,
     window_order_revision: u64,
+    window_geometry_revision: u64,
+    window_metadata_revision: u64,
+    window_state_revision: u64,
     window_rows_by_id: HashMap<u32, shell_wire::ShellWindowSnapshot>,
     focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
     keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
@@ -26,6 +29,21 @@ impl ShellSnapshotModel {
     fn next_window_order_revision(&mut self) -> u64 {
         self.window_order_revision = self.window_order_revision.wrapping_add(1);
         self.window_order_revision
+    }
+
+    fn next_window_geometry_revision(&mut self) -> u64 {
+        self.window_geometry_revision = self.window_geometry_revision.wrapping_add(1);
+        self.window_geometry_revision
+    }
+
+    fn next_window_metadata_revision(&mut self) -> u64 {
+        self.window_metadata_revision = self.window_metadata_revision.wrapping_add(1);
+        self.window_metadata_revision
+    }
+
+    fn next_window_state_revision(&mut self) -> u64 {
+        self.window_state_revision = self.window_state_revision.wrapping_add(1);
+        self.window_state_revision
     }
 
     fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
@@ -132,11 +150,17 @@ impl ShellSnapshotModel {
                     );
                 }
                 self.next_window_list_revision();
+                self.next_window_geometry_revision();
+                self.next_window_metadata_revision();
+                self.next_window_state_revision();
                 self.next_window_order_revision();
             }
             shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
                 if self.window_row_remove(*window_id) {
                     self.next_window_list_revision();
+                    self.next_window_geometry_revision();
+                    self.next_window_metadata_revision();
+                    self.next_window_state_revision();
                     self.next_window_order_revision();
                 }
             }
@@ -164,7 +188,7 @@ impl ShellSnapshotModel {
                     row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
                     row.output_id = output_id.clone();
                     row.output_name = output_name.clone();
-                    self.next_window_list_revision();
+                    self.next_window_geometry_revision();
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
@@ -177,7 +201,7 @@ impl ShellSnapshotModel {
                     row.surface_id = *surface_id;
                     row.title = title.clone();
                     row.app_id = app_id.clone();
-                    self.next_window_list_revision();
+                    self.next_window_metadata_revision();
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::WindowState {
@@ -186,7 +210,7 @@ impl ShellSnapshotModel {
             } => {
                 if let Some(row) = self.window_row_mut(*window_id) {
                     row.minimized = if *minimized { 1 } else { 0 };
-                    self.next_window_list_revision();
+                    self.next_window_state_revision();
                 }
             }
             shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
@@ -196,6 +220,9 @@ impl ShellSnapshotModel {
                 self.keyboard_layout = Some(message.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+                self.workspace_state = Some(message.clone());
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {
                 self.workspace_state = Some(message.clone());
             }
             shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
@@ -244,6 +271,41 @@ impl ShellSnapshotModel {
             revision: self.window_order_revision,
             windows: order,
         });
+        let mut rows: Vec<_> = self.window_rows_by_id.values().cloned().collect();
+        rows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
+        for row in &rows {
+            messages.push(
+                shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                    window_id: row.window_id,
+                    surface_id: row.surface_id,
+                    x: row.x,
+                    y: row.y,
+                    w: row.w,
+                    h: row.h,
+                    maximized: row.maximized != 0,
+                    fullscreen: row.fullscreen != 0,
+                    client_side_decoration: row.client_side_decoration != 0,
+                    output_id: row.output_id.clone(),
+                    output_name: row.output_name.clone(),
+                },
+            );
+        }
+        for row in &rows {
+            messages.push(
+                shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
+                    window_id: row.window_id,
+                    surface_id: row.surface_id,
+                    title: row.title.clone(),
+                    app_id: row.app_id.clone(),
+                },
+            );
+        }
+        for row in &rows {
+            messages.push(shell_wire::DecodedCompositorToShellMessage::WindowState {
+                window_id: row.window_id,
+                minimized: row.minimized != 0,
+            });
+        }
         if let Some(message) = self.focus_changed.clone() {
             messages.push(message);
         }
@@ -284,11 +346,17 @@ pub(crate) fn snapshot_dirty_domains(
             }
             shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
             | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. } => {
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA
+            }
+            shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE
             }
             shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER
@@ -300,6 +368,9 @@ pub(crate) fn snapshot_dirty_domains(
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD
             }
             shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
+                shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
+            }
+            shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {
                 shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
             }
             shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
@@ -351,7 +422,7 @@ mod tests {
         assert_eq!(
             flags,
             shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
-                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE
                 | shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
                 | shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
         );
@@ -403,7 +474,7 @@ mod tests {
             panic!("missing window list");
         };
 
-        assert_eq!(*revision, 2);
+        assert_eq!(*revision, 1);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].window_id, 3);
         assert_eq!(windows[0].surface_id, 31);

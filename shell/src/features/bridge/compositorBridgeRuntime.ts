@@ -204,6 +204,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
   const snapshotDomainWindowOrder = 1 << 9
+  const snapshotDomainWindowGeometry = 1 << 10
+  const snapshotDomainWindowMetadata = 1 << 11
+  const snapshotDomainWindowState = 1 << 12
 
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
@@ -240,6 +243,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         return snapshotDomainWindows
       case 'window_order':
         return snapshotDomainWindowOrder
+      case 'window_geometry':
+        return snapshotDomainWindowGeometry
+      case 'window_metadata':
+        return snapshotDomainWindowMetadata
+      case 'window_state':
+        return snapshotDomainWindowState
       case 'focus_changed':
         return snapshotDomainFocus
       case 'keyboard_layout':

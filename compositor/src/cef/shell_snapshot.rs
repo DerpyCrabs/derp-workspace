@@ -6,6 +6,9 @@ use std::sync::atomic::{fence, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::cef::shell_snapshot_model::{snapshot_dirty_domains, ShellSnapshotModel};
+use crate::session::workspace_model::{
+    WorkspaceMonitorLayoutType, WorkspaceSlotRuleField, WorkspaceSlotRuleOp, WorkspaceState,
+};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -586,6 +589,149 @@ fn rule_op_code(value: Option<&serde_json::Value>) -> u32 {
     }
 }
 
+fn layout_type_code(value: &WorkspaceMonitorLayoutType) -> u32 {
+    match value {
+        WorkspaceMonitorLayoutType::MasterStack => 1,
+        WorkspaceMonitorLayoutType::Columns => 2,
+        WorkspaceMonitorLayoutType::Grid => 3,
+        WorkspaceMonitorLayoutType::CustomAuto => 4,
+        WorkspaceMonitorLayoutType::ManualSnap => 0,
+    }
+}
+
+fn slot_rule_field_code(value: &WorkspaceSlotRuleField) -> u32 {
+    match value {
+        WorkspaceSlotRuleField::Title => 1,
+        WorkspaceSlotRuleField::X11Class => 2,
+        WorkspaceSlotRuleField::X11Instance => 3,
+        WorkspaceSlotRuleField::Kind => 4,
+        WorkspaceSlotRuleField::AppId => 0,
+    }
+}
+
+fn slot_rule_op_code(value: &WorkspaceSlotRuleOp) -> u32 {
+    match value {
+        WorkspaceSlotRuleOp::Contains => 1,
+        WorkspaceSlotRuleOp::StartsWith => 2,
+        WorkspaceSlotRuleOp::Equals => 0,
+    }
+}
+
+fn push_wire_string(out: &mut Vec<u8>, value: &str) -> Option<()> {
+    let bytes = value.as_bytes();
+    out.extend_from_slice(&u32::try_from(bytes.len()).ok()?.to_le_bytes());
+    out.extend_from_slice(bytes);
+    Some(())
+}
+
+pub(crate) fn encode_workspace_state_binary_payload(state: &WorkspaceState) -> Option<Vec<u8>> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&u32::try_from(state.groups.len()).ok()?.to_le_bytes());
+    for group in &state.groups {
+        push_wire_string(&mut body, &group.id)?;
+        body.extend_from_slice(&u32::try_from(group.window_ids.len()).ok()?.to_le_bytes());
+        for window_id in &group.window_ids {
+            body.extend_from_slice(&window_id.to_le_bytes());
+        }
+    }
+    body.extend_from_slice(
+        &u32::try_from(state.active_tab_by_group_id.len())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for (group_id, window_id) in &state.active_tab_by_group_id {
+        push_wire_string(&mut body, group_id)?;
+        body.extend_from_slice(&window_id.to_le_bytes());
+    }
+    body.extend_from_slice(
+        &u32::try_from(state.pinned_window_ids.len())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for window_id in &state.pinned_window_ids {
+        body.extend_from_slice(&window_id.to_le_bytes());
+    }
+    body.extend_from_slice(
+        &u32::try_from(state.split_by_group_id.len())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for (group_id, split) in &state.split_by_group_id {
+        push_wire_string(&mut body, group_id)?;
+        body.extend_from_slice(&split.left_window_id.to_le_bytes());
+        body.extend_from_slice(&split.left_pane_fraction.to_le_bytes());
+    }
+    body.extend_from_slice(&u32::try_from(state.monitor_tiles.len()).ok()?.to_le_bytes());
+    for monitor in &state.monitor_tiles {
+        push_wire_string(&mut body, &monitor.output_id)?;
+        push_wire_string(&mut body, &monitor.output_name)?;
+        body.extend_from_slice(&u32::try_from(monitor.entries.len()).ok()?.to_le_bytes());
+        for entry in &monitor.entries {
+            body.extend_from_slice(&entry.window_id.to_le_bytes());
+            push_wire_string(&mut body, &entry.zone)?;
+            body.extend_from_slice(&entry.bounds.x.to_le_bytes());
+            body.extend_from_slice(&entry.bounds.y.to_le_bytes());
+            body.extend_from_slice(&entry.bounds.width.to_le_bytes());
+            body.extend_from_slice(&entry.bounds.height.to_le_bytes());
+        }
+    }
+    body.extend_from_slice(
+        &u32::try_from(state.monitor_layouts.len())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for layout in &state.monitor_layouts {
+        push_wire_string(&mut body, &layout.output_id)?;
+        push_wire_string(&mut body, &layout.output_name)?;
+        body.extend_from_slice(&layout_type_code(&layout.layout).to_le_bytes());
+        body.extend_from_slice(&layout.params.master_ratio.unwrap_or_default().to_le_bytes());
+        body.extend_from_slice(&layout.params.max_columns.unwrap_or_default().to_le_bytes());
+        push_wire_string(
+            &mut body,
+            layout
+                .params
+                .custom_layout_id
+                .as_deref()
+                .unwrap_or_default(),
+        )?;
+        body.extend_from_slice(
+            &u32::try_from(layout.params.custom_slots.len())
+                .ok()?
+                .to_le_bytes(),
+        );
+        for slot in &layout.params.custom_slots {
+            push_wire_string(&mut body, &slot.slot_id)?;
+            body.extend_from_slice(&slot.x.to_le_bytes());
+            body.extend_from_slice(&slot.y.to_le_bytes());
+            body.extend_from_slice(&slot.width.to_le_bytes());
+            body.extend_from_slice(&slot.height.to_le_bytes());
+            body.extend_from_slice(&u32::try_from(slot.rules.len()).ok()?.to_le_bytes());
+            for rule in &slot.rules {
+                body.extend_from_slice(&slot_rule_field_code(&rule.field).to_le_bytes());
+                body.extend_from_slice(&slot_rule_op_code(&rule.op).to_le_bytes());
+                push_wire_string(&mut body, &rule.value)?;
+            }
+        }
+    }
+    body.extend_from_slice(
+        &u32::try_from(state.pre_tile_geometry.len())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for entry in &state.pre_tile_geometry {
+        body.extend_from_slice(&entry.window_id.to_le_bytes());
+        body.extend_from_slice(&entry.bounds.x.to_le_bytes());
+        body.extend_from_slice(&entry.bounds.y.to_le_bytes());
+        body.extend_from_slice(&entry.bounds.width.to_le_bytes());
+        body.extend_from_slice(&entry.bounds.height.to_le_bytes());
+    }
+    body.extend_from_slice(&state.next_group_seq.to_le_bytes());
+    if body.len() > shell_wire::MAX_WORKSPACE_BINARY_BYTES as usize {
+        return None;
+    }
+    Some(body)
+}
+
 fn encode_workspace_state_binary(revision: u64, state_json: &str) -> Option<Vec<u8>> {
     let root: serde_json::Value = serde_json::from_str(state_json).ok()?;
     let object = root.as_object()?;
@@ -869,6 +1015,13 @@ fn append_snapshot_message(
                     shell_wire::encode_compositor_workspace_state(*revision, state_json)
                 }),
                 "workspace state",
+            )?;
+        }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { revision, state } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_workspace_state_binary(*revision, state),
+                "workspace state binary",
             )?;
         }
         shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState {

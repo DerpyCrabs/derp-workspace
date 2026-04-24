@@ -1968,57 +1968,6 @@ impl WorkspaceState {
     }
 
     pub fn to_json(&self) -> Result<String, String> {
-        let mut value = serde_json::to_value(self)
-            .map_err(|error| format!("serialize workspace state: {error}"))?;
-        let Some(object) = value.as_object_mut() else {
-            return Err("serialize workspace state: expected object".to_string());
-        };
-        let mut group_id_by_window_id = serde_json::Map::new();
-        let mut visible_window_id_by_group_id = serde_json::Map::new();
-        let mut monitor_name_by_window_id = serde_json::Map::new();
-        let mut monitor_id_by_window_id = serde_json::Map::new();
-        for group in &self.groups {
-            for window_id in &group.window_ids {
-                group_id_by_window_id.insert(
-                    window_id.to_string(),
-                    serde_json::Value::String(group.id.clone()),
-                );
-            }
-            if let Some(window_id) = self.visible_window_id_for_group(&group.id) {
-                visible_window_id_by_group_id
-                    .insert(group.id.clone(), serde_json::Value::from(window_id));
-            }
-        }
-        for monitor in &self.monitor_tiles {
-            for entry in &monitor.entries {
-                monitor_name_by_window_id.insert(
-                    entry.window_id.to_string(),
-                    serde_json::Value::String(monitor.output_name.clone()),
-                );
-                if !monitor.output_id.is_empty() {
-                    monitor_id_by_window_id.insert(
-                        entry.window_id.to_string(),
-                        serde_json::Value::String(monitor.output_id.clone()),
-                    );
-                }
-            }
-        }
-        object.insert(
-            "groupIdByWindowId".to_string(),
-            serde_json::Value::Object(group_id_by_window_id),
-        );
-        object.insert(
-            "visibleWindowIdByGroupId".to_string(),
-            serde_json::Value::Object(visible_window_id_by_group_id),
-        );
-        object.insert(
-            "monitorNameByWindowId".to_string(),
-            serde_json::Value::Object(monitor_name_by_window_id),
-        );
-        object.insert(
-            "monitorIdByWindowId".to_string(),
-            serde_json::Value::Object(monitor_id_by_window_id),
-        );
-        serde_json::to_string(&value).map_err(|error| format!("serialize workspace state: {error}"))
+        serde_json::to_string(self).map_err(|error| format!("serialize workspace state: {error}"))
     }
 }

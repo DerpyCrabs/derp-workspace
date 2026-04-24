@@ -152,7 +152,10 @@ pub const SHELL_SNAPSHOT_DOMAIN_INTERACTION: u32 = 1 << 6;
 pub const SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW: u32 = 1 << 7;
 pub const SHELL_SNAPSHOT_DOMAIN_TRAY: u32 = 1 << 8;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER: u32 = 1 << 9;
-pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 10;
+pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY: u32 = 1 << 10;
+pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA: u32 = 1 << 11;
+pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE: u32 = 1 << 12;
+pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 13;
 pub const SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES: usize = SHELL_SNAPSHOT_DOMAIN_COUNT * 8;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -1281,6 +1284,10 @@ pub enum DecodedCompositorToShellMessage {
         revision: u64,
         state_json: String,
     },
+    WorkspaceStateBinary {
+        revision: u64,
+        state: Vec<u8>,
+    },
     ShellHostedAppState {
         revision: u64,
         state_json: String,
@@ -1630,6 +1637,23 @@ pub fn encode_compositor_workspace_state(revision: u64, state_json: &str) -> Opt
     v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
+    Some(v)
+}
+
+pub fn encode_compositor_workspace_state_binary(revision: u64, payload: &[u8]) -> Option<Vec<u8>> {
+    if payload.len() > MAX_WORKSPACE_BINARY_BYTES as usize {
+        return None;
+    }
+    let body_len = 12usize.checked_add(payload.len())?;
+    let body_len = u32::try_from(body_len).ok()?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_WORKSPACE_STATE_BINARY.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
+    v.extend_from_slice(payload);
     Some(v)
 }
 

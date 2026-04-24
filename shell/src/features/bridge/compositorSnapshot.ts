@@ -2,8 +2,13 @@ import type { DerpShellDetail } from '@/host/appWindowState'
 import { normalizeWorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
 
 const MSG_OUTPUT_GEOMETRY = 5
+const MSG_WINDOW_MAPPED = 6
+const MSG_WINDOW_UNMAPPED = 7
+const MSG_WINDOW_GEOMETRY = 8
+const MSG_WINDOW_METADATA = 9
 const MSG_FOCUS_CHANGED = 10
 const MSG_WINDOW_LIST = 11
+const MSG_WINDOW_STATE = 37
 const MSG_OUTPUT_LAYOUT = 44
 const MSG_COMPOSITOR_KEYBOARD_LAYOUT = 52
 const MSG_COMPOSITOR_VOLUME_OVERLAY = 53
@@ -19,7 +24,7 @@ const MSG_WINDOW_ORDER = 63
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 0x4452444d
 const SNAPSHOT_HEADER_BYTES = 32
-const SNAPSHOT_DOMAIN_COUNT = 10
+const SNAPSHOT_DOMAIN_COUNT = 13
 const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
 const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
@@ -31,6 +36,9 @@ const SNAPSHOT_DOMAIN_INTERACTION = 1 << 6
 const SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW = 1 << 7
 const SNAPSHOT_DOMAIN_TRAY = 1 << 8
 const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
+const SNAPSHOT_DOMAIN_WINDOW_GEOMETRY = 1 << 10
+const SNAPSHOT_DOMAIN_WINDOW_METADATA = 1 << 11
+const SNAPSHOT_DOMAIN_WINDOW_STATE = 1 << 12
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
@@ -256,6 +264,89 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
   return { type: 'window_list', revision, windows }
 }
 
+function decodeWindowUnmapped(view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 8 !== view.byteLength) return null
+  return { type: 'window_unmapped', window_id: view.getUint32(offset + 4, true) }
+}
+
+function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 28 > view.byteLength) return null
+  const windowId = view.getUint32(offset + 4, true)
+  const surfaceId = view.getUint32(offset + 8, true)
+  const x = view.getInt32(offset + 12, true)
+  const y = view.getInt32(offset + 16, true)
+  const width = view.getInt32(offset + 20, true)
+  const height = view.getInt32(offset + 24, true)
+  let cursor = offset + 28
+  let maximized = false
+  let fullscreen = false
+  if (cursor + 8 <= view.byteLength) {
+    maximized = view.getUint32(cursor, true) !== 0
+    fullscreen = view.getUint32(cursor + 4, true) !== 0
+    cursor += 8
+  }
+  if (cursor + 4 <= view.byteLength) cursor += 4
+  let outputName = ''
+  if (cursor < view.byteLength) {
+    if (cursor + 4 > view.byteLength) return null
+    const len = view.getUint32(cursor, true)
+    cursor += 4
+    if (len > MAX_WINDOW_STRING_BYTES) return null
+    const value = readUtf8(bytes, cursor, len)
+    if (value == null) return null
+    outputName = value
+    cursor += len
+  }
+  if (cursor !== view.byteLength) return null
+  return {
+    type: 'window_geometry',
+    window_id: windowId,
+    surface_id: surfaceId,
+    x,
+    y,
+    width,
+    height,
+    output_id: '',
+    output_name: outputName,
+    maximized,
+    fullscreen,
+  }
+}
+
+function decodeWindowMetadata(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 36 > view.byteLength) return null
+  const windowId = view.getUint32(offset + 4, true)
+  const surfaceId = view.getUint32(offset + 8, true)
+  const titleLen = view.getUint32(offset + 28, true)
+  const appLen = view.getUint32(offset + 32, true)
+  if (titleLen > MAX_WINDOW_STRING_BYTES) return null
+  if (appLen > MAX_WINDOW_STRING_BYTES) return null
+  let cursor = offset + 36
+  const title = readUtf8(bytes, cursor, titleLen)
+  if (title == null) return null
+  cursor += titleLen
+  const appId = readUtf8(bytes, cursor, appLen)
+  if (appId == null) return null
+  cursor += appLen
+  if (cursor !== view.byteLength) return null
+  return {
+    type: 'window_metadata',
+    window_id: windowId,
+    surface_id: surfaceId,
+    title,
+    app_id: appId,
+  }
+}
+
+function decodeWindowState(view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 12 !== view.byteLength) return null
+  return {
+    type: 'window_state',
+    window_id: view.getUint32(offset + 4, true),
+    minimized: view.getUint32(offset + 8, true) !== 0,
+  }
+}
+
 function decodeFocusChanged(view: DataView, offset: number): DerpShellDetail | null {
   if (offset + 12 > view.byteLength) return null
   const surfaceId = view.getUint32(offset + 4, true)
@@ -433,10 +524,18 @@ function domainForMessageType(msgType: number): number {
     case MSG_OUTPUT_GEOMETRY:
     case MSG_OUTPUT_LAYOUT:
       return SNAPSHOT_DOMAIN_OUTPUTS
+    case MSG_WINDOW_MAPPED:
+    case MSG_WINDOW_UNMAPPED:
     case MSG_WINDOW_LIST:
       return SNAPSHOT_DOMAIN_WINDOWS
     case MSG_WINDOW_ORDER:
       return SNAPSHOT_DOMAIN_WINDOW_ORDER
+    case MSG_WINDOW_GEOMETRY:
+      return SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
+    case MSG_WINDOW_METADATA:
+      return SNAPSHOT_DOMAIN_WINDOW_METADATA
+    case MSG_WINDOW_STATE:
+      return SNAPSHOT_DOMAIN_WINDOW_STATE
     case MSG_FOCUS_CHANGED:
       return SNAPSHOT_DOMAIN_FOCUS
     case MSG_COMPOSITOR_KEYBOARD_LAYOUT:
@@ -672,6 +771,14 @@ function decodeSnapshotPacket(bodyBytes: Uint8Array, bodyView: DataView): DerpSh
       return decodeOutputLayout(bodyBytes, bodyView, 0)
     case MSG_WINDOW_LIST:
       return decodeWindowList(bodyBytes, bodyView, 0)
+    case MSG_WINDOW_UNMAPPED:
+      return decodeWindowUnmapped(bodyView, 0)
+    case MSG_WINDOW_GEOMETRY:
+      return decodeWindowGeometry(bodyBytes, bodyView, 0)
+    case MSG_WINDOW_METADATA:
+      return decodeWindowMetadata(bodyBytes, bodyView, 0)
+    case MSG_WINDOW_STATE:
+      return decodeWindowState(bodyView, 0)
     case MSG_WINDOW_ORDER:
       return decodeWindowOrder(bodyView, 0)
     case MSG_FOCUS_CHANGED:
