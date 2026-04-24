@@ -197,6 +197,18 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn programs_menu_opened(&self, restore_window_id: u32) {
+        self.run(move |s| {
+            s.programs_menu_opened_from_shell(restore_window_id);
+        });
+    }
+
+    pub fn programs_menu_closed(&self) {
+        self.run(move |s| {
+            s.programs_menu_closed_from_shell();
+        });
+    }
+
     pub fn shell_ui_pointer_grab_begin(&self, window_id: u32) {
         self.run(move |s| {
             s.shell_ui_pointer_grab_begin(window_id);

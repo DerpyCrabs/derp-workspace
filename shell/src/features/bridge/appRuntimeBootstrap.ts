@@ -64,9 +64,6 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   void options.warmDefaultApps()
   void options.warmProgramsMenuItems()
   void options.bootstrapSessionState()
-  console.log(
-    '[derp-shell-move] shell App onMount (expect cef_js_console in compositor.log when CEF forwards this prefix)',
-  )
   options.startShellTransportBridge()
 
   const unregisterShellE2eBridge = registerShellE2eBridge(options.registerShellE2eBridge)

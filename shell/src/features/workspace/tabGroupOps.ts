@@ -19,8 +19,6 @@ const TAB_DROP_HIT_SLOP_PX = 8
 function targetWindowIdForGroup(state: WorkspaceSnapshot, groupId: string): number | null {
   const group = state.groups.find((entry) => entry.id === groupId)
   if (!group || group.windowIds.length === 0) return null
-  const visible = state.visibleWindowIdByGroupId?.[groupId]
-  if (typeof visible === 'number' && group.windowIds.includes(visible)) return visible
   const active = state.activeTabByGroupId[groupId]
   if (typeof active === 'number' && group.windowIds.includes(active)) return active
   return group.windowIds[0]
@@ -322,15 +320,6 @@ export function resolveGroupVisibleWindowId(
 ): number | null {
   const members = tabsInGroup(windows, state, groupId)
   if (members.length === 0) return null
-  const derivedVisible = state.visibleWindowIdByGroupId?.[groupId]
-  if (
-    typeof derivedVisible === 'number' &&
-    derivedVisible > 0 &&
-    derivedVisible !== splitLeftWindowId(state, groupId) &&
-    members.some((window) => window.window_id === derivedVisible && !window.minimized)
-  ) {
-    return derivedVisible
-  }
   const active = state.activeTabByGroupId[groupId]
   const leftWindowId = splitLeftWindowId(state, groupId)
   if (members.some((window) => window.window_id === active) && active !== leftWindowId) {

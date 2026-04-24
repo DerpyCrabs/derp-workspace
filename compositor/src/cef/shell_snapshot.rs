@@ -17,6 +17,7 @@ use std::os::fd::AsRawFd;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC: u32 = 0x4452_444d;
+const SNAPSHOT_DELTA_CHUNK_FLAG: u32 = 0x8000_0000;
 
 pub enum SnapshotDirtyRead {
     Unchanged,
@@ -201,6 +202,7 @@ pub struct SharedShellSnapshotWriter {
     last_payload: Option<Vec<u8>>,
     domain_revisions: [u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
     domain_chunks: [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    domain_delta_chunks: [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
     domain_chunks_initialized: bool,
     authoritative: ShellSnapshotModel,
 }
@@ -218,6 +220,7 @@ impl SharedShellSnapshotWriter {
             last_payload: None,
             domain_revisions: [0; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
             domain_chunks: std::array::from_fn(|_| Vec::new()),
+            domain_delta_chunks: std::array::from_fn(|_| Vec::new()),
             domain_chunks_initialized: false,
             authoritative: ShellSnapshotModel::default(),
         };
@@ -238,20 +241,29 @@ impl SharedShellSnapshotWriter {
         for message in messages {
             self.authoritative.apply(message);
         }
-        self.bump_domain_revisions(dirty_domains);
         let authoritative_messages = self.authoritative.messages();
         warn_snapshot_invariants(&authoritative_messages);
-        refresh_domain_chunk_cache(
+        let actual_dirty_domains = refresh_domain_chunk_cache(
             &mut self.domain_chunks,
             dirty_domains,
             &authoritative_messages,
             !self.domain_chunks_initialized,
         )?;
+        refresh_delta_chunk_cache(
+            &mut self.domain_delta_chunks,
+            actual_dirty_domains,
+            messages,
+        )?;
+        self.bump_domain_revisions(actual_dirty_domains);
         self.domain_chunks_initialized = true;
         self.publish_payload_at(
             sequence,
-            dirty_domains,
-            encode_payload_chunks(&self.domain_revisions, &self.domain_chunks)?,
+            actual_dirty_domains,
+            encode_payload_chunks(
+                &self.domain_revisions,
+                &self.domain_chunks,
+                &self.domain_delta_chunks,
+            )?,
         )
     }
 
@@ -316,6 +328,7 @@ impl SharedShellSnapshotWriter {
 fn encode_payload_chunks(
     domain_revisions: &[u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
     domain_chunks: &[Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    domain_delta_chunks: &[Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
 ) -> Result<Vec<u8>, String> {
     let mut payload = Vec::new();
     for revision in domain_revisions {
@@ -324,7 +337,11 @@ fn encode_payload_chunks(
     let chunks_len = domain_chunks
         .iter()
         .filter(|chunk| !chunk.is_empty())
-        .count();
+        .count()
+        + domain_delta_chunks
+            .iter()
+            .filter(|chunk| !chunk.is_empty())
+            .count();
     payload.extend_from_slice(&SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
     payload.extend_from_slice(
         &u32::try_from(chunks_len)
@@ -344,6 +361,19 @@ fn encode_payload_chunks(
         );
         payload.extend_from_slice(&chunk);
     }
+    for (index, chunk) in domain_delta_chunks.iter().enumerate() {
+        if chunk.is_empty() {
+            continue;
+        }
+        let domain = SNAPSHOT_DELTA_CHUNK_FLAG | (1u32 << index);
+        payload.extend_from_slice(&domain.to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(chunk.len())
+                .map_err(|_| "snapshot domain delta chunk too large".to_string())?
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(&chunk);
+    }
     Ok(payload)
 }
 
@@ -352,7 +382,7 @@ fn refresh_domain_chunk_cache(
     dirty_domains: u32,
     messages: &[shell_wire::DecodedCompositorToShellMessage],
     force_all: bool,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     let mut next_chunks: [Option<Vec<u8>>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] =
         std::array::from_fn(|index| {
             let domain = 1u32 << index;
@@ -372,12 +402,45 @@ fn refresh_domain_chunk_cache(
         };
         append_snapshot_message(chunk, msg)?;
     }
+    let mut actual_dirty_domains = 0u32;
     for (index, chunk) in domain_chunks.iter_mut().enumerate() {
         let domain = 1u32 << index;
         if !force_all && dirty_domains & domain == 0 {
             continue;
         }
-        *chunk = next_chunks[index].take().unwrap_or_default();
+        let next = next_chunks[index].take().unwrap_or_default();
+        if *chunk != next {
+            *chunk = next;
+            actual_dirty_domains |= domain;
+        }
+    }
+    Ok(actual_dirty_domains)
+}
+
+fn refresh_delta_chunk_cache(
+    domain_delta_chunks: &mut [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
+    dirty_domains: u32,
+    messages: &[shell_wire::DecodedCompositorToShellMessage],
+) -> Result<(), String> {
+    let mut next_chunks: [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] =
+        std::array::from_fn(|_| Vec::new());
+    for msg in messages {
+        let domain = snapshot_domain_for_message(msg);
+        let Some(index) = snapshot_domain_index(domain) else {
+            continue;
+        };
+        if dirty_domains & domain == 0 {
+            continue;
+        }
+        append_snapshot_message(&mut next_chunks[index], msg)?;
+    }
+    for (index, chunk) in domain_delta_chunks.iter_mut().enumerate() {
+        let domain = 1u32 << index;
+        if dirty_domains & domain != 0 {
+            *chunk = std::mem::take(&mut next_chunks[index]);
+        } else {
+            chunk.clear();
+        }
     }
     Ok(())
 }
@@ -392,6 +455,10 @@ fn snapshot_domain_index(domain: u32) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn snapshot_chunk_base_domain(domain: u32) -> u32 {
+    domain & !SNAPSHOT_DELTA_CHUNK_FLAG
 }
 
 fn snapshot_payload_domain_revisions(
@@ -422,7 +489,8 @@ fn encode_dirty_snapshot_payload(
     }
     let chunk_count = u32::from_le_bytes(payload[offset + 4..offset + 8].try_into().ok()?) as usize;
     offset += 8;
-    let mut selected = Vec::<(u32, &[u8])>::new();
+    let mut normal_chunks = Vec::<(u32, &[u8])>::new();
+    let mut delta_chunks = HashMap::<u32, &[u8]>::new();
     let mut selected_flags = 0u32;
     for _ in 0..chunk_count {
         if offset + 8 > payload.len() {
@@ -436,12 +504,17 @@ fn encode_dirty_snapshot_payload(
         if chunk_end > payload.len() {
             return None;
         }
-        let changed = snapshot_domain_index(domain)
+        let base_domain = snapshot_chunk_base_domain(domain);
+        let changed = snapshot_domain_index(base_domain)
             .map(|index| previous_domain_revisions[index] != current_domain_revisions[index])
             .unwrap_or(true);
         if changed {
-            selected_flags |= domain;
-            selected.push((domain, &payload[chunk_start..chunk_end]));
+            selected_flags |= base_domain;
+            if domain & SNAPSHOT_DELTA_CHUNK_FLAG != 0 {
+                delta_chunks.insert(base_domain, &payload[chunk_start..chunk_end]);
+            } else {
+                normal_chunks.push((base_domain, &payload[chunk_start..chunk_end]));
+            }
         }
         offset = chunk_end;
     }
@@ -453,6 +526,16 @@ fn encode_dirty_snapshot_payload(
         out.extend_from_slice(&revision.to_le_bytes());
     }
     out.extend_from_slice(&SNAPSHOT_DOMAIN_CHUNKS_MAGIC.to_le_bytes());
+    let selected: Vec<(u32, &[u8])> = normal_chunks
+        .into_iter()
+        .filter_map(|(domain, chunk)| {
+            delta_chunks
+                .get(&domain)
+                .copied()
+                .map(|delta| (domain, delta))
+                .or(Some((domain, chunk)))
+        })
+        .collect();
     out.extend_from_slice(&u32::try_from(selected.len()).ok()?.to_le_bytes());
     for (domain, chunk) in selected {
         out.extend_from_slice(&domain.to_le_bytes());
@@ -1369,11 +1452,15 @@ pub fn snapshot_read_dirty_if_changed(
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_dirty_snapshot_payload, encode_payload_chunks, refresh_domain_chunk_cache,
-        SNAPSHOT_DOMAIN_CHUNKS_MAGIC,
+        append_snapshot_message, encode_dirty_snapshot_payload, encode_payload_chunks,
+        refresh_domain_chunk_cache, SNAPSHOT_DOMAIN_CHUNKS_MAGIC,
     };
 
     fn chunks() -> [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] {
+        std::array::from_fn(|_| Vec::new())
+    }
+
+    fn delta_chunks() -> [Vec<u8>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] {
         std::array::from_fn(|_| Vec::new())
     }
 
@@ -1460,7 +1547,7 @@ mod tests {
         .unwrap();
         let mut revisions = [0u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT];
         revisions[0] = 1;
-        let payload = encode_payload_chunks(&revisions, &chunks).unwrap();
+        let payload = encode_payload_chunks(&revisions, &chunks, &delta_chunks()).unwrap();
         let header_len = shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES;
         assert_eq!(
             u32::from_le_bytes(payload[header_len..header_len + 4].try_into().unwrap()),
@@ -1486,7 +1573,7 @@ mod tests {
         revisions[0] = 2;
         revisions[1] = 7;
         revisions[2] = 3;
-        let payload = encode_payload_chunks(&revisions, &chunks).unwrap();
+        let payload = encode_payload_chunks(&revisions, &chunks, &delta_chunks()).unwrap();
         let mut previous = revisions;
         previous[0] = 1;
         previous[2] = 2;
@@ -1520,7 +1607,7 @@ mod tests {
         refresh_domain_chunk_cache(&mut chunks, 0, &[output_geometry(1920)], true).unwrap();
         let mut revisions = [0u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT];
         revisions[0] = 5;
-        let payload = encode_payload_chunks(&revisions, &chunks).unwrap();
+        let payload = encode_payload_chunks(&revisions, &chunks, &delta_chunks()).unwrap();
         let (flags, dirty_payload) = encode_dirty_snapshot_payload(&payload, &revisions).unwrap();
         let header_len = shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES;
         assert_eq!(flags, 0);
@@ -1535,6 +1622,53 @@ mod tests {
                     .unwrap()
             ),
             0
+        );
+    }
+
+    #[test]
+    fn encode_dirty_snapshot_payload_prefers_delta_chunk() {
+        let mut chunks = chunks();
+        refresh_domain_chunk_cache(&mut chunks, 0, &[output_geometry(1920)], true).unwrap();
+        let mut deltas = delta_chunks();
+        append_snapshot_message(&mut deltas[0], &output_geometry(2560)).unwrap();
+        let mut revisions = [0u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT];
+        revisions[0] = 6;
+        let payload = encode_payload_chunks(&revisions, &chunks, &deltas).unwrap();
+        let mut previous = revisions;
+        previous[0] = 5;
+        let (flags, dirty_payload) = encode_dirty_snapshot_payload(&payload, &previous).unwrap();
+        let header_len = shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES;
+        assert_eq!(flags, shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS);
+        assert_eq!(
+            u32::from_le_bytes(
+                dirty_payload[header_len + 4..header_len + 8]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                dirty_payload[header_len + 8..header_len + 12]
+                    .try_into()
+                    .unwrap()
+            ),
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
+        );
+        let chunk_len = u32::from_le_bytes(
+            dirty_payload[header_len + 12..header_len + 16]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let chunk_start = header_len + 16;
+        assert_eq!(chunk_len, deltas[0].len());
+        assert_eq!(
+            u32::from_le_bytes(
+                dirty_payload[chunk_start + 8..chunk_start + 12]
+                    .try_into()
+                    .unwrap()
+            ),
+            2560
         );
     }
 }

@@ -78,4 +78,52 @@ describe('createCompositorModel', () => {
       dispose()
     })
   })
+
+  it('keeps workspace window projection stable for geometry-only updates', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorDetail(
+        {
+          type: 'window_mapped',
+          window_id: 7,
+          surface_id: 70,
+          stack_z: 1,
+          x: 10,
+          y: 20,
+          width: 300,
+          height: 200,
+          minimized: false,
+          maximized: false,
+          fullscreen: false,
+          title: 'Stable',
+          app_id: 'stable.app',
+          output_id: 'output-a',
+          output_name: 'DP-1',
+          workspace_visible: true,
+        },
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+      const before = model.workspaceWindowsMap().get(7)
+      model.applyCompositorDetail(
+        {
+          type: 'window_geometry',
+          window_id: 7,
+          surface_id: 70,
+          x: 40,
+          y: 50,
+          width: 640,
+          height: 480,
+          output_id: 'output-a',
+          output_name: 'DP-1',
+          maximized: false,
+          fullscreen: false,
+        },
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+
+      expect(model.windows().get(7)).toMatchObject({ x: 40, y: 50, width: 640, height: 480 })
+      expect(model.workspaceWindowsMap().get(7)).toBe(before)
+      dispose()
+    })
+  })
 })

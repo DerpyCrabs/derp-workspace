@@ -177,6 +177,7 @@ export interface CompositorSnapshot {
   pending_deferred_window_ids?: number[]
   orphaned_wayland_surface_protocol_ids?: number[]
   pointer?: { x: number; y: number }
+  pointer_pressed_button_count?: number
   workspace?: CompositorWorkspaceRect | null
   shell_context_menu_global?: CompositorWorkspaceRect | null
   shell_floating_layers?: CompositorFloatingLayerSnapshot[]

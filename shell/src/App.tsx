@@ -273,7 +273,7 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     arg3 !== undefined
   ) {
     fn(op, arg, arg2, arg3)
-  } else if (op === 'shell_blur_ui_window' || op === 'shell_ui_grab_end') {
+  } else if (op === 'shell_blur_ui_window' || op === 'programs_menu_closed' || op === 'shell_ui_grab_end') {
     fn(op)
   } else {
     fn(op, arg)
@@ -288,6 +288,8 @@ function App() {
   const {
     allWindowsMap: compositorWindowsMap,
     windowsList: compositorWindowsList,
+    workspaceWindowsMap,
+    workspaceWindowsList,
     workspaceSnapshot,
     focusedWindowId,
     shellHostedAppByWindow,
@@ -895,6 +897,8 @@ function App() {
     postSessionPower,
     canSessionControl,
     scheduleExclusionZonesSync: () => scheduleExclusionZonesSync(),
+    focusedWindowId,
+    shellWireSend: (op, arg) => shellWireSend(op, arg),
     exitSession: () => {
       if (shellWireSend('quit')) {
         clearShellActionIssue()
@@ -985,8 +989,8 @@ function App() {
     taskbarRowsByMonitor,
   } = createWorkspaceSelectors({
     workspaceSnapshot,
-    windowsById: compositorWindowsMap,
-    windowsList: compositorWindowsList,
+    windowsById: workspaceWindowsMap,
+    windowsList: workspaceWindowsList,
     focusedWindowId,
     fallbackMonitorKey: fallbackMonitorName,
     desktopApps: desktopApps.items,
@@ -1363,7 +1367,6 @@ function App() {
   })
 
   const exclusionReactiveDeps = createMemo(() => {
-    void compositorSnapshotSequence()
     void shellContextMenus.ctxMenuOpen()
     void shellContextMenus.programsMenuOpen()
     void shellContextMenus.powerMenuOpen()
@@ -1402,7 +1405,6 @@ function App() {
 
   createEffect(() => {
     void shellWireReadyRev()
-    void compositorSnapshotSequence()
     queueMicrotask(() => {
       flushShellUiWindowsSyncNow()
       syncExclusionZonesNow()

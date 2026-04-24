@@ -60,6 +60,8 @@ type CreateShellContextMenusArgs = {
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
   exitSession: () => void
+  focusedWindowId: Accessor<number | null>
+  shellWireSend: (op: 'programs_menu_opened' | 'programs_menu_closed', arg?: number) => boolean
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
@@ -182,10 +184,14 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   }
 
   function hideContextMenu(skipStore = false) {
+    const restoreProgramsMenuFocus = triggerIsOpen(programsMenuTrigger)
     resetContextMenuState()
     args.floatingLayers.clearLayerPlacement(ROOT_CONTEXT_MENU_LAYER_ID)
     if (!skipStore) {
       args.floatingLayers.closeBranch(ROOT_CONTEXT_MENU_LAYER_ID)
+    }
+    if (restoreProgramsMenuFocus) {
+      args.shellWireSend('programs_menu_closed')
     }
     scheduleOverlayExclusionSync()
   }
@@ -356,6 +362,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   function openProgramsMenu(outputName?: string | null) {
     args.closeAllAtlasSelects()
+    args.shellWireSend('programs_menu_opened', args.focusedWindowId() ?? 0)
     setProgramsMenuOutputName(outputName ?? null)
     anchorProgramsMenuToCenter(outputName)
     openRootContextMenu(programsMenuTrigger)
@@ -557,6 +564,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         badge: def.badge,
         title: def.title,
         action: () => {
+          hideContextMenu(false)
           void args.openShellHostedApp(def.kind)
         },
       })
@@ -581,6 +589,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         badge: app.terminal ? 'tty' : undefined,
         action: () => {
           setProgramsUsageCounts(recordDesktopAppLaunch(app))
+          hideContextMenu(false)
           void args.spawnInCompositor(app.exec, {
             command: app.exec,
             desktopId: app.desktop_id.trim() || null,

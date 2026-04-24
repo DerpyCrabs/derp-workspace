@@ -648,12 +648,7 @@ mod tests {
                     "preTileGeometry",
                     "nextGroupSeq"
                 ],
-                "workspaceDerivedFields": [
-                    "groupIdByWindowId",
-                    "visibleWindowIdByGroupId",
-                    "monitorNameByWindowId",
-                    "monitorIdByWindowId"
-                ],
+                "workspaceDerivedFields": [],
                 "monitorLayoutTypes": [
                     "manual-snap",
                     "master-stack",

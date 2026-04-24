@@ -74,7 +74,7 @@ function sharedOutputLayoutRevision(): number {
 }
 
 export function sharedShellStateStampKey(): string {
-  return `${sharedSnapshotEpoch()}:${sharedOutputLayoutRevision()}`
+  return `${sharedOutputLayoutRevision()}`
 }
 
 function setSharedPrefix(view: DataView): void {

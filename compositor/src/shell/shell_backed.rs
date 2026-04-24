@@ -462,6 +462,7 @@ impl CompositorState {
         else {
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_move_deferred_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -481,6 +482,7 @@ impl CompositorState {
         self.shell_move_flush_pending_deltas_backed();
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
         self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {

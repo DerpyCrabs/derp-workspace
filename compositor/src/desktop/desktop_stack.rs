@@ -143,7 +143,6 @@ where
 {
     inner: FractionalDamageSpaceElements<E>,
     exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
-    debug_window_id: Option<u32>,
 }
 
 impl<E> SpaceExclusionClip<E>
@@ -154,12 +153,10 @@ where
         inner: SpaceRenderElements<GlesRenderer, E>,
         output_scale: f64,
         exclusion: Arc<exclusion_clip::ShellExclusionClipCtx>,
-        debug_window_id: Option<u32>,
     ) -> Self {
         Self {
             inner: FractionalDamageSpaceElements::new(inner, output_scale),
             exclusion,
-            debug_window_id,
         }
     }
 }
@@ -282,14 +279,6 @@ where
             }
         }
         if clipped.is_empty() {
-            warn!(
-                target: "derp_shell_clip",
-                window_id = ?self.debug_window_id,
-                damage = ?damage,
-                dst = ?dst,
-                zone_count = self.exclusion.zones.len(),
-                "space exclusion clip removed all native damage"
-            );
             return Ok(());
         }
         self.inner

@@ -20,6 +20,8 @@ export type ShellCompositorWireOp =
   | 'activate_window'
   | 'shell_focus_ui_window'
   | 'shell_blur_ui_window'
+  | 'programs_menu_opened'
+  | 'programs_menu_closed'
   | 'shell_ui_grab_begin'
   | 'shell_ui_grab_end'
   | 'minimize'

@@ -45,6 +45,7 @@ import {
   waitForPowerMenuClosed,
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
+  waitForProgramsMenuOpen,
   waitForVolumeMenuClosed,
   waitFor,
   waitForCompositorShellUiFocus,
@@ -314,6 +315,79 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     await runKeybind(base, 'toggle_programs_menu')
     await waitForProgramsMenuClosed(base)
+  })
+
+  test('super tap toggles programs menu after pointer movement while held', async ({ base }) => {
+    const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (before.programs_menu_open) {
+      await runKeybind(base, 'toggle_programs_menu')
+      await waitForProgramsMenuClosed(base)
+    }
+    const { compositor } = await getSnapshots(base)
+    const output = compositor.outputs[0]
+    assert(output, 'expected at least one output')
+    const start = {
+      x: output.x + Math.floor(output.width / 2),
+      y: output.y + Math.min(96, Math.max(48, Math.floor(output.height / 5))),
+    }
+    await movePoint(base, start.x, start.y)
+    await keyAction(base, 125, 'press')
+    await movePoint(base, start.x + 18, start.y + 14)
+    await keyAction(base, 125, 'release')
+    const opened = await waitForProgramsMenuOpen(base)
+    assert(opened.programs_menu_open, 'programs menu should open after moved Super tap')
+    await keyAction(base, 125, 'press')
+    await movePoint(base, start.x + 32, start.y + 22)
+    await keyAction(base, 125, 'release')
+    await waitForProgramsMenuClosed(base)
+  })
+
+  test('programs menu super toggle preserves focused native window when dismissed', async ({ base, state }) => {
+    const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (before.programs_menu_open) {
+      await runKeybind(base, 'toggle_programs_menu')
+      await waitForProgramsMenuClosed(base)
+    }
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Launcher Focus ${stamp}`,
+      token: `launcher-focus-${stamp}`,
+      strip: 'red',
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForNativeFocus(base, windowId)
+
+    await keyAction(base, 125, 'tap')
+    const opened = await waitFor(
+      'wait for programs menu open without native focus loss',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (!snapshots.shell.programs_menu_open) return null
+        if (snapshots.compositor.focused_window_id !== windowId) return null
+        if (snapshots.shell.focused_window_id !== windowId) return null
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    assert(opened.compositor.shell_keyboard_focus === true, 'programs menu should capture shell keyboard while native focus is preserved logically')
+
+    await keyAction(base, 125, 'tap')
+    const closed = await waitFor(
+      'wait for programs menu close without native focus loss',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (snapshots.shell.programs_menu_open) return null
+        if (snapshots.compositor.focused_window_id !== windowId) return null
+        if (snapshots.shell.focused_window_id !== windowId) return null
+        if (snapshots.compositor.shell_keyboard_focus === true) return null
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    assert(closed.compositor.focused_window_id === windowId, 'native window should remain focused after closing programs menu')
   })
 
   test('programs menu list scrolls with pointer wheel over launcher', async ({ base, state }) => {
@@ -809,6 +883,58 @@ export default defineGroup(import.meta.url, ({ test }) => {
         centerX,
       },
     })
+  })
+
+  test('super taps alternate programs menu open and closed after completed shell titlebar drag', async ({ base, state }) => {
+    const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (before.programs_menu_open) {
+      await runKeybind(base, 'toggle_programs_menu')
+      await waitForProgramsMenuClosed(base)
+    }
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    await waitForShellUiFocus(base, windowId)
+    const titlebar = await waitFor(
+      'wait for shell titlebar before super-after-drag',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const rect = windowControls(shell, windowId)?.titlebar
+        return rect && rect.width >= 80 && rect.height >= 16 ? rect : null
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(titlebar)
+    await dragBetweenPoints(base, start.x, start.y, start.x + 180, start.y + 80, 18)
+    await waitFor(
+      'wait for shell titlebar drag to settle before super tap',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const controls = windowControls(snapshots.shell, windowId)
+        if (snapshots.compositor.shell_move_window_id !== null) return null
+        if (snapshots.compositor.shell_resize_window_id !== null) return null
+        if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+        if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+        if (!controls || controls.dragging) return null
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    for (let tap = 1; tap <= 10; tap += 1) {
+      await keyAction(base, 125, 'tap')
+      if (tap % 2 === 1) {
+        const openedByTap = await waitForProgramsMenuOpen(base)
+        assert(openedByTap.programs_menu_open, `programs menu should open on post-drag Super tap ${tap}`)
+        assert(openedByTap.controls?.programs_menu_panel || openedByTap.controls?.programs_menu_search, `programs menu should have visible controls on post-drag Super tap ${tap}`)
+        assert(openedByTap.focused_window_id === windowId, `shell focus should stay on dragged window while programs menu is open on tap ${tap}`)
+      } else {
+        const closedByTap = await waitForProgramsMenuClosed(base)
+        assert(!closedByTap.programs_menu_open, `programs menu should close on post-drag Super tap ${tap}`)
+        assert(!closedByTap.controls?.programs_menu_panel, `programs menu panel should be gone on post-drag Super tap ${tap}`)
+        assert(closedByTap.focused_window_id === windowId, `shell focus should return to dragged window after programs menu closes on tap ${tap}`)
+      }
+    }
   })
 
   test('shell drag stays live and blocks pointer hover below', async ({ base, state }) => {

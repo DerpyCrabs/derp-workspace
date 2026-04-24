@@ -10,7 +10,6 @@ use cef::{
     ThreadId, WrapTask,
 };
 
-use crate::cef::cef_userfree_string_to_string;
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
 
@@ -328,13 +327,6 @@ wrap_task! {
                         return;
                     }
                 };
-                tracing::warn!(
-                    target: "derp_shell_boot",
-                    browser_id = browser.identifier(),
-                    frame_url = %cef_userfree_string_to_string(&frame.url()),
-                    script_len = self.script.len(),
-                    "execute_shell_bridge_js"
-                );
                 frame.execute_java_script(Some(&CefString::from(self.script.as_str())), None, 0);
                 Ok(())
             };
@@ -359,33 +351,13 @@ fn execute_shell_bridge_js(
 
 fn request_shell_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<String, String> {
     let request_id = e2e_bridge::next_request_id();
-    tracing::warn!(
-        target: "derp_shell_boot",
-        request_id,
-        "request_shell_snapshot_json start"
-    );
     execute_shell_bridge_js(
         browser,
         format!(
             "window.__DERP_E2E_REQUEST_SNAPSHOT&&window.__DERP_E2E_REQUEST_SNAPSHOT({request_id});"
         ),
     )?;
-    let result = e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3));
-    match &result {
-        Ok(json) => tracing::warn!(
-            target: "derp_shell_boot",
-            request_id,
-            bytes = json.len(),
-            "request_shell_snapshot_json ok"
-        ),
-        Err(error) => tracing::warn!(
-            target: "derp_shell_boot",
-            request_id,
-            %error,
-            "request_shell_snapshot_json failed"
-        ),
-    }
-    result
+    e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3))
 }
 
 fn sync_shell_compositor_snapshot_json(

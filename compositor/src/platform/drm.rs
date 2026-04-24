@@ -279,7 +279,7 @@ impl DrmHead {
                                 ),
                             )),
                             Some(ctx) => render_elements.push(DesktopStack::SpaceClip(
-                                SpaceExclusionClip::new(el, output_scale, ctx, wid),
+                                SpaceExclusionClip::new(el, output_scale, ctx),
                             )),
                         }
                     }

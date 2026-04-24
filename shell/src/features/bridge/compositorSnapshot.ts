@@ -23,6 +23,7 @@ const MSG_WINDOW_ORDER = 63
 
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 0x4452444d
+const SNAPSHOT_DELTA_CHUNK_FLAG = 0x80000000
 const SNAPSHOT_HEADER_BYTES = 32
 const SNAPSHOT_DOMAIN_COUNT = 13
 const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
@@ -811,8 +812,12 @@ function domainIndex(domain: number): number {
   return Math.trunc(Math.log2(domain))
 }
 
+function baseSnapshotDomain(domain: number): number {
+  return domain & ~SNAPSHOT_DELTA_CHUNK_FLAG
+}
+
 function domainChanged(domain: number, revisions: readonly number[], previous?: CompositorSnapshotDecodeCursor): boolean {
-  const index = domainIndex(domain)
+  const index = domainIndex(baseSnapshotDomain(domain))
   if (index < 0) return true
   return previous?.domainRevisions[index] !== revisions[index]
 }
@@ -852,6 +857,8 @@ export function decodeCompositorSnapshot(
   if (offset + 8 <= payloadEnd && view.getUint32(offset, true) === SNAPSHOT_DOMAIN_CHUNKS_MAGIC) {
     const chunkCount = view.getUint32(offset + 4, true)
     offset += 8
+    const chunks: { domain: number; start: number; end: number }[] = []
+    const fullDomains = new Set<number>()
     for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
       if (offset + 8 > payloadEnd) return null
       const domain = view.getUint32(offset, true)
@@ -859,26 +866,29 @@ export function decodeCompositorSnapshot(
       const chunkStart = offset + 8
       const chunkEnd = chunkStart + chunkLen
       if (chunkEnd > payloadEnd) return null
-      if (domain !== 0 && !domainChanged(domain, domainRevisions, previous)) {
-        offset = chunkEnd
-        continue
-      }
-      let packetOffset = chunkStart
-      while (packetOffset < chunkEnd) {
-        if (packetOffset + 8 > chunkEnd) return null
+      chunks.push({ domain, start: chunkStart, end: chunkEnd })
+      if ((domain & SNAPSHOT_DELTA_CHUNK_FLAG) === 0) fullDomains.add(baseSnapshotDomain(domain))
+      offset = chunkEnd
+    }
+    if (offset !== payloadEnd) return null
+    for (const chunk of chunks) {
+      const baseDomain = baseSnapshotDomain(chunk.domain)
+      if ((chunk.domain & SNAPSHOT_DELTA_CHUNK_FLAG) !== 0 && fullDomains.has(baseDomain)) continue
+      if (chunk.domain !== 0 && !domainChanged(chunk.domain, domainRevisions, previous)) continue
+      let packetOffset = chunk.start
+      while (packetOffset < chunk.end) {
+        if (packetOffset + 8 > chunk.end) return null
         const bodyLen = view.getUint32(packetOffset, true)
         const bodyStart = packetOffset + 4
         const bodyEnd = bodyStart + bodyLen
-        if (bodyEnd > chunkEnd || bodyStart + 4 > bodyEnd) return null
+        if (bodyEnd > chunk.end || bodyStart + 4 > bodyEnd) return null
         const bodyBytes = new Uint8Array(bytes.buffer, bytes.byteOffset + bodyStart, bodyLen)
         const bodyView = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
         const detail = decodeSnapshotPacket(bodyBytes, bodyView)
         if (detail) details.push(detail)
         packetOffset = bodyEnd
       }
-      offset = chunkEnd
     }
-    if (offset !== payloadEnd) return null
     return {
       sequence: Number(sequence),
       domainFlags,

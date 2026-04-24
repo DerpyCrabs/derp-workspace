@@ -119,32 +119,21 @@ enum ShellSharedStateStaleReason {
         payload_revision: u64,
         current_revision: u64,
     },
-    SnapshotEpoch {
-        payload_epoch: u64,
-        current_epoch: u64,
-    },
 }
 
 fn shell_shared_state_payload_stale_reason(
     payload: &[u8],
     current_output_layout_revision: u64,
-    current_snapshot_epoch: u64,
+    _current_snapshot_epoch: u64,
 ) -> Option<ShellSharedStateStaleReason> {
     if payload.len() < 16 {
         return None;
     }
-    let snapshot_epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
     let output_layout_revision = u64::from_le_bytes(payload[8..16].try_into().unwrap());
     if output_layout_revision > 0 && output_layout_revision < current_output_layout_revision {
         return Some(ShellSharedStateStaleReason::OutputLayoutRevision {
             payload_revision: output_layout_revision,
             current_revision: current_output_layout_revision,
-        });
-    }
-    if snapshot_epoch > 0 && snapshot_epoch < current_snapshot_epoch {
-        return Some(ShellSharedStateStaleReason::SnapshotEpoch {
-            payload_epoch: snapshot_epoch,
-            current_epoch: current_snapshot_epoch,
         });
     }
     None
@@ -591,6 +580,7 @@ pub struct CompositorState {
     pub(crate) programs_menu_super_armed: bool,
     pub(crate) programs_menu_super_chord: bool,
     pub(crate) programs_menu_super_pending_toggle: bool,
+    pub(crate) programs_menu_restore_focus_window_id: Option<u32>,
     keyboard_layout_by_window: HashMap<u32, u32>,
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
@@ -606,6 +596,7 @@ pub struct CompositorState {
     pub(crate) shell_last_pointer_ipc_px: Option<(i32, i32)>,
     pub(crate) shell_last_pointer_ipc_global_logical: Option<(i32, i32)>,
     pub(crate) shell_last_pointer_ipc_modifiers: Option<u32>,
+    pub(crate) pointer_pressed_buttons: HashSet<u32>,
     /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
     /// Themed / system default pointer (`left_ptr`); also used for [`CursorImageStatus::Named`].
@@ -682,6 +673,8 @@ pub struct CompositorState {
     pub(crate) shell_workspace_revision: u64,
     pub(crate) shell_hosted_app_state_revision: u64,
     pub(crate) shell_interaction_revision: u64,
+    pub(crate) shell_interaction_last_sent_at: Option<Instant>,
+    pub(crate) shell_move_last_flush_at: Option<Instant>,
     pub(crate) shell_snapshot_epoch: u64,
     pub(crate) workspace_state: WorkspaceState,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
@@ -870,7 +863,10 @@ impl CompositorState {
 
     pub(crate) fn logical_focused_window_id(&self) -> Option<u32> {
         if self.shell_ipc_keyboard_to_cef {
-            return self.shell_focused_ui_window_id;
+            return self.shell_focused_ui_window_id.or_else(|| {
+                self.programs_menu_restore_focus_window_id
+                    .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+            });
         }
         self.keyboard_focused_window_id()
     }
@@ -1174,6 +1170,7 @@ impl CompositorState {
             programs_menu_super_armed: false,
             programs_menu_super_chord: false,
             programs_menu_super_pending_toggle: false,
+            programs_menu_restore_focus_window_id: None,
             keyboard_layout_by_window: HashMap::new(),
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
@@ -1187,6 +1184,7 @@ impl CompositorState {
             shell_last_pointer_ipc_px: None,
             shell_last_pointer_ipc_global_logical: None,
             shell_last_pointer_ipc_modifiers: None,
+            pointer_pressed_buttons: HashSet::new(),
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
             pointer_cursor_image: CursorImageStatus::default_named(),
@@ -1247,6 +1245,8 @@ impl CompositorState {
             shell_workspace_revision: 0,
             shell_hosted_app_state_revision: 0,
             shell_interaction_revision: 0,
+            shell_interaction_last_sent_at: None,
+            shell_move_last_flush_at: None,
             shell_snapshot_epoch: 0,
             workspace_state: WorkspaceState::default(),
             shell_last_sent_ui_focus_id: None,
@@ -1535,27 +1535,6 @@ impl CompositorState {
                     snapshot_epoch,
                     output_layout_revision = payload_revision,
                     current_output_layout_revision = current_revision,
-                    "rejected stale shell shared-state payload"
-                );
-                true
-            }
-            Some(ShellSharedStateStaleReason::SnapshotEpoch {
-                payload_epoch,
-                current_epoch,
-            }) => {
-                let output_layout_revision = if payload.len() >= 16 {
-                    u64::from_le_bytes(payload[8..16].try_into().unwrap())
-                } else {
-                    0
-                };
-                tracing::warn!(
-                    target: "derp_shell_shared_state",
-                    kind,
-                    sequence,
-                    snapshot_epoch = payload_epoch,
-                    current_snapshot_epoch = current_epoch,
-                    output_layout_revision,
-                    current_output_layout_revision = self.shell_output_topology_revision,
                     "rejected stale shell shared-state payload"
                 );
                 true
@@ -1973,12 +1952,6 @@ impl CompositorState {
         if id == self.shell_last_sent_ui_focus_id {
             return;
         }
-        tracing::warn!(
-            target: "derp_shell_clip",
-            focused = ?id,
-            logical = ?self.logical_focused_window_id(),
-            "shell ui focus changed"
-        );
         self.shell_last_sent_ui_focus_id = id;
         let (surface_id, window_id) = match id {
             None => (None, None),
@@ -2691,6 +2664,15 @@ impl CompositorState {
                 .is_some_and(|until| now < until)
     }
 
+    fn shell_hot_interaction_due(last: &mut Option<Instant>, interval: Duration) -> bool {
+        let now = Instant::now();
+        if last.is_some_and(|sent| now.duration_since(sent) < interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+
     pub(crate) fn shell_nudge_cef_repaint(&mut self) {
         self.shell_begin_frame_note_forced_repaint();
         let Ok(g) = self.shell_to_cef.lock() else {
@@ -2707,26 +2689,66 @@ impl CompositorState {
     }
 
     pub(crate) fn programs_menu_toggle_from_super(&mut self, serial: Serial) {
-        tracing::warn!(
-            target: "derp_shell_menu",
-            shell_cef_active = self.shell_cef_active(),
-            shell_has_frame = self.shell_has_frame,
-            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
-            pending_toggle = self.programs_menu_super_pending_toggle,
-            "programs_menu_toggle_from_super"
-        );
-        self.space.elements().for_each(|e| {
-            e.set_activate(false);
-            if let DerpSpaceElem::Wayland(w) = e {
-                w.toplevel().unwrap().send_pending_configure();
-            }
-        });
-        let keyboard = self.seat.get_keyboard().unwrap();
-        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
-        self.keyboard_on_focus_surface_changed(None);
-        self.shell_ipc_keyboard_to_cef = true;
-        self.shell_emit_shell_ui_focus_if_changed(None);
+        let _ = serial;
+        self.programs_menu_opened_from_shell(0);
         self.shell_send_keybind_ex("toggle_programs_menu", None);
+    }
+
+    pub(crate) fn programs_menu_opened_from_shell(&mut self, restore_window_id: u32) {
+        let restore_from_shell = (restore_window_id != 0
+            && self.logical_focus_target_is_valid(restore_window_id))
+        .then_some(restore_window_id);
+        self.programs_menu_restore_focus_window_id = restore_from_shell.or_else(|| {
+            self.logical_focused_window_id()
+                .or_else(|| self.keyboard_focused_window_id())
+                .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+        });
+        self.shell_ipc_keyboard_to_cef = true;
+        self.shell_send_to_cef(self.shell_focus_message());
+    }
+
+    pub(crate) fn programs_menu_closed_from_shell(&mut self) {
+        let restore_window_id = self.programs_menu_restore_focus_window_id.take();
+        self.programs_menu_super_armed = false;
+        self.programs_menu_super_chord = false;
+        self.programs_menu_super_pending_toggle = false;
+        if let Some(window_id) = restore_window_id {
+            if self.logical_focus_target_is_valid(window_id) {
+                self.focus_logical_window(window_id);
+                self.shell_reply_window_list();
+                return;
+            }
+        }
+        self.shell_ipc_keyboard_to_cef = false;
+        self.shell_send_to_cef(self.shell_focus_message());
+    }
+
+    pub(crate) fn programs_menu_prepare_super_press(&mut self) {
+        if self.pointer_pressed_buttons.is_empty() {
+            self.shell_resize_end_active();
+            self.shell_move_end_active();
+            self.shell_ui_pointer_grab_end();
+            self.shell_backed_move_candidate = None;
+        }
+        self.programs_menu_super_armed = true;
+        self.programs_menu_super_chord = Self::programs_menu_super_press_chord(
+            !self.pointer_pressed_buttons.is_empty(),
+            self.shell_move_is_active(),
+            self.shell_resize_is_active(),
+            self.shell_backed_move_candidate.is_some(),
+        );
+    }
+
+    pub(crate) fn programs_menu_super_press_chord(
+        pointer_button_pressed: bool,
+        shell_move_active: bool,
+        shell_resize_active: bool,
+        shell_backed_move_candidate: bool,
+    ) -> bool {
+        pointer_button_pressed
+            || shell_move_active
+            || shell_resize_active
+            || shell_backed_move_candidate
     }
 
     pub(crate) fn shell_send_keybind(&mut self, action: &str) {
@@ -2734,16 +2756,6 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_keybind_ex(&mut self, action: &str, target_window_id: Option<u32>) {
-        tracing::warn!(
-            target: "derp_shell_menu",
-            %action,
-            ?target_window_id,
-            shell_cef_active = self.shell_cef_active(),
-            shell_has_frame = self.shell_has_frame,
-            shell_ipc_keyboard_to_cef = self.shell_ipc_keyboard_to_cef,
-            pending_toggle = self.programs_menu_super_pending_toggle,
-            "shell_send_keybind_ex"
-        );
         self.shell_begin_frame_note_shell_input();
         self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
@@ -7380,6 +7392,7 @@ impl CompositorState {
         }
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = initial_pending_delta;
+        self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
         self.shell_ipc_keyboard_to_cef = true;
         if initial_pending_delta != (0, 0) {
@@ -7414,7 +7427,6 @@ impl CompositorState {
         let Some(wid) = self.shell_move_window_id else {
             return;
         };
-        tracing::warn!(target: "derp_shell_move", wid, "shell_move_end_active (seat LMB release)");
         self.shell_move_end(wid);
     }
 
@@ -7624,11 +7636,19 @@ impl CompositorState {
         if kind == WindowKind::ShellHosted {
             if let Some(record) = self.window_registry.window_record(window_id) {
                 if let Some(rect) = record.shell_hosted_float_restore {
-                    return (rect.size.w.max(1), rect.size.h.max(1));
+                    let w = rect.size.w.max(1);
+                    let h = rect.size.h.max(1);
+                    if w < info.width.saturating_sub(24) || h < info.height.saturating_sub(120) {
+                        return (w, h);
+                    }
                 }
             }
         } else if let Some((_, _, w, h)) = self.toplevel_floating_restore.get(&window_id).copied() {
-            return (w.max(1), h.max(1));
+            let w = w.max(1);
+            let h = h.max(1);
+            if w < info.width.saturating_sub(24) || h < info.height.saturating_sub(120) {
+                return (w, h);
+            }
         }
         (
             (info.width.max(1) * 55 / 100).max(360),
@@ -7739,16 +7759,8 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_begin(window_id);
-            let loc = self
-                .space
-                .element_location(&DerpSpaceElem::Wayland(window.clone()));
-            tracing::warn!(
-                target: "derp_shell_move",
-                window_id,
-                loc = ?loc,
-                "shell_move_begin: started"
-            );
             self.shell_send_interaction_state();
             return;
         }
@@ -7770,16 +7782,8 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_begin(window_id);
-            let loc = self
-                .space
-                .element_location(&DerpSpaceElem::X11(x11.clone()));
-            tracing::warn!(
-                target: "derp_shell_move",
-                window_id,
-                loc = ?loc,
-                "shell_move_begin: started"
-            );
             self.shell_send_interaction_state();
             return;
         }
@@ -7811,6 +7815,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -7845,6 +7850,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_flush: window gone");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -7865,6 +7871,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, ?error, "shell_move_flush: x11 configure failed");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -7903,13 +7910,16 @@ impl CompositorState {
             self.shell_move_pending_delta.0 += dx;
             self.shell_move_pending_delta.1 += dy;
             self.shell_move_proxy_try_arm_capture();
-            self.shell_move_flush_pending_deltas_backed();
+            if self.shell_move_delta_flush_due() {
+                self.shell_move_flush_pending_deltas_backed();
+            }
             return;
         }
         let Some(sid) = self.window_registry.surface_id_for_window(wid) else {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -7935,6 +7945,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_delta: window gone from space");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
             self.shell_send_interaction_state();
@@ -7951,7 +7962,16 @@ impl CompositorState {
             "shell_move_delta: flushing to space"
         );
         self.shell_move_proxy_try_arm_capture();
-        self.shell_move_flush_pending_deltas();
+        if self.shell_move_delta_flush_due() {
+            self.shell_move_flush_pending_deltas();
+        }
+    }
+
+    pub(crate) fn shell_move_delta_flush_due(&mut self) -> bool {
+        Self::shell_hot_interaction_due(
+            &mut self.shell_move_last_flush_at,
+            Duration::from_millis(16),
+        )
     }
 
     /// Clears shell move state after `move_end` IPC, compositor button release, or disconnect.
@@ -7963,6 +7983,7 @@ impl CompositorState {
         self.shell_native_drag_preview_cancel(Some(window_id));
         self.notify_geometry_for_window(window, true);
         self.shell_move_proxy_release(window_id);
+        self.shell_move_last_flush_at = None;
         self.shell_send_interaction_state();
     }
 
@@ -7996,6 +8017,7 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(window_id));
             self.shell_move_proxy_cancel(Some(window_id));
             self.shell_send_interaction_state();
@@ -8004,11 +8026,6 @@ impl CompositorState {
         if let Some(window) = self.find_window_by_surface_id(sid) {
             self.shell_move_flush_pending_deltas();
             self.shell_move_end_cleanup(window_id, &window);
-            tracing::warn!(
-                target: "derp_shell_move",
-                window_id,
-                "shell_move_end: finished"
-            );
             return;
         }
         if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
@@ -8017,15 +8034,11 @@ impl CompositorState {
                 self.shell_move_window_id = None;
             }
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(window_id));
             self.emit_x11_window_updates(&x11, true, false);
             self.shell_move_proxy_release(window_id);
             self.shell_send_interaction_state();
-            tracing::warn!(
-                target: "derp_shell_move",
-                window_id,
-                "shell_move_end: finished"
-            );
             return;
         }
         tracing::warn!(
@@ -8036,6 +8049,7 @@ impl CompositorState {
         );
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_move_last_flush_at = None;
         self.shell_native_drag_preview_cancel(Some(window_id));
         self.shell_move_proxy_cancel(Some(window_id));
         self.shell_send_interaction_state();
@@ -9600,6 +9614,18 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_interaction_state(&mut self) {
+        self.next_shell_interaction_revision();
+        self.shell_interaction_last_sent_at = Some(Instant::now());
+        self.shell_send_to_cef(self.shell_interaction_state_message());
+    }
+
+    pub(crate) fn shell_send_interaction_state_throttled(&mut self) {
+        if !Self::shell_hot_interaction_due(
+            &mut self.shell_interaction_last_sent_at,
+            Duration::from_millis(16),
+        ) {
+            return;
+        }
         self.next_shell_interaction_revision();
         self.shell_send_to_cef(self.shell_interaction_state_message());
     }
@@ -12600,13 +12626,14 @@ mod shell_shared_state_tests {
     }
 
     #[test]
-    fn rejects_payload_from_old_snapshot_epoch() {
+    fn allows_lagged_snapshot_epoch_payloads() {
         assert_eq!(
             shell_shared_state_payload_stale_reason(&payload(18, 4), 4, 20),
-            Some(ShellSharedStateStaleReason::SnapshotEpoch {
-                payload_epoch: 18,
-                current_epoch: 20,
-            })
+            None
+        );
+        assert_eq!(
+            shell_shared_state_payload_stale_reason(&payload(16, 4), 4, 20),
+            None
         );
     }
 
@@ -12624,5 +12651,37 @@ mod shell_shared_state_tests {
             shell_shared_state_payload_stale_reason(&payload(20, 4), 4, 20),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod programs_menu_super_tests {
+    use super::CompositorState;
+
+    #[test]
+    fn super_press_without_active_pointer_interaction_is_not_a_chord() {
+        assert!(!CompositorState::programs_menu_super_press_chord(
+            false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn super_press_with_pressed_pointer_button_is_a_chord() {
+        assert!(CompositorState::programs_menu_super_press_chord(
+            true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn super_press_with_active_move_or_resize_is_a_chord() {
+        assert!(CompositorState::programs_menu_super_press_chord(
+            false, true, false, false
+        ));
+        assert!(CompositorState::programs_menu_super_press_chord(
+            false, false, true, false
+        ));
+        assert!(CompositorState::programs_menu_super_press_chord(
+            false, false, false, true
+        ));
     }
 }

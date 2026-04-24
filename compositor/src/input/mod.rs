@@ -142,15 +142,6 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
-            if self.programs_menu_super_armed
-                && (grabbed
-                    || self.shell_move_is_active()
-                    || self.shell_resize_is_active()
-                    || self.shell_ui_pointer_grab_active()
-                    || self.shell_backed_move_candidate.is_some())
-            {
-                self.programs_menu_super_chord = true;
-            }
             self.shell_begin_frame_note_shell_input();
             if self.shell_move_window_id.is_none() && !self.shell_ui_pointer_grab_active() {
                 if let Some((window_id, start)) = self.shell_backed_move_candidate {
@@ -183,7 +174,7 @@ impl CompositorState {
                 self.shell_resize_delta(dx, dy);
             }
             if self.shell_move_is_active() || self.shell_resize_is_active() {
-                self.shell_send_interaction_state();
+                self.shell_send_interaction_state_throttled();
             }
         }
         self.shell_ipc_maybe_forward_pointer_move(pos);
@@ -302,7 +293,15 @@ impl CompositorState {
         button_state: ButtonState,
         time_msec: u32,
     ) {
-        if self.programs_menu_super_armed {
+        match button_state {
+            ButtonState::Pressed => {
+                self.pointer_pressed_buttons.insert(button);
+            }
+            ButtonState::Released => {
+                self.pointer_pressed_buttons.remove(&button);
+            }
+        }
+        if self.programs_menu_super_armed && button_state == ButtonState::Pressed {
             self.programs_menu_super_chord = true;
         }
         self.shell_begin_frame_note_shell_input();
@@ -668,19 +667,7 @@ impl CompositorState {
                         }
                         if key_state == KeyState::Pressed {
                             if is_super && !state.seat.keyboard_shortcuts_inhibited() {
-                                tracing::warn!(
-                                    target: "derp_shell_menu",
-                                    source = "libinput",
-                                    key_state = "pressed",
-                                    raw_sym,
-                                    shell_cef_active = state.shell_cef_active(),
-                                    shell_has_frame = state.shell_has_frame,
-                                    shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                                    pending_toggle = state.programs_menu_super_pending_toggle,
-                                    "super key pressed"
-                                );
-                                state.programs_menu_super_armed = true;
-                                state.programs_menu_super_chord = false;
+                                state.programs_menu_prepare_super_press();
                                 return FilterResult::Intercept(());
                             }
                             if state.programs_menu_super_armed
@@ -693,17 +680,6 @@ impl CompositorState {
                                 if let Some(action) = scratchpad_action.as_deref().or_else(|| {
                                     super_keybind_action(raw_sym, mods.ctrl, mods.shift)
                                 }) {
-                                    tracing::warn!(
-                                        target: "derp_shell_menu",
-                                        source = "libinput",
-                                        %action,
-                                        raw_sym,
-                                        shell_cef_active = state.shell_cef_active(),
-                                        shell_has_frame = state.shell_has_frame,
-                                        shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                                        pending_toggle = state.programs_menu_super_pending_toggle,
-                                        "super chord matched action"
-                                    );
                                     state.programs_menu_super_chord = true;
                                     if state.shell_cef_active() {
                                         state.handle_super_keybind(action);
@@ -719,19 +695,6 @@ impl CompositorState {
                         {
                             let armed = state.programs_menu_super_armed;
                             let chord = state.programs_menu_super_chord;
-                            tracing::warn!(
-                                target: "derp_shell_menu",
-                                source = "libinput",
-                                key_state = "released",
-                                raw_sym,
-                                armed,
-                                chord,
-                                shell_cef_active = state.shell_cef_active(),
-                                shell_has_frame = state.shell_has_frame,
-                                shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                                pending_toggle = state.programs_menu_super_pending_toggle,
-                                "super key released"
-                            );
                             state.programs_menu_super_armed = false;
                             state.programs_menu_super_chord = false;
                             if armed && !chord {

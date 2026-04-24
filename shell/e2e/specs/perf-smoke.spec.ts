@@ -5,6 +5,7 @@ import {
   getJson,
   getPerfCounters,
   printNote,
+  postJson,
   raiseTaskbarWindow,
   rectCenter,
   resetPerfCounters,
@@ -221,8 +222,49 @@ export default defineGroup(import.meta.url, ({ test }) => {
       moveDelta.shell_sync.full_window_list_replies <= 2,
       `window drag should not trigger repeated full window list replies, got ${moveDelta.shell_sync.full_window_list_replies}`,
     )
+    assert(
+      moveDelta.shell_sync.snapshot_notifies <= 2,
+      `window drag should not trigger repeated snapshot notifications, got ${moveDelta.shell_sync.snapshot_notifies}`,
+    )
+
+    const afterShortDrag = await focusNativeWindow(base, red.window.window_id)
+    const longDragControls = windowControls(afterShortDrag, red.window.window_id)
+    assert(longDragControls?.titlebar, 'missing red titlebar before long perf move')
+    const longDragStart = rectCenter(longDragControls.titlebar)
+    await resetPerfCounters(base)
+    await postJson(base, '/test/input/drag', {
+      x0: longDragStart.x,
+      y0: longDragStart.y,
+      x1: longDragStart.x + 520,
+      y1: longDragStart.y + 96,
+      button: 0x110,
+      steps: 240,
+    })
+    const longDragSample = await waitFor(
+      'wait for perf counters after long window drag',
+      async () => {
+        const sample = await getPerfCounters(base)
+        if (sample.shell_updates.window_geometry_messages < 1) return null
+        return sample
+      },
+      5000,
+      100,
+    )
+
+    assert(
+      longDragSample.shell_updates.window_geometry_messages <= 48,
+      `long drag should coalesce geometry updates, got ${longDragSample.shell_updates.window_geometry_messages}`,
+    )
+    assert(
+      longDragSample.shell_updates.message_count <= 96,
+      `long drag should not flood shell messages, got ${longDragSample.shell_updates.message_count}`,
+    )
+    assert(
+      longDragSample.shell_sync.snapshot_notifies <= 4,
+      `long drag should not trigger repeated snapshot notifications, got ${longDragSample.shell_sync.snapshot_notifies}`,
+    )
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -233,6 +275,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         open: openDelta,
         dirty: dirtySample,
         move: moveDelta,
+        long_move: longDragSample,
       },
       windows: {
         red: red.window,

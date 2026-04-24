@@ -14,10 +14,6 @@ export const WORKSPACE_STATE_FIELDS = [
 ] as const
 
 export const WORKSPACE_DERIVED_FIELDS = [
-  'groupIdByWindowId',
-  'visibleWindowIdByGroupId',
-  'monitorNameByWindowId',
-  'monitorIdByWindowId',
 ] as const
 
 export const WORKSPACE_MONITOR_LAYOUT_TYPES = [
@@ -122,10 +118,6 @@ export type WorkspaceState = {
   monitorTiles: WorkspaceMonitorTileState[]
   monitorLayouts: WorkspaceMonitorLayoutState[]
   preTileGeometry: WorkspacePreTileGeometry[]
-  groupIdByWindowId?: Record<string, string>
-  visibleWindowIdByGroupId?: Record<string, number>
-  monitorNameByWindowId?: Record<string, string>
-  monitorIdByWindowId?: Record<string, string>
   nextGroupSeq: number
 }
 

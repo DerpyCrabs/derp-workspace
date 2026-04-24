@@ -188,6 +188,7 @@ struct E2eInteractionVisualSnapshot {
 struct E2eCompositorSnapshot {
     captured_at_ms: u128,
     pointer: E2ePointSnapshot,
+    pointer_pressed_button_count: usize,
     focused_window_id: Option<u32>,
     focused_shell_ui_window_id: Option<u32>,
     session_power_action: Option<String>,
@@ -412,19 +413,7 @@ impl CompositorState {
                 }
                 if key_state == KeyState::Pressed {
                     if is_super && !state.seat.keyboard_shortcuts_inhibited() {
-                        tracing::warn!(
-                            target: "derp_shell_menu",
-                            source = "e2e",
-                            key_state = "pressed",
-                            raw_sym,
-                            shell_cef_active = state.shell_cef_active(),
-                            shell_has_frame = state.shell_has_frame,
-                            shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                            pending_toggle = state.programs_menu_super_pending_toggle,
-                            "super key pressed"
-                        );
-                        state.programs_menu_super_armed = true;
-                        state.programs_menu_super_chord = false;
+                        state.programs_menu_prepare_super_press();
                         return FilterResult::Intercept(());
                     }
                     if state.programs_menu_super_armed
@@ -434,17 +423,6 @@ impl CompositorState {
                         if let Some(action) =
                             crate::input::super_keybind_action(raw_sym, mods.ctrl, mods.shift)
                         {
-                            tracing::warn!(
-                                target: "derp_shell_menu",
-                                source = "e2e",
-                                %action,
-                                raw_sym,
-                                shell_cef_active = state.shell_cef_active(),
-                                shell_has_frame = state.shell_has_frame,
-                                shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                                pending_toggle = state.programs_menu_super_pending_toggle,
-                                "super chord matched action"
-                            );
                             state.programs_menu_super_chord = true;
                             if state.shell_cef_active() {
                                 state.handle_super_keybind(action);
@@ -460,19 +438,6 @@ impl CompositorState {
                 {
                     let armed = state.programs_menu_super_armed;
                     let chord = state.programs_menu_super_chord;
-                    tracing::warn!(
-                        target: "derp_shell_menu",
-                        source = "e2e",
-                        key_state = "released",
-                        raw_sym,
-                        armed,
-                        chord,
-                        shell_cef_active = state.shell_cef_active(),
-                        shell_has_frame = state.shell_has_frame,
-                        shell_ipc_keyboard_to_cef = state.shell_ipc_keyboard_to_cef,
-                        pending_toggle = state.programs_menu_super_pending_toggle,
-                        "super key released"
-                    );
                     state.programs_menu_super_armed = false;
                     state.programs_menu_super_chord = false;
                     if armed && !chord {
@@ -700,6 +665,7 @@ impl CompositorState {
                 x: pointer.x,
                 y: pointer.y,
             },
+            pointer_pressed_button_count: self.pointer_pressed_buttons.len(),
             focused_window_id: self.keyboard_focused_window_id(),
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
             session_power_action: self.e2e_last_session_power_action.clone(),

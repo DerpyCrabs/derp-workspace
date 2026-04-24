@@ -146,12 +146,14 @@ export function buildTaskbarRowsByMonitor(
   for (const workspaceGroup of workspaceSnapshot.groups) {
     const group = groupsById.get(workspaceGroup.id)
     if (!group) continue
-    const windowKey = String(group.visibleWindow.window_id)
+    const tiledMonitor = workspaceSnapshot.monitorTiles.find((monitor) =>
+      monitor.entries.some((entry) => entry.windowId === group.visibleWindow.window_id),
+    )
     const key =
       group.visibleWindow.output_name ||
-      workspaceSnapshot.monitorNameByWindowId?.[windowKey] ||
       group.visibleWindow.output_id ||
-      workspaceSnapshot.monitorIdByWindowId?.[windowKey] ||
+      tiledMonitor?.outputName ||
+      tiledMonitor?.outputId ||
       fallbackMonitorKey
     const bucket = groupsByMonitor.get(key)
     if (bucket) bucket.push(group)
@@ -251,18 +253,6 @@ export function createWorkspaceSelectors(options: CreateWorkspaceSelectorsOption
   })
 
   const workspaceGroupIdByWindowId = createMemo(() => {
-    const derived = options.workspaceSnapshot().groupIdByWindowId
-    if (derived && typeof derived === 'object') {
-      const map = new Map<number, string>()
-      for (const [windowId, groupId] of Object.entries(derived)) {
-        const parsedWindowId = Math.trunc(Number(windowId))
-        if (!Number.isFinite(parsedWindowId) || parsedWindowId <= 0 || typeof groupId !== 'string' || groupId.length === 0) {
-          continue
-        }
-        map.set(parsedWindowId, groupId)
-      }
-      return map
-    }
     const map = new Map<number, string>()
     for (const group of options.workspaceSnapshot().groups) {
       for (const windowId of group.windowIds) {

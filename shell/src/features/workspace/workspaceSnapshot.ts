@@ -62,10 +62,6 @@ export function cloneWorkspaceSnapshot(state: WorkspaceSnapshot): WorkspaceSnaps
       windowId: entry.windowId,
       bounds: { ...entry.bounds },
     })),
-    groupIdByWindowId: state.groupIdByWindowId ? { ...state.groupIdByWindowId } : undefined,
-    visibleWindowIdByGroupId: state.visibleWindowIdByGroupId ? { ...state.visibleWindowIdByGroupId } : undefined,
-    monitorNameByWindowId: state.monitorNameByWindowId ? { ...state.monitorNameByWindowId } : undefined,
-    monitorIdByWindowId: state.monitorIdByWindowId ? { ...state.monitorIdByWindowId } : undefined,
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -165,23 +161,6 @@ export function workspaceSnapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapsh
     for (let windowIndex = 0; windowIndex < groupA.windowIds.length; windowIndex += 1) {
       if (groupA.windowIds[windowIndex] !== groupB.windowIds[windowIndex]) return false
     }
-  }
-  if (!sameRecord(a.groupIdByWindowId, b.groupIdByWindowId)) return false
-  if (!sameRecord(a.visibleWindowIdByGroupId, b.visibleWindowIdByGroupId)) return false
-  if (!sameRecord(a.monitorNameByWindowId, b.monitorNameByWindowId)) return false
-  if (!sameRecord(a.monitorIdByWindowId, b.monitorIdByWindowId)) return false
-  return true
-}
-
-function sameRecord<T extends string | number>(
-  left: Record<string, T> | undefined,
-  right: Record<string, T> | undefined,
-): boolean {
-  const leftEntries = Object.entries(left ?? {})
-  const rightEntries = Object.entries(right ?? {})
-  if (leftEntries.length !== rightEntries.length) return false
-  for (const [key, value] of leftEntries) {
-    if (right?.[key] !== value) return false
   }
   return true
 }
@@ -485,37 +464,11 @@ export function normalizeWorkspaceSnapshot(raw: unknown): WorkspaceSnapshot {
   state.monitorTiles = normalizeMonitorTiles(source.monitorTiles)
   state.monitorLayouts = normalizeMonitorLayouts(source.monitorLayouts)
   state.preTileGeometry = normalizePreTileGeometry(source.preTileGeometry)
-  state.groupIdByWindowId = normalizeStringRecord(source.groupIdByWindowId)
-  state.visibleWindowIdByGroupId = normalizeNumberRecord(source.visibleWindowIdByGroupId)
-  state.monitorNameByWindowId = normalizeStringRecord(source.monitorNameByWindowId)
-  state.monitorIdByWindowId = normalizeStringRecord(source.monitorIdByWindowId)
   const nextRaw = typeof source.nextGroupSeq === 'number' ? source.nextGroupSeq : Number(source.nextGroupSeq)
   const nextSeq = Math.trunc(nextRaw)
   state.nextGroupSeq =
     Number.isFinite(nextSeq) && nextSeq > 0 ? nextSeq : inferNextGroupSeq(state)
   return reconcileWorkspaceSnapshot(state, allWorkspaceWindowIds(state))
-}
-
-function normalizeStringRecord(raw: unknown): Record<string, string> | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value !== 'string' || value.length === 0) continue
-    out[key] = value
-  }
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
-function normalizeNumberRecord(raw: unknown): Record<string, number> | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const out: Record<string, number> = {}
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    const num = typeof value === 'number' ? value : Number(value)
-    const int = Math.trunc(num)
-    if (!Number.isFinite(int) || int <= 0) continue
-    out[key] = int
-  }
-  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function inferNextGroupSeq(state: WorkspaceSnapshot): number {
@@ -529,36 +482,7 @@ function inferNextGroupSeq(state: WorkspaceSnapshot): number {
   return next
 }
 
-function refreshDerivedWorkspaceIndexes(state: WorkspaceSnapshot): void {
-  const groupIdByWindowId: Record<string, string> = {}
-  const visibleWindowIdByGroupId: Record<string, number> = {}
-  const monitorNameByWindowId: Record<string, string> = {}
-  const monitorIdByWindowId: Record<string, string> = {}
-  for (const group of state.groups) {
-    for (const windowId of group.windowIds) {
-      groupIdByWindowId[windowId] = group.id
-    }
-    const active = state.activeTabByGroupId[group.id]
-    visibleWindowIdByGroupId[group.id] = normalizedWorkspaceActiveWindowId(
-      state,
-      group,
-      group.windowIds.includes(active) ? active : group.windowIds[0],
-    )
-  }
-  for (const monitor of state.monitorTiles) {
-    for (const entry of monitor.entries) {
-      monitorNameByWindowId[entry.windowId] = monitor.outputName
-      if (monitor.outputId) monitorIdByWindowId[entry.windowId] = monitor.outputId
-    }
-  }
-  state.groupIdByWindowId = groupIdByWindowId
-  state.visibleWindowIdByGroupId = visibleWindowIdByGroupId
-  state.monitorNameByWindowId = monitorNameByWindowId
-  state.monitorIdByWindowId = Object.keys(monitorIdByWindowId).length > 0 ? monitorIdByWindowId : undefined
-}
-
 export function withRefreshedDerivedWorkspaceIndexes(state: WorkspaceSnapshot): WorkspaceSnapshot {
-  refreshDerivedWorkspaceIndexes(state)
   return state
 }
 
@@ -576,14 +500,6 @@ export function allWorkspaceWindowIds(state: WorkspaceSnapshot): number[] {
 }
 
 export function groupIdForWindow(state: WorkspaceSnapshot, windowId: number): string | null {
-  const derived = state.groupIdByWindowId?.[windowId]
-  if (
-    typeof derived === 'string' &&
-    derived.length > 0 &&
-    state.groups.some((group) => group.id === derived && group.windowIds.includes(windowId))
-  ) {
-    return derived
-  }
   for (const group of state.groups) {
     if (group.windowIds.includes(windowId)) return group.id
   }
@@ -676,6 +592,5 @@ export function reconcileWorkspaceSnapshot(
   next.preTileGeometry = next.preTileGeometry.filter((entry) => live.has(entry.windowId))
   ensurePinnedWindowIds(next)
   ensureValidWorkspaceSplitState(next)
-  refreshDerivedWorkspaceIndexes(next)
   return next
 }
