@@ -1,5 +1,6 @@
 import { For, Show, onCleanup, onMount } from 'solid-js'
 import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
 export function ProgramsContextMenu() {
@@ -41,6 +42,12 @@ export function ProgramsContextMenu() {
     document.removeEventListener('keydown', redirectLauncherTyping, true)
   })
 
+  function registerPanel(el: HTMLDivElement) {
+    props.setPanelRef(el)
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
+
   return (
     <DropdownMenuContent
       data-shell-programs-menu-panel
@@ -48,9 +55,7 @@ export function ProgramsContextMenu() {
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex flex-col overflow-hidden"
       role="group"
       aria-label="Application search"
-      ref={(el) => {
-        props.setPanelRef(el)
-      }}
+      ref={registerPanel}
       style={props.placement() ?? undefined}
     >
       <div class="shrink-0 border-b border-(--shell-border)">

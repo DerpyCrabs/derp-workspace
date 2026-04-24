@@ -1,4 +1,10 @@
 import { clientRectToGlobalLogical } from '@/lib/shellCoords'
+import {
+  createShellMeasureFrame,
+  currentShellMeasureFrame,
+  type ShellMeasureEnv,
+  type ShellMeasureFrame,
+} from '@/features/bridge/shellMeasureFrame'
 import { sharedShellStateStampKey, writeShellUiWindowsState } from '@/features/bridge/sharedShellState'
 export {
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -10,15 +16,11 @@ export {
 export const SHELL_WINDOW_FLAG_SHELL_HOSTED = 1
 export const SHELL_WINDOW_FLAG_SCRATCHPAD = 2
 
-export type ShellUiMeasureEnv = {
-  main: HTMLElement
-  outputGeom: { w: number; h: number }
-  origin: { x: number; y: number } | null
-}
+export type ShellUiMeasureEnv = ShellMeasureEnv
 
 type Entry = {
   id: number
-  measure: () => {
+  measure: (frame: ShellMeasureFrame | null) => {
     id: number
     z: number
     gx: number
@@ -76,10 +78,11 @@ function flush() {
   raf = 0
   microtaskQueued = false
   if (!structureDirty && dirtyRegistryTokens.size === 0 && lastWindows !== null) return
+  const frame = currentShellMeasureFrame()
   for (const token of dirtyRegistryTokens) {
     const entry = registry.get(token)
     if (!entry) continue
-    entry.cached = entry.measure()
+    entry.cached = entry.measure(frame)
   }
   dirtyRegistryTokens.clear()
   structureDirty = false
@@ -147,14 +150,14 @@ export function shellUiWindowMeasureFromEnv(
   z: number,
   root: HTMLElement | undefined,
   getEnv: () => ShellUiMeasureEnv | null,
+  frame?: ShellMeasureFrame | null,
 ) {
   const el = root
-  const env = getEnv()
+  const env = frame ?? currentShellMeasureFrame() ?? createShellMeasureFrame(getEnv())
   if (!el || !env) return null
-  const mainRect = env.main.getBoundingClientRect()
   const r = el.getBoundingClientRect()
   if (r.width < 1 || r.height < 1) return null
-  const logical = clientRectToGlobalLogical(mainRect, r, env.outputGeom.w, env.outputGeom.h, env.origin)
+  const logical = clientRectToGlobalLogical(env.mainRect, r, env.outputGeom.w, env.outputGeom.h, env.origin)
   return {
     id,
     z,

@@ -21,6 +21,7 @@ import {
   type ShellUiMeasureEnv,
   shellUiWindowMeasureFromEnv,
 } from '@/features/shell-ui/shellUiWindows'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { canvasRectToClientCss, clientPointToGlobalLogical, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
 
 type ScreenshotSelectionState = {
@@ -433,6 +434,11 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
   function PortalPickerOverlay() {
     let panel: HTMLDivElement | undefined
 
+    function registerOverlay(el: HTMLDivElement) {
+      const registration = registerShellExclusionElement('floating', 'floating', el)
+      onCleanup(registration.unregister)
+    }
+
     onMount(() => {
       options.acquireOverlayPointer()
       const onKeyDown = (event: KeyboardEvent) => {
@@ -464,6 +470,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
             <div
               data-shell-exclusion-floating
               class="absolute inset-0 z-90000"
+              ref={registerOverlay}
               onContextMenu={(event) => {
                 event.preventDefault()
               }}

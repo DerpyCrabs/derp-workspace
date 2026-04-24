@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { currentShellMeasureFrame } from './shellMeasureFrame'
 import { createShellSharedStateSync } from './shellSharedStateSync'
 
 async function flushMicrotasks() {
@@ -44,5 +45,35 @@ describe('createShellSharedStateSync', () => {
     expect(calls).toEqual(['schedule', 'schedule'])
     await flushMicrotasks()
     expect(calls).toEqual(['schedule', 'schedule', 'schedule'])
+  })
+
+  it('shares one measurement frame across immediate shell ui and exclusion sync', () => {
+    const rect = {
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+    } as DOMRect
+    const main = {
+      getBoundingClientRect: vi.fn(() => rect),
+    } as unknown as HTMLElement
+    const frames: unknown[] = []
+    const sync = createShellSharedStateSync({
+      invalidateAllShellUiWindows: () => frames.push(currentShellMeasureFrame()),
+      flushShellUiWindowsSyncNow: () => frames.push(currentShellMeasureFrame()),
+      scheduleExclusionZonesSync: () => frames.push(currentShellMeasureFrame()),
+      syncExclusionZonesNow: () => frames.push(currentShellMeasureFrame()),
+      measureEnv: () => ({ main, outputGeom: { w: 100, h: 100 }, origin: null }),
+    })
+
+    sync.requestSharedStateSync({ shellUi: 'flush', exclusion: 'sync' }, 'now')
+
+    expect(main.getBoundingClientRect).toHaveBeenCalledTimes(1)
+    expect(frames).toHaveLength(2)
+    expect(frames[0]).toBe(frames[1])
   })
 })

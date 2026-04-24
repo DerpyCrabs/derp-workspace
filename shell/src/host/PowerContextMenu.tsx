@@ -1,5 +1,6 @@
-import { For, Show, createMemo } from 'solid-js'
+import { For, Show, createMemo, onCleanup } from 'solid-js'
 import { DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { useShellContextMenus } from './ShellContextMenusContext'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 
@@ -19,15 +20,18 @@ export function PowerContextMenu() {
       transform: 'translateX(-100%) translateY(-100%)',
     }
   })
+  function registerPanel(el: HTMLDivElement) {
+    props.setPanelRef(el)
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
   return (
     <DropdownMenuContent
       data-shell-exclusion-floating
       data-shell-power-menu-panel
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
       aria-label="Power"
-      ref={(el) => {
-        props.setPanelRef(el)
-      }}
+      ref={registerPanel}
       style={panelStyle()}
     >
       <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">

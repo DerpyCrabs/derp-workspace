@@ -2739,7 +2739,6 @@ impl CompositorState {
         if let Some(window_id) = restore_window_id {
             if self.logical_focus_target_is_valid(window_id) {
                 self.focus_logical_window(window_id);
-                self.shell_reply_window_list();
                 return;
             }
         }

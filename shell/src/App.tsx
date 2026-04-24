@@ -1400,11 +1400,18 @@ function App() {
     onHudChange: debugHudRuntime.setExclusionZonesHud,
     exclusionReactiveDeps,
   })
+  const shellMeasureEnv = () => {
+    const main = mainRef
+    const og = outputGeom()
+    if (!main || !og) return null
+    return { main, outputGeom: og, origin: layoutCanvasOrigin() }
+  }
   const shellSharedStateSync = createShellSharedStateSync({
     invalidateAllShellUiWindows,
     flushShellUiWindowsSyncNow,
     scheduleExclusionZonesSync,
     syncExclusionZonesNow,
+    measureEnv: shellMeasureEnv,
   })
 
   const workspaceLayoutBridge = createWorkspaceLayoutBridge({

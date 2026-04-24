@@ -11,6 +11,7 @@ import {
 } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { useShellFloating } from '@/features/floating/ShellFloatingContext'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { resolveSelectBehavior } from '@/lib/selectBehavior'
 export type SelectProps<T> = {
   options: readonly T[]
@@ -202,6 +203,13 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
     setIsOpen(true)
   }
 
+  function registerPanel(el: HTMLDivElement) {
+    panelEl = el
+    if (!floatingPlacement()) return
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
+
   return (
     <div class="relative self-start" ref={(el) => (anchorWrap = el)}>
       <button
@@ -244,7 +252,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
         {(() => {
           const list = (
             <div
-              ref={(el) => (panelEl = el)}
+              ref={registerPanel}
               class={
                 props.listClass ??
                 (floatingPlacement() ? DEFAULT_LIST_CLASS : DEFAULT_INLINE_LIST_CLASS)

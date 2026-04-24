@@ -21,6 +21,7 @@ import {
   shellUiWindowMeasureFromEnv,
   type ShellUiMeasureEnv,
 } from '@/features/shell-ui/shellUiWindows'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 
 const SNAP_ASSIST_SHAPES: AssistGridShape[] = ['3x2', '3x3', '2x2', '2x3']
 const PICKER_APPROX_WIDTH = 360
@@ -179,6 +180,12 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
 
   const hoverSpan = createMemo(() => props.hoverSelection?.hoverSpan ?? null)
 
+  function registerPicker(el: HTMLDivElement) {
+    pickerRef = el
+    const registration = registerShellExclusionElement('base', 'snap-picker', el)
+    onCleanup(registration.unregister)
+  }
+
   function selectionFromSpan(
     span: AssistGridSpan,
     shape: AssistGridShape,
@@ -219,9 +226,7 @@ export function SnapAssistPicker(props: SnapAssistPickerProps) {
 
   return (
     <div
-      ref={(el) => {
-        pickerRef = el
-      }}
+      ref={registerPicker}
       data-shell-snap-picker
       data-tiling-picker
       class="fixed z-[1100000] max-h-[min(88vh,760px)] w-[min(360px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-(--shell-border) bg-(--shell-surface-panel) p-3 shadow-2xl"

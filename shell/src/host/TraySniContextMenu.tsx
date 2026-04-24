@@ -1,10 +1,11 @@
-import { For, Show, createMemo, type Accessor } from 'solid-js'
+import { For, Show, createMemo, onCleanup, type Accessor } from 'solid-js'
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
 } from '@/components/ui/context-menu'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
 
 type CtxMenuAnchor = { x: number; y: number; alignAboveY?: number }
@@ -25,6 +26,11 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
       top: `${Math.round(a.y)}px`,
     }
   })
+  function registerPanel(el: HTMLElement) {
+    props.setPanelRef(el as HTMLDivElement)
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
   return (
     <ContextMenu defaultOpen>
       <ContextMenuContent
@@ -32,9 +38,7 @@ export function TraySniContextMenu(props: TraySniContextMenuProps) {
         class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 fixed flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
         aria-label="Tray"
         when={() => true}
-        ref={(el) => {
-          props.setPanelRef(el)
-        }}
+        ref={registerPanel}
         style={panelStyle()}
       >
         <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">

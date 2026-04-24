@@ -20,6 +20,7 @@ import {
 } from '@/host/TaskbarContextMenu'
 import { VolumeContextMenu } from '@/host/VolumeContextMenu'
 import { taskbarRowTooltip, taskbarWindowLabel } from '@/features/taskbar/taskbarRowTooltip'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { TaskbarWindowIcon } from './taskbarIcons'
 
 export type TaskbarWindowRow = {
@@ -267,6 +268,21 @@ export function Taskbar(props: TaskbarProps) {
     })
   }
 
+  function registerTaskbarBase(el: HTMLElement) {
+    const registration = registerShellExclusionElement('base', `taskbar:${props.monitorName}`, el)
+    onCleanup(registration.unregister)
+  }
+
+  function registerTrayStrip(el: HTMLElement) {
+    const registration = registerShellExclusionElement('tray-strip', 'tray-strip', el)
+    onCleanup(registration.unregister)
+  }
+
+  function registerFloatingExclusion(el: HTMLElement) {
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
+
   onCleanup(() => setRowHoverTip(null))
 
   return (
@@ -275,6 +291,7 @@ export function Taskbar(props: TaskbarProps) {
       data-shell-taskbar-exclude
       data-shell-taskbar-monitor={props.monitorName}
       class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
+      ref={registerTaskbarBase}
     >
       <Show
         when={props.isPrimary}
@@ -285,7 +302,10 @@ export function Taskbar(props: TaskbarProps) {
             class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
             role="list"
             aria-label="Windows"
-            ref={windowRailRef}
+            ref={(el) => {
+              windowRailRef = el
+              registerTaskbarBase(el)
+            }}
           >
             <TaskbarWindowRows
               windows={props.windows}
@@ -302,6 +322,7 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
           class="mr-1 flex h-full shrink-0 items-stretch"
+          ref={registerTaskbarBase}
         >
           <ProgramsTaskbarMenu>
             <TaskbarContextMenuTrigger>
@@ -332,7 +353,10 @@ export function Taskbar(props: TaskbarProps) {
           class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
           role="list"
           aria-label="Windows"
-          ref={windowRailRef}
+          ref={(el) => {
+            windowRailRef = el
+            registerTaskbarBase(el)
+          }}
         >
           <TaskbarWindowRows
             windows={props.windows}
@@ -347,6 +371,7 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
           class="ml-auto flex shrink-0 items-stretch"
+          ref={registerTaskbarBase}
         >
           <Show when={props.keyboardLayoutLabel}>
             <span
@@ -361,6 +386,7 @@ export function Taskbar(props: TaskbarProps) {
             class="flex h-full shrink-0 items-stretch border-l border-(--shell-border) bg-transparent"
             style={{ width: `${Math.max(0, props.trayReservedPx)}px`, 'min-width': `${Math.max(0, props.trayReservedPx)}px` }}
             aria-label="Tray"
+            ref={registerTrayStrip}
           >
             <For each={props.sniTrayItems}>
               {(it) => {
@@ -503,6 +529,7 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-row-tooltip
           data-shell-exclusion-floating
           class="pointer-events-none fixed z-430000 max-w-[min(28rem,calc(100vw-1rem))] rounded-md border border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-2.5 py-1.5 text-left text-xs leading-snug text-(--shell-text) shadow-lg"
+          ref={registerFloatingExclusion}
           style={{
             left: `${rowHoverTip()!.left}px`,
             top: `${rowHoverTip()!.top}px`,

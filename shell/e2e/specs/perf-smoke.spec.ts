@@ -5,6 +5,7 @@ import {
   dragBetweenPoints,
   getJson,
   getPerfCounters,
+  keyAction,
   measurePointerInteractionPerf,
   printNote,
   postJson,
@@ -18,6 +19,8 @@ import {
   writeJsonArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+
+const SUPER_KEYCODE = 125
 
 async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
   await raiseTaskbarWindow(base, windowId)
@@ -251,8 +254,82 @@ export default defineGroup(import.meta.url, ({ test }) => {
       longDragSample.shell_sync.snapshot_reads <= 2,
       `long drag should not require full snapshot reads, got ${longDragSample.shell_sync.snapshot_reads}`,
     )
+
+    const stressDragControls = windowControls(await focusNativeWindow(base, red.window.window_id), red.window.window_id)
+    assert(stressDragControls?.titlebar, 'missing red titlebar before stress perf move')
+    const stressDragStart = rectCenter(stressDragControls.titlebar)
+    const stressDragMeasured = await measurePointerInteractionPerf(
+      base,
+      'stress window drag',
+      () =>
+        postJson(base, '/test/input/drag', {
+          x0: stressDragStart.x,
+          y0: stressDragStart.y,
+          x1: stressDragStart.x + 360,
+          y1: stressDragStart.y + 36,
+          button: 0x110,
+          steps: 720,
+        }),
+      {
+        afterInteraction: () =>
+          waitFor(
+            'wait for perf counters after stress window drag',
+            async () => {
+              const sample = await getPerfCounters(base)
+              if (sample.shell_updates.window_geometry_messages < 1) return null
+              return sample
+            },
+            5000,
+            100,
+          ),
+        budget: {
+          sharedStateUiWindowWrites: 4,
+          sharedStateExclusionWrites: 4,
+          fullWindowListReplies: 2,
+          snapshotDirtyFallbacks: 0,
+        },
+      },
+    )
+    const stressDragSample = stressDragMeasured.sample
+    assert(
+      stressDragSample.shell_updates.window_geometry_messages <= 96,
+      `stress drag should coalesce geometry updates, got ${stressDragSample.shell_updates.window_geometry_messages}`,
+    )
+    assert(
+      stressDragSample.shell_updates.message_count <= 480,
+      `stress drag should not flood shell messages, got ${stressDragSample.shell_updates.message_count}`,
+    )
+    assert(
+      stressDragSample.shell_sync.shared_state_exclusion_writes <= 4,
+      `stress drag should not repeatedly write exclusion zones, got ${stressDragSample.shell_sync.shared_state_exclusion_writes}`,
+    )
+
+    await resetPerfCounters(base)
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await keyAction(base, SUPER_KEYCODE, 'tap')
+      await keyAction(base, SUPER_KEYCODE, 'tap')
+    }
+    const menuChurnSample = await getPerfCounters(base)
+    const afterMenuChurn = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(!afterMenuChurn.programs_menu_open, 'programs menu churn should end closed')
+    assert(
+      menuChurnSample.shell_sync.full_window_list_replies <= 2,
+      `programs menu churn should avoid full window lists, got ${menuChurnSample.shell_sync.full_window_list_replies}`,
+    )
+    assert(
+      menuChurnSample.shell_sync.snapshot_notifies <= 4,
+      `programs menu churn should avoid snapshot notifies, got ${menuChurnSample.shell_sync.snapshot_notifies}`,
+    )
+    assert(
+      menuChurnSample.shell_sync.shared_state_exclusion_writes <= 24,
+      `programs menu churn should coalesce exclusion writes, got ${menuChurnSample.shell_sync.shared_state_exclusion_writes}`,
+    )
+    assert(
+      menuChurnSample.shell_sync.shared_state_ui_window_writes <= 24,
+      `programs menu churn should coalesce shell ui writes, got ${menuChurnSample.shell_sync.shared_state_ui_window_writes}`,
+    )
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -264,6 +341,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
         dirty: dirtySample,
         move: moveDelta,
         long_move: longDragSample,
+        stress_move: stressDragSample,
+        programs_menu_churn: menuChurnSample,
       },
       windows: {
         red: red.window,

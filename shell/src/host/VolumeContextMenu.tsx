@@ -1,4 +1,4 @@
-import { For, Show } from 'solid-js'
+import { For, Show, onCleanup } from 'solid-js'
 import { createMemo } from 'solid-js'
 import { Select } from '@/host/Select'
 import { ShellAudioRow } from '@/apps/settings/ShellAudioControls'
@@ -9,6 +9,7 @@ import {
   useShellAudioState,
 } from '@/apps/settings/useShellAudioState'
 import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { useShellContextMenus } from './ShellContextMenusContext'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 
@@ -46,6 +47,12 @@ export function VolumeContextMenu() {
     }
   })
 
+  function registerPanel(el: HTMLDivElement) {
+    props.setPanelRef(el)
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
+
   return (
     <DropdownMenuContent
       data-shell-exclusion-floating
@@ -53,9 +60,7 @@ export function VolumeContextMenu() {
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex max-w-120 flex-col overflow-hidden rounded-[0.35rem] shadow-[0_16px_40px_rgba(0,0,0,0.34)]"
       role="dialog"
       aria-label="Volume"
-      ref={(el) => {
-        props.setPanelRef(el)
-      }}
+      ref={registerPanel}
       style={panelStyle()}
     >
       <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 py-3">

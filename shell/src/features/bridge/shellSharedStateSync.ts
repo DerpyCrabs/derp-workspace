@@ -1,3 +1,5 @@
+import { type ShellMeasureEnv, withShellMeasureFrame } from './shellMeasureFrame'
+
 export type ShellSharedStateSyncRequest = {
   shellUi?: 'invalidate-all' | 'flush'
   exclusion?: 'schedule' | 'sync'
@@ -8,6 +10,7 @@ type ShellSharedStateSyncOptions = {
   flushShellUiWindowsSyncNow: () => void
   scheduleExclusionZonesSync: () => void
   syncExclusionZonesNow: () => void
+  measureEnv?: () => ShellMeasureEnv | null
 }
 
 function mergeShellUi(
@@ -32,13 +35,20 @@ export function createShellSharedStateSync(options: ShellSharedStateSyncOptions)
   let queuedExclusion: ShellSharedStateSyncRequest['exclusion'] | undefined
 
   const run = (request: ShellSharedStateSyncRequest) => {
-    if (request.shellUi === 'invalidate-all') options.invalidateAllShellUiWindows()
-    if (request.shellUi === 'flush') options.flushShellUiWindowsSyncNow()
-    if (request.exclusion === 'sync') {
-      options.syncExclusionZonesNow()
-    } else if (request.exclusion === 'schedule') {
-      options.scheduleExclusionZonesSync()
+    const apply = () => {
+      if (request.shellUi === 'invalidate-all') options.invalidateAllShellUiWindows()
+      if (request.shellUi === 'flush') options.flushShellUiWindowsSyncNow()
+      if (request.exclusion === 'sync') {
+        options.syncExclusionZonesNow()
+      } else if (request.exclusion === 'schedule') {
+        options.scheduleExclusionZonesSync()
+      }
     }
+    if (options.measureEnv) {
+      withShellMeasureFrame(options.measureEnv, apply)
+      return
+    }
+    apply()
   }
 
   const flushQueued = () => {

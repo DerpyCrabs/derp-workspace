@@ -11,6 +11,7 @@ import {
 } from 'solid-js'
 import { screensListForLayout } from '@/host/appLayout'
 import type { LayoutScreen } from '@/host/types'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { canvasRectToClientCss, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
 import {
   clampCustomLayoutRatio,
@@ -761,6 +762,11 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
     }
   }
 
+  function registerFloatingExclusion(el: HTMLElement) {
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
+
   return (
     <Show when={props.state() && props.getMenuLayerHostEl()}>
       {(host) => (
@@ -770,6 +776,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
             data-custom-layout-overlay
             data-custom-layout-overlay-monitor={props.state()!.outputName}
             class="pointer-events-auto absolute inset-0 z-[430000]"
+            ref={registerFloatingExclusion}
             onContextMenu={(event) => event.preventDefault()}
           >
             <div class="absolute inset-0 bg-black/60" />
