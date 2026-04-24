@@ -198,15 +198,6 @@ impl WindowRegistry {
         removed
     }
 
-    pub fn highest_allocated_window_id(&self) -> WindowId {
-        self.records
-            .values()
-            .filter(|record| record.kind == WindowKind::Native)
-            .map(|record| record.info.window_id)
-            .max()
-            .unwrap_or_else(|| self.next_id.saturating_sub(1))
-    }
-
     pub fn window_id_for_wl_surface(&self, wl: &WlSurface) -> Option<WindowId> {
         self.by_surface.get(&key(wl)?).copied()
     }

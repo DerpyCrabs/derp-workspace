@@ -14,6 +14,7 @@ mod osr_view_state;
 mod runner;
 pub mod shared_state;
 mod shell_snapshot;
+mod shell_snapshot_model;
 mod shell_uplink;
 mod uplink;
 

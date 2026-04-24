@@ -312,16 +312,6 @@ function nextStackZ(map: Map<number, DerpWindow>, excludeWindowId?: number): num
   return max + 1
 }
 
-export function promoteWindowStack(map: Map<number, DerpWindow>, windowId: number): Map<number, DerpWindow> {
-  const window = map.get(windowId)
-  if (!window) return map
-  const stack_z = nextStackZ(map, windowId)
-  if (window.stack_z > stack_z - 1) return map
-  const next = new Map(map)
-  next.set(windowId, { ...window, stack_z })
-  return next
-}
-
 export function switchVisibleWindowLocally(
   map: Map<number, DerpWindow>,
   windowId: number,

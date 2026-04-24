@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::cef::shell_snapshot_model::{snapshot_dirty_domains, ShellSnapshotModel};
+
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
@@ -175,246 +177,7 @@ pub struct SharedShellSnapshotWriter {
     mmap: SharedMmapFile,
     sequence: u64,
     last_payload: Option<Vec<u8>>,
-    authoritative: SnapshotAuthoritativeState,
-}
-
-#[derive(Default)]
-struct SnapshotAuthoritativeState {
-    output_geometry: Option<shell_wire::DecodedCompositorToShellMessage>,
-    output_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
-    window_list_revision: u64,
-    window_list_rows: Vec<shell_wire::ShellWindowSnapshot>,
-    focus_changed: Option<shell_wire::DecodedCompositorToShellMessage>,
-    keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
-    workspace_state: Option<shell_wire::DecodedCompositorToShellMessage>,
-    shell_hosted_app_state: Option<shell_wire::DecodedCompositorToShellMessage>,
-    interaction_state: Option<shell_wire::DecodedCompositorToShellMessage>,
-    native_drag_preview: Option<shell_wire::DecodedCompositorToShellMessage>,
-    tray_hints: Option<shell_wire::DecodedCompositorToShellMessage>,
-    tray_sni: Option<shell_wire::DecodedCompositorToShellMessage>,
-}
-
-impl SnapshotAuthoritativeState {
-    fn next_window_list_revision(&mut self) -> u64 {
-        self.window_list_revision = self.window_list_revision.wrapping_add(1);
-        self.window_list_revision
-    }
-
-    fn window_row_mut(&mut self, window_id: u32) -> Option<&mut shell_wire::ShellWindowSnapshot> {
-        self.window_list_rows
-            .iter_mut()
-            .find(|row| row.window_id == window_id)
-    }
-
-    fn window_row_remove(&mut self, window_id: u32) -> bool {
-        let before = self.window_list_rows.len();
-        self.window_list_rows
-            .retain(|row| row.window_id != window_id);
-        before != self.window_list_rows.len()
-    }
-
-    fn apply(&mut self, message: &shell_wire::DecodedCompositorToShellMessage) {
-        match message {
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. } => {
-                self.output_geometry = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
-                self.output_layout = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { revision, windows } => {
-                self.window_list_revision = *revision;
-                self.window_list_rows = windows.clone();
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMapped {
-                window_id,
-                surface_id,
-                stack_z,
-                x,
-                y,
-                w,
-                h,
-                minimized,
-                maximized,
-                fullscreen,
-                title,
-                app_id,
-                client_side_decoration,
-                shell_flags,
-                output_id,
-                output_name,
-                capture_identifier,
-                kind,
-                x11_class,
-                x11_instance,
-            } => {
-                if let Some(row) = self.window_row_mut(*window_id) {
-                    row.surface_id = *surface_id;
-                    row.stack_z = *stack_z;
-                    row.x = *x;
-                    row.y = *y;
-                    row.w = *w;
-                    row.h = *h;
-                    row.minimized = if *minimized { 1 } else { 0 };
-                    row.maximized = if *maximized { 1 } else { 0 };
-                    row.fullscreen = if *fullscreen { 1 } else { 0 };
-                    row.title = title.clone();
-                    row.app_id = app_id.clone();
-                    row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
-                    row.shell_flags = *shell_flags;
-                    row.output_id = output_id.clone();
-                    row.output_name = output_name.clone();
-                    row.capture_identifier = capture_identifier.clone();
-                    row.kind = kind.clone();
-                    row.x11_class = x11_class.clone();
-                    row.x11_instance = x11_instance.clone();
-                } else {
-                    self.window_list_rows.push(shell_wire::ShellWindowSnapshot {
-                        window_id: *window_id,
-                        surface_id: *surface_id,
-                        stack_z: *stack_z,
-                        x: *x,
-                        y: *y,
-                        w: *w,
-                        h: *h,
-                        minimized: if *minimized { 1 } else { 0 },
-                        maximized: if *maximized { 1 } else { 0 },
-                        fullscreen: if *fullscreen { 1 } else { 0 },
-                        client_side_decoration: if *client_side_decoration { 1 } else { 0 },
-                        shell_flags: *shell_flags,
-                        title: title.clone(),
-                        app_id: app_id.clone(),
-                        output_id: output_id.clone(),
-                        output_name: output_name.clone(),
-                        capture_identifier: capture_identifier.clone(),
-                        kind: kind.clone(),
-                        x11_class: x11_class.clone(),
-                        x11_instance: x11_instance.clone(),
-                    });
-                }
-                self.window_list_rows
-                    .sort_by(|a, b| a.window_id.cmp(&b.window_id));
-                self.next_window_list_revision();
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { window_id } => {
-                if self.window_row_remove(*window_id) {
-                    self.next_window_list_revision();
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                window_id,
-                surface_id,
-                x,
-                y,
-                w,
-                h,
-                maximized,
-                fullscreen,
-                client_side_decoration,
-                output_id,
-                output_name,
-            } => {
-                if let Some(row) = self.window_row_mut(*window_id) {
-                    row.surface_id = *surface_id;
-                    row.x = *x;
-                    row.y = *y;
-                    row.w = *w;
-                    row.h = *h;
-                    row.maximized = if *maximized { 1 } else { 0 };
-                    row.fullscreen = if *fullscreen { 1 } else { 0 };
-                    row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };
-                    row.output_id = output_id.clone();
-                    row.output_name = output_name.clone();
-                    self.next_window_list_revision();
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMetadata {
-                window_id,
-                surface_id,
-                title,
-                app_id,
-            } => {
-                if let Some(row) = self.window_row_mut(*window_id) {
-                    row.surface_id = *surface_id;
-                    row.title = title.clone();
-                    row.app_id = app_id.clone();
-                    self.next_window_list_revision();
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id,
-                minimized,
-            } => {
-                if let Some(row) = self.window_row_mut(*window_id) {
-                    row.minimized = if *minimized { 1 } else { 0 };
-                    self.next_window_list_revision();
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                self.focus_changed = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
-                self.keyboard_layout = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
-                self.workspace_state = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
-                self.shell_hosted_app_state = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
-                self.interaction_state = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
-                self.native_drag_preview = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::TrayHints { .. } => {
-                self.tray_hints = Some(message.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
-                self.tray_sni = Some(message.clone());
-            }
-            _ => {}
-        }
-    }
-
-    fn messages(&self) -> Vec<shell_wire::DecodedCompositorToShellMessage> {
-        let mut messages = Vec::new();
-        if let Some(message) = self.output_geometry.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.output_layout.clone() {
-            messages.push(message);
-        }
-        messages.push(shell_wire::DecodedCompositorToShellMessage::WindowList {
-            revision: self.window_list_revision,
-            windows: self.window_list_rows.clone(),
-        });
-        if let Some(message) = self.focus_changed.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.workspace_state.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.shell_hosted_app_state.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.interaction_state.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.native_drag_preview.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.keyboard_layout.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.tray_hints.clone() {
-            messages.push(message);
-        }
-        if let Some(message) = self.tray_sni.clone() {
-            messages.push(message);
-        }
-        messages
-    }
+    authoritative: ShellSnapshotModel,
 }
 
 impl SharedShellSnapshotWriter {
@@ -428,7 +191,7 @@ impl SharedShellSnapshotWriter {
             mmap,
             sequence: 0,
             last_payload: None,
-            authoritative: SnapshotAuthoritativeState::default(),
+            authoritative: ShellSnapshotModel::default(),
         };
         this.publish_payload_at(0, 0, Vec::new())?;
         Ok(this)
@@ -513,50 +276,6 @@ fn encode_payload_messages(
         append_snapshot_message(&mut payload, msg)?;
     }
     Ok(payload)
-}
-
-fn snapshot_dirty_domains(messages: &[shell_wire::DecodedCompositorToShellMessage]) -> u32 {
-    let mut flags = 0u32;
-    for message in messages {
-        flags |= match message {
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
-            }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
-            }
-            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
-            }
-            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
-            }
-            shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION
-            }
-            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
-            }
-            shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_TRAY
-            }
-            _ => 0,
-        };
-    }
-    flags
 }
 
 fn extend_snapshot_packet(
@@ -1025,42 +744,5 @@ pub fn snapshot_read_if_changed(
             return Ok(None);
         }
         Ok(Some(out))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::snapshot_dirty_domains;
-
-    #[test]
-    fn snapshot_dirty_domains_groups_transaction_changes() {
-        let flags = snapshot_dirty_domains(&[
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
-                logical_w: 100,
-                logical_h: 100,
-                physical_w: 100,
-                physical_h: 100,
-            },
-            shell_wire::DecodedCompositorToShellMessage::WindowState {
-                window_id: 7,
-                minimized: true,
-            },
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged {
-                surface_id: Some(9),
-                window_id: Some(7),
-            },
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState {
-                revision: 3,
-                state_json: "{}".to_string(),
-            },
-        ]);
-
-        assert_eq!(
-            flags,
-            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
-                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
-                | shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
-                | shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
-        );
     }
 }

@@ -26,6 +26,7 @@ import {
   pickMonitorMove,
   pointerButton,
   spawnCommand,
+  syncTest,
   rectCenter,
   rightClickRect,
   runKeybind,
@@ -384,11 +385,7 @@ async function dragWindowHandleOntoTab(
   )
 }
 
-async function dragTabOntoTab(
-  base: string,
-  sourceWindowId: number,
-  targetWindowId: number,
-) {
+async function dragTabOntoTab(base: string, sourceWindowId: number, targetWindowId: number) {
   const source = await waitForTabRect(base, sourceWindowId)
   const target = await waitForTabRect(base, targetWindowId)
   const start = rectCenter(source.tab.rect!)
@@ -1658,6 +1655,21 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       footWindowId = footWindow.window_id
       state.spawnedNativeWindowIds.add(footWindowId)
+      const footAboveFileBrowser = (shell: ShellSnapshot) => {
+        const foot = shell.windows.find((entry) => entry.window_id === footWindowId)
+        const fileBrowser = shell.windows.find((entry) => entry.window_id === fileBrowserWindowId)
+        if (!foot || !fileBrowser) return null
+        if ((foot.stack_z ?? 0) <= (fileBrowser.stack_z ?? 0)) return null
+        return shell
+      }
+      await timing.step('wait for spawned foot above file browser', () =>
+        waitFor(
+          'wait for spawned foot above file browser',
+          async () => footAboveFileBrowser((await syncTest(base)).shell),
+          3000,
+          40,
+        ),
+      )
       await timing.step('merge foot tab into file browser tab', () => dragTabOntoTab(base, footWindowId!, fileBrowserWindowId))
       const merged = await timing.step('wait for file browser and foot grouped', () =>
         waitForGroupedMembers(base, [fileBrowserWindowId, footWindowId!], footWindowId!),

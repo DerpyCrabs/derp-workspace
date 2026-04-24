@@ -699,7 +699,6 @@ impl DrmSession {
 
         state.sync_shell_shared_state_for_input();
         state.space.refresh();
-        state.shell_process_deferred_native_focus();
 
         crate::cef::begin_frame_diag::note_drm_render_tick();
 
