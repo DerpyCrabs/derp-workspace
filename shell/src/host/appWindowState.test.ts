@@ -195,6 +195,24 @@ describe('appWindowState', () => {
     expect(stateNext.get(2)?.minimized).toBe(true)
   })
 
+  it('raises the focused window from a live focus change', () => {
+    const left = makeWindow(1, { stack_z: 3 })
+    const right = makeWindow(2, { stack_z: 4 })
+    const previous = new Map<number, DerpWindow>([
+      [left.window_id, left],
+      [right.window_id, right],
+    ])
+
+    const next = applyDetail(previous, {
+      type: 'focus_changed',
+      surface_id: 1,
+      window_id: 1,
+    })
+
+    expect(next.get(1)?.stack_z).toBe(5)
+    expect(next.get(2)).toBe(right)
+  })
+
   it('switches grouped visibility locally without churning unrelated windows', () => {
     const left = makeWindow(1)
     const hidden = makeWindow(2, { minimized: true })

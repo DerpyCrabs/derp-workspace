@@ -134,6 +134,12 @@ declare global {
       lastSequence: number,
       abi?: number,
     ) => ArrayBuffer | null
+    __derpCompositorSnapshotReadDirtyIfChanged?: (
+      path: string,
+      lastSequence: number,
+      previousDomainRevisions: ArrayBuffer,
+      abi?: number,
+    ) => ArrayBuffer | null
     __DERP_E2E_REQUEST_SNAPSHOT?: (requestId: number) => void
     __DERP_E2E_REQUEST_HTML?: (requestId: number, selector?: string | null) => void
     __DERP_E2E_OPEN_TEST_WINDOW_REQ?: (requestId: number) => void

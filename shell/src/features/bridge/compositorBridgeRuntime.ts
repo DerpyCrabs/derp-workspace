@@ -194,6 +194,16 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let lastSnapshotSequence = 0
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
 
+  const snapshotDomainOutputs = 1 << 0
+  const snapshotDomainWindows = 1 << 1
+  const snapshotDomainFocus = 1 << 2
+  const snapshotDomainKeyboard = 1 << 3
+  const snapshotDomainWorkspace = 1 << 4
+  const snapshotDomainShellHostedApps = 1 << 5
+  const snapshotDomainInteraction = 1 << 6
+  const snapshotDomainNativeDragPreview = 1 << 7
+  const snapshotDomainTray = 1 << 8
+
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
     const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
@@ -218,6 +228,33 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     detail.type === 'keyboard_layout' ||
     detail.type === 'tray_hints' ||
     detail.type === 'tray_sni'
+
+  const detailSnapshotDomainFlags = (detail: DerpShellDetail) => {
+    switch (detail.type) {
+      case 'output_layout':
+      case 'output_geometry':
+        return snapshotDomainOutputs
+      case 'window_list':
+        return snapshotDomainWindows
+      case 'focus_changed':
+        return snapshotDomainFocus
+      case 'keyboard_layout':
+        return snapshotDomainKeyboard
+      case 'workspace_state':
+        return snapshotDomainWorkspace
+      case 'shell_hosted_app_state':
+        return snapshotDomainShellHostedApps
+      case 'interaction_state':
+        return snapshotDomainInteraction
+      case 'native_drag_preview':
+        return snapshotDomainNativeDragPreview
+      case 'tray_hints':
+      case 'tray_sni':
+        return snapshotDomainTray
+      default:
+        return 0
+    }
+  }
 
   const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
     const lw = Math.max(1, logicalWidth)
@@ -532,7 +569,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (detailCanBeSupersededBySnapshot(d)) {
       if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
       const hadSnapshot = syncCompositorSnapshot()
-      if (hadSnapshot || (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch)) return
+      if (hadSnapshot) {
+        const detailDomains = detailSnapshotDomainFlags(d)
+        if (detailDomains !== 0 && (hadSnapshot.domainFlags & detailDomains) !== 0) return
+      }
+      if (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch) return
       if (detailEpoch > lastSnapshotSequence && typeof window.__DERP_COMPOSITOR_SNAPSHOT_PATH === 'string' && window.__DERP_COMPOSITOR_SNAPSHOT_PATH.length > 0) {
         options.requestCompositorSync()
         return
@@ -682,14 +723,36 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     })
   }
 
+  const snapshotDomainRevisionBuffer = (cursor: CompositorSnapshotDecodeCursor | undefined) => {
+    const revisions = cursor?.domainRevisions
+    if (!revisions || revisions.length === 0) return null
+    const buffer = new ArrayBuffer(revisions.length * 8)
+    const view = new DataView(buffer)
+    for (let index = 0; index < revisions.length; index += 1) {
+      const value = Math.max(0, Math.trunc(revisions[index] ?? 0))
+      view.setBigUint64(index * 8, BigInt(value), true)
+    }
+    return buffer
+  }
+
   const syncCompositorSnapshot = (force = false) => {
     const path = window.__DERP_COMPOSITOR_SNAPSHOT_PATH
     if (typeof path !== 'string' || path.length === 0) return false
     const readSnapshot = window.__derpCompositorSnapshotRead
     if (typeof readSnapshot !== 'function') return false
+    const readDirtySnapshotIfChanged = window.__derpCompositorSnapshotReadDirtyIfChanged
     const readSnapshotIfChanged = window.__derpCompositorSnapshotReadIfChanged
     let raw: ArrayBuffer | null = null
-    if (!force && typeof readSnapshotIfChanged === 'function') {
+    if (!force && typeof readDirtySnapshotIfChanged === 'function') {
+      const revisions = snapshotDomainRevisionBuffer(lastSnapshotDecodeCursor)
+      raw =
+        revisions === null
+          ? null
+          : readDirtySnapshotIfChanged(path, lastSnapshotSequence, revisions)
+      if (!(raw instanceof ArrayBuffer) && typeof readSnapshotIfChanged === 'function') {
+        raw = readSnapshotIfChanged(path, lastSnapshotSequence)
+      }
+    } else if (!force && typeof readSnapshotIfChanged === 'function') {
       raw = readSnapshotIfChanged(path, lastSnapshotSequence)
     } else if (!force) {
       const snapshotVersion = window.__derpCompositorSnapshotVersion
@@ -727,7 +790,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
     }
-    return true
+    return { domainFlags: decoded.domainFlags, detailsLength: decoded.details.length }
   }
 
   const onDerpShell = (ev: Event) => {

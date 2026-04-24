@@ -491,7 +491,15 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       break
     }
     case 'focus_changed': {
-      break
+      const wid = coerceShellWindowId(detail.window_id)
+      if (wid === null) break
+      const w = map.get(wid)
+      if (!w) break
+      const stack_z = nextStackZ(map, wid)
+      if (w.stack_z >= stack_z) return map
+      const next = new Map(map)
+      next.set(wid, { ...w, stack_z })
+      return next
     }
     default:
       break
