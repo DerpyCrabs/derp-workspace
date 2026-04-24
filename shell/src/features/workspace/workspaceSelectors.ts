@@ -67,33 +67,61 @@ export function buildWorkspaceGroups(
   const previousById = new Map(previous.map((group) => [group.id, group]))
   const groups: WorkspaceGroupModel[] = []
   for (const group of workspaceSnapshot.groups) {
-    const members = group.windowIds
-      .map((windowId) => windowsById.get(windowId))
-      .filter((window): window is DerpWindow => !!window)
+    const members: DerpWindow[] = []
+    for (const windowId of group.windowIds) {
+      const window = windowsById.get(windowId)
+      if (window) members.push(window)
+    }
     if (members.length === 0) continue
-    const compositorVisibleMembers = members.filter((window) => window.workspace_visible)
-    const visibleMemberIds = compositorVisibleMembers.map((window) => window.window_id)
-    const visibleWindowId =
-      visibleMemberIds.find((windowId) => windowId === resolveGroupVisibleWindowId(workspaceSnapshot, group.id, members)) ??
-      visibleMemberIds[0] ??
-      resolveGroupVisibleWindowId(workspaceSnapshot, group.id, members)
-    const visibleWindow =
-      members.find((window) => window.window_id === visibleWindowId) ??
-      members.find((window) => !window.minimized) ??
-      members[0]
+    const resolvedVisibleWindowId = resolveGroupVisibleWindowId(workspaceSnapshot, group.id, members) ?? members[0]!.window_id
+    const visibleWindowIds: number[] = []
+    const visibleWindowIdSet = new Set<number>()
+    let firstVisibleWindowId: number | null = null
+    let resolvedVisibleWindow: DerpWindow | null = null
+    let firstVisibleWindow: DerpWindow | null = null
+    let firstUnminimizedWindow: DerpWindow | null = null
+    for (const window of members) {
+      if (window.window_id === resolvedVisibleWindowId) resolvedVisibleWindow = window
+      if (!firstUnminimizedWindow && !window.minimized) firstUnminimizedWindow = window
+      if (!window.workspace_visible) continue
+      visibleWindowIds.push(window.window_id)
+      visibleWindowIdSet.add(window.window_id)
+      if (firstVisibleWindowId === null) {
+        firstVisibleWindowId = window.window_id
+        firstVisibleWindow = window
+      }
+    }
+    const visibleWindowId = visibleWindowIdSet.has(resolvedVisibleWindowId)
+      ? resolvedVisibleWindowId
+      : firstVisibleWindowId ?? resolvedVisibleWindowId
+    const visibleWindow = visibleWindowId === resolvedVisibleWindowId
+      ? resolvedVisibleWindow ?? firstVisibleWindow ?? firstUnminimizedWindow ?? members[0]
+      : firstVisibleWindow ?? resolvedVisibleWindow ?? firstUnminimizedWindow ?? members[0]
     if (!visibleWindow) continue
     const split = getWorkspaceGroupSplit(workspaceSnapshot, group.id)
-    const splitLeftWindow =
-      split ? members.find((window) => window.window_id === split.leftWindowId) ?? null : null
-    const visibleWindowIds = visibleMemberIds.length > 0
-      ? visibleMemberIds
-      : [
-          ...(splitLeftWindow ? [splitLeftWindow.window_id] : []),
-          visibleWindow.window_id,
-        ].filter((windowId, index, all) => all.indexOf(windowId) === index)
-    const hiddenWindowIds = members
-      .map((window) => window.window_id)
-      .filter((windowId) => !visibleWindowIds.includes(windowId))
+    let splitLeftWindow: DerpWindow | null = null
+    if (split) {
+      for (const window of members) {
+        if (window.window_id === split.leftWindowId) {
+          splitLeftWindow = window
+          break
+        }
+      }
+    }
+    if (visibleWindowIds.length === 0) {
+      if (splitLeftWindow) {
+        visibleWindowIds.push(splitLeftWindow.window_id)
+        visibleWindowIdSet.add(splitLeftWindow.window_id)
+      }
+      if (!visibleWindowIdSet.has(visibleWindow.window_id)) {
+        visibleWindowIds.push(visibleWindow.window_id)
+        visibleWindowIdSet.add(visibleWindow.window_id)
+      }
+    }
+    const hiddenWindowIds: number[] = []
+    for (const window of members) {
+      if (!visibleWindowIdSet.has(window.window_id)) hiddenWindowIds.push(window.window_id)
+    }
     const previousGroup = previousById.get(group.id)
     if (
       previousGroup &&

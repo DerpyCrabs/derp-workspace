@@ -1,10 +1,4 @@
-import { type JSX, type Accessor, Show, createEffect, createMemo, onCleanup } from 'solid-js'
-import {
-  invalidateShellUiWindow,
-  registerShellUiWindow,
-  shellUiWindowMeasureFromEnv,
-  type ShellUiMeasureEnv,
-} from '@/features/shell-ui/shellUiWindows'
+import { type JSX, type Accessor, Show, createMemo } from 'solid-js'
 import {
   CHROME_BORDER_PX,
   CHROME_RESIZE_HANDLE_PX,
@@ -59,13 +53,11 @@ type ShellWindowFrameProps = {
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
-  shellUiRegister?: { id: number; z: number; getEnv: () => ShellUiMeasureEnv | null }
   tabStrip?: JSX.Element
   children?: JSX.Element
 }
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
-  let root: HTMLDivElement | undefined
   const requestFocus = () => {
     props.onFocusRequest?.()
   }
@@ -119,49 +111,18 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
     props.onResizeEdgeDown(edges, pointerId, clientX, clientY)
   }
   const frameVisible = () => props.frameVisible === undefined || readAcc(props.frameVisible)
+  const dragging = () => props.dragging !== undefined && readAcc(props.dragging)
   const chromeHidden = () =>
     (props.hidden !== undefined && readAcc(props.hidden)) || !frameVisible()
 
-  createEffect(() => {
-    const cfg = props.shellUiRegister
-    if (!cfg) return
-    const registeredId = cfg.id
-    const unreg = registerShellUiWindow(registeredId, () => {
-      const next = props.shellUiRegister
-      if (!next || next.id !== registeredId) return null
-      if (!frameVisible()) return null
-      return shellUiWindowMeasureFromEnv(next.id, next.z, root, next.getEnv)
-    })
-    onCleanup(unreg)
-  })
-
-  createEffect(() => {
-    if (!props.shellUiRegister) return
-    frameVisible()
-    const w = model()
-    if (w) {
-      w.x
-      w.y
-      w.width
-      w.height
-      w.snap_tiled
-    }
-    readAcc(props.stackZ)
-    props.shellUiRegister.z
-    invalidateShellUiWindow(props.shellUiRegister.id)
-  })
-
   return (
     <div
-      ref={(el) => {
-        root = el
-      }}
       data-shell-window-frame={model()?.window_id ?? 0}
       data-shell-window-hidden={
         chromeHidden() ? 'true' : 'false'
       }
       data-shell-window-dragging={
-        props.dragging !== undefined && readAcc(props.dragging) ? 'true' : 'false'
+        dragging() ? 'true' : 'false'
       }
       data-shell-repaint={props.repaintKey !== undefined ? readAcc(props.repaintKey) : 0}
       class="pointer-events-none box-border"
@@ -185,7 +146,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             ? '0'
             : props.dragOpacity !== undefined
               ? String(readAcc(props.dragOpacity))
-            : props.dragging !== undefined && readAcc(props.dragging)
+            : dragging()
               ? '0.76'
               : '1',
       }}
@@ -232,7 +193,9 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
                 ? readAcc(props.contentBackground)
                 : 'var(--shell-surface-inset)',
             'pointer-events':
-              props.contentPointerEvents !== undefined
+              dragging()
+                ? 'none'
+                : props.contentPointerEvents !== undefined
                 ? readAcc(props.contentPointerEvents)
                 : 'auto',
           }}
@@ -255,7 +218,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           'box-sizing': 'border-box',
           'z-index': 6,
           background: 'var(--shell-chrome-bg)',
-          'pointer-events': 'auto',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary) return
@@ -385,6 +348,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           width: `${layout().rh}px`,
           height: `${layout().rh}px`,
           cursor: 'nesw-resize',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary || e.button !== 0) return
@@ -412,6 +376,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           width: `${layout().rh}px`,
           height: `${layout().rh}px`,
           cursor: 'nwse-resize',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary || e.button !== 0) return
@@ -439,6 +404,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           width: `${Math.max(0, layout().outerW - 2 * layout().rh)}px`,
           height: `${layout().rh}px`,
           cursor: 'ns-resize',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary || e.button !== 0) return
@@ -466,6 +432,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           width: `${layout().rh}px`,
           bottom: `${layout().rh}px`,
           cursor: 'ew-resize',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary || e.button !== 0) return
@@ -493,6 +460,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           width: `${layout().rh}px`,
           bottom: `${layout().rh}px`,
           cursor: 'ew-resize',
+          'pointer-events': dragging() ? 'none' : 'auto',
         }}
         onPointerDown={(e) => {
           if (!e.isPrimary || e.button !== 0) return

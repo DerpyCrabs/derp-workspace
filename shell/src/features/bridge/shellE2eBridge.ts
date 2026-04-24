@@ -54,6 +54,22 @@ type RegisterShellE2eBridgeOptions = {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    move_rect?: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized: boolean
+      fullscreen: boolean
+    } | null
+    resize_rect?: {
+      x: number
+      y: number
+      width: number
+      height: number
+      maximized: boolean
+      fullscreen: boolean
+    } | null
   } | null
   getOrigin: () => CanvasOrigin
   getCanvas: () => CanvasSize | null

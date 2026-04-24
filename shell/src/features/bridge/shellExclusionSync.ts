@@ -180,22 +180,32 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
   const fullscreenTaskbarExclusionSig = () => {
+    const outputNames = new Set<string>()
+    const outputIds = new Set<string>()
     for (const window of options.windows()) {
       if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
+      if (window.output_name) outputNames.add(window.output_name)
+      if (window.output_id) outputIds.add(window.output_id)
     }
     return options
       .taskbarScreens()
-      .map((screen) => `${screen.name}:${screenTaskbarHiddenForFullscreen(screen) ? 1 : 0}`)
+      .map((screen) => `${screen.name}:${fullscreenSetsHideTaskbar(outputNames, outputIds, screen) ? 1 : 0}`)
       .join('|')
   }
 
-  function screenTaskbarHiddenForFullscreen(screen: LayoutScreen) {
-    return options.windows().some((window) =>
-      isWindowVisible(window) &&
-      !window.minimized &&
-      window.fullscreen &&
-      (window.output_name === screen.name || (!!screen.identity && window.output_id === screen.identity)),
-    )
+  function fullscreenOutputSets() {
+    const outputNames = new Set<string>()
+    const outputIds = new Set<string>()
+    for (const window of options.windows()) {
+      if (!isWindowVisible(window) || window.minimized || !window.fullscreen) continue
+      if (window.output_name) outputNames.add(window.output_name)
+      if (window.output_id) outputIds.add(window.output_id)
+    }
+    return { outputNames, outputIds }
+  }
+
+  function fullscreenSetsHideTaskbar(outputNames: ReadonlySet<string>, outputIds: ReadonlySet<string>, screen: LayoutScreen) {
+    return outputNames.has(screen.name) || (!!screen.identity && outputIds.has(screen.identity))
   }
 
   function syncExclusionZonesNow() {
@@ -221,9 +231,10 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const frame = currentShellMeasureFrame() ?? createShellMeasureFrame({ main, outputGeom: og, origin: co })
     if (!frame) return
     const snapshot = readShellExclusionRegistry(frame)
+    const fullscreen = fullscreenOutputSets()
     const taskbarBase = options
       .taskbarScreens()
-      .filter((screen) => !screenTaskbarHiddenForFullscreen(screen))
+      .filter((screen) => !fullscreenSetsHideTaskbar(fullscreen.outputNames, fullscreen.outputIds, screen))
       .map((screen) => ({
         label: `taskbar:${screen.name}`,
         x: screen.x,

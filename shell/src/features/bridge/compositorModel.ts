@@ -108,6 +108,10 @@ function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolea
     left.window_id === right.window_id &&
     left.surface_id === right.surface_id &&
     left.stack_z === right.stack_z &&
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.output_id === right.output_id &&
@@ -116,6 +120,8 @@ function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolea
     left.x11_class === right.x11_class &&
     left.x11_instance === right.x11_instance &&
     left.minimized === right.minimized &&
+    left.maximized === right.maximized &&
+    left.fullscreen === right.fullscreen &&
     left.shell_flags === right.shell_flags &&
     left.capture_identifier === right.capture_identifier &&
     left.workspace_visible === right.workspace_visible
@@ -147,12 +153,13 @@ function isWindowSnapshotDetail(detail: DerpShellDetail) {
   )
 }
 
-function applyWindowSnapshotDetails(
+function applyWindowSnapshotDetailsFromSnapshot(
   map: Map<number, DerpWindow>,
   details: readonly DerpShellDetail[],
 ): Map<number, DerpWindow> {
   let next = map
   for (const detail of details) {
+    if (!isWindowSnapshotDetail(detail)) continue
     next = applyDetail(next, detail)
   }
   return next
@@ -330,13 +337,21 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (nextFocusedWindowId !== undefined) {
       setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
     }
-    const windowDetails = details.filter(isWindowSnapshotDetail)
-    if (windowDetails.length > 0) {
-      commitWindows((map) => applyWindowSnapshotDetails(map, windowDetails))
-      for (const detail of windowDetails) {
-        if (detail.type !== 'window_unmapped') continue
-        const windowId = coerceShellWindowId(detail.window_id)
-        if (windowId !== null) setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+    let hasWindowDetails = false
+    const unmappedWindowIds: number[] = []
+    for (const detail of details) {
+      if (isWindowSnapshotDetail(detail)) {
+        hasWindowDetails = true
+        if (detail.type === 'window_unmapped') {
+          const windowId = coerceShellWindowId(detail.window_id)
+          if (windowId !== null) unmappedWindowIds.push(windowId)
+        }
+      }
+    }
+    if (hasWindowDetails) {
+      commitWindows((map) => applyWindowSnapshotDetailsFromSnapshot(map, details))
+      for (const windowId of unmappedWindowIds) {
+        setFocusedWindowId((prev) => (prev === windowId ? null : prev))
       }
     }
     })

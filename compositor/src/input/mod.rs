@@ -665,6 +665,14 @@ impl CompositorState {
                                 return FilterResult::Intercept(());
                             }
                         }
+                        if key_state == KeyState::Pressed
+                            && matches!(raw_sym, keysyms::KEY_Escape)
+                            && state.shell_exclusion_overlay_open
+                            && state.shell_cef_active()
+                        {
+                            state.shell_dismiss_context_menu_from_compositor();
+                            return FilterResult::Intercept(());
+                        }
                         if key_state == KeyState::Pressed {
                             if is_super && !state.seat.keyboard_shortcuts_inhibited() {
                                 state.programs_menu_prepare_super_press();

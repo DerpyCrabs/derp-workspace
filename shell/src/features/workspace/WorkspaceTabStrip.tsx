@@ -1,6 +1,6 @@
 import FileText from 'lucide-solid/icons/file-text'
 import X from 'lucide-solid/icons/x'
-import { For, Show, createMemo } from 'solid-js'
+import { For, Show, createEffect, createMemo, onCleanup, onMount } from 'solid-js'
 import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import { windowLabel } from '@/features/workspace/tabGroupOps'
 
@@ -12,6 +12,22 @@ export type WorkspaceTabStripTab = {
   pinned: boolean
 }
 
+export type WorkspaceTabStripRect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+export type WorkspaceTabStripLayout = {
+  groupId: string
+  strip: WorkspaceTabStripRect
+  slots: Array<{ insertIndex: number; rect: WorkspaceTabStripRect }>
+  tabs: Array<{ windowId: number; splitLeft: boolean; rect: WorkspaceTabStripRect }>
+}
+
 type WorkspaceTabStripProps = {
   groupId: string
   tabs: WorkspaceTabStripTab[]
@@ -19,9 +35,11 @@ type WorkspaceTabStripProps = {
   dragWindowId: number | null
   dropTarget: TabMergeTarget | null
   suppressClickWindowId: number | null
+  layoutKey?: string | number
   onSelectTab: (windowId: number) => void
   onConsumeSuppressedClick: (windowId: number) => void
   onCloseTab: (windowId: number) => void
+  onLayout?: (groupId: string, layout: WorkspaceTabStripLayout | null) => void
   onTabPointerDown: (
     windowId: number,
     pointerId: number,
@@ -32,7 +50,19 @@ type WorkspaceTabStripProps = {
   onTabContextMenu: (windowId: number, clientX: number, clientY: number) => void
 }
 
+function rectSnapshot(rect: DOMRect): WorkspaceTabStripRect {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
 export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
+  let root: HTMLDivElement | undefined
   const tabsByWindowId = createMemo(() => {
     const map = new Map<number, WorkspaceTabStripTab>()
     for (const tab of props.tabs) map.set(tab.window_id, tab)
@@ -65,6 +95,72 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
     props.dragWindowId !== null &&
     props.dropTarget?.groupId === props.groupId &&
     props.dropTarget.insertIndex === rightStripIndexToInsertIndex(displayIndex)
+
+  const publishLayout = () => {
+    if (!root || !root.isConnected || !props.onLayout) return
+    const slots: WorkspaceTabStripLayout['slots'] = []
+    for (const slot of root.querySelectorAll('[data-tab-drop-slot]')) {
+      if (!(slot instanceof HTMLElement)) continue
+      const value = slot.getAttribute('data-tab-drop-slot')
+      const split = value?.lastIndexOf(':') ?? -1
+      if (!value || split < 0) continue
+      const insertIndex = Number(value.slice(split + 1))
+      if (!Number.isFinite(insertIndex)) continue
+      slots.push({ insertIndex: Math.trunc(insertIndex), rect: rectSnapshot(slot.getBoundingClientRect()) })
+    }
+    const tabs: WorkspaceTabStripLayout['tabs'] = []
+    for (const tab of root.querySelectorAll('[data-workspace-tab]')) {
+      if (!(tab instanceof HTMLElement)) continue
+      const windowId = Number(tab.getAttribute('data-workspace-tab'))
+      if (!Number.isFinite(windowId)) continue
+      tabs.push({
+        windowId: Math.trunc(windowId),
+        splitLeft: tab.getAttribute('data-workspace-split-left-tab') !== null,
+        rect: rectSnapshot(tab.getBoundingClientRect()),
+      })
+    }
+    props.onLayout(props.groupId, {
+      groupId: props.groupId,
+      strip: rectSnapshot(root.getBoundingClientRect()),
+      slots,
+      tabs,
+    })
+  }
+
+  createEffect(() => {
+    props.groupId
+    props.splitLeftWindowId
+    props.layoutKey
+    props.tabs.map((tab) => `${tab.window_id}:${tab.title}:${tab.app_id}:${tab.pinned ? 1 : 0}`).join('|')
+    publishLayout()
+  })
+
+  onMount(() => {
+    publishLayout()
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && root ? new ResizeObserver(() => publishLayout()) : null
+    if (root) resizeObserver?.observe(root)
+    const mutationObserver =
+      typeof MutationObserver !== 'undefined' && root
+        ? new MutationObserver(() => publishLayout())
+        : null
+    mutationObserver?.observe(root!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        'data-tab-drop-slot',
+        'data-workspace-tab',
+        'data-workspace-tab-group',
+        'data-workspace-split-left-tab',
+      ],
+    })
+    onCleanup(() => {
+      resizeObserver?.disconnect()
+      mutationObserver?.disconnect()
+      props.onLayout?.(props.groupId, null)
+    })
+  })
 
   const renderTab = (tab: () => WorkspaceTabStripTab, displayIndex: number, splitLeft: boolean) => (
     <>
@@ -198,6 +294,9 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
 
   return (
     <div
+      ref={(el) => {
+        root = el
+      }}
       class="flex min-w-0 flex-1 select-none items-stretch overflow-hidden"
       data-workspace-tab-strip={props.groupId}
       style={{ '-webkit-user-drag': 'none' }}

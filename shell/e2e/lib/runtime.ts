@@ -168,6 +168,7 @@ export interface CompositorSnapshot {
   ordered_window_ids_by_output?: CompositorOutputWindowStackSnapshot[]
   shell_ui_windows_generation?: number
   shell_ui_windows?: CompositorShellUiWindowSnapshot[]
+  shell_window_frames?: CompositorShellUiWindowSnapshot[]
   shell_exclusion_global?: CompositorWorkspaceRect[]
   shell_native_drag_preview_window_id?: number | null
   shell_native_drag_preview_generation?: number | null
@@ -236,6 +237,7 @@ export interface ShellWindowControls {
   dragging?: boolean
   hidden?: boolean
   frame_opacity?: number | null
+  content_opacity?: number | null
   frame_z?: number | null
   native_drag_preview_rect?: Rect | null
   native_drag_preview_generation?: number | null
@@ -1360,6 +1362,11 @@ export type PointerInteractionPerfBudget = {
   sharedStateExclusionWrites?: number
   snapshotDirtyFallbacks?: number
   fullWindowListReplies?: number
+  snapshotEncodeUs?: number
+  snapshotDecodeMs?: number
+  snapshotDecodeBytes?: number
+  snapshotApplyMs?: number
+  domMeasureCount?: number
 }
 
 export function assertPointerInteractionPerfBudget(
@@ -1372,6 +1379,11 @@ export function assertPointerInteractionPerfBudget(
     sharedStateExclusionWrites: budget.sharedStateExclusionWrites ?? 12,
     snapshotDirtyFallbacks: budget.snapshotDirtyFallbacks ?? 0,
     fullWindowListReplies: budget.fullWindowListReplies ?? 5,
+    snapshotEncodeUs: budget.snapshotEncodeUs,
+    snapshotDecodeMs: budget.snapshotDecodeMs,
+    snapshotDecodeBytes: budget.snapshotDecodeBytes,
+    snapshotApplyMs: budget.snapshotApplyMs,
+    domMeasureCount: budget.domMeasureCount,
   }
   assert(
     sample.shell_sync.shared_state_ui_window_writes <= resolved.sharedStateUiWindowWrites,
@@ -1389,6 +1401,36 @@ export function assertPointerInteractionPerfBudget(
     sample.shell_sync.full_window_list_replies <= resolved.fullWindowListReplies,
     `${label} should not require repeated full window lists, got ${sample.shell_sync.full_window_list_replies}`,
   )
+  if (resolved.snapshotEncodeUs !== undefined) {
+    assert(
+      sample.shell_sync.snapshot_encode_us <= resolved.snapshotEncodeUs,
+      `${label} should keep snapshot encode bounded, got ${sample.shell_sync.snapshot_encode_us}us`,
+    )
+  }
+  if (resolved.snapshotDecodeMs !== undefined) {
+    assert(
+      (sample.shell_runtime?.snapshot_decode_ms ?? 0) <= resolved.snapshotDecodeMs,
+      `${label} should keep shell snapshot decode bounded, got ${sample.shell_runtime?.snapshot_decode_ms ?? 0}ms`,
+    )
+  }
+  if (resolved.snapshotDecodeBytes !== undefined) {
+    assert(
+      (sample.shell_runtime?.snapshot_decode_bytes ?? 0) <= resolved.snapshotDecodeBytes,
+      `${label} should keep shell snapshot decode bytes bounded, got ${sample.shell_runtime?.snapshot_decode_bytes ?? 0}`,
+    )
+  }
+  if (resolved.snapshotApplyMs !== undefined) {
+    assert(
+      (sample.shell_runtime?.snapshot_apply_ms ?? 0) <= resolved.snapshotApplyMs,
+      `${label} should keep shell snapshot apply bounded, got ${sample.shell_runtime?.snapshot_apply_ms ?? 0}ms`,
+    )
+  }
+  if (resolved.domMeasureCount !== undefined) {
+    assert(
+      (sample.shell_runtime?.dom_measure_count ?? 0) <= resolved.domMeasureCount,
+      `${label} should keep DOM measurements bounded, got ${sample.shell_runtime?.dom_measure_count ?? 0}`,
+    )
+  }
 }
 
 export async function measurePointerInteractionPerf<TInteraction, TAfter = undefined>(

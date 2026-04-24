@@ -217,7 +217,7 @@ async function resolveNativeTabTarget(base: string, windowIds: number[]) {
     const topmostShellUiWindowId =
       tabCenter === null
         ? null
-        : [...(compositor.shell_ui_windows ?? [])]
+        : [...(compositor.shell_window_frames ?? [])]
             .filter((entry) => {
               const rect = entry.global
               return (
@@ -621,7 +621,7 @@ async function openTabMenu(base: string, windowId: number) {
         .map(({ groupVisibleWindowId, groupSplitLeftWindowId, tab }) => {
           if (!tab.rect) return null
           const ui =
-            compositor.shell_ui_windows?.find(
+            compositor.shell_window_frames?.find(
               (entry) =>
                 entry.id === tab.window_id ||
                 entry.id === groupVisibleWindowId ||
@@ -635,7 +635,7 @@ async function openTabMenu(base: string, windowId: number) {
       for (const candidate of candidates) {
         const point = rectCenter(candidate.tab.rect!)
         const topmostShellUiWindowId =
-          [...(compositor.shell_ui_windows ?? [])]
+          [...(compositor.shell_window_frames ?? [])]
             .filter((entry) => {
               const rect = entry.global
               return (

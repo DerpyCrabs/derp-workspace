@@ -92,7 +92,7 @@ function nativeDecorTopRect(
   compositor: CompositorSnapshot,
   windowId: number,
 ): CompositorWorkspaceRect | null {
-  return compositor.shell_ui_windows?.find((entry) => entry.id === windowId)?.global ?? null
+  return compositor.shell_window_frames?.find((entry) => entry.id === windowId)?.global ?? null
 }
 
 function nativeFrameTopLeftFromVisual(visual: {

@@ -79,6 +79,22 @@ export type BuildE2eShellSnapshotArgs = {
         resize_window_id: number | null
         move_proxy_window_id: number | null
         move_capture_window_id: number | null
+        move_rect?: {
+          x: number
+          y: number
+          width: number
+          height: number
+          maximized: boolean
+          fullscreen: boolean
+        } | null
+        resize_rect?: {
+          x: number
+          y: number
+          width: number
+          height: number
+          maximized: boolean
+          fullscreen: boolean
+        } | null
       }
     | null
   main: HTMLElement | null
@@ -441,6 +457,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         const frame = cache.queryAttr('data-shell-window-frame', window.window_id)
         if (!frame) return null
         const opacity = Number.parseFloat(getComputedStyle(frame).opacity)
+        return Number.isFinite(opacity) ? opacity : null
+      })(),
+      content_opacity: (() => {
+        const content = cache.queryAttr('data-shell-hosted-content-mount', window.window_id)
+        if (!content) return null
+        const opacity = Number.parseFloat(getComputedStyle(content).opacity)
         return Number.isFinite(opacity) ? opacity : null
       })(),
       frame_z: (() => {

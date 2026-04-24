@@ -220,6 +220,7 @@ struct E2eCompositorSnapshot {
     ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot>,
     shell_ui_windows_generation: u32,
     shell_ui_windows: Vec<E2eShellUiWindowSnapshot>,
+    shell_window_frames: Vec<E2eShellUiWindowSnapshot>,
     shell_exclusion_global: Vec<E2eRectSnapshot>,
     shell_native_drag_preview_window_id: Option<u32>,
     shell_native_drag_preview_generation: Option<u32>,
@@ -282,11 +283,6 @@ impl CompositorState {
     }
 
     pub(crate) fn e2e_pointer_move_global(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let prev = self
-            .seat
-            .get_pointer()
-            .map(|pointer| pointer.current_location())
-            .unwrap_or_else(|| Point::from((x, y)));
         let pos = self
             .e2e_clamp_global_point(Point::from((x, y)))
             .ok_or_else(|| "no workspace bounds available".to_string())?;
@@ -301,19 +297,6 @@ impl CompositorState {
         let local = pos - output_geo.loc.to_f64();
         self.sync_shell_shared_state_for_input();
         self.pointer_motion_output_local(output_geo, local, self.e2e_now_ms() as u32);
-        let dx = (pos.x - prev.x).round() as i32;
-        let dy = (pos.y - prev.y).round() as i32;
-        if dx != 0 || dy != 0 {
-            if self.shell_move_is_active() {
-                self.shell_move_delta(dx, dy);
-            }
-            if self.shell_resize_is_active() {
-                self.shell_resize_delta(dx, dy);
-            }
-            if self.shell_move_is_active() || self.shell_resize_is_active() {
-                self.shell_send_interaction_state();
-            }
-        }
         Ok(())
     }
 
@@ -462,6 +445,14 @@ impl CompositorState {
                     state.shell_ipc_refresh_pointer_modifiers();
                     return FilterResult::Intercept(());
                 }
+                if key_state == KeyState::Pressed
+                    && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
+                    && state.shell_exclusion_overlay_open
+                    && state.shell_cef_active()
+                {
+                    state.shell_dismiss_context_menu_from_compositor();
+                    return FilterResult::Intercept(());
+                }
                 FilterResult::Forward
             },
         );
@@ -576,6 +567,16 @@ impl CompositorState {
         ordered_window_ids_by_output.sort_by(|a, b| a.output_name.cmp(&b.output_name));
         let shell_ui_windows = self
             .shell_ui_windows
+            .iter()
+            .map(|window| E2eShellUiWindowSnapshot {
+                id: window.id,
+                z: window.z,
+                global: Self::e2e_rect_snapshot(window.global_rect),
+                buffer: Self::e2e_rect_snapshot(window.buffer_rect),
+            })
+            .collect();
+        let shell_window_frames = self
+            .shell_window_frame_placements()
             .iter()
             .map(|window| E2eShellUiWindowSnapshot {
                 id: window.id,
@@ -732,6 +733,7 @@ impl CompositorState {
             ordered_window_ids_by_output,
             shell_ui_windows_generation: self.shell_ui_windows_generation,
             shell_ui_windows,
+            shell_window_frames,
             shell_exclusion_global,
             shell_native_drag_preview_window_id: self
                 .shell_native_drag_preview

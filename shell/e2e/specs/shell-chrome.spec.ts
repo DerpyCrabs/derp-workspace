@@ -63,6 +63,11 @@ import {
 } from '../lib/runtime.ts'
 import { openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
 
+function compositorFrameTitlebar(snapshot: CompositorSnapshot, windowId: number): Rect | null {
+  const frame = snapshot.shell_window_frames?.find((entry) => entry.id === windowId)?.global
+  return frame ? { x: 0, y: 0, global_x: frame.x, global_y: frame.y, width: frame.width, height: 26 } : null
+}
+
 async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
   let lastTop = -1
   let lastChangedAt = Date.now()
@@ -1274,7 +1279,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const fileBrowserWindow = shellWindowById(snapshots.shell, fileBrowserId)
           const fileBrowserTitlebar = windowControls(snapshots.shell, fileBrowserId)?.titlebar
           const nativeWindow = compositorWindowById(snapshots.compositor, nativeId!)
-          const nativeTitlebar = windowControls(snapshots.shell, nativeId!)?.titlebar
+          const nativeTitlebar =
+            windowControls(snapshots.shell, nativeId!)?.titlebar ??
+            compositorFrameTitlebar(snapshots.compositor, nativeId!)
           const output = snapshots.compositor.outputs.find((entry) => entry.name === fileBrowserWindow?.output_name) ?? null
           if (!fileBrowserWindow || !fileBrowserTitlebar || !nativeWindow || !nativeTitlebar || !output) return null
           const overlapLeft = Math.max(fileBrowserWindow.x, nativeWindow.x)
@@ -1336,7 +1343,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
           const controls = windowControls(snapshots.shell, fileBrowserId)
           const fileBrowserWindow = compositorWindowById(snapshots.compositor, fileBrowserId)
           if (!controls || controls.hidden || !controls.titlebar || !fileBrowserWindow) return null
-          if ((controls.frame_opacity ?? 0) > 0.8) return null
+          const frameDimmed = (controls.frame_opacity ?? 1) <= 0.8 || (fileBrowserWindow.render_alpha ?? 1) <= 0.8
+          if (!frameDimmed) return null
           const nativeWindow = compositorWindowById(snapshots.compositor, nativeId!)
           if (!nativeWindow) return null
           const overlapLeft = Math.max(fileBrowserWindow.x, nativeWindow.x)
@@ -1433,9 +1441,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
 
     const initialTitlebarCenter = rectCenter(initial.titlebar)
+    const clippedDy = Math.max(
+      240,
+      Math.round(initial.taskbar.global_y + 36 - (initial.window.y + initial.window.height)),
+    )
     const clippedTarget = {
       x: Math.round(initialTitlebarCenter.x),
-      y: Math.round(initialTitlebarCenter.y + 240),
+      y: Math.round(initialTitlebarCenter.y + clippedDy),
     }
 
     await dragBetweenPoints(
@@ -1511,6 +1523,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
         if (controls.hidden) return null
         if ((controls.frame_opacity ?? 0) > 0.8) return null
+        if ((controls.content_opacity ?? 0) > 0.8) return null
         if (window.y + window.height > taskbar.rect.global_y + 1) return null
         return {
           compositor: snapshots.compositor,
@@ -1559,6 +1572,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         height: clippedDuringDrag.window.height,
         hidden: clippedDuringDrag.controls.hidden,
         frameOpacity: clippedDuringDrag.controls.frame_opacity ?? null,
+        contentOpacity: clippedDuringDrag.controls.content_opacity ?? null,
         moveWindowId: clippedDuringDrag.compositor.shell_move_window_id,
         moveProxyWindowId: clippedDuringDrag.compositor.shell_move_proxy_window_id,
       },
@@ -1569,6 +1583,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         height: fullyVisibleDuringDrag.window.height,
         hidden: fullyVisibleDuringDrag.controls.hidden,
         frameOpacity: fullyVisibleDuringDrag.controls.frame_opacity ?? null,
+        contentOpacity: fullyVisibleDuringDrag.controls.content_opacity ?? null,
         moveWindowId: fullyVisibleDuringDrag.compositor.shell_move_window_id,
         moveProxyWindowId: fullyVisibleDuringDrag.compositor.shell_move_proxy_window_id,
       },

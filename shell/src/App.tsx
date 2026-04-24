@@ -1631,7 +1631,7 @@ function App() {
   })
 
   const endWorkspaceAwareShellWindowMove = (reason: string, sendMoveEnd = true) => {
-    const dropped = workspaceChrome.finishWindowDragDrop(compositorInteractionPointerClient())
+    const dropped = workspaceChrome.finishWindowDragDrop(pointerClient() ?? compositorInteractionPointerClient())
     shellWindowGestureRuntime.endShellWindowMove(reason, !dropped, sendMoveEnd)
   }
 
@@ -1737,6 +1737,8 @@ function App() {
             resize_window_id: state.resize_window_id,
             move_proxy_window_id: state.move_proxy_window_id,
             move_capture_window_id: state.move_capture_window_id,
+            move_rect: state.move_rect,
+            resize_rect: state.resize_rect,
           }
         },
         getOrigin: layoutCanvasOrigin,
@@ -1962,7 +1964,7 @@ function App() {
         {(capture) => (
           <div
             data-window-interaction-capture
-            class={`fixed inset-0 z-470118 touch-none ${capture.cursor}`}
+            class={`fixed inset-0 z-[2000000] touch-none ${capture.cursor}`}
             onContextMenu={(event) => {
               event.preventDefault()
             }}

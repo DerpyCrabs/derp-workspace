@@ -1766,6 +1766,51 @@ impl CompositorState {
                 .into_iter()
                 .filter(|w| !shell_ids.contains(&w.id)),
         );
+        placements.extend(
+            self.shell_native_frame_placements()
+                .into_iter()
+                .filter(|w| !shell_ids.contains(&w.id)),
+        );
+        placements
+    }
+
+    pub(crate) fn shell_window_frame_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        let mut placements = self.shell_backed_placements();
+        placements.extend(self.shell_native_frame_placements());
+        placements
+    }
+
+    fn shell_native_frame_placements(&self) -> Vec<ShellUiWindowPlacement> {
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return Vec::new();
+        };
+        let mut placements = Vec::new();
+        for record in self.window_registry.all_records() {
+            if record.kind != WindowKind::Native {
+                continue;
+            }
+            let info = record.info;
+            if info.minimized
+                || self.window_info_is_solid_shell_host(&info)
+                || !shell_window_row_should_show(&info)
+                || !self.workspace_window_is_visible_during_render(info.window_id)
+            {
+                continue;
+            }
+            let outer = self.shell_native_outer_global_rect(&info);
+            let Some(clamped) = outer.intersection(ws) else {
+                continue;
+            };
+            let Some(br) = self.shell_global_rect_to_buffer_rect(&clamped) else {
+                continue;
+            };
+            placements.push(ShellUiWindowPlacement {
+                id: info.window_id,
+                z: self.shell_window_stack_z(info.window_id),
+                global_rect: clamped,
+                buffer_rect: br,
+            });
+        }
         placements
     }
 
@@ -2395,14 +2440,17 @@ impl CompositorState {
         if info.minimized || !self.workspace_window_is_visible_during_render(window_id) {
             return Vec::new();
         }
-        if !self
-            .shell_ui_windows
-            .iter()
-            .any(|placement| placement.id == window_id)
+        let is_shell_hosted = self.window_registry.is_shell_hosted(window_id);
+        if !is_shell_hosted
+            && self.window_registry.window_kind(window_id) != Some(WindowKind::Native)
         {
             return Vec::new();
         }
-        let outer = self.shell_backed_outer_global_rect(&info);
+        let outer = if is_shell_hosted {
+            self.shell_backed_outer_global_rect(&info)
+        } else {
+            self.shell_native_outer_global_rect(&info)
+        };
         let titlebar_h = self.shell_chrome_titlebar_h.max(0);
         if titlebar_h <= 0 {
             return Vec::new();
@@ -2422,7 +2470,7 @@ impl CompositorState {
             outer.loc,
             Size::from((outer.size.w.max(1), titlebar_h.saturating_add(inset_top))),
         )];
-        if self.window_registry.is_shell_hosted(window_id) && border > 0 {
+        if is_shell_hosted && border > 0 {
             let client = Self::shell_hosted_client_global_rect(&info);
             out.push(Rectangle::new(
                 Point::from((outer.loc.x, client.loc.y)),
