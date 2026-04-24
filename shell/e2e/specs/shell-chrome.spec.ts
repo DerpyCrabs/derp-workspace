@@ -24,6 +24,7 @@ import {
   getShellHtml,
   getSnapshots,
   keyAction,
+  measurePointerInteractionPerf,
   movePoint,
   openDebug,
   openPowerMenu,
@@ -446,6 +447,93 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for click-opened programs menu dismissal to restore native focus',
     )
     assert(closed.compositor.focused_window_id === windowId, 'native window should regain keyboard focus after click-opened programs menu closes')
+  })
+
+  test('programs menu closes with one super tap after shell titlebar drag without stealing focus', async ({ base, state }) => {
+    await ensureProgramsMenuClosedForFocusTest(base)
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    await waitForShellUiFocus(base, windowId)
+    const titlebar = await waitFor(
+      'wait for shell titlebar before menu close after drag',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const rect = windowControls(shell, windowId)?.titlebar
+        return rect && rect.width >= 80 && rect.height >= 16 ? rect : null
+      },
+      5000,
+      100,
+    )
+    const start = rectCenter(titlebar)
+    await dragBetweenPoints(base, start.x, start.y, start.x + 180, start.y + 80, 18)
+    await waitFor(
+      'wait for shell drag settled before menu close regression',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const controls = windowControls(snapshots.shell, windowId)
+        if (snapshots.compositor.shell_move_window_id !== null) return null
+        if (snapshots.compositor.shell_resize_window_id !== null) return null
+        if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+        if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+        if (!controls || controls.dragging) return null
+        if (snapshots.shell.focused_window_id !== windowId) return null
+        if (snapshots.compositor.focused_shell_ui_window_id !== windowId) return null
+        return snapshots
+      },
+      5000,
+      100,
+    )
+
+    const measured = await measurePointerInteractionPerf(
+      base,
+      'post-drag programs menu super close',
+      async () => {
+        await keyAction(base, 125, 'tap')
+        const openedBySuper = await waitFor(
+          'wait for post-drag programs menu open with shell focus retained',
+          async () => {
+            const snapshots = await getSnapshots(base)
+            if (!snapshots.shell.programs_menu_open) return null
+            if (snapshots.shell.focused_window_id !== windowId) return null
+            if (snapshots.compositor.focused_shell_ui_window_id !== windowId) return null
+            assertTopWindow(snapshots.shell, windowId, 'programs menu open should not raise another shell window')
+            return snapshots
+          },
+          5000,
+          100,
+        )
+        await keyAction(base, 125, 'tap')
+        return openedBySuper
+      },
+      {
+        afterInteraction: () =>
+          waitFor(
+            'wait for post-drag programs menu closed by single super tap',
+            async () => {
+              const snapshots = await getSnapshots(base)
+              if (snapshots.shell.programs_menu_open) return null
+              if (snapshots.shell.focused_window_id !== windowId) return null
+              if (snapshots.compositor.focused_shell_ui_window_id !== windowId) return null
+              assertTopWindow(snapshots.shell, windowId, 'programs menu close should keep dragged shell window focused')
+              return snapshots
+            },
+            5000,
+            100,
+          ),
+        budget: {
+          sharedStateUiWindowWrites: 8,
+          sharedStateExclusionWrites: 8,
+          fullWindowListReplies: 2,
+          snapshotDirtyFallbacks: 0,
+        },
+      },
+    )
+
+    await writeJsonArtifact('programs-menu-super-close-after-drag.json', {
+      openedBySuper: measured.result,
+      closedBySuper: measured.after,
+      perf: measured.sample,
+    })
   })
 
   test('programs menu list scrolls with pointer wheel over launcher', async ({ base, state }) => {

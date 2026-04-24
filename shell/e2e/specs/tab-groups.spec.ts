@@ -16,10 +16,10 @@ import {
   createTimingMarks,
   defineGroup,
   ensureNativePair,
-  getPerfCounters,
   getJson,
   getShellHtml,
   getSnapshots,
+  measurePointerInteractionPerf,
   minimizeWindow,
   movePoint,
   openShellTestWindow,
@@ -29,7 +29,6 @@ import {
   pointerButton,
   spawnCommand,
   rectCenter,
-  resetPerfCounters,
   rightClickRect,
   runKeybind,
   shellWindowById,
@@ -46,7 +45,6 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
   type E2eState,
-  type PerfCounterSnapshot,
   type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
@@ -75,25 +73,6 @@ async function waitForTabRect(base: string, windowId: number) {
     },
     3000,
     40,
-  )
-}
-
-function assertPointerInteractionPerfBudget(label: string, sample: PerfCounterSnapshot) {
-  assert(
-    sample.shell_sync.shared_state_ui_window_writes <= 24,
-    `${label} should not repeatedly write shell-ui window placements, got ${sample.shell_sync.shared_state_ui_window_writes}`,
-  )
-  assert(
-    sample.shell_sync.shared_state_exclusion_writes <= 12,
-    `${label} should not repeatedly write exclusion zones, got ${sample.shell_sync.shared_state_exclusion_writes}`,
-  )
-  assert(
-    sample.shell_sync.snapshot_dirty_fallbacks === 0,
-    `${label} dirty snapshots should not fall back to full payloads, got ${sample.shell_sync.snapshot_dirty_fallbacks}`,
-  )
-  assert(
-    sample.shell_sync.full_window_list_replies <= 5,
-    `${label} should not require repeated full window lists, got ${sample.shell_sync.full_window_list_replies}`,
   )
 }
 
@@ -856,26 +835,34 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const target = await timing.step('resolve visible native target', () =>
         resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
       )
-      await resetPerfCounters(base)
-      await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId))
-      const merged = await timing.step('wait for merged group', () => waitFor(
-        'wait for native/js group merge',
-        async () => {
-          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          const group = tabGroupByWindow(shell, target.windowId)
-          if (!group) return null
-          if (!group.member_window_ids.includes(jsWindow.window.window_id)) return null
-          if (group.visible_window_id !== jsWindow.window.window_id) return null
-          const row = taskbarEntry(shell, jsWindow.window.window_id)
-          if (!row || row.tab_count !== 2) return null
-          if (taskbarEntry(shell, target.windowId)) return null
-          return { shell, group, row }
-        },
-        2000,
-        125,
-      ))
-      const mergePerf = await getPerfCounters(base)
-      assertPointerInteractionPerfBudget('tab merge drag', mergePerf)
+      const measuredMerge = await timing.step('drag js tab into native tab', () =>
+        measurePointerInteractionPerf(
+          base,
+          'tab merge drag',
+          () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId),
+          {
+            afterInteraction: () =>
+              waitFor(
+                'wait for native/js group merge',
+                async () => {
+                  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+                  const group = tabGroupByWindow(shell, target.windowId)
+                  if (!group) return null
+                  if (!group.member_window_ids.includes(jsWindow.window.window_id)) return null
+                  if (group.visible_window_id !== jsWindow.window.window_id) return null
+                  const row = taskbarEntry(shell, jsWindow.window.window_id)
+                  if (!row || row.tab_count !== 2) return null
+                  if (taskbarEntry(shell, target.windowId)) return null
+                  return { shell, group, row }
+                },
+                2000,
+                125,
+              ),
+          },
+        ),
+      )
+      const merged = measuredMerge.after
+      const mergePerf = measuredMerge.sample
       await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
       const jsVisible = await timing.step('wait for js tab visible', () => waitFor(
         'wait for js tab visible',
@@ -2751,20 +2738,25 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const start = rectCenter(divider)
     const dragMidX = Math.round(start.x + split.group.split_right_rect.width * 0.35)
     const dragEndX = Math.round(split.group.split_right_rect.x + split.group.split_right_rect.width * 0.7)
-    await resetPerfCounters(base)
-    await timing.step('drag split divider', async () => {
-      await movePoint(base, start.x, start.y)
-      await pointerButton(base, BTN_LEFT, 'press')
-      await movePoint(base, start.x + 36, start.y)
-      await movePoint(base, dragMidX, start.y)
-      await movePoint(base, dragEndX, start.y)
-      await pointerButton(base, BTN_LEFT, 'release')
-    })
-    const resized = await timing.step('wait for resized split panes', () =>
-      waitForSplitGroup(base, target.windowId, target.windowId),
+    const measuredSplitDrag = await timing.step('drag split divider', () =>
+      measurePointerInteractionPerf(
+        base,
+        'split divider drag',
+        async () => {
+          await movePoint(base, start.x, start.y)
+          await pointerButton(base, BTN_LEFT, 'press')
+          await movePoint(base, start.x + 36, start.y)
+          await movePoint(base, dragMidX, start.y)
+          await movePoint(base, dragEndX, start.y)
+          await pointerButton(base, BTN_LEFT, 'release')
+        },
+        {
+          afterInteraction: () => waitForSplitGroup(base, target.windowId, target.windowId),
+        },
+      ),
     )
-    const splitDragPerf = await getPerfCounters(base)
-    assertPointerInteractionPerfBudget('split divider drag', splitDragPerf)
+    const resized = measuredSplitDrag.after
+    const splitDragPerf = measuredSplitDrag.sample
     const left = resized.group.split_left_rect!
     const right = resized.group.split_right_rect!
     const rowWidth = left.width + right.width

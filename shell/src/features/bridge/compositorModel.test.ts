@@ -2,6 +2,32 @@ import { createRoot } from 'solid-js'
 import { describe, expect, it } from 'vitest'
 import { createCompositorModel } from './compositorModel'
 
+function nativeWindow(windowId: number, title: string) {
+  return {
+    window_id: windowId,
+    surface_id: windowId * 10,
+    stack_z: windowId,
+    x: 10,
+    y: 20,
+    width: 300,
+    height: 200,
+    minimized: false,
+    maximized: false,
+    fullscreen: false,
+    client_side_decoration: true,
+    workspace_visible: true,
+    shell_flags: 0,
+    title,
+    app_id: `${title.toLowerCase()}.app`,
+    output_id: 'output-a',
+    output_name: 'DP-1',
+    capture_identifier: `cap-${windowId}`,
+    kind: 'native',
+    x11_class: '',
+    x11_instance: '',
+  }
+}
+
 describe('createCompositorModel', () => {
   it('applies snapshot window detail chunks as one authoritative window update', () => {
     createRoot((dispose) => {
@@ -206,6 +232,52 @@ describe('createCompositorModel', () => {
 
       expect(moved()).toMatchObject({ x: 40, y: 50, width: 640, height: 480 })
       expect(stable()).toBe(stableBefore)
+      dispose()
+    })
+  })
+
+  it('evicts unmapped per-window accessors instead of reusing stale signals', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      let previousAccessor: ReturnType<typeof model.windowById> | null = null
+      const oldAccessors: ReturnType<typeof model.windowById>[] = []
+
+      for (let revision = 1; revision <= 5; revision += 1) {
+        model.applyCompositorSnapshot([
+          {
+            type: 'window_list',
+            revision,
+            windows: [nativeWindow(7, `Window ${revision}`)],
+          },
+        ])
+        const accessor = model.windowById(7)
+        if (previousAccessor) expect(accessor).not.toBe(previousAccessor)
+        expect(accessor()?.title).toBe(`Window ${revision}`)
+        model.applyCompositorDetail(
+          {
+            type: 'window_unmapped',
+            window_id: 7,
+          },
+          { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+        )
+        expect(accessor()).toBeUndefined()
+        oldAccessors.push(accessor)
+        previousAccessor = accessor
+      }
+
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 6,
+          windows: [nativeWindow(7, 'Window 6')],
+        },
+      ])
+      const latest = model.windowById(7)
+      expect(latest()?.title).toBe('Window 6')
+      for (const accessor of oldAccessors) {
+        expect(accessor()).toBeUndefined()
+        expect(accessor).not.toBe(latest)
+      }
       dispose()
     })
   })

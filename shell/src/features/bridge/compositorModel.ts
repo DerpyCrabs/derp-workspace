@@ -235,7 +235,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     for (const windowId of prev.keys()) {
       if (next.has(windowId)) continue
       const signal = windowSignals.get(windowId)
-      if (signal) signal.set(() => undefined)
+      if (signal) {
+        signal.set(() => undefined)
+        windowSignals.delete(windowId)
+      }
     }
   }
 

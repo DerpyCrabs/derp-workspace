@@ -1,9 +1,11 @@
 import {
   assert,
   defineGroup,
+  diffPerfCounters,
   dragBetweenPoints,
   getJson,
   getPerfCounters,
+  measurePointerInteractionPerf,
   printNote,
   postJson,
   raiseTaskbarWindow,
@@ -14,56 +16,8 @@ import {
   waitForTaskbarEntry,
   windowControls,
   writeJsonArtifact,
-  type PerfCounterSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-
-function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapshot): PerfCounterSnapshot {
-  return {
-    begin_frame: {
-      compositor_schedules: after.begin_frame.compositor_schedules - before.begin_frame.compositor_schedules,
-      compositor_schedules_idle: after.begin_frame.compositor_schedules_idle - before.begin_frame.compositor_schedules_idle,
-      compositor_schedules_active: after.begin_frame.compositor_schedules_active - before.begin_frame.compositor_schedules_active,
-      compositor_schedules_forced: after.begin_frame.compositor_schedules_forced - before.begin_frame.compositor_schedules_forced,
-      cef_send_external_begin_frame:
-        after.begin_frame.cef_send_external_begin_frame - before.begin_frame.cef_send_external_begin_frame,
-      drm_render_ticks: after.begin_frame.drm_render_ticks - before.begin_frame.drm_render_ticks,
-    },
-    shell_updates: {
-      batch_count: after.shell_updates.batch_count - before.shell_updates.batch_count,
-      message_count: after.shell_updates.message_count - before.shell_updates.message_count,
-      window_list_messages: after.shell_updates.window_list_messages - before.shell_updates.window_list_messages,
-      window_mapped_messages: after.shell_updates.window_mapped_messages - before.shell_updates.window_mapped_messages,
-      window_geometry_messages:
-        after.shell_updates.window_geometry_messages - before.shell_updates.window_geometry_messages,
-      window_metadata_messages:
-        after.shell_updates.window_metadata_messages - before.shell_updates.window_metadata_messages,
-      window_state_messages: after.shell_updates.window_state_messages - before.shell_updates.window_state_messages,
-      focus_changed_messages: after.shell_updates.focus_changed_messages - before.shell_updates.focus_changed_messages,
-    },
-    shell_sync: {
-      full_window_list_replies:
-        after.shell_sync.full_window_list_replies - before.shell_sync.full_window_list_replies,
-      snapshot_notifies: after.shell_sync.snapshot_notifies - before.shell_sync.snapshot_notifies,
-      snapshot_reads: after.shell_sync.snapshot_reads - before.shell_sync.snapshot_reads,
-      snapshot_full_bytes: after.shell_sync.snapshot_full_bytes - before.shell_sync.snapshot_full_bytes,
-      snapshot_dirty_reads: after.shell_sync.snapshot_dirty_reads - before.shell_sync.snapshot_dirty_reads,
-      snapshot_dirty_unchanged:
-        after.shell_sync.snapshot_dirty_unchanged - before.shell_sync.snapshot_dirty_unchanged,
-      snapshot_dirty_fallbacks:
-        after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
-      snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
-      shared_state_ui_window_writes:
-        after.shell_sync.shared_state_ui_window_writes - before.shell_sync.shared_state_ui_window_writes,
-      shared_state_ui_window_bytes:
-        after.shell_sync.shared_state_ui_window_bytes - before.shell_sync.shared_state_ui_window_bytes,
-      shared_state_exclusion_writes:
-        after.shell_sync.shared_state_exclusion_writes - before.shell_sync.shared_state_exclusion_writes,
-      shared_state_exclusion_bytes:
-        after.shell_sync.shared_state_exclusion_bytes - before.shell_sync.shared_state_exclusion_bytes,
-    },
-  }
-}
 
 async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
   await raiseTaskbarWindow(base, windowId)
@@ -239,25 +193,39 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const longDragControls = windowControls(afterShortDrag, red.window.window_id)
     assert(longDragControls?.titlebar, 'missing red titlebar before long perf move')
     const longDragStart = rectCenter(longDragControls.titlebar)
-    await resetPerfCounters(base)
-    await postJson(base, '/test/input/drag', {
-      x0: longDragStart.x,
-      y0: longDragStart.y,
-      x1: longDragStart.x + 520,
-      y1: longDragStart.y + 96,
-      button: 0x110,
-      steps: 240,
-    })
-    const longDragSample = await waitFor(
-      'wait for perf counters after long window drag',
-      async () => {
-        const sample = await getPerfCounters(base)
-        if (sample.shell_updates.window_geometry_messages < 1) return null
-        return sample
+    const longDragMeasured = await measurePointerInteractionPerf(
+      base,
+      'long window drag',
+      () =>
+        postJson(base, '/test/input/drag', {
+          x0: longDragStart.x,
+          y0: longDragStart.y,
+          x1: longDragStart.x + 520,
+          y1: longDragStart.y + 96,
+          button: 0x110,
+          steps: 240,
+        }),
+      {
+        afterInteraction: () =>
+          waitFor(
+            'wait for perf counters after long window drag',
+            async () => {
+              const sample = await getPerfCounters(base)
+              if (sample.shell_updates.window_geometry_messages < 1) return null
+              return sample
+            },
+            5000,
+            100,
+          ),
+        budget: {
+          sharedStateUiWindowWrites: 4,
+          sharedStateExclusionWrites: 4,
+          fullWindowListReplies: 2,
+          snapshotDirtyFallbacks: 0,
+        },
       },
-      5000,
-      100,
     )
+    const longDragSample = longDragMeasured.sample
 
     assert(
       longDragSample.shell_updates.window_geometry_messages <= 48,
@@ -276,28 +244,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `long drag begin frames regressed: expected <= drm ticks + 8, got begin=${longDragSample.begin_frame.cef_send_external_begin_frame} drm=${longDragSample.begin_frame.drm_render_ticks}`,
     )
     assert(
-      longDragSample.shell_sync.full_window_list_replies <= 2,
-      `long drag should not trigger repeated full window list replies, got ${longDragSample.shell_sync.full_window_list_replies}`,
-    )
-    assert(
       longDragSample.shell_sync.snapshot_notifies <= 4,
       `long drag should not trigger repeated snapshot notifications, got ${longDragSample.shell_sync.snapshot_notifies}`,
     )
     assert(
       longDragSample.shell_sync.snapshot_reads <= 2,
       `long drag should not require full snapshot reads, got ${longDragSample.shell_sync.snapshot_reads}`,
-    )
-    assert(
-      longDragSample.shell_sync.snapshot_dirty_fallbacks === 0,
-      `long drag dirty snapshots should not fall back to full payloads, got ${longDragSample.shell_sync.snapshot_dirty_fallbacks}`,
-    )
-    assert(
-      longDragSample.shell_sync.shared_state_ui_window_writes <= 4,
-      `long drag should not repeatedly write shell-ui window placements, got ${longDragSample.shell_sync.shared_state_ui_window_writes}`,
-    )
-    assert(
-      longDragSample.shell_sync.shared_state_exclusion_writes <= 4,
-      `long drag should not repeatedly write exclusion zones, got ${longDragSample.shell_sync.shared_state_exclusion_writes}`,
     )
     printNote(
       `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} long_messages=${longDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes}`,

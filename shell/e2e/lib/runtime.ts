@@ -1261,6 +1261,106 @@ export async function resetPerfCounters(base: string): Promise<void> {
   await postJson(base, '/test/perf/reset', {})
 }
 
+export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapshot): PerfCounterSnapshot {
+  return {
+    begin_frame: {
+      compositor_schedules: after.begin_frame.compositor_schedules - before.begin_frame.compositor_schedules,
+      compositor_schedules_idle: after.begin_frame.compositor_schedules_idle - before.begin_frame.compositor_schedules_idle,
+      compositor_schedules_active: after.begin_frame.compositor_schedules_active - before.begin_frame.compositor_schedules_active,
+      compositor_schedules_forced: after.begin_frame.compositor_schedules_forced - before.begin_frame.compositor_schedules_forced,
+      cef_send_external_begin_frame:
+        after.begin_frame.cef_send_external_begin_frame - before.begin_frame.cef_send_external_begin_frame,
+      drm_render_ticks: after.begin_frame.drm_render_ticks - before.begin_frame.drm_render_ticks,
+    },
+    shell_updates: {
+      batch_count: after.shell_updates.batch_count - before.shell_updates.batch_count,
+      message_count: after.shell_updates.message_count - before.shell_updates.message_count,
+      window_list_messages: after.shell_updates.window_list_messages - before.shell_updates.window_list_messages,
+      window_mapped_messages: after.shell_updates.window_mapped_messages - before.shell_updates.window_mapped_messages,
+      window_geometry_messages:
+        after.shell_updates.window_geometry_messages - before.shell_updates.window_geometry_messages,
+      window_metadata_messages:
+        after.shell_updates.window_metadata_messages - before.shell_updates.window_metadata_messages,
+      window_state_messages: after.shell_updates.window_state_messages - before.shell_updates.window_state_messages,
+      focus_changed_messages: after.shell_updates.focus_changed_messages - before.shell_updates.focus_changed_messages,
+    },
+    shell_sync: {
+      full_window_list_replies:
+        after.shell_sync.full_window_list_replies - before.shell_sync.full_window_list_replies,
+      snapshot_notifies: after.shell_sync.snapshot_notifies - before.shell_sync.snapshot_notifies,
+      snapshot_reads: after.shell_sync.snapshot_reads - before.shell_sync.snapshot_reads,
+      snapshot_full_bytes: after.shell_sync.snapshot_full_bytes - before.shell_sync.snapshot_full_bytes,
+      snapshot_dirty_reads: after.shell_sync.snapshot_dirty_reads - before.shell_sync.snapshot_dirty_reads,
+      snapshot_dirty_unchanged:
+        after.shell_sync.snapshot_dirty_unchanged - before.shell_sync.snapshot_dirty_unchanged,
+      snapshot_dirty_fallbacks:
+        after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
+      snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
+      shared_state_ui_window_writes:
+        after.shell_sync.shared_state_ui_window_writes - before.shell_sync.shared_state_ui_window_writes,
+      shared_state_ui_window_bytes:
+        after.shell_sync.shared_state_ui_window_bytes - before.shell_sync.shared_state_ui_window_bytes,
+      shared_state_exclusion_writes:
+        after.shell_sync.shared_state_exclusion_writes - before.shell_sync.shared_state_exclusion_writes,
+      shared_state_exclusion_bytes:
+        after.shell_sync.shared_state_exclusion_bytes - before.shell_sync.shared_state_exclusion_bytes,
+    },
+  }
+}
+
+export type PointerInteractionPerfBudget = {
+  sharedStateUiWindowWrites?: number
+  sharedStateExclusionWrites?: number
+  snapshotDirtyFallbacks?: number
+  fullWindowListReplies?: number
+}
+
+export function assertPointerInteractionPerfBudget(
+  label: string,
+  sample: PerfCounterSnapshot,
+  budget: PointerInteractionPerfBudget = {},
+): void {
+  const resolved = {
+    sharedStateUiWindowWrites: budget.sharedStateUiWindowWrites ?? 24,
+    sharedStateExclusionWrites: budget.sharedStateExclusionWrites ?? 12,
+    snapshotDirtyFallbacks: budget.snapshotDirtyFallbacks ?? 0,
+    fullWindowListReplies: budget.fullWindowListReplies ?? 5,
+  }
+  assert(
+    sample.shell_sync.shared_state_ui_window_writes <= resolved.sharedStateUiWindowWrites,
+    `${label} should not repeatedly write shell-ui window placements, got ${sample.shell_sync.shared_state_ui_window_writes}`,
+  )
+  assert(
+    sample.shell_sync.shared_state_exclusion_writes <= resolved.sharedStateExclusionWrites,
+    `${label} should not repeatedly write exclusion zones, got ${sample.shell_sync.shared_state_exclusion_writes}`,
+  )
+  assert(
+    sample.shell_sync.snapshot_dirty_fallbacks <= resolved.snapshotDirtyFallbacks,
+    `${label} dirty snapshots should not fall back to full payloads, got ${sample.shell_sync.snapshot_dirty_fallbacks}`,
+  )
+  assert(
+    sample.shell_sync.full_window_list_replies <= resolved.fullWindowListReplies,
+    `${label} should not require repeated full window lists, got ${sample.shell_sync.full_window_list_replies}`,
+  )
+}
+
+export async function measurePointerInteractionPerf<TInteraction, TAfter = undefined>(
+  base: string,
+  label: string,
+  interaction: () => Promise<TInteraction>,
+  options: {
+    afterInteraction?: () => Promise<TAfter>
+    budget?: PointerInteractionPerfBudget
+  } = {},
+): Promise<{ result: TInteraction; after: TAfter; sample: PerfCounterSnapshot }> {
+  await resetPerfCounters(base)
+  const result = await interaction()
+  const after = options.afterInteraction ? await options.afterInteraction() : (undefined as TAfter)
+  const sample = await getPerfCounters(base)
+  assertPointerInteractionPerfBudget(label, sample, options.budget)
+  return { result, after, sample }
+}
+
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
