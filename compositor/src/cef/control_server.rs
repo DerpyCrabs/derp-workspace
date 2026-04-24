@@ -388,6 +388,19 @@ fn request_shell_snapshot_json(browser: &Arc<Mutex<Option<Browser>>>) -> Result<
     result
 }
 
+fn sync_shell_compositor_snapshot_json(
+    browser: &Arc<Mutex<Option<Browser>>>,
+) -> Result<String, String> {
+    let request_id = e2e_bridge::next_request_id();
+    execute_shell_bridge_js(
+        browser,
+        format!(
+            "(()=>{{const derpSyncSnapshot=window.__DERP_SYNC_COMPOSITOR_SNAPSHOT;if(typeof derpSyncSnapshot==='function')derpSyncSnapshot();window.__DERP_E2E_REQUEST_SNAPSHOT&&window.__DERP_E2E_REQUEST_SNAPSHOT({request_id});}})();"
+        ),
+    )?;
+    e2e_bridge::wait_for_shell_snapshot(request_id, Duration::from_secs(3))
+}
+
 fn request_shell_html(
     browser: &Arc<Mutex<Option<Browser>>>,
     selector: Option<&str>,
@@ -702,6 +715,12 @@ fn handle_one(
 
     if method.eq_ignore_ascii_case("GET") && req_path == "/test/state/shell" {
         let json = request_shell_snapshot_json(browser)?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/test/snapshot/sync" {
+        let json = sync_shell_compositor_snapshot_json(browser)?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }

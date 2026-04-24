@@ -19,6 +19,11 @@ static SHELL_DETAIL_FOCUS_CHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_REPLY_WINDOW_LIST_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_NOTIFY_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_SNAPSHOT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_FULL_BYTES: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_DIRTY_READ_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_SNAPSHOT_DIRTY_BYTES: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
@@ -134,6 +139,11 @@ struct ShellSyncSnapshot {
     full_window_list_replies: u64,
     snapshot_notifies: u64,
     snapshot_reads: u64,
+    snapshot_full_bytes: u64,
+    snapshot_dirty_reads: u64,
+    snapshot_dirty_unchanged: u64,
+    snapshot_dirty_fallbacks: u64,
+    snapshot_dirty_bytes: u64,
 }
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
@@ -211,8 +221,27 @@ pub(crate) fn note_shell_snapshot_notify() {
     SHELL_SNAPSHOT_NOTIFY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn note_shell_snapshot_read() {
+pub(crate) fn note_shell_snapshot_read(payload_len: usize) {
     SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_FULL_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_dirty_snapshot_read(payload_len: usize) {
+    SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_dirty_snapshot_unchanged() {
+    SHELL_SNAPSHOT_DIRTY_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn note_shell_dirty_snapshot_fallback(payload_len: usize) {
+    SHELL_SNAPSHOT_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_READ_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    SHELL_SNAPSHOT_FULL_BYTES.fetch_add(payload_len as u64, Ordering::Relaxed);
 }
 
 pub(crate) fn note_cef_message_pump_scheduled(delay_ms: i64) {
@@ -271,6 +300,11 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             full_window_list_replies: SHELL_REPLY_WINDOW_LIST_COUNT.load(Ordering::Relaxed),
             snapshot_notifies: SHELL_SNAPSHOT_NOTIFY_COUNT.load(Ordering::Relaxed),
             snapshot_reads: SHELL_SNAPSHOT_READ_COUNT.load(Ordering::Relaxed),
+            snapshot_full_bytes: SHELL_SNAPSHOT_FULL_BYTES.load(Ordering::Relaxed),
+            snapshot_dirty_reads: SHELL_SNAPSHOT_DIRTY_READ_COUNT.load(Ordering::Relaxed),
+            snapshot_dirty_unchanged: SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT.load(Ordering::Relaxed),
+            snapshot_dirty_fallbacks: SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT.load(Ordering::Relaxed),
+            snapshot_dirty_bytes: SHELL_SNAPSHOT_DIRTY_BYTES.load(Ordering::Relaxed),
         },
     }
 }
@@ -298,6 +332,11 @@ pub(crate) fn reset_perf_counters() {
     SHELL_REPLY_WINDOW_LIST_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_NOTIFY_COUNT.store(0, Ordering::Relaxed);
     SHELL_SNAPSHOT_READ_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_FULL_BYTES.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_READ_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_UNCHANGED_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_FALLBACK_COUNT.store(0, Ordering::Relaxed);
+    SHELL_SNAPSHOT_DIRTY_BYTES.store(0, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }

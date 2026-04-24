@@ -746,6 +746,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return buffer
   }
 
+  const dirtySnapshotResultBuffer = (result: unknown) => {
+    if (result instanceof ArrayBuffer) return { status: 'dirty', buffer: result }
+    if (!result || typeof result !== 'object') return { status: 'legacy-null', buffer: null }
+    const raw = result as { status?: unknown; buffer?: unknown }
+    const status = typeof raw.status === 'string' ? raw.status : 'unknown'
+    return { status, buffer: raw.buffer instanceof ArrayBuffer ? raw.buffer : null }
+  }
+
   const syncCompositorSnapshot = (force = false) => {
     const path = window.__DERP_COMPOSITOR_SNAPSHOT_PATH
     if (typeof path !== 'string' || path.length === 0) return false
@@ -756,11 +764,17 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     let raw: ArrayBuffer | null = null
     if (!force && typeof readDirtySnapshotIfChanged === 'function') {
       const revisions = snapshotDomainRevisionBuffer(lastSnapshotDecodeCursor)
-      raw =
+      const dirty =
         revisions === null
-          ? null
-          : readDirtySnapshotIfChanged(path, lastSnapshotSequence, revisions)
-      if (!(raw instanceof ArrayBuffer) && typeof readSnapshotIfChanged === 'function') {
+          ? { status: 'missing-cursor', buffer: null }
+          : dirtySnapshotResultBuffer(readDirtySnapshotIfChanged(path, lastSnapshotSequence, revisions))
+      if (dirty.buffer instanceof ArrayBuffer) {
+        raw = dirty.buffer
+      } else if (dirty.status === 'unchanged' || dirty.status === 'error') {
+        return false
+      } else if (dirty.status === 'missing-cursor') {
+        raw = readSnapshot(path)
+      } else if (typeof readSnapshotIfChanged === 'function') {
         raw = readSnapshotIfChanged(path, lastSnapshotSequence)
       }
     } else if (!force && typeof readSnapshotIfChanged === 'function') {

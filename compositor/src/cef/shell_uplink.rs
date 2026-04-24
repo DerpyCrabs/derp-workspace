@@ -28,6 +28,41 @@ fn reset_drag_invalidate_throttle() {
         .expect("LAST_DRAG_VIEW_INVALIDATE") = None;
 }
 
+fn snapshot_payload_len(bytes: &[u8]) -> usize {
+    bytes
+        .len()
+        .saturating_sub(shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize)
+}
+
+fn send_snapshot_perf(frame: &Frame, kind: &str, payload_len: usize) {
+    let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
+        return;
+    };
+    let Some(list) = msg.argument_list() else {
+        return;
+    };
+    let _ = list.set_string(0, Some(&CefString::from("snapshot_perf")));
+    let _ = list.set_string(1, Some(&CefString::from(kind)));
+    let _ = list.set_int(2, payload_len.min(i32::MAX as usize) as i32);
+    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+}
+
+fn dirty_snapshot_read_result_value(status: &str, bytes: Option<&[u8]>) -> Option<V8Value> {
+    let object = v8_value_create_object(None, None)?;
+    let attrs = sys::cef_v8_propertyattribute_t(0);
+    let status_key = CefString::from("status");
+    let status_value = CefString::from(status);
+    let mut status_value = v8_value_create_string(Some(&status_value));
+    let _ = object.set_value_bykey(Some(&status_key), status_value.as_mut(), attrs.into());
+    if let Some(bytes) = bytes {
+        let buffer_key = CefString::from("buffer");
+        let mut buffer_value =
+            v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len());
+        let _ = object.set_value_bykey(Some(&buffer_key), buffer_value.as_mut(), attrs.into());
+    }
+    Some(object)
+}
+
 fn maybe_invalidate_shell_view_after_move_delta(
     browser: Option<&mut Browser>,
     reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
@@ -281,6 +316,23 @@ fn handle_uplink_list(
         "shared_state_sync" => {
             let kind = args.int(1) as u32;
             uplink.shell_shared_state_sync(kind);
+        }
+        "snapshot_perf" => {
+            let kind = cef_string_userfree_to_string(&args.string(1));
+            let payload_len = args.int(2).max(0) as usize;
+            match kind.as_str() {
+                "full" => crate::cef::begin_frame_diag::note_shell_snapshot_read(payload_len),
+                "dirty" => {
+                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_read(payload_len)
+                }
+                "dirty_fallback" => {
+                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_fallback(payload_len)
+                }
+                "dirty_unchanged" => {
+                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_unchanged()
+                }
+                _ => {}
+            }
         }
         "sni_tray_activate" => {
             let id = cef_string_userfree_to_string(&args.string(1));
@@ -1114,7 +1166,9 @@ wrap_v8_handler! {
 }
 
 wrap_v8_handler! {
-    pub struct SharedSnapshotReadV8Handler;
+    pub struct SharedSnapshotReadV8Handler {
+        frame: Frame,
+    }
 
     impl V8Handler {
         fn execute(
@@ -1149,7 +1203,7 @@ wrap_v8_handler! {
             }
             let value = match shell_snapshot::snapshot_read(std::path::Path::new(&path)) {
                 Ok(Some(bytes)) => {
-                    crate::cef::begin_frame_diag::note_shell_snapshot_read();
+                    send_snapshot_perf(&self.frame, "full", snapshot_payload_len(&bytes));
                     v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
                 }
                 Ok(None) => v8_value_create_null(),
@@ -1164,7 +1218,9 @@ wrap_v8_handler! {
 }
 
 wrap_v8_handler! {
-    pub struct SharedSnapshotReadIfChangedV8Handler;
+    pub struct SharedSnapshotReadIfChangedV8Handler {
+        frame: Frame,
+    }
 
     impl V8Handler {
         fn execute(
@@ -1214,7 +1270,7 @@ wrap_v8_handler! {
                 last_sequence,
             ) {
                 Ok(Some(bytes)) => {
-                    crate::cef::begin_frame_diag::note_shell_snapshot_read();
+                    send_snapshot_perf(&self.frame, "full", snapshot_payload_len(&bytes));
                     v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
                 }
                 Ok(None) => v8_value_create_null(),
@@ -1229,7 +1285,9 @@ wrap_v8_handler! {
 }
 
 wrap_v8_handler! {
-    pub struct SharedSnapshotReadDirtyIfChangedV8Handler;
+    pub struct SharedSnapshotReadDirtyIfChangedV8Handler {
+        frame: Frame,
+    }
 
     impl V8Handler {
         fn execute(
@@ -1301,12 +1359,19 @@ wrap_v8_handler! {
                 last_sequence,
                 &previous_domain_revisions,
             ) {
-                Ok(Some(bytes)) => {
-                    crate::cef::begin_frame_diag::note_shell_snapshot_read();
-                    v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len())
+                Ok(shell_snapshot::SnapshotDirtyRead::Dirty { bytes, payload_len }) => {
+                    send_snapshot_perf(&self.frame, "dirty", payload_len);
+                    dirty_snapshot_read_result_value("dirty", Some(&bytes))
                 }
-                Ok(None) => v8_value_create_null(),
-                Err(_) => v8_value_create_null(),
+                Ok(shell_snapshot::SnapshotDirtyRead::Fallback { bytes, payload_len }) => {
+                    send_snapshot_perf(&self.frame, "dirty_fallback", payload_len);
+                    dirty_snapshot_read_result_value("fallback", Some(&bytes))
+                }
+                Ok(shell_snapshot::SnapshotDirtyRead::Unchanged) => {
+                    send_snapshot_perf(&self.frame, "dirty_unchanged", 0);
+                    dirty_snapshot_read_result_value("unchanged", None)
+                }
+                Err(_) => dirty_snapshot_read_result_value("error", None),
             };
             if let Some(retval) = retval {
                 *retval = value;
@@ -1370,17 +1435,19 @@ wrap_render_process_handler! {
             let mut snapshot_version_func =
                 v8_value_create_function(Some(&snapshot_version_name), Some(&mut snapshot_version_handler));
             let snapshot_read_name = CefString::from("__derpCompositorSnapshotRead");
-            let mut snapshot_read_handler = SharedSnapshotReadV8Handler::new();
+            let mut snapshot_read_handler = SharedSnapshotReadV8Handler::new(frame.clone());
             let mut snapshot_read_func =
                 v8_value_create_function(Some(&snapshot_read_name), Some(&mut snapshot_read_handler));
             let snapshot_read_if_changed_name = CefString::from("__derpCompositorSnapshotReadIfChanged");
-            let mut snapshot_read_if_changed_handler = SharedSnapshotReadIfChangedV8Handler::new();
+            let mut snapshot_read_if_changed_handler =
+                SharedSnapshotReadIfChangedV8Handler::new(frame.clone());
             let mut snapshot_read_if_changed_func = v8_value_create_function(
                 Some(&snapshot_read_if_changed_name),
                 Some(&mut snapshot_read_if_changed_handler),
             );
             let snapshot_read_dirty_if_changed_name = CefString::from("__derpCompositorSnapshotReadDirtyIfChanged");
-            let mut snapshot_read_dirty_if_changed_handler = SharedSnapshotReadDirtyIfChangedV8Handler::new();
+            let mut snapshot_read_dirty_if_changed_handler =
+                SharedSnapshotReadDirtyIfChangedV8Handler::new(frame.clone());
             let mut snapshot_read_dirty_if_changed_func = v8_value_create_function(
                 Some(&snapshot_read_dirty_if_changed_name),
                 Some(&mut snapshot_read_dirty_if_changed_handler),

@@ -505,6 +505,11 @@ export interface PerfShellSyncSnapshot {
   full_window_list_replies: number
   snapshot_notifies: number
   snapshot_reads: number
+  snapshot_full_bytes: number
+  snapshot_dirty_reads: number
+  snapshot_dirty_unchanged: number
+  snapshot_dirty_fallbacks: number
+  snapshot_dirty_bytes: number
 }
 
 export interface PerfCounterSnapshot {

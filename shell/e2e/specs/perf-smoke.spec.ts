@@ -45,6 +45,13 @@ function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounterSnapsho
         after.shell_sync.full_window_list_replies - before.shell_sync.full_window_list_replies,
       snapshot_notifies: after.shell_sync.snapshot_notifies - before.shell_sync.snapshot_notifies,
       snapshot_reads: after.shell_sync.snapshot_reads - before.shell_sync.snapshot_reads,
+      snapshot_full_bytes: after.shell_sync.snapshot_full_bytes - before.shell_sync.snapshot_full_bytes,
+      snapshot_dirty_reads: after.shell_sync.snapshot_dirty_reads - before.shell_sync.snapshot_dirty_reads,
+      snapshot_dirty_unchanged:
+        after.shell_sync.snapshot_dirty_unchanged - before.shell_sync.snapshot_dirty_unchanged,
+      snapshot_dirty_fallbacks:
+        after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
+      snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
     },
   }
 }
@@ -148,8 +155,30 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(openDelta.shell_updates.batch_count >= 1, 'window open churn should deliver compositor batches')
     assert(
-      openDelta.shell_sync.snapshot_reads <= 1,
-      `window open churn should avoid snapshot read churn, got ${openDelta.shell_sync.snapshot_reads}`,
+      openDelta.shell_sync.snapshot_full_bytes === 0,
+      `window open churn should avoid full snapshot payload reads, got ${openDelta.shell_sync.snapshot_full_bytes} bytes`,
+    )
+    assert(
+      openDelta.shell_sync.snapshot_dirty_fallbacks === 0,
+      `window open churn dirty snapshots should not fall back to full payloads, got ${openDelta.shell_sync.snapshot_dirty_fallbacks}`,
+    )
+
+    await resetPerfCounters(base)
+    await getJson<ShellSnapshot>(base, '/test/snapshot/sync')
+    await getJson<ShellSnapshot>(base, '/test/snapshot/sync')
+    const dirtySample = await getPerfCounters(base)
+
+    assert(
+      dirtySample.shell_sync.snapshot_dirty_reads >= 1,
+      `snapshot sync should call the dirty snapshot reader, got ${dirtySample.shell_sync.snapshot_dirty_reads}`,
+    )
+    assert(
+      dirtySample.shell_sync.snapshot_dirty_unchanged >= 1,
+      `unchanged snapshot sync should return an explicit status, got ${dirtySample.shell_sync.snapshot_dirty_unchanged}`,
+    )
+    assert(
+      dirtySample.shell_sync.snapshot_dirty_fallbacks === 0,
+      `unchanged dirty snapshots should not fall back to full payloads, got ${dirtySample.shell_sync.snapshot_dirty_fallbacks}`,
     )
 
     const focusedShell = await focusNativeWindow(base, red.window.window_id)
@@ -193,7 +222,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `window drag should not trigger repeated full window list replies, got ${moveDelta.shell_sync.full_window_list_replies}`,
     )
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} moved=${moveDelta.shell_updates.window_geometry_messages} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} snapshot_reads=${moveDelta.shell_sync.snapshot_reads}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -202,6 +231,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       after_move: movedSample,
       deltas: {
         open: openDelta,
+        dirty: dirtySample,
         move: moveDelta,
       },
       windows: {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,21 @@ use std::os::fd::AsRawFd;
 
 const SNAPSHOT_CAPACITY_BYTES: usize = 16 * 1024 * 1024;
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC: u32 = 0x4452_444d;
+
+pub enum SnapshotDirtyRead {
+    Unchanged,
+    Dirty { bytes: Vec<u8>, payload_len: usize },
+    Fallback { bytes: Vec<u8>, payload_len: usize },
+}
+
+enum SnapshotReadResult {
+    Unchanged,
+    Changed {
+        bytes: Vec<u8>,
+        payload_len: usize,
+        filtered: bool,
+    },
+}
 
 struct SharedMmapFile {
     _file: File,
@@ -432,7 +448,7 @@ fn snapshot_read_bytes(
     path: &Path,
     last_sequence: Option<u64>,
     previous_domain_revisions: Option<&[u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT]>,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<SnapshotReadResult, String> {
     #[cfg(not(unix))]
     {
         let _ = (path, last_sequence, previous_domain_revisions);
@@ -451,36 +467,39 @@ fn snapshot_read_bytes(
             || head_a.sequence % 2 != 0
             || last_sequence == Some(head_a.sequence)
         {
-            return Ok(None);
+            return Ok(SnapshotReadResult::Unchanged);
         }
         let payload_len = head_a.payload_len as usize;
         if header_len + payload_len > mapped.len() {
-            return Ok(None);
+            return Ok(SnapshotReadResult::Unchanged);
         }
         fence(Ordering::Acquire);
         let payload = &mapped[header_len..header_len + payload_len];
         let filtered = previous_domain_revisions
             .and_then(|revisions| encode_dirty_snapshot_payload(payload, revisions));
-        let (flags, payload) = filtered
-            .map(|(flags, payload)| (flags, payload))
-            .unwrap_or_else(|| (head_a.flags, payload.to_vec()));
+        let (flags, payload, filtered) = filtered
+            .map(|(flags, payload)| (flags, Cow::Owned(payload), true))
+            .unwrap_or((head_a.flags, Cow::Borrowed(payload), false));
         let mut out = Vec::with_capacity(header_len + payload.len());
-        let mut header = [0u8; shell_wire::SHELL_SHARED_SNAPSHOT_HEADER_BYTES as usize];
+        out.resize(header_len, 0);
         shell_wire::write_shared_snapshot_header(
-            &mut header,
+            &mut out[..header_len],
             head_a.sequence,
             payload.len() as u32,
             flags,
         )?;
-        out.extend_from_slice(&header);
         out.extend_from_slice(&payload);
         fence(Ordering::Acquire);
         let head_b_bytes = mapped_snapshot_header(mapped)?;
         let head_b = shell_wire::read_shared_snapshot_header(&head_b_bytes)?;
         if head_a.sequence != head_b.sequence || head_b.sequence % 2 != 0 {
-            return Ok(None);
+            return Ok(SnapshotReadResult::Unchanged);
         }
-        Ok(Some(out))
+        Ok(SnapshotReadResult::Changed {
+            bytes: out,
+            payload_len: payload.len(),
+            filtered,
+        })
     }
 }
 
@@ -1125,7 +1144,10 @@ pub fn snapshot_read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
     #[cfg(unix)]
     {
-        snapshot_read_bytes(path, None, None)
+        match snapshot_read_bytes(path, None, None)? {
+            SnapshotReadResult::Changed { bytes, .. } => Ok(Some(bytes)),
+            SnapshotReadResult::Unchanged => Ok(None),
+        }
     }
 }
 
@@ -1140,7 +1162,10 @@ pub fn snapshot_read_if_changed(
     }
     #[cfg(unix)]
     {
-        snapshot_read_bytes(path, Some(last_sequence), None)
+        match snapshot_read_bytes(path, Some(last_sequence), None)? {
+            SnapshotReadResult::Changed { bytes, .. } => Ok(Some(bytes)),
+            SnapshotReadResult::Unchanged => Ok(None),
+        }
     }
 }
 
@@ -1148,7 +1173,7 @@ pub fn snapshot_read_dirty_if_changed(
     path: &Path,
     last_sequence: u64,
     previous_domain_revisions: &[u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT],
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<SnapshotDirtyRead, String> {
     #[cfg(not(unix))]
     {
         let _ = (path, last_sequence, previous_domain_revisions);
@@ -1156,7 +1181,20 @@ pub fn snapshot_read_dirty_if_changed(
     }
     #[cfg(unix)]
     {
-        snapshot_read_bytes(path, Some(last_sequence), Some(previous_domain_revisions))
+        match snapshot_read_bytes(path, Some(last_sequence), Some(previous_domain_revisions))? {
+            SnapshotReadResult::Unchanged => Ok(SnapshotDirtyRead::Unchanged),
+            SnapshotReadResult::Changed {
+                bytes,
+                payload_len,
+                filtered,
+            } => {
+                if filtered {
+                    Ok(SnapshotDirtyRead::Dirty { bytes, payload_len })
+                } else {
+                    Ok(SnapshotDirtyRead::Fallback { bytes, payload_len })
+                }
+            }
+        }
     }
 }
 
