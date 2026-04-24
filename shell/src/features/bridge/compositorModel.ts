@@ -95,6 +95,27 @@ function sameNumberArray(left: readonly number[], right: readonly number[]): boo
   return true
 }
 
+function isWindowSnapshotDetail(detail: DerpShellDetail) {
+  return (
+    detail.type === 'window_geometry' ||
+    detail.type === 'window_metadata' ||
+    detail.type === 'window_state' ||
+    detail.type === 'window_mapped' ||
+    detail.type === 'window_unmapped'
+  )
+}
+
+function applyWindowSnapshotDetails(
+  map: Map<number, DerpWindow>,
+  details: readonly DerpShellDetail[],
+): Map<number, DerpWindow> {
+  let next = map
+  for (const detail of details) {
+    next = applyDetail(next, detail)
+  }
+  return next
+}
+
 function shellHostedAppByWindowFromState(state: { byWindowId?: Record<string, unknown> } | null | undefined) {
   const raw = state?.byWindowId
   if (!raw || typeof raw !== 'object') return {}
@@ -215,18 +236,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     if (nextFocusedWindowId !== undefined) {
       setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
     }
-    for (const detail of details) {
-      if (
-        detail.type !== 'window_geometry' &&
-        detail.type !== 'window_metadata' &&
-        detail.type !== 'window_state' &&
-        detail.type !== 'window_mapped' &&
-        detail.type !== 'window_unmapped'
-      ) {
-        continue
-      }
-      setWindows((map) => applyDetail(map, detail))
-      if (detail.type === 'window_unmapped') {
+    const windowDetails = details.filter(isWindowSnapshotDetail)
+    if (windowDetails.length > 0) {
+      setWindows((map) => applyWindowSnapshotDetails(map, windowDetails))
+      for (const detail of windowDetails) {
+        if (detail.type !== 'window_unmapped') continue
         const windowId = coerceShellWindowId(detail.window_id)
         if (windowId !== null) setFocusedWindowId((prev) => (prev === windowId ? null : prev))
       }

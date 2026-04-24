@@ -334,60 +334,64 @@ impl ShellSnapshotModel {
     }
 }
 
+pub(crate) fn snapshot_domain_for_message(
+    message: &shell_wire::DecodedCompositorToShellMessage,
+) -> u32 {
+    match message {
+        shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+        | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE
+        }
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER
+        }
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
+        }
+        shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD
+        }
+        shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+        | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
+        }
+        shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
+        }
+        shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION
+        }
+        shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
+        }
+        shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+        | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_TRAY
+        }
+        _ => 0,
+    }
+}
+
 pub(crate) fn snapshot_dirty_domains(
     messages: &[shell_wire::DecodedCompositorToShellMessage],
 ) -> u32 {
     let mut flags = 0u32;
     for message in messages {
-        flags |= match message {
-            shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_OUTPUTS
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOWS
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER
-            }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_FOCUS
-            }
-            shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_KEYBOARD
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_WORKSPACE
-            }
-            shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
-            }
-            shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION
-            }
-            shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_NATIVE_DRAG_PREVIEW
-            }
-            shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. } => {
-                shell_wire::SHELL_SNAPSHOT_DOMAIN_TRAY
-            }
-            _ => 0,
-        };
+        flags |= snapshot_domain_for_message(message);
     }
     flags
 }

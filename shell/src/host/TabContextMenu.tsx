@@ -13,6 +13,13 @@ type TabContextMenuProps = {
 }
 
 export function TabContextMenu(props: TabContextMenuProps) {
+  let picked = false
+  const pickItem = (item: ShellContextMenuItem) => {
+    if (picked || item.disabled) return
+    picked = true
+    item.action()
+    props.closeContextMenu()
+  }
   const panelStyle = createMemo(() => {
     const a = props.anchor()
     return {
@@ -48,10 +55,16 @@ export function TabContextMenu(props: TabContextMenuProps) {
                 onMouseDown={(e) => {
                   e.preventDefault()
                 }}
-                onClick={() => {
-                  if (item.disabled) return
-                  item.action()
-                  props.closeContextMenu()
+                onPointerUp={(e) => {
+                  if (e.button !== 0) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  pickItem(item)
+                }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  pickItem(item)
                 }}
               >
                 <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>

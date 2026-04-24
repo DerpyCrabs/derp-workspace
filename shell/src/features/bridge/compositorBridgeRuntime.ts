@@ -234,6 +234,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     detail.type === 'tray_hints' ||
     detail.type === 'tray_sni'
 
+  const hotWindowDetailCanBeStale = (detail: DerpShellDetail) =>
+    detail.type === 'window_geometry' ||
+    detail.type === 'window_metadata' ||
+    detail.type === 'window_state' ||
+    detail.type === 'window_mapped' ||
+    detail.type === 'window_unmapped'
+
   const detailSnapshotDomainFlags = (detail: DerpShellDetail) => {
     switch (detail.type) {
       case 'output_layout':
@@ -579,6 +586,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorDetail = (d: DerpShellDetail) => {
     const detailEpoch = detailSnapshotEpoch(d)
+    if (hotWindowDetailCanBeStale(d) && detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
     if (detailCanBeSupersededBySnapshot(d)) {
       if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
       const hadSnapshot = syncCompositorSnapshot()

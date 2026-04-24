@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::cef::shell_snapshot_model::{snapshot_dirty_domains, ShellSnapshotModel};
+use crate::cef::shell_snapshot_model::{
+    snapshot_dirty_domains, snapshot_domain_for_message, ShellSnapshotModel,
+};
 use crate::session::workspace_model::{
     WorkspaceMonitorLayoutType, WorkspaceSlotRuleField, WorkspaceSlotRuleOp, WorkspaceState,
 };
@@ -351,18 +353,31 @@ fn refresh_domain_chunk_cache(
     messages: &[shell_wire::DecodedCompositorToShellMessage],
     force_all: bool,
 ) -> Result<(), String> {
+    let mut next_chunks: [Option<Vec<u8>>; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT] =
+        std::array::from_fn(|index| {
+            let domain = 1u32 << index;
+            if force_all || dirty_domains & domain != 0 {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        });
+    for msg in messages {
+        let domain = snapshot_domain_for_message(msg);
+        let Some(index) = snapshot_domain_index(domain) else {
+            continue;
+        };
+        let Some(chunk) = next_chunks[index].as_mut() else {
+            continue;
+        };
+        append_snapshot_message(chunk, msg)?;
+    }
     for (index, chunk) in domain_chunks.iter_mut().enumerate() {
         let domain = 1u32 << index;
         if !force_all && dirty_domains & domain == 0 {
             continue;
         }
-        let mut next = Vec::new();
-        for msg in messages {
-            if snapshot_dirty_domains(std::slice::from_ref(msg)) == domain {
-                append_snapshot_message(&mut next, msg)?;
-            }
-        }
-        *chunk = next;
+        *chunk = next_chunks[index].take().unwrap_or_default();
     }
     Ok(())
 }
