@@ -50,7 +50,7 @@ impl DirectDmabufSink {
                     "negative plane fd",
                 ));
             }
-            let d = unsafe { libc::dup(fd) };
+            let d = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
             if d < 0 {
                 drop(owned);
                 return Err(io::Error::last_os_error());
