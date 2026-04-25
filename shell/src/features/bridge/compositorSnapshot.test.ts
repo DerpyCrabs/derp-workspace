@@ -411,6 +411,7 @@ describe('decodeCompositorSnapshot', () => {
       ...i32(0),
       ...i32(0),
       ...u32(0),
+      ...u32(0),
     ])
     const payload = [...domainRevisions([0, 0, 0, 0, 0, 0, 1]), ...interactionState]
     const bytes = new Uint8Array([
@@ -434,6 +435,7 @@ describe('decodeCompositorSnapshot', () => {
           pointer_x: 140,
           pointer_y: 220,
           move_window_id: 9,
+          window_switcher_selected_window_id: null,
           resize_window_id: null,
           move_proxy_window_id: 9,
           move_capture_window_id: 9,

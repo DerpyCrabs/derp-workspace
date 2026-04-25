@@ -68,6 +68,13 @@ pub(crate) fn keysym_is_super(keysym: &smithay::input::keyboard::KeysymHandle<'_
     })
 }
 
+pub(crate) fn keysym_is_alt(keysym: &smithay::input::keyboard::KeysymHandle<'_>) -> bool {
+    keysym
+        .raw_syms()
+        .into_iter()
+        .any(|sym| matches!(sym.raw(), keysyms::KEY_Alt_L | keysyms::KEY_Alt_R))
+}
+
 /// Map libinput / Smithay pointer-axis values to integers for CEF [`send_mouse_wheel_event`].
 fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
     if let Some(v) = discrete_v120 {
@@ -612,6 +619,7 @@ impl CompositorState {
                     move |state, mods, keysym| {
                         let raw_sym = keysym.modified_sym().raw();
                         let is_super = keysym_is_super(&keysym);
+                        let is_alt = keysym_is_alt(&keysym);
                         if state.screenshot_selection_active() {
                             if key_state == KeyState::Released && is_super {
                                 state.programs_menu_super_armed = false;
@@ -677,6 +685,15 @@ impl CompositorState {
                                 state.programs_menu_prepare_super_press();
                                 return FilterResult::Intercept(());
                             }
+                            if matches!(raw_sym, keysyms::KEY_Tab)
+                                && mods.alt
+                                && !state.seat.keyboard_shortcuts_inhibited()
+                            {
+                                if !is_autorepeat {
+                                    state.shell_window_switcher_cycle(mods.shift);
+                                }
+                                return FilterResult::Intercept(());
+                            }
                             if state.programs_menu_super_armed
                                 && !is_super
                                 && !state.seat.keyboard_shortcuts_inhibited()
@@ -717,6 +734,19 @@ impl CompositorState {
                                 }
                                 return FilterResult::Intercept(());
                             }
+                        }
+                        if state.shell_window_switcher_open() {
+                            if key_state == KeyState::Released && is_alt {
+                                state.shell_window_switcher_commit();
+                                return FilterResult::Intercept(());
+                            }
+                            if key_state == KeyState::Pressed
+                                && matches!(raw_sym, keysyms::KEY_Escape)
+                            {
+                                state.shell_window_switcher_cancel();
+                                return FilterResult::Intercept(());
+                            }
+                            return FilterResult::Intercept(());
                         }
                         if state.shell_keyboard_capture_active()
                             && state.shell_cef_active()

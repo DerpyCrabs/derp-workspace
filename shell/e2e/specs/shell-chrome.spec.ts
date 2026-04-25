@@ -49,6 +49,8 @@ import {
   waitForPowerMenuOpen,
   waitForProgramsMenuClosed,
   waitForProgramsMenuOpen,
+  waitForWindowSwitcherClosed,
+  waitForWindowSwitcherOpen,
   waitForVolumeMenuClosed,
   waitFor,
   waitForCompositorShellUiFocus,
@@ -482,6 +484,42 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for click-opened programs menu dismissal to restore native focus',
     )
     assert(closed.compositor.focused_window_id === windowId, 'native window should regain keyboard focus after click-opened programs menu closes')
+  })
+
+  test('alt tab switcher uses launcher styling and activates selection on alt release', async ({ base, state }) => {
+    const { red } = await ensureNativePair(base, state)
+    await activateTaskbarWindow(base, await getJson<ShellSnapshot>(base, '/test/state/shell'), red.window.window_id)
+    const focused = await waitForNativeFocus(base, red.window.window_id)
+    const expectedSelectedWindowId =
+      focused.shell.window_stack_order?.find((windowId) =>
+        windowId !== red.window.window_id &&
+        focused.shell.windows.some((window) => window.window_id === windowId && !window.minimized),
+      ) ?? null
+    assert(expectedSelectedWindowId !== null, 'alt tab should have another visible window to switch to')
+    const expectedWindow =
+      focused.shell.windows.find((window) => window.window_id === expectedSelectedWindowId) ?? null
+    assert(expectedWindow, 'expected alt tab target window missing from shell snapshot')
+
+    await keyAction(base, KEY.alt, 'press')
+    await keyAction(base, KEY.tab, 'tap')
+    const switcher = await waitForWindowSwitcherOpen(base)
+    assert(switcher.window_switcher_selected_window_id === expectedSelectedWindowId, 'window switcher should select the next stacked window')
+    assert(switcher.controls?.window_switcher_panel, 'window switcher panel should be visible')
+
+    await keyAction(base, KEY.alt, 'release')
+    await waitForWindowSwitcherClosed(base)
+    if (expectedWindow.shell_hosted) {
+      await waitForShellUiFocus(base, expectedSelectedWindowId!)
+    } else {
+      await waitForNativeFocus(base, expectedSelectedWindowId!)
+    }
+
+    await writeJsonArtifact('alt-tab-switcher.json', {
+      focusedBefore: red.window.window_id,
+      expectedSelectedWindowId,
+      expectedWindow,
+      switcher,
+    })
   })
 
   test('closing programs menu immediately restores native content under its old exclusion', async ({ base, state }) => {

@@ -454,7 +454,7 @@ function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: nu
 }
 
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 76 !== view.byteLength) return null
+  if (offset + 80 !== view.byteLength) return null
   const decodeVisual = (windowId: number, base: number) => {
     if (windowId <= 0) return null
     const flags = view.getUint32(base + 16, true)
@@ -472,6 +472,7 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
   const resizeWindowId = view.getUint32(offset + 24, true)
   const moveProxyWindowId = view.getUint32(offset + 28, true)
   const moveCaptureWindowId = view.getUint32(offset + 32, true)
+  const windowSwitcherSelectedWindowId = view.getUint32(offset + 76, true)
   return {
     type: 'interaction_state',
     revision,
@@ -483,6 +484,8 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
     move_capture_window_id: moveCaptureWindowId > 0 ? moveCaptureWindowId : null,
     move_rect: decodeVisual(moveWindowId, offset + 36),
     resize_rect: decodeVisual(resizeWindowId, offset + 56),
+    window_switcher_selected_window_id:
+      windowSwitcherSelectedWindowId > 0 ? windowSwitcherSelectedWindowId : null,
   }
 }
 

@@ -32,6 +32,8 @@ export const KEY = {
   space: 57,
   grave: 41,
   shift: 42,
+  tab: 15,
+  alt: 56,
   comma: 51,
   home: 102,
   left: 105,
@@ -277,6 +279,9 @@ export interface ShellControls {
   programs_menu_first_item?: Rect | null
   programs_menu_panel?: Rect | null
   programs_menu_list?: Rect | null
+  window_switcher_panel?: Rect | null
+  window_switcher_first_item?: Rect | null
+  window_switcher_list?: Rect | null
   tab_menu_pin?: Rect | null
   tab_menu_unpin?: Rect | null
   tab_menu_use_split_left?: Rect | null
@@ -446,8 +451,11 @@ export interface ShellSnapshot {
     volume_panel_dom: boolean
     power_menu_dom: boolean
     programs_menu_dom: boolean
+    window_switcher_dom?: boolean
   } | null
   programs_menu_query: string
+  window_switcher_open?: boolean
+  window_switcher_selected_window_id?: number | null
   programs_menu_list_scroll?: ProgramsMenuListScroll | null
   crosshair_cursor: boolean
   snap_picker_open?: boolean
@@ -479,6 +487,7 @@ export interface ShellSnapshot {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    window_switcher_selected_window_id?: number | null
   } | null
   window_interaction_capture?: Rect | null
   window_interaction_capture_blocks_pointer?: boolean
@@ -2479,6 +2488,30 @@ export async function waitForProgramsMenuClosed(base: string, timeoutMs = 5000):
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       return shell.programs_menu_open ? null : shell
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForWindowSwitcherOpen(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for window switcher open',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.window_switcher_open && shell.controls?.window_switcher_panel ? shell : null
+    },
+    timeoutMs,
+    100,
+  )
+}
+
+export async function waitForWindowSwitcherClosed(base: string, timeoutMs = 5000): Promise<ShellSnapshot> {
+  return waitFor(
+    'wait for window switcher closed',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.window_switcher_open ? null : shell
     },
     timeoutMs,
     100,

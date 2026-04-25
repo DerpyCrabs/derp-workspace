@@ -49,6 +49,7 @@ import { refreshThemeSettingsFromRemote } from '@/features/theme/themeStore'
 import { ShellContextMenusProvider } from '@/host/ShellContextMenusContext'
 import { createShellContextMenus } from '@/host/createShellContextMenus'
 import { ShellContextMenuLayer } from '@/host/ShellContextMenuLayer'
+import { WindowSwitcherContextMenu } from '@/host/WindowSwitcherContextMenu'
 import { createDebugHudRuntime } from '@/apps/debug/debugHudRuntime'
 import {
   layoutScreenCssRect,
@@ -110,6 +111,7 @@ import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
 import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
 import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
 import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
+import { DropdownMenu, DropdownMenuPortal } from '@/components/ui/dropdown-menu'
 
 declare global {
   interface Window {
@@ -319,6 +321,7 @@ function App() {
     resize_window_id: number | null
     move_proxy_window_id: number | null
     move_capture_window_id: number | null
+    window_switcher_selected_window_id: number | null
     move_rect: {
       x: number
       y: number
@@ -910,7 +913,11 @@ function App() {
     postSessionPower,
     canSessionControl,
     scheduleOverlayExclusionSync: () => shellSharedStateSync.scheduleOverlayExclusionSync(),
+    windows: windowsList,
+    windowSwitcherSelectedWindowId: () =>
+      compositorInteractionState()?.window_switcher_selected_window_id ?? null,
     focusedWindowId,
+    activateWindow: (windowId) => shellWireSend('activate_window', windowId),
     shellWireSend: (op, arg) => shellWireSend(op, arg),
     exitSession: () => {
       if (shellWireSend('quit')) {
@@ -1746,6 +1753,7 @@ function App() {
             resize_window_id: state.resize_window_id,
             move_proxy_window_id: state.move_proxy_window_id,
             move_capture_window_id: state.move_capture_window_id,
+            window_switcher_selected_window_id: state.window_switcher_selected_window_id,
             move_rect: state.move_rect,
             resize_rect: state.resize_rect,
           }
@@ -2038,6 +2046,18 @@ function App() {
         tabMenuProps={shellContextMenus.tabMenuProps}
         traySniMenuProps={shellContextMenus.traySniMenuProps}
       />
+
+      <Show when={shellContextMenus.windowSwitcherOpen() && shellContextMenus.menuLayerHostEl()} keyed>
+        {(host) => (
+          <DropdownMenu open={shellContextMenus.windowSwitcherOpen()}>
+            <DropdownMenuPortal mount={host}>
+              <div class="pointer-events-none">
+                <WindowSwitcherContextMenu />
+              </div>
+            </DropdownMenuPortal>
+          </DropdownMenu>
+        )}
+      </Show>
 
       <div class="pointer-events-none fixed inset-0 z-50" aria-hidden="true">
         {crosshairDebugOverlay()}

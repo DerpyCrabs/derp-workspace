@@ -233,6 +233,8 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             let resize_window_id = value_u32(detail, "resize_window_id").unwrap_or(0);
             let move_proxy_window_id = value_u32(detail, "move_proxy_window_id").unwrap_or(0);
             let move_capture_window_id = value_u32(detail, "move_capture_window_id").unwrap_or(0);
+            let window_switcher_selected_window_id =
+                value_u32(detail, "window_switcher_selected_window_id").unwrap_or(0);
             push_u64(
                 bytes,
                 detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
@@ -245,6 +247,10 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             push_u32(bytes, move_capture_window_id);
             push_hot_visual(bytes, detail, "move_rect")
                 && push_hot_visual(bytes, detail, "resize_rect")
+                && {
+                    push_u32(bytes, window_switcher_selected_window_id);
+                    true
+                }
         }
         _ => false,
     }
@@ -864,6 +870,7 @@ fn apply_message(
             move_capture_window_id,
             move_visual,
             resize_visual,
+            window_switcher_selected_window_id,
         } => {
             pending_details.push(detail_with_snapshot_epoch(
                 json!({
@@ -875,6 +882,7 @@ fn apply_message(
                     "resize_window_id": resize_window_id,
                     "move_proxy_window_id": move_proxy_window_id,
                     "move_capture_window_id": move_capture_window_id,
+                    "window_switcher_selected_window_id": window_switcher_selected_window_id,
                     "move_rect": move_visual.map(|visual| json!({
                         "x": visual.x,
                         "y": visual.y,

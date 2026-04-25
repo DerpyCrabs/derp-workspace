@@ -210,7 +210,7 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       continue
     }
     if (tag === 6) {
-      if (cursor.offset + 72 > view.byteLength) return null
+      if (cursor.offset + 76 > view.byteLength) return null
       const revision = Number(view.getBigUint64(cursor.offset, true))
       const pointer_x = view.getInt32(cursor.offset + 8, true)
       const pointer_y = view.getInt32(cursor.offset + 12, true)
@@ -221,7 +221,8 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const moveVisualWindowId = moveWindowId || moveProxyWindowId || moveCaptureWindowId
       const move_rect = decodeHotVisual(view, cursor.offset + 32, moveVisualWindowId)
       const resize_rect = decodeHotVisual(view, cursor.offset + 52, resizeWindowId)
-      cursor.offset += 72
+      const windowSwitcherSelectedWindowId = view.getUint32(cursor.offset + 72, true)
+      cursor.offset += 76
       details.push({
         type: 'interaction_state',
         revision,
@@ -233,6 +234,8 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
         move_capture_window_id: moveCaptureWindowId > 0 ? moveCaptureWindowId : null,
         move_rect,
         resize_rect,
+        window_switcher_selected_window_id:
+          windowSwitcherSelectedWindowId > 0 ? windowSwitcherSelectedWindowId : null,
         ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
       })
       continue

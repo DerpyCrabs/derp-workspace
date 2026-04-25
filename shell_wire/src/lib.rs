@@ -1302,6 +1302,7 @@ pub enum DecodedCompositorToShellMessage {
         move_capture_window_id: u32,
         move_visual: Option<CompositorInteractionVisual>,
         resize_visual: Option<CompositorInteractionVisual>,
+        window_switcher_selected_window_id: u32,
     },
     NativeDragPreview {
         window_id: u32,
@@ -1443,8 +1444,9 @@ pub fn encode_compositor_interaction_state(
     move_capture_window_id: u32,
     move_visual: Option<CompositorInteractionVisual>,
     resize_visual: Option<CompositorInteractionVisual>,
+    window_switcher_selected_window_id: u32,
 ) -> Vec<u8> {
-    let body_len = 76u32;
+    let body_len = 80u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     let encode_visual =
         |out: &mut Vec<u8>, visual: Option<CompositorInteractionVisual>| match visual {
@@ -1481,6 +1483,7 @@ pub fn encode_compositor_interaction_state(
     v.extend_from_slice(&move_capture_window_id.to_le_bytes());
     encode_visual(&mut v, move_visual);
     encode_visual(&mut v, resize_visual);
+    v.extend_from_slice(&window_switcher_selected_window_id.to_le_bytes());
     v
 }
 
@@ -2314,7 +2317,7 @@ fn decode_compositor_to_shell_body(
             })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
-            if body.len() != 76 {
+            if body.len() != 80 {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let decode_visual = |window_id: u32,
@@ -2339,6 +2342,8 @@ fn decode_compositor_to_shell_body(
             let resize_window_id = u32::from_le_bytes(body[24..28].try_into().unwrap());
             let move_proxy_window_id = u32::from_le_bytes(body[28..32].try_into().unwrap());
             let move_capture_window_id = u32::from_le_bytes(body[32..36].try_into().unwrap());
+            let window_switcher_selected_window_id =
+                u32::from_le_bytes(body[76..80].try_into().unwrap());
             Ok(DecodedCompositorToShellMessage::InteractionState {
                 revision,
                 pointer_x,
@@ -2349,6 +2354,7 @@ fn decode_compositor_to_shell_body(
                 move_capture_window_id,
                 move_visual: decode_visual(move_window_id, 36),
                 resize_visual: decode_visual(resize_window_id, 56),
+                window_switcher_selected_window_id,
             })
         }
         MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW => {

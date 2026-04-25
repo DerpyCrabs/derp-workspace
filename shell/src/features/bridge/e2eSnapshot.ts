@@ -79,6 +79,7 @@ export type BuildE2eShellSnapshotArgs = {
         resize_window_id: number | null
         move_proxy_window_id: number | null
         move_capture_window_id: number | null
+        window_switcher_selected_window_id: number | null
         move_rect?: {
           x: number
           y: number
@@ -362,6 +363,8 @@ function shellHostedWindowIdFromElement(el: Element): number | null {
 
 export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   const cache = createQueryCache(args.document)
+  const windowSwitcherOpen =
+    (args.compositorInteractionState?.window_switcher_selected_window_id ?? null) !== null
   const settingsTilingLayoutTriggerRect = queryRect(cache, '[data-settings-tiling-layout-trigger]', args.origin)
   const settingsMonitorName =
     args.windows.find((window) => window.window_id === 9002 && !window.minimized)?.output_name ?? null
@@ -708,6 +711,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     let panel: HTMLElement | null = null
     if (args.volumeMenuOpen) panel = cache.query('[data-shell-volume-menu-panel]')
     else if (args.powerMenuOpen) panel = cache.query('[data-shell-power-menu-panel]')
+    else if (windowSwitcherOpen) panel = cache.query('[data-shell-window-switcher-panel]')
     else if (args.programsMenuOpen) panel = cache.query('[data-shell-programs-menu-panel]')
     else return null
     if (!(panel instanceof HTMLElement)) return { hit_ok: false, tray_flap_above_toggle: null }
@@ -736,6 +740,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     screenshot_mode: args.screenshotMode,
     crosshair_cursor: args.crosshairCursor,
     programs_menu_open: args.programsMenuOpen,
+    window_switcher_open: windowSwitcherOpen,
     power_menu_open: args.powerMenuOpen,
     volume_menu_open: args.volumeMenuOpen,
     menu_layer_host_connected: !!menuLayerHostElResolved,
@@ -748,6 +753,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
             volume_panel_dom: !!cache.query('[data-shell-volume-menu-panel]'),
             power_menu_dom: !!cache.query('[data-shell-power-menu-panel]'),
             programs_menu_dom: !!cache.query('[data-shell-programs-menu-panel]'),
+            window_switcher_dom: !!cache.query('[data-shell-window-switcher-panel]'),
           }
         : null,
     debug_window_visible: args.debugWindowVisible,
@@ -772,6 +778,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     pdf_viewer_windows: pdfViewerWindows,
     file_browser_context_menu: fileBrowserContextMenu,
     programs_menu_query: args.programsMenuQuery,
+    window_switcher_selected_window_id:
+      args.compositorInteractionState?.window_switcher_selected_window_id ?? null,
     session_snapshot: args.sessionSnapshot,
     session_snapshot_error: args.sessionSnapshotError,
     session_restore_active: args.sessionRestoreActive,
@@ -838,6 +846,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       programs_menu_first_item: queryRect(cache, '[data-programs-menu-idx="0"]', args.origin),
       programs_menu_panel: queryRect(cache, '[data-shell-programs-menu-panel]', args.origin),
       programs_menu_list: queryRect(cache, '[data-programs-menu-scroll]', args.origin),
+      window_switcher_panel: queryRect(cache, '[data-shell-window-switcher-panel]', args.origin),
+      window_switcher_first_item: queryRect(cache, '[data-window-switcher-idx="0"]', args.origin),
+      window_switcher_list: queryRect(cache, '[data-window-switcher-scroll]', args.origin),
       tab_menu_pin: queryRect(cache, '[data-tab-menu-idx="0"]', args.origin),
       tab_menu_unpin: queryRect(cache, '[data-tab-menu-idx="0"]', args.origin),
       tab_menu_use_split_left: queryRect(cache, '[data-tab-menu-action="use-split-left"]', args.origin),

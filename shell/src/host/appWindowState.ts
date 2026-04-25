@@ -107,6 +107,7 @@ export type DerpShellDetail = ({
             fullscreen: boolean
           }
         | null
+      window_switcher_selected_window_id?: number | null
     }
   | {
       type: 'native_drag_preview'

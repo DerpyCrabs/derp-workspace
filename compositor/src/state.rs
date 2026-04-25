@@ -490,6 +490,7 @@ pub(crate) enum ShellKeyboardCapture {
     None,
     ShellUi,
     ProgramsMenu { restore_window_id: Option<u32> },
+    WindowSwitcher { restore_window_id: Option<u32> },
 }
 
 pub struct CompositorState {
@@ -683,6 +684,7 @@ pub struct CompositorState {
     pub(crate) shell_hosted_app_state_revision: u64,
     pub(crate) shell_interaction_revision: u64,
     pub(crate) shell_interaction_last_sent_at: Option<Instant>,
+    pub(crate) shell_window_switcher_selected_window_id: Option<u32>,
     pub(crate) shell_move_last_flush_at: Option<Instant>,
     pub(crate) shell_snapshot_epoch: u64,
     pub(crate) workspace_state: WorkspaceState,
@@ -920,6 +922,13 @@ impl CompositorState {
         self.shell_keyboard_capture = ShellKeyboardCapture::ProgramsMenu { restore_window_id };
     }
 
+    pub(crate) fn shell_keyboard_capture_window_switcher(
+        &mut self,
+        restore_window_id: Option<u32>,
+    ) {
+        self.shell_keyboard_capture = ShellKeyboardCapture::WindowSwitcher { restore_window_id };
+    }
+
     pub(crate) fn shell_keyboard_capture_clear(&mut self) {
         self.shell_keyboard_capture = ShellKeyboardCapture::None;
     }
@@ -929,6 +938,9 @@ impl CompositorState {
             ShellKeyboardCapture::None => self.keyboard_focused_window_id(),
             ShellKeyboardCapture::ShellUi => self.shell_focused_ui_window_id,
             ShellKeyboardCapture::ProgramsMenu { restore_window_id } => restore_window_id
+                .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+                .or(self.shell_focused_ui_window_id),
+            ShellKeyboardCapture::WindowSwitcher { restore_window_id } => restore_window_id
                 .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
                 .or(self.shell_focused_ui_window_id),
         }
@@ -982,6 +994,122 @@ impl CompositorState {
             }
         }
         None
+    }
+
+    fn shell_window_switcher_restore_window_id(&self) -> Option<u32> {
+        match self.shell_keyboard_capture {
+            ShellKeyboardCapture::WindowSwitcher { restore_window_id } => restore_window_id,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn shell_window_switcher_open(&self) -> bool {
+        matches!(
+            self.shell_keyboard_capture,
+            ShellKeyboardCapture::WindowSwitcher { .. }
+        )
+    }
+
+    fn shell_window_switcher_candidates(&self) -> Vec<u32> {
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        for &wid in self.shell_window_stack_ids().iter().rev() {
+            if !seen.insert(wid) {
+                continue;
+            }
+            if !self.logical_focus_target_is_valid(wid) {
+                continue;
+            }
+            candidates.push(wid);
+        }
+        candidates
+    }
+
+    fn shell_window_switcher_effective_selected_window_id(&self) -> Option<u32> {
+        if !self.shell_window_switcher_open() {
+            return None;
+        }
+        if let Some(window_id) = self
+            .shell_window_switcher_selected_window_id
+            .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+        {
+            return Some(window_id);
+        }
+        let restore_window_id = self
+            .shell_window_switcher_restore_window_id()
+            .filter(|window_id| self.logical_focus_target_is_valid(*window_id));
+        let candidates = self.shell_window_switcher_candidates();
+        if let Some(restore_window_id) = restore_window_id {
+            if let Some(index) = candidates.iter().position(|wid| *wid == restore_window_id) {
+                return candidates
+                    .get((index + 1) % candidates.len().max(1))
+                    .copied()
+                    .or(Some(restore_window_id));
+            }
+        }
+        candidates.first().copied()
+    }
+
+    pub(crate) fn shell_window_switcher_cycle(&mut self, reverse: bool) {
+        let candidates = self.shell_window_switcher_candidates();
+        if candidates.len() < 2 {
+            return;
+        }
+        let restore_window_id = self.shell_window_switcher_restore_window_id().or_else(|| {
+            self.logical_focused_window_id()
+                .or_else(|| self.keyboard_focused_window_id())
+                .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+        });
+        if !self.shell_window_switcher_open() {
+            self.shell_keyboard_capture_window_switcher(restore_window_id);
+            self.shell_send_to_cef(self.shell_focus_message());
+        }
+        let pivot_window_id = self
+            .shell_window_switcher_selected_window_id
+            .filter(|window_id| self.logical_focus_target_is_valid(*window_id))
+            .or(restore_window_id)
+            .unwrap_or(candidates[0]);
+        let pivot_index = candidates
+            .iter()
+            .position(|wid| *wid == pivot_window_id)
+            .unwrap_or(0);
+        let len = candidates.len();
+        let next_index = if reverse {
+            (pivot_index + len - 1) % len
+        } else {
+            (pivot_index + 1) % len
+        };
+        self.shell_window_switcher_selected_window_id = candidates.get(next_index).copied();
+        self.shell_send_interaction_state();
+    }
+
+    pub(crate) fn shell_window_switcher_cancel(&mut self) {
+        let restore_window_id = self
+            .shell_window_switcher_restore_window_id()
+            .filter(|window_id| self.logical_focus_target_is_valid(*window_id));
+        self.shell_window_switcher_selected_window_id = None;
+        self.shell_keyboard_capture_clear();
+        self.shell_send_interaction_state();
+        if let Some(window_id) = restore_window_id {
+            self.focus_logical_window(window_id);
+            return;
+        }
+        self.shell_send_to_cef(self.shell_focus_message());
+    }
+
+    pub(crate) fn shell_window_switcher_commit(&mut self) {
+        let restore_window_id = self
+            .shell_window_switcher_restore_window_id()
+            .filter(|window_id| self.logical_focus_target_is_valid(*window_id));
+        let selected_window_id = self.shell_window_switcher_effective_selected_window_id();
+        self.shell_window_switcher_selected_window_id = None;
+        self.shell_keyboard_capture_clear();
+        self.shell_send_interaction_state();
+        if let Some(window_id) = selected_window_id.or(restore_window_id) {
+            self.focus_logical_window(window_id);
+            return;
+        }
+        self.shell_send_to_cef(self.shell_focus_message());
     }
 
     pub(crate) fn focus_logical_window(&mut self, window_id: u32) {
@@ -1314,6 +1442,7 @@ impl CompositorState {
             shell_hosted_app_state_revision: 0,
             shell_interaction_revision: 0,
             shell_interaction_last_sent_at: None,
+            shell_window_switcher_selected_window_id: None,
             shell_move_last_flush_at: None,
             shell_snapshot_epoch: 0,
             workspace_state: WorkspaceState::default(),
@@ -2537,8 +2666,14 @@ impl CompositorState {
         );
         rect.contains(output_geo.loc)
             && rect.contains(Point::from((
-                output_geo.loc.x.saturating_add(output_geo.size.w.saturating_sub(1)),
-                output_geo.loc.y.saturating_add(output_geo.size.h.saturating_sub(1)),
+                output_geo
+                    .loc
+                    .x
+                    .saturating_add(output_geo.size.w.saturating_sub(1)),
+                output_geo
+                    .loc
+                    .y
+                    .saturating_add(output_geo.size.h.saturating_sub(1)),
             )))
     }
 
@@ -9862,6 +9997,9 @@ impl CompositorState {
             move_capture_window_id,
             move_visual: interaction_visual(self.shell_move_window_id),
             resize_visual: interaction_visual(self.shell_resize_window_id),
+            window_switcher_selected_window_id: self
+                .shell_window_switcher_effective_selected_window_id()
+                .unwrap_or(0),
         }
     }
 

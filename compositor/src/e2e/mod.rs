@@ -386,6 +386,7 @@ impl CompositorState {
             move |state, mods, keysym| {
                 let raw_sym = keysym.modified_sym().raw();
                 let is_super = crate::input::keysym_is_super(&keysym);
+                let is_alt = crate::input::keysym_is_alt(&keysym);
                 if state.screenshot_selection_active() {
                     if key_state == KeyState::Pressed
                         && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
@@ -397,6 +398,13 @@ impl CompositorState {
                 if key_state == KeyState::Pressed {
                     if is_super && !state.seat.keyboard_shortcuts_inhibited() {
                         state.programs_menu_prepare_super_press();
+                        return FilterResult::Intercept(());
+                    }
+                    if matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Tab)
+                        && mods.alt
+                        && !state.seat.keyboard_shortcuts_inhibited()
+                    {
+                        state.shell_window_switcher_cycle(mods.shift);
                         return FilterResult::Intercept(());
                     }
                     if state.programs_menu_super_armed
@@ -438,6 +446,19 @@ impl CompositorState {
                         }
                         return FilterResult::Intercept(());
                     }
+                }
+                if state.shell_window_switcher_open() {
+                    if key_state == KeyState::Released && is_alt {
+                        state.shell_window_switcher_commit();
+                        return FilterResult::Intercept(());
+                    }
+                    if key_state == KeyState::Pressed
+                        && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
+                    {
+                        state.shell_window_switcher_cancel();
+                        return FilterResult::Intercept(());
+                    }
+                    return FilterResult::Intercept(());
                 }
                 if state.shell_keyboard_capture_active()
                     && state.shell_cef_active()

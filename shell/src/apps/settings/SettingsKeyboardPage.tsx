@@ -11,6 +11,7 @@ import {
 } from './keyboardSettings'
 
 const SHORTCUT_ROWS: { keys: string; action: string }[] = [
+  { keys: 'Alt + Tab', action: 'Switch windows' },
   { keys: 'Super + Space', action: 'Cycle keyboard layout' },
   { keys: 'Super + Enter', action: 'Launch terminal (spawn command)' },
   { keys: 'Super + Q', action: 'Close focused window' },

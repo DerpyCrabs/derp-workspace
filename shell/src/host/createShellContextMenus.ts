@@ -23,6 +23,7 @@ import {
   shellHostedProgramsBuiltinMatchesQuery,
   shellHostedProgramsMenuDefinitions,
 } from '@/features/shell-ui/shellHostedAppsRegistry'
+import { windowIsShellHosted, type DerpWindow } from './appWindowState'
 import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
 
@@ -60,7 +61,10 @@ type CreateShellContextMenusArgs = {
   postSessionPower: (action: string) => Promise<void>
   canSessionControl: () => boolean
   exitSession: () => void
+  windows: Accessor<readonly DerpWindow[]>
+  windowSwitcherSelectedWindowId: Accessor<number | null>
   focusedWindowId: Accessor<number | null>
+  activateWindow: (windowId: number) => boolean
   shellWireSend: (op: 'programs_menu_opened' | 'programs_menu_closed', arg?: number) => boolean
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
@@ -105,6 +109,7 @@ function layoutScreenCssRect(
 export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   const [ctxMenuOpen, setCtxMenuOpen] = createSignal(false)
   const programsMenuTrigger = {}
+  const windowSwitcherTrigger = {}
   const powerMenuTrigger = {}
   const volumeMenuTrigger = {}
   const tabMenuTrigger = {}
@@ -143,6 +148,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   const triggerOpen = (token: object) => createMemo(() => ctxMenuOpen() && activeMenuTrigger() === token)
   const programsMenuOpen = triggerOpen(programsMenuTrigger)
+  const windowSwitcherOpen = triggerOpen(windowSwitcherTrigger)
   const powerMenuOpen = triggerOpen(powerMenuTrigger)
   const tabMenuOpen = triggerOpen(tabMenuTrigger)
   const traySniMenuOpen = triggerOpen(traySniMenuTrigger)
@@ -310,6 +316,42 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       client_rect: scr,
       placement_px: { left, top, w: metrics.width, h: metrics.height },
     })
+    return {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${Math.round(metrics.width)}px`,
+      'max-height': `${Math.round(metrics.height)}px`,
+    } as const satisfies JSX.CSSProperties
+  })
+
+  const windowSwitcherSelectedWindow = createMemo(() => {
+    const selectedWindowId = args.windowSwitcherSelectedWindowId()
+    if (selectedWindowId === null) return null
+    return args.windows().find((window) => window.window_id === selectedWindowId) ?? null
+  })
+
+  const windowSwitcherPlacement = createMemo(() => {
+    void args.viewportCss().w
+    void args.viewportCss().h
+    void args.canvasCss().w
+    void args.canvasCss().h
+    const outputName = windowSwitcherSelectedWindow()?.output_name ?? null
+    const metrics = programsMenuMetrics(outputName)
+    const main = args.mainEl()
+    const og = args.outputGeom()
+    if (!metrics || !main || !og) return null
+    const mainRect = main.getBoundingClientRect()
+    const scr = canvasRectToClientCss(
+      metrics.targetCss.x,
+      metrics.targetCss.y,
+      metrics.targetCss.width,
+      metrics.targetCss.height,
+      mainRect,
+      og.w,
+      og.h,
+    )
+    const left = Math.round(scr.left + (scr.width - metrics.width) / 2)
+    const top = Math.round(scr.top + (scr.height - metrics.height) / 2)
     return {
       left: `${left}px`,
       top: `${top}px`,
@@ -598,6 +640,54 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     ]
   })
 
+  const windowSwitcherListItems = createMemo((): ShellContextMenuItem[] => {
+    if (!windowSwitcherOpen()) return []
+    const selectedWindowId = args.windowSwitcherSelectedWindowId()
+    const windows = [...args.windows()]
+      .filter((window) => !window.minimized && window.workspace_visible)
+      .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
+    return windows.map((window) => ({
+      actionId: String(window.window_id),
+      label:
+        window.title.trim() ||
+        window.app_id.trim() ||
+        (windowIsShellHosted(window) ? `Shell window ${window.window_id}` : `Window ${window.window_id}`),
+      badge:
+        selectedWindowId === window.window_id
+          ? 'active'
+          : windowIsShellHosted(window)
+            ? 'shell'
+            : undefined,
+      title: window.app_id.trim() || undefined,
+      action: () => {
+        args.activateWindow(window.window_id)
+      },
+    }))
+  })
+
+  const windowSwitcherHighlightIdx = createMemo(() => {
+    if (!windowSwitcherOpen()) return 0
+    const selectedWindowId = args.windowSwitcherSelectedWindowId()
+    const items = windowSwitcherListItems()
+    if (items.length === 0 || selectedWindowId === null) return 0
+    const index = items.findIndex((item) => item.actionId === String(selectedWindowId))
+    return index >= 0 ? index : 0
+  })
+
+  createEffect(() => {
+    const selectedWindowId = args.windowSwitcherSelectedWindowId()
+    if (selectedWindowId !== null) {
+      args.closeAllAtlasSelects()
+      if (!triggerIsOpen(windowSwitcherTrigger)) {
+        openRootContextMenu(windowSwitcherTrigger)
+      }
+      return
+    }
+    if (triggerIsOpen(windowSwitcherTrigger)) {
+      hideContextMenu()
+    }
+  })
+
   function activateProgramsMenuSelection() {
     if (!programsMenuOpen()) return
     const items = programsMenuListItems()
@@ -724,6 +814,18 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       const panel = menuPanelRef
       if (!panel) return
       const el = panel.querySelector(`[data-programs-menu-idx="${idx}"]`)
+      if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    })
+  })
+
+  createEffect(() => {
+    if (!windowSwitcherOpen()) return
+    const idx = windowSwitcherHighlightIdx()
+    void windowSwitcherListItems().length
+    queueMicrotask(() => {
+      const panel = menuPanelRef
+      if (!panel) return
+      const el = panel.querySelector(`[data-window-switcher-idx="${idx}"]`)
       if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
     })
   })
@@ -965,6 +1067,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
 
   const onCtxPointerDown = (e: PointerEvent) => {
     if (!args.floatingLayers.anyOpen()) return
+    if (windowSwitcherOpen()) return
     const shouldDismiss = shouldDismissContextMenuPointerDown({
       target: e.target,
     })
@@ -982,6 +1085,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   return {
     ctxMenuOpen,
     programsMenuOpen,
+    windowSwitcherOpen,
     powerMenuOpen,
     volumeMenuOpen,
     tabMenuOpen,
@@ -1015,6 +1119,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       setPanelRef: setMenuPanelRef,
       activateSelection: activateProgramsMenuSelection,
       closeContextMenu: hideContextMenu,
+    },
+    windowSwitcherProps: {
+      placement: windowSwitcherPlacement,
+      items: windowSwitcherListItems,
+      highlightIdx: windowSwitcherHighlightIdx,
+      setPanelRef: setMenuPanelRef,
     },
     powerMenuProps: {
       anchor: ctxMenuAnchor,

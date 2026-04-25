@@ -1156,6 +1156,7 @@ fn append_snapshot_message(
             move_capture_window_id,
             move_visual,
             resize_visual,
+            window_switcher_selected_window_id,
         } => {
             payload.extend_from_slice(&shell_wire::encode_compositor_interaction_state(
                 *revision,
@@ -1167,6 +1168,7 @@ fn append_snapshot_message(
                 *move_capture_window_id,
                 *move_visual,
                 *resize_visual,
+                *window_switcher_selected_window_id,
             ));
         }
         shell_wire::DecodedCompositorToShellMessage::NativeDragPreview {

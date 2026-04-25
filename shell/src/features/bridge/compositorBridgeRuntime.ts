@@ -40,6 +40,7 @@ type CompositorInteractionState = {
   resize_window_id: number | null
   move_proxy_window_id: number | null
   move_capture_window_id: number | null
+  window_switcher_selected_window_id: number | null
   move_rect: {
     x: number
     y: number
@@ -440,6 +441,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       resize_window_id: coerceShellWindowId(d.resize_window_id),
       move_proxy_window_id: coerceShellWindowId(d.move_proxy_window_id),
       move_capture_window_id: coerceShellWindowId(d.move_capture_window_id),
+      window_switcher_selected_window_id: coerceShellWindowId(d.window_switcher_selected_window_id),
       move_rect: d.move_rect,
       resize_rect: d.resize_rect,
     })

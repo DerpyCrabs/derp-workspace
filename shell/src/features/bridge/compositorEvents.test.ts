@@ -15,7 +15,7 @@ describe('installCompositorBatchHandler', () => {
     const outputName = new TextEncoder().encode('DP-1')
     const geometryLength = 1 + 8 + 25 + 4 + outputId.length + 4 + outputName.length
     const orderLength = 1 + 8 + 8 + 4 + 2 * 8
-    const interactionLength = 1 + 8 + 72
+    const interactionLength = 1 + 8 + 76
     const bytes = new ArrayBuffer(8 + geometryLength + orderLength + interactionLength)
     const view = new DataView(bytes)
     let offset = 0
@@ -68,6 +68,7 @@ describe('installCompositorBatchHandler', () => {
     view.setInt32(offset + 40, 300, true)
     view.setInt32(offset + 44, 220, true)
     view.setUint32(offset + 48, 3, true)
+    view.setUint32(offset + 52, 0, true)
     return bytes
   }
 
@@ -140,6 +141,7 @@ describe('installCompositorBatchHandler', () => {
         pointer_x: 120,
         pointer_y: 160,
         move_window_id: 42,
+        window_switcher_selected_window_id: null,
         resize_window_id: null,
         move_proxy_window_id: 43,
         move_capture_window_id: 44,
@@ -194,6 +196,7 @@ describe('installCompositorBatchHandler', () => {
         pointer_x: 120,
         pointer_y: 160,
         move_window_id: 42,
+        window_switcher_selected_window_id: null,
         resize_window_id: null,
         move_proxy_window_id: 43,
         move_capture_window_id: 44,
