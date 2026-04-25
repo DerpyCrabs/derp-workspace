@@ -174,6 +174,28 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       })
       continue
     }
+    if (tag === 5) {
+      if (cursor.offset + 12 > view.byteLength) return null
+      const revision = Number(view.getBigUint64(cursor.offset, true))
+      const windowCount = view.getUint32(cursor.offset + 8, true)
+      cursor.offset += 12
+      if (cursor.offset + windowCount * 8 > view.byteLength) return null
+      const windows: Array<{ window_id: number; stack_z: number }> = []
+      for (let windowIndex = 0; windowIndex < windowCount; windowIndex += 1) {
+        windows.push({
+          window_id: view.getUint32(cursor.offset, true),
+          stack_z: view.getUint32(cursor.offset + 4, true),
+        })
+        cursor.offset += 8
+      }
+      details.push({
+        type: 'window_order',
+        revision,
+        windows,
+        ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
+      })
+      continue
+    }
     return null
   }
   return cursor.offset === view.byteLength ? details : null

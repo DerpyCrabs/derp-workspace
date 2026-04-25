@@ -15,6 +15,7 @@ const HOT_DETAIL_WINDOW_GEOMETRY: u8 = 1;
 const HOT_DETAIL_WINDOW_STATE: u8 = 2;
 const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
 const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
+const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
     if snapshot_epoch > 0 {
@@ -148,6 +149,31 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                     bytes.push(0);
                     push_u32(bytes, 0);
                 }
+            }
+            true
+        }
+        "window_order" => {
+            bytes.push(HOT_DETAIL_WINDOW_ORDER);
+            push_u64(bytes, snapshot_epoch);
+            push_u64(
+                bytes,
+                detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
+            );
+            let Some(windows) = detail.get("windows").and_then(Value::as_array) else {
+                return false;
+            };
+            let Ok(count) = u32::try_from(windows.len()) else {
+                return false;
+            };
+            push_u32(bytes, count);
+            for window in windows {
+                let (Some(window_id), Some(stack_z)) =
+                    (value_u32(window, "window_id"), value_u32(window, "stack_z"))
+                else {
+                    return false;
+                };
+                push_u32(bytes, window_id);
+                push_u32(bytes, stack_z);
             }
             true
         }

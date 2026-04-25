@@ -13,11 +13,13 @@ describe('installCompositorBatchHandler', () => {
   const hotBatch = () => {
     const outputId = new TextEncoder().encode('dp-1')
     const outputName = new TextEncoder().encode('DP-1')
-    const bytes = new ArrayBuffer(8 + 1 + 8 + 25 + 4 + outputId.length + 4 + outputName.length)
+    const geometryLength = 1 + 8 + 25 + 4 + outputId.length + 4 + outputName.length
+    const orderLength = 1 + 8 + 8 + 4 + 2 * 8
+    const bytes = new ArrayBuffer(8 + geometryLength + orderLength)
     const view = new DataView(bytes)
     let offset = 0
     for (const value of [0x44, 0x48, 0x42, 0x31]) view.setUint8(offset++, value)
-    view.setUint32(offset, 1, true)
+    view.setUint32(offset, 2, true)
     offset += 4
     view.setUint8(offset++, 1)
     view.setBigUint64(offset, 7n, true)
@@ -37,6 +39,18 @@ describe('installCompositorBatchHandler', () => {
     view.setUint32(offset, outputName.length, true)
     offset += 4
     new Uint8Array(bytes, offset, outputName.length).set(outputName)
+    offset += outputName.length
+    view.setUint8(offset++, 5)
+    view.setBigUint64(offset, 8n, true)
+    offset += 8
+    view.setBigUint64(offset, 9n, true)
+    offset += 8
+    view.setUint32(offset, 2, true)
+    offset += 4
+    view.setUint32(offset, 42, true)
+    view.setUint32(offset + 4, 2, true)
+    view.setUint32(offset + 8, 43, true)
+    view.setUint32(offset + 12, 1, true)
     return bytes
   }
 
@@ -94,6 +108,15 @@ describe('installCompositorBatchHandler', () => {
         fullscreen: false,
         snapshot_epoch: 7,
       },
+      {
+        type: 'window_order',
+        revision: 9,
+        windows: [
+          { window_id: 42, stack_z: 2 },
+          { window_id: 43, stack_z: 1 },
+        ],
+        snapshot_epoch: 8,
+      },
     ])
   })
 
@@ -118,6 +141,15 @@ describe('installCompositorBatchHandler', () => {
         maximized: true,
         fullscreen: false,
         snapshot_epoch: 7,
+      },
+      {
+        type: 'window_order',
+        revision: 9,
+        windows: [
+          { window_id: 42, stack_z: 2 },
+          { window_id: 43, stack_z: 1 },
+        ],
+        snapshot_epoch: 8,
       },
     ])
 
