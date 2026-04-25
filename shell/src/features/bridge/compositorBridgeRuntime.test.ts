@@ -128,6 +128,7 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -304,6 +305,27 @@ describe('registerCompositorBridgeRuntime', () => {
       resize_rect: null,
     })
     expect(runtimeOptions.setCompositorInteractionState).not.toHaveBeenCalledWith(null)
+    dispose()
+  })
+
+  it('forces a shell repaint after bulk window unmap', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      { type: 'window_unmapped', window_id: 7, snapshot_epoch: 12 } satisfies DerpShellDetail,
+      { type: 'window_unmapped', window_id: 8, snapshot_epoch: 12 } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
     dispose()
   })
 })

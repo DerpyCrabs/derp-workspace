@@ -1926,6 +1926,7 @@ function App() {
     <ShellContextMenusProvider value={shellContextMenus}>
     <main
       data-shell-main
+      data-shell-repaint={snapChromeRev()}
       classList={{
         'relative block box-border overflow-hidden bg-transparent font-sans text-(--shell-text) m-0 min-h-screen pb-0':
           true,
@@ -1944,6 +1945,13 @@ function App() {
         e.preventDefault()
       }}
     >
+      <div
+        class="pointer-events-none fixed top-0 left-0 z-0 size-px"
+        style={{
+          opacity: 0.001,
+          background: snapChromeRev() % 2 === 0 ? '#000' : '#fff',
+        }}
+      />
       <Show when={shellBridgeIssue()} keyed>
         {(msg) => (
           <div class="border border-(--shell-warning-border) bg-(--shell-warning-bg) text-(--shell-warning-text) pointer-events-none fixed top-3 left-1/2 z-470100 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium">

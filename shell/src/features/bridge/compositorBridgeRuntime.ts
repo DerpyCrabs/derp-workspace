@@ -506,6 +506,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
+    const needsPostApplyPaint = details.filter((detail) => detail.type === 'window_unmapped').length > 1
     let sawWindowList = false
     let sawInteractionState = false
     batch(() => {
@@ -526,6 +527,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
+    if (needsPostApplyPaint) {
+      options.bumpSnapChrome()
+      options.shellWireSend('invalidate_view')
+    }
   }
 
   const modelDetailOptions = () => ({
@@ -838,6 +843,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
+    let unmapCount = 0
     batch(() => {
       const pendingModelDetails: DerpShellDetail[] = []
       const flushPendingModelDetails = () => {
@@ -847,10 +853,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         applyModelCompositorDetailsBatch(nextDetails)
       }
       for (const detail of details) {
+        if (detail.type === 'window_unmapped') unmapCount += 1
         applyCompositorBatchDetail(detail, pendingModelDetails, flushPendingModelDetails)
       }
       flushPendingModelDetails()
     })
+    if (unmapCount > 1) {
+      options.bumpSnapChrome()
+      options.shellWireSend('invalidate_view')
+    }
     noteShellBatchApply(performance.now() - applyStart, details.length)
   }
 

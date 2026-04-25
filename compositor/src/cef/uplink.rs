@@ -318,6 +318,13 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_force_next_dmabuf_full_damage(&self) {
+        let _ = self.run_result(move |s| {
+            s.shell_force_next_dmabuf_full_damage();
+            Ok(())
+        });
+    }
+
     pub fn shell_backed_window_open(&self, json: String) {
         self.run(move |s| {
             s.shell_backed_try_open_json(&json);

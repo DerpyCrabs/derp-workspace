@@ -1677,7 +1677,7 @@ function paethPredictor(a: number, b: number, c: number): number {
   return c
 }
 
-async function readPngRgba(filePath: string): Promise<DecodedPng> {
+export async function readPngRgba(filePath: string): Promise<DecodedPng> {
   const bytes = await readFile(filePath)
   if (!decodePngSignature(bytes)) {
     throw new Error(`bad png signature: ${filePath}`)

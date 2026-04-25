@@ -653,6 +653,7 @@ pub struct CompositorState {
     pub(crate) shell_dmabuf_commit: CommitCounter,
     pub(crate) shell_dmabuf_dirty_buffer: Vec<Rectangle<i32, Buffer>>,
     pub(crate) shell_dmabuf_dirty_force_full: bool,
+    pub(crate) shell_dmabuf_next_force_full: bool,
 
     /// DRM only: used so **Ctrl+Alt+F1–F12** can switch virtual terminals via libseat (kernel shortcuts do not apply while we hold the input session).
     pub(crate) vt_session: Option<LibSeatSession>,
@@ -1286,6 +1287,7 @@ impl CompositorState {
             shell_dmabuf_commit: CommitCounter::default(),
             shell_dmabuf_dirty_buffer: Vec::new(),
             shell_dmabuf_dirty_force_full: true,
+            shell_dmabuf_next_force_full: false,
             vt_session: None,
             toplevel_floating_restore: HashMap::new(),
             toplevel_fullscreen_return_maximized: HashSet::new(),
@@ -2897,6 +2899,10 @@ impl CompositorState {
         } else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
         }
+    }
+
+    pub(crate) fn shell_force_next_dmabuf_full_damage(&mut self) {
+        self.shell_dmabuf_next_force_full = true;
     }
 
     pub(crate) fn programs_menu_toggle_from_super(&mut self, serial: Serial) {
@@ -11734,7 +11740,10 @@ impl CompositorState {
             .as_ref()
             .map(|v| Self::shell_osr_dirty_bbox_covers_buffer(v, width, height))
             .unwrap_or(true);
-        let mut force_full = force_env || resized || dirty_list.is_none() || bbox_full;
+        let pending_force_full = self.shell_dmabuf_next_force_full;
+        self.shell_dmabuf_next_force_full = false;
+        let mut force_full =
+            force_env || pending_force_full || resized || dirty_list.is_none() || bbox_full;
         let buffer_rects: Vec<Rectangle<i32, Buffer>> = if let Some(ref dl) = dirty_list {
             let mut rects = Vec::with_capacity(dl.len());
             for &(x, y, w, h) in dl {
@@ -11845,6 +11854,7 @@ impl CompositorState {
             height,
             force_full,
             force_env,
+            pending_force_full,
             resized,
             dirty_supplied = dirty_supplied_len,
             bbox_full,
@@ -11909,6 +11919,7 @@ impl CompositorState {
         self.shell_native_drag_preview = None;
         self.shell_dmabuf_dirty_buffer.clear();
         self.shell_dmabuf_dirty_force_full = true;
+        self.shell_dmabuf_next_force_full = false;
         self.shell_last_pointer_ipc_px = None;
         self.shell_last_pointer_ipc_global_logical = None;
         self.shell_last_pointer_ipc_modifiers = None;

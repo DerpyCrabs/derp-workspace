@@ -227,6 +227,8 @@ fn invalidate_shell_view_unthrottled(
         if let Some(host) = b.host() {
             crate::cef::begin_frame_diag::note_shell_view_invalidate(reason);
             host.invalidate(PaintElementType::VIEW);
+            host.send_external_begin_frame();
+            crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
         }
     }
 }
@@ -422,6 +424,7 @@ fn handle_uplink_list(
             uplink.shell_request_compositor_sync();
         }
         "invalidate_view" => {
+            uplink.shell_force_next_dmabuf_full_damage();
             invalidate_shell_view_unthrottled(
                 browser,
                 crate::cef::begin_frame_diag::ShellViewInvalidateReason::FocusChanged,
