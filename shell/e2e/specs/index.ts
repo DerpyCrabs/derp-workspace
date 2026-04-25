@@ -23,7 +23,6 @@ export const defaultGroups = [
   windowParityGroup,
   x11WindowsGroup,
   snapAssistGroup,
-  scratchpadsGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,
   fileBrowserGroup,
@@ -31,6 +30,7 @@ export const defaultGroups = [
   taskbarMinimizeGroup,
   taskbarCloseGroup,
   artifactsGroup,
+  scratchpadsGroup,
 ]
 
 export const sessionRestoreGroups = [restartPersistenceGroup, restartInputGroup, shellChromeSessionGroup]

@@ -7,7 +7,6 @@ import {
   getJson,
   keyAction,
   restartSession,
-  runKeybind,
   waitFor,
   waitForProgramsMenuClosed,
   waitForSessionRestoreIdle,
@@ -21,7 +20,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForSessionRestoreIdle(base)
     const initialShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     if (initialShell.programs_menu_open) {
-      await runKeybind(base, 'toggle_programs_menu')
+      assert(initialShell.controls?.taskbar_programs_toggle, 'missing programs toggle before restart')
+      await clickRect(base, initialShell.controls.taskbar_programs_toggle)
       await waitForProgramsMenuClosed(base)
     }
 
@@ -99,7 +99,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    await runKeybind(restartedBase, 'toggle_programs_menu')
+    const shellBeforeClickTest = await getJson<ShellSnapshot>(restartedBase, '/test/state/shell')
+    assert(shellBeforeClickTest.controls?.taskbar_programs_toggle, 'missing programs toggle before restart click test')
+    await clickRect(restartedBase, shellBeforeClickTest.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(restartedBase)
 
     await waitForSessionRestoreIdle(restartedBase)
@@ -117,7 +119,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(openedByClick.programs_menu_open, 'programs menu should open by click after restart')
-    await runKeybind(restartedBase, 'toggle_programs_menu')
+    assert(openedByClick.controls?.taskbar_programs_toggle, 'missing programs toggle after restart click open')
+    await clickRect(restartedBase, openedByClick.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(restartedBase)
 
     const compositorBeforeHeldSuperEnter = await getJson<CompositorSnapshot>(restartedBase, '/test/state/compositor')

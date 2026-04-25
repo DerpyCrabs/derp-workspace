@@ -30,6 +30,9 @@ export const KEY = {
   enter: 28,
   escape: 1,
   space: 57,
+  grave: 41,
+  shift: 42,
+  comma: 51,
   home: 102,
   left: 105,
   right: 106,
@@ -62,6 +65,7 @@ export const KEY = {
   up: 103,
   y: 21,
   z: 44,
+  super: 125,
 } as const
 
 export interface Rect {
@@ -593,6 +597,7 @@ export interface E2eState {
   multiMonitorNativeMove: { window_id: number; target_output: string } | null
   multiMonitorShellMove: { window_id: number; target_output: string } | null
   tiledOutput: string | null
+  afterSuiteCleanup: Array<(base: string) => Promise<void>>
 }
 
 export interface TestContext {
@@ -882,6 +887,7 @@ export function createState(base: string): E2eState {
     multiMonitorNativeMove: null,
     multiMonitorShellMove: null,
     tiledOutput: null,
+    afterSuiteCleanup: [],
   }
 }
 
@@ -1855,6 +1861,14 @@ export async function tapKey(base: string, keycode: number): Promise<void> {
   await keyAction(base, keycode, 'tap')
 }
 
+export async function tapSuperShortcut(base: string, keycode: number, options: { shift?: boolean } = {}): Promise<void> {
+  await keyAction(base, KEY.super, 'press')
+  if (options.shift) await keyAction(base, KEY.shift, 'press')
+  await tapKey(base, keycode)
+  if (options.shift) await keyAction(base, KEY.shift, 'release')
+  await keyAction(base, KEY.super, 'release')
+}
+
 export async function keyAction(base: string, keycode: number, action: 'tap' | 'press' | 'release'): Promise<void> {
   await postJson(base, '/test/input/key', { keycode, action })
   await syncTest(base)
@@ -2162,15 +2176,7 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = taskbarEntry(shell, windowId)
-    if (!row?.close) {
-      await closeWindow(base, windowId)
-      try {
-        await waitForWindowGone(base, windowId, 4000)
-        return
-      } catch {}
-      shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      continue
-    }
+    assert(row?.close, `missing taskbar close control for window ${windowId}`)
     await clickRect(base, row.close)
     try {
       await waitForWindowGone(base, windowId, 600)
@@ -2178,6 +2184,7 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
     } catch {}
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   }
+  assert(false, `taskbar close control did not close window ${windowId}`)
 }
 
 export async function closeWindow(base: string, windowId: number): Promise<void> {
@@ -2472,7 +2479,7 @@ export async function openSettings(base: string, method: 'click' | 'keybind' = '
     return waitForSettingsVisible(base)
   }
   if (method === 'keybind') {
-    await runKeybind(base, 'open_settings')
+    await tapSuperShortcut(base, KEY.comma)
   } else {
     const { rect } = await waitForTaskbarToggle(base, 'taskbar_settings_toggle', 'settings')
     await clickRect(base, rect)
@@ -2542,7 +2549,7 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
 
   const openOnce = async (useKeybind: boolean) => {
     if (useKeybind) {
-      await runKeybind(base, 'toggle_programs_menu')
+      await tapKey(base, KEY.super)
     } else {
       const { shell, rect } = await waitForTaskbarToggle(base, 'taskbar_programs_toggle', 'programs')
       if (!shell.shell_keyboard_layout) {
@@ -2554,14 +2561,16 @@ export async function openProgramsMenu(base: string, method: 'click' | 'keybind'
     return waitForProgramsMenuOpen(base, 2000)
   }
 
+  if (method === 'keybind') return openOnce(true)
   try {
-    return await openOnce(method === 'keybind')
-  } catch {
-    try {
-      await openSettings(base, 'click')
-      await cleanupShellWindows(base, [SHELL_UI_SETTINGS_WINDOW_ID])
-    } catch {}
-    return openOnce(true)
+    return await openOnce(false)
+  } catch (firstError) {
+    const afterFirstClick = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (afterFirstClick.programs_menu_open) return waitForProgramsMenuOpen(base)
+    if (!afterFirstClick.power_menu_open && !afterFirstClick.volume_menu_open) {
+      return openOnce(false)
+    }
+    throw firstError
   }
 }
 

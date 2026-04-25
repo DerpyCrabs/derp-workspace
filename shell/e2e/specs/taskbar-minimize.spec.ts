@@ -6,7 +6,6 @@ import {
   getJson,
   openProgramsMenu,
   raiseTaskbarWindow,
-  runKeybind,
   shellWindowById,
   taskbarEntry,
   waitFor,
@@ -15,6 +14,9 @@ import {
   waitForWindowMinimized,
   type CompositorSnapshot,
 } from '../lib/runtime.ts'
+import { keyAction } from '../lib/user.ts'
+
+const SUPER_KEYCODE = 125
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('taskbar minimizes focused native after programs menu returns to shell', async ({ base, state }) => {
@@ -22,7 +24,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const redId = red.window.window_id
     await raiseTaskbarWindow(base, redId)
     await openProgramsMenu(base, 'click')
-    await runKeybind(base, 'toggle_programs_menu')
+    await keyAction(base, SUPER_KEYCODE, 'tap')
     await waitForProgramsMenuClosed(base)
     await waitFor(
       'compositor keyboard back on native or shell routing idle',

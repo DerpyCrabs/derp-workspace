@@ -88,6 +88,7 @@ function createState(base: string): E2eState {
     multiMonitorNativeMove: null,
     multiMonitorShellMove: null,
     tiledOutput: null,
+    afterSuiteCleanup: [],
   }
 }
 

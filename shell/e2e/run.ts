@@ -116,6 +116,7 @@ async function main(): Promise<void> {
     base = await disableSessionRestoreForE2e(base, state)
     state.base = base
   }
+  let suitePassed = false
   let currentGroupName = selected[0]?.name ?? 'suite'
   let currentTestName = 'bootstrap'
 
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
     if (state.screenshot?.path) {
       process.stdout.write(`${color(' Screenshot ', ANSI.dim)} ${state.screenshot.path}\n`)
     }
+    suitePassed = true
   } catch (error) {
     const label = `failure-${Date.now()}-${testLabel(`${currentGroupName}-${currentTestName}`)}`
     await captureFailureArtifacts(state.base, label)
@@ -166,12 +168,19 @@ async function main(): Promise<void> {
     )
     throw error
   } finally {
-    await cleanupShellWindows(state.base, [
-      SHELL_UI_DEBUG_WINDOW_ID,
-      SHELL_UI_SETTINGS_WINDOW_ID,
-      ...state.spawnedShellWindowIds,
-    ])
-    await cleanupNativeWindows(state.base, state.spawnedNativeWindowIds)
+    if (suitePassed) {
+      for (const cleanup of state.afterSuiteCleanup) {
+        await cleanup(state.base)
+      }
+      await cleanupShellWindows(state.base, [
+        SHELL_UI_DEBUG_WINDOW_ID,
+        SHELL_UI_SETTINGS_WINDOW_ID,
+        ...state.spawnedShellWindowIds,
+      ])
+      await cleanupNativeWindows(state.base, state.spawnedNativeWindowIds)
+    } else {
+      process.stderr.write(`${color(' Preserved ', ANSI.yellow)} failed e2e state for debugging\n`)
+    }
     reporter.printSummary()
   }
 }

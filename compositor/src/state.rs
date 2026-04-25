@@ -3159,6 +3159,13 @@ impl CompositorState {
     }
 
     fn super_keybind_target_window_id(&self) -> Option<u32> {
+        if let Some(wid) = self.logical_focused_window_id() {
+            if let Some(info) = self.window_registry.window_info(wid) {
+                if !self.window_info_is_solid_shell_host(&info) {
+                    return Some(wid);
+                }
+            }
+        }
         if let Some(wid) = self.keyboard_focused_window_id() {
             if let Some(info) = self.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {

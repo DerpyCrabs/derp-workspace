@@ -38,7 +38,6 @@ import {
   rectCenter,
   assertRectMinSize,
   resetPerfCounters,
-  runKeybind,
   shellWindowById,
   spawnNativeWindow,
   taskbarEntry,
@@ -115,9 +114,16 @@ async function waitForPointerIdle(base: string) {
 async function ensureProgramsMenuClosedForFocusTest(base: string) {
   const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
   if (before.programs_menu_open) {
-    await runKeybind(base, 'toggle_programs_menu')
+    assert(before.controls?.taskbar_programs_toggle, 'missing programs toggle while closing menu')
+    await clickRect(base, before.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(base)
   }
+}
+
+async function closeProgramsMenuByTaskbarToggle(base: string, shell: ShellSnapshot) {
+  assert(shell.controls?.taskbar_programs_toggle, 'missing programs toggle while menu is open')
+  await clickRect(base, shell.controls.taskbar_programs_toggle)
+  await waitForProgramsMenuClosed(base)
 }
 
 async function waitForProgramsMenuOpenWithNativeOwner(
@@ -365,15 +371,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
       opened.menu_portal_hit_test?.tray_flap_above_toggle === null,
       'programs launcher is not a tray flap menu',
     )
-    await runKeybind(base, 'toggle_programs_menu')
-    await waitForProgramsMenuClosed(base)
+    await closeProgramsMenuByTaskbarToggle(base, opened)
   })
 
   test('super tap toggles programs menu after pointer movement while held', async ({ base }) => {
     const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
     if (before.programs_menu_open) {
-      await runKeybind(base, 'toggle_programs_menu')
-      await waitForProgramsMenuClosed(base)
+      await closeProgramsMenuByTaskbarToggle(base, before)
     }
     const { compositor } = await getSnapshots(base)
     const output = compositor.outputs[0]
@@ -625,8 +629,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       4000,
       40,
     )
-    await runKeybind(base, 'toggle_programs_menu')
-    await waitForProgramsMenuClosed(base)
+    await closeProgramsMenuByTaskbarToggle(base, await getJson<ShellSnapshot>(base, '/test/state/shell'))
   })
 
   test('settings window opens from taskbar, switches tabs, and reopens from keybind', async ({ base }) => {
@@ -807,7 +810,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
   })
 
-  test('close_focused keybind closes focused shell window when native windows exist', async ({ base }) => {
+  test('focused shell window close button keeps native windows open', async ({ base }) => {
     const before = await getSnapshots(base)
     const knownIds = new Set(before.compositor.windows.map((w) => w.window_id))
     await pressSuperEnter(base)
@@ -827,8 +830,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(terminal, 'expected foot')
     await waitForNativeFocus(base, terminal.window_id)
     await openSettings(base, 'click')
-    await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    await runKeybind(base, 'close_focused')
+    const focused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    const close = assertRectMinSize(
+      'settings close button with native window present',
+      windowControls(focused.shell, SHELL_UI_SETTINGS_WINDOW_ID)?.close,
+      12,
+    )
+    await clickRect(base, close)
     await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const after = await getSnapshots(base)
     assert(
@@ -979,8 +987,13 @@ export default defineGroup(import.meta.url, ({ test }) => {
   test('maximized shell window titlebar drag restores under pointer', async ({ base, state }) => {
     const opened = await openShellTestWindow(base, state)
     const windowId = opened.window.window_id
-    await waitForShellUiFocus(base, windowId)
-    await runKeybind(base, 'toggle_maximize', windowId)
+    const focused = await waitForShellUiFocus(base, windowId)
+    const maximize = assertRectMinSize(
+      'shell test maximize button before titlebar drag',
+      windowControls(focused.shell, windowId)?.maximize,
+      12,
+    )
+    await clickRect(base, maximize)
     const maximized = await waitFor(
       'wait for shell test maximized',
       async () => {
@@ -1039,8 +1052,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
   test('super taps alternate programs menu open and closed after completed shell titlebar drag', async ({ base, state }) => {
     const before = await getJson<ShellSnapshot>(base, '/test/state/shell')
     if (before.programs_menu_open) {
-      await runKeybind(base, 'toggle_programs_menu')
-      await waitForProgramsMenuClosed(base)
+      await closeProgramsMenuByTaskbarToggle(base, before)
     }
     const opened = await openShellTestWindow(base, state)
     const windowId = opened.window.window_id
@@ -1713,6 +1725,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const programsOpen = await openProgramsMenu(base, 'click')
     assert(programsOpen.programs_menu_open, 'programs menu should be open')
     assert(!programsOpen.power_menu_open, 'power menu should close when programs menu opens')
+    assert(programsOpen.settings_window_visible, 'settings should stay visible when switching power menu to programs menu')
+    assert(taskbarEntry(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID)?.activate, 'settings taskbar row should stay visible when programs menu opens')
     const programsHtml = await getShellHtml(base, '[aria-label="Application search"]')
     assert(programsHtml.includes('Search apps, keywords, and commands'), 'programs menu missing search placeholder')
 
@@ -1724,6 +1738,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForProgramsMenuClosed(base)
     const programsClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
     assert(!programsClosed.power_menu_open, 'power menu should remain closed after dismissing programs menu')
+    assert(programsClosed.settings_window_visible, 'settings should stay visible after dismissing programs menu')
+    assert(taskbarEntry(programsClosed, SHELL_UI_SETTINGS_WINDOW_ID)?.activate, 'settings taskbar row should stay visible after dismissing programs menu')
 
     await openPowerMenu(base)
     const powerReopened = await waitForPowerMenuOpen(base)
@@ -1737,10 +1753,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const powerClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')
 
     const shellAfterMenus = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (taskbarEntry(shellAfterMenus, SHELL_UI_SETTINGS_WINDOW_ID)?.activate) {
+    assert(taskbarEntry(shellAfterMenus, SHELL_UI_SETTINGS_WINDOW_ID)?.activate, 'missing settings taskbar row after menus')
+    const compositorAfterMenus = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    if (compositorAfterMenus.focused_shell_ui_window_id !== SHELL_UI_SETTINGS_WINDOW_ID) {
       await activateTaskbarWindow(base, shellAfterMenus, SHELL_UI_SETTINGS_WINDOW_ID)
-    } else {
-      await runKeybind(base, 'open_settings')
     }
     await waitFor(
       'wait for compositor shell ui on settings after menus',
@@ -2151,10 +2167,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await clickPoint(base, menuDismissPoint.x, menuDismissPoint.y)
     await waitForProgramsMenuClosed(base)
     const shellAfterProgramDismiss = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (taskbarEntry(shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)?.activate) {
+    const compositorAfterProgramDismiss = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    if (
+      taskbarEntry(shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)?.activate &&
+      compositorAfterProgramDismiss.focused_shell_ui_window_id !== SHELL_UI_SETTINGS_WINDOW_ID
+    ) {
       await activateTaskbarWindow(base, shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)
-    } else {
-      await runKeybind(base, 'open_settings')
+    } else if (!taskbarEntry(shellAfterProgramDismiss, SHELL_UI_SETTINGS_WINDOW_ID)?.activate) {
+      assert(shellAfterProgramDismiss.controls?.taskbar_settings_toggle, 'missing settings taskbar toggle after programs menu dismiss')
+      await clickRect(base, shellAfterProgramDismiss.controls.taskbar_settings_toggle)
     }
     await waitForCompositorShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
     const programsClosed = await getJson<ShellSnapshot>(base, '/test/state/shell')

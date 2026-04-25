@@ -1,16 +1,17 @@
 import {
+  KEY,
   NATIVE_APP_ID,
   assert,
   compositorWindowById,
   defineGroup,
   getSnapshots,
   shellWindowById,
+  tapSuperShortcut,
   taskbarEntry,
   waitFor,
-  waitForWindowGone,
   writeJsonArtifact,
 } from '../lib/runtime.ts'
-import { cleanupNativeWindows, closeWindow, runKeybind, spawnNativeWindow } from '../lib/setup.ts'
+import { spawnNativeWindow } from '../lib/setup.ts'
 
 const EMPTY_SCRATCHPADS = { items: [] }
 
@@ -43,75 +44,66 @@ export default defineGroup(import.meta.url, ({ test }) => {
         },
       ],
     })
-    try {
-      const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
-        title,
-        token: 'scratchpad-native',
-        strip: 'green',
-        width: 640,
-        height: 420,
-      })
-      windowId = spawned.window.window_id
-      state.spawnedNativeWindowIds.add(windowId)
+    state.afterSuiteCleanup.push((cleanupBase) => saveScratchpads(cleanupBase, EMPTY_SCRATCHPADS))
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title,
+      token: 'scratchpad-native',
+      strip: 'green',
+      width: 640,
+      height: 420,
+    })
+    windowId = spawned.window.window_id
+    state.spawnedNativeWindowIds.add(windowId)
 
-      const hidden = await waitFor(
-        'wait for scratchpad hidden native',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const shellWindow = shellWindowById(shell, windowId!)
-          const compositorWindow = compositorWindowById(compositor, windowId!)
-          if (!shellWindow?.scratchpad || !shellWindow.minimized || !compositorWindow?.minimized) return null
-          if (taskbarEntry(shell, windowId!)) return null
-          return { compositor, shell }
-        },
-        5000,
-        50,
-      )
-      await writeJsonArtifact('scratchpad-hidden.json', hidden)
+    const hidden = await waitFor(
+      'wait for scratchpad hidden native',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const shellWindow = shellWindowById(shell, windowId!)
+        const compositorWindow = compositorWindowById(compositor, windowId!)
+        if (!shellWindow?.scratchpad || !shellWindow.minimized || !compositorWindow?.minimized) return null
+        if (taskbarEntry(shell, windowId!)) return null
+        return { compositor, shell }
+      },
+      5000,
+      50,
+    )
+    await writeJsonArtifact('scratchpad-hidden.json', hidden)
 
-      await runKeybind(base, 'toggle_scratchpad:native-pad')
-      const shown = await waitFor(
-        'wait for scratchpad shown native',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const shellWindow = shellWindowById(shell, windowId!)
-          const compositorWindow = compositorWindowById(compositor, windowId!)
-          if (!shellWindow?.scratchpad || shellWindow.minimized || !compositorWindow || compositorWindow.minimized) return null
-          if (taskbarEntry(shell, windowId!)) return null
-          const output = compositor.outputs.find((entry) => entry.name === compositorWindow.output_name) ?? compositor.outputs[0]
-          if (!output) return null
-          const cx = compositorWindow.x + compositorWindow.width / 2
-          const cy = compositorWindow.y + compositorWindow.height / 2
-          assert(cx >= output.x && cx <= output.x + output.width, 'scratchpad center x should be on output')
-          assert(cy >= output.y && cy <= output.y + output.height, 'scratchpad center y should be on output')
-          return { compositor, shell }
-        },
-        5000,
-        50,
-      )
-      await writeJsonArtifact('scratchpad-shown.json', shown)
+    await tapSuperShortcut(base, KEY.grave)
+    const shown = await waitFor(
+      'wait for scratchpad shown native',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const shellWindow = shellWindowById(shell, windowId!)
+        const compositorWindow = compositorWindowById(compositor, windowId!)
+        if (!shellWindow?.scratchpad || shellWindow.minimized || !compositorWindow || compositorWindow.minimized) return null
+        if (taskbarEntry(shell, windowId!)) return null
+        const output = compositor.outputs.find((entry) => entry.name === compositorWindow.output_name) ?? compositor.outputs[0]
+        if (!output) return null
+        const cx = compositorWindow.x + compositorWindow.width / 2
+        const cy = compositorWindow.y + compositorWindow.height / 2
+        assert(cx >= output.x && cx <= output.x + output.width, 'scratchpad center x should be on output')
+        assert(cy >= output.y && cy <= output.y + output.height, 'scratchpad center y should be on output')
+        return { compositor, shell }
+      },
+      5000,
+      50,
+    )
+    await writeJsonArtifact('scratchpad-shown.json', shown)
 
-      await runKeybind(base, 'toggle_scratchpad:native-pad')
-      await waitFor(
-        'wait for scratchpad hidden after toggle',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const shellWindow = shellWindowById(shell, windowId!)
-          const compositorWindow = compositorWindowById(compositor, windowId!)
-          return shellWindow?.scratchpad && shellWindow.minimized && compositorWindow?.minimized ? shell : null
-        },
-        5000,
-        50,
-      )
-    } finally {
-      await saveScratchpads(base, EMPTY_SCRATCHPADS)
-      if (windowId !== null) {
-        await closeWindow(base, windowId).catch(() => undefined)
-        await waitForWindowGone(base, windowId).catch(() => undefined)
-        await cleanupNativeWindows(base, new Set([windowId]))
-        state.spawnedNativeWindowIds.delete(windowId)
-      }
-    }
+    await tapSuperShortcut(base, KEY.grave)
+    await waitFor(
+      'wait for scratchpad hidden after toggle',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const shellWindow = shellWindowById(shell, windowId!)
+        const compositorWindow = compositorWindowById(compositor, windowId!)
+        return shellWindow?.scratchpad && shellWindow.minimized && compositorWindow?.minimized ? shell : null
+      },
+      5000,
+      50,
+    )
   })
 
   test('scratchpad settings can match app id and start visible', async ({ base, state }) => {
@@ -133,37 +125,28 @@ export default defineGroup(import.meta.url, ({ test }) => {
         },
       ],
     })
-    try {
-      const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
-        title,
-        token: 'scratchpad-visible-native',
-        strip: 'red',
-        width: 520,
-        height: 360,
-      })
-      windowId = spawned.window.window_id
-      state.spawnedNativeWindowIds.add(windowId)
-      await waitFor(
-        'wait for visible scratchpad native',
-        async () => {
-          const { compositor, shell } = await getSnapshots(base)
-          const shellWindow = shellWindowById(shell, windowId!)
-          const compositorWindow = compositorWindowById(compositor, windowId!)
-          if (!shellWindow?.scratchpad || shellWindow.minimized || !compositorWindow || compositorWindow.minimized) return null
-          if (taskbarEntry(shell, windowId!)) return null
-          return shell
-        },
-        5000,
-        50,
-      )
-    } finally {
-      await saveScratchpads(base, EMPTY_SCRATCHPADS)
-      if (windowId !== null) {
-        await closeWindow(base, windowId).catch(() => undefined)
-        await waitForWindowGone(base, windowId).catch(() => undefined)
-        await cleanupNativeWindows(base, new Set([windowId]))
-        state.spawnedNativeWindowIds.delete(windowId)
-      }
-    }
+    state.afterSuiteCleanup.push((cleanupBase) => saveScratchpads(cleanupBase, EMPTY_SCRATCHPADS))
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title,
+      token: 'scratchpad-visible-native',
+      strip: 'red',
+      width: 520,
+      height: 360,
+    })
+    windowId = spawned.window.window_id
+    state.spawnedNativeWindowIds.add(windowId)
+    await waitFor(
+      'wait for visible scratchpad native',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const shellWindow = shellWindowById(shell, windowId!)
+        const compositorWindow = compositorWindowById(compositor, windowId!)
+        if (!shellWindow?.scratchpad || shellWindow.minimized || !compositorWindow || compositorWindow.minimized) return null
+        if (taskbarEntry(shell, windowId!)) return null
+        return shell
+      },
+      5000,
+      50,
+    )
   })
 })

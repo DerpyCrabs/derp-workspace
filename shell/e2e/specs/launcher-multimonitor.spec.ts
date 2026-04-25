@@ -24,9 +24,9 @@ import {
   printNote,
   raiseTaskbarWindow,
   rectCenter,
-  runKeybind,
   shellWindowById,
   tapKey,
+  tapSuperShortcut,
   taskbarEntry,
   taskbarForMonitor,
   typeText,
@@ -75,12 +75,32 @@ async function ensureProgramsMenuSearchReady(base: string, shell: ShellSnapshot)
   return getJson<ShellSnapshot>(base, '/test/state/shell')
 }
 
+async function openProgramsMenuBySuper(base: string): Promise<ShellSnapshot> {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  if (!shell.programs_menu_open) {
+    await tapKey(base, KEY.super)
+  }
+  return waitFor(
+    'wait for programs menu open by super',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return next.programs_menu_open && next.controls?.programs_menu_search ? next : null
+    },
+    5000,
+    100,
+  )
+}
+
+async function moveFocusedWindowToMonitor(base: string, action: 'move_monitor_left' | 'move_monitor_right') {
+  await tapSuperShortcut(base, action === 'move_monitor_left' ? KEY.left : KEY.right, { shift: true })
+}
+
 async function launchTerminalAppFromProgramsMenu(
   base: string,
   state: { desktopApps: DesktopAppEntry[]; launcherWindowId: number | null; spawnedNativeWindowIds: Set<number> },
   launcherCandidate: { query: string; app: DesktopAppEntry },
 ) {
-  await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+  await ensureProgramsMenuSearchReady(base, await openProgramsMenuBySuper(base))
   await typeText(base, launcherCandidate.query)
   const filteredMenu = await waitFor(
     `wait for launcher query ${launcherCandidate.query}`,
@@ -159,7 +179,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(menuOpen.controls.taskbar_programs_toggle, 'missing programs menu toggle')
     await clickRect(base, menuOpen.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(base)
-    const menuByKeybind = await ensureProgramsMenuSearchReady(base, await openProgramsMenu(base, 'keybind'))
+    const menuBySuper = await ensureProgramsMenuSearchReady(base, await openProgramsMenuBySuper(base))
     await typeText(base, 'a')
     await waitFor(
       'wait for programs menu query',
@@ -174,7 +194,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     if (!launcherCandidate) {
       printNote('no stable terminal launcher candidate found')
     } else {
-      await runKeybind(base, 'toggle_programs_menu')
+      const shellBeforeLaunch = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      assert(shellBeforeLaunch.controls?.taskbar_programs_toggle, 'missing programs toggle before launcher app launch')
+      await clickRect(base, shellBeforeLaunch.controls.taskbar_programs_toggle)
       await waitForProgramsMenuClosed(base)
       const { stableLaunch } = await launchTerminalAppFromProgramsMenu(base, state, launcherCandidate)
       await writeJsonArtifact('programs-menu-launch.json', {
@@ -184,9 +206,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       })
       await closeLaunchedWindowAndAssertNoGhost(base, stableLaunch.window)
     }
-    await writeJsonArtifact('programs-menu-shell.json', menuByKeybind)
-    if ((await getJson<ShellSnapshot>(base, '/test/state/shell')).programs_menu_open) {
-      await runKeybind(base, 'toggle_programs_menu')
+    await writeJsonArtifact('programs-menu-shell.json', menuBySuper)
+    const shellAfterLaunch = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (shellAfterLaunch.programs_menu_open) {
+      assert(shellAfterLaunch.controls?.taskbar_programs_toggle, 'missing programs toggle while menu is open')
+      await clickRect(base, shellAfterLaunch.controls.taskbar_programs_toggle)
       await waitForProgramsMenuClosed(base)
     }
   })
@@ -310,7 +334,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const cy = nativeInitial.redCompositor.y + Math.floor(nativeInitial.redCompositor.height / 2)
     await movePoint(base, cx, cy)
     await clickPoint(base, cx, cy)
-    await runKeybind(base, nativeMove.action, redId)
+    await moveFocusedWindowToMonitor(base, nativeMove.action)
     const nativeMoved = await waitFor(
       'wait for native monitor move',
       async () => {
@@ -346,7 +370,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     if (!settingsMove) {
       throw new SkipError(`no adjacent monitor for settings from ${settingsOutputName}`)
     }
-    await runKeybind(base, settingsMove.action, SHELL_UI_SETTINGS_WINDOW_ID)
+    await moveFocusedWindowToMonitor(base, settingsMove.action)
     const settingsMoved = await waitFor(
       'wait for settings monitor move',
       async () => {
