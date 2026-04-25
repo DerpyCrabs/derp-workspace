@@ -5879,6 +5879,7 @@ impl CompositorState {
         window_id: u32,
         removed_info: Option<WindowInfo>,
     ) {
+        self.shell_force_next_dmabuf_full_damage();
         self.keyboard_layout_by_window.remove(&window_id);
         if self.keyboard_layout_last_focus_window == Some(window_id) {
             self.keyboard_layout_last_focus_window = None;

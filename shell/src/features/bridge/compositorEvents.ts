@@ -218,7 +218,8 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
       const resizeWindowId = view.getUint32(cursor.offset + 20, true)
       const moveProxyWindowId = view.getUint32(cursor.offset + 24, true)
       const moveCaptureWindowId = view.getUint32(cursor.offset + 28, true)
-      const move_rect = decodeHotVisual(view, cursor.offset + 32, moveWindowId)
+      const moveVisualWindowId = moveWindowId || moveProxyWindowId || moveCaptureWindowId
+      const move_rect = decodeHotVisual(view, cursor.offset + 32, moveVisualWindowId)
       const resize_rect = decodeHotVisual(view, cursor.offset + 52, resizeWindowId)
       cursor.offset += 72
       details.push({

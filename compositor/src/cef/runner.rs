@@ -236,6 +236,10 @@ wrap_app! {
                 cmd.append_switch(Some(&CefString::from("disable-domain-reliability")));
                 cmd.append_switch(Some(&CefString::from("disable-hang-monitor")));
                 cmd.append_switch(Some(&CefString::from("disable-ipc-flooding-protection")));
+                cmd.append_switch_with_value(
+                    Some(&CefString::from("remote-allow-origins")),
+                    Some(&CefString::from("*")),
+                );
                 cmd.append_switch(Some(&CefString::from("disable-client-side-phishing-detection")));
                 cmd.append_switch(Some(&CefString::from("disable-speech-api")));
                 cmd.append_switch(Some(&CefString::from("disable-print-preview")));
@@ -728,6 +732,12 @@ fn run_cef(
     settings.windowless_rendering_enabled = 1;
     settings.external_message_pump = 1;
     settings.log_severity = LogSeverity::WARNING;
+    let remote_debugging_port = std::env::var("DERP_CEF_REMOTE_DEBUGGING_PORT")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(9222);
+    settings.remote_debugging_port = remote_debugging_port;
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(s) = exe.to_str() {
@@ -747,6 +757,12 @@ fn run_cef(
         settings.root_cache_path = s.clone();
         settings.cache_path = s;
     }
+    tracing::warn!(
+        target: "derp_shell_boot",
+        port = remote_debugging_port,
+        url = format!("http://127.0.0.1:{remote_debugging_port}"),
+        "cef remote devtools enabled"
+    );
 
     let message_pump = Arc::new(ExternalMessagePump::new());
     let cef_args = Args::new();

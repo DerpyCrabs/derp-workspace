@@ -233,13 +233,6 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             let resize_window_id = value_u32(detail, "resize_window_id").unwrap_or(0);
             let move_proxy_window_id = value_u32(detail, "move_proxy_window_id").unwrap_or(0);
             let move_capture_window_id = value_u32(detail, "move_capture_window_id").unwrap_or(0);
-            if move_window_id == 0
-                && resize_window_id == 0
-                && move_proxy_window_id == 0
-                && move_capture_window_id == 0
-            {
-                return false;
-            }
             push_u64(
                 bytes,
                 detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
