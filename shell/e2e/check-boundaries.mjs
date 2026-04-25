@@ -3,24 +3,6 @@ import path from 'node:path'
 
 const root = process.cwd()
 const specsDir = path.join(root, 'e2e', 'specs')
-const legacySpecs = new Set([
-  'artifacts.spec.ts',
-  'compositor-snapshot.spec.ts',
-  'file-browser.spec.ts',
-  'launcher-multimonitor.spec.ts',
-  'native-windows.spec.ts',
-  'perf-smoke.spec.ts',
-  'restart-input.spec.ts',
-  'restart-persistence.spec.ts',
-  'shell-chrome-session.spec.ts',
-  'shell-chrome.spec.ts',
-  'snap-assist.spec.ts',
-  'tab-groups.spec.ts',
-  'taskbar-close.spec.ts',
-  'taskbar-minimize.spec.ts',
-  'text-editor.spec.ts',
-  'x11-windows.spec.ts',
-])
 const blocked = new Set([
   'postJson',
   'runKeybind',
@@ -33,6 +15,30 @@ const blocked = new Set([
   'prepareFileBrowserFixtures',
   'resetFileBrowserFixtures',
 ])
+const allowedRuntimeImports = new Map([
+  ['artifacts.spec.ts', new Set(['crashWindow', 'postJson'])],
+  ['compositor-snapshot.spec.ts', new Set(['spawnNativeWindow'])],
+  ['file-browser.spec.ts', new Set(['prepareFileBrowserFixtures', 'postJson', 'resetFileBrowserFixtures'])],
+  ['launcher-multimonitor.spec.ts', new Set(['closeWindow', 'runKeybind'])],
+  ['native-windows.spec.ts', new Set(['closeWindow', 'postJson', 'runKeybind', 'spawnNativeWindow'])],
+  ['perf-smoke.spec.ts', new Set(['postJson', 'runKeybind', 'spawnNativeWindow'])],
+  ['restart-input.spec.ts', new Set(['runKeybind'])],
+  ['restart-persistence.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures', 'runKeybind', 'spawnNativeWindow'])],
+  ['shell-chrome-session.spec.ts', new Set(['openShellTestWindow', 'postJson'])],
+  ['shell-chrome.spec.ts', new Set(['openShellTestWindow', 'runKeybind', 'spawnNativeWindow'])],
+  ['snap-assist.spec.ts', new Set(['postJson', 'runKeybind', 'spawnNativeWindow'])],
+  ['tab-groups.spec.ts', new Set(['closeWindow', 'openShellTestWindow', 'postJson', 'runKeybind'])],
+  ['taskbar-close.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures'])],
+  ['taskbar-minimize.spec.ts', new Set(['runKeybind'])],
+  ['text-editor.spec.ts', new Set(['prepareFileBrowserFixtures'])],
+  ['x11-windows.spec.ts', new Set(['runKeybind'])],
+])
+const allowedRawInputEndpoint = new Set([
+  'native-windows.spec.ts',
+  'perf-smoke.spec.ts',
+  'snap-assist.spec.ts',
+])
+const allowedRawFloatingLayers = new Set(['shell-chrome.spec.ts'])
 const rawInputEndpoint = /['"]\/test\/input\//
 const rawFloatingLayers = /shell_floating_layers/
 
@@ -65,15 +71,15 @@ for (const file of files(specsDir)) {
   const rel = path.relative(specsDir, file).replace(/\\/g, '/')
   const source = readFileSync(file, 'utf8')
   const names = importedNames(source, '../lib/runtime.ts')
-  const bad = [...names].filter((name) => blocked.has(name))
-  if (legacySpecs.has(rel)) continue
+  const allowed = allowedRuntimeImports.get(rel) ?? new Set()
+  const bad = [...names].filter((name) => blocked.has(name) && !allowed.has(name))
   if (bad.length > 0) {
     failures.push(`${rel}: import ${bad.join(', ')} from ../lib/runtime.ts via ../lib/user.ts, ../lib/setup.ts, or ../lib/oracle.ts`)
   }
-  if (rawInputEndpoint.test(source)) {
+  if (rawInputEndpoint.test(source) && !allowedRawInputEndpoint.has(rel)) {
     failures.push(`${rel}: use ../lib/user.ts helpers instead of direct /test/input endpoints`)
   }
-  if (rawFloatingLayers.test(source)) {
+  if (rawFloatingLayers.test(source) && !allowedRawFloatingLayers.has(rel)) {
     failures.push(`${rel}: use floating layer helpers from ../lib/oracle.ts instead of reading shell_floating_layers directly`)
   }
 }

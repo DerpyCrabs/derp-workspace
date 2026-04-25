@@ -4,7 +4,7 @@
 //! - `u32 msg_type`, `u32 command_len`, then `command_len` UTF-8 bytes (no NUL).
 //!
 //! Compositor → shell process, same length-prefixed framing:
-//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_POINTER_AXIS`], [`MSG_COMPOSITOR_KEY`], [`MSG_COMPOSITOR_TOUCH`] (legacy; current session uses `wl_seat` only)
+//! - [`MSG_COMPOSITOR_POINTER_MOVE`], [`MSG_COMPOSITOR_POINTER_BUTTON`], [`MSG_COMPOSITOR_POINTER_AXIS`], [`MSG_COMPOSITOR_KEY`], [`MSG_COMPOSITOR_TOUCH`]
 //! - [`MSG_OUTPUT_GEOMETRY`]: logical size (DIP / layout) plus physical pixel size for HiDPI shell HUD math
 //! - [`MSG_WINDOW_MAPPED`], [`MSG_WINDOW_UNMAPPED`], [`MSG_WINDOW_GEOMETRY`], [`MSG_WINDOW_METADATA`], [`MSG_FOCUS_CHANGED`]
 //!

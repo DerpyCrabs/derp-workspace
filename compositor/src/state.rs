@@ -5259,13 +5259,6 @@ impl CompositorState {
         if !self.pending_deferred_toplevels.contains_key(&key) {
             return;
         }
-        let reg_win_id = self.window_registry.window_id_for_wl_surface(root);
-        tracing::warn!(
-            target: "derp_toplevel",
-            wl_surface_protocol_id = root.id().protocol_id(),
-            window_id = ?reg_win_id,
-            "xdg sync deferred toplevel entry"
-        );
         {
             let pending = self
                 .pending_deferred_toplevels
@@ -5312,7 +5305,6 @@ impl CompositorState {
                     attrs.app_id.clone().unwrap_or_default(),
                 )
             });
-            let parent_p = pending.window.toplevel().and_then(|t| t.parent());
             let ident = !app_id.trim().is_empty();
             let geo = pending.window.geometry();
             let matches_initial_rect = pending.initial_client_rect.is_none_or(|rect| {
@@ -5323,30 +5315,6 @@ impl CompositorState {
                 && pending.initial_client_rect.is_some()
                 && !matches_initial_rect;
             let ready = ident && has_buffer_extent && matches_initial_rect;
-            tracing::warn!(
-                target: "derp_toplevel",
-                title = %title,
-                app_id = %app_id,
-                bbox_w = bbox.size.w,
-                bbox_h = bbox.size.h,
-                geo = ?geo,
-                has_buffer_extent,
-                has_identity = ident,
-                will_map_now = ready,
-                "xdg sync deferred toplevel state"
-            );
-            tracing::warn!(
-                target: "derp_toplevel",
-                wl_surface_protocol_id = root.id().protocol_id(),
-                window_id = ?reg_win_id,
-                title = %title,
-                app_id = %app_id,
-                parent_wl_surface_protocol_id = ?parent_p.as_ref().map(|p| p.id().protocol_id()),
-                has_buffer_extent,
-                has_identity = ident,
-                will_map_now = ready,
-                "xdg sync deferred toplevel detail"
-            );
             (ready, title, app_id, retry_initial_resize)
         };
         if retry_initial_resize {

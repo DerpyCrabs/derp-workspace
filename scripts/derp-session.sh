@@ -217,29 +217,21 @@ derp_session_log_fresh_start
 trap derp_session_restore_csd_button_policy EXIT
 
 exec >>"$DERP_COMPOSITOR_LOG" 2>&1
-# Default: keep a supervisor loop so SIGUSR2 → exit 42 can reload a newly installed
-# /usr/local/bin/compositor without ending the GDM session (scripts/remote-update-and-restart.sh).
-# Set DERP_COMPOSITOR_RESPAWN=0 for legacy single-exec behavior.
-if [[ "${DERP_COMPOSITOR_RESPAWN:-1}" != "0" ]]; then
-  while true; do
+while true; do
+  derp_session_build_args
+  if "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"; then
+    ec=0
+  else
+    ec=$?
+  fi
+  if [[ "$ec" -eq 42 ]]; then
+    if [[ "${DERP_COMPOSITOR_LOG_APPEND:-0}" != "1" ]]; then
+      : >"$DERP_COMPOSITOR_LOG"
+    fi
+    printf '%s\n' "derp-session: compositor exited 42 (SIGUSR2 reload), respawning $(date -Is)..."
     derp_session_build_args
-    if "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"; then
-      ec=0
-    else
-      ec=$?
-    fi
-    if [[ "$ec" -eq 42 ]]; then
-      if [[ "${DERP_COMPOSITOR_LOG_APPEND:-0}" != "1" ]]; then
-        : >"$DERP_COMPOSITOR_LOG"
-      fi
-      printf '%s\n' "derp-session: compositor exited 42 (SIGUSR2 reload), respawning $(date -Is)..."
-      derp_session_build_args
-      derp_session_log_banner
-      continue
-    fi
-    exit "$ec"
-  done
-else
-  "$COMPOSITOR_BIN" "${ARGS[@]}" "$@"
-  exit $?
-fi
+    derp_session_log_banner
+    continue
+  fi
+  exit "$ec"
+done

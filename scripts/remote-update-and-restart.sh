@@ -247,5 +247,4 @@ echo "Done."
 echo ""
 printf '%s\n' \
   "remote-update-and-restart: SIGUSR2 reloads the compositor process only." \
-  "If scripts/derp-session.sh changed, or you added scripts/derp-session.local.env / CEF_* overrides," \
-  "log out of GDM and back in once (the derp-session supervisor is the old bash until then)."
+  "If you added scripts/derp-session.local.env / CEF_* overrides, log out of GDM and back in once."

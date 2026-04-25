@@ -125,23 +125,6 @@ describe('tilingConfig', () => {
     expect(getMonitorLayout('DP-1').snapLayout).toEqual({ kind: 'assist', shape: '3x2' })
   })
 
-  it('reads legacy edgeLayout storage as current snap layout', () => {
-    const localStorage = stubLocalStorage()
-    localStorage.setItem(
-      'derp-tiling-config',
-      JSON.stringify({
-        monitors: {
-          'DP-1': {
-            layout: 'manual-snap',
-            edgeLayout: '2x2',
-          },
-        },
-      }),
-    )
-
-    expect(getMonitorLayout('DP-1').snapLayout).toEqual({ kind: 'assist', shape: '2x2' })
-  })
-
   it('clears persisted tiling config', () => {
     const localStorage = stubLocalStorage()
 

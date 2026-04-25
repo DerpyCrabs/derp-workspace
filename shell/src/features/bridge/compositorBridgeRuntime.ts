@@ -867,8 +867,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const dirtySnapshotResultBuffer = (result: unknown) => {
-    if (result instanceof ArrayBuffer) return { status: 'dirty', buffer: result }
-    if (!result || typeof result !== 'object') return { status: 'legacy-null', buffer: null }
+    if (!result || typeof result !== 'object') return { status: 'error', buffer: null }
     const raw = result as { status?: unknown; buffer?: unknown }
     const status = typeof raw.status === 'string' ? raw.status : 'unknown'
     return { status, buffer: raw.buffer instanceof ArrayBuffer ? raw.buffer : null }

@@ -58,11 +58,9 @@ bash scripts/remote-update-and-restart.sh
 
 **In-place reload** needs a **current** `derp-session.sh` and compositor from this tree:
 
-- After **`install-system-run.sh`**, `/usr/local/bin/derp-session` points at the repo copy of **`scripts/derp-session.sh`**. That script **defaults to a supervisor loop**: when the compositor exits **42** (after graceful **`SIGUSR2`**), it starts **`/usr/local/bin/compositor`** again so you stay in-session instead of returning to GDM. Set **`DERP_COMPOSITOR_RESPAWN=0`** if you need the old single-**`exec`** behavior.
+- After **`install-system-run.sh`**, `/usr/local/bin/derp-session` points at the repo copy of **`scripts/derp-session.sh`**. That script runs a supervisor loop: when the compositor exits **42** (after graceful **`SIGUSR2`**), it starts **`/usr/local/bin/compositor`** again so you stay in-session instead of returning to GDM.
 
-- **One logout/login** (or reboot) after updating `derp-session.sh` on disk is required: a session that was started with an older launcher may still have used plain **`exec`**, so the first **`SIGUSR2`** would end the session. After logging in again, the new loop is active.
-
-- The **running** compositor must understand **`SIGUSR2`** (exit 42 after teardown). The first time you deploy that binary, if the **old** process is still running, **`SIGUSR2`** may terminate it without exit 42; log in once so the new binary runs, then remote updates should reload cleanly.
+- The **running** compositor must understand **`SIGUSR2`** and exit **42** after teardown so the supervisor can reload it cleanly.
 
 - Run **`bash scripts/verify.sh`** before a remote update when you want a quick local check of Rust tests plus shell typecheck/tests.
 

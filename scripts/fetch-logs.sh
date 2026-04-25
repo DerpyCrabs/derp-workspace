@@ -8,7 +8,7 @@
 #
 # On the remote, reads ~/.local/state/derp/compositor.log (override with DERP_COMPOSITOR_LOG on that host).
 #
-# Default session RUST_LOG: warn (derp_toplevel includes shell_close and xdg staging). dma-buf when DERP_SESSION_DMABUF_LOGS=1. See derp-session.sh.
+# Default session RUST_LOG: warn. dma-buf when DERP_SESSION_DMABUF_LOGS=1. See derp-session.sh.
 # Manually before login, e.g. RUST_LOG=warn,derp_input=debug,derp_shell_osr=debug,derp_cef_begin_frame=debug
 #
 # Usage:

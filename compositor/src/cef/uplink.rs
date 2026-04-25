@@ -465,19 +465,7 @@ impl UplinkToCompositor {
             match (action.as_str(), target_window_id) {
                 ("move_monitor_left" | "move_monitor_right", Some(wid)) => {
                     let move_right = action == "move_monitor_right";
-                    match s.super_move_window_to_adjacent_monitor(wid, move_right) {
-                        Ok(()) => {}
-                        Err(err) => {
-                            tracing::warn!(
-                                target: "derp_e2e_super_move",
-                                window_id = wid,
-                                %action,
-                                %err,
-                                "super_move failed; shell keybind fallback"
-                            );
-                            s.shell_send_keybind_ex(&action, Some(wid));
-                        }
-                    }
+                    s.super_move_window_to_adjacent_monitor(wid, move_right)?;
                 }
                 (
                     "tile_left" | "tile_right" | "tile_up" | "tile_down" | "toggle_fullscreen"

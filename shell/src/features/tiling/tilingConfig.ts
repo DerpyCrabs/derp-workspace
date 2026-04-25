@@ -178,8 +178,7 @@ function parseConfig(raw: string | null): TilingConfig {
         cleaned.customLayouts = customLayouts
       }
       const snapLayout = sanitizeStoredSnapLayout(
-        (el as { snapLayout?: unknown; edgeLayout?: unknown }).snapLayout ??
-          (el as { edgeLayout?: unknown }).edgeLayout,
+        (el as { snapLayout?: unknown }).snapLayout,
         customLayouts,
       )
       if (snapLayout) {
