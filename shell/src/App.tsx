@@ -1384,7 +1384,6 @@ function App() {
 
   const exclusionReactiveDeps = createMemo(() => {
     void shellContextMenus.ctxMenuOpen()
-    void shellContextMenus.programsMenuOpen()
     void shellContextMenus.powerMenuOpen()
     void shellContextMenus.volumeMenuOpen()
     void shellContextMenus.tabMenuOpen()

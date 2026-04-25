@@ -1,16 +1,19 @@
 import {
   BTN_LEFT,
   KEY,
+  comparePngFixture,
   ensureNativePair,
   RED_NATIVE_TITLE,
   SHELL_UI_SETTINGS_WINDOW_ID,
   activateTaskbarWindow,
   assert,
   assertTopWindow,
+  captureScreenshotRect,
   clickPoint,
   clickRect,
   cleanupNativeWindows,
   closeTaskbarWindow,
+  copyArtifactFile,
   compositorFloatingLayerContainsPoint,
   compositorFloatingLayerCount,
   compositorFloatingLayers,
@@ -124,6 +127,29 @@ async function closeProgramsMenuByTaskbarToggle(base: string, shell: ShellSnapsh
   assert(shell.controls?.taskbar_programs_toggle, 'missing programs toggle while menu is open')
   await clickRect(base, shell.controls.taskbar_programs_toggle)
   await waitForProgramsMenuClosed(base)
+}
+
+async function captureNativeInteriorScreenshot(base: string, windowId: number, name: string) {
+  const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const controls = windowControls(shell, windowId)
+  const titlebar = assertRectMinSize(`window ${windowId} titlebar`, controls?.titlebar ?? null, 80, 16)
+  const bottomRight = assertRectMinSize(
+    `window ${windowId} bottom right resize`,
+    controls?.resize_bottom_right ?? null,
+    4,
+    4,
+  )
+  const rect = {
+    x: titlebar.global_x + 24,
+    y: titlebar.global_y + titlebar.height + 24,
+    width: Math.max(80, titlebar.width - 48),
+    height: Math.max(80, bottomRight.global_y + bottomRight.height - (titlebar.global_y + titlebar.height) - 48),
+  }
+  const screenshot = await captureScreenshotRect(base, rect)
+  return {
+    rect,
+    path: await copyArtifactFile(`${name}.png`, screenshot.path),
+  }
 }
 
 async function waitForProgramsMenuOpenWithNativeOwner(
@@ -456,6 +482,51 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for click-opened programs menu dismissal to restore native focus',
     )
     assert(closed.compositor.focused_window_id === windowId, 'native window should regain keyboard focus after click-opened programs menu closes')
+  })
+
+  test('closing programs menu immediately restores native content under its old exclusion', async ({ base, state }) => {
+    await ensureProgramsMenuClosedForFocusTest(base)
+    const stamp = Date.now()
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Launcher Content ${stamp}`,
+      token: `launcher-content-${stamp}`,
+      strip: '#15803d',
+      width: 900,
+      height: 620,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForNativeFocus(base, windowId)
+    const before = await captureNativeInteriorScreenshot(base, windowId, 'programs-menu-native-content-before')
+    const opened = await openProgramsMenu(base, 'click')
+    assert(opened.programs_menu_open, 'programs menu should open over native content')
+    await closeProgramsMenuByTaskbarToggle(base, opened)
+    await waitForProgramsMenuClosed(base)
+    const closed = await waitFor(
+      'wait for compositor menu exclusion cleared before native content capture',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (snapshots.shell.programs_menu_open) return null
+        if (snapshots.compositor.shell_context_menu_visible) return null
+        if ((snapshots.compositor.shell_floating_layers ?? []).length > 0) return null
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    assert(!closed.compositor.shell_context_menu_visible, 'compositor should not keep stale context menu visible after close')
+    const after = await captureNativeInteriorScreenshot(base, windowId, 'programs-menu-native-content-after')
+    const comparison = await comparePngFixture(after.path, before.path, {
+      maxDifferentPixels: 32,
+      maxChannelDelta: 8,
+    })
+    await writeJsonArtifact('programs-menu-native-content-restore.json', {
+      windowId,
+      before,
+      after,
+      comparison,
+      closedCompositor: closed.compositor,
+    })
   })
 
   test('programs menu closes with one super tap after shell titlebar drag without stealing focus', async ({ base, state }) => {

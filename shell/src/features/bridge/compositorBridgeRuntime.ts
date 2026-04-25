@@ -508,7 +508,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
     let sawInteractionState = false
-    let sawFocusChanged = false
     batch(() => {
       options.applyModelCompositorSnapshot(details)
       for (const detail of details) {
@@ -519,9 +518,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         if (detail.type === 'interaction_state') {
           sawInteractionState = true
         }
-        if (detail.type === 'focus_changed') {
-          sawFocusChanged = true
-        }
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
       if ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) {
@@ -530,7 +526,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
-    if (sawFocusChanged) queueMicrotask(() => options.shellWireSend('invalidate_view'))
   }
 
   const modelDetailOptions = () => ({
@@ -542,7 +537,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (details.length === 0) return
     let sawWindowList = false
     let sawWindowSync = false
-    let sawFocusChanged = false
     for (const detail of details) {
       if (detail.type === 'window_list') sawWindowList = true
       if (
@@ -554,7 +548,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       ) {
         sawWindowSync = true
       }
-      if (detail.type === 'focus_changed') sawFocusChanged = true
     }
     if (sawWindowList || sawWindowSync) options.markHasSeenCompositorWindowSync()
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
@@ -562,7 +555,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     for (const result of results) {
       if (result.followup) options.scheduleCompositorFollowup(result.followup)
     }
-    if (sawFocusChanged) queueMicrotask(() => options.shellWireSend('invalidate_view'))
   }
 
   const keybindTargetWindowId = (d: Extract<DerpShellDetail, { type: 'keybind' }>, focusedWindowId: number | null) =>

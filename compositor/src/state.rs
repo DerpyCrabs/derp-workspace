@@ -2977,7 +2977,9 @@ impl CompositorState {
                 .new_toplevel_placement_output(None)
                 .map(|output| output.name().to_string()),
         });
-        self.shell_nudge_cef_repaint();
+        if action != "toggle_programs_menu" {
+            self.shell_nudge_cef_repaint();
+        }
     }
 
     pub(crate) fn screenshot_selection_active(&self) -> bool {
@@ -3235,7 +3237,6 @@ impl CompositorState {
         }
         self.shell_spawn_known_native_window_ids = None;
         self.shell_raise_and_focus_window(window_id);
-        self.shell_reply_window_list();
     }
 
     fn shell_prepare_spawned_toplevel_stack(&mut self, window_id: u32) {

@@ -545,10 +545,22 @@ export interface PerfShellRuntimeSnapshot {
   dom_measure_count: number
 }
 
+export interface PerfLatencySnapshot {
+  samples: number
+  schedule_to_begin_us: number
+  begin_to_paint_us: number
+  paint_to_dmabuf_us: number
+  dmabuf_to_render_us: number
+  schedule_to_dmabuf_us: number
+  schedule_to_render_us: number
+  schedule_to_render_max_us: number
+}
+
 export interface PerfCounterSnapshot {
   begin_frame: PerfBeginFrameSnapshot
   shell_updates: PerfShellUpdateSnapshot
   shell_sync: PerfShellSyncSnapshot
+  latency: PerfLatencySnapshot
   shell_runtime?: PerfShellRuntimeSnapshot
 }
 
@@ -1372,6 +1384,17 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       shared_state_exclusion_rects:
         after.shell_sync.shared_state_exclusion_rects - before.shell_sync.shared_state_exclusion_rects,
     },
+    latency: {
+      samples: after.latency.samples - before.latency.samples,
+      schedule_to_begin_us: after.latency.schedule_to_begin_us - before.latency.schedule_to_begin_us,
+      begin_to_paint_us: after.latency.begin_to_paint_us - before.latency.begin_to_paint_us,
+      paint_to_dmabuf_us: after.latency.paint_to_dmabuf_us - before.latency.paint_to_dmabuf_us,
+      dmabuf_to_render_us: after.latency.dmabuf_to_render_us - before.latency.dmabuf_to_render_us,
+      schedule_to_dmabuf_us: after.latency.schedule_to_dmabuf_us - before.latency.schedule_to_dmabuf_us,
+      schedule_to_render_us: after.latency.schedule_to_render_us - before.latency.schedule_to_render_us,
+      schedule_to_render_max_us:
+        after.latency.samples > before.latency.samples ? after.latency.schedule_to_render_max_us : 0,
+    },
     ...(shellRuntime ? { shell_runtime: shellRuntime } : {}),
   }
 }
@@ -1771,6 +1794,15 @@ export async function comparePngFixture(
     differentPixels,
     maxObservedChannelDelta,
   }
+}
+
+export async function captureScreenshotRect(
+  base: string,
+  rect: { x: number; y: number; width: number; height: number },
+): Promise<{ path: string }> {
+  const screenshot = await postJson<{ path?: string }>(base, '/test/screenshot', rect)
+  assert(typeof screenshot.path === 'string' && screenshot.path.length > 0, 'screenshot response missing path')
+  return { path: screenshot.path }
 }
 
 export async function captureFailureArtifacts(base: string, label: string): Promise<void> {

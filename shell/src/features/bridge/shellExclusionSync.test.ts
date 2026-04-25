@@ -115,4 +115,5 @@ describe('createShellExclusionSync', () => {
     registration.unregister()
     dispose()
   })
+
 })

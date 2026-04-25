@@ -37,6 +37,14 @@ static SHELL_SHARED_STATE_UI_WINDOW_ROWS: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_WRITES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_BYTES: AtomicU64 = AtomicU64::new(0);
 static SHELL_SHARED_STATE_EXCLUSION_RECTS: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_SCHEDULE_TO_BEGIN_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_BEGIN_TO_PAINT_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_PAINT_TO_DMABUF_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_DMABUF_TO_RENDER_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_SCHEDULE_TO_DMABUF_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_SCHEDULE_TO_RENDER_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +131,7 @@ pub(crate) struct PerfCounterSnapshot {
     begin_frame: BeginFrameSnapshot,
     shell_updates: ShellUpdateSnapshot,
     shell_sync: ShellSyncSnapshot,
+    latency: ShellLatencySnapshot,
 }
 
 #[derive(serde::Serialize)]
@@ -170,6 +179,18 @@ struct ShellSyncSnapshot {
     shared_state_exclusion_writes: u64,
     shared_state_exclusion_bytes: u64,
     shared_state_exclusion_rects: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ShellLatencySnapshot {
+    samples: u64,
+    schedule_to_begin_us: u64,
+    begin_to_paint_us: u64,
+    paint_to_dmabuf_us: u64,
+    dmabuf_to_render_us: u64,
+    schedule_to_dmabuf_us: u64,
+    schedule_to_render_us: u64,
+    schedule_to_render_max_us: u64,
 }
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
@@ -385,6 +406,17 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             shared_state_exclusion_rects: SHELL_SHARED_STATE_EXCLUSION_RECTS
                 .load(Ordering::Relaxed),
         },
+        latency: ShellLatencySnapshot {
+            samples: SHELL_LATENCY_SAMPLES.load(Ordering::Relaxed),
+            schedule_to_begin_us: SHELL_LATENCY_SCHEDULE_TO_BEGIN_US.load(Ordering::Relaxed),
+            begin_to_paint_us: SHELL_LATENCY_BEGIN_TO_PAINT_US.load(Ordering::Relaxed),
+            paint_to_dmabuf_us: SHELL_LATENCY_PAINT_TO_DMABUF_US.load(Ordering::Relaxed),
+            dmabuf_to_render_us: SHELL_LATENCY_DMABUF_TO_RENDER_US.load(Ordering::Relaxed),
+            schedule_to_dmabuf_us: SHELL_LATENCY_SCHEDULE_TO_DMABUF_US.load(Ordering::Relaxed),
+            schedule_to_render_us: SHELL_LATENCY_SCHEDULE_TO_RENDER_US.load(Ordering::Relaxed),
+            schedule_to_render_max_us: SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US
+                .load(Ordering::Relaxed),
+        },
     }
 }
 
@@ -429,6 +461,14 @@ pub(crate) fn reset_perf_counters() {
     SHELL_SHARED_STATE_EXCLUSION_WRITES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_EXCLUSION_BYTES.store(0, Ordering::Relaxed);
     SHELL_SHARED_STATE_EXCLUSION_RECTS.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_SAMPLES.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_BEGIN_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_BEGIN_TO_PAINT_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_PAINT_TO_DMABUF_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_DMABUF_TO_RENDER_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_DMABUF_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_RENDER_US.store(0, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US.store(0, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }
@@ -451,6 +491,37 @@ fn maybe_log_shell_latency() {
         return;
     }
     latency.last_logged_dmabuf_rx_at = Some(dmabuf_rx_at);
+    let render_at = Instant::now();
+    let Some(schedule_at) = latency
+        .compositor_schedule_at
+        .or(latency.view_invalidate_at)
+        .or(latency.message_pump_at)
+    else {
+        return;
+    };
+    let Some(begin_at) = latency.cef_begin_frame_at else {
+        return;
+    };
+    let Some(paint_at) = latency.accelerated_paint_at else {
+        return;
+    };
+    if schedule_at > begin_at || begin_at > paint_at || paint_at > dmabuf_rx_at {
+        return;
+    }
+    let schedule_to_begin = begin_at.duration_since(schedule_at).as_micros() as u64;
+    let begin_to_paint = paint_at.duration_since(begin_at).as_micros() as u64;
+    let paint_to_dmabuf = dmabuf_rx_at.duration_since(paint_at).as_micros() as u64;
+    let dmabuf_to_render = render_at.duration_since(dmabuf_rx_at).as_micros() as u64;
+    let schedule_to_dmabuf = dmabuf_rx_at.duration_since(schedule_at).as_micros() as u64;
+    let schedule_to_render = render_at.duration_since(schedule_at).as_micros() as u64;
+    SHELL_LATENCY_SAMPLES.fetch_add(1, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_BEGIN_US.fetch_add(schedule_to_begin, Ordering::Relaxed);
+    SHELL_LATENCY_BEGIN_TO_PAINT_US.fetch_add(begin_to_paint, Ordering::Relaxed);
+    SHELL_LATENCY_PAINT_TO_DMABUF_US.fetch_add(paint_to_dmabuf, Ordering::Relaxed);
+    SHELL_LATENCY_DMABUF_TO_RENDER_US.fetch_add(dmabuf_to_render, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_DMABUF_US.fetch_add(schedule_to_dmabuf, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_RENDER_US.fetch_add(schedule_to_render, Ordering::Relaxed);
+    SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US.fetch_max(schedule_to_render, Ordering::Relaxed);
 }
 
 pub(crate) fn maybe_log_cef_begin_frame_pacing() {

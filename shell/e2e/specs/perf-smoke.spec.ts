@@ -190,6 +190,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       moveDelta.begin_frame.cef_software_paints === 0,
       `CEF shell should stay on accelerated OSR during move, got software paints=${moveDelta.begin_frame.cef_software_paints}`,
     )
+    assert(moveDelta.latency.samples >= 1, `window move should expose latency samples, got ${moveDelta.latency.samples}`)
+    assert(
+      moveDelta.latency.schedule_to_render_us > 0,
+      `window move latency should include schedule-to-render time, got ${moveDelta.latency.schedule_to_render_us}us`,
+    )
 
     assert(
       moveDelta.shell_sync.full_window_list_replies <= 2,
@@ -339,7 +344,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `programs menu churn should avoid snapshot notifies, got ${menuChurnSample.shell_sync.snapshot_notifies}`,
     )
     assert(
-      menuChurnSample.shell_sync.shared_state_exclusion_writes <= 24,
+      menuChurnSample.begin_frame.compositor_schedules_forced <= 2,
+      `programs menu churn should avoid forced begin frames, got ${menuChurnSample.begin_frame.compositor_schedules_forced}`,
+    )
+    assert(
+      menuChurnSample.shell_sync.shared_state_exclusion_writes <= 12,
       `programs menu churn should coalesce exclusion writes, got ${menuChurnSample.shell_sync.shared_state_exclusion_writes}`,
     )
     assert(
@@ -390,7 +399,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `20-window churn dirty snapshots should not fall back to full payloads, got ${scaleOpenSample.shell_sync.snapshot_dirty_fallbacks}`,
     )
     assert(
-      scaleOpenSample.shell_sync.full_window_list_replies <= 28,
+      scaleOpenSample.shell_sync.full_window_list_replies <= 8,
       `20-window churn should keep full window lists bounded, got ${scaleOpenSample.shell_sync.full_window_list_replies}`,
     )
     assert(
@@ -438,7 +447,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       }
     }
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} late_timers=${moveDelta.begin_frame.drm_render_late_timers} fullscreen_bypass=${fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses} cef_sw=${moveDelta.begin_frame.cef_software_paints} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes} long_decode_bytes=${longDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} stress_decode_bytes=${stressDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} long_dom_measures=${longDragSample.shell_runtime?.dom_measure_count ?? 'n/a'}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} latency_samples=${moveDelta.latency.samples} latency_schedule_to_render_us=${moveDelta.latency.schedule_to_render_us} latency_max_us=${moveDelta.latency.schedule_to_render_max_us} late_timers=${moveDelta.begin_frame.drm_render_late_timers} fullscreen_bypass=${fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses} cef_sw=${moveDelta.begin_frame.cef_software_paints} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_forced=${menuChurnSample.begin_frame.compositor_schedules_forced} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes} long_decode_bytes=${longDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} stress_decode_bytes=${stressDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} long_dom_measures=${longDragSample.shell_runtime?.dom_measure_count ?? 'n/a'}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
