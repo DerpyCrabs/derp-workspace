@@ -819,12 +819,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     d: DerpShellDetail,
     pendingModelDetails: DerpShellDetail[],
     flushPendingModelDetails: () => void,
+    syncSnapshot: typeof syncCompositorSnapshot,
   ) => {
     const detailEpoch = detailSnapshotEpoch(d)
     if (hotWindowDetailCanBeStale(d) && detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
     if (detailCanBeSupersededBySnapshot(d)) {
       if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
-      const hadSnapshot = syncCompositorSnapshot()
+      const hadSnapshot = syncSnapshot()
       if (hadSnapshot) {
         const detailDomains = detailSnapshotDomainFlags(d)
         if (detailDomains !== 0 && (hadSnapshot.domainFlags & detailDomains) !== 0) return
@@ -854,14 +855,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const needsPostApplyPaint = countWindowUnmapped(details) > 1
     batch(() => {
       const pendingModelDetails: DerpShellDetail[] = []
+      let batchSnapshotResult: ReturnType<typeof syncCompositorSnapshot> | undefined
+      const syncBatchSnapshot = () => {
+        if (batchSnapshotResult === undefined) batchSnapshotResult = syncCompositorSnapshot()
+        return batchSnapshotResult
+      }
       const flushPendingModelDetails = () => {
         if (pendingModelDetails.length === 0) return
-        const nextDetails = pendingModelDetails.slice()
+        applyModelCompositorDetailsBatch(pendingModelDetails)
         pendingModelDetails.length = 0
-        applyModelCompositorDetailsBatch(nextDetails)
       }
       for (const detail of details) {
-        applyCompositorBatchDetail(detail, pendingModelDetails, flushPendingModelDetails)
+        applyCompositorBatchDetail(detail, pendingModelDetails, flushPendingModelDetails, syncBatchSnapshot)
       }
       flushPendingModelDetails()
     })
