@@ -137,6 +137,22 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
     };
     let op = cef_string_userfree_to_string(&args.string(0));
     match op.as_str() {
+        "batch_hot" => {
+            let Some(binary) = args.binary(1) else {
+                return true;
+            };
+            let Some(bytes) = read_binary_value_bytes(&binary) else {
+                return true;
+            };
+            let mut buffer_arg =
+                v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len());
+            let _ = call_global_function(
+                frame,
+                "__DERP_APPLY_COMPOSITOR_BATCH_BINARY",
+                &[buffer_arg.take()],
+            );
+            true
+        }
         "batch_json" => {
             let Some(binary) = args.binary(1) else {
                 return true;

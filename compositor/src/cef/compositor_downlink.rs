@@ -10,6 +10,11 @@ use serde_json::{json, Value};
 use crate::cef::osr_view_state::OsrViewState;
 
 pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_downlink";
+const HOT_BATCH_MAGIC: &[u8; 4] = b"DHB1";
+const HOT_DETAIL_WINDOW_GEOMETRY: u8 = 1;
+const HOT_DETAIL_WINDOW_STATE: u8 = 2;
+const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
+const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
     if snapshot_epoch > 0 {
@@ -18,6 +23,151 @@ fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
         }
     }
     detail
+}
+
+fn value_u32(value: &Value, key: &str) -> Option<u32> {
+    value.get(key)?.as_u64().and_then(|v| u32::try_from(v).ok())
+}
+
+fn value_i32(value: &Value, key: &str) -> Option<i32> {
+    value.get(key)?.as_i64().and_then(|v| i32::try_from(v).ok())
+}
+
+fn value_bool(value: &Value, key: &str) -> Option<bool> {
+    value.get(key)?.as_bool()
+}
+
+fn value_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key)?.as_str()
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_string(bytes: &mut Vec<u8>, value: &str) -> bool {
+    let Ok(length) = u32::try_from(value.len()) else {
+        return false;
+    };
+    push_u32(bytes, length);
+    bytes.extend_from_slice(value.as_bytes());
+    true
+}
+
+fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
+    let Some(kind) = value_string(detail, "type") else {
+        return false;
+    };
+    let snapshot_epoch = detail
+        .get("snapshot_epoch")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    match kind {
+        "window_geometry" => {
+            bytes.push(HOT_DETAIL_WINDOW_GEOMETRY);
+            push_u64(bytes, snapshot_epoch);
+            let (Some(window_id), Some(surface_id), Some(x), Some(y), Some(width), Some(height)) = (
+                value_u32(detail, "window_id"),
+                value_u32(detail, "surface_id"),
+                value_i32(detail, "x"),
+                value_i32(detail, "y"),
+                value_i32(detail, "width"),
+                value_i32(detail, "height"),
+            ) else {
+                return false;
+            };
+            push_u32(bytes, window_id);
+            push_u32(bytes, surface_id);
+            push_i32(bytes, x);
+            push_i32(bytes, y);
+            push_i32(bytes, width);
+            push_i32(bytes, height);
+            let mut flags = 0u8;
+            if value_bool(detail, "maximized").unwrap_or(false) {
+                flags |= 1;
+            }
+            if value_bool(detail, "fullscreen").unwrap_or(false) {
+                flags |= 2;
+            }
+            bytes.push(flags);
+            push_string(bytes, value_string(detail, "output_id").unwrap_or(""))
+                && push_string(bytes, value_string(detail, "output_name").unwrap_or(""))
+        }
+        "window_state" => {
+            bytes.push(HOT_DETAIL_WINDOW_STATE);
+            push_u64(bytes, snapshot_epoch);
+            let Some(window_id) = value_u32(detail, "window_id") else {
+                return false;
+            };
+            push_u32(bytes, window_id);
+            bytes.push(u8::from(value_bool(detail, "minimized").unwrap_or(false)));
+            true
+        }
+        "window_unmapped" => {
+            bytes.push(HOT_DETAIL_WINDOW_UNMAPPED);
+            push_u64(bytes, snapshot_epoch);
+            let Some(window_id) = value_u32(detail, "window_id") else {
+                return false;
+            };
+            push_u32(bytes, window_id);
+            true
+        }
+        "focus_changed" => {
+            bytes.push(HOT_DETAIL_FOCUS_CHANGED);
+            push_u64(bytes, snapshot_epoch);
+            match detail.get("surface_id").and_then(Value::as_u64) {
+                Some(surface_id) => {
+                    let Ok(surface_id) = u32::try_from(surface_id) else {
+                        return false;
+                    };
+                    bytes.push(1);
+                    push_u32(bytes, surface_id);
+                }
+                None => {
+                    bytes.push(0);
+                    push_u32(bytes, 0);
+                }
+            }
+            match detail.get("window_id").and_then(Value::as_u64) {
+                Some(window_id) => {
+                    let Ok(window_id) = u32::try_from(window_id) else {
+                        return false;
+                    };
+                    bytes.push(1);
+                    push_u32(bytes, window_id);
+                }
+                None => {
+                    bytes.push(0);
+                    push_u32(bytes, 0);
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn encode_hot_detail_batch(details: &[Value]) -> Option<Vec<u8>> {
+    let count = u32::try_from(details.len()).ok()?;
+    let mut bytes = Vec::with_capacity(8 + details.len().saturating_mul(48));
+    bytes.extend_from_slice(HOT_BATCH_MAGIC);
+    push_u32(&mut bytes, count);
+    for detail in details {
+        let start = bytes.len();
+        if !encode_hot_detail(&mut bytes, detail) {
+            bytes.truncate(start);
+            return None;
+        }
+    }
+    Some(bytes)
 }
 
 fn apply_output_dimensions_to_osr(
@@ -52,9 +202,6 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
         return;
     }
     crate::cef::begin_frame_diag::note_shell_detail_batch(details.len());
-    let Ok(js) = serde_json::to_string(details) else {
-        return;
-    };
     let Some(frame) = browser.main_frame() else {
         return;
     };
@@ -64,10 +211,18 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     let Some(list) = msg.argument_list() else {
         return;
     };
-    let Some(mut payload) = binary_value_create(Some(js.as_bytes())) else {
+    let (op, payload_bytes) = if let Some(bytes) = encode_hot_detail_batch(details) {
+        ("batch_hot", bytes)
+    } else {
+        let Ok(js) = serde_json::to_vec(details) else {
+            return;
+        };
+        ("batch_json", js)
+    };
+    let Some(mut payload) = binary_value_create(Some(&payload_bytes)) else {
         return;
     };
-    let _ = list.set_string(0, Some(&CefString::from("batch_json")));
+    let _ = list.set_string(0, Some(&CefString::from(op)));
     let _ = list.set_binary(1, Some(&mut payload));
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
