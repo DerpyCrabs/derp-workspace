@@ -565,7 +565,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const ignoreDraggedWindowFrame =
       drag.detached || (options.workspaceGroupsById().get(drag.sourceGroupId)?.members.length ?? 0) <= 1
     const nextTarget = dragging
-      ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame) ?? drag.target
+      ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame)
       : drag.target
     const merged = dragging && nextTarget ? options.applyTabDrop(drag.windowId, nextTarget) : false
     const clickTarget = !dragging
@@ -809,7 +809,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     y: number
   } | null>(null)
   const [lastWindowDragWindowId, setLastWindowDragWindowId] = createSignal<number | null>(null)
-  const [lastWindowDragTarget, setLastWindowDragTarget] = createSignal<TabMergeTarget | null>(null)
   const [activeWindowDragTarget, setActiveWindowDragTarget] = createSignal<TabMergeTarget | null>(null, {
     equals: sameTabMergeTarget,
   })
@@ -831,7 +830,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     setLastWindowDragPointerClient({ x: pointer.x, y: pointer.y })
     const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
     setActiveWindowDragTarget(target)
-    if (target) setLastWindowDragTarget(target)
   })
 
   const activeFrameDragWindowId = createMemo(() => activeWindowDragWindowId())
@@ -1566,8 +1564,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     setLastWindowDragPointerClient(null)
     setLastWindowDragWindowId(null)
     if (windowId == null || !pointer) return false
-    const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y) ?? lastWindowDragTarget()
-    setLastWindowDragTarget(null)
+    const target = resolveWindowDragTarget(windowId, pointer.x, pointer.y)
     if (!target) return false
     return options.applyWindowDrop(windowId, target)
   }

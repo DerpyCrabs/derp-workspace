@@ -1317,6 +1317,88 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
   })
 
+  test('window drag hovering over a tab bar only merges when released there', async ({ base, state }) => {
+    const timing = createTimingMarks('tab-window-drag-hover-out')
+    let jsWindowId: number | null = null
+    let released = false
+    try {
+      const { red, green } = await ensureFreshNativePair(base, state)
+      const jsWindow = await timing.step('open js test window', () => openShellTestWindow(base, state))
+      jsWindowId = jsWindow.window.window_id
+      await timing.step('move js window to other monitor', () =>
+        moveShellWindowToOtherMonitor(base, jsWindow.window.window_id),
+      )
+      const target = await timing.step('resolve visible native target', () =>
+        resolveNativeTabTarget(base, [green.window.window_id, red.window.window_id]),
+      )
+      const shellBefore = await timing.step('read source tab shell snapshot', () =>
+        getJson<ShellSnapshot>(base, '/test/state/shell'),
+      )
+      const sourceTab = tabRect(shellBefore, jsWindow.window.window_id)
+      const hover = await timing.step('drag single-tab window by tab into native tab bar', () =>
+        dragWindowHandleOntoTab(base, jsWindow.window.window_id, rectCenter(sourceTab.tab.rect!), target.windowId),
+      )
+      const outPoint = await timing.step('choose native content release point', async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return nativeContentPoint(shell, target.windowId)
+      })
+      await timing.step('drag back out of tab bar', async () => {
+        await movePoint(base, outPoint.x, outPoint.y)
+        await waitFor(
+          `wait for cleared window drag target ${jsWindow.window.window_id}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            if (compositor.shell_move_window_id !== jsWindow.window.window_id) return null
+            if (shell.tab_drag_target) return null
+            return { compositor, shell }
+          },
+          2000,
+          40,
+        )
+      })
+      await timing.step('release outside tab bar', () => finishDrag(base))
+      released = true
+      const separated = await timing.step('confirm windows stayed separate', () =>
+        waitFor(
+          `wait for unmerged window drag ${jsWindow.window.window_id}`,
+          async () => {
+            const { compositor, shell } = await getSnapshots(base)
+            const sourceGroup = tabGroupByWindow(shell, jsWindow.window.window_id)
+            const targetGroup = tabGroupByWindow(shell, target.windowId)
+            if (!sourceGroup || !targetGroup) return null
+            if (sourceGroup.group_id === targetGroup.group_id) return null
+            if (sourceGroup.member_window_ids.includes(target.windowId)) return null
+            if (targetGroup.member_window_ids.includes(jsWindow.window.window_id)) return null
+            if (compositor.shell_move_window_id !== null) return null
+            if (shell.tab_drag_target) return null
+            return { compositor, shell, sourceGroup, targetGroup }
+          },
+          2000,
+          125,
+        ),
+      )
+      await timing.step('write hover out artifact', () =>
+        writeJsonArtifact('tab-groups-window-drag-hover-out.json', {
+          hover,
+          outPoint,
+          separated,
+        }),
+      )
+    } finally {
+      if (!released) {
+        try {
+          await finishDrag(base)
+        } catch {}
+      }
+      if (jsWindowId !== null) {
+        try {
+          await closeWindow(base, jsWindowId)
+          await waitForWindowGone(base, jsWindowId)
+        } catch {}
+      }
+    }
+  })
+
   test('titlebar drag drops a grouped native window into empty tab strip area with all tabs', async ({ base, state }) => {
     const timing = createTimingMarks('tab-titlebar-group-drag-drop')
     let jsWindowId: number | null = null
