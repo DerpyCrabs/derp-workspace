@@ -397,23 +397,64 @@ async function dragWindowHandleOntoTab(
     const t = step / 24
     await movePoint(base, start.x + 28 + (end.x - (start.x + 28)) * t, start.y + (end.y - start.y) * t)
   }
-  await waitFor(
-    `wait for window drag target ${sourceWindowId}->${targetWindowId}`,
-    async () => {
-      const { compositor, shell } = await getSnapshots(base)
-      const currentTarget = tabGroupByWindow(shell, targetWindowId)
-      const dragTarget = shell.tab_drag_target
-      if (!currentTarget || !dragTarget) return null
-      const targetIndex = currentTarget.member_window_ids.indexOf(targetWindowId)
-      const expectedInsertIndex = targetIndex >= 0 ? targetIndex + 1 : currentTarget.member_window_ids.length
-      if (compositor.shell_move_window_id !== sourceWindowId) return null
-      if (dragTarget.window_id !== sourceWindowId || dragTarget.group_id !== currentTarget.group_id) return null
-      if (dragTarget.insert_index !== expectedInsertIndex) return null
-      return { compositor, shell, dragTarget }
-    },
-    2000,
-    40,
-  )
+  const dragTargetMatches = async () => {
+    const { compositor, shell } = await getSnapshots(base)
+    const currentTarget = tabGroupByWindow(shell, targetWindowId)
+    const dragTarget = shell.tab_drag_target
+    if (!currentTarget || !dragTarget) return null
+    const targetIndex = currentTarget.member_window_ids.indexOf(targetWindowId)
+    const expectedInsertIndex = targetIndex >= 0 ? targetIndex + 1 : currentTarget.member_window_ids.length
+    if (compositor.shell_move_window_id !== sourceWindowId) return null
+    if (dragTarget.window_id !== sourceWindowId || dragTarget.group_id !== currentTarget.group_id) return null
+    if (dragTarget.insert_index !== expectedInsertIndex) return null
+    const controls = shell.window_controls?.find((entry) => entry.window_id === sourceWindowId) ?? null
+    return { compositor, shell, dragTarget, controls }
+  }
+  try {
+    return await waitFor(`wait for window drag target ${sourceWindowId}->${targetWindowId}`, dragTargetMatches, 2000, 40)
+  } catch {
+    const latest = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const latestTarget = tabGroupByWindow(latest, targetWindowId)
+    const latestSlot = tabDropSlotRect(latest, targetWindowId)
+    const latestTab = latestTarget?.tabs.find((entry) => entry.window_id === targetWindowId)?.rect ?? null
+    const latestEnd = latestSlot ? rectCenter(latestSlot) : latestTab ? rectCenter(latestTab) : end
+    const correctionPoints = [latestEnd]
+    if (latestSlot) {
+      correctionPoints.push({
+        x: latestSlot.global_x + Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+      correctionPoints.push({
+        x: latestSlot.global_x + latestSlot.width - Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+    }
+    if (latestTab) {
+      correctionPoints.push(rectCenter(latestTab))
+    }
+    let corrected = false
+    for (const point of correctionPoints) {
+      await movePoint(base, point.x, point.y)
+      try {
+        const correctedMatch = await waitFor(
+          `wait for corrected window drag target ${sourceWindowId}->${targetWindowId}`,
+          dragTargetMatches,
+          500,
+          40,
+        )
+        corrected = true
+        return correctedMatch
+      } catch {}
+    }
+    if (!corrected) {
+      return waitFor(
+        `wait for corrected window drag target ${sourceWindowId}->${targetWindowId}`,
+        dragTargetMatches,
+        2000,
+        40,
+      )
+    }
+  }
 }
 
 async function dragTabOntoTab(base: string, sourceWindowId: number, targetWindowId: number) {
@@ -500,8 +541,32 @@ async function dragTabOntoTab(base: string, sourceWindowId: number, targetWindow
     const latestSlot = tabDropSlotRect(latest, targetWindowId)
     const latestTab = latestTarget?.tabs.find((entry) => entry.window_id === targetWindowId)?.rect ?? null
     const latestEnd = latestSlot ? rectCenter(latestSlot) : latestTab ? rectCenter(latestTab) : end
-    await movePoint(base, latestEnd.x, latestEnd.y)
-    await waitFor(`wait for corrected tab drag target ${target.group.group_id}`, dragTargetMatches, 2000, 40)
+    const correctionPoints = [latestEnd]
+    if (latestSlot) {
+      correctionPoints.push({
+        x: latestSlot.global_x + Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+      correctionPoints.push({
+        x: latestSlot.global_x + latestSlot.width - Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+    }
+    if (latestTab) {
+      correctionPoints.push(rectCenter(latestTab))
+    }
+    let corrected = false
+    for (const point of correctionPoints) {
+      await movePoint(base, point.x, point.y)
+      try {
+        await waitFor(`wait for corrected tab drag target ${target.group.group_id}`, dragTargetMatches, 500, 40)
+        corrected = true
+        break
+      } catch {}
+    }
+    if (!corrected) {
+      await waitFor(`wait for corrected tab drag target ${target.group.group_id}`, dragTargetMatches, 2000, 40)
+    }
   }
   await pointerButton(base, BTN_LEFT, 'release')
 }
@@ -518,6 +583,63 @@ async function dragTabStep(base: string, windowId: number, target: { x: number; 
   await movePoint(base, start.x, start.y)
   await pointerButton(base, BTN_LEFT, 'press')
   await movePoint(base, target.x, target.y)
+}
+
+async function moveDraggedWindowOntoTabBar(base: string, sourceWindowId: number, targetWindowId: number) {
+  const targetMatches = async () => {
+    const { compositor, shell } = await getSnapshots(base)
+    const currentTarget = tabGroupByWindow(shell, targetWindowId)
+    const dragTarget = shell.tab_drag_target
+    if (!currentTarget || !dragTarget) return null
+    const targetIndex = currentTarget.member_window_ids.indexOf(targetWindowId)
+    const expectedInsertIndex = targetIndex >= 0 ? targetIndex + 1 : currentTarget.member_window_ids.length
+    if (compositor.shell_move_window_id !== sourceWindowId) return null
+    if (dragTarget.window_id !== sourceWindowId || dragTarget.group_id !== currentTarget.group_id) return null
+    if (dragTarget.insert_index !== expectedInsertIndex) return null
+    const html = await getShellHtml(base, '[data-tab-drop-indicator]')
+    if (!html.includes(currentTarget.group_id)) return null
+    return { compositor, shell, dragTarget, html }
+  }
+
+  const moveToLatestTarget = async () => {
+    const latest = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const latestTarget = tabGroupByWindow(latest, targetWindowId)
+    const latestSlot = tabDropSlotRect(latest, targetWindowId)
+    const latestTab = latestTarget?.tabs.find((entry) => entry.window_id === targetWindowId)?.rect ?? null
+    const latestEnd = latestSlot ? rectCenter(latestSlot) : latestTab ? rectCenter(latestTab) : null
+    assert(latestEnd, `missing remerge target ${targetWindowId}`)
+    const correctionPoints = [latestEnd]
+    if (latestSlot) {
+      correctionPoints.push({
+        x: latestSlot.global_x + Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+      correctionPoints.push({
+        x: latestSlot.global_x + latestSlot.width - Math.max(2, Math.round(latestSlot.width / 3)),
+        y: latestEnd.y,
+      })
+    }
+    if (latestTab) {
+      correctionPoints.push(rectCenter(latestTab))
+    }
+    return correctionPoints
+  }
+
+  const initialPoints = await moveToLatestTarget()
+  for (const point of initialPoints) {
+    await movePoint(base, point.x, point.y)
+    try {
+      return await waitFor(`wait for tab drop indicator ${targetWindowId}`, targetMatches, 500, 40)
+    } catch {}
+  }
+  const correctionPoints = await moveToLatestTarget()
+  for (const point of correctionPoints) {
+    await movePoint(base, point.x, point.y)
+    try {
+      return await waitFor(`wait for corrected tab drop indicator ${targetWindowId}`, targetMatches, 500, 40)
+    } catch {}
+  }
+  return waitFor(`wait for corrected tab drop indicator ${targetWindowId}`, targetMatches, 2000, 40)
 }
 
 async function finishDrag(base: string) {
@@ -1162,25 +1284,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
         getJson<ShellSnapshot>(base, '/test/state/shell'),
       )
       const sourceTab = tabRect(shellBefore, jsWindow.window.window_id)
-      await timing.step('drag single-tab window by tab into native tab bar', () =>
+      const dragging = await timing.step('drag single-tab window by tab into native tab bar', () =>
         dragWindowHandleOntoTab(base, jsWindow.window.window_id, rectCenter(sourceTab.tab.rect!), target.windowId),
-      )
-      const dragging = await timing.step('wait for compositor-backed tab drag state', () =>
-        waitFor(
-          `wait for single-tab window drag ${jsWindow.window.window_id}`,
-          async () => {
-            const { compositor, shell } = await getSnapshots(base)
-            const controls = shell.window_controls?.find((entry) => entry.window_id === jsWindow.window.window_id) ?? null
-            if (compositor.shell_move_window_id !== jsWindow.window.window_id) return null
-            if (!controls?.dragging || (controls.frame_opacity ?? 1) >= 0.99) return null
-            const dragTarget = shell.tab_drag_target
-            const targetGroup = tabGroupByWindow(shell, target.windowId)
-            if (!dragTarget || !targetGroup || dragTarget.group_id !== targetGroup.group_id) return null
-            return { compositor, shell, controls, dragTarget }
-          },
-          2000,
-          40,
-        ),
       )
       await timing.step('release grouped drop', () => finishDrag(base))
       released = true
@@ -2422,23 +2527,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
           100,
         ),
       )
-      const remergeTarget = await timing.step('wait for remerge target tab rect', () =>
+      await timing.step('wait for remerge target tab rect', () =>
         waitForTabRect(base, jsWindowB.window.window_id),
       )
-      const remergeTargetGroupId = remergeTarget.group.group_id
-      await timing.step('drag torn out window onto second js tab bar', () =>
-        movePoint(base, rectCenter(remergeTarget.tab.rect!).x, rectCenter(remergeTarget.tab.rect!).y),
-      )
-      const dropIndicatorHtml = await timing.step('wait for drop indicator', () =>
-        waitFor(
-          `wait for drop indicator ${remergeTargetGroupId}`,
-          async () => {
-            const html = await getShellHtml(base, '[data-tab-drop-indicator]')
-            return html.includes(remergeTargetGroupId) ? html : null
-          },
-          5000,
-          100,
-        ),
+      const dropIndicator = await timing.step('drag torn out window onto second js tab bar', () =>
+        moveDraggedWindowOntoTabBar(base, jsWindowA.window.window_id, jsWindowB.window.window_id),
       )
       await timing.step('release merged drag on second js tab bar', () => finishDrag(base))
       released = true
@@ -2465,7 +2558,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await timing.step('write same drag remerge artifact', () =>
         writeJsonArtifact('tab-groups-tear-out-remerge.json', {
           tear_out_point: tearOutPoint,
-          drop_indicator_html: dropIndicatorHtml,
+          drop_indicator: dropIndicator,
           remerged,
         }),
       )

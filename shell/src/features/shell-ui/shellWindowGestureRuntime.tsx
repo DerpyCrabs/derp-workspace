@@ -300,13 +300,24 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
 
   function readDragMeasure(windowId: number): ShellDragMeasureCache | null {
     const drag = shellWindowDrag?.windowId === windowId ? shellWindowDrag : null
-    if (drag?.measure) return drag.measure
     const main = options.getMainRef()
     const output = options.outputGeom()
     if (!main || !output) return null
     const origin = options.layoutCanvasOrigin()
     const stripEl = main.querySelector('[data-shell-snap-strip-trigger]') as HTMLElement | null
     const pickerEl = main.querySelector('[data-shell-snap-picker]') as HTMLElement | null
+    if (drag?.measure) {
+      drag.measure.main = main
+      drag.measure.output = output
+      drag.measure.origin = origin
+      drag.measure.mainRect = main.getBoundingClientRect()
+      drag.measure.screens = screensListForLayout(options.screenDraftRows(), output, origin)
+      drag.measure.stripRect = stripEl?.getBoundingClientRect() ?? null
+      drag.measure.pickerEl = pickerEl
+      drag.measure.pickerRect = pickerEl?.getBoundingClientRect() ?? null
+      drag.measure.contexts.clear()
+      return drag.measure
+    }
     const measure: ShellDragMeasureCache = {
       main,
       output,

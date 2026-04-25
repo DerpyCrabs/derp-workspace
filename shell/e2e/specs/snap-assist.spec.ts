@@ -16,6 +16,7 @@ import {
   createTimingMarks,
   defineGroup,
   discoverReadyBase,
+  dragBetweenPoints,
   ensureNativePair,
   getJson,
   getShellHtml,
@@ -241,10 +242,103 @@ async function waitForSnapStripTrigger(base: string) {
   return assertRectMinSize('snap strip trigger', shell.controls?.snap_strip_trigger, 12)
 }
 
+function nativeTitlebarDragPoint(shell: ShellSnapshot, windowId: number) {
+  const controls = windowControls(shell, windowId)
+  const titlebar = assertRectMinSize(`native titlebar ${windowId}`, controls?.titlebar, 80, 16)
+  const group = shell.tab_groups?.find((entry) => entry.member_window_ids.includes(windowId)) ?? null
+  const rightTabs = group?.tabs
+    .filter((tab) => !tab.split_left && !!tab.rect)
+    .map((tab) => tab.rect!)
+  const tabsRight = rightTabs && rightTabs.length > 0
+    ? Math.max(...rightTabs.map((rect) => rect.global_x + rect.width))
+    : titlebar.global_x + 20
+  const controlsLeft = controls?.minimize?.global_x ?? titlebar.global_x + titlebar.width
+  if (controlsLeft - tabsRight >= 24) {
+    const y = titlebar.global_y + Math.max(8, Math.min(titlebar.height - 8, Math.round(titlebar.height / 2)))
+    const minX = Math.round(tabsRight + 12)
+    const maxX = Math.round(controlsLeft - 20)
+    let x = maxX
+    const strip = shell.controls?.snap_strip_trigger
+    if (
+      strip &&
+      y >= strip.global_y &&
+      y <= strip.global_y + strip.height &&
+      x >= strip.global_x &&
+      x <= strip.global_x + strip.width
+    ) {
+      const leftCandidate = Math.round(Math.max(minX, strip.global_x - 12))
+      const rightCandidate = Math.round(Math.min(maxX, strip.global_x + strip.width + 12))
+      if (leftCandidate < strip.global_x) {
+        x = leftCandidate
+      } else if (rightCandidate > strip.global_x + strip.width) {
+        x = rightCandidate
+      }
+    }
+    return {
+      x,
+      y,
+    }
+  }
+  return {
+    x: Math.round(titlebar.global_x + Math.min(140, Math.max(40, titlebar.width * 0.35))),
+    y: Math.round(titlebar.global_y + titlebar.height / 2),
+  }
+}
+
+async function dragPointerToPoint(
+  base: string,
+  x: number,
+  y: number,
+  steps = 10,
+): Promise<void> {
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  assert(compositor.pointer, 'missing compositor pointer position')
+  const startX = compositor.pointer.x
+  const startY = compositor.pointer.y
+  const count = Math.max(1, steps)
+  for (let index = 1; index <= count; index += 1) {
+    const t = index / count
+    await movePoint(base, Math.round(startX + (x - startX) * t), Math.round(startY + (y - startY) * t))
+  }
+}
+
 async function openPickerWhileDragging(base: string, windowId: number): Promise<ShellSnapshot> {
-  const stripCenter = rectGlobalCenter(await waitForSnapStripTrigger(base))
-  await movePoint(base, stripCenter.x, stripCenter.y)
-  return waitForPickerOpen(base, windowId)
+  const strip = await waitForSnapStripTrigger(base)
+  const stripCenter = rectGlobalCenter(strip)
+  const inset = Math.max(12, Math.min(28, Math.round(strip.width / 5)))
+  const points = [
+    stripCenter,
+    {
+      x: Math.max(strip.global_x + inset, stripCenter.x - inset),
+      y: stripCenter.y,
+    },
+    {
+      x: Math.min(strip.global_x + strip.width - inset, stripCenter.x + inset),
+      y: stripCenter.y,
+    },
+    stripCenter,
+  ]
+  for (const point of points) {
+    await dragPointerToPoint(base, point.x, point.y, 6)
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (shell.snap_picker_open && shell.snap_picker_window_id === windowId && shell.controls?.snap_picker_root) {
+      return shell
+    }
+  }
+  try {
+    return await waitForPickerOpen(base, windowId)
+  } catch (error) {
+    const { compositor, shell } = await getSnapshots(base)
+    await writeJsonArtifact(`snap-assist-open-picker-debug-${windowId}.json`, {
+      error: error instanceof Error ? error.message : String(error),
+      windowId,
+      strip,
+      points,
+      compositor,
+      shell,
+    })
+    throw error
+  }
 }
 
 async function waitForPickerClosed(base: string, windowId: number): Promise<ShellSnapshot> {
@@ -295,6 +389,33 @@ async function hoverPickerCellWhileDragging(
     },
     4000,
     100,
+  )
+}
+
+async function dragToTopRightEdgePreview(
+  base: string,
+  output: { x: number; y: number; width: number; height: number },
+  label: string,
+): Promise<ShellSnapshot> {
+  const points = [
+    { x: output.x + output.width - 40, y: output.y + 32 },
+    { x: output.x + output.width - 8, y: output.y + 8 },
+    { x: output.x + output.width - 24, y: output.y + 8 },
+    { x: output.x + output.width - 8, y: output.y + 24 },
+  ]
+  for (const point of points) {
+    await movePoint(base, point.x, point.y)
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (shell.snap_preview_visible && shell.snap_preview_rect) return shell
+  }
+  return waitFor(
+    label,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
+    },
+    2000,
+    125,
   )
 }
 
@@ -422,7 +543,7 @@ async function placeNativeWindowForPickerTest(base: string, windowId: number): P
   assert(output, 'missing output for picker placement')
   const controls = windowControls(focused.shell, windowId)
   assert(controls?.titlebar, `missing native titlebar ${windowId}`)
-  const from = rectGlobalCenter(controls.titlebar)
+  const from = nativeTitlebarDragPoint(focused.shell, windowId)
   const to = {
     x: output.x + Math.round(output.width * 0.45),
     y: output.y + Math.min(260, Math.max(160, Math.round(output.height * 0.22))),
@@ -804,8 +925,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const focused = await focusNativeWindow(base, redId)
     const controls = windowControls(focused.shell, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
-    const titlebarCenter = rectGlobalCenter(controls.titlebar)
-    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
+    const titlebarPoint = nativeTitlebarDragPoint(focused.shell, redId)
+    await movePoint(base, titlebarPoint.x, titlebarPoint.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
@@ -827,10 +948,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const dragShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const controls = windowControls(dragShell, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
-    const titlebarCenter = rectGlobalCenter(controls.titlebar)
-    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
-    await pointerButton(base, 0x110, 'press')
+    const titlebarPoint = nativeTitlebarDragPoint(dragShell, redId)
+    await movePoint(base, titlebarPoint.x, titlebarPoint.y)
     await keyAction(base, SUPER_KEYCODE, 'press')
+    await pointerButton(base, 0x110, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       assert(pickerOpen.snap_picker_source === 'strip', 'expected strip drag to open the picker')
@@ -860,10 +981,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shellFocused = await timing.step('read shell snapshot', () => getJson<ShellSnapshot>(base, '/test/state/shell'))
     const controls = windowControls(shellFocused, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
-    const titlebarCenter = rectGlobalCenter(controls.titlebar)
-    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
-    await pointerButton(base, 0x110, 'press')
+    const titlebarPoint = nativeTitlebarDragPoint(shellFocused, redId)
+    await movePoint(base, titlebarPoint.x, titlebarPoint.y)
     await keyAction(base, SUPER_KEYCODE, 'press')
+    await pointerButton(base, 0x110, 'press')
     try {
       await timing.step('open drag picker', () => openPickerWhileDragging(base, redId))
       const { rect: firstCell } = await timing.step('reveal picker first cell', () =>
@@ -903,10 +1024,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const focused = await focusNativeWindow(base, redId)
     const controls = windowControls(focused.shell, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
-    const titlebarCenter = rectGlobalCenter(controls.titlebar)
-    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
-    await pointerButton(base, 0x110, 'press')
+    const titlebarPoint = nativeTitlebarDragPoint(focused.shell, redId)
+    await movePoint(base, titlebarPoint.x, titlebarPoint.y)
     await keyAction(base, SUPER_KEYCODE, 'press')
+    await pointerButton(base, 0x110, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       await waitForPickerAboveWindow(base, pickerOpen, redId)
@@ -965,10 +1086,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const focused = await focusNativeWindow(base, redId)
     const controls = windowControls(focused.shell, redId)
     assert(controls?.titlebar, 'missing red titlebar rect')
-    const titlebarCenter = rectGlobalCenter(controls.titlebar)
-    await movePoint(base, titlebarCenter.x, titlebarCenter.y)
-    await pointerButton(base, 0x110, 'press')
+    const titlebarPoint = nativeTitlebarDragPoint(focused.shell, redId)
+    await movePoint(base, titlebarPoint.x, titlebarPoint.y)
     await keyAction(base, SUPER_KEYCODE, 'press')
+    await pointerButton(base, 0x110, 'press')
     try {
       const pickerOpen = await openPickerWhileDragging(base, redId)
       assert(pickerOpen.snap_picker_open, 'expected drag picker to open')
@@ -1154,18 +1275,33 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(window2x2, 'missing settings compositor window after 2x2 snap')
     const output2x2 = compositor2x2.outputs.find((entry) => entry.name === window2x2.output_name) ?? null
     assert(output2x2, `missing output ${window2x2.output_name}`)
-    await movePoint(base, titlebar2x2Center.x, titlebar2x2Center.y)
+    await dragBetweenPoints(
+      base,
+      titlebar2x2Center.x,
+      titlebar2x2Center.y,
+      output2x2.x + Math.round(output2x2.width * 0.52),
+      output2x2.y + Math.max(140, Math.round(output2x2.height * 0.18)),
+      18,
+    )
+    const floated2x2 = await waitFor(
+      'wait for settings float reposition after 2x2 snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        const titlebar = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.titlebar
+        if (!window || !titlebar) return null
+        return titlebar.global_y >= output2x2.y + 48 ? { compositor, shell, window, titlebar } : null
+      },
+      2000,
+      125,
+    )
+    await movePoint(base, rectGlobalCenter(floated2x2.titlebar).x, rectGlobalCenter(floated2x2.titlebar).y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
-      await movePoint(base, output2x2.x + output2x2.width - 8, output2x2.y + 8)
-      const preview2x2 = await waitFor(
+      const preview2x2 = await dragToTopRightEdgePreview(
+        base,
+        output2x2,
         'wait for 2x2 top-right edge preview',
-        async () => {
-          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
-        },
-        2000,
-        125,
       )
       const work2x2 = monitorFrameRect(output2x2.name, compositor2x2, preview2x2)
       const halfWidth2x2 = Math.round(work2x2.width / 2)
@@ -1237,18 +1373,33 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(window3x2, 'missing settings compositor window after 3x2 snap')
     const output3x2 = compositor3x2.outputs.find((entry) => entry.name === window3x2.output_name) ?? null
     assert(output3x2, `missing output ${window3x2.output_name}`)
-    await movePoint(base, titlebar3x2Center.x, titlebar3x2Center.y)
+    await dragBetweenPoints(
+      base,
+      titlebar3x2Center.x,
+      titlebar3x2Center.y,
+      output3x2.x + Math.round(output3x2.width * 0.62),
+      output3x2.y + Math.max(140, Math.round(output3x2.height * 0.18)),
+      18,
+    )
+    const floated3x2 = await waitFor(
+      'wait for settings float reposition after 3x2 snap',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
+        const titlebar = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.titlebar
+        if (!window || !titlebar) return null
+        return titlebar.global_y >= output3x2.y + 48 ? { compositor, shell, window, titlebar } : null
+      },
+      2000,
+      125,
+    )
+    await movePoint(base, rectGlobalCenter(floated3x2.titlebar).x, rectGlobalCenter(floated3x2.titlebar).y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
-      await movePoint(base, output3x2.x + output3x2.width - 8, output3x2.y + 8)
-      const preview3x2 = await waitFor(
+      const preview3x2 = await dragToTopRightEdgePreview(
+        base,
+        output3x2,
         'wait for 3x2 top-right edge preview',
-        async () => {
-          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
-        },
-        2000,
-        125,
       )
       const work3x2 = monitorFrameRect(output3x2.name, compositor3x2, preview3x2)
       const twoThirdWidth3x2 = Math.round((work3x2.width * 2) / 3)

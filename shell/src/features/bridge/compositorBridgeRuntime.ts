@@ -245,7 +245,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     detail.type === 'output_layout' ||
     detail.type === 'keyboard_layout' ||
     detail.type === 'tray_hints' ||
-    detail.type === 'tray_sni'
+    detail.type === 'tray_sni' ||
+    detail.type === 'native_drag_preview'
 
   const hotWindowDetailCanBeStale = (detail: DerpShellDetail) =>
     detail.type === 'window_geometry' ||
@@ -494,7 +495,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     return false
   }
 
-  const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
+  const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
     let sawWindowList = false
@@ -515,7 +516,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         }
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
-      if (!sawInteractionState) options.setCompositorInteractionState(null)
+      if ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) {
+        options.setCompositorInteractionState(null)
+      }
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
@@ -932,7 +935,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       decoded.domainFlags
     if (decoded.details.length > 0) {
       const applyStart = performance.now()
-      applyCompositorSnapshot(decoded.details)
+      applyCompositorSnapshot(decoded.details, decoded.domainFlags)
       noteShellSnapshotApply(performance.now() - applyStart, decoded.details.length)
     }
     if (shellLatencySampleId !== 0) {

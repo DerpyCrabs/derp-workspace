@@ -1474,24 +1474,6 @@ function App() {
       </>
     )
   })
-  const windowInteractionCapture = createMemo(() => {
-    const state = compositorInteractionState()
-    if (!state) return null
-    const activeWindowId =
-      state.move_proxy_window_id ?? state.move_window_id ?? state.resize_window_id
-    if (activeWindowId === null) return null
-    const activeWindow = windows().get(activeWindowId)
-    if (!activeWindow || !windowIsShellHosted(activeWindow)) return null
-    return {
-      cursor:
-        state.resize_window_id !== null
-          ? 'cursor-default'
-          : state.move_window_id !== null || state.move_proxy_window_id !== null
-            ? 'cursor-grabbing'
-            : 'cursor-default',
-    }
-  })
-
   createEffect(() => {
     outputGeom()
     layoutCanvasOrigin()
@@ -1540,6 +1522,29 @@ function App() {
     shellWireSend,
     shellMoveLog,
     clearNativeDragPreview: () => setNativeDragPreview(null),
+  })
+
+  const windowInteractionCapture = createMemo(() => {
+    const state = compositorInteractionState()
+    const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
+    const activeWindowId =
+      state?.move_proxy_window_id ??
+      state?.move_window_id ??
+      state?.resize_window_id ??
+      localDragWindowId
+    if (activeWindowId === null) return null
+    const activeWindow = windows().get(activeWindowId)
+    if (!activeWindow || !windowIsShellHosted(activeWindow)) return null
+    return {
+      cursor:
+        state?.resize_window_id !== null
+          ? 'cursor-default'
+          : state?.move_window_id !== null ||
+              state?.move_proxy_window_id !== null ||
+              localDragWindowId !== null
+            ? 'cursor-grabbing'
+            : 'cursor-default',
+    }
   })
 
   const workspaceChrome = createWorkspaceChrome({
@@ -1649,6 +1654,9 @@ function App() {
     if (interactionActive && compositorPointer) {
       syncPointerSignalsFromClient(compositorPointer)
       if (compositorMoveWindowId !== null) {
+        if (localDragWindowId === null) {
+          shellWindowGestureRuntime.adoptShellWindowMove(compositorMoveWindowId, compositorPointer.x, compositorPointer.y)
+        }
         shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
       }
       if (compositorResizeWindowId !== null) {
