@@ -142,7 +142,6 @@ impl CompositorState {
         let dx = (pos.x - prev.x).round() as i32;
         let dy = (pos.y - prev.y).round() as i32;
         if dx != 0 || dy != 0 {
-            self.shell_begin_frame_note_shell_input();
             if self.shell_move_window_id.is_none() && !self.shell_ui_pointer_grab_active() {
                 if let Some((window_id, start)) = self.shell_backed_move_candidate {
                     let travel = ((pos.x - start.x).powi(2) + (pos.y - start.y).powi(2)).sqrt();
@@ -1038,9 +1037,6 @@ impl CompositorState {
                 let delta_x =
                     pointer_axis_to_cef_delta(horizontal_amount, horizontal_amount_discrete);
                 let delta_y = pointer_axis_to_cef_delta(vertical_amount, vertical_amount_discrete);
-                if delta_x != 0 || delta_y != 0 {
-                    self.shell_begin_frame_note_shell_input();
-                }
                 self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
 
                 let pointer = self.seat.get_pointer().unwrap();
