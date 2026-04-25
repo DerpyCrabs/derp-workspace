@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerCompositorBridgeRuntime } from './compositorBridgeRuntime'
 import type { CompositorApplyResult } from './compositorModel'
 import type { DerpShellDetail } from '@/host/appWindowState'
+import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 
 const DOMAIN_COUNT = 13
 const SNAPSHOT_DOMAIN_KEYBOARD = 1 << 3
@@ -134,9 +135,10 @@ afterEach(() => {
 
 describe('registerCompositorBridgeRuntime', () => {
   it('drops stale hot window details after a newer snapshot epoch', async () => {
+    let snapshotBuffer = emptySnapshot(10n)
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
-      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotRead: vi.fn(() => snapshotBuffer),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })
@@ -310,7 +312,83 @@ describe('registerCompositorBridgeRuntime', () => {
     dispose()
   })
 
-  it('forces a shell repaint after bulk window unmap', async () => {
+  it('requests compositor sync when a shell-hosted interaction ends', async () => {
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options({
+      allWindowsMap: () =>
+        new Map([
+          [7, {
+            window_id: 7,
+            surface_id: 70,
+            stack_z: 1,
+            x: 10,
+            y: 20,
+            width: 640,
+            height: 480,
+            title: 'Settings',
+            app_id: 'derp.settings',
+            output_id: '',
+            output_name: 'DP-4',
+            kind: 'settings',
+            x11_class: '',
+            x11_instance: '',
+            minimized: false,
+            maximized: false,
+            fullscreen: false,
+            shell_flags: SHELL_WINDOW_FLAG_SHELL_HOSTED,
+            capture_identifier: '',
+            workspace_visible: true,
+          }],
+        ]),
+    })
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'interaction_state',
+        revision: 12,
+        pointer_x: 42,
+        pointer_y: 64,
+        move_window_id: 7,
+        resize_window_id: 0,
+        move_proxy_window_id: 0,
+        move_capture_window_id: 0,
+        move_rect: {
+          x: 11,
+          y: 12,
+          width: 640,
+          height: 480,
+          maximized: false,
+          fullscreen: false,
+        },
+        resize_rect: null,
+      } satisfies DerpShellDetail,
+      {
+        type: 'interaction_state',
+        revision: 13,
+        pointer_x: 44,
+        pointer_y: 66,
+        move_window_id: 0,
+        resize_window_id: 0,
+        move_proxy_window_id: 0,
+        move_capture_window_id: 0,
+        move_rect: null,
+        resize_rect: null,
+      } satisfies DerpShellDetail,
+    ])
+
+    await Promise.resolve()
+    expect(runtimeOptions.requestCompositorSync).toHaveBeenCalledTimes(1)
+    dispose()
+  })
+
+  it('forces a shell repaint after window unmap', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
@@ -323,7 +401,6 @@ describe('registerCompositorBridgeRuntime', () => {
     await Promise.resolve()
     window.__DERP_APPLY_COMPOSITOR_BATCH?.([
       { type: 'window_unmapped', window_id: 7, snapshot_epoch: 12 } satisfies DerpShellDetail,
-      { type: 'window_unmapped', window_id: 8, snapshot_epoch: 12 } satisfies DerpShellDetail,
     ])
 
     expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)

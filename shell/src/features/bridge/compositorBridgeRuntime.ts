@@ -20,7 +20,7 @@ import {
   noteShellSnapshotDecode,
 } from '@/features/bridge/shellPerfCounters'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
-import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
+import { coerceShellWindowId, type DerpShellDetail, type DerpWindow, windowIsShellHosted } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
@@ -208,6 +208,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let lastSnapshotSequence = 0
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
   let lastInteractionRevision = -1
+  let lastKnownInteractionState: CompositorInteractionState = null
   let snapshotDomainRevisionScratch = new ArrayBuffer(0)
   let snapshotDomainRevisionView = new DataView(snapshotDomainRevisionScratch)
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
@@ -433,7 +434,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     if (revision < lastInteractionRevision) return
     lastInteractionRevision = revision
     const moveWindowId = coerceShellWindowId(d.move_window_id)
-    options.setCompositorInteractionState({
+    const nextInteractionState = {
       revision,
       pointer_x: d.pointer_x,
       pointer_y: d.pointer_y,
@@ -444,7 +445,25 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       window_switcher_selected_window_id: coerceShellWindowId(d.window_switcher_selected_window_id),
       move_rect: d.move_rect,
       resize_rect: d.resize_rect,
-    })
+    } satisfies NonNullable<CompositorInteractionState>
+    const previousActiveWindowId =
+      lastKnownInteractionState?.move_window_id ?? lastKnownInteractionState?.resize_window_id ?? null
+    const nextActiveWindowId = nextInteractionState.move_window_id ?? nextInteractionState.resize_window_id ?? null
+    options.setCompositorInteractionState(nextInteractionState)
+    lastKnownInteractionState = nextInteractionState
+    if (previousActiveWindowId !== null || nextActiveWindowId !== null) {
+      const previousActiveWindow = previousActiveWindowId !== null
+        ? options.allWindowsMap().get(previousActiveWindowId) ?? null
+        : null
+      if (
+        previousActiveWindowId !== null &&
+        nextActiveWindowId === null &&
+        previousActiveWindow &&
+        windowIsShellHosted(previousActiveWindow)
+      ) {
+        queueMicrotask(() => options.requestCompositorSync())
+      }
+    }
   }
 
   const applyNativeDragPreviewDetail = (d: Extract<DerpShellDetail, { type: 'native_drag_preview' }>) => {
@@ -516,9 +535,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
-    const needsPostApplyPaint = countWindowUnmapped(details) > 1
+    const needsPostApplyPaint = countWindowUnmapped(details) > 0
     let sawWindowList = false
     let sawInteractionState = false
+    let previousActiveWindowIdBeforeSnapshotClear: number | null = null
     batch(() => {
       options.applyModelCompositorSnapshot(details)
       for (const detail of details) {
@@ -532,10 +552,19 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
       if ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) {
+        previousActiveWindowIdBeforeSnapshotClear =
+          lastKnownInteractionState?.move_window_id ?? lastKnownInteractionState?.resize_window_id ?? null
+        lastKnownInteractionState = null
         options.setCompositorInteractionState(null)
       }
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
+    if (previousActiveWindowIdBeforeSnapshotClear !== null) {
+      const previousActiveWindow = options.allWindowsMap().get(previousActiveWindowIdBeforeSnapshotClear) ?? null
+      if (previousActiveWindow && windowIsShellHosted(previousActiveWindow)) {
+        queueMicrotask(() => options.requestCompositorSync())
+      }
+    }
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
     if (needsPostApplyPaint) {
       options.bumpSnapChrome()
@@ -854,7 +883,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
-    const needsPostApplyPaint = countWindowUnmapped(details) > 1
+    const needsPostApplyPaint = countWindowUnmapped(details) > 0
     batch(() => {
       const pendingModelDetails: DerpShellDetail[] = []
       let batchSnapshotResult: ReturnType<typeof syncCompositorSnapshot> | undefined

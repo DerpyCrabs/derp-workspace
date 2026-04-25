@@ -31,6 +31,7 @@ import {
   getShellHtml,
   getSnapshots,
   movePoint,
+  movePointRelative,
   openDebug,
   openSettings,
   outputForWindow,
@@ -415,6 +416,43 @@ function visibleWindowClickPoint(shell: ShellSnapshot, windowId: number): { x: n
   return visible
 }
 
+async function waitForNativeTitleContains(
+  base: string,
+  windowId: number,
+  expected: string,
+  label: string,
+) {
+  return waitFor(
+    label,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const window = compositorWindowById(compositor, windowId)
+      if (!window || !window.title.includes(expected)) return null
+      return { compositor, window }
+    },
+    5000,
+    100,
+  )
+}
+
+async function waitForNativeWindowGeometry(
+  base: string,
+  windowId: number,
+  label: string,
+) {
+  return waitFor(
+    label,
+    async () => {
+      const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      const window = compositorWindowById(compositor, windowId)
+      if (!window || window.width < 1 || window.height < 1) return null
+      return { compositor, window }
+    },
+    5000,
+    100,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('spawn native red and green windows', async ({ base, state }) => {
     const { red, green } = await ensureNativePair(base, state)
@@ -441,6 +479,139 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     await writeJsonArtifact('native-buffer-drop-pruned-compositor.json', gone.compositor)
     await writeJsonArtifact('native-buffer-drop-pruned-shell.json', gone.shell)
+  })
+
+  test('native game windows support relative pointer and pointer constraints', async ({ base, state }) => {
+    const lockedSpawn = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp Native Relative Lock',
+      token: 'native-relative-lock',
+      strip: 'blue',
+      width: 520,
+      height: 360,
+      pointerConstraint: 'lock',
+    })
+    state.spawnedNativeWindowIds.add(lockedSpawn.window.window_id)
+    const lockedId = lockedSpawn.window.window_id
+    const lockedWindowReady = await waitForNativeWindowGeometry(base, lockedId, 'wait for locked native window geometry')
+    const lockCenter = rectCenter({
+      x: lockedWindowReady.window.x,
+      y: lockedWindowReady.window.y,
+      width: lockedWindowReady.window.width,
+      height: lockedWindowReady.window.height,
+      global_x: lockedWindowReady.window.x,
+      global_y: lockedWindowReady.window.y,
+    })
+    await movePoint(base, lockCenter.x, lockCenter.y)
+    const lockedActive = await waitForNativeTitleContains(base, lockedId, 'lock=1', 'wait for native pointer lock')
+    assert(lockedActive.compositor.pointer, 'missing locked pointer snapshot')
+    const lockedPointerBefore = { ...lockedActive.compositor.pointer }
+    await movePointRelative(base, 140, 80)
+    const lockedRelative = await waitForNativeTitleContains(
+      base,
+      lockedId,
+      'last=140,80',
+      'wait for native relative pointer delta',
+    )
+    assert(lockedRelative.compositor.pointer, 'missing locked relative pointer snapshot')
+    assert(
+      Math.abs(lockedRelative.compositor.pointer.x - lockedPointerBefore.x) < 0.01 &&
+        Math.abs(lockedRelative.compositor.pointer.y - lockedPointerBefore.y) < 0.01,
+      `locked pointer should stay in place, got ${lockedRelative.compositor.pointer.x},${lockedRelative.compositor.pointer.y} from ${lockedPointerBefore.x},${lockedPointerBefore.y}`,
+    )
+    assert(lockedRelative.compositor.focused_window_id === lockedId, `expected locked focus ${lockedId}`)
+    await closeWindow(base, lockedId)
+    await waitForWindowGone(base, lockedId, 5000)
+
+    const confinedSpawn = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp Native Relative Confine',
+      token: 'native-relative-confine',
+      strip: 'cyan',
+      width: 520,
+      height: 360,
+      pointerConstraint: 'confine',
+    })
+    state.spawnedNativeWindowIds.add(confinedSpawn.window.window_id)
+    const confinedId = confinedSpawn.window.window_id
+    const confinedWindowReady = await waitForNativeWindowGeometry(
+      base,
+      confinedId,
+      'wait for confined native window geometry',
+    )
+    const confinedCenter = rectCenter({
+      x: confinedWindowReady.window.x,
+      y: confinedWindowReady.window.y,
+      width: confinedWindowReady.window.width,
+      height: confinedWindowReady.window.height,
+      global_x: confinedWindowReady.window.x,
+      global_y: confinedWindowReady.window.y,
+    })
+    await movePoint(base, confinedCenter.x, confinedCenter.y)
+    const confinedActive = await waitForNativeTitleContains(
+      base,
+      confinedId,
+      'confine=1',
+      'wait for native pointer confine',
+    )
+    assert(confinedActive.compositor.pointer, 'missing confined pointer snapshot')
+    const confinedPointerBefore = { ...confinedActive.compositor.pointer }
+    await movePointRelative(base, 40, 0)
+    const confinedRelative = await waitForNativeTitleContains(
+      base,
+      confinedId,
+      'last=40,0',
+      'wait for confined relative pointer delta',
+    )
+    assert(confinedRelative.compositor.pointer, 'missing confined relative pointer snapshot')
+    assert(
+      confinedRelative.compositor.pointer.x > confinedPointerBefore.x + 10,
+      `confined relative motion should move pointer inside window, got ${confinedRelative.compositor.pointer.x} from ${confinedPointerBefore.x}`,
+    )
+    const confinedWindow = compositorWindowById(confinedRelative.compositor, confinedId)
+    assert(confinedWindow, 'missing confined native window')
+    const confinedPointerAfterRelative = { ...confinedRelative.compositor.pointer }
+    await movePoint(base, confinedWindow.x + confinedWindow.width + 120, confinedCenter.y)
+    const confinedBlocked = await waitFor(
+      'wait for confined pointer block',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, confinedId)
+        if (!window || !compositor.pointer) return null
+        const inside =
+          compositor.pointer.x >= window.x &&
+          compositor.pointer.x < window.x + window.width &&
+          compositor.pointer.y >= window.y &&
+          compositor.pointer.y < window.y + window.height
+        if (!inside) return null
+        return { compositor, window }
+      },
+      5000,
+      100,
+    )
+    assert(confinedBlocked.compositor.pointer, 'missing confined blocked pointer snapshot')
+    assert(
+      Math.abs(confinedBlocked.compositor.pointer.x - confinedPointerAfterRelative.x) < 0.01 &&
+        Math.abs(confinedBlocked.compositor.pointer.y - confinedPointerAfterRelative.y) < 0.01,
+      `confined pointer should stay inside the game window, got ${confinedBlocked.compositor.pointer.x},${confinedBlocked.compositor.pointer.y} from ${confinedPointerAfterRelative.x},${confinedPointerAfterRelative.y}`,
+    )
+    assert(confinedBlocked.compositor.focused_window_id === confinedId, `expected confined focus ${confinedId}`)
+    await writeJsonArtifact('native-game-pointer-support.json', {
+      lockedId,
+      lockedPointerBefore,
+      lockedRelative: {
+        title: lockedRelative.window.title,
+        pointer: lockedRelative.compositor.pointer,
+      },
+      confinedId,
+      confinedPointerBefore,
+      confinedRelative: {
+        title: confinedRelative.window.title,
+        pointer: confinedRelative.compositor.pointer,
+      },
+      confinedBlocked: {
+        title: confinedBlocked.window.title,
+        pointer: confinedBlocked.compositor.pointer,
+      },
+    })
   })
 
   test('native taskbar focus and tile left/right', async ({ base, state }) => {

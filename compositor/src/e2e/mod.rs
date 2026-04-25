@@ -300,6 +300,20 @@ impl CompositorState {
         Ok(())
     }
 
+    pub(crate) fn e2e_pointer_move_relative(&mut self, dx: f64, dy: f64) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        self.sync_shell_shared_state_for_input();
+        self.pointer_motion_relative(
+            Point::<f64, Logical>::from((dx, dy)),
+            Point::<f64, Logical>::from((dx, dy)),
+            (self.e2e_now_ms() * 1000) as u64,
+            self.e2e_now_ms() as u32,
+        );
+        Ok(())
+    }
+
     pub(crate) fn e2e_pointer_button(&mut self, button: u32, pressed: bool) -> Result<(), String> {
         if self.workspace_logical_bounds().is_none() {
             return Err("no workspace bounds available".to_string());

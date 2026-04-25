@@ -13,11 +13,15 @@ use smithay::{
     },
     input::{
         keyboard::{keysyms, FilterResult},
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     },
-    reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
+    reexports::{
+        calloop::LoopHandle,
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat,
+    wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint},
 };
 
 use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
@@ -105,6 +109,115 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
 }
 
 impl CompositorState {
+    fn active_pointer_constraint(
+        &self,
+        pointer: &smithay::input::pointer::PointerHandle<Self>,
+    ) -> Option<(
+        WlSurface,
+        Point<f64, Logical>,
+        bool,
+        Option<smithay::wayland::compositor::RegionAttributes>,
+    )> {
+        self.surface_under(pointer.current_location())
+            .map(|(surface, _)| self.pointer_constraint_root_surface(&surface))
+            .or_else(|| {
+                pointer
+                    .current_focus()
+                    .map(|surface| self.pointer_constraint_root_surface(&surface))
+            })
+            .and_then(|surface| {
+                let surface_loc = self.pointer_constraint_surface_origin(&surface)?;
+                let mut state = None;
+                with_pointer_constraint(&surface, pointer, |constraint| {
+                    if let Some(constraint) = constraint {
+                        if constraint.is_active() {
+                            let locked = matches!(&*constraint, PointerConstraint::Locked(_));
+                            state = Some((
+                                surface.clone(),
+                                surface_loc,
+                                locked,
+                                constraint.region().cloned(),
+                            ));
+                        }
+                    }
+                });
+                state
+            })
+    }
+
+    pub(crate) fn pointer_motion_relative(
+        &mut self,
+        delta: Point<f64, Logical>,
+        delta_unaccel: Point<f64, Logical>,
+        utime: u64,
+        time_msec: u32,
+    ) {
+        let Some(ws) = self.workspace_logical_bounds() else {
+            return;
+        };
+        let pointer = self.seat.get_pointer().unwrap();
+        let prev = pointer.current_location();
+        let under = if pointer.is_grabbed()
+            || self.shell_move_is_active()
+            || self.shell_resize_is_active()
+            || self.shell_ui_pointer_grab_active()
+        {
+            None
+        } else {
+            self.surface_under(prev)
+        };
+
+        pointer.relative_motion(
+            self,
+            under.clone(),
+            &RelativeMotionEvent {
+                delta,
+                delta_unaccel,
+                utime,
+            },
+        );
+
+        let constraint = self.active_pointer_constraint(&pointer);
+
+        if let Some((_surface, _surface_loc, true, _region)) = constraint {
+            pointer.frame(self);
+            return;
+        }
+
+        let mut pos = prev + delta;
+        let min_x = ws.loc.x as f64;
+        let min_y = ws.loc.y as f64;
+        let max_x = (min_x + ws.size.w.max(0) as f64 - 1.0e-4).max(min_x);
+        let max_y = (min_y + ws.size.h.max(0) as f64 - 1.0e-4).max(min_y);
+        pos.x = pos.x.clamp(min_x, max_x);
+        pos.y = pos.y.clamp(min_y, max_y);
+
+        if let Some((surface, surface_loc, false, region)) = constraint {
+            let point = (pos - surface_loc).to_i32_round();
+            if region.as_ref().is_some_and(|region| !region.contains(point)) {
+                pointer.frame(self);
+                return;
+            }
+            let next_under = self.surface_under(pos);
+            let same_surface = next_under
+                .as_ref()
+                .map(|(hit, _)| self.pointer_constraint_root_surface(hit))
+                .is_some_and(|root| root == surface);
+            if !same_surface {
+                pointer.frame(self);
+                return;
+            }
+        }
+
+        let output = self
+            .output_containing_global_point(pos)
+            .or_else(|| self.leftmost_output())
+            .unwrap();
+        let output_geo = self.space.output_geometry(&output).unwrap();
+        let local = pos - output_geo.loc.to_f64();
+        self.pointer_motion_output_local(output_geo, local, time_msec);
+    }
+
     /// Logical pointer position **within the output** (`output_geo` from [`crate::state::CompositorState::space`]).
     pub(crate) fn pointer_motion_output_local(
         &mut self,
@@ -113,7 +226,6 @@ impl CompositorState {
         time_msec: u32,
     ) {
         let pos = local + output_geo.loc.to_f64();
-        self.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
         let pointer = self.seat.get_pointer().unwrap();
         let prev = pointer.current_location();
         let serial = SERIAL_COUNTER.next_serial();
@@ -133,6 +245,29 @@ impl CompositorState {
             return;
         }
 
+        if let Some((surface, surface_loc, locked, region)) = self.active_pointer_constraint(&pointer)
+        {
+            if locked {
+                pointer.frame(self);
+                return;
+            }
+            let point = (pos - surface_loc).to_i32_round();
+            if region.as_ref().is_some_and(|region| !region.contains(point)) {
+                pointer.frame(self);
+                return;
+            }
+            let next_under = self.surface_under(pos);
+            let same_surface = next_under
+                .as_ref()
+                .map(|(hit, _)| self.pointer_constraint_root_surface(hit))
+                .is_some_and(|root| root == surface);
+            if !same_surface {
+                pointer.frame(self);
+                return;
+            }
+        }
+
+        self.shell_pointer_norm = self.shell_pointer_norm_from_global(pos);
         self.sync_shell_shared_state_for_input();
         let grabbed = pointer.is_grabbed();
 
@@ -170,6 +305,9 @@ impl CompositorState {
             },
         );
         pointer.frame(self);
+        if let Some((surface, _surface_loc)) = self.surface_under(pos) {
+            self.pointer_constraint_maybe_activate(&surface, &pointer, pos);
+        }
         if dx != 0 || dy != 0 {
             if self.shell_move_is_active() {
                 self.shell_move_delta(dx, dy);
@@ -779,9 +917,6 @@ impl CompositorState {
                 );
             }
             InputEvent::PointerMotion { event, .. } => {
-                let Some(ws) = self.workspace_logical_bounds() else {
-                    return;
-                };
                 let pointer = self.seat.get_pointer().unwrap();
                 let d = event.delta();
                 tracing::trace!(
@@ -793,30 +928,12 @@ impl CompositorState {
                     touch_window_px = self.touch_abs_is_window_pixels,
                     "PointerMotion (relative)"
                 );
-                let mut pos = pointer.current_location() + event.delta();
-                let min_x = ws.loc.x as f64;
-                let min_y = ws.loc.y as f64;
-                let max_x = (min_x + ws.size.w.max(0) as f64 - 1.0e-4).max(min_x);
-                let max_y = (min_y + ws.size.h.max(0) as f64 - 1.0e-4).max(min_y);
-                pos.x = pos.x.clamp(min_x, max_x);
-                pos.y = pos.y.clamp(min_y, max_y);
-                let output = self
-                    .output_containing_global_point(pos)
-                    .or_else(|| self.leftmost_output())
-                    .unwrap();
-                let output_geo = self.space.output_geometry(&output).unwrap();
-                let local = pos - output_geo.loc.to_f64();
-                tracing::trace!(
-                    target: "derp_input",
-                    clamped_x = pos.x,
-                    clamped_y = pos.y,
-                    local_x = local.x,
-                    local_y = local.y,
-                    out_w = output_geo.size.w,
-                    out_h = output_geo.size.h,
-                    "PointerMotion → logical"
+                self.pointer_motion_relative(
+                    d,
+                    event.delta_unaccel(),
+                    event.time(),
+                    Event::time_msec(&event),
                 );
-                self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(ws) = self.workspace_logical_bounds() else {

@@ -1,12 +1,19 @@
 use clap::Parser;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_registry, delegate_seat, delegate_shm,
+    delegate_compositor, delegate_output, delegate_pointer, delegate_pointer_constraints,
+    delegate_registry, delegate_relative_pointer, delegate_seat, delegate_shm,
     delegate_xdg_shell, delegate_xdg_window,
+    globals::ProvidesBoundGlobal,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
-    seat::{Capability, SeatHandler, SeatState},
+    seat::{
+        pointer::{PointerEvent, PointerHandler},
+        pointer_constraints::{PointerConstraintsHandler, PointerConstraintsState},
+        relative_pointer::{RelativeMotionEvent, RelativePointerHandler, RelativePointerState},
+        Capability, SeatHandler, SeatState,
+    },
     shell::{
         xdg::{
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
@@ -21,9 +28,55 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_surface},
+    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, QueueHandle,
 };
+use wayland_protocols::wp::{
+    pointer_constraints::zv1::client::{
+        zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
+    },
+    relative_pointer::zv1::client::zwp_relative_pointer_v1,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointerConstraintMode {
+    None,
+    Lock,
+    Confine,
+}
+
+impl PointerConstraintMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "none" => Ok(Self::None),
+            "lock" | "locked" => Ok(Self::Lock),
+            "confine" | "confined" => Ok(Self::Confine),
+            other => Err(format!("unsupported --pointer-constraint value: {other}")),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Lock => "lock",
+            Self::Confine => "confine",
+        }
+    }
+}
+
+enum PointerConstraintHandle {
+    Locked(zwp_locked_pointer_v1::ZwpLockedPointerV1),
+    Confined(zwp_confined_pointer_v1::ZwpConfinedPointerV1),
+}
+
+impl PointerConstraintHandle {
+    fn destroy(self) {
+        match self {
+            Self::Locked(handle) => handle.destroy(),
+            Self::Confined(handle) => handle.destroy(),
+        }
+    }
+}
 
 #[derive(Parser, Debug, Clone)]
 struct Args {
@@ -41,10 +94,14 @@ struct Args {
     height: u32,
     #[arg(long, default_value_t = false)]
     drop_buffer_after_draw: bool,
+    #[arg(long, default_value = "none")]
+    pointer_constraint: String,
 }
 
 fn main() {
     let args = Args::parse();
+    let pointer_constraint_mode = PointerConstraintMode::parse(&args.pointer_constraint)
+        .unwrap_or_else(|error| panic!("{error}"));
     let strip_color = parse_strip_color(&args.strip, &args.token)
         .unwrap_or_else(|error| panic!("invalid --strip value: {error}"));
     let conn = Connection::connect_to_env().expect("connect to wayland compositor");
@@ -57,6 +114,8 @@ fn main() {
     let output_state = OutputState::new(&globals, &qh);
     let registry_state = RegistryState::new(&globals);
     let seat_state = SeatState::new(&globals, &qh);
+    let relative_pointer_state = RelativePointerState::bind(&globals, &qh);
+    let pointer_constraint_state = PointerConstraintsState::bind(&globals, &qh);
 
     let surface = compositor_state.create_surface(&qh);
     let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
@@ -76,6 +135,8 @@ fn main() {
         _compositor_state: compositor_state,
         shm_state,
         _xdg_shell_state: xdg_shell_state,
+        relative_pointer_state,
+        pointer_constraint_state,
         pool,
         window,
         buffer: None,
@@ -84,11 +145,20 @@ fn main() {
         configured: false,
         needs_redraw: false,
         exit: false,
+        base_title: args.title,
         token: args.token,
         strip_color,
         drop_buffer_after_draw: args.drop_buffer_after_draw,
         buffer_dropped: false,
         pending_presentation_loops: 0,
+        pointer_constraint_mode,
+        pointer: None,
+        relative_pointer: None,
+        pointer_constraint: None,
+        constraint_locked: false,
+        constraint_confined: false,
+        last_relative: (0.0, 0.0),
+        total_relative: (0.0, 0.0),
     };
 
     while !state.exit {
@@ -105,6 +175,8 @@ struct TestClient {
     _compositor_state: CompositorState,
     shm_state: Shm,
     _xdg_shell_state: XdgShell,
+    relative_pointer_state: RelativePointerState,
+    pointer_constraint_state: PointerConstraintsState,
     pool: SlotPool,
     window: Window,
     buffer: Option<Buffer>,
@@ -113,11 +185,20 @@ struct TestClient {
     configured: bool,
     needs_redraw: bool,
     exit: bool,
+    base_title: String,
     token: String,
     strip_color: [u8; 4],
     drop_buffer_after_draw: bool,
     buffer_dropped: bool,
     pending_presentation_loops: u32,
+    pointer_constraint_mode: PointerConstraintMode,
+    pointer: Option<wl_pointer::WlPointer>,
+    relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
+    pointer_constraint: Option<PointerConstraintHandle>,
+    constraint_locked: bool,
+    constraint_confined: bool,
+    last_relative: (f64, f64),
+    total_relative: (f64, f64),
 }
 
 impl TestClient {
@@ -194,6 +275,64 @@ impl TestClient {
         self.window.wl_surface().commit();
         self.buffer = None;
         self.buffer_dropped = true;
+    }
+
+    fn ensure_game_pointer_state(&mut self, qh: &QueueHandle<Self>) {
+        if self.pointer_constraint_mode == PointerConstraintMode::None {
+            return;
+        }
+        if self.pointer_constraint.is_some() {
+            return;
+        }
+        let Some(pointer) = self.pointer.as_ref() else {
+            return;
+        };
+        if self.pointer_constraint_state.bound_global().is_err() {
+            return;
+        }
+        let surface = self.window.wl_surface();
+        self.pointer_constraint = match self.pointer_constraint_mode {
+            PointerConstraintMode::Lock => self
+                .pointer_constraint_state
+                .lock_pointer(
+                    surface,
+                    pointer,
+                    None,
+                    zwp_pointer_constraints_v1::Lifetime::Persistent,
+                    qh,
+                )
+                .ok()
+                .map(PointerConstraintHandle::Locked),
+            PointerConstraintMode::Confine => self
+                .pointer_constraint_state
+                .confine_pointer(
+                    surface,
+                    pointer,
+                    None,
+                    zwp_pointer_constraints_v1::Lifetime::Persistent,
+                    qh,
+                )
+                .ok()
+                .map(PointerConstraintHandle::Confined),
+            PointerConstraintMode::None => None,
+        };
+    }
+
+    fn update_status_title(&self) {
+        if self.pointer_constraint_mode == PointerConstraintMode::None {
+            return;
+        }
+        self.window.set_title(format!(
+            "{} | mode={} lock={} confine={} last={:.0},{:.0} total={:.0},{:.0}",
+            self.base_title,
+            self.pointer_constraint_mode.label(),
+            u8::from(self.constraint_locked),
+            u8::from(self.constraint_confined),
+            self.last_relative.0.round(),
+            self.last_relative.1.round(),
+            self.total_relative.0.round(),
+            self.total_relative.1.round(),
+        ));
     }
 }
 
@@ -493,6 +632,7 @@ impl WindowHandler for TestClient {
         if !(self.drop_buffer_after_draw && !self.buffer_dropped) {
             self.pending_presentation_loops = 0;
         }
+        self.ensure_game_pointer_state(qh);
         self.draw(conn, qh);
     }
 }
@@ -508,44 +648,139 @@ impl SeatHandler for TestClient {
         &mut self.seat_state
     }
 
-    fn new_seat(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: wayland_client::protocol::wl_seat::WlSeat,
-    ) {
-    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 
     fn new_capability(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _seat: wayland_client::protocol::wl_seat::WlSeat,
-        _capability: Capability,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
     ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            let pointer = self
+                .seat_state
+                .get_pointer(qh, &seat)
+                .expect("create pointer");
+            self.relative_pointer = self
+                .relative_pointer_state
+                .get_relative_pointer(&pointer, qh)
+                .ok();
+            self.pointer = Some(pointer);
+            self.ensure_game_pointer_state(qh);
+        }
     }
 
     fn remove_capability(
         &mut self,
         _conn: &Connection,
         _: &QueueHandle<Self>,
-        _: wayland_client::protocol::wl_seat::WlSeat,
-        _capability: Capability,
+        _: wl_seat::WlSeat,
+        capability: Capability,
     ) {
+        if capability == Capability::Pointer {
+            if let Some(constraint) = self.pointer_constraint.take() {
+                constraint.destroy();
+            }
+            if let Some(relative_pointer) = self.relative_pointer.take() {
+                relative_pointer.destroy();
+            }
+            if let Some(pointer) = self.pointer.take() {
+                pointer.release();
+            }
+            self.constraint_locked = false;
+            self.constraint_confined = false;
+        }
     }
 
-    fn remove_seat(
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for TestClient {
+    fn pointer_frame(
         &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: wayland_client::protocol::wl_seat::WlSeat,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        _events: &[PointerEvent],
     ) {
+    }
+}
+
+impl PointerConstraintsHandler for TestClient {
+    fn confined(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _confined_pointer: &zwp_confined_pointer_v1::ZwpConfinedPointerV1,
+        _surface: &wl_surface::WlSurface,
+        _pointer: &wl_pointer::WlPointer,
+    ) {
+        self.constraint_confined = true;
+        self.constraint_locked = false;
+        self.update_status_title();
+    }
+
+    fn unconfined(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _confined_pointer: &zwp_confined_pointer_v1::ZwpConfinedPointerV1,
+        _surface: &wl_surface::WlSurface,
+        _pointer: &wl_pointer::WlPointer,
+    ) {
+        self.constraint_confined = false;
+        self.update_status_title();
+    }
+
+    fn locked(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _locked_pointer: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+        _surface: &wl_surface::WlSurface,
+        _pointer: &wl_pointer::WlPointer,
+    ) {
+        self.constraint_locked = true;
+        self.constraint_confined = false;
+        self.update_status_title();
+    }
+
+    fn unlocked(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _locked_pointer: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+        _surface: &wl_surface::WlSurface,
+        _pointer: &wl_pointer::WlPointer,
+    ) {
+        self.constraint_locked = false;
+        self.update_status_title();
+    }
+}
+
+impl RelativePointerHandler for TestClient {
+    fn relative_pointer_motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _relative_pointer: &zwp_relative_pointer_v1::ZwpRelativePointerV1,
+        _pointer: &wl_pointer::WlPointer,
+        event: RelativeMotionEvent,
+    ) {
+        self.last_relative = event.delta;
+        self.total_relative.0 += event.delta.0;
+        self.total_relative.1 += event.delta.1;
+        self.update_status_title();
     }
 }
 
 delegate_compositor!(TestClient);
 delegate_output!(TestClient);
 delegate_shm!(TestClient);
+delegate_pointer!(TestClient);
+delegate_pointer_constraints!(TestClient);
+delegate_relative_pointer!(TestClient);
 delegate_xdg_shell!(TestClient);
 delegate_xdg_window!(TestClient);
 delegate_seat!(TestClient);

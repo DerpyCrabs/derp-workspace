@@ -1188,6 +1188,8 @@ impl CompositorState {
         let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&dh);
         let idle_inhibit_manager_state = IdleInhibitManagerState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
+        smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
         let screencopy_manager_state =
             crate::render::capture::ScreencopyManagerState::new::<Self>(&dh);
         let ext_image_capture_manager_state =

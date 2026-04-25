@@ -1905,6 +1905,11 @@ export async function movePoint(base: string, x: number, y: number): Promise<voi
   await syncTest(base)
 }
 
+export async function movePointRelative(base: string, dx: number, dy: number): Promise<void> {
+  await postJson(base, '/test/input/pointer_move_relative', { dx, dy })
+  await syncTest(base)
+}
+
 export async function pointerWheel(base: string, deltaX: number, deltaY: number): Promise<void> {
   await postJson(base, '/test/input/pointer_wheel', { delta_x: deltaX, delta_y: deltaY })
   await syncTest(base)
@@ -2705,6 +2710,7 @@ export function buildNativeSpawnCommand({
   width = 480,
   height = 320,
   dropBufferAfterDraw = false,
+  pointerConstraint = 'none',
 }: {
   title: string
   appId?: string
@@ -2713,6 +2719,7 @@ export function buildNativeSpawnCommand({
   width?: number
   height?: number
   dropBufferAfterDraw?: boolean
+  pointerConstraint?: 'none' | 'lock' | 'confine'
 }): string {
   const parts = [
     nativeBin(),
@@ -2728,6 +2735,8 @@ export function buildNativeSpawnCommand({
     String(width),
     '--height',
     String(height),
+    '--pointer-constraint',
+    shellQuote(pointerConstraint),
   ]
   if (dropBufferAfterDraw) parts.push('--drop-buffer-after-draw')
   return parts.join(' ')
@@ -2748,9 +2757,28 @@ export async function spawnNativeWindow(
     width,
     height,
     dropBufferAfterDraw,
-  }: { title: string; appId?: string; token: string; strip: string; width?: number; height?: number; dropBufferAfterDraw?: boolean },
+    pointerConstraint,
+  }: {
+    title: string
+    appId?: string
+    token: string
+    strip: string
+    width?: number
+    height?: number
+    dropBufferAfterDraw?: boolean
+    pointerConstraint?: 'none' | 'lock' | 'confine'
+  },
 ): Promise<NativeSpawnResult> {
-  const command = buildNativeSpawnCommand({ title, appId, token, strip, width, height, dropBufferAfterDraw })
+  const command = buildNativeSpawnCommand({
+    title,
+    appId,
+    token,
+    strip,
+    width,
+    height,
+    dropBufferAfterDraw,
+    pointerConstraint,
+  })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })
 }

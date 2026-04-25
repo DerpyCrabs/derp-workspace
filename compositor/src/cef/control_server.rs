@@ -1185,6 +1185,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/input/pointer_move_relative" {
+        uplink.test_pointer_move_relative(json_f64_field(&v, "dx")?, json_f64_field(&v, "dy")?)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/input/pointer_button" {
         let button = v
             .get("button")
