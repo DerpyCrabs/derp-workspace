@@ -75,6 +75,24 @@ impl PendingCompositorMessageQueue {
         self.ordered.insert(sequence, pending_message);
     }
 
+    fn push_urgent_input(&mut self, pending_message: PendingCompositorMessage) {
+        if matches!(
+            pending_message.msg,
+            shell_wire::DecodedCompositorToShellMessage::PointerMove { .. }
+        ) {
+            if let Some((&sequence, previous)) = self.ordered.last_key_value() {
+                if matches!(
+                    previous.msg,
+                    shell_wire::DecodedCompositorToShellMessage::PointerMove { .. }
+                ) {
+                    self.ordered.insert(sequence, pending_message);
+                    return;
+                }
+            }
+        }
+        self.push(pending_message);
+    }
+
     fn take_all(&mut self) -> Vec<PendingCompositorMessage> {
         self.dedup_sequences.clear();
         std::mem::take(&mut self.ordered).into_values().collect()
@@ -381,7 +399,7 @@ impl ShellToCefLink {
                 msg,
             };
             if pending_message_is_urgent_input(&pending.msg) {
-                guard.urgent.push(pending);
+                guard.urgent.push_urgent_input(pending);
             } else {
                 guard.messages.push(pending);
             }
@@ -541,5 +559,63 @@ mod tests {
             }),
             Some(PendingCompositorMessageDedupKey::WindowList)
         );
+    }
+
+    #[test]
+    fn urgent_queue_coalesces_adjacent_pointer_moves_without_crossing_buttons() {
+        let mut queue = PendingCompositorMessageQueue::default();
+        queue.push_urgent_input(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
+                x: 10,
+                y: 20,
+                modifiers: 1,
+            },
+        });
+        queue.push_urgent_input(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
+                x: 30,
+                y: 40,
+                modifiers: 2,
+            },
+        });
+        queue.push_urgent_input(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::PointerButton {
+                x: 30,
+                y: 40,
+                button: 0,
+                mouse_up: false,
+                titlebar_drag_window_id: 0,
+                modifiers: 2,
+            },
+        });
+        queue.push_urgent_input(PendingCompositorMessage {
+            snapshot_epoch: 0,
+            msg: shell_wire::DecodedCompositorToShellMessage::PointerMove {
+                x: 50,
+                y: 60,
+                modifiers: 0,
+            },
+        });
+
+        let drained = queue.take_all();
+        assert_eq!(drained.len(), 3);
+        assert!(matches!(
+            drained[0].msg,
+            shell_wire::DecodedCompositorToShellMessage::PointerMove { x: 30, y: 40, .. }
+        ));
+        assert!(matches!(
+            drained[1].msg,
+            shell_wire::DecodedCompositorToShellMessage::PointerButton {
+                mouse_up: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            drained[2].msg,
+            shell_wire::DecodedCompositorToShellMessage::PointerMove { x: 50, y: 60, .. }
+        ));
     }
 }
