@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use cef::{
@@ -16,6 +17,7 @@ const HOT_DETAIL_WINDOW_STATE: u8 = 2;
 const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
 const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
 const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
+static CEF_HOST_FOCUSED_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
     if snapshot_epoch > 0 {
@@ -291,6 +293,15 @@ fn flush_shell_updates(
     }
 }
 
+fn ensure_host_focus_for_input(host: &cef::BrowserHost) {
+    if CEF_HOST_FOCUSED_FOR_INPUT
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        host.set_focus(1);
+    }
+}
+
 pub fn apply_messages(
     messages: Vec<crate::cef::bridge::PendingCompositorMessage>,
     browser: &Mutex<Option<Browser>>,
@@ -321,7 +332,7 @@ fn apply_message(
     browser: Option<&Browser>,
     view_state: &Mutex<OsrViewState>,
     pending_details: &mut Vec<Value>,
-    snapshot_dirty: &mut bool,
+    _snapshot_dirty: &mut bool,
 ) {
     match msg {
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry {
@@ -562,6 +573,7 @@ fn apply_message(
             surface_id,
             window_id,
         } => {
+            CEF_HOST_FOCUSED_FOR_INPUT.store(false, Ordering::Relaxed);
             crate::cef::begin_frame_diag::note_shell_detail_focus_changed();
             pending_details.push(detail_with_snapshot_epoch(
                 json!({
@@ -585,14 +597,13 @@ fn apply_message(
             }));
         }
         shell_wire::DecodedCompositorToShellMessage::PointerMove { x, y, modifiers } => {
-            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-            host.set_focus(1);
+            ensure_host_focus_for_input(&host);
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
         }
@@ -604,14 +615,13 @@ fn apply_message(
             modifiers,
             ..
         } => {
-            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-            host.set_focus(1);
+            ensure_host_focus_for_input(&host);
             let ev = MouseEvent { x, y, modifiers };
             let ty = match button {
                 1 => MouseButtonType::MIDDLE,
@@ -628,14 +638,13 @@ fn apply_message(
             delta_y,
             modifiers,
         } => {
-            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
             let Some(host) = b.host() else {
                 return;
             };
-            host.set_focus(1);
+            ensure_host_focus_for_input(&host);
             let ev = MouseEvent { x, y, modifiers };
             host.send_mouse_move_event(Some(&ev), 0);
             host.send_mouse_wheel_event(Some(&ev), -delta_x, -delta_y);
@@ -648,7 +657,6 @@ fn apply_message(
             character,
             unmodified_character,
         } => {
-            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };
@@ -679,7 +687,6 @@ fn apply_message(
             x,
             y,
         } => {
-            flush_shell_updates(browser, pending_details, snapshot_dirty);
             let Some(b) = browser else {
                 return;
             };

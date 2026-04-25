@@ -16,6 +16,7 @@ use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
 
 struct PendingCompositorMessages {
     scheduled: bool,
+    urgent: PendingCompositorMessageQueue,
     messages: PendingCompositorMessageQueue,
     snapshot: PendingCompositorMessageQueue,
     snapshot_epoch: u64,
@@ -156,6 +157,17 @@ fn pending_message_dedup_key(
     }
 }
 
+fn pending_message_is_urgent_input(msg: &shell_wire::DecodedCompositorToShellMessage) -> bool {
+    matches!(
+        msg,
+        shell_wire::DecodedCompositorToShellMessage::PointerMove { .. }
+            | shell_wire::DecodedCompositorToShellMessage::PointerButton { .. }
+            | shell_wire::DecodedCompositorToShellMessage::PointerAxis { .. }
+            | shell_wire::DecodedCompositorToShellMessage::Key { .. }
+            | shell_wire::DecodedCompositorToShellMessage::Touch { .. }
+    )
+}
+
 fn post_external_begin_frame_task(
     browser_holder: Arc<Mutex<Option<Browser>>>,
     pending_begin_frame: Arc<AtomicBool>,
@@ -192,22 +204,26 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            let (messages, snapshot_messages, snapshot_epoch) = {
+            let (urgent_messages, messages, snapshot_messages, snapshot_epoch) = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() && guard.snapshot.is_empty() {
+                if guard.urgent.is_empty() && guard.messages.is_empty() && guard.snapshot.is_empty() {
                     guard.scheduled = false;
                     self.pending_work.store(false, Ordering::Relaxed);
                     return;
                 }
                 guard.scheduled = false;
                 (
+                    guard.urgent.take_all(),
                     guard.messages.take_all(),
                     guard.snapshot.take_all(),
                     std::mem::take(&mut guard.snapshot_epoch),
                 )
             };
+            if !urgent_messages.is_empty() {
+                compositor_downlink::apply_messages(urgent_messages, &self.browser_holder, &self.view_state);
+            }
             if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
@@ -228,7 +244,7 @@ wrap_task! {
                 let Ok(mut guard) = self.pending_messages.lock() else {
                     return;
                 };
-                if guard.messages.is_empty() && guard.snapshot.is_empty() {
+                if guard.urgent.is_empty() && guard.messages.is_empty() && guard.snapshot.is_empty() {
                     self.pending_work.store(false, Ordering::Relaxed);
                     false
                 } else if guard.scheduled {
@@ -311,6 +327,7 @@ impl ShellToCefLink {
             view_state,
             pending_messages: Arc::new(Mutex::new(PendingCompositorMessages {
                 scheduled: false,
+                urgent: PendingCompositorMessageQueue::default(),
                 messages: PendingCompositorMessageQueue::default(),
                 snapshot: PendingCompositorMessageQueue::default(),
                 snapshot_epoch: 0,
@@ -359,10 +376,15 @@ impl ShellToCefLink {
             if let Some(snapshot_epoch) = snapshot_epoch {
                 guard.snapshot_epoch = guard.snapshot_epoch.max(snapshot_epoch);
             }
-            guard.messages.push(PendingCompositorMessage {
+            let pending = PendingCompositorMessage {
                 snapshot_epoch: msg_epoch.unwrap_or_default(),
                 msg,
-            });
+            };
+            if pending_message_is_urgent_input(&pending.msg) {
+                guard.urgent.push(pending);
+            } else {
+                guard.messages.push(pending);
+            }
             self.pending_work.store(true, Ordering::Relaxed);
             if guard.scheduled {
                 false
