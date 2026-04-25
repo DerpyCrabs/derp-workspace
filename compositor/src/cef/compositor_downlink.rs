@@ -17,6 +17,7 @@ const HOT_DETAIL_WINDOW_STATE: u8 = 2;
 const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
 const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
 const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
+const HOT_DETAIL_INTERACTION_STATE: u8 = 6;
 static CEF_HOST_FOCUSED_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
@@ -62,6 +63,46 @@ fn push_string(bytes: &mut Vec<u8>, value: &str) -> bool {
     };
     push_u32(bytes, length);
     bytes.extend_from_slice(value.as_bytes());
+    true
+}
+
+fn push_hot_visual(bytes: &mut Vec<u8>, detail: &Value, key: &str) -> bool {
+    let Some(visual) = detail.get(key) else {
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_u32(bytes, 0);
+        return true;
+    };
+    if visual.is_null() {
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_i32(bytes, 0);
+        push_u32(bytes, 0);
+        return true;
+    }
+    let (Some(x), Some(y), Some(width), Some(height)) = (
+        value_i32(visual, "x"),
+        value_i32(visual, "y"),
+        value_i32(visual, "width"),
+        value_i32(visual, "height"),
+    ) else {
+        return false;
+    };
+    push_i32(bytes, x);
+    push_i32(bytes, y);
+    push_i32(bytes, width);
+    push_i32(bytes, height);
+    let mut flags = 0u32;
+    if value_bool(visual, "maximized").unwrap_or(false) {
+        flags |= 1;
+    }
+    if value_bool(visual, "fullscreen").unwrap_or(false) {
+        flags |= 2;
+    }
+    push_u32(bytes, flags);
     true
 }
 
@@ -179,12 +220,47 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             }
             true
         }
+        "interaction_state" => {
+            bytes.push(HOT_DETAIL_INTERACTION_STATE);
+            push_u64(bytes, snapshot_epoch);
+            let (Some(pointer_x), Some(pointer_y)) = (
+                value_i32(detail, "pointer_x"),
+                value_i32(detail, "pointer_y"),
+            ) else {
+                return false;
+            };
+            push_u64(
+                bytes,
+                detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
+            );
+            push_i32(bytes, pointer_x);
+            push_i32(bytes, pointer_y);
+            push_u32(bytes, value_u32(detail, "move_window_id").unwrap_or(0));
+            push_u32(bytes, value_u32(detail, "resize_window_id").unwrap_or(0));
+            push_u32(
+                bytes,
+                value_u32(detail, "move_proxy_window_id").unwrap_or(0),
+            );
+            push_u32(
+                bytes,
+                value_u32(detail, "move_capture_window_id").unwrap_or(0),
+            );
+            push_hot_visual(bytes, detail, "move_rect")
+                && push_hot_visual(bytes, detail, "resize_rect")
+        }
         _ => false,
     }
 }
 
 fn encode_hot_detail_batch(details: &[Value]) -> Option<Vec<u8>> {
     let count = u32::try_from(details.len()).ok()?;
+    if details.len() > 1
+        && details
+            .iter()
+            .any(|detail| value_string(detail, "type") == Some("interaction_state"))
+    {
+        return None;
+    }
     let mut bytes = Vec::with_capacity(8 + details.len().saturating_mul(48));
     bytes.extend_from_slice(HOT_BATCH_MAGIC);
     push_u32(&mut bytes, count);

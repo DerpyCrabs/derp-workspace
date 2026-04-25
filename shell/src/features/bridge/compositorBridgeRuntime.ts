@@ -33,6 +33,7 @@ type CompositorFollowup = {
 }
 
 type CompositorInteractionState = {
+  revision: number
   pointer_x: number
   pointer_y: number
   move_window_id: number | null
@@ -205,6 +206,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
+  let lastInteractionRevision = -1
   let snapshotDomainRevisionScratch = new ArrayBuffer(0)
   let snapshotDomainRevisionView = new DataView(snapshotDomainRevisionScratch)
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
@@ -418,8 +420,12 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const applyInteractionStateDetail = (d: Extract<DerpShellDetail, { type: 'interaction_state' }>) => {
+    const revision = typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0
+    if (revision < lastInteractionRevision) return
+    lastInteractionRevision = revision
     const moveWindowId = coerceShellWindowId(d.move_window_id)
     options.setCompositorInteractionState({
+      revision,
       pointer_x: d.pointer_x,
       pointer_y: d.pointer_y,
       move_window_id: moveWindowId,

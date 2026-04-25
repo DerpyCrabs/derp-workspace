@@ -222,6 +222,7 @@ describe('registerCompositorBridgeRuntime', () => {
     ])
 
     expect(runtimeOptions.setCompositorInteractionState).toHaveBeenCalledWith({
+      revision: 0,
       pointer_x: 42,
       pointer_y: 64,
       move_window_id: 7,
@@ -285,6 +286,7 @@ describe('registerCompositorBridgeRuntime', () => {
     ])
 
     expect(runtimeOptions.setCompositorInteractionState).toHaveBeenNthCalledWith(1, {
+      revision: 0,
       pointer_x: 42,
       pointer_y: 64,
       move_window_id: 7,

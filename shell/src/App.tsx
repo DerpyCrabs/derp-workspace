@@ -312,6 +312,7 @@ function App() {
   const windows = compositorWindowsMap
   const windowsList = compositorWindowsList
   const [compositorInteractionState, setCompositorInteractionState] = createSignal<{
+    revision: number
     pointer_x: number
     pointer_y: number
     move_window_id: number | null

@@ -86,6 +86,19 @@ function readString(view: DataView, cursor: { offset: number }): string | null {
   return hotBatchTextDecoder.decode(bytes)
 }
 
+function decodeHotVisual(view: DataView, offset: number, windowId: number) {
+  if (windowId <= 0) return null
+  const flags = view.getUint32(offset + 16, true)
+  return {
+    x: view.getInt32(offset, true),
+    y: view.getInt32(offset + 4, true),
+    width: view.getInt32(offset + 8, true),
+    height: view.getInt32(offset + 12, true),
+    maximized: (flags & 1) !== 0,
+    fullscreen: (flags & 2) !== 0,
+  }
+}
+
 export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[] | null {
   const view = new DataView(buffer)
   if (view.byteLength < 8) return null
@@ -192,6 +205,33 @@ export function decodeCompositorHotBatch(buffer: ArrayBuffer): DerpShellDetail[]
         type: 'window_order',
         revision,
         windows,
+        ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
+      })
+      continue
+    }
+    if (tag === 6) {
+      if (cursor.offset + 72 > view.byteLength) return null
+      const revision = Number(view.getBigUint64(cursor.offset, true))
+      const pointer_x = view.getInt32(cursor.offset + 8, true)
+      const pointer_y = view.getInt32(cursor.offset + 12, true)
+      const moveWindowId = view.getUint32(cursor.offset + 16, true)
+      const resizeWindowId = view.getUint32(cursor.offset + 20, true)
+      const moveProxyWindowId = view.getUint32(cursor.offset + 24, true)
+      const moveCaptureWindowId = view.getUint32(cursor.offset + 28, true)
+      const move_rect = decodeHotVisual(view, cursor.offset + 32, moveWindowId)
+      const resize_rect = decodeHotVisual(view, cursor.offset + 52, resizeWindowId)
+      cursor.offset += 72
+      details.push({
+        type: 'interaction_state',
+        revision,
+        pointer_x,
+        pointer_y,
+        move_window_id: moveWindowId > 0 ? moveWindowId : null,
+        resize_window_id: resizeWindowId > 0 ? resizeWindowId : null,
+        move_proxy_window_id: moveProxyWindowId > 0 ? moveProxyWindowId : null,
+        move_capture_window_id: moveCaptureWindowId > 0 ? moveCaptureWindowId : null,
+        move_rect,
+        resize_rect,
         ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
       })
       continue

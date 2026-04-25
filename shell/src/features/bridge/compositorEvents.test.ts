@@ -15,11 +15,12 @@ describe('installCompositorBatchHandler', () => {
     const outputName = new TextEncoder().encode('DP-1')
     const geometryLength = 1 + 8 + 25 + 4 + outputId.length + 4 + outputName.length
     const orderLength = 1 + 8 + 8 + 4 + 2 * 8
-    const bytes = new ArrayBuffer(8 + geometryLength + orderLength)
+    const interactionLength = 1 + 8 + 72
+    const bytes = new ArrayBuffer(8 + geometryLength + orderLength + interactionLength)
     const view = new DataView(bytes)
     let offset = 0
     for (const value of [0x44, 0x48, 0x42, 0x31]) view.setUint8(offset++, value)
-    view.setUint32(offset, 2, true)
+    view.setUint32(offset, 3, true)
     offset += 4
     view.setUint8(offset++, 1)
     view.setBigUint64(offset, 7n, true)
@@ -51,6 +52,22 @@ describe('installCompositorBatchHandler', () => {
     view.setUint32(offset + 4, 2, true)
     view.setUint32(offset + 8, 43, true)
     view.setUint32(offset + 12, 1, true)
+    offset += 16
+    view.setUint8(offset++, 6)
+    view.setBigUint64(offset, 10n, true)
+    offset += 8
+    view.setBigUint64(offset, 11n, true)
+    view.setInt32(offset + 8, 120, true)
+    view.setInt32(offset + 12, 160, true)
+    view.setUint32(offset + 16, 42, true)
+    view.setUint32(offset + 20, 0, true)
+    view.setUint32(offset + 24, 43, true)
+    view.setUint32(offset + 28, 44, true)
+    view.setInt32(offset + 32, 100, true)
+    view.setInt32(offset + 36, 110, true)
+    view.setInt32(offset + 40, 300, true)
+    view.setInt32(offset + 44, 220, true)
+    view.setUint32(offset + 48, 3, true)
     return bytes
   }
 
@@ -117,6 +134,26 @@ describe('installCompositorBatchHandler', () => {
         ],
         snapshot_epoch: 8,
       },
+      {
+        type: 'interaction_state',
+        revision: 11,
+        pointer_x: 120,
+        pointer_y: 160,
+        move_window_id: 42,
+        resize_window_id: null,
+        move_proxy_window_id: 43,
+        move_capture_window_id: 44,
+        move_rect: {
+          x: 100,
+          y: 110,
+          width: 300,
+          height: 220,
+          maximized: true,
+          fullscreen: true,
+        },
+        resize_rect: null,
+        snapshot_epoch: 10,
+      },
     ])
   })
 
@@ -150,6 +187,26 @@ describe('installCompositorBatchHandler', () => {
           { window_id: 43, stack_z: 1 },
         ],
         snapshot_epoch: 8,
+      },
+      {
+        type: 'interaction_state',
+        revision: 11,
+        pointer_x: 120,
+        pointer_y: 160,
+        move_window_id: 42,
+        resize_window_id: null,
+        move_proxy_window_id: 43,
+        move_capture_window_id: 44,
+        move_rect: {
+          x: 100,
+          y: 110,
+          width: 300,
+          height: 220,
+          maximized: true,
+          fullscreen: true,
+        },
+        resize_rect: null,
+        snapshot_epoch: 10,
       },
     ])
 
