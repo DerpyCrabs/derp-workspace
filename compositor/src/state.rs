@@ -2498,6 +2498,48 @@ impl CompositorState {
             .collect()
     }
 
+    pub(crate) fn output_has_fullscreen_native_direct_path(&self, output: &Output) -> bool {
+        if self.shell_presentation_fullscreen
+            || self.shell_exclusion_overlay_open
+            || self.screenshot_request.is_some()
+            || self.screenshot_selection_active
+            || self.tile_preview_rect_global.is_some()
+            || self.shell_move_window_id.is_some()
+            || !self.shell_ui_windows.is_empty()
+            || !self.shell_exclusion_floating.is_empty()
+        {
+            return false;
+        }
+        let Some(output_geo) = self.space.output_geometry(output) else {
+            return false;
+        };
+        let Some(window_id) = self.ordered_window_ids_on_output(output).last().copied() else {
+            return false;
+        };
+        if self.window_registry.is_shell_hosted(window_id) {
+            return false;
+        }
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if !info.fullscreen
+            || info.minimized
+            || self.window_info_is_solid_shell_host(&info)
+            || self.workspace_window_render_alpha(window_id) < 0.999
+        {
+            return false;
+        }
+        let rect = Rectangle::new(
+            Point::from((info.x, info.y)),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        rect.contains(output_geo.loc)
+            && rect.contains(Point::from((
+                output_geo.loc.x.saturating_add(output_geo.size.w.saturating_sub(1)),
+                output_geo.loc.y.saturating_add(output_geo.size.h.saturating_sub(1)),
+            )))
+    }
+
     fn window_ids_strictly_above_in_stack<'a>(
         &self,
         ordered_window_ids: &'a [u32],

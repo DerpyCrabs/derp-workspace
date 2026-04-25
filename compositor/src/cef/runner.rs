@@ -540,6 +540,7 @@ wrap_render_handler! {
             if type_ != PaintElementType::VIEW || width <= 0 || height <= 0 {
                 return;
             }
+            crate::cef::begin_frame_diag::note_cef_software_paint();
             #[cfg(unix)]
             if SHELL_USE_ACCELERATED_FRAMES.load(Ordering::Relaxed) {
                 return;
@@ -547,6 +548,12 @@ wrap_render_handler! {
             if buffer.is_null() {
                 return;
             }
+            tracing::warn!(
+                target: "derp_shell_osr",
+                width,
+                height,
+                "cef: software OnPaint before accelerated dma-buf frame"
+            );
             let notify = {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;

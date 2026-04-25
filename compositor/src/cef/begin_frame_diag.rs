@@ -8,6 +8,10 @@ static COMPOSITOR_SCHEDULE_ACTIVE: AtomicU64 = AtomicU64::new(0);
 static COMPOSITOR_SCHEDULE_FORCED: AtomicU64 = AtomicU64::new(0);
 static CEF_UI_SEND: AtomicU64 = AtomicU64::new(0);
 static DRM_RENDER_TICK: AtomicU64 = AtomicU64::new(0);
+static DRM_RENDER_LATE_TIMER: AtomicU64 = AtomicU64::new(0);
+static DRM_FULLSCREEN_SHELL_BYPASS: AtomicU64 = AtomicU64::new(0);
+static CEF_ACCELERATED_PAINT: AtomicU64 = AtomicU64::new(0);
+static CEF_SOFTWARE_PAINT: AtomicU64 = AtomicU64::new(0);
 static SHELL_DETAIL_BATCH_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_DETAIL_MESSAGE_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHELL_DETAIL_WINDOW_LIST_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -129,6 +133,10 @@ struct BeginFrameSnapshot {
     compositor_schedules_forced: u64,
     cef_send_external_begin_frame: u64,
     drm_render_ticks: u64,
+    drm_render_late_timers: u64,
+    drm_fullscreen_shell_bypasses: u64,
+    cef_accelerated_paints: u64,
+    cef_software_paints: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -200,6 +208,14 @@ pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
 pub(crate) fn note_drm_render_tick() {
     DRM_RENDER_TICK.fetch_add(1, Ordering::Relaxed);
     maybe_log_shell_latency();
+}
+
+pub(crate) fn note_drm_render_late_timer() {
+    DRM_RENDER_LATE_TIMER.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn note_drm_fullscreen_shell_bypass() {
+    DRM_FULLSCREEN_SHELL_BYPASS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_detail_batch(message_count: usize) {
@@ -299,6 +315,7 @@ pub(crate) fn note_cef_accelerated_paint(
     dirty_rect_coverage_per_mille: u16,
     dirty_rect_bbox_full: bool,
 ) {
+    CEF_ACCELERATED_PAINT.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         latency.accelerated_paint_at = Some(Instant::now());
         latency.accelerated_paint_size = Some((width, height));
@@ -307,6 +324,10 @@ pub(crate) fn note_cef_accelerated_paint(
         latency.dirty_rect_coverage_per_mille = Some(dirty_rect_coverage_per_mille);
         latency.dirty_rect_bbox_full = Some(dirty_rect_bbox_full);
     }
+}
+
+pub(crate) fn note_cef_software_paint() {
+    CEF_SOFTWARE_PAINT.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn note_shell_dmabuf_rx(width: u32, height: u32) {
@@ -325,6 +346,10 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             compositor_schedules_forced: COMPOSITOR_SCHEDULE_FORCED.load(Ordering::Relaxed),
             cef_send_external_begin_frame: CEF_UI_SEND.load(Ordering::Relaxed),
             drm_render_ticks: DRM_RENDER_TICK.load(Ordering::Relaxed),
+            drm_render_late_timers: DRM_RENDER_LATE_TIMER.load(Ordering::Relaxed),
+            drm_fullscreen_shell_bypasses: DRM_FULLSCREEN_SHELL_BYPASS.load(Ordering::Relaxed),
+            cef_accelerated_paints: CEF_ACCELERATED_PAINT.load(Ordering::Relaxed),
+            cef_software_paints: CEF_SOFTWARE_PAINT.load(Ordering::Relaxed),
         },
         shell_updates: ShellUpdateSnapshot {
             batch_count: SHELL_DETAIL_BATCH_COUNT.load(Ordering::Relaxed),
@@ -375,6 +400,10 @@ pub(crate) fn reset_perf_counters() {
     COMPOSITOR_SCHEDULE_FORCED.store(0, Ordering::Relaxed);
     CEF_UI_SEND.store(0, Ordering::Relaxed);
     DRM_RENDER_TICK.store(0, Ordering::Relaxed);
+    DRM_RENDER_LATE_TIMER.store(0, Ordering::Relaxed);
+    DRM_FULLSCREEN_SHELL_BYPASS.store(0, Ordering::Relaxed);
+    CEF_ACCELERATED_PAINT.store(0, Ordering::Relaxed);
+    CEF_SOFTWARE_PAINT.store(0, Ordering::Relaxed);
     SHELL_DETAIL_BATCH_COUNT.store(0, Ordering::Relaxed);
     SHELL_DETAIL_MESSAGE_COUNT.store(0, Ordering::Relaxed);
     SHELL_DETAIL_WINDOW_LIST_COUNT.store(0, Ordering::Relaxed);

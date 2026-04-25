@@ -88,6 +88,7 @@ pub struct DrmHead {
     pub connector: connector::Handle,
     crtc: crtc::Handle,
     pending_frame_complete: bool,
+    last_vblank_at: Option<Instant>,
 }
 
 impl DrmHead {
@@ -96,6 +97,7 @@ impl DrmHead {
             warn!(?e, "drm frame_submitted");
         }
         self.pending_frame_complete = false;
+        self.last_vblank_at = Some(Instant::now());
     }
 
     fn render_one(
@@ -283,8 +285,14 @@ impl DrmHead {
                             )),
                         }
                     }
-                    if let Some(ref el) = shell_render.dmabuf {
-                        render_elements.push(DesktopStack::ShellDma(el));
+                    let bypass_shell = state.output_has_fullscreen_native_direct_path(output);
+                    if bypass_shell {
+                        crate::cef::begin_frame_diag::note_drm_fullscreen_shell_bypass();
+                    }
+                    if !bypass_shell {
+                        if let Some(ref el) = shell_render.dmabuf {
+                            render_elements.push(DesktopStack::ShellDma(el));
+                        }
                     }
                     let (backdrop, backdrop_force_full_damage) =
                         crate::render::backdrop_render::desktop_backdrop_layers(
@@ -415,9 +423,34 @@ pub struct DrmSession {
     output_formats: Vec<Format>,
     hotplug_retry_after: HashMap<connector::Handle, Instant>,
     drm_idle_render_armed: bool,
+    drm_late_render_armed: bool,
 }
 
 impl DrmSession {
+    fn frame_interval(&self) -> Duration {
+        self.heads
+            .iter()
+            .filter_map(|head| head.output.current_mode())
+            .filter_map(|mode| u64::try_from(mode.refresh.max(1)).ok())
+            .map(|refresh| Duration::from_nanos((1_000_000_000_000u64 / refresh).max(1)))
+            .min()
+            .unwrap_or(Duration::from_millis(16))
+    }
+
+    fn render_late_margin(&self) -> Duration {
+        let interval = self.frame_interval();
+        (interval / 4).clamp(Duration::from_millis(2), Duration::from_millis(5))
+    }
+
+    fn next_late_render_target(&self) -> Option<Instant> {
+        let interval = self.frame_interval();
+        let margin = self.render_late_margin();
+        self.heads
+            .iter()
+            .filter_map(|head| head.last_vblank_at.map(|at| at + interval - margin))
+            .min()
+    }
+
     fn shell_begin_min_when_active(&self) -> Duration {
         let refresh_milli_hz = self
             .heads
@@ -455,8 +488,25 @@ impl DrmSession {
     }
 
     fn schedule_drm_idle_render_coalesced(&mut self) {
-        if self.drm_idle_render_armed {
+        if self.drm_idle_render_armed || self.drm_late_render_armed {
             return;
+        }
+        if let Some(target) = self.next_late_render_target() {
+            let now = Instant::now();
+            if target > now {
+                self.drm_late_render_armed = true;
+                crate::cef::begin_frame_diag::note_drm_render_late_timer();
+                let h = self.loop_handle.clone();
+                let delay = target.duration_since(now);
+                let _ = h.insert_source(Timer::from_duration(delay), |_, _, d| {
+                    if let Some(drms) = d.drm.as_mut() {
+                        drms.drm_late_render_armed = false;
+                    }
+                    drm_idle_render(d);
+                    TimeoutAction::Drop
+                });
+                return;
+            }
         }
         self.drm_idle_render_armed = true;
         let h = self.loop_handle.clone();
@@ -658,6 +708,7 @@ impl DrmSession {
                 connector: conns[0],
                 crtc: crtc_h,
                 pending_frame_complete: false,
+                last_vblank_at: None,
             });
         }
 
@@ -758,6 +809,7 @@ fn drm_idle_render(data: &mut CalloopData) {
         return;
     };
     drms.drm_idle_render_armed = false;
+    drms.drm_late_render_armed = false;
     drms.render_tick(&mut data.state, &mut data.display_handle);
 }
 
@@ -1124,6 +1176,7 @@ pub fn init_drm(
             connector: conns[0],
             crtc: crtc_h,
             pending_frame_complete: false,
+            last_vblank_at: None,
         });
     }
 
@@ -1171,6 +1224,7 @@ pub fn init_drm(
         output_formats: format_vec,
         hotplug_retry_after: HashMap::new(),
         drm_idle_render_armed: false,
+        drm_late_render_armed: false,
     });
 
     let drm_monitor = udev::MonitorBuilder::new()

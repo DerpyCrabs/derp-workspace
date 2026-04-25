@@ -495,6 +495,10 @@ export interface PerfBeginFrameSnapshot {
   compositor_schedules_forced: number
   cef_send_external_begin_frame: number
   drm_render_ticks: number
+  drm_render_late_timers: number
+  drm_fullscreen_shell_bypasses: number
+  cef_accelerated_paints: number
+  cef_software_paints: number
 }
 
 export interface PerfShellUpdateSnapshot {
@@ -1317,6 +1321,15 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       cef_send_external_begin_frame:
         after.begin_frame.cef_send_external_begin_frame - before.begin_frame.cef_send_external_begin_frame,
       drm_render_ticks: after.begin_frame.drm_render_ticks - before.begin_frame.drm_render_ticks,
+      drm_render_late_timers:
+        after.begin_frame.drm_render_late_timers - before.begin_frame.drm_render_late_timers,
+      drm_fullscreen_shell_bypasses:
+        after.begin_frame.drm_fullscreen_shell_bypasses -
+        before.begin_frame.drm_fullscreen_shell_bypasses,
+      cef_accelerated_paints:
+        after.begin_frame.cef_accelerated_paints - before.begin_frame.cef_accelerated_paints,
+      cef_software_paints:
+        after.begin_frame.cef_software_paints - before.begin_frame.cef_software_paints,
     },
     shell_updates: {
       batch_count: after.shell_updates.batch_count - before.shell_updates.batch_count,

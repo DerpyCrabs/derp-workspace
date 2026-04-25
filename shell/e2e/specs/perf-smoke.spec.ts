@@ -186,6 +186,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       moveDelta.begin_frame.cef_send_external_begin_frame <= moveDelta.begin_frame.drm_render_ticks + 8,
       `window move begin frames regressed: expected <= drm ticks + 8, got begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drm=${moveDelta.begin_frame.drm_render_ticks}`,
     )
+    assert(
+      moveDelta.begin_frame.cef_software_paints === 0,
+      `CEF shell should stay on accelerated OSR during move, got software paints=${moveDelta.begin_frame.cef_software_paints}`,
+    )
 
     assert(
       moveDelta.shell_sync.full_window_list_replies <= 2,
@@ -345,6 +349,28 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const beforeScale = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
     await resetPerfCounters(base)
+    await runKeybind(base, 'toggle_fullscreen', red.window.window_id)
+    const fullscreenBypassSample = await waitFor(
+      'wait for fullscreen native shell bypass',
+      async () => {
+        const sample = await getPerfCounters(base)
+        if (sample.begin_frame.drm_fullscreen_shell_bypasses < 1) return null
+        return sample
+      },
+      5000,
+      100,
+    )
+    assert(
+      fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses >= 1,
+      `fullscreen native should bypass shell plane, got ${fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses}`,
+    )
+    assert(
+      fullscreenBypassSample.begin_frame.cef_software_paints === 0,
+      `fullscreen native bypass should not trigger CEF software paint, got ${fullscreenBypassSample.begin_frame.cef_software_paints}`,
+    )
+    await runKeybind(base, 'toggle_fullscreen', red.window.window_id)
+
+    await resetPerfCounters(base)
     const scaleWindows = []
     for (let index = 0; index < 20; index += 1) {
       const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
@@ -412,7 +438,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       }
     }
     printNote(
-      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes} long_decode_bytes=${longDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} stress_decode_bytes=${stressDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} long_dom_measures=${longDragSample.shell_runtime?.dom_measure_count ?? 'n/a'}`,
+      `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} late_timers=${moveDelta.begin_frame.drm_render_late_timers} fullscreen_bypass=${fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses} cef_sw=${moveDelta.begin_frame.cef_software_paints} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes} long_decode_bytes=${longDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} stress_decode_bytes=${stressDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} long_dom_measures=${longDragSample.shell_runtime?.dom_measure_count ?? 'n/a'}`,
     )
 
     await writeJsonArtifact('perf-smoke-counters.json', {
@@ -425,6 +451,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         move: moveDelta,
         long_move: longDragSample,
         stress_move: stressDragSample,
+        fullscreen_bypass: fullscreenBypassSample,
         programs_menu_churn: menuChurnSample,
         scale_open: scaleOpenSample,
         scale_monitor_move: scaleMonitorMoveSample,
