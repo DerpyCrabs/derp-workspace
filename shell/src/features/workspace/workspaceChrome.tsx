@@ -965,7 +965,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const frameModel = createMemo((): ShellWindowModel | undefined => {
       const window = visibleWindow()
       if (!window) return undefined
-      const liveFrame = options.interactionFrameForWindow(window.window_id)
+      const liveFrame = proxyHidden() ? null : options.interactionFrameForWindow(window.window_id)
       const split = splitLayout()
       if (!split && liveFrame) {
         return {
@@ -996,7 +996,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     })
     const showFrame = createMemo(() => {
       const model = frameModel()
-      return model !== undefined && frameVisible() && !detachedNativeAwaitingMove() && (!frameHidden() || keepShellContentMounted())
+      return model !== undefined && frameVisible() && !proxyHidden() && !detachedNativeAwaitingMove() && (!frameHidden() || keepShellContentMounted())
     })
     const stackZ = createMemo(() => {
       const currentVisibleWindowId = visibleWindowId()

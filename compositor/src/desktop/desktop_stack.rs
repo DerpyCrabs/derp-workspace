@@ -375,11 +375,7 @@ impl Element for ShellDmaElement {
                         .iter()
                         .filter_map(|r| r.intersection(full_rect))
                         .collect();
-                    if v.is_empty() {
-                        DamageSet::from_slice(&[full_rect])
-                    } else {
-                        v.into_iter().collect()
-                    }
+                    v.into_iter().collect()
                 }
             },
             Some(_) => DamageSet::from_slice(&[full_rect]),

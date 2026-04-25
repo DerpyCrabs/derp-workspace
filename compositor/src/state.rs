@@ -2867,7 +2867,7 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_begin_frame_interaction_active(&self, now: Instant) -> bool {
-        self.shell_move_is_active()
+        self.shell_move_needs_shell_begin_frame()
             || self.shell_resize_is_active()
             || self.shell_ui_pointer_grab_active()
             || self.screenshot_selection_active()
@@ -7609,6 +7609,19 @@ impl CompositorState {
 
     pub(crate) fn shell_move_is_active(&self) -> bool {
         self.shell_move_window_id.is_some()
+    }
+
+    fn shell_move_needs_shell_begin_frame(&self) -> bool {
+        let Some(window_id) = self.shell_move_window_id else {
+            return false;
+        };
+        if self.window_registry.is_shell_hosted(window_id) {
+            return true;
+        }
+        !self
+            .shell_move_proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.window_id == window_id && proxy.texture.is_some())
     }
 
     pub(crate) fn shell_move_end_active(&mut self) {

@@ -229,11 +229,7 @@ fn build_main_shell_dmabuf_element(
             output_scale,
             &state.shell_dmabuf_dirty_buffer,
         );
-        if mapped.is_empty() {
-            None
-        } else {
-            Some(mapped)
-        }
+        Some(mapped)
     };
 
     match crate::desktop::desktop_stack::shell_dmabuf_overlay_element(
