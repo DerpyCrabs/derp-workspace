@@ -186,6 +186,29 @@ fn pending_message_is_urgent_input(msg: &shell_wire::DecodedCompositorToShellMes
     )
 }
 
+fn pending_message_needs_fast_begin_frame(
+    msg: &shell_wire::DecodedCompositorToShellMessage,
+) -> bool {
+    matches!(
+        msg,
+        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
+            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
+            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
+            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
+            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
+            | shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
+    )
+}
+
 fn post_external_begin_frame_task(
     browser_holder: Arc<Mutex<Option<Browser>>>,
     pending_begin_frame: Arc<AtomicBool>,
@@ -242,6 +265,12 @@ wrap_task! {
             if !urgent_messages.is_empty() {
                 compositor_downlink::apply_messages(urgent_messages, &self.browser_holder, &self.view_state);
             }
+            let needs_fast_begin_frame = snapshot_messages
+                .iter()
+                .any(|pending| pending_message_needs_fast_begin_frame(&pending.msg))
+                || messages
+                    .iter()
+                    .any(|pending| pending_message_needs_fast_begin_frame(&pending.msg));
             if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
@@ -257,6 +286,14 @@ wrap_task! {
             }
             if !messages.is_empty() {
                 compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
+            }
+            if needs_fast_begin_frame {
+                post_external_begin_frame_task(
+                    self.browser_holder.clone(),
+                    self.pending_begin_frame.clone(),
+                    self.pending_begin_frame_reschedule.clone(),
+                    crate::cef::begin_frame_diag::CompositorScheduleKind::Active,
+                );
             }
             let should_repost = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
