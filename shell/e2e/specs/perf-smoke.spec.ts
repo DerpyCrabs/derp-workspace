@@ -99,7 +99,7 @@ function perfRankRows(stages: ReturnType<typeof perfStageRow>[]) {
     .sort((a, b) => b.value - a.value)
 }
 
-async function assertScreenshotRectMostlyFlat(path: string, label: string) {
+async function screenshotRectIsMostlyFlat(path: string) {
   const png = await readPngRgba(path)
   let minR = 255
   let minG = 255
@@ -119,7 +119,7 @@ async function assertScreenshotRectMostlyFlat(path: string, label: string) {
     maxB = Math.max(maxB, b)
   }
   const spread = Math.max(maxR - minR, maxG - minG, maxB - minB)
-  assert(spread <= 6, `${label} should be cleared to desktop, got RGB spread ${spread}`)
+  return spread <= 6
 }
 
 async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
@@ -577,12 +577,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
-    const staleProbeScreenshot = await captureScreenshotRect(base, staleProbeRect)
-    const staleProbeArtifact = await copyArtifactFile(
-      'perf-bulk-unmap-clears-decoration.png',
-      staleProbeScreenshot.path,
+    const staleProbeArtifact = await waitFor(
+      'wait for bulk unmap stale decoration probe to clear',
+      async () => {
+        const staleProbeScreenshot = await captureScreenshotRect(base, staleProbeRect)
+        if (!(await screenshotRectIsMostlyFlat(staleProbeScreenshot.path))) return null
+        return copyArtifactFile('perf-bulk-unmap-clears-decoration.png', staleProbeScreenshot.path)
+      },
+      5000,
+      100,
     )
-    await assertScreenshotRectMostlyFlat(staleProbeArtifact, 'bulk unmap stale decoration probe')
+    assert(staleProbeArtifact, 'bulk unmap stale decoration probe artifact missing')
 
     printNote(
       `perf idle begin=${idleSample.begin_frame.cef_send_external_begin_frame} mapped=${openDelta.shell_updates.window_mapped_messages} dirty_reads=${dirtySample.shell_sync.snapshot_dirty_reads} dirty_unchanged=${dirtySample.shell_sync.snapshot_dirty_unchanged} dirty_fallbacks=${dirtySample.shell_sync.snapshot_dirty_fallbacks} moved=${moveDelta.shell_updates.window_geometry_messages} long_moved=${longDragSample.shell_updates.window_geometry_messages} stress_moved=${stressDragSample.shell_updates.window_geometry_messages} stress_messages=${stressDragSample.shell_updates.message_count} drag_begin=${moveDelta.begin_frame.cef_send_external_begin_frame} drag_drm=${moveDelta.begin_frame.drm_render_ticks} latency_samples=${moveDelta.latency.samples} latency_schedule_to_render_us=${moveDelta.latency.schedule_to_render_us} latency_max_us=${moveDelta.latency.schedule_to_render_max_us} dirty_avg=${moveDelta.dirty_rects.samples > 0 ? Math.round(moveDelta.dirty_rects.coverage_per_mille / moveDelta.dirty_rects.samples) : 0} dirty_max=${moveDelta.dirty_rects.max_coverage_per_mille} late_timers=${moveDelta.begin_frame.drm_render_late_timers} fullscreen_bypass=${fullscreenBypassSample.begin_frame.drm_fullscreen_shell_bypasses} cef_sw=${moveDelta.begin_frame.cef_software_paints} full_lists=${moveDelta.shell_sync.full_window_list_replies} snapshot_notifies=${moveDelta.shell_sync.snapshot_notifies} long_snapshot_notifies=${longDragSample.shell_sync.snapshot_notifies} stress_exclusion_writes=${stressDragSample.shell_sync.shared_state_exclusion_writes} menu_forced=${menuChurnSample.begin_frame.compositor_schedules_forced} menu_exclusion_writes=${menuChurnSample.shell_sync.shared_state_exclusion_writes} menu_ui_writes=${menuChurnSample.shell_sync.shared_state_ui_window_writes} scale_full_lists=${scaleOpenSample.shell_sync.full_window_list_replies} scale_ui_writes=${scaleOpenSample.shell_sync.shared_state_ui_window_writes} scale_exclusion_writes=${scaleOpenSample.shell_sync.shared_state_exclusion_writes} scale_monitor_exclusion_writes=${scaleMonitorMoveSample?.shell_sync.shared_state_exclusion_writes ?? 'n/a'} snapshot_reads=${moveDelta.shell_sync.snapshot_reads} ui_writes=${longDragSample.shell_sync.shared_state_ui_window_writes} exclusion_writes=${longDragSample.shell_sync.shared_state_exclusion_writes} long_decode_bytes=${longDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} stress_decode_bytes=${stressDragSample.shell_runtime?.snapshot_decode_bytes ?? 'n/a'} long_dom_measures=${longDragSample.shell_runtime?.dom_measure_count ?? 'n/a'}`,

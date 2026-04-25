@@ -218,6 +218,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainWorkspace = 1 << 4
   const snapshotDomainShellHostedApps = 1 << 5
   const snapshotDomainInteraction = 1 << 6
+
+  const countWindowUnmapped = (details: readonly DerpShellDetail[]) => {
+    let count = 0
+    for (const detail of details) {
+      if (detail.type === 'window_unmapped') count += 1
+    }
+    return count
+  }
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
   const snapshotDomainWindowOrder = 1 << 9
@@ -506,7 +514,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
-    const needsPostApplyPaint = details.filter((detail) => detail.type === 'window_unmapped').length > 1
+    const needsPostApplyPaint = countWindowUnmapped(details) > 1
     let sawWindowList = false
     let sawInteractionState = false
     batch(() => {
@@ -843,7 +851,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
-    let unmapCount = 0
+    const needsPostApplyPaint = countWindowUnmapped(details) > 1
     batch(() => {
       const pendingModelDetails: DerpShellDetail[] = []
       const flushPendingModelDetails = () => {
@@ -853,12 +861,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         applyModelCompositorDetailsBatch(nextDetails)
       }
       for (const detail of details) {
-        if (detail.type === 'window_unmapped') unmapCount += 1
         applyCompositorBatchDetail(detail, pendingModelDetails, flushPendingModelDetails)
       }
       flushPendingModelDetails()
     })
-    if (unmapCount > 1) {
+    if (needsPostApplyPaint) {
       options.bumpSnapChrome()
       options.shellWireSend('invalidate_view')
     }
