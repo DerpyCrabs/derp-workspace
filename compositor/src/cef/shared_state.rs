@@ -6,8 +6,6 @@ use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::FileExt;
 
 pub const SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES: u32 = 1;
 pub const SHELL_SHARED_STATE_KIND_UI_WINDOWS: u32 = 2;
@@ -85,6 +83,57 @@ impl Drop for SharedMmapFile {
     }
 }
 
+#[cfg(unix)]
+struct ReadOnlySharedMmapFile {
+    _file: File,
+    ptr: usize,
+    len: usize,
+}
+
+#[cfg(unix)]
+impl ReadOnlySharedMmapFile {
+    fn open(path: &Path, file: File) -> Result<Self, String> {
+        let len = file
+            .metadata()
+            .map_err(|e| format!("stat shared state file {}: {e}", path.display()))?
+            .len() as usize;
+        if len < SHELL_SHARED_STATE_HEADER_BYTES {
+            return Err(format!("shared state file {} too small", path.display()));
+        }
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(format!("mmap shared state file {}", path.display()));
+        }
+        Ok(Self {
+            _file: file,
+            ptr: ptr as usize,
+            len,
+        })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnlySharedMmapFile {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = libc::munmap(self.ptr as *mut libc::c_void, self.len);
+        }
+    }
+}
+
 struct SharedStateWriter {
     mmap: SharedMmapFile,
     sequence: u64,
@@ -137,8 +186,8 @@ fn writer_cache() -> &'static Mutex<HashMap<PathBuf, SharedStateWriter>> {
 }
 
 #[cfg(unix)]
-fn reader_cache() -> &'static Mutex<HashMap<PathBuf, File>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, File>>> = OnceLock::new();
+fn reader_cache() -> &'static Mutex<HashMap<PathBuf, ReadOnlySharedMmapFile>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, ReadOnlySharedMmapFile>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -169,38 +218,35 @@ pub fn write_payload(path: &Path, abi: u32, payload: &[u8]) -> Result<u64, Strin
 }
 
 #[cfg(unix)]
-fn with_reader_file<T>(
+fn with_reader_mmap<T>(
     path: &Path,
-    f: impl FnOnce(&File) -> Result<T, String>,
+    f: impl FnOnce(&[u8]) -> Result<T, String>,
 ) -> Result<Option<T>, String> {
     let mut cache = reader_cache()
         .lock()
         .map_err(|_| "shared state reader cache poisoned".to_string())?;
     if !cache.contains_key(path) {
-        match OpenOptions::new().read(true).open(path) {
-            Ok(file) => {
-                cache.insert(path.to_path_buf(), file);
-            }
+        let file = match OpenOptions::new().read(true).open(path) {
+            Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(format!("open shared state file {}: {e}", path.display()));
-            }
-        }
+            Err(e) => return Err(format!("open shared state file {}: {e}", path.display())),
+        };
+        let mmap = ReadOnlySharedMmapFile::open(path, file)?;
+        cache.insert(path.to_path_buf(), mmap);
     }
-    let Some(file) = cache.get(path) else {
+    let Some(mmap) = cache.get(path) else {
         return Ok(None);
     };
-    Ok(Some(f(file)?))
+    Ok(Some(f(mmap.as_slice())?))
 }
 
 #[cfg(unix)]
 fn read_payload_inner(
-    file: &File,
-    path: &Path,
+    mapped: &[u8],
     expected_abi: u32,
     min_sequence_exclusive: Option<u64>,
 ) -> Result<Option<(u64, Vec<u8>)>, String> {
-    let head_a_bytes = read_header_bytes(file, path)?;
+    let head_a_bytes = read_header_bytes(mapped)?;
     let head_a = read_header(&head_a_bytes)?;
     if head_a.magic != SHELL_SHARED_STATE_MAGIC
         || head_a.abi_version != expected_abi
@@ -212,19 +258,17 @@ fn read_payload_inner(
         return Ok(None);
     }
     let payload_len = head_a.payload_len as usize;
-    if SHELL_SHARED_STATE_HEADER_BYTES + payload_len > SHELL_SHARED_STATE_CAPACITY_BYTES {
+    if SHELL_SHARED_STATE_HEADER_BYTES + payload_len > mapped.len()
+        || SHELL_SHARED_STATE_HEADER_BYTES + payload_len > SHELL_SHARED_STATE_CAPACITY_BYTES
+    {
         return Ok(None);
     }
     fence(Ordering::Acquire);
-    let mut payload = vec![0; payload_len];
-    read_exact_at(
-        file,
-        path,
-        SHELL_SHARED_STATE_HEADER_BYTES as u64,
-        &mut payload,
-    )?;
+    let payload = mapped
+        [SHELL_SHARED_STATE_HEADER_BYTES..SHELL_SHARED_STATE_HEADER_BYTES + payload_len]
+        .to_vec();
     fence(Ordering::Acquire);
-    let head_b_bytes = read_header_bytes(file, path)?;
+    let head_b_bytes = read_header_bytes(mapped)?;
     let head_b = read_header(&head_b_bytes)?;
     if head_a.sequence != head_b.sequence || head_b.sequence % 2 != 0 {
         return Ok(None);
@@ -233,31 +277,12 @@ fn read_payload_inner(
 }
 
 #[cfg(unix)]
-fn read_exact_at(file: &File, path: &Path, mut offset: u64, buf: &mut [u8]) -> Result<(), String> {
-    let mut filled = 0;
-    while filled < buf.len() {
-        let read = file
-            .read_at(&mut buf[filled..], offset)
-            .map_err(|e| format!("read shared state file {}: {e}", path.display()))?;
-        if read == 0 {
-            return Err(format!(
-                "unexpected eof reading shared state file {}",
-                path.display()
-            ));
-        }
-        filled += read;
-        offset += read as u64;
+fn read_header_bytes(mapped: &[u8]) -> Result<[u8; SHELL_SHARED_STATE_HEADER_BYTES], String> {
+    if mapped.len() < SHELL_SHARED_STATE_HEADER_BYTES {
+        return Err("shared state mapping shorter than header".to_string());
     }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn read_header_bytes(
-    file: &File,
-    path: &Path,
-) -> Result<[u8; SHELL_SHARED_STATE_HEADER_BYTES], String> {
     let mut header = [0u8; SHELL_SHARED_STATE_HEADER_BYTES];
-    read_exact_at(file, path, 0, &mut header)?;
+    header.copy_from_slice(&mapped[..SHELL_SHARED_STATE_HEADER_BYTES]);
     Ok(header)
 }
 
@@ -277,8 +302,8 @@ pub fn read_payload_if_newer(
         return Err("shared state requires unix reads".to_string());
     }
     #[cfg(unix)]
-    with_reader_file(path, |file| {
-        read_payload_inner(file, path, expected_abi, min_sequence_exclusive)
+    with_reader_mmap(path, |mapped| {
+        read_payload_inner(mapped, expected_abi, min_sequence_exclusive)
     })
     .map(|value| value.flatten())
 }
