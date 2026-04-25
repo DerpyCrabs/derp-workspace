@@ -399,6 +399,38 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn notifications_state_json(&self) -> Result<String, String> {
+        self.run_result(move |s| Ok(s.notifications_state_json()))
+    }
+
+    pub fn notifications_set_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.notifications_set_enabled(enabled)?;
+            crate::session::settings_config::write_notifications_settings(
+                crate::session::settings_config::NotificationsSettingsFile { enabled },
+            )
+        })
+    }
+
+    pub fn notifications_shell_notify(
+        &self,
+        request: crate::notifications::ShellNotificationRequest,
+    ) -> Result<u32, String> {
+        self.run_result(move |s| s.notifications_shell_notify(request))
+    }
+
+    pub fn notifications_close(&self, id: u32, reason: u32, source: String) {
+        self.run(move |s| {
+            s.notifications_close(id, reason, source);
+        });
+    }
+
+    pub fn notifications_invoke_action(&self, id: u32, action_key: String, source: String) {
+        self.run(move |s| {
+            s.notifications_invoke_action(id, action_key, source);
+        });
+    }
+
     pub fn screenshot_region(&self, x: i32, y: i32, width: i32, height: i32) {
         self.run(move |s| {
             if let Err(error) = s.request_screenshot_region(smithay::utils::Rectangle::new(

@@ -940,6 +940,32 @@ fn apply_message(
                 message_snapshot_epoch,
             ));
         }
+        shell_wire::DecodedCompositorToShellMessage::NotificationsState { state_json } => {
+            let state = serde_json::from_str::<Value>(&state_json).unwrap_or_else(|_| json!(null));
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "notifications_state",
+                    "state": state,
+                }),
+                message_snapshot_epoch,
+            ));
+        }
+        shell_wire::DecodedCompositorToShellMessage::NotificationEvent {
+            notification_id,
+            event_type,
+            action_key,
+            close_reason,
+            source,
+        } => {
+            pending_details.push(json!({
+                "type": "notification_event",
+                "notification_id": notification_id,
+                "event_type": event_type,
+                "action_key": action_key,
+                "close_reason": close_reason,
+                "source": source,
+            }));
+        }
         shell_wire::DecodedCompositorToShellMessage::MutationAck {
             domain,
             client_mutation_id,

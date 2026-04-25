@@ -14,6 +14,7 @@ export {
   openSettings,
   openShellTestWindow,
   openVolumeMenu,
+  postJson,
   prepareFileBrowserFixtures,
   primeState,
   resetFileBrowserFixtures,

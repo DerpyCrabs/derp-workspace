@@ -30,6 +30,7 @@ import {
   type OpenWithOption,
 } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
+import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 
 export type ShellHostedWindowContentEnv = {
   windowById: (windowId: number) => Accessor<DerpWindow | undefined>
@@ -102,6 +103,7 @@ export type ShellHostedWindowContentEnv = {
   setSessionAutoSaveEnabled: (enabled: boolean) => void
   defaultApps: DefaultApplicationsController
   desktopApps: DesktopApplicationsController
+  notificationsState: Accessor<ShellNotificationsState | null>
 }
 
 export function renderShellHostedWindowContent(
@@ -157,6 +159,7 @@ export function renderShellHostedWindowContent(
         defaultApps={env.defaultApps}
         desktopApps={env.desktopApps}
         windowsList={env.windowsList}
+        notificationsState={env.notificationsState}
       />
     )
   }

@@ -6,6 +6,7 @@ import { SettingsBluetoothPage } from './SettingsBluetoothPage'
 import { SettingsDisplaysPage } from './SettingsDisplaysPage'
 import { SettingsDefaultApplicationsPage } from './SettingsDefaultApplicationsPage'
 import { SettingsKeyboardPage } from './SettingsKeyboardPage'
+import { SettingsNotificationsPage } from './SettingsNotificationsPage'
 import { SettingsSoundPage } from './SettingsSoundPage'
 import { SettingsScratchpadsPage } from './SettingsScratchpadsPage'
 import { SettingsTilingPage } from './SettingsTilingPage'
@@ -14,6 +15,7 @@ import { SettingsWifiPage } from './SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settingsTypes'
 import type { DefaultApplicationsController } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
+import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 import type { DerpWindow } from '@/host/appWindowState'
 
 export type { SettingsLayoutScreen }
@@ -24,6 +26,7 @@ type SettingsPageId =
   | 'tiling'
   | 'scratchpads'
   | 'keyboard'
+  | 'notifications'
   | 'sound'
   | 'wifi'
   | 'bluetooth'
@@ -36,6 +39,7 @@ const NAV: { id: SettingsPageId; label: string }[] = [
   { id: 'tiling', label: 'Tiling' },
   { id: 'scratchpads', label: 'Scratchpads' },
   { id: 'keyboard', label: 'Keyboard' },
+  { id: 'notifications', label: 'Notifications' },
   { id: 'sound', label: 'Sound' },
   { id: 'wifi', label: 'Wi-Fi' },
   { id: 'bluetooth', label: 'Bluetooth' },
@@ -67,6 +71,7 @@ export type SettingsPanelProps = {
   defaultApps: DefaultApplicationsController
   desktopApps: DesktopApplicationsController
   windowsList: Accessor<readonly DerpWindow[]>
+  notificationsState: Accessor<ShellNotificationsState | null>
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -150,6 +155,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </Show>
         <Show when={activePage() === 'keyboard'}>
           <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} />
+        </Show>
+        <Show when={activePage() === 'notifications'}>
+          <SettingsNotificationsPage notificationsState={props.notificationsState} />
         </Show>
         <Show when={activePage() === 'sound'}>
           <SettingsSoundPage />

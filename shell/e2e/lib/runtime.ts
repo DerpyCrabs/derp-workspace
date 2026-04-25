@@ -291,7 +291,12 @@ export interface ShellControls {
   settings_tab_tiling?: Rect | null
   settings_tab_scratchpads?: Rect | null
   settings_tab_keyboard?: Rect | null
+  settings_tab_notifications?: Rect | null
   settings_tiling_layout_trigger?: Rect | null
+  settings_notifications_page?: Rect | null
+  settings_notifications_enable?: Rect | null
+  settings_notifications_disable?: Rect | null
+  settings_notifications_history_first?: Rect | null
   settings_scratchpads_page?: Rect | null
   settings_scratchpad_window_inspector?: Rect | null
   settings_scratchpad_list?: Rect | null
@@ -326,6 +331,9 @@ export interface ShellControls {
   debug_reload_button?: Rect | null
   debug_copy_snapshot_button?: Rect | null
   debug_crosshair_toggle?: Rect | null
+  shell_notification_first?: Rect | null
+  shell_notification_first_action?: Rect | null
+  shell_notification_first_dismiss?: Rect | null
   snap_strip_trigger?: Rect | null
   snap_picker_root?: Rect | null
   snap_picker_first_cell?: Rect | null
@@ -477,6 +485,11 @@ export interface ShellSnapshot {
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null
   session_restore_active?: boolean
+  notifications?: {
+    enabled: boolean
+    active_count: number
+    history_count: number
+  } | null
   tab_drag_target?: {
     window_id: number
     group_id: string

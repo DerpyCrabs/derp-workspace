@@ -907,6 +907,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/notifications_state" {
+        let json = uplink.notifications_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_user" {
         let json = crate::session::gdm_settings::read_gdm_autologin_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -1461,6 +1467,42 @@ fn handle_one(
             >(v)
             .map_err(|e| format!("invalid scratchpad settings: {e}"))?;
             uplink.settings_scratchpads_apply(scratchpads)?;
+        }
+        "/settings_notifications" => {
+            let enabled = json_bool_field(&v, "enabled")?;
+            uplink.notifications_set_enabled(enabled)?;
+        }
+        "/notifications_shell" => {
+            let request = serde_json::from_value::<crate::notifications::ShellNotificationRequest>(v)
+                .map_err(|e| format!("invalid notifications request: {e}"))?;
+            let id = uplink.notifications_shell_notify(request)?;
+            let body = serde_json::json!({ "id": id }).to_string();
+            write_http_ok_json(stream, &body).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        "/notifications_action" => {
+            let notification_id = json_u32_field(&v, "notification_id")?;
+            let action_key = json_string_field(&v, "action_key")?;
+            let source = v
+                .get("source")
+                .and_then(|value| value.as_str())
+                .unwrap_or("shell")
+                .to_string();
+            uplink.notifications_invoke_action(notification_id, action_key, source);
+        }
+        "/notifications_close" => {
+            let notification_id = json_u32_field(&v, "notification_id")?;
+            let reason = v
+                .get("reason")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(3);
+            let source = v
+                .get("source")
+                .and_then(|value| value.as_str())
+                .unwrap_or("shell")
+                .to_string();
+            uplink.notifications_close(notification_id, reason, source);
         }
         "/settings_user" => {
             let update =

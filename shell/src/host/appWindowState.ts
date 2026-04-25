@@ -144,6 +144,18 @@ export type DerpShellDetail = ({
       }[]
     }
   | {
+      type: 'notifications_state'
+      state: unknown
+    }
+  | {
+      type: 'notification_event'
+      notification_id: number
+      event_type: string
+      action_key?: string | null
+      close_reason?: number | null
+      source: string
+    }
+  | {
       type: 'mutation_ack'
       domain: string
       client_mutation_id: number

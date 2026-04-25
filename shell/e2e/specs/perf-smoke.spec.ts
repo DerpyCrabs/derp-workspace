@@ -259,6 +259,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
         const sample = await getPerfCounters(base)
         if (sample.shell_updates.window_geometry_messages < 1) return null
         if (sample.begin_frame.cef_send_external_begin_frame < 1) return null
+        if (sample.latency.samples < 1) return null
         return sample
       },
       5000,

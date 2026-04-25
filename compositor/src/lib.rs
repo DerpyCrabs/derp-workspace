@@ -16,6 +16,7 @@ mod e2e;
 mod grabs;
 mod handlers;
 mod input;
+mod notifications;
 mod platform;
 mod render;
 mod session;

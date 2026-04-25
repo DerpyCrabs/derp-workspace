@@ -112,6 +112,12 @@ import { isPdfFilePath } from '@/apps/pdf-viewer/pdfViewerCore'
 import { isTextEditorFilePath } from '@/apps/text-editor/textEditorCore'
 import { isVideoFilePath } from '@/apps/video-viewer/videoViewerCore'
 import { DropdownMenu, DropdownMenuPortal } from '@/components/ui/dropdown-menu'
+import { ShellNotificationLayer } from '@/features/notifications/ShellNotificationLayer'
+import {
+  emptyNotificationsState,
+  type ShellNotificationsState,
+} from '@/features/notifications/notificationsState'
+import { installShellNotificationsApi } from '@/features/notifications/shellNotifications'
 
 declare global {
   interface Window {
@@ -344,6 +350,9 @@ function App() {
     generation: number
     image_path: string
   } | null>(null)
+  const [notificationsState, setNotificationsState] = createSignal<ShellNotificationsState | null>(
+    emptyNotificationsState(),
+  )
   const [loadedNativeDragPreviewKey, setLoadedNativeDragPreviewKey] = createSignal<string | null>(null)
   const [loadedNativeDragPreviewImage, setLoadedNativeDragPreviewImage] = createSignal<HTMLImageElement | null>(null)
   const [pointerClient, setPointerClient] = createSignal<{ x: number; y: number } | null>(null)
@@ -1372,6 +1381,7 @@ function App() {
       setSessionAutoSaveEnabled: sessionPersistenceRuntime.updateSessionAutoSavePreference,
       defaultApps,
       desktopApps,
+      notificationsState,
     })
   }
 
@@ -1730,6 +1740,7 @@ function App() {
   }
 
   onMount(() => {
+    const disposeNotificationsApi = installShellNotificationsApi()
     const disposeAppRuntimeBootstrap = registerAppRuntimeBootstrap({
       startThemeDomSync,
       subscribeShellWindowState,
@@ -1786,6 +1797,7 @@ function App() {
         getProgramsMenuQuery: shellContextMenus.programsMenuProps.query,
         buildSessionSnapshot,
         getSessionRestoreActive: () => sessionRestoreSnapshot() !== null,
+        getNotificationsState: notificationsState,
         getFloatingLayers: floatingLayers.layers,
         getTabDragTarget: e2eTabDragTarget,
         projectCurrentMenuElementRect: shellContextMenus.projectCurrentMenuElementRect,
@@ -1810,6 +1822,7 @@ function App() {
         setCompositorSnapshotSequence,
         setCompositorInteractionState,
         setNativeDragPreview,
+        setNotificationsState,
         getNativeDragPreview: nativeDragPreview,
         markHasSeenCompositorWindowSync: sessionPersistenceRuntime.markHasSeenCompositorWindowSync,
         clearWindowSyncRecoveryPending: () => {
@@ -1879,7 +1892,10 @@ function App() {
       requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
       shellWireSend,
     })
-    onCleanup(disposeAppRuntimeBootstrap)
+    onCleanup(() => {
+      disposeNotificationsApi()
+      disposeAppRuntimeBootstrap()
+    })
   })
 
   function copyDebugHudSnapshot() {
@@ -1967,6 +1983,8 @@ function App() {
           </div>
         )}
       </Show>
+
+      <ShellNotificationLayer notificationsState={notificationsState} />
 
       <For each={workspaceGroupIds()}>
         {(groupId) => <workspaceChrome.WorkspaceGroupFrame groupId={groupId} />}

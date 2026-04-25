@@ -25,6 +25,12 @@ import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
 import type { WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
+import {
+  sanitizeNotificationsState,
+  sanitizeNotificationEvent,
+  type ShellNotificationsState,
+} from '@/features/notifications/notificationsState'
+import { dispatchShellNotificationEvent } from '@/features/notifications/shellNotifications'
 
 type CompositorFollowup = {
   syncExclusion?: boolean
@@ -100,6 +106,7 @@ type CompositorBridgeRuntimeOptions = {
   setCompositorSnapshotSequence: (value: number) => void
   setCompositorInteractionState: (value: CompositorInteractionState) => void
   setNativeDragPreview: (value: NativeDragPreviewState) => void
+  setNotificationsState: (value: ShellNotificationsState | null) => void
   getNativeDragPreview: () => NativeDragPreviewState
   markHasSeenCompositorWindowSync: () => void
   clearWindowSyncRecoveryPending: () => void
@@ -496,6 +503,16 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     options.setNativeDragPreview(next)
   }
 
+  const applyNotificationsStateDetail = (d: Extract<DerpShellDetail, { type: 'notifications_state' }>) => {
+    options.setNotificationsState(sanitizeNotificationsState(d.state))
+  }
+
+  const applyNotificationEventDetail = (d: Extract<DerpShellDetail, { type: 'notification_event' }>) => {
+    const event = sanitizeNotificationEvent(d)
+    if (!event) return
+    dispatchShellNotificationEvent(event)
+  }
+
   const applySnapshotVisualDetail = (d: DerpShellDetail, skipOutputGeometry: boolean) => {
     if (d.type === 'keyboard_layout') {
       applyKeyboardLayoutDetail(d)
@@ -527,6 +544,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'native_drag_preview') {
       applyNativeDragPreviewDetail(d)
+      return true
+    }
+    if (d.type === 'notifications_state') {
+      applyNotificationsStateDetail(d)
       return true
     }
     return false
@@ -756,6 +777,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'native_drag_preview') {
       applyNativeDragPreviewDetail(d)
+      return
+    }
+    if (d.type === 'notifications_state') {
+      applyNotificationsStateDetail(d)
+      return
+    }
+    if (d.type === 'notification_event') {
+      applyNotificationEventDetail(d)
       return
     }
     if (d.type === 'window_list') {

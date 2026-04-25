@@ -546,6 +546,9 @@ pub struct CompositorState {
     pub(crate) sni_tray_cmd_tx: Option<std::sync::mpsc::Sender<crate::tray::sni_tray::SniTrayCmd>>,
     pub(crate) sni_tray_slot_count: u32,
     pub(crate) sni_tray_items: Vec<shell_wire::TraySniItemWire>,
+    pub(crate) notifications_cmd_tx:
+        Option<std::sync::mpsc::Sender<crate::notifications::NotificationsCmd>>,
+    pub(crate) notifications_state_json: String,
 
     pub xwayland_shell_state: XWaylandShellState,
     pub x11_wm_slot: Option<(XwmId, X11Wm)>,
@@ -1286,6 +1289,32 @@ impl CompositorState {
             })
             .map_err(|e| format!("sni tray channel: {e}"))?;
 
+        let notifications_enabled =
+            crate::session::settings_config::read_notifications_settings().enabled;
+        let (notifications_to_loop_tx, notifications_rx) =
+            channel::channel::<crate::notifications::NotificationsLoopMsg>();
+        let (notifications_cmd_tx, notifications_cmd_rx) =
+            std::sync::mpsc::channel::<crate::notifications::NotificationsCmd>();
+        crate::notifications::spawn_notifications_thread(
+            notifications_to_loop_tx,
+            notifications_cmd_rx,
+            notifications_enabled,
+        );
+        event_loop
+            .handle()
+            .insert_source(notifications_rx, |ev, _, d: &mut CalloopData| match ev {
+                CalloopChannelEvent::Msg(msg) => match msg {
+                    crate::notifications::NotificationsLoopMsg::State(state_json) => {
+                        d.state.on_notifications_state_updated(state_json);
+                    }
+                    crate::notifications::NotificationsLoopMsg::Event(event) => {
+                        d.state.on_notification_event(event);
+                    }
+                },
+                CalloopChannelEvent::Closed => {}
+            })
+            .map_err(|e| format!("notifications channel: {e}"))?;
+
         let mut s = Self {
             start_time,
             display_handle: dh,
@@ -1332,6 +1361,10 @@ impl CompositorState {
             sni_tray_cmd_tx: Some(sni_cmd_tx),
             sni_tray_slot_count: 0,
             sni_tray_items: Vec::new(),
+            notifications_cmd_tx: Some(notifications_cmd_tx),
+            notifications_state_json: crate::notifications::initial_state_json(
+                notifications_enabled,
+            ),
             xwayland_shell_state,
             x11_wm_slot: None,
             x11_client: None,
@@ -7172,6 +7205,7 @@ impl CompositorState {
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
         self.shell_hosted_app_state_send();
+        self.shell_send_to_cef(self.notifications_state_message());
         let window_id = self.logical_focused_window_id();
         let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
@@ -7279,6 +7313,105 @@ impl CompositorState {
 
     pub(crate) fn sync_tray_hints_to_shell(&mut self) {
         self.shell_send_to_cef(self.shell_tray_hints_message());
+    }
+
+    pub(crate) fn on_notifications_state_updated(&mut self, state_json: String) {
+        self.notifications_state_json = state_json.clone();
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::NotificationsState {
+            state_json,
+        });
+    }
+
+    pub(crate) fn on_notification_event(
+        &mut self,
+        event: crate::notifications::NotificationEventPayload,
+    ) {
+        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::NotificationEvent {
+            notification_id: event.notification_id,
+            event_type: event.event_type,
+            action_key: event.action_key,
+            close_reason: event.close_reason,
+            source: event.source,
+        });
+    }
+
+    pub(crate) fn notifications_state_message(
+        &self,
+    ) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::NotificationsState {
+            state_json: self.notifications_state_json.clone(),
+        }
+    }
+
+    pub(crate) fn notifications_state_json(&self) -> String {
+        if let Some(tx) = &self.notifications_cmd_tx {
+            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+            if tx
+                .send(crate::notifications::NotificationsCmd::GetState {
+                    reply: reply_tx,
+                })
+                .is_ok()
+            {
+                if let Ok(state_json) = reply_rx.recv_timeout(Duration::from_secs(2)) {
+                    return state_json;
+                }
+            }
+        }
+        self.notifications_state_json.clone()
+    }
+
+    pub(crate) fn notifications_set_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        let Some(tx) = &self.notifications_cmd_tx else {
+            return Err("notifications thread unavailable".into());
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        tx.send(crate::notifications::NotificationsCmd::SetEnabled {
+            enabled,
+            reply: reply_tx,
+        })
+        .map_err(|_| "notifications thread unavailable".to_string())?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| "timed out waiting for notifications".to_string())?
+    }
+
+    pub(crate) fn notifications_shell_notify(
+        &mut self,
+        request: crate::notifications::ShellNotificationRequest,
+    ) -> Result<u32, String> {
+        let Some(tx) = &self.notifications_cmd_tx else {
+            return Err("notifications thread unavailable".into());
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        tx.send(crate::notifications::NotificationsCmd::ShellNotify {
+            request,
+            reply: reply_tx,
+        })
+        .map_err(|_| "notifications thread unavailable".to_string())?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| "timed out waiting for notifications".to_string())?
+    }
+
+    pub(crate) fn notifications_close(&mut self, id: u32, reason: u32, source: String) {
+        if let Some(tx) = &self.notifications_cmd_tx {
+            let _ = tx.send(crate::notifications::NotificationsCmd::Close { id, reason, source });
+        }
+    }
+
+    pub(crate) fn notifications_invoke_action(
+        &mut self,
+        id: u32,
+        action_key: String,
+        source: String,
+    ) {
+        if let Some(tx) = &self.notifications_cmd_tx {
+            let _ = tx.send(crate::notifications::NotificationsCmd::InvokeAction {
+                id,
+                action_key,
+                source,
+            });
+        }
     }
 
     pub(crate) fn on_sni_tray_items_updated(&mut self, items: Vec<shell_wire::TraySniItemWire>) {

@@ -41,6 +41,7 @@ enum PendingCompositorMessageStaticKey {
     WorkspaceStateBinary,
     ShellHostedAppState,
     InteractionState,
+    NotificationsState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -159,6 +160,11 @@ fn pending_message_dedup_key(
                 PendingCompositorMessageStaticKey::InteractionState,
             ))
         }
+        shell_wire::DecodedCompositorToShellMessage::NotificationsState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::NotificationsState,
+            ))
+        }
         shell_wire::DecodedCompositorToShellMessage::WindowGeometry { window_id, .. } => {
             Some(PendingCompositorMessageDedupKey::WindowGeometry(*window_id))
         }
@@ -204,6 +210,8 @@ fn pending_message_needs_fast_begin_frame(
             | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
             | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
             | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
+            | shell_wire::DecodedCompositorToShellMessage::NotificationsState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::NotificationEvent { .. }
             | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
             | shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
     )

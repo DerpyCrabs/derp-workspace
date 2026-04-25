@@ -4,6 +4,7 @@ import type { CanvasOrigin } from '@/lib/shellCoords'
 import type { WorkspaceGroupModel } from '@/features/workspace/workspaceSelectors'
 import { buildE2eShellHtml, buildE2eShellSnapshot, type E2eRectSnapshot } from './e2eSnapshot'
 import type { SessionSnapshot } from './sessionSnapshot'
+import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 
 type CanvasSize = {
   w: number
@@ -92,6 +93,7 @@ type RegisterShellE2eBridgeOptions = {
   getProgramsMenuQuery: () => string
   buildSessionSnapshot: () => SessionSnapshot
   getSessionRestoreActive: () => boolean
+  getNotificationsState: () => ShellNotificationsState | null
   getFloatingLayers: () => FloatingLayerLike[]
   getTabDragTarget: () => TabDragTargetLike | null
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
@@ -158,6 +160,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
           sessionSnapshot,
           sessionSnapshotError,
           sessionRestoreActive: options.getSessionRestoreActive(),
+          notificationsState: options.getNotificationsState(),
           floatingLayers: options.getFloatingLayers(),
           tabDragTarget: options.getTabDragTarget(),
           projectCurrentMenuElementRect: options.projectCurrentMenuElementRect,

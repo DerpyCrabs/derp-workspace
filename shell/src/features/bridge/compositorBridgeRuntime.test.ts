@@ -72,6 +72,7 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
     setTrayReservedPx: vi.fn(),
     setTrayIconSlotPx: vi.fn(),
     setSniTrayItems: vi.fn(),
+    setNotificationsState: vi.fn(),
     setOutputTopology: vi.fn(),
     setCompositorSnapshotSequence: vi.fn(),
     setCompositorInteractionState: vi.fn(),

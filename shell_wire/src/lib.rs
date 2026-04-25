@@ -1315,6 +1315,16 @@ pub enum DecodedCompositorToShellMessage {
         status: String,
         snapshot_epoch: u64,
     },
+    NotificationsState {
+        state_json: String,
+    },
+    NotificationEvent {
+        notification_id: u32,
+        event_type: String,
+        action_key: Option<String>,
+        close_reason: Option<u32>,
+        source: String,
+    },
     TrayHints {
         slot_count: u32,
         slot_w: i32,

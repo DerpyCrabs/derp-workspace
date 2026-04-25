@@ -3,6 +3,7 @@ import type { DerpWindow } from '@/host/appWindowState'
 import { canvasOriginXY, canvasRectToClientCss, type CanvasOrigin } from '@/lib/shellCoords'
 import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { SessionSnapshot } from './sessionSnapshot'
+import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 
 export type E2eRectSnapshot = {
   x: number
@@ -120,6 +121,7 @@ export type BuildE2eShellSnapshotArgs = {
   sessionSnapshot: SessionSnapshot | null
   sessionSnapshotError: string | null
   sessionRestoreActive: boolean
+  notificationsState: ShellNotificationsState | null
   floatingLayers: E2eFloatingLayer[]
   tabDragTarget: E2eTabDragTarget | null
   projectCurrentMenuElementRect: (el: Element | null) => E2eRectSnapshot | null
@@ -783,6 +785,13 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     session_snapshot: args.sessionSnapshot,
     session_snapshot_error: args.sessionSnapshotError,
     session_restore_active: args.sessionRestoreActive,
+    notifications: args.notificationsState
+      ? {
+          enabled: args.notificationsState.enabled,
+          active_count: args.notificationsState.active.length,
+          history_count: args.notificationsState.history.length,
+        }
+      : null,
     tab_drag_target: args.tabDragTarget
       ? {
           window_id: args.tabDragTarget.windowId,
@@ -858,7 +867,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_tiling: queryRect(cache, '[data-settings-tab="tiling"]', args.origin),
       settings_tab_scratchpads: queryRect(cache, '[data-settings-tab="scratchpads"]', args.origin),
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
+      settings_tab_notifications: queryRect(cache, '[data-settings-tab="notifications"]', args.origin),
       settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
+      settings_notifications_page: queryRect(cache, '[data-settings-notifications-page]', args.origin),
+      settings_notifications_enable: queryRect(cache, '[data-settings-notifications-enable]', args.origin),
+      settings_notifications_disable: queryRect(cache, '[data-settings-notifications-disable]', args.origin),
+      settings_notifications_history_first: queryRect(
+        cache,
+        '[data-settings-notification-history]',
+        args.origin,
+      ),
       settings_scratchpads_page: queryRect(cache, '[data-settings-scratchpads-page]', args.origin),
       settings_scratchpad_window_inspector: queryRect(
         cache,
@@ -969,6 +987,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       debug_reload_button: queryRect(cache, '[data-shell-debug-reload]', args.origin),
       debug_copy_snapshot_button: queryRect(cache, '[data-shell-debug-copy-snapshot]', args.origin),
       debug_crosshair_toggle: queryRect(cache, '[data-shell-debug-crosshair-toggle]', args.origin),
+      shell_notification_first: queryRect(cache, '[data-shell-notification]', args.origin),
+      shell_notification_first_action: queryRect(cache, '[data-shell-notification-action]', args.origin),
+      shell_notification_first_dismiss: queryRect(cache, '[data-shell-notification-dismiss]', args.origin),
       snap_strip_trigger: queryRect(cache, '[data-shell-snap-strip-trigger]', args.origin),
       snap_picker_root: queryRect(cache, '[data-shell-snap-picker]', args.origin),
       snap_picker_first_cell: queryLargestRect(

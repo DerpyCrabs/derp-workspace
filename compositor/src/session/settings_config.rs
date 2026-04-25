@@ -53,6 +53,12 @@ pub struct FilesSettingsFile {
     pub default_open_target: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NotificationsSettingsFile {
+    pub enabled: bool,
+}
+
 impl Default for DefaultApplicationsFile {
     fn default() -> Self {
         Self {
@@ -73,6 +79,12 @@ impl Default for FilesSettingsFile {
             custom_icons: BTreeMap::new(),
             default_open_target: "window".into(),
         }
+    }
+}
+
+impl Default for NotificationsSettingsFile {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -189,6 +201,7 @@ pub struct SettingsFile {
     pub keyboard: KeyboardSettingsFile,
     pub default_applications: DefaultApplicationsFile,
     pub files: FilesSettingsFile,
+    pub notifications: NotificationsSettingsFile,
     pub scratchpads: ScratchpadSettingsFile,
 }
 
@@ -200,6 +213,7 @@ impl Default for SettingsFile {
             keyboard: KeyboardSettingsFile::default(),
             default_applications: DefaultApplicationsFile::default(),
             files: FilesSettingsFile::default(),
+            notifications: NotificationsSettingsFile::default(),
             scratchpads: ScratchpadSettingsFile::default(),
         }
     }
@@ -389,6 +403,14 @@ pub fn sanitize_files_settings(settings: FilesSettingsFile) -> FilesSettingsFile
         favorites,
         custom_icons,
         default_open_target: sanitize_default_open_target(&settings.default_open_target),
+    }
+}
+
+pub fn sanitize_notifications_settings(
+    settings: NotificationsSettingsFile,
+) -> NotificationsSettingsFile {
+    NotificationsSettingsFile {
+        enabled: settings.enabled,
     }
 }
 
@@ -587,6 +609,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
             cfg.default_applications =
                 sanitize_default_applications_settings(cfg.default_applications);
             cfg.files = sanitize_files_settings(cfg.files);
+            cfg.notifications = sanitize_notifications_settings(cfg.notifications);
             cfg.scratchpads = sanitize_scratchpad_settings(cfg.scratchpads);
             if cfg.version == 0 {
                 cfg.version = 1;
@@ -610,6 +633,37 @@ pub fn read_scratchpad_settings() -> ScratchpadSettingsFile {
         return ScratchpadSettingsFile::default();
     };
     read_settings_file_from_path(&path).scratchpads
+}
+
+pub fn read_notifications_settings() -> NotificationsSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return NotificationsSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).notifications
+}
+
+pub fn write_notifications_settings(settings: NotificationsSettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let notifications = sanitize_notifications_settings(settings);
+    if cfg.version == 1 && cfg.notifications == notifications {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.notifications = notifications;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
 }
 
 pub fn read_scratchpad_settings_json() -> Result<String, String> {

@@ -4,6 +4,7 @@ import {
   assert,
   assertRectMinSize,
   getJson,
+  getSnapshots,
   shellWindowById,
   taskbarEntry,
   waitFor,
@@ -124,6 +125,24 @@ async function waitForFloating(base: string, windowId: number, label: string) {
   )
 }
 
+async function waitForChromeSettled(base: string, windowId: number, label: string) {
+  return waitFor(
+    `${label} chrome settled`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      const controls = windowControls(snapshots.shell, windowId)
+      if (snapshots.compositor.shell_move_window_id !== null) return null
+      if (snapshots.compositor.shell_resize_window_id !== null) return null
+      if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+      if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+      if (!controls || controls.dragging) return null
+      return snapshots
+    },
+    5000,
+    100,
+  )
+}
+
 async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
@@ -139,6 +158,7 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
   await dragTitlebarDown(base, opened.window_id, parity.label)
   const restored = await waitForFloating(base, opened.window_id, parity.label)
   assert(restored.window.width > 100 && restored.window.height > 100, `${parity.label} restore keeps usable size`)
+  await waitForChromeSettled(base, opened.window_id, parity.label)
 
   await clickMinimize(base, opened.window_id, parity.label)
   const minimized = await waitForWindowMinimized(base, opened.window_id)
