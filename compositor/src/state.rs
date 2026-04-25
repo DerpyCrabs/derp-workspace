@@ -672,6 +672,7 @@ pub struct CompositorState {
     pub(crate) shell_ui_windows: Vec<ShellUiWindowPlacement>,
     pub(crate) shell_ui_windows_generation: u32,
     pub(crate) shell_ui_windows_shared_sequence: u64,
+    pub(crate) shell_ui_windows_shared_path: PathBuf,
     pub(crate) shell_focused_ui_window_id: Option<u32>,
     pub(crate) shell_window_stack_order: Vec<u32>,
     pub(crate) shell_window_stack_revision: u64,
@@ -689,6 +690,7 @@ pub struct CompositorState {
     pub(crate) shell_last_sent_window_order: Vec<(u32, u32)>,
     shell_visible_placements_cache: RefCell<Option<ShellVisiblePlacementsCache>>,
     pub(crate) shell_exclusion_shared_sequence: u64,
+    pub(crate) shell_exclusion_shared_path: PathBuf,
     pub(crate) tile_preview_rect_global: Option<Rectangle<i32, Logical>>,
     pub(crate) tile_preview_solid: SolidColorBuffer,
     pub(crate) shell_chrome_titlebar_h: i32,
@@ -1297,6 +1299,10 @@ impl CompositorState {
             shell_ui_windows: Vec::new(),
             shell_ui_windows_generation: 0,
             shell_ui_windows_shared_sequence: 0,
+            shell_ui_windows_shared_path: crate::cef::shared_state::path_for_kind(
+                crate::cef::runtime_dir(),
+                crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS,
+            ),
             shell_focused_ui_window_id: None,
             shell_window_stack_order: Vec::new(),
             shell_window_stack_revision: 0,
@@ -1314,6 +1320,10 @@ impl CompositorState {
             shell_last_sent_window_order: Vec::new(),
             shell_visible_placements_cache: RefCell::new(None),
             shell_exclusion_shared_sequence: 0,
+            shell_exclusion_shared_path: crate::cef::shared_state::path_for_kind(
+                crate::cef::runtime_dir(),
+                crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES,
+            ),
             tile_preview_rect_global: None,
             tile_preview_solid: SolidColorBuffer::new((1, 1), Color32F::TRANSPARENT),
             shell_chrome_titlebar_h: SHELL_TITLEBAR_HEIGHT,
@@ -1607,18 +1617,19 @@ impl CompositorState {
     }
 
     pub fn sync_shell_shared_state(&mut self, kind: u32) {
-        let path = crate::cef::shared_state::path_for_kind(crate::cef::runtime_dir(), kind);
-        let min_sequence_exclusive = match kind {
-            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => {
-                Some(self.shell_exclusion_shared_sequence)
-            }
-            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS => {
-                Some(self.shell_ui_windows_shared_sequence)
-            }
-            _ => None,
+        let (path, min_sequence_exclusive) = match kind {
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_EXCLUSION_ZONES => (
+                &self.shell_exclusion_shared_path,
+                Some(self.shell_exclusion_shared_sequence),
+            ),
+            crate::cef::shared_state::SHELL_SHARED_STATE_KIND_UI_WINDOWS => (
+                &self.shell_ui_windows_shared_path,
+                Some(self.shell_ui_windows_shared_sequence),
+            ),
+            _ => return,
         };
         let Ok(Some((sequence, payload))) = crate::cef::shared_state::read_payload_if_newer(
-            &path,
+            path,
             crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
             min_sequence_exclusive,
         ) else {
