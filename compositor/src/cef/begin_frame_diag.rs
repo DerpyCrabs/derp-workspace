@@ -45,6 +45,13 @@ static SHELL_LATENCY_DMABUF_TO_RENDER_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_LATENCY_SCHEDULE_TO_DMABUF_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_LATENCY_SCHEDULE_TO_RENDER_US: AtomicU64 = AtomicU64::new(0);
 static SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_COVERAGE_PER_MILLE: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_BBOX_FULL: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_MISSING: AtomicU64 = AtomicU64::new(0);
+static SHELL_DIRTY_RECT_EMPTY: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
@@ -132,6 +139,7 @@ pub(crate) struct PerfCounterSnapshot {
     shell_updates: ShellUpdateSnapshot,
     shell_sync: ShellSyncSnapshot,
     latency: ShellLatencySnapshot,
+    dirty_rects: ShellDirtyRectSnapshot,
 }
 
 #[derive(serde::Serialize)]
@@ -191,6 +199,17 @@ struct ShellLatencySnapshot {
     schedule_to_dmabuf_us: u64,
     schedule_to_render_us: u64,
     schedule_to_render_max_us: u64,
+}
+
+#[derive(serde::Serialize)]
+struct ShellDirtyRectSnapshot {
+    samples: u64,
+    rect_count: u64,
+    coverage_per_mille: u64,
+    max_coverage_per_mille: u64,
+    bbox_full_count: u64,
+    missing_count: u64,
+    empty_count: u64,
 }
 
 pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
@@ -337,6 +356,34 @@ pub(crate) fn note_cef_accelerated_paint(
     dirty_rect_bbox_full: bool,
 ) {
     CEF_ACCELERATED_PAINT.fetch_add(1, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_SAMPLES.fetch_add(1, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_COUNT.fetch_add(dirty_rect_count as u64, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_COVERAGE_PER_MILLE
+        .fetch_add(dirty_rect_coverage_per_mille as u64, Ordering::Relaxed);
+    let mut current = SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE.load(Ordering::Relaxed);
+    while u64::from(dirty_rect_coverage_per_mille) > current {
+        match SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE.compare_exchange_weak(
+            current,
+            u64::from(dirty_rect_coverage_per_mille),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+    if dirty_rect_bbox_full {
+        SHELL_DIRTY_RECT_BBOX_FULL.fetch_add(1, Ordering::Relaxed);
+    }
+    match dirty_rect_kind {
+        DirtyRectKind::Missing => {
+            SHELL_DIRTY_RECT_MISSING.fetch_add(1, Ordering::Relaxed);
+        }
+        DirtyRectKind::Empty => {
+            SHELL_DIRTY_RECT_EMPTY.fetch_add(1, Ordering::Relaxed);
+        }
+        DirtyRectKind::Provided => {}
+    }
     if let Ok(mut latency) = LATENCY.lock() {
         latency.accelerated_paint_at = Some(Instant::now());
         latency.accelerated_paint_size = Some((width, height));
@@ -417,6 +464,15 @@ pub(crate) fn perf_counter_snapshot() -> PerfCounterSnapshot {
             schedule_to_render_max_us: SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US
                 .load(Ordering::Relaxed),
         },
+        dirty_rects: ShellDirtyRectSnapshot {
+            samples: SHELL_DIRTY_RECT_SAMPLES.load(Ordering::Relaxed),
+            rect_count: SHELL_DIRTY_RECT_COUNT.load(Ordering::Relaxed),
+            coverage_per_mille: SHELL_DIRTY_RECT_COVERAGE_PER_MILLE.load(Ordering::Relaxed),
+            max_coverage_per_mille: SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE.load(Ordering::Relaxed),
+            bbox_full_count: SHELL_DIRTY_RECT_BBOX_FULL.load(Ordering::Relaxed),
+            missing_count: SHELL_DIRTY_RECT_MISSING.load(Ordering::Relaxed),
+            empty_count: SHELL_DIRTY_RECT_EMPTY.load(Ordering::Relaxed),
+        },
     }
 }
 
@@ -469,6 +525,13 @@ pub(crate) fn reset_perf_counters() {
     SHELL_LATENCY_SCHEDULE_TO_DMABUF_US.store(0, Ordering::Relaxed);
     SHELL_LATENCY_SCHEDULE_TO_RENDER_US.store(0, Ordering::Relaxed);
     SHELL_LATENCY_SCHEDULE_TO_RENDER_MAX_US.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_SAMPLES.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_COUNT.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_COVERAGE_PER_MILLE.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_MAX_COVERAGE_PER_MILLE.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_BBOX_FULL.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_MISSING.store(0, Ordering::Relaxed);
+    SHELL_DIRTY_RECT_EMPTY.store(0, Ordering::Relaxed);
     if let Ok(mut latency) = LATENCY.lock() {
         *latency = LatencyTrace::new();
     }

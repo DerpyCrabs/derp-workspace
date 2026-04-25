@@ -556,11 +556,22 @@ export interface PerfLatencySnapshot {
   schedule_to_render_max_us: number
 }
 
+export interface PerfDirtyRectSnapshot {
+  samples: number
+  rect_count: number
+  coverage_per_mille: number
+  max_coverage_per_mille: number
+  bbox_full_count: number
+  missing_count: number
+  empty_count: number
+}
+
 export interface PerfCounterSnapshot {
   begin_frame: PerfBeginFrameSnapshot
   shell_updates: PerfShellUpdateSnapshot
   shell_sync: PerfShellSyncSnapshot
   latency: PerfLatencySnapshot
+  dirty_rects: PerfDirtyRectSnapshot
   shell_runtime?: PerfShellRuntimeSnapshot
 }
 
@@ -1394,6 +1405,16 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       schedule_to_render_us: after.latency.schedule_to_render_us - before.latency.schedule_to_render_us,
       schedule_to_render_max_us:
         after.latency.samples > before.latency.samples ? after.latency.schedule_to_render_max_us : 0,
+    },
+    dirty_rects: {
+      samples: after.dirty_rects.samples - before.dirty_rects.samples,
+      rect_count: after.dirty_rects.rect_count - before.dirty_rects.rect_count,
+      coverage_per_mille: after.dirty_rects.coverage_per_mille - before.dirty_rects.coverage_per_mille,
+      max_coverage_per_mille:
+        after.dirty_rects.samples > before.dirty_rects.samples ? after.dirty_rects.max_coverage_per_mille : 0,
+      bbox_full_count: after.dirty_rects.bbox_full_count - before.dirty_rects.bbox_full_count,
+      missing_count: after.dirty_rects.missing_count - before.dirty_rects.missing_count,
+      empty_count: after.dirty_rects.empty_count - before.dirty_rects.empty_count,
     },
     ...(shellRuntime ? { shell_runtime: shellRuntime } : {}),
   }
