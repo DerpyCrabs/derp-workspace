@@ -26,6 +26,8 @@ const SHARED_STATE_ABI = 2
 const KIND_EXCLUSION_ZONES = 1
 const KIND_UI_WINDOWS = 2
 const SHARED_STATE_PREFIX_BYTES = 16
+let shellUiWindowsPayloadScratch = new ArrayBuffer(0)
+let shellExclusionPayloadScratch = new ArrayBuffer(0)
 
 function i32(value: number): number {
   return Number.isFinite(value) ? Math.trunc(value) : 0
@@ -92,11 +94,17 @@ function writeSharedState(path: string | null | undefined, payload: ArrayBuffer,
   }
 }
 
+function scratchBuffer(current: ArrayBuffer, length: number): ArrayBuffer {
+  return current.byteLength === length ? current : new ArrayBuffer(length)
+}
+
 export function writeShellUiWindowsState(
   generation: number,
   windows: readonly SharedShellUiWindow[],
 ): boolean {
-  const payload = new ArrayBuffer(SHARED_STATE_PREFIX_BYTES + 8 + windows.length * 28)
+  const payloadLength = SHARED_STATE_PREFIX_BYTES + 8 + windows.length * 28
+  const payload = scratchBuffer(shellUiWindowsPayloadScratch, payloadLength)
+  shellUiWindowsPayloadScratch = payload
   const view = new DataView(payload)
   setSharedPrefix(view)
   view.setUint32(SHARED_STATE_PREFIX_BYTES + 0, u32(generation), true)
@@ -121,9 +129,10 @@ export function writeShellExclusionState(
   overlayOpen: boolean,
   floatingRects: readonly SharedShellExclusionRect[],
 ): boolean {
-  const payload = new ArrayBuffer(
-    SHARED_STATE_PREFIX_BYTES + 8 + rects.length * 20 + (trayStrip ? 16 : 0) + 8 + floatingRects.length * 20,
-  )
+  const payloadLength =
+    SHARED_STATE_PREFIX_BYTES + 8 + rects.length * 20 + (trayStrip ? 16 : 0) + 8 + floatingRects.length * 20
+  const payload = scratchBuffer(shellExclusionPayloadScratch, payloadLength)
+  shellExclusionPayloadScratch = payload
   const view = new DataView(payload)
   setSharedPrefix(view)
   view.setUint32(SHARED_STATE_PREFIX_BYTES + 0, u32(rects.length), true)

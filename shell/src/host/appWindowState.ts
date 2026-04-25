@@ -229,9 +229,9 @@ export function buildWindowsMapFromList(
 ): Map<number, DerpWindow> {
   const next = new Map<number, DerpWindow>()
   if (!Array.isArray(raw)) return prev && prev.size === 0 ? prev : next
-  const prevEntries = prev ? Array.from(prev.entries()) : null
-  let identical = !!prevEntries
-  let nextIndex = 0
+  const prevIterator = prev?.entries()
+  let identical = !!prev
+  let seen = 0
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue
     const r = row as Record<string, unknown>
@@ -282,12 +282,12 @@ export function buildWindowsMapFromList(
     const stableWindow = sameAsPrevious ? previousWindow : window
     next.set(wid, stableWindow)
     if (identical) {
-      const previousEntry = prevEntries?.[nextIndex]
+      const previousEntry = prevIterator?.next().value
       if (!previousEntry || previousEntry[0] !== wid || previousEntry[1] !== stableWindow) identical = false
     }
-    nextIndex += 1
+    seen += 1
   }
-  if (identical && prev && prev.size === next.size) return prev
+  if (identical && prev && prev.size === seen) return prev
   return next
 }
 

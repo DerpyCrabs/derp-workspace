@@ -205,6 +205,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
+  let snapshotDomainRevisionScratch = new ArrayBuffer(0)
+  let snapshotDomainRevisionView = new DataView(snapshotDomainRevisionScratch)
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
 
   const snapshotDomainOutputs = 1 << 0
@@ -857,13 +859,15 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainRevisionBuffer = (cursor: CompositorSnapshotDecodeCursor | undefined) => {
     const revisions = cursor?.domainRevisions
     if (!revisions || revisions.length === 0) return null
-    const buffer = new ArrayBuffer(revisions.length * 8)
-    const view = new DataView(buffer)
+    if (snapshotDomainRevisionScratch.byteLength !== revisions.length * 8) {
+      snapshotDomainRevisionScratch = new ArrayBuffer(revisions.length * 8)
+      snapshotDomainRevisionView = new DataView(snapshotDomainRevisionScratch)
+    }
     for (let index = 0; index < revisions.length; index += 1) {
       const value = Math.max(0, Math.trunc(revisions[index] ?? 0))
-      view.setBigUint64(index * 8, BigInt(value), true)
+      snapshotDomainRevisionView.setBigUint64(index * 8, BigInt(value), true)
     }
-    return buffer
+    return snapshotDomainRevisionScratch
   }
 
   const dirtySnapshotResultBuffer = (result: unknown) => {
