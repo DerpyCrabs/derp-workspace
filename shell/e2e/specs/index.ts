@@ -16,6 +16,7 @@ import taskbarCloseGroup from './taskbar-close.spec.ts'
 import textEditorGroup from './text-editor.spec.ts'
 import windowParityGroup from './window-parity.spec.ts'
 import x11WindowsGroup from './x11-windows.spec.ts'
+import xdgActivationGroup from './xdg-activation.spec.ts'
 
 export const defaultGroups = [
   shellChromeGroup,
@@ -24,6 +25,7 @@ export const defaultGroups = [
   notificationsGroup,
   windowParityGroup,
   x11WindowsGroup,
+  xdgActivationGroup,
   snapAssistGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,

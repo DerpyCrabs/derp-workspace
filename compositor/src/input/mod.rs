@@ -15,10 +15,7 @@ use smithay::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     },
-    reexports::{
-        calloop::LoopHandle,
-        wayland_server::protocol::wl_surface::WlSurface,
-    },
+    reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat,
     wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint},
@@ -194,7 +191,10 @@ impl CompositorState {
 
         if let Some((surface, surface_loc, false, region)) = constraint {
             let point = (pos - surface_loc).to_i32_round();
-            if region.as_ref().is_some_and(|region| !region.contains(point)) {
+            if region
+                .as_ref()
+                .is_some_and(|region| !region.contains(point))
+            {
                 pointer.frame(self);
                 return;
             }
@@ -245,14 +245,18 @@ impl CompositorState {
             return;
         }
 
-        if let Some((surface, surface_loc, locked, region)) = self.active_pointer_constraint(&pointer)
+        if let Some((surface, surface_loc, locked, region)) =
+            self.active_pointer_constraint(&pointer)
         {
             if locked {
                 pointer.frame(self);
                 return;
             }
             let point = (pos - surface_loc).to_i32_round();
-            if region.as_ref().is_some_and(|region| !region.contains(point)) {
+            if region
+                .as_ref()
+                .is_some_and(|region| !region.contains(point))
+            {
                 pointer.frame(self);
                 return;
             }

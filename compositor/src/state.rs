@@ -78,6 +78,7 @@ use smithay::{
         },
         shm::ShmState,
         viewporter::ViewporterState,
+        xdg_activation::{XdgActivationState, XdgActivationTokenData},
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
@@ -504,6 +505,7 @@ pub struct CompositorState {
 
     pub compositor_state: WlCompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub xdg_activation_state: XdgActivationState,
     pub xdg_decoration_state: XdgDecorationState,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
@@ -1180,6 +1182,7 @@ impl CompositorState {
 
         let compositor_state = WlCompositorState::new_v6::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
@@ -1324,6 +1327,7 @@ impl CompositorState {
             socket_name,
             compositor_state,
             xdg_shell_state,
+            xdg_activation_state,
             xdg_decoration_state,
             fractional_scale_manager_state,
             viewporter_state,
@@ -5601,11 +5605,20 @@ impl CompositorState {
                 .window_info(spawn_focus_wid)
                 .unwrap_or(info);
             let output_name = current_info.output_name.clone();
+            let pending_activation_focus =
+                self.shell_pending_native_focus_window_id == Some(spawn_focus_wid);
             if !(self.scratchpad_windows.contains_key(&spawn_focus_wid) && current_info.minimized) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
             }
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
-                self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                if pending_activation_focus {
+                    self.shell_raise_and_focus_window(spawn_focus_wid);
+                    if let Some(window_order) = self.shell_window_order_message_if_changed() {
+                        self.shell_send_to_cef(window_order);
+                    }
+                } else {
+                    self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                }
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
             }
         }
@@ -7317,22 +7330,24 @@ impl CompositorState {
 
     pub(crate) fn on_notifications_state_updated(&mut self, state_json: String) {
         self.notifications_state_json = state_json.clone();
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::NotificationsState {
-            state_json,
-        });
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::NotificationsState { state_json },
+        );
     }
 
     pub(crate) fn on_notification_event(
         &mut self,
         event: crate::notifications::NotificationEventPayload,
     ) {
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::NotificationEvent {
-            notification_id: event.notification_id,
-            event_type: event.event_type,
-            action_key: event.action_key,
-            close_reason: event.close_reason,
-            source: event.source,
-        });
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::NotificationEvent {
+                notification_id: event.notification_id,
+                event_type: event.event_type,
+                action_key: event.action_key,
+                close_reason: event.close_reason,
+                source: event.source,
+            },
+        );
     }
 
     pub(crate) fn notifications_state_message(
@@ -7347,9 +7362,7 @@ impl CompositorState {
         if let Some(tx) = &self.notifications_cmd_tx {
             let (reply_tx, reply_rx) = std::sync::mpsc::channel();
             if tx
-                .send(crate::notifications::NotificationsCmd::GetState {
-                    reply: reply_tx,
-                })
+                .send(crate::notifications::NotificationsCmd::GetState { reply: reply_tx })
                 .is_ok()
             {
                 if let Ok(state_json) = reply_rx.recv_timeout(Duration::from_secs(2)) {
@@ -9167,6 +9180,9 @@ impl CompositorState {
     }
 
     fn scratchpad_hide_window(&mut self, window_id: u32) {
+        if self.shell_pending_native_focus_window_id == Some(window_id) {
+            self.shell_pending_native_focus_window_id = None;
+        }
         if self.window_registry.is_shell_hosted(window_id) {
             let _ = self.shell_backed_minimize_if_any(window_id);
         } else {
@@ -9487,7 +9503,7 @@ impl CompositorState {
         }
     }
 
-    fn shell_window_order_message_if_changed(
+    pub(crate) fn shell_window_order_message_if_changed(
         &mut self,
     ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
         let windows: Vec<_> = self
@@ -12542,6 +12558,31 @@ impl CompositorState {
             ("WAYLAND_DISPLAY".to_string(), display),
             ("XDG_RUNTIME_DIR".to_string(), runtime),
         ];
+        self.xdg_activation_prune_stale_tokens();
+        let activation_token = {
+            let surface = self
+                .seat
+                .get_keyboard()
+                .and_then(|keyboard| keyboard.current_focus())
+                .or_else(|| {
+                    self.seat
+                        .get_pointer()
+                        .and_then(|pointer| pointer.current_focus())
+                });
+            let app_id = self
+                .logical_focused_window_id()
+                .or_else(|| self.keyboard_focused_window_id())
+                .and_then(|window_id| self.window_registry.window_info(window_id))
+                .map(|info| info.app_id);
+            let data = XdgActivationTokenData {
+                app_id,
+                surface,
+                ..Default::default()
+            };
+            let (token, _) = self.xdg_activation_state.create_external_token(Some(data));
+            String::from(token.clone())
+        };
+        envs.push(("XDG_ACTIVATION_TOKEN".to_string(), activation_token));
         for key in [
             "DBUS_SESSION_BUS_ADDRESS",
             "XDG_CURRENT_DESKTOP",
@@ -13076,6 +13117,7 @@ impl DmabufHandler for CompositorState {
     }
 }
 
+smithay::delegate_xdg_activation!(crate::CompositorState);
 smithay::delegate_xdg_decoration!(crate::CompositorState);
 smithay::delegate_fractional_scale!(crate::CompositorState);
 smithay::delegate_viewporter!(crate::CompositorState);

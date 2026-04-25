@@ -357,7 +357,9 @@ impl NotificationsDbus {
         let urgency = 1;
         let id = {
             let Ok(mut runtime) = self.runtime.lock() else {
-                return Err(zbus::fdo::Error::Failed("notification runtime poisoned".into()));
+                return Err(zbus::fdo::Error::Failed(
+                    "notification runtime poisoned".into(),
+                ));
             };
             runtime.notify(
                 "native",
@@ -388,7 +390,9 @@ impl NotificationsDbus {
     ) -> zbus::fdo::Result<()> {
         let closed = {
             let Ok(mut runtime) = self.runtime.lock() else {
-                return Err(zbus::fdo::Error::Failed("notification runtime poisoned".into()));
+                return Err(zbus::fdo::Error::Failed(
+                    "notification runtime poisoned".into(),
+                ));
             };
             runtime.close(id, 3)
         };
@@ -460,7 +464,10 @@ fn run_notifications(
     }) {
         Ok(connection) => Some(connection),
         Err(error) => {
-            tracing::warn!(?error, "notifications: could not own org.freedesktop.Notifications");
+            tracing::warn!(
+                ?error,
+                "notifications: could not own org.freedesktop.Notifications"
+            );
             match Connection::session() {
                 Ok(connection) => Some(connection),
                 Err(session_error) => {
@@ -539,7 +546,10 @@ fn run_notifications(
                 }
             }
             Ok(NotificationsCmd::Close { id, reason, source }) => {
-                let closed = runtime.lock().ok().and_then(|mut runtime| runtime.close(id, reason));
+                let closed = runtime
+                    .lock()
+                    .ok()
+                    .and_then(|mut runtime| runtime.close(id, reason));
                 if let Some(entry) = closed {
                     let _ = loop_tx.send(NotificationsLoopMsg::State(
                         runtime
@@ -582,7 +592,10 @@ fn run_notifications(
                     }));
                     emit_action_invoked(connection.as_ref(), event.notification_id, &action_key);
                 }
-                let closed = runtime.lock().ok().and_then(|mut runtime| runtime.close(id, 2));
+                let closed = runtime
+                    .lock()
+                    .ok()
+                    .and_then(|mut runtime| runtime.close(id, 2));
                 if let Some(entry) = closed {
                     let _ = loop_tx.send(NotificationsLoopMsg::State(
                         runtime
@@ -683,7 +696,9 @@ fn normalize_actions(raw: Vec<String>) -> Vec<NotificationAction> {
     actions
 }
 
-fn normalize_shell_request(request: ShellNotificationRequest) -> NormalizedShellNotificationRequest {
+fn normalize_shell_request(
+    request: ShellNotificationRequest,
+) -> NormalizedShellNotificationRequest {
     let mut actions = Vec::new();
     for action in request.actions {
         let key = clamp_text(&action.key, 64);

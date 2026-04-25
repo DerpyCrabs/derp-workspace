@@ -1473,8 +1473,9 @@ fn handle_one(
             uplink.notifications_set_enabled(enabled)?;
         }
         "/notifications_shell" => {
-            let request = serde_json::from_value::<crate::notifications::ShellNotificationRequest>(v)
-                .map_err(|e| format!("invalid notifications request: {e}"))?;
+            let request =
+                serde_json::from_value::<crate::notifications::ShellNotificationRequest>(v)
+                    .map_err(|e| format!("invalid notifications request: {e}"))?;
             let id = uplink.notifications_shell_notify(request)?;
             let body = serde_json::json!({ "id": id }).to_string();
             write_http_ok_json(stream, &body).map_err(|e| e.to_string())?;

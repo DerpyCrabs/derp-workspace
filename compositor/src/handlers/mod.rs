@@ -12,18 +12,65 @@ use smithay::delegate_relative_pointer;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point};
-use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
+use smithay::utils::{Logical, Point, Serial};
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
 use smithay::wayland::selection::data_device::{
     set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
 };
 use smithay::wayland::selection::wlr_data_control::DataControlHandler;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::tablet_manager::TabletSeatHandler;
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
 use smithay::{delegate_data_control, delegate_data_device, delegate_output, delegate_seat};
 
 impl CompositorState {
+    fn xdg_activation_token_max_age(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(10)
+    }
+
+    pub(crate) fn xdg_activation_prune_stale_tokens(&mut self) {
+        let max_age = self.xdg_activation_token_max_age();
+        self.xdg_activation_state
+            .retain_tokens(|_, data| data.timestamp.elapsed() < max_age);
+    }
+
+    fn xdg_activation_serial_is_current(&self, serial: Serial) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.last_enter())
+            .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
+            || self
+                .seat
+                .get_pointer()
+                .and_then(|pointer| pointer.last_enter())
+                .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
+    }
+
+    fn xdg_activation_surface_matches_current_focus(&self, surface: &WlSurface) -> bool {
+        let root = self.pointer_constraint_root_surface(surface);
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
+            || self
+                .seat
+                .get_pointer()
+                .and_then(|pointer| pointer.current_focus())
+                .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
+    }
+
+    fn xdg_activation_window_id_for_surface(&self, surface: &WlSurface) -> Option<u32> {
+        self.window_registry
+            .window_id_for_wl_surface(surface)
+            .or_else(|| {
+                let root = self.pointer_constraint_root_surface(surface);
+                self.window_registry.window_id_for_wl_surface(&root)
+            })
+    }
+
     pub(crate) fn pointer_constraint_root_surface(&self, surface: &WlSurface) -> WlSurface {
         let mut root = surface.clone();
         while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
@@ -38,12 +85,16 @@ impl CompositorState {
     ) -> Option<Point<f64, Logical>> {
         let root = self.pointer_constraint_root_surface(surface);
         if let Some(window) = self.wayland_window_containing_surface(&root) {
-            let map_loc = self.space.element_location(&crate::DerpSpaceElem::Wayland(window.clone()))?;
+            let map_loc = self
+                .space
+                .element_location(&crate::DerpSpaceElem::Wayland(window.clone()))?;
             let render_loc = map_loc - window.geometry().loc;
             return Some(render_loc.to_f64());
         }
         if let Some(x11) = self.x11_window_containing_surface(&root) {
-            let map_loc = self.space.element_location(&crate::DerpSpaceElem::X11(x11.clone()))?;
+            let map_loc = self
+                .space
+                .element_location(&crate::DerpSpaceElem::X11(x11.clone()))?;
             let render_loc = map_loc - x11.geometry().loc;
             return Some(render_loc.to_f64());
         }
@@ -68,7 +119,10 @@ impl CompositorState {
                 return;
             }
             let point = (pointer_location - surface_origin).to_i32_round();
-            if constraint.region().is_none_or(|region| region.contains(point)) {
+            if constraint
+                .region()
+                .is_none_or(|region| region.contains(point))
+            {
                 constraint.activate();
             }
         });
@@ -129,6 +183,69 @@ delegate_seat!(crate::CompositorState);
 
 impl TabletSeatHandler for CompositorState {}
 
+impl XdgActivationHandler for CompositorState {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.xdg_activation_state
+    }
+
+    fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        self.xdg_activation_prune_stale_tokens();
+        let Some((serial, seat)) = data
+            .serial
+            .as_ref()
+            .map(|(serial, seat)| (*serial, seat.clone()))
+        else {
+            return false;
+        };
+        if Seat::from_resource(&seat) != Some(self.seat.clone()) {
+            return false;
+        }
+        if !self.xdg_activation_serial_is_current(serial) {
+            return false;
+        }
+        if let Some(surface) = data.surface.as_ref() {
+            return self.xdg_activation_surface_matches_current_focus(surface);
+        }
+        true
+    }
+
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.xdg_activation_prune_stale_tokens();
+        if token_data.timestamp.elapsed() >= self.xdg_activation_token_max_age() {
+            self.xdg_activation_state.remove_token(&token);
+            return;
+        }
+        let Some(window_id) = self.xdg_activation_window_id_for_surface(&surface) else {
+            self.xdg_activation_state.remove_token(&token);
+            return;
+        };
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            self.xdg_activation_state.remove_token(&token);
+            return;
+        };
+        if info.minimized {
+            if self.scratchpad_windows.contains_key(&window_id) {
+                self.xdg_activation_state.remove_token(&token);
+                return;
+            }
+            self.shell_restore_minimized_window(window_id);
+        } else if self.wayland_window_id_is_pending_deferred_toplevel(window_id) {
+            self.shell_pending_native_focus_window_id = Some(window_id);
+        } else {
+            self.shell_raise_and_focus_window(window_id);
+            if let Some(window_order) = self.shell_window_order_message_if_changed() {
+                self.shell_send_to_cef(window_order);
+            }
+        }
+        self.xdg_activation_state.remove_token(&token);
+    }
+}
+
 impl PointerConstraintsHandler for CompositorState {
     fn new_constraint(
         &mut self,
@@ -151,7 +268,9 @@ impl PointerConstraintsHandler for CompositorState {
             return;
         };
         let same_surface = match (pointer_root_window_id, surface_window_id) {
-            (Some(focus_window_id), Some(surface_window_id)) => focus_window_id == surface_window_id,
+            (Some(focus_window_id), Some(surface_window_id)) => {
+                focus_window_id == surface_window_id
+            }
             _ => current_focus == *surface,
         };
         if !same_surface {

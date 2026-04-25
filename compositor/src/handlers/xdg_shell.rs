@@ -173,11 +173,20 @@ impl XdgShellHandler for CompositorState {
                 .window_info(spawn_focus_wid)
                 .unwrap_or(info);
             let output_name = current_info.output_name.clone();
+            let pending_activation_focus =
+                self.shell_pending_native_focus_window_id == Some(spawn_focus_wid);
             if !(self.scratchpad_windows.contains_key(&spawn_focus_wid) && current_info.minimized) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
             }
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
-                self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                if pending_activation_focus {
+                    self.shell_raise_and_focus_window(spawn_focus_wid);
+                    if let Some(window_order) = self.shell_window_order_message_if_changed() {
+                        self.shell_send_to_cef(window_order);
+                    }
+                } else {
+                    self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
+                }
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
             }
         }

@@ -1,15 +1,17 @@
 use clap::Parser;
 use smithay_client_toolkit::{
+    activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_pointer, delegate_pointer_constraints,
-    delegate_registry, delegate_relative_pointer, delegate_seat, delegate_shm,
-    delegate_xdg_shell, delegate_xdg_window,
+    delegate_activation, delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer,
+    delegate_pointer_constraints, delegate_registry, delegate_relative_pointer, delegate_seat,
+    delegate_shm, delegate_xdg_shell, delegate_xdg_window,
     globals::ProvidesBoundGlobal,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
-        pointer::{PointerEvent, PointerHandler},
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers, RepeatInfo},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
         pointer_constraints::{PointerConstraintsHandler, PointerConstraintsState},
         relative_pointer::{RelativeMotionEvent, RelativePointerHandler, RelativePointerState},
         Capability, SeatHandler, SeatState,
@@ -28,7 +30,7 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, QueueHandle,
 };
 use wayland_protocols::wp::{
@@ -96,6 +98,8 @@ struct Args {
     drop_buffer_after_draw: bool,
     #[arg(long, default_value = "none")]
     pointer_constraint: String,
+    #[arg(long)]
+    spawn_on_press_command: Option<String>,
 }
 
 fn main() {
@@ -116,6 +120,11 @@ fn main() {
     let seat_state = SeatState::new(&globals, &qh);
     let relative_pointer_state = RelativePointerState::bind(&globals, &qh);
     let pointer_constraint_state = PointerConstraintsState::bind(&globals, &qh);
+    let activation_state = ActivationState::bind(&globals, &qh).ok();
+    let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
+    if startup_activation_token.is_some() {
+        std::env::remove_var("XDG_ACTIVATION_TOKEN");
+    }
 
     let surface = compositor_state.create_surface(&qh);
     let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
@@ -135,6 +144,7 @@ fn main() {
         _compositor_state: compositor_state,
         shm_state,
         _xdg_shell_state: xdg_shell_state,
+        activation_state,
         relative_pointer_state,
         pointer_constraint_state,
         pool,
@@ -146,13 +156,21 @@ fn main() {
         needs_redraw: false,
         exit: false,
         base_title: args.title,
+        app_id: args.app_id,
         token: args.token,
         strip_color,
         drop_buffer_after_draw: args.drop_buffer_after_draw,
         buffer_dropped: false,
         pending_presentation_loops: 0,
+        startup_activation_token,
+        startup_activation_sent: false,
+        spawn_on_press_command: args.spawn_on_press_command,
+        spawn_on_press_requested: false,
         pointer_constraint_mode,
+        keyboard: None,
+        keyboard_seat: None,
         pointer: None,
+        pointer_seat: None,
         relative_pointer: None,
         pointer_constraint: None,
         constraint_locked: false,
@@ -175,6 +193,7 @@ struct TestClient {
     _compositor_state: CompositorState,
     shm_state: Shm,
     _xdg_shell_state: XdgShell,
+    activation_state: Option<ActivationState>,
     relative_pointer_state: RelativePointerState,
     pointer_constraint_state: PointerConstraintsState,
     pool: SlotPool,
@@ -186,13 +205,21 @@ struct TestClient {
     needs_redraw: bool,
     exit: bool,
     base_title: String,
+    app_id: String,
     token: String,
     strip_color: [u8; 4],
     drop_buffer_after_draw: bool,
     buffer_dropped: bool,
     pending_presentation_loops: u32,
+    startup_activation_token: Option<String>,
+    startup_activation_sent: bool,
+    spawn_on_press_command: Option<String>,
+    spawn_on_press_requested: bool,
     pointer_constraint_mode: PointerConstraintMode,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboard_seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
+    pointer_seat: Option<wl_seat::WlSeat>,
     relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
     pointer_constraint: Option<PointerConstraintHandle>,
     constraint_locked: bool,
@@ -264,6 +291,7 @@ impl TestClient {
             .attach_to(self.window.wl_surface())
             .expect("attach buffer");
         self.window.wl_surface().commit();
+        self.maybe_activate_from_startup_token();
         self.needs_redraw = false;
     }
 
@@ -316,6 +344,45 @@ impl TestClient {
                 .map(PointerConstraintHandle::Confined),
             PointerConstraintMode::None => None,
         };
+    }
+
+    fn maybe_activate_from_startup_token(&mut self) {
+        if self.startup_activation_sent {
+            return;
+        }
+        let Some(token) = self.startup_activation_token.take() else {
+            return;
+        };
+        let Some(activation_state) = self.activation_state.as_ref() else {
+            self.startup_activation_token = Some(token);
+            return;
+        };
+        activation_state.activate::<Self>(self.window.wl_surface(), token);
+        self.startup_activation_sent = true;
+    }
+
+    fn request_spawn_activation(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        serial: u32,
+        seat: wl_seat::WlSeat,
+        surface: wl_surface::WlSurface,
+    ) {
+        let Some(command) = self.spawn_on_press_command.as_ref() else {
+            return;
+        };
+        let Some(activation_state) = self.activation_state.as_ref() else {
+            panic!("spawn-on-press requires xdg-activation support");
+        };
+        let _ = command;
+        activation_state.request_token(
+            qh,
+            RequestData {
+                app_id: Some(self.app_id.clone()),
+                seat_and_serial: Some((seat, serial)),
+                surface: Some(surface),
+            },
+        );
     }
 
     fn update_status_title(&self) {
@@ -637,6 +704,109 @@ impl WindowHandler for TestClient {
     }
 }
 
+impl ActivationHandler for TestClient {
+    type RequestData = RequestData;
+
+    fn new_token(&mut self, token: String, _data: &Self::RequestData) {
+        if self.spawn_on_press_requested {
+            return;
+        }
+        let Some(command) = self.spawn_on_press_command.as_ref() else {
+            return;
+        };
+        self.spawn_on_press_requested = true;
+        let mut child = std::process::Command::new("/bin/sh");
+        child
+            .arg("-c")
+            .arg(command)
+            .env("XDG_ACTIVATION_TOKEN", token);
+        child.spawn().expect("spawn-on-press child");
+    }
+}
+
+impl KeyboardHandler for TestClient {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw: &[u32],
+        _keysyms: &[Keysym],
+    ) {
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        serial: u32,
+        _event: KeyEvent,
+    ) {
+        let Some(seat) = self.keyboard_seat.as_ref() else {
+            return;
+        };
+        self.request_spawn_activation(qh, serial, seat.clone(), self.window.wl_surface().clone());
+    }
+
+    fn repeat_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        _event: KeyEvent,
+    ) {
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        serial: u32,
+        _event: KeyEvent,
+    ) {
+        let Some(seat) = self.keyboard_seat.as_ref() else {
+            return;
+        };
+        self.request_spawn_activation(qh, serial, seat.clone(), self.window.wl_surface().clone());
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        _modifiers: Modifiers,
+        _raw_modifiers: RawModifiers,
+        _layout: u32,
+    ) {
+    }
+
+    fn update_repeat_info(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _info: RepeatInfo,
+    ) {
+    }
+}
+
 impl ShmHandler for TestClient {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm_state
@@ -657,7 +827,16 @@ impl SeatHandler for TestClient {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard_seat = Some(seat.clone());
+            let keyboard = self
+                .seat_state
+                .get_keyboard(qh, &seat, None)
+                .expect("create keyboard");
+            self.keyboard = Some(keyboard);
+        }
         if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer_seat = Some(seat.clone());
             let pointer = self
                 .seat_state
                 .get_pointer(qh, &seat)
@@ -678,6 +857,12 @@ impl SeatHandler for TestClient {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard {
+            if let Some(keyboard) = self.keyboard.take() {
+                keyboard.release();
+            }
+            self.keyboard_seat = None;
+        }
         if capability == Capability::Pointer {
             if let Some(constraint) = self.pointer_constraint.take() {
                 constraint.destroy();
@@ -690,6 +875,7 @@ impl SeatHandler for TestClient {
             }
             self.constraint_locked = false;
             self.constraint_confined = false;
+            self.pointer_seat = None;
         }
     }
 
@@ -700,10 +886,22 @@ impl PointerHandler for TestClient {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
-        _events: &[PointerEvent],
+        events: &[PointerEvent],
     ) {
+        for event in events {
+            let Some(seat) = self.pointer_seat.as_ref() else {
+                continue;
+            };
+            match event.kind {
+                PointerEventKind::Press { serial, .. }
+                | PointerEventKind::Release { serial, .. } => {
+                    self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -785,6 +983,8 @@ delegate_xdg_shell!(TestClient);
 delegate_xdg_window!(TestClient);
 delegate_seat!(TestClient);
 delegate_registry!(TestClient);
+delegate_activation!(TestClient);
+delegate_keyboard!(TestClient);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {
