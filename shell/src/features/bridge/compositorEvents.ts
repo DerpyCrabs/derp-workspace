@@ -68,6 +68,7 @@ export function flushActiveShellLatencySample() {
 declare global {
   interface Window {
     __DERP_APPLY_COMPOSITOR_BATCH?: (details: readonly DerpShellDetail[]) => void
+    __DERP_APPLY_COMPOSITOR_BATCH_JSON?: (json: string) => void
     __DERP_SYNC_COMPOSITOR_SNAPSHOT?: () => void
   }
 }
@@ -76,17 +77,31 @@ export function installCompositorBatchHandler(
   handler: (details: readonly DerpShellDetail[]) => void,
 ): () => void {
   const previous = window.__DERP_APPLY_COMPOSITOR_BATCH
+  const previousJson = window.__DERP_APPLY_COMPOSITOR_BATCH_JSON
   const wrapped = (details: readonly DerpShellDetail[]) => {
     if (!Array.isArray(details) || details.length === 0) return
     handler(details)
   }
+  const wrappedJson = (json: string) => {
+    const details = JSON.parse(json) as readonly DerpShellDetail[]
+    wrapped(details)
+  }
   window.__DERP_APPLY_COMPOSITOR_BATCH = wrapped
+  window.__DERP_APPLY_COMPOSITOR_BATCH_JSON = wrappedJson
   return () => {
-    if (window.__DERP_APPLY_COMPOSITOR_BATCH !== wrapped) return
-    if (typeof previous === 'function') {
-      window.__DERP_APPLY_COMPOSITOR_BATCH = previous
-    } else {
-      delete window.__DERP_APPLY_COMPOSITOR_BATCH
+    if (window.__DERP_APPLY_COMPOSITOR_BATCH === wrapped) {
+      if (typeof previous === 'function') {
+        window.__DERP_APPLY_COMPOSITOR_BATCH = previous
+      } else {
+        delete window.__DERP_APPLY_COMPOSITOR_BATCH
+      }
+    }
+    if (window.__DERP_APPLY_COMPOSITOR_BATCH_JSON === wrappedJson) {
+      if (typeof previousJson === 'function') {
+        window.__DERP_APPLY_COMPOSITOR_BATCH_JSON = previousJson
+      } else {
+        delete window.__DERP_APPLY_COMPOSITOR_BATCH_JSON
+      }
     }
   }
 }

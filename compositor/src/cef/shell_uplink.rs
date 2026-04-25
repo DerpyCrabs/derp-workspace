@@ -90,6 +90,93 @@ fn dirty_snapshot_read_result_value(status: &str, bytes: Option<&[u8]>) -> Optio
     Some(object)
 }
 
+fn call_global_function(frame: &Frame, name: &str, arguments: &[Option<V8Value>]) -> bool {
+    let Some(mut context) = frame.v8_context() else {
+        return false;
+    };
+    if context.enter() == 0 {
+        return false;
+    }
+    let ok = (|| {
+        let Some(global) = context.global() else {
+            return false;
+        };
+        let Some(func) = global.value_bykey(Some(&CefString::from(name))) else {
+            return false;
+        };
+        if func.is_function() == 0 {
+            return false;
+        }
+        func.execute_function_with_context(Some(&mut context), None, Some(arguments))
+            .is_some()
+    })();
+    let _ = context.exit();
+    ok
+}
+
+fn read_binary_value_bytes(value: &BinaryValue) -> Option<Vec<u8>> {
+    let size = value.size();
+    let mut bytes = vec![0; size];
+    if size == 0 {
+        return Some(bytes);
+    }
+    if value.data(Some(&mut bytes), 0) != size {
+        return None;
+    }
+    Some(bytes)
+}
+
+fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> bool {
+    if cef_string_userfree_to_string(&message.name())
+        != crate::cef::compositor_downlink::PROCESS_MESSAGE_NAME
+    {
+        return false;
+    }
+    let Some(args) = message.argument_list() else {
+        return true;
+    };
+    let op = cef_string_userfree_to_string(&args.string(0));
+    match op.as_str() {
+        "batch_json" => {
+            let Some(binary) = args.binary(1) else {
+                return true;
+            };
+            let Some(bytes) = read_binary_value_bytes(&binary) else {
+                return true;
+            };
+            let Ok(json) = String::from_utf8(bytes) else {
+                return true;
+            };
+            let mut json_arg = v8_value_create_string(Some(&CefString::from(json.as_str())));
+            if !call_global_function(
+                frame,
+                "__DERP_APPLY_COMPOSITOR_BATCH_JSON",
+                &[json_arg.take()],
+            ) {
+                let code = format!(
+                    "(()=>{{const f=window.__DERP_APPLY_COMPOSITOR_BATCH_JSON;if(typeof f==='function')f({});}})();",
+                    serde_json::to_string(&json).unwrap_or_else(|_| "\"[]\"".to_string())
+                );
+                frame.execute_java_script(Some(&CefString::from(code.as_str())), None, 0);
+            }
+            true
+        }
+        "snapshot_notify" => {
+            if !call_global_function(frame, "__DERP_SYNC_COMPOSITOR_SNAPSHOT", &[]) {
+                frame.execute_java_script(
+                    Some(&CefString::from(
+                        "(()=>{const f=window.__DERP_SYNC_COMPOSITOR_SNAPSHOT;if(typeof f==='function')f();})();",
+                    )),
+                    None,
+                    0,
+                );
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
 fn maybe_invalidate_shell_view_after_move_delta(
     browser: Option<&mut Browser>,
     reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
@@ -1444,7 +1531,7 @@ wrap_render_process_handler! {
             if source_process != ProcessId::BROWSER {
                 return 0;
             }
-            let Some(_msg) = message else {
+            let Some(msg) = message else {
                 return 0;
             };
             let Some(frame) = frame else {
@@ -1452,6 +1539,9 @@ wrap_render_process_handler! {
             };
             if frame.is_main() != 1 {
                 return 0;
+            }
+            if handle_downlink_process_message(frame, msg) {
+                return 1;
             }
             0
         }

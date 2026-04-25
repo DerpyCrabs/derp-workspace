@@ -1,12 +1,15 @@
 use std::sync::Mutex;
 
 use cef::{
-    Browser, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, KeyEvent, KeyEventType,
-    MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
+    binary_value_create, process_message_create, Browser, CefString, ImplBrowser, ImplBrowserHost,
+    ImplFrame, ImplListValue, ImplProcessMessage, KeyEvent, KeyEventType, MouseButtonType,
+    MouseEvent, PointerType, ProcessId, TouchEvent, TouchEventType,
 };
 use serde_json::{json, Value};
 
 use crate::cef::osr_view_state::OsrViewState;
+
+pub const PROCESS_MESSAGE_NAME: &str = "derp_shell_downlink";
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
     if snapshot_epoch > 0 {
@@ -15,13 +18,6 @@ fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
         }
     }
     detail
-}
-
-fn execute_main_frame_script(browser: &Browser, code: &str) {
-    let Some(frame) = browser.main_frame() else {
-        return;
-    };
-    frame.execute_java_script(Some(&CefString::from(code)), None, 0);
 }
 
 fn apply_output_dimensions_to_osr(
@@ -59,19 +55,36 @@ fn dispatch_shell_detail_batch(browser: &Browser, details: &[Value]) {
     let Ok(js) = serde_json::to_string(details) else {
         return;
     };
-    let mut code = String::with_capacity(js.len() + 320);
-    code.push_str("(()=>{const derpShellBatch=");
-    code.push_str(&js);
-    code.push_str(";const derpApplyCompositorBatch=window.__DERP_APPLY_COMPOSITOR_BATCH;if(typeof derpApplyCompositorBatch==='function'){try{derpApplyCompositorBatch(derpShellBatch);return;}catch(err){console.warn('[derp-shell-bridge] compositor batch handler failed',err);}}for(let i=0;i<derpShellBatch.length;i++)window.dispatchEvent(new CustomEvent('derp-shell',{detail:derpShellBatch[i]}));})();");
-    execute_main_frame_script(browser, code.as_str());
+    let Some(frame) = browser.main_frame() else {
+        return;
+    };
+    let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
+        return;
+    };
+    let Some(list) = msg.argument_list() else {
+        return;
+    };
+    let Some(mut payload) = binary_value_create(Some(js.as_bytes())) else {
+        return;
+    };
+    let _ = list.set_string(0, Some(&CefString::from("batch_json")));
+    let _ = list.set_binary(1, Some(&mut payload));
+    frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
 
 fn dispatch_shell_snapshot_notify(browser: &Browser) {
     crate::cef::begin_frame_diag::note_shell_snapshot_notify();
-    execute_main_frame_script(
-        browser,
-        "(()=>{const derpSyncSnapshot=window.__DERP_SYNC_COMPOSITOR_SNAPSHOT;if(typeof derpSyncSnapshot==='function'){try{derpSyncSnapshot();return;}catch(err){console.warn('[derp-shell-bridge] compositor snapshot handler failed',err);}}window.dispatchEvent(new Event('derp-shell-snapshot'));})();",
-    );
+    let Some(frame) = browser.main_frame() else {
+        return;
+    };
+    let Some(mut msg) = process_message_create(Some(&CefString::from(PROCESS_MESSAGE_NAME))) else {
+        return;
+    };
+    let Some(list) = msg.argument_list() else {
+        return;
+    };
+    let _ = list.set_string(0, Some(&CefString::from("snapshot_notify")));
+    frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
 
 fn flush_shell_updates(
