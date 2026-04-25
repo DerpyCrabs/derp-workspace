@@ -1709,7 +1709,7 @@ impl CompositorState {
             .is_some_and(|w| self.shell_placement_renders_above_window(&w, window_id))
     }
 
-    fn shell_placement_renders_above_window(
+    pub(crate) fn shell_placement_renders_above_window(
         &self,
         placement: &ShellUiWindowPlacement,
         window_id: u32,

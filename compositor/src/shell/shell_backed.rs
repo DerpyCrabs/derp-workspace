@@ -65,7 +65,12 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_backed_titlebar_window_at(&self, pos: Point<f64, Logical>) -> Option<u32> {
-        let placement = self.shell_ui_placement_topmost_for_input_at(pos)?;
+        let placement = self.shell_ui_placement_topmost_at(pos)?;
+        if let Some((Some(window_id), _, _)) = self.native_surface_under_no_shell_exclusion(pos) {
+            if !self.shell_placement_renders_above_window(&placement, window_id) {
+                return None;
+            }
+        }
         if !self.window_registry.is_shell_hosted(placement.id) {
             return None;
         }
@@ -494,10 +499,10 @@ impl CompositorState {
         self.shell_move_pending_delta = (0, 0);
         self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
-        self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }
+        self.shell_send_interaction_state();
     }
 
     pub(crate) fn shell_resize_try_begin_backed(
@@ -628,10 +633,10 @@ impl CompositorState {
         self.shell_resize_edges = None;
         self.shell_resize_initial_rect = None;
         self.shell_resize_accum = (0.0, 0.0);
-        self.shell_send_interaction_state();
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
         }
+        self.shell_send_interaction_state();
     }
 
     pub(crate) fn shell_backed_set_window_maximized_if_any(

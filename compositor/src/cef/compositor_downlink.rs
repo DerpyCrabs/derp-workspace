@@ -254,10 +254,9 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
 
 fn encode_hot_detail_batch(details: &[Value]) -> Option<Vec<u8>> {
     let count = u32::try_from(details.len()).ok()?;
-    if details.len() > 1
-        && details
-            .iter()
-            .any(|detail| value_string(detail, "type") == Some("interaction_state"))
+    if details
+        .iter()
+        .any(|detail| value_string(detail, "type") == Some("interaction_state"))
     {
         return None;
     }
