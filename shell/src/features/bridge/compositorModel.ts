@@ -140,6 +140,29 @@ function buildWorkspaceWindowsMap(
   return identical ? (prev as Map<number, DerpWindow>) : next
 }
 
+function buildWorkspaceWindowsMapForTouched(
+  source: ReadonlyMap<number, DerpWindow>,
+  prev: ReadonlyMap<number, DerpWindow>,
+  touchedWindowIds: ReadonlySet<number>,
+): Map<number, DerpWindow> {
+  let next: Map<number, DerpWindow> | null = null
+  for (const windowId of touchedWindowIds) {
+    const window = source.get(windowId)
+    const previousWindow = prev.get(windowId)
+    if (!window) {
+      if (!previousWindow) continue
+      if (!next) next = new Map(prev)
+      next.delete(windowId)
+      continue
+    }
+    const stableWindow = previousWindow && workspaceWindowFieldsEqual(previousWindow, window) ? previousWindow : window
+    if (previousWindow === stableWindow) continue
+    if (!next) next = new Map(prev)
+    next.set(windowId, stableWindow)
+  }
+  return next ?? (prev as Map<number, DerpWindow>)
+}
+
 function isWindowSnapshotDetail(detail: DerpShellDetail) {
   return (
     detail.type === 'window_geometry' ||
@@ -259,6 +282,24 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
   }
 
+  const syncTouchedWindowSignals = (
+    prev: ReadonlyMap<number, DerpWindow>,
+    next: ReadonlyMap<number, DerpWindow>,
+    touchedWindowIds: ReadonlySet<number>,
+  ) => {
+    for (const windowId of touchedWindowIds) {
+      const window = next.get(windowId)
+      if (prev.get(windowId) === window) continue
+      const signal = windowSignals.get(windowId)
+      if (window) {
+        ensureWindowSignal(windowId).set(() => window)
+      } else if (signal) {
+        signal.set(() => undefined)
+        windowSignals.delete(windowId)
+      }
+    }
+  }
+
   const commitWindows = (updater: (prev: Map<number, DerpWindow>) => Map<number, DerpWindow>) => {
     setWindows((prev) => {
       const next = updater(prev)
@@ -269,11 +310,23 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       return next
     })
   }
-  const publishWindows = (prev: ReadonlyMap<number, DerpWindow>, next: Map<number, DerpWindow>) => {
+  const publishWindows = (
+    prev: ReadonlyMap<number, DerpWindow>,
+    next: Map<number, DerpWindow>,
+    touchedWindowIds?: ReadonlySet<number>,
+  ) => {
     if (next === prev) return
-    syncWindowSignals(prev, next)
+    if (touchedWindowIds) {
+      syncTouchedWindowSignals(prev, next, touchedWindowIds)
+    } else {
+      syncWindowSignals(prev, next)
+    }
     setWindows(next)
-    setWorkspaceWindows((stablePrev) => buildWorkspaceWindowsMap(next, stablePrev))
+    setWorkspaceWindows((stablePrev) =>
+      touchedWindowIds
+        ? buildWorkspaceWindowsMapForTouched(next, stablePrev, touchedWindowIds)
+        : buildWorkspaceWindowsMap(next, stablePrev),
+    )
   }
 
   const allWindowsMap = createMemo(() => windows())
@@ -309,6 +362,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     const baseWindows = windows()
     let nextWindows = baseWindows
     let windowsMutated = false
+    const touchedWindowIds = new Set<number>()
+    let canPublishTouchedOnly = true
     const currentWindows = () => nextWindows
     const ensureMutableWindows = () => {
       if (!windowsMutated) {
@@ -344,6 +399,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (revision !== windowsRevision()) {
           nextWindows = buildWindowsMapFromList(detail.windows, currentWindows())
           windowsMutated = nextWindows !== baseWindows
+          canPublishTouchedOnly = false
           const nextOrderIds = collectWindowOrderIds(detail.windows)
           setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
           setWindowsRevision(revision)
@@ -360,7 +416,9 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         const revision = coerceRevision(detail.revision)
         if (revision !== windowOrderRevision()) {
           const mutableWindows = ensureMutableWindows()
-          applyDetailMutable(mutableWindows, detail)
+          if (applyDetailMutable(mutableWindows, detail)) {
+            for (const windowId of collectWindowOrderIds(detail.windows)) touchedWindowIds.add(windowId)
+          }
           const nextOrderIds = collectWindowOrderIds(detail.windows)
           setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
           setWindowOrderRevision(revision)
@@ -410,7 +468,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (detail.minimized && windowId !== null) {
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
-        applyDetailMutable(ensureMutableWindows(), detail)
+        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
         results.push({
           kind: 'window_state',
           detailType: detail.type,
@@ -427,7 +485,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (windowId !== null) {
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
-        applyDetailMutable(ensureMutableWindows(), detail)
+        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
         results.push({
           kind: 'window_unmapped',
           detailType: detail.type,
@@ -445,7 +503,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           results.push(requestRecovery(detail, applyOptions, windowId))
           continue
         }
-        applyDetailMutable(ensureMutableWindows(), detail)
+        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
         results.push({
           kind: 'window_geometry',
           detailType: detail.type,
@@ -456,7 +514,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       }
 
       if (detail.type === 'window_mapped') {
-        applyDetailMutable(ensureMutableWindows(), detail)
+        if (applyDetailMutable(ensureMutableWindows(), detail)) touchedWindowIds.add(detail.window_id)
         results.push({
           kind: 'window_mapped',
           detailType: detail.type,
@@ -471,7 +529,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           results.push(requestRecovery(detail, applyOptions, windowId))
           continue
         }
-        applyDetailMutable(ensureMutableWindows(), detail)
+        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
         results.push({
           kind: 'window_metadata',
           detailType: detail.type,
@@ -486,7 +544,13 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       })
     }
 
-    if (windowsMutated) publishWindows(baseWindows, nextWindows)
+    if (windowsMutated) {
+      publishWindows(
+        baseWindows,
+        nextWindows,
+        canPublishTouchedOnly && touchedWindowIds.size > 0 ? touchedWindowIds : undefined,
+      )
+    }
     return results
   })
 

@@ -212,11 +212,7 @@ fn read_payload_inner(
         return Ok(None);
     }
     let payload_len = head_a.payload_len as usize;
-    let file_len = file
-        .metadata()
-        .map_err(|e| format!("stat shared state file {}: {e}", path.display()))?
-        .len() as usize;
-    if SHELL_SHARED_STATE_HEADER_BYTES + payload_len > file_len {
+    if SHELL_SHARED_STATE_HEADER_BYTES + payload_len > SHELL_SHARED_STATE_CAPACITY_BYTES {
         return Ok(None);
     }
     fence(Ordering::Acquire);
