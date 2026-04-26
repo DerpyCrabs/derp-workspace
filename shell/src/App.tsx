@@ -156,6 +156,8 @@ declare global {
     __DERP_E2E_RESET_TILING_CONFIG_REQ?: (requestId: number) => void
     __DERP_SHELL_PERF_SNAPSHOT?: () => Record<string, number>
     __DERP_SHELL_PERF_RESET?: () => void
+    __DERP_BRIDGE_DEBUG?: Record<string, unknown>
+    __DERP_MOVE_DEBUG?: Record<string, unknown>
   }
 }
 
@@ -183,8 +185,14 @@ function shSingleQuotedForSpawn(text: string): string {
 }
 
 function shellMoveLog(msg: string, detail?: Record<string, unknown>) {
-  void msg
-  void detail
+  const now = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now()
+  const current =
+    typeof window.__DERP_MOVE_DEBUG === 'object' && window.__DERP_MOVE_DEBUG !== null
+      ? window.__DERP_MOVE_DEBUG
+      : { events: [] as Array<{ msg: string; at: number; detail: Record<string, unknown> | null }> }
+  const events = Array.isArray(current.events) ? current.events.slice(-31) : []
+  events.push({ msg, at: now, detail: detail ?? null })
+  window.__DERP_MOVE_DEBUG = { events }
 }
 
 function nativeDragPreviewUrl(imagePath: string, generation: number) {
@@ -1535,6 +1543,7 @@ function App() {
       }
     },
     requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
+    requestCompositorSync,
     bumpSnapChrome,
     shellWireSend,
     shellMoveLog,
@@ -1687,7 +1696,13 @@ function App() {
     ) {
       if (compositorPointer) {
         syncPointerSignalsFromClient(compositorPointer)
-        shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+        if (
+          shellWindowGestureRuntime.getActiveSnapZone() === null &&
+          shellWindowGestureRuntime.getActiveSnapPreviewCanvas() === null &&
+          shellWindowGestureRuntime.snapAssistPicker() === null
+        ) {
+          shellWindowGestureRuntime.syncShellWindowMovePointer(compositorPointer.x, compositorPointer.y)
+        }
       }
       endWorkspaceAwareShellWindowMove('compositor-move-ended', false)
     }
@@ -1790,6 +1805,10 @@ function App() {
         getSettingsWindowVisible: settingsHudFrameVisible,
         getSnapAssistPicker: shellWindowGestureRuntime.snapAssistPicker,
         getActiveSnapPreviewCanvas: shellWindowGestureRuntime.getActiveSnapPreviewCanvas,
+        getActiveSnapState: () => ({
+          zone: shellWindowGestureRuntime.getActiveSnapZone(),
+          dragSuperHeld: shellWindowGestureRuntime.getDragSuperHeld(),
+        }),
         getAssistOverlayHoverSpan: () => {
           const overlay = shellWindowGestureRuntime.assistOverlay()
           return overlay?.kind === 'assist' ? overlay.hoverSpan : null

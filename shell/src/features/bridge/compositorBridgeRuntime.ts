@@ -20,7 +20,7 @@ import {
   noteShellSnapshotDecode,
 } from '@/features/bridge/shellPerfCounters'
 import type { TraySniMenuEntry } from '@/host/createShellContextMenus'
-import { coerceShellWindowId, type DerpShellDetail, type DerpWindow, windowIsShellHosted } from '@/host/appWindowState'
+import { coerceShellWindowId, type DerpShellDetail, type DerpWindow } from '@/host/appWindowState'
 import type { LayoutScreen } from '@/host/types'
 import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import type { Rect as TileRect, SnapZone } from '@/features/tiling/tileZones'
@@ -89,6 +89,87 @@ export type CompositorOutputTopology = {
   uiScalePercent: 100 | 150 | 200
   screens: LayoutScreen[]
   shellChromePrimaryName: string | null
+}
+
+const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
+const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
+const SNAPSHOT_DOMAIN_WINDOW_GEOMETRY = 1 << 10
+const SNAPSHOT_DOMAIN_WINDOW_METADATA = 1 << 11
+const SNAPSHOT_DOMAIN_WINDOW_STATE = 1 << 12
+
+function runtimeDetailSnapshotEpoch(detail: DerpShellDetail) {
+  const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
+  return Math.max(0, Math.trunc(raw))
+}
+
+function runtimeDetailCanBeSupersededBySnapshot(detail: DerpShellDetail) {
+  return (
+    detail.type === 'window_list' ||
+    detail.type === 'window_order' ||
+    detail.type === 'focus_changed' ||
+    detail.type === 'workspace_state' ||
+    detail.type === 'shell_hosted_app_state' ||
+    detail.type === 'output_layout' ||
+    detail.type === 'keyboard_layout' ||
+    detail.type === 'tray_hints' ||
+    detail.type === 'tray_sni' ||
+    detail.type === 'native_drag_preview'
+  )
+}
+
+function runtimeHotWindowDetailCanBeStale(detail: DerpShellDetail) {
+  return (
+    detail.type === 'window_geometry' ||
+    detail.type === 'window_metadata' ||
+    detail.type === 'window_state'
+  )
+}
+
+function runtimeDetailSnapshotDomainFlags(detail: DerpShellDetail) {
+  switch (detail.type) {
+    case 'window_list':
+    case 'window_mapped':
+    case 'window_unmapped':
+      return SNAPSHOT_DOMAIN_WINDOWS
+    case 'window_order':
+      return SNAPSHOT_DOMAIN_WINDOW_ORDER
+    case 'window_geometry':
+      return SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
+    case 'window_metadata':
+      return SNAPSHOT_DOMAIN_WINDOW_METADATA
+    case 'window_state':
+      return SNAPSHOT_DOMAIN_WINDOW_STATE
+    default:
+      return 0
+  }
+}
+
+export function queuedCompositorDetailSurvivesSnapshotSync(
+  detail: DerpShellDetail,
+  snapshot: { sequence: number; domainFlags: number; incremental: boolean },
+) {
+  const detailEpoch = runtimeDetailSnapshotEpoch(detail)
+  const detailDomains = runtimeDetailSnapshotDomainFlags(detail)
+  const snapshotSupersedesDetailDomain =
+    !snapshot.incremental || detailDomains === 0 || (snapshot.domainFlags & detailDomains) !== 0
+  if (
+    runtimeHotWindowDetailCanBeStale(detail) &&
+    detailEpoch > 0 &&
+    detailEpoch < snapshot.sequence &&
+    snapshotSupersedesDetailDomain
+  ) {
+    return false
+  }
+  if (
+    runtimeDetailCanBeSupersededBySnapshot(detail) &&
+    detailEpoch > 0 &&
+    detailEpoch < snapshot.sequence &&
+    snapshotSupersedesDetailDomain
+  ) {
+    return false
+  }
+  return true
 }
 
 type CompositorBridgeRuntimeOptions = {
@@ -211,9 +292,19 @@ function traySniMenuEntriesFromDetail(detail: DerpShellDetail): {
 }
 
 export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntimeOptions) {
+  const bridgeDebug = (patch: Record<string, unknown>) => {
+    const current =
+      typeof window.__DERP_BRIDGE_DEBUG === 'object' && window.__DERP_BRIDGE_DEBUG !== null
+        ? window.__DERP_BRIDGE_DEBUG
+        : {}
+    window.__DERP_BRIDGE_DEBUG = { ...current, ...patch }
+  }
   let volumeOverlayHideTimer: ReturnType<typeof setTimeout> | undefined
   let lastSnapshotSequence = 0
+  let lastSnapshotDomainFlags = 0
+  let lastSnapshotWasIncremental = false
   let lastSnapshotDecodeCursor: CompositorSnapshotDecodeCursor | undefined
+  let liveWindowGeometrySequence = 0
   let lastInteractionRevision = -1
   let lastKnownInteractionState: CompositorInteractionState = null
   let snapshotDomainRevisionScratch = new ArrayBuffer(0)
@@ -221,7 +312,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const removeShellRuntimePerfCounters = installShellRuntimePerfCounters()
 
   const snapshotDomainOutputs = 1 << 0
-  const snapshotDomainWindows = 1 << 1
   const snapshotDomainFocus = 1 << 2
   const snapshotDomainKeyboard = 1 << 3
   const snapshotDomainWorkspace = 1 << 4
@@ -237,15 +327,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
-  const snapshotDomainWindowOrder = 1 << 9
-  const snapshotDomainWindowGeometry = 1 << 10
-  const snapshotDomainWindowMetadata = 1 << 11
-  const snapshotDomainWindowState = 1 << 12
+  const snapshotDomainWindowGeometry = SNAPSHOT_DOMAIN_WINDOW_GEOMETRY
 
   const detailSnapshotEpoch = (detail: DerpShellDetail) => {
-    const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
-    return Math.max(0, Math.trunc(raw))
+    return runtimeDetailSnapshotEpoch(detail)
   }
 
   const markCompositorStateEpoch = (epoch: number) => {
@@ -258,39 +343,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   }
 
   const detailCanBeSupersededBySnapshot = (detail: DerpShellDetail) =>
-    detail.type === 'window_list' ||
-    detail.type === 'window_order' ||
-    detail.type === 'focus_changed' ||
-    detail.type === 'workspace_state' ||
-    detail.type === 'shell_hosted_app_state' ||
-    detail.type === 'output_layout' ||
-    detail.type === 'keyboard_layout' ||
-    detail.type === 'tray_hints' ||
-    detail.type === 'tray_sni' ||
-    detail.type === 'native_drag_preview'
+    runtimeDetailCanBeSupersededBySnapshot(detail)
 
   const hotWindowDetailCanBeStale = (detail: DerpShellDetail) =>
-    detail.type === 'window_geometry' ||
-    detail.type === 'window_metadata' ||
-    detail.type === 'window_state' ||
-    detail.type === 'window_mapped' ||
-    detail.type === 'window_unmapped'
+    runtimeHotWindowDetailCanBeStale(detail)
 
   const detailSnapshotDomainFlags = (detail: DerpShellDetail) => {
+    const runtimeFlags = runtimeDetailSnapshotDomainFlags(detail)
+    if (runtimeFlags !== 0) return runtimeFlags
     switch (detail.type) {
       case 'output_layout':
       case 'output_geometry':
         return snapshotDomainOutputs
-      case 'window_list':
-        return snapshotDomainWindows
-      case 'window_order':
-        return snapshotDomainWindowOrder
-      case 'window_geometry':
-        return snapshotDomainWindowGeometry
-      case 'window_metadata':
-        return snapshotDomainWindowMetadata
-      case 'window_state':
-        return snapshotDomainWindowState
       case 'focus_changed':
         return snapshotDomainFocus
       case 'keyboard_layout':
@@ -310,6 +374,9 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         return 0
     }
   }
+
+  const snapshotSupersedesDetailDomain = (detailDomains: number) =>
+    !lastSnapshotWasIncremental || detailDomains === 0 || (lastSnapshotDomainFlags & detailDomains) !== 0
 
   const outputUiScalePercent = (logicalWidth: number, physicalWidth: number): 100 | 150 | 200 => {
     const lw = Math.max(1, logicalWidth)
@@ -459,17 +526,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     options.setCompositorInteractionState(nextInteractionState)
     lastKnownInteractionState = nextInteractionState
     if (previousActiveWindowId !== null || nextActiveWindowId !== null) {
-      const previousActiveWindow = previousActiveWindowId !== null
-        ? options.allWindowsMap().get(previousActiveWindowId) ?? null
-        : null
-      if (
-        previousActiveWindowId !== null &&
-        nextActiveWindowId === null &&
-        previousActiveWindow &&
-        windowIsShellHosted(previousActiveWindow)
-      ) {
-        queueMicrotask(() => options.requestCompositorSync())
-      }
     }
   }
 
@@ -559,7 +615,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const needsPostApplyPaint = countWindowUnmapped(details) > 0
     let sawWindowList = false
     let sawInteractionState = false
-    let previousActiveWindowIdBeforeSnapshotClear: number | null = null
     batch(() => {
       options.applyModelCompositorSnapshot(details)
       for (const detail of details) {
@@ -573,19 +628,11 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         applySnapshotVisualDetail(detail, skipOutputGeometry)
       }
       if ((domainFlags & snapshotDomainInteraction) !== 0 && !sawInteractionState) {
-        previousActiveWindowIdBeforeSnapshotClear =
-          lastKnownInteractionState?.move_window_id ?? lastKnownInteractionState?.resize_window_id ?? null
         lastKnownInteractionState = null
         options.setCompositorInteractionState(null)
       }
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
-    if (previousActiveWindowIdBeforeSnapshotClear !== null) {
-      const previousActiveWindow = options.allWindowsMap().get(previousActiveWindowIdBeforeSnapshotClear) ?? null
-      if (previousActiveWindow && windowIsShellHosted(previousActiveWindow)) {
-        queueMicrotask(() => options.requestCompositorSync())
-      }
-    }
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
     if (needsPostApplyPaint) {
       options.bumpSnapChrome()
@@ -600,6 +647,24 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyModelCompositorDetailsBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
+    bridgeDebug({
+      last_model_batch: details.map((detail) =>
+        detail.type === 'window_geometry'
+          ? {
+              type: detail.type,
+              window_id: detail.window_id,
+              x: detail.x,
+              y: detail.y,
+              width: detail.width,
+              height: detail.height,
+              snapshot_epoch: detail.snapshot_epoch ?? 0,
+            }
+          : {
+              type: detail.type,
+              snapshot_epoch: detail.snapshot_epoch ?? 0,
+            },
+      ),
+    })
     let sawWindowList = false
     let sawWindowSync = false
     for (const detail of details) {
@@ -699,21 +764,43 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
 
   const applyCompositorDetail = (d: DerpShellDetail) => {
     const detailEpoch = detailSnapshotEpoch(d)
-    if (hotWindowDetailCanBeStale(d) && detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
+    const detailDomains = detailSnapshotDomainFlags(d)
+    if (
+      hotWindowDetailCanBeStale(d) &&
+      detailEpoch > 0 &&
+      detailEpoch < lastSnapshotSequence &&
+      snapshotSupersedesDetailDomain(detailDomains)
+    ) {
+      bridgeDebug({
+        last_drop: { reason: 'stale_hot_detail', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+      })
+      return
+    }
     if (detailCanBeSupersededBySnapshot(d)) {
-      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
-      const hadSnapshot = syncCompositorSnapshot()
-      if (hadSnapshot) {
-        const detailDomains = detailSnapshotDomainFlags(d)
-        if (detailDomains !== 0 && (hadSnapshot.domainFlags & detailDomains) !== 0) return
+      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'older_than_snapshot', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
+        return
       }
-      if (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch) return
-      if (detailEpoch > lastSnapshotSequence && typeof window.__DERP_COMPOSITOR_SNAPSHOT_PATH === 'string' && window.__DERP_COMPOSITOR_SNAPSHOT_PATH.length > 0) {
-        options.requestCompositorSync()
+      const hadSnapshot = syncCompositorSnapshot()
+      if (hadSnapshot && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'fresh_snapshot_same_domain', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
+        return
+      }
+      if (detailEpoch > 0 && lastSnapshotSequence > detailEpoch && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'newer_snapshot_same_domain', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
         return
       }
     }
     markCompositorStateEpoch(detailEpoch)
+    if (d.type === 'window_geometry' && detailEpoch >= lastSnapshotSequence) {
+      liveWindowGeometrySequence = detailEpoch
+    }
     if (d.type === 'context_menu_dismiss') {
       options.closeAllAtlasSelects()
       options.hideContextMenu()
@@ -875,6 +962,28 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     d.type === 'window_mapped' ||
     d.type === 'window_metadata'
 
+  const detailStillFreshAfterSnapshotSync = (d: DerpShellDetail) => {
+    if (
+      !queuedCompositorDetailSurvivesSnapshotSync(d, {
+        sequence: lastSnapshotSequence,
+        domainFlags: lastSnapshotDomainFlags,
+        incremental: lastSnapshotWasIncremental,
+      })
+    ) {
+      const detailEpoch = detailSnapshotEpoch(d)
+      bridgeDebug({
+        last_drop: {
+          reason: 'stale_queued_hot_detail_batch',
+          type: d.type,
+          snapshot_epoch: detailEpoch,
+          sequence: lastSnapshotSequence,
+        },
+      })
+      return false
+    }
+    return true
+  }
+
   const applyCompositorBatchDetail = (
     d: DerpShellDetail,
     pendingModelDetails: DerpShellDetail[],
@@ -882,25 +991,43 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     syncSnapshot: typeof syncCompositorSnapshot,
   ) => {
     const detailEpoch = detailSnapshotEpoch(d)
-    if (hotWindowDetailCanBeStale(d) && detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
+    const detailDomains = detailSnapshotDomainFlags(d)
+    if (
+      hotWindowDetailCanBeStale(d) &&
+      detailEpoch > 0 &&
+      detailEpoch < lastSnapshotSequence &&
+      snapshotSupersedesDetailDomain(detailDomains)
+    ) {
+      bridgeDebug({
+        last_drop: { reason: 'stale_hot_detail_batch', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+      })
+      return
+    }
     if (detailCanBeSupersededBySnapshot(d)) {
-      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence) return
-      const hadSnapshot = syncSnapshot()
-      if (hadSnapshot) {
-        const detailDomains = detailSnapshotDomainFlags(d)
-        if (detailDomains !== 0 && (hadSnapshot.domainFlags & detailDomains) !== 0) return
+      if (detailEpoch > 0 && detailEpoch < lastSnapshotSequence && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'older_than_snapshot_batch', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
+        return
       }
-      if (detailEpoch > 0 && lastSnapshotSequence >= detailEpoch) return
-      if (
-        detailEpoch > lastSnapshotSequence &&
-        typeof window.__DERP_COMPOSITOR_SNAPSHOT_PATH === 'string' &&
-        window.__DERP_COMPOSITOR_SNAPSHOT_PATH.length > 0
-      ) {
-        options.requestCompositorSync()
+      const hadSnapshot = syncSnapshot()
+      if (hadSnapshot && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'fresh_snapshot_same_domain_batch', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
+        return
+      }
+      if (detailEpoch > 0 && lastSnapshotSequence > detailEpoch && snapshotSupersedesDetailDomain(detailDomains)) {
+        bridgeDebug({
+          last_drop: { reason: 'newer_snapshot_same_domain_batch', type: d.type, snapshot_epoch: detailEpoch, sequence: lastSnapshotSequence },
+        })
         return
       }
     }
     markCompositorStateEpoch(detailEpoch)
+    if (d.type === 'window_geometry' && detailEpoch >= lastSnapshotSequence) {
+      liveWindowGeometrySequence = detailEpoch
+    }
     if (detailUsesBatchedModelApply(d)) {
       pendingModelDetails.push(d)
       return
@@ -922,7 +1049,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       }
       const flushPendingModelDetails = () => {
         if (pendingModelDetails.length === 0) return
-        applyModelCompositorDetailsBatch(pendingModelDetails)
+        const freshDetails = pendingModelDetails.filter(detailStillFreshAfterSnapshotSync)
+        if (freshDetails.length > 0) applyModelCompositorDetailsBatch(freshDetails)
         pendingModelDetails.length = 0
       }
       for (const detail of details) {
@@ -997,15 +1125,40 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (!(raw instanceof ArrayBuffer)) return false
     const decodeStart = performance.now()
+    const decodedAgainstCursor = !force && lastSnapshotDecodeCursor !== undefined
     const decoded = decodeCompositorSnapshot(raw, force ? undefined : lastSnapshotDecodeCursor)
     noteShellSnapshotDecode(performance.now() - decodeStart, raw.byteLength)
     if (!decoded) return false
+    const ignoreWindowGeometrySnapshot = decoded.sequence === liveWindowGeometrySequence
+    const snapshotDetails = ignoreWindowGeometrySnapshot
+      ? decoded.details.filter((detail) => detail.type !== 'window_geometry')
+      : decoded.details
     lastSnapshotDecodeCursor = { domainRevisions: decoded.domainRevisions }
+    lastSnapshotWasIncremental = decodedAgainstCursor
+    lastSnapshotDomainFlags =
+      ignoreWindowGeometrySnapshot ? decoded.domainFlags & ~snapshotDomainWindowGeometry : decoded.domainFlags
+    bridgeDebug({
+      last_snapshot_sequence: decoded.sequence,
+      last_snapshot_domain_flags: lastSnapshotDomainFlags,
+      last_snapshot_incremental: decodedAgainstCursor,
+      last_snapshot_details: snapshotDetails.map((detail) =>
+        detail.type === 'window_geometry'
+          ? {
+              type: detail.type,
+              window_id: detail.window_id,
+              x: detail.x,
+              y: detail.y,
+              width: detail.width,
+              height: detail.height,
+            }
+          : { type: detail.type },
+      ),
+    })
     const shouldTrace =
-      decoded.details.some((detail) => detail.type.startsWith('window_')) ||
-      decoded.details.some((detail) => detail.type === 'focus_changed' || detail.type === 'workspace_state')
+      snapshotDetails.some((detail) => detail.type.startsWith('window_')) ||
+      snapshotDetails.some((detail) => detail.type === 'focus_changed' || detail.type === 'workspace_state')
     const shellLatencySampleId = shouldTrace
-      ? beginShellLatencySample(decoded.sequence, decoded.details.length, force)
+      ? beginShellLatencySample(decoded.sequence, snapshotDetails.length, force)
       : 0
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { decodedAt: performance.now() })
@@ -1016,16 +1169,19 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_SEQUENCE =
       decoded.sequence
     ;(window as Window & { __DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS?: number }).__DERP_LAST_COMPOSITOR_SNAPSHOT_DOMAIN_FLAGS =
-      decoded.domainFlags
-    if (decoded.details.length > 0) {
+      lastSnapshotDomainFlags
+    if (snapshotDetails.length > 0) {
       const applyStart = performance.now()
-      applyCompositorSnapshot(decoded.details, decoded.domainFlags)
-      noteShellSnapshotApply(performance.now() - applyStart, decoded.details.length)
+      applyCompositorSnapshot(snapshotDetails, lastSnapshotDomainFlags)
+      noteShellSnapshotApply(performance.now() - applyStart, snapshotDetails.length)
     }
     if (shellLatencySampleId !== 0) {
       markShellLatencySample(shellLatencySampleId, { appliedAt: performance.now() })
     }
-    return { domainFlags: decoded.domainFlags, detailsLength: decoded.details.length }
+    if (decoded.sequence > liveWindowGeometrySequence) {
+      liveWindowGeometrySequence = 0
+    }
+    return { domainFlags: lastSnapshotDomainFlags, detailsLength: snapshotDetails.length }
   }
 
   const onDerpShell = (ev: Event) => {

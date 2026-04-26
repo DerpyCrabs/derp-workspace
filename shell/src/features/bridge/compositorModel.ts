@@ -49,19 +49,6 @@ type ApplyCompositorDetailOptions = {
   requestWindowSyncRecovery: () => void
 }
 
-function requestRecovery(
-  detail: DerpShellDetail,
-  applyOptions: ApplyCompositorDetailOptions,
-  windowId?: number | null,
-): CompositorApplyResult {
-  applyOptions.requestWindowSyncRecovery()
-  return {
-    kind: 'recovery_requested',
-    detailType: detail.type,
-    windowId,
-  }
-}
-
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
@@ -109,6 +96,10 @@ function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolea
     left.window_id === right.window_id &&
     left.surface_id === right.surface_id &&
     left.stack_z === right.stack_z &&
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.output_id === right.output_id &&
@@ -256,6 +247,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [shellHostedAppByWindow, setShellHostedAppByWindow] = createSignal<Readonly<Record<number, unknown>>>({})
   const [shellHostedAppRevision, setShellHostedAppRevision] = createSignal(-1)
+  let pendingFocusedWindowId: number | null = null
+  const pendingWindowDetails = new Map<number, Map<DerpShellDetail['type'], DerpShellDetail>>()
 
   const ensureWindowSignal = (windowId: number) => {
     let signal = windowSignals.get(windowId)
@@ -356,7 +349,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
   const applyCompositorDetails = (
     details: readonly DerpShellDetail[],
-    applyOptions: ApplyCompositorDetailOptions,
+    _applyOptions: ApplyCompositorDetailOptions,
   ): CompositorApplyResult[] => batch(() => {
     const results: CompositorApplyResult[] = []
     const baseWindows = windows()
@@ -365,6 +358,27 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     const touchedWindowIds = new Set<number>()
     let canPublishTouchedOnly = true
     const currentWindows = () => nextWindows
+    const queuePendingWindowDetail = (windowId: number, detail: DerpShellDetail) => {
+      let pending = pendingWindowDetails.get(windowId)
+      if (!pending) {
+        pending = new Map()
+        pendingWindowDetails.set(windowId, pending)
+      }
+      pending.set(detail.type, detail)
+    }
+    const applyPendingWindowDetails = (windowId: number) => {
+      const pending = pendingWindowDetails.get(windowId)
+      if (!pending || pending.size === 0) return
+      pendingWindowDetails.delete(windowId)
+      for (const type of ['window_geometry', 'window_metadata', 'window_state'] as const) {
+        const detail = pending.get(type)
+        if (!detail) continue
+        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        if (detail.type === 'window_state' && detail.minimized) {
+          setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+        }
+      }
+    }
     const ensureMutableWindows = () => {
       if (!windowsMutated) {
         nextWindows = new Map(nextWindows)
@@ -378,11 +392,18 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         const windowId = coerceShellWindowId(detail.window_id)
         if (windowId !== null) {
           if (!currentWindows().has(windowId)) {
-            results.push(requestRecovery(detail, applyOptions, windowId))
+            pendingFocusedWindowId = windowId
+            results.push({
+              kind: 'ignored',
+              detailType: detail.type,
+              windowId,
+            })
             continue
           }
+          pendingFocusedWindowId = null
           setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
         } else {
+          pendingFocusedWindowId = null
           setFocusedWindowId(null)
         }
         results.push({
@@ -403,6 +424,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           const nextOrderIds = collectWindowOrderIds(detail.windows)
           setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
           setWindowsRevision(revision)
+        }
+        pendingWindowDetails.clear()
+        if (pendingFocusedWindowId !== null && nextWindows.get(pendingFocusedWindowId)) {
+          setFocusedWindowId((prev) => (prev === pendingFocusedWindowId ? prev : pendingFocusedWindowId))
+          pendingFocusedWindowId = null
         }
         results.push({
           kind: 'window_list',
@@ -462,7 +488,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         const windowId = coerceShellWindowId(detail.window_id)
         const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
         if (windowId !== null && !previousWindow) {
-          results.push(requestRecovery(detail, applyOptions, windowId))
+          queuePendingWindowDetail(windowId, detail)
+          results.push({
+            kind: 'ignored',
+            detailType: detail.type,
+            windowId,
+          })
           continue
         }
         if (detail.minimized && windowId !== null) {
@@ -483,6 +514,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         const windowId = coerceShellWindowId(detail.window_id)
         const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
         if (windowId !== null) {
+          pendingWindowDetails.delete(windowId)
+          if (pendingFocusedWindowId === windowId) pendingFocusedWindowId = null
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
         if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
@@ -500,7 +533,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         const windowId = coerceShellWindowId(detail.window_id)
         const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
         if (windowId !== null && !previousWindow) {
-          results.push(requestRecovery(detail, applyOptions, windowId))
+          queuePendingWindowDetail(windowId, detail)
+          results.push({
+            kind: 'ignored',
+            detailType: detail.type,
+            windowId,
+          })
           continue
         }
         if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
@@ -515,10 +553,17 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
       if (detail.type === 'window_mapped') {
         if (applyDetailMutable(ensureMutableWindows(), detail)) touchedWindowIds.add(detail.window_id)
+        applyPendingWindowDetails(detail.window_id)
+        const focusMappedWindow = pendingFocusedWindowId === detail.window_id
+        if (focusMappedWindow) {
+          pendingFocusedWindowId = null
+          setFocusedWindowId((prev) => (prev === detail.window_id ? prev : detail.window_id))
+        }
         results.push({
           kind: 'window_mapped',
           detailType: detail.type,
           windowId: detail.window_id,
+          followup: focusMappedWindow ? { syncExclusion: true, flushWindows: true } : undefined,
         })
         continue
       }
@@ -526,7 +571,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       if (detail.type === 'window_metadata') {
         const windowId = coerceShellWindowId(detail.window_id)
         if (windowId !== null && !currentWindows().has(windowId)) {
-          results.push(requestRecovery(detail, applyOptions, windowId))
+          queuePendingWindowDetail(windowId, detail)
+          results.push({
+            kind: 'ignored',
+            detailType: detail.type,
+            windowId,
+          })
           continue
         }
         if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)

@@ -272,8 +272,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             onPointerDown={(e) => {
               requestFocus()
               e.stopPropagation()
+              if (e.button !== 0) return
+              e.preventDefault()
+              props.onMinimize()
             }}
-            onClick={() => props.onMinimize()}
+            onClick={(e) => {
+              if (e.detail !== 0) return
+              props.onMinimize()
+            }}
           >
             −
           </button>
@@ -285,11 +291,20 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             onPointerDown={(e) => {
               requestFocus()
               e.stopPropagation()
-              if (e.button !== 2) return
-              e.preventDefault()
-              props.onSnapAssistOpen?.(e.currentTarget.getBoundingClientRect())
+              if (e.button === 0) {
+                e.preventDefault()
+                props.onMaximize()
+                return
+              }
+              if (e.button === 2) {
+                e.preventDefault()
+                props.onSnapAssistOpen?.(e.currentTarget.getBoundingClientRect())
+              }
             }}
-            onClick={() => props.onMaximize()}
+            onClick={(e) => {
+              if (e.detail !== 0) return
+              props.onMaximize()
+            }}
             onContextMenu={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -328,8 +343,14 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             onPointerDown={(e) => {
               requestFocus()
               e.stopPropagation()
+              if (e.button !== 0) return
+              e.preventDefault()
+              props.onClose()
             }}
-            onClick={() => props.onClose()}
+            onClick={(e) => {
+              if (e.detail !== 0) return
+              props.onClose()
+            }}
           >
             ×
           </button>

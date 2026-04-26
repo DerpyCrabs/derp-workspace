@@ -501,6 +501,7 @@ impl CompositorState {
         self.shell_move_proxy_cancel(Some(window_id));
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
+            self.shell_reply_window_list();
         }
         self.shell_send_interaction_state();
     }
@@ -635,6 +636,7 @@ impl CompositorState {
         self.shell_resize_accum = (0.0, 0.0);
         if let Some(info) = self.window_registry.window_info(window_id) {
             self.shell_backed_emit_geometry_messages(&info);
+            self.shell_reply_window_list();
         }
         self.shell_send_interaction_state();
     }

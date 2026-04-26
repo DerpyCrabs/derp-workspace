@@ -383,7 +383,13 @@ async function dragTitlebar(base: string, windowId: number, dx: number, dy: numb
   const controls = windowControls(shell, windowId)
   const titlebar = controls?.titlebar
   assert(titlebar && titlebar.width >= 80 && titlebar.height >= 16, 'window titlebar has usable drag rect')
-  const startX = Math.round(titlebar.x + Math.min(160, Math.max(32, titlebar.width * 0.35)))
+  const controlsLeft = controls?.minimize?.x ?? titlebar.x + titlebar.width
+  const startX = Math.round(
+    Math.max(
+      titlebar.x + 32,
+      Math.min(controlsLeft - 40, titlebar.x + titlebar.width - 64),
+    ),
+  )
   const startY = Math.round(titlebar.y + titlebar.height / 2)
   await dragBetweenPoints(base, startX, startY, startX + dx, startY + dy, 14)
 }
@@ -555,8 +561,8 @@ async function runDragFileBrowserNoReloadScenario(harness: HarnessState): Promis
   const afterReady = await waitFor(
     'wait for file browser ready after drag',
     async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const window = shellWindowById(shell, opened.windowId)
+      const { compositor, shell } = await getSnapshots(base)
+      const window = compositorWindowById(compositor, opened.windowId)
       const fileBrowser = fileBrowserSnapshot(shell, opened.windowId)
       const beforeWindow = shellWindowById(beforeReady.shell, opened.windowId)
       if (!window || !beforeWindow || !fileBrowser || fileBrowser.list_state !== 'ready') return null

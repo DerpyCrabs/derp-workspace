@@ -288,7 +288,37 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const rightWindowIds = stateGroup.windowIds.filter((windowId) => windowId !== group.splitLeftWindowId)
     if (rightWindowIds.length === 0) return null
     const leftWindow = group.splitLeftWindow
-    const rightWindow = group.visibleWindow
+    const rightWindowCandidates = rightWindowIds
+      .map((windowId) => options.allWindowsMap().get(windowId))
+      .filter((window): window is DerpWindow => !!window)
+    const rightWindow =
+      rightWindowCandidates.reduce<DerpWindow | null>((best, candidate) => {
+        if (!best) return candidate
+        const bestRect = {
+          x: Math.min(leftWindow.x, best.x),
+          y: Math.min(leftWindow.y, best.y),
+          width:
+            Math.max(leftWindow.x + leftWindow.width, best.x + best.width) - Math.min(leftWindow.x, best.x),
+          height:
+            Math.max(leftWindow.y + leftWindow.height, best.y + best.height) - Math.min(leftWindow.y, best.y),
+        }
+        const candidateRect = {
+          x: Math.min(leftWindow.x, candidate.x),
+          y: Math.min(leftWindow.y, candidate.y),
+          width:
+            Math.max(leftWindow.x + leftWindow.width, candidate.x + candidate.width) -
+            Math.min(leftWindow.x, candidate.x),
+          height:
+            Math.max(leftWindow.y + leftWindow.height, candidate.y + candidate.height) -
+            Math.min(leftWindow.y, candidate.y),
+        }
+        const bestArea = bestRect.width * bestRect.height
+        const candidateArea = candidateRect.width * candidateRect.height
+        if (candidateArea !== bestArea) return candidateArea < bestArea ? candidate : best
+        const bestDistance = Math.abs(best.x - leftWindow.x) + Math.abs(best.y - leftWindow.y)
+        const candidateDistance = Math.abs(candidate.x - leftWindow.x) + Math.abs(candidate.y - leftWindow.y)
+        return candidateDistance < bestDistance ? candidate : best
+      }, null) ?? group.visibleWindow
     const overlapping =
       leftWindow.x === rightWindow.x &&
       leftWindow.y === rightWindow.y &&
@@ -1014,11 +1044,6 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       const changed = options.selectGroupWindow(windowId)
       if (!changed) return
       if ((group()?.splitLeftWindowId ?? null) === windowId) return
-      if (splitLayout()) {
-        queueMicrotask(() => {
-          applySplitGroupGeometry(props.groupId)
-        })
-      }
     }
     const renderSplitPane = (
       windowId: number,

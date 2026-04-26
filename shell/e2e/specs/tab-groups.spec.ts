@@ -682,7 +682,16 @@ async function selectTabByClick(base: string, windowId: number) {
       },
       3000,
       40,
-    )
+    ).catch(async (error) => {
+      const snapshots = await getSnapshots(base)
+      await writeJsonArtifact(`tab-select-target-failure-${windowId}.json`, {
+        windowId,
+        preferHandle,
+        shell: snapshots.shell,
+        compositor: snapshots.compositor,
+      })
+      throw error
+    })
     const tabRect = assertRectMinSize(`tab ${windowId}`, rect, 12, 10)
     const c = rectCenter(tabRect)
     await movePoint(base, c.x, c.y)
@@ -1031,7 +1040,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
       )
       await timing.step('drag js tab into native tab', () => dragTabOntoTab(base, jsWindow.window.window_id, target.windowId))
       await timing.step('wait for grouped members', () => waitForGroupedMembers(base, [target.windowId, jsWindow.window.window_id]))
-      await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
+      await timing.step('select js tab', async () => {
+        try {
+          await selectTabByClick(base, jsWindow.window.window_id)
+        } catch (error) {
+          const snapshots = await getSnapshots(base)
+          await writeJsonArtifact('tab-groups-multimonitor-select-failure.json', {
+            jsWindowId: jsWindow.window.window_id,
+            targetWindowId: target.windowId,
+            shell: snapshots.shell,
+            compositor: snapshots.compositor,
+          })
+          throw error
+        }
+      })
       const jsFocused = await timing.step('focus grouped js tab', () => waitForShellUiFocus(base, jsWindow.window.window_id))
       const jsSnapshot = shellWindowById(jsFocused.shell, jsWindow.window.window_id)
       assert(jsSnapshot?.output_name, 'missing js test window output')

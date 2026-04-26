@@ -233,8 +233,11 @@ export interface ShellWindowControls {
   window_id: number
   titlebar?: Rect | null
   minimize?: Rect | null
+  minimize_hit?: string | null
   maximize?: Rect | null
+  maximize_hit?: string | null
   close?: Rect | null
+  close_hit?: string | null
   snap_picker?: Rect | null
   resize_left?: Rect | null
   resize_right?: Rect | null
@@ -2870,15 +2873,26 @@ export async function ensureXtermWindow(base: string, state: E2eState, title: st
 }
 
 export async function waitForTaskbarEntry(base: string, windowId: number, timeoutMs = 2000): Promise<ShellSnapshot> {
-  return waitFor(
-    `wait for taskbar row ${windowId}`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return taskbarEntry(shell, windowId) ? shell : null
-    },
-    timeoutMs,
-    40,
-  )
+  try {
+    return await waitFor(
+      `wait for taskbar row ${windowId}`,
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return taskbarEntry(shell, windowId) ? shell : null
+      },
+      timeoutMs,
+      40,
+    )
+  } catch (error) {
+    const { compositor, shell } = await getSnapshots(base)
+    await writeJsonArtifact(`taskbar-entry-timeout-${windowId}.json`, {
+      windowId,
+      error: error instanceof Error ? error.message : String(error),
+      compositor,
+      shell,
+    })
+    throw error
+  }
 }
 
 async function closeWindowBestEffort(base: string, windowId: number): Promise<boolean> {

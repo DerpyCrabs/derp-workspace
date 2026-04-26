@@ -58,6 +58,11 @@ type E2eSnapPreviewCanvas = {
   h: number
 }
 
+type E2eActiveSnapState = {
+  zone: string | null
+  dragSuperHeld: boolean
+}
+
 type E2eSnapAssistPicker = {
   windowId: number
   source: string
@@ -116,6 +121,7 @@ export type BuildE2eShellSnapshotArgs = {
   settingsWindowVisible: boolean
   snapAssistPicker: E2eSnapAssistPicker | null
   activeSnapPreviewCanvas: E2eSnapPreviewCanvas | null
+  activeSnapState: E2eActiveSnapState
   assistOverlayHoverSpan: AssistGridSpan | null
   programsMenuQuery: string
   sessionSnapshot: SessionSnapshot | null
@@ -155,6 +161,29 @@ export function snapshotRect(el: Element | null, origin: CanvasOrigin): E2eRectS
     global_x: ox + x,
     global_y: oy + y,
   }
+}
+
+function snapshotHitAtRectCenter(el: Element | null): string | null {
+  if (!(el instanceof HTMLElement)) return null
+  const rect = visibleClientRect(el)
+  if (!rect) return null
+  const hit = document.elementFromPoint(rect.left + rect.width * 0.5, rect.top + rect.height * 0.5)
+  if (!(hit instanceof HTMLElement)) return null
+  const attrs = [
+    'data-shell-minimize-trigger',
+    'data-shell-maximize-trigger',
+    'data-shell-close-trigger',
+    'data-shell-titlebar',
+    'data-shell-window-frame',
+    'data-shell-hosted-content-mount',
+    'data-workspace-tab',
+  ]
+  const parts = [hit.tagName.toLowerCase()]
+  for (const attr of attrs) {
+    const value = hit.getAttribute(attr)
+    if (value !== null) parts.push(`${attr}=${value}`)
+  }
+  return parts.join(' ')
 }
 
 function visibleClientRect(el: HTMLElement) {
@@ -447,8 +476,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       window_id: window.window_id,
       titlebar: snapshotRect(cache.queryAttr('data-shell-titlebar', window.window_id), args.origin),
       minimize: snapshotRect(cache.queryAttr('data-shell-minimize-trigger', window.window_id), args.origin),
+      minimize_hit: snapshotHitAtRectCenter(cache.queryAttr('data-shell-minimize-trigger', window.window_id)),
       maximize: snapshotRect(cache.queryAttr('data-shell-maximize-trigger', window.window_id), args.origin),
+      maximize_hit: snapshotHitAtRectCenter(cache.queryAttr('data-shell-maximize-trigger', window.window_id)),
       close: snapshotRect(cache.queryAttr('data-shell-close-trigger', window.window_id), args.origin),
+      close_hit: snapshotHitAtRectCenter(cache.queryAttr('data-shell-close-trigger', window.window_id)),
     snap_picker: snapshotRect(cache.queryAttr('data-shell-snap-picker-trigger', window.window_id), args.origin),
     resize_left: snapshotRect(cache.queryAttr('data-shell-resize-left', window.window_id), args.origin),
     resize_right: snapshotRect(cache.queryAttr('data-shell-resize-right', window.window_id), args.origin),
@@ -764,6 +796,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     snap_picker_window_id: args.snapAssistPicker?.windowId ?? null,
     snap_picker_source: args.snapAssistPicker?.source ?? null,
     snap_picker_monitor: args.snapAssistPicker?.monitorName ?? null,
+    snap_active_zone: args.activeSnapState.zone,
+    snap_drag_super_held: args.activeSnapState.dragSuperHeld,
     snap_picker_z: (() => {
       const picker = cache.query('[data-shell-snap-picker]')
       if (!picker) return null
@@ -1034,8 +1068,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
     },
     taskbars: taskbarButtons,
-    taskbar_windows: taskbarWindowButtons,
-    window_controls: windowControls,
+  taskbar_windows: taskbarWindowButtons,
+  window_controls: windowControls,
+    bridge_debug:
+      typeof window.__DERP_BRIDGE_DEBUG === 'object' && window.__DERP_BRIDGE_DEBUG !== null
+        ? window.__DERP_BRIDGE_DEBUG
+        : null,
+    move_debug:
+      typeof window.__DERP_MOVE_DEBUG === 'object' && window.__DERP_MOVE_DEBUG !== null
+        ? window.__DERP_MOVE_DEBUG
+        : null,
   }
 }
 

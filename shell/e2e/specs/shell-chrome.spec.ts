@@ -72,6 +72,54 @@ function compositorFrameTitlebar(snapshot: CompositorSnapshot, windowId: number)
   return frame ? { x: 0, y: 0, global_x: frame.x, global_y: frame.y, width: frame.width, height: 26 } : null
 }
 
+function shellTitlebarDragPoint(shell: ShellSnapshot, windowId: number) {
+  const controls = windowControls(shell, windowId)
+  const rect = assertRectMinSize(`shell titlebar ${windowId}`, controls?.titlebar, 80, 16)
+  const group = shell.tab_groups?.find((entry) => entry.member_window_ids.includes(windowId)) ?? null
+  const tabRight = Math.max(
+    rect.global_x + 24,
+    ...(group?.tabs.map((tab) => (tab.rect?.global_x ?? rect.global_x) + (tab.rect?.width ?? 0)) ?? []),
+  )
+  const controlLeft = controls?.minimize?.global_x ?? rect.global_x + rect.width
+  const minX = Math.min(controlLeft - 24, tabRight + 20)
+  const maxX = Math.max(minX, controlLeft - 24)
+  const preferredX = Math.round(rect.global_x + rect.width * 0.72)
+  return {
+    x: Math.max(minX, Math.min(maxX, preferredX)),
+    y: rect.global_y + Math.max(8, Math.min(rect.height - 8, Math.round(rect.height / 2))),
+  }
+}
+
+async function waitForShellWindowAligned(base: string, windowId: number, label: string) {
+  return waitFor(
+    label,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      const shellWindow = shellWindowById(snapshots.shell, windowId)
+      const compositorWindow = compositorWindowById(snapshots.compositor, windowId)
+      const controls = windowControls(snapshots.shell, windowId)
+      const titlebar = controls?.titlebar
+      if (!shellWindow || !compositorWindow || !titlebar) return null
+      if (snapshots.compositor.shell_move_window_id !== null) return null
+      if (snapshots.compositor.shell_resize_window_id !== null) return null
+      if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+      if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+      if (controls.dragging) return null
+      if (Math.abs(shellWindow.x - compositorWindow.x) > 2) return null
+      if (Math.abs(shellWindow.y - compositorWindow.y) > 2) return null
+      if (Math.abs(shellWindow.width - compositorWindow.width) > 2) return null
+      if (Math.abs(shellWindow.height - compositorWindow.height) > 2) return null
+      const expectedTitlebarX = shellWindow.maximized || shellWindow.fullscreen ? shellWindow.x : shellWindow.x - 4
+      const expectedTitlebarY = shellWindow.maximized || shellWindow.fullscreen ? shellWindow.y - 22 : shellWindow.y - 26
+      if (Math.abs(titlebar.global_x - expectedTitlebarX) > 2) return null
+      if (Math.abs(titlebar.global_y - expectedTitlebarY) > 2) return null
+      return { shellWindow, compositorWindow, titlebar, snapshots }
+    },
+    5000,
+    100,
+  )
+}
+
 async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
   let lastTop = -1
   let lastChangedAt = Date.now()
@@ -601,6 +649,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    await waitForShellWindowAligned(base, windowId, 'wait for shell drag aligned before menu close regression')
 
     const measured = await measurePointerInteractionPerf(
       base,
@@ -1139,6 +1188,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    const aligned = await waitForShellWindowAligned(
+      base,
+      windowId,
+      'wait for shell test aligned after maximized titlebar drag',
+    )
     const centerX = restored.window.x + restored.window.width / 2
     assert(
       Math.abs(centerX - start.x) < 220,
@@ -1154,6 +1208,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
         h: restored.window.height,
         output: restored.window.output_name,
         centerX,
+      },
+      aligned: {
+        shell: aligned.shellWindow,
+        compositor: aligned.compositorWindow,
+        titlebar: aligned.titlebar,
       },
     })
   })
@@ -1193,6 +1252,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       5000,
       100,
     )
+    await waitForShellWindowAligned(base, windowId, 'wait for shell titlebar drag aligned before super tap')
     for (let tap = 1; tap <= 10; tap += 1) {
       await keyAction(base, 125, 'tap')
       if (tap % 2 === 1) {
@@ -1550,7 +1610,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       async () => {
         const snapshots = await getSnapshots(base)
         const window = compositorWindowById(snapshots.compositor, windowId)
-        const titlebar = windowControls(snapshots.shell, windowId)?.titlebar
+        const titlebar = compositorFrameTitlebar(snapshots.compositor, windowId)
         const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
         const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
         return window && titlebar && output && taskbar?.rect
@@ -1561,95 +1621,61 @@ export default defineGroup(import.meta.url, ({ test }) => {
       40,
     )
 
-    const initialTitlebarCenter = rectCenter(initial.titlebar)
-    const clippedDy = Math.max(
-      240,
-      Math.round(initial.taskbar.global_y + 36 - (initial.window.y + initial.window.height)),
-    )
-    const clippedTarget = {
-      x: Math.round(initialTitlebarCenter.x),
-      y: Math.round(initialTitlebarCenter.y + clippedDy),
+    let positioned = initial
+    let clippedTarget: { x: number; y: number } | null = null
+    if (initial.window.y + initial.window.height <= initial.taskbar.global_y + 24) {
+      const initialTitlebarCenter = shellTitlebarDragPoint(initial.shell, windowId)
+      await movePoint(base, initialTitlebarCenter.x, initialTitlebarCenter.y)
+      await pointerButton(base, BTN_LEFT, 'press')
+      try {
+        for (let step = 1; step <= 24; step += 1) {
+          const nextTarget = {
+            x: Math.round(initialTitlebarCenter.x),
+            y: Math.round(initialTitlebarCenter.y + step * 12),
+          }
+          clippedTarget = nextTarget
+          await movePoint(base, nextTarget.x, nextTarget.y)
+          const snapshots = await getSnapshots(base)
+          const window = compositorWindowById(snapshots.compositor, windowId)
+          const titlebar = compositorFrameTitlebar(snapshots.compositor, windowId)
+          const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+          const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+          if (!window || !titlebar || !output || !taskbar?.rect) continue
+          if (snapshots.compositor.shell_move_proxy_window_id !== null) continue
+          positioned = { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
+          if (window.y + window.height <= taskbar.rect.global_y + 24) continue
+          break
+        }
+      } finally {
+        await pointerButton(base, BTN_LEFT, 'release')
+      }
+      assert(
+        positioned.window.y + positioned.window.height > positioned.taskbar.global_y + 24,
+        'shell test window should become taskbar-clipped after downward drag',
+      )
     }
 
-    await dragBetweenPoints(
-      base,
-      initialTitlebarCenter.x,
-      initialTitlebarCenter.y,
-      clippedTarget.x,
-      clippedTarget.y,
-      18,
-    )
-
-    const positioned = await waitFor(
-      'wait for shell test window clipped by taskbar',
+    const secondDragPositioned = await waitFor(
+      'wait for clipped shell window settled before second drag',
       async () => {
         const snapshots = await getSnapshots(base)
         const window = compositorWindowById(snapshots.compositor, windowId)
-        const titlebar = windowControls(snapshots.shell, windowId)?.titlebar
+        const titlebar = compositorFrameTitlebar(snapshots.compositor, windowId)
+        const controls = windowControls(snapshots.shell, windowId)
         const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
         const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
-        if (
-          !window ||
-          !titlebar ||
-          !output ||
-          !taskbar?.rect ||
-          snapshots.compositor.shell_move_window_id !== null ||
-          snapshots.compositor.shell_move_proxy_window_id !== null
-        ) {
-          return null
-        }
+        if (!window || !titlebar || !controls || !output || !taskbar?.rect) return null
+        if (snapshots.compositor.shell_move_window_id !== null) return null
+        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+        if (snapshots.compositor.shell_pointer_grab_window_id !== null) return null
+        if (snapshots.compositor.pointer_pressed_button_count !== 0) return null
+        if (controls.hidden || controls.dragging) return null
         if (window.y + window.height <= taskbar.rect.global_y + 24) return null
-        return { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
-      },
-      5000,
-      20,
-    )
-
-    const dragStart = rectCenter(positioned.titlebar)
-    await movePoint(base, dragStart.x, dragStart.y)
-    await pointerButton(base, BTN_LEFT, 'press')
-    await movePoint(base, dragStart.x - 18, dragStart.y - 16)
-
-    const clippedDuringDrag = await waitFor(
-      'wait for clipped shell drag to stay live without proxy',
-      async () => {
-        const snapshots = await getSnapshots(base)
-        const window = compositorWindowById(snapshots.compositor, windowId)
-        const controls = windowControls(snapshots.shell, windowId)
-        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
-        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
-        if (!window || !controls || !output || !taskbar?.rect) return null
-        if (snapshots.compositor.shell_move_window_id !== windowId) return null
-        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
-        if (controls.hidden) return null
-        if (window.y + window.height <= taskbar.rect.global_y + 8) return null
-        return { compositor: snapshots.compositor, shell: snapshots.shell, window, controls, output, taskbar: taskbar.rect }
-      },
-      5000,
-      20,
-    )
-
-    await movePoint(base, dragStart.x, dragStart.y - 120)
-
-    const fullyVisibleDuringDrag = await waitFor(
-      'wait for shell drag to stay live after the clipped frame becomes fully visible',
-      async () => {
-        const snapshots = await getSnapshots(base)
-        const window = compositorWindowById(snapshots.compositor, windowId)
-        const controls = windowControls(snapshots.shell, windowId)
-        const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
-        const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
-        if (!window || !controls || !output || !taskbar?.rect) return null
-        if (snapshots.compositor.shell_move_window_id !== windowId) return null
-        if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
-        if (controls.hidden) return null
-        if ((controls.frame_opacity ?? 0) > 0.8) return null
-        if ((controls.content_opacity ?? 0) > 0.8) return null
-        if (window.y + window.height > taskbar.rect.global_y + 1) return null
         return {
           compositor: snapshots.compositor,
           shell: snapshots.shell,
           window,
+          titlebar,
           controls,
           output,
           taskbar: taskbar.rect,
@@ -1659,7 +1685,102 @@ export default defineGroup(import.meta.url, ({ test }) => {
       20,
     )
 
-    await pointerButton(base, BTN_LEFT, 'release')
+    const dragStart = shellTitlebarDragPoint(secondDragPositioned.shell, windowId)
+    const clippedOverlap =
+      secondDragPositioned.window.y + secondDragPositioned.window.height - (secondDragPositioned.taskbar.global_y + 8)
+    const upwardTravel = Math.max(48, clippedOverlap + 48)
+    const upwardSteps = Math.max(8, Math.ceil(upwardTravel / 6))
+    let clippedDuringDrag:
+      | {
+          compositor: Awaited<ReturnType<typeof getSnapshots>>['compositor']
+          shell: Awaited<ReturnType<typeof getSnapshots>>['shell']
+          window: ReturnType<typeof compositorWindowById> extends infer T ? Exclude<T, null> : never
+          controls: NonNullable<ReturnType<typeof windowControls>>
+          titlebar: NonNullable<ReturnType<typeof compositorFrameTitlebar>>
+          output: (typeof positioned.output)
+          taskbar: typeof positioned.taskbar
+        }
+      | null =
+      secondDragPositioned.window.y + secondDragPositioned.window.height > secondDragPositioned.taskbar.global_y + 8
+        ? {
+            compositor: secondDragPositioned.compositor,
+            shell: secondDragPositioned.shell,
+            window: secondDragPositioned.window,
+            controls: secondDragPositioned.controls,
+            titlebar: secondDragPositioned.titlebar,
+            output: secondDragPositioned.output,
+            taskbar: secondDragPositioned.taskbar,
+          }
+        : null
+    let sawActiveDragWithoutProxy = false
+    let fullyVisibleDuringDrag:
+      | {
+          compositor: Awaited<ReturnType<typeof getSnapshots>>['compositor']
+          shell: Awaited<ReturnType<typeof getSnapshots>>['shell']
+          window: ReturnType<typeof compositorWindowById> extends infer T ? Exclude<T, null> : never
+          controls: NonNullable<ReturnType<typeof windowControls>>
+          titlebar: NonNullable<ReturnType<typeof compositorFrameTitlebar>>
+          output: (typeof positioned.output)
+          taskbar: typeof positioned.taskbar
+        }
+      | null = null
+    await movePoint(base, dragStart.x, dragStart.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      for (const [dx, dy] of [
+        [-6, -6],
+        [-12, -12],
+        [-18, -16],
+      ] as const) {
+        await movePoint(base, dragStart.x + dx, dragStart.y + dy)
+      }
+      for (let step = 1; step <= upwardSteps; step += 1) {
+        await movePoint(base, dragStart.x, dragStart.y - 18 - step * 6)
+        const observed = await waitFor(
+          `wait for clipped shell drag sample ${step}`,
+          async () => {
+            const snapshots = await getSnapshots(base)
+            const window = compositorWindowById(snapshots.compositor, windowId)
+            const controls = windowControls(snapshots.shell, windowId)
+            const titlebar = compositorFrameTitlebar(snapshots.compositor, windowId)
+            const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
+            const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
+            if (!window || !controls || !titlebar || !output || !taskbar?.rect) return null
+            if (snapshots.compositor.shell_move_window_id !== windowId) return null
+            if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+            if (controls.hidden) return null
+            return {
+              compositor: snapshots.compositor,
+              shell: snapshots.shell,
+              window,
+              controls,
+              titlebar,
+              output,
+              taskbar: taskbar.rect,
+            }
+          },
+          160,
+          10,
+        ).catch(() => null)
+        if (!observed) continue
+        sawActiveDragWithoutProxy = true
+        if (observed.window.y + observed.window.height > observed.taskbar.global_y + 8) {
+          clippedDuringDrag = observed
+          continue
+        }
+        if (!clippedDuringDrag) continue
+        if (observed.titlebar.global_y < observed.output.y) continue
+        fullyVisibleDuringDrag = observed
+        break
+      }
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
+    assert(sawActiveDragWithoutProxy, 'shell drag should stay live without proxy while shell frame is being moved')
+    assert(
+      fullyVisibleDuringDrag,
+      'shell drag should stay live after the clipped shell frame becomes fully visible again',
+    )
 
     const settled = await waitFor(
       'wait for clipped shell drag release',
@@ -1686,17 +1807,19 @@ export default defineGroup(import.meta.url, ({ test }) => {
         output: positioned.window.output_name,
         taskbarTop: positioned.taskbar.global_y,
       },
-      clippedDuringDrag: {
-        x: clippedDuringDrag.window.x,
-        y: clippedDuringDrag.window.y,
-        width: clippedDuringDrag.window.width,
-        height: clippedDuringDrag.window.height,
-        hidden: clippedDuringDrag.controls.hidden,
-        frameOpacity: clippedDuringDrag.controls.frame_opacity ?? null,
-        contentOpacity: clippedDuringDrag.controls.content_opacity ?? null,
-        moveWindowId: clippedDuringDrag.compositor.shell_move_window_id,
-        moveProxyWindowId: clippedDuringDrag.compositor.shell_move_proxy_window_id,
-      },
+      clippedDuringDrag: clippedDuringDrag
+        ? {
+            x: clippedDuringDrag.window.x,
+            y: clippedDuringDrag.window.y,
+            width: clippedDuringDrag.window.width,
+            height: clippedDuringDrag.window.height,
+            hidden: clippedDuringDrag.controls.hidden,
+            frameOpacity: clippedDuringDrag.controls.frame_opacity ?? null,
+            contentOpacity: clippedDuringDrag.controls.content_opacity ?? null,
+            moveWindowId: clippedDuringDrag.compositor.shell_move_window_id,
+            moveProxyWindowId: clippedDuringDrag.compositor.shell_move_proxy_window_id,
+          }
+        : null,
       fullyVisibleDuringDrag: {
         x: fullyVisibleDuringDrag.window.x,
         y: fullyVisibleDuringDrag.window.y,

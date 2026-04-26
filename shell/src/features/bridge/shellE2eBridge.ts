@@ -34,6 +34,11 @@ type SnapPreviewCanvasLike = {
   h: number
 }
 
+type ActiveSnapStateLike = {
+  zone: string | null
+  dragSuperHeld: boolean
+}
+
 type TabDragTargetLike = {
   windowId: number
   groupId: string
@@ -89,6 +94,7 @@ type RegisterShellE2eBridgeOptions = {
   getSettingsWindowVisible: () => boolean
   getSnapAssistPicker: () => SnapAssistPickerLike | null
   getActiveSnapPreviewCanvas: () => SnapPreviewCanvasLike | null
+  getActiveSnapState: () => ActiveSnapStateLike
   getAssistOverlayHoverSpan: () => AssistGridSpan | null
   getProgramsMenuQuery: () => string
   buildSessionSnapshot: () => SessionSnapshot
@@ -155,6 +161,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
           settingsWindowVisible: options.getSettingsWindowVisible(),
           snapAssistPicker: options.getSnapAssistPicker(),
           activeSnapPreviewCanvas: options.getActiveSnapPreviewCanvas(),
+          activeSnapState: options.getActiveSnapState(),
           assistOverlayHoverSpan: options.getAssistOverlayHoverSpan(),
           programsMenuQuery: options.getProgramsMenuQuery(),
           sessionSnapshot,

@@ -7194,12 +7194,6 @@ impl CompositorState {
 
     /// Full sync when `cef_host` connects: output size, all mapped windows, current focus (IPC only).
     pub fn shell_on_shell_client_connected(&mut self) {
-        let was_delivery_ready = self
-            .shell_to_cef
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|link| link.delivery_ready()))
-            .unwrap_or(false);
         self.shell_embedded_initial_handshake_done = true;
         if let Ok(g) = self.shell_to_cef.lock() {
             if let Some(link) = g.as_ref() {
@@ -7211,9 +7205,6 @@ impl CompositorState {
         self.shell_ipc_last_pong = None;
         self.shell_ipc_unanswered_ping_since = None;
         self.shell_ipc_ping_late_warned_for = None;
-        if was_delivery_ready {
-            return;
-        }
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();

@@ -372,6 +372,7 @@ impl ShellSnapshotModel {
                 if changed {
                     self.mark_window_list_cache_dirty();
                     self.mark_window_geometry_cache_dirty();
+                    self.next_window_list_revision();
                     self.next_window_geometry_revision();
                 }
             }
@@ -395,6 +396,7 @@ impl ShellSnapshotModel {
                 if changed {
                     self.mark_window_list_cache_dirty();
                     self.mark_window_metadata_cache_dirty();
+                    self.next_window_list_revision();
                     self.next_window_metadata_revision();
                 }
             }
@@ -416,6 +418,7 @@ impl ShellSnapshotModel {
                 if changed {
                     self.mark_window_list_cache_dirty();
                     self.mark_window_state_cache_dirty();
+                    self.next_window_list_revision();
                     self.next_window_state_revision();
                 }
             }
@@ -680,7 +683,7 @@ mod tests {
             panic!("missing window list");
         };
 
-        assert_eq!(*revision, 1);
+        assert_eq!(*revision, 2);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].window_id, 3);
         assert_eq!(windows[0].surface_id, 31);

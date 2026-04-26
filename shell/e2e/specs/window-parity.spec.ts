@@ -22,45 +22,47 @@ type ParityCase = {
   open: (context: TestContext) => Promise<WindowSnapshot>
 }
 
-async function clickMaximize(base: string, windowId: number, label: string) {
-  const maximize = await waitFor(
-    `${label} maximize control`,
+async function waitForControlRect(
+  base: string,
+  windowId: number,
+  label: string,
+  kind: 'minimize' | 'maximize' | 'close',
+) {
+  return waitFor(
+    `${label} ${kind} control`,
     async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const rect = windowControls(shell, windowId)?.maximize
-      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
+      const snapshots = await getSnapshots(base)
+      const controls = windowControls(snapshots.shell, windowId)
+      const window = shellWindowById(snapshots.shell, windowId)
+      const actual = controls?.[kind]
+      const titlebar = controls?.titlebar
+      if (!window || !titlebar || !actual || actual.width < 12 || actual.height < 12) return null
+      const expectedTitlebarX = window.maximized || window.fullscreen ? window.x : window.x - 4
+      const expectedTitlebarY = window.maximized || window.fullscreen ? window.y - 22 : window.y - 26
+      if (Math.abs(titlebar.global_x - expectedTitlebarX) > 2) return null
+      if (Math.abs(titlebar.global_y - expectedTitlebarY) > 2) return null
+      if (actual.global_y !== titlebar.global_y) return null
+      if (actual.global_x < titlebar.global_x) return null
+      if (actual.global_x + actual.width > titlebar.global_x + titlebar.width) return null
+      return actual
     },
     5000,
     100,
   )
+}
+
+async function clickMaximize(base: string, windowId: number, label: string) {
+  const maximize = await waitForControlRect(base, windowId, label, 'maximize')
   await clickRect(base, maximize)
 }
 
 async function clickClose(base: string, windowId: number, label: string) {
-  const close = await waitFor(
-    `${label} close control`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const rect = windowControls(shell, windowId)?.close
-      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
-    },
-    5000,
-    100,
-  )
+  const close = await waitForControlRect(base, windowId, label, 'close')
   await clickRect(base, close)
 }
 
 async function clickMinimize(base: string, windowId: number, label: string) {
-  const minimize = await waitFor(
-    `${label} minimize control`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const rect = windowControls(shell, windowId)?.minimize
-      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
-    },
-    5000,
-    100,
-  )
+  const minimize = await waitForControlRect(base, windowId, label, 'minimize')
   await clickRect(base, minimize)
 }
 

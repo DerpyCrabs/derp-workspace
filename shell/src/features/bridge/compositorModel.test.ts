@@ -105,7 +105,7 @@ describe('createCompositorModel', () => {
     })
   })
 
-  it('keeps workspace window projection stable for geometry-only updates', () => {
+  it('updates workspace window projection for geometry-only updates', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
       model.applyCompositorDetail(
@@ -148,7 +148,8 @@ describe('createCompositorModel', () => {
       )
 
       expect(model.windows().get(7)).toMatchObject({ x: 40, y: 50, width: 640, height: 480 })
-      expect(model.workspaceWindowsMap().get(7)).toBe(before)
+      expect(model.workspaceWindowsMap().get(7)).not.toBe(before)
+      expect(model.workspaceWindowsMap().get(7)).toMatchObject({ x: 40, y: 50, width: 640, height: 480 })
       dispose()
     })
   })
@@ -300,6 +301,61 @@ describe('createCompositorModel', () => {
         app_id: 'batch.updated',
       })
       expect(model.focusedWindowId()).toBe(7)
+      dispose()
+    })
+  })
+
+  it('keeps pending focus for out-of-order newly mapped windows without recovery', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      let recoveryCount = 0
+
+      model.applyCompositorDetail(
+        {
+          type: 'focus_changed',
+          surface_id: 70,
+          window_id: 7,
+        },
+        {
+          fallbackMonitorKey: () => 'DP-1',
+          requestWindowSyncRecovery: () => {
+            recoveryCount += 1
+          },
+        },
+      )
+
+      expect(model.focusedWindowId()).toBe(null)
+      expect(recoveryCount).toBe(0)
+
+      model.applyCompositorDetail(
+        {
+          type: 'window_mapped',
+          window_id: 7,
+          surface_id: 70,
+          stack_z: 1,
+          x: 10,
+          y: 20,
+          width: 300,
+          height: 200,
+          minimized: false,
+          maximized: false,
+          fullscreen: false,
+          title: 'Pending Focus',
+          app_id: 'pending.focus',
+          output_id: 'output-a',
+          output_name: 'DP-1',
+          workspace_visible: true,
+        },
+        {
+          fallbackMonitorKey: () => 'DP-1',
+          requestWindowSyncRecovery: () => {
+            recoveryCount += 1
+          },
+        },
+      )
+
+      expect(model.focusedWindowId()).toBe(7)
+      expect(recoveryCount).toBe(0)
       dispose()
     })
   })

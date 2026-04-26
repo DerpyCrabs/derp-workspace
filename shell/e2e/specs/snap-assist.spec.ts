@@ -396,26 +396,35 @@ async function dragToTopRightEdgePreview(
   base: string,
   output: { x: number; y: number; width: number; height: number },
   label: string,
+  accept: (shell: ShellSnapshot) => boolean,
 ): Promise<ShellSnapshot> {
   const points = [
-    { x: output.x + output.width - 40, y: output.y + 32 },
-    { x: output.x + output.width - 8, y: output.y + 8 },
     { x: output.x + output.width - 24, y: output.y + 8 },
-    { x: output.x + output.width - 8, y: output.y + 24 },
+    { x: output.x + output.width - 8, y: output.y + 8 },
+    { x: output.x + output.width - 40, y: output.y + 32 },
+    { x: output.x + output.width - 16, y: output.y + 12 },
   ]
   for (const point of points) {
-    await movePoint(base, point.x, point.y)
-    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    if (shell.snap_preview_visible && shell.snap_preview_rect) return shell
+    await dragPointerToPoint(base, point.x, point.y, 8)
+    const shell = await waitFor(
+      label,
+      async () => {
+        const current = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return accept(current) ? current : null
+      },
+      500,
+      16,
+    ).catch(() => null)
+    if (shell) return shell
   }
   return waitFor(
     label,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      return shell.snap_preview_visible && shell.snap_preview_rect ? shell : null
+      return accept(shell) ? shell : null
     },
     2000,
-    125,
+    16,
   )
 }
 
@@ -458,6 +467,13 @@ function rectGlobalCenter(rect: { global_x: number; global_y: number; width: num
   return {
     x: rect.global_x + rect.width / 2,
     y: rect.global_y + rect.height / 2,
+  }
+}
+
+function shellHostedTitlebarPoint(window: WindowSnapshot) {
+  return {
+    x: window.x + window.width / 2,
+    y: window.y - TITLEBAR_PX / 2,
   }
 }
 
@@ -1098,7 +1114,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const output = focused.compositor.outputs.find((entry) => entry.name === window.output_name) ?? null
       assert(output, `missing output ${window.output_name}`)
       await movePoint(base, output.x + output.width / 2, output.y + output.height - 120)
-      await waitForPickerClosed(base, redId)
+      try {
+        await waitForPickerClosed(base, redId)
+      } catch (error) {
+        const { compositor, shell } = await getSnapshots(base)
+        await writeJsonArtifact(`snap-assist-picker-close-timeout-${redId}.json`, {
+          error: error instanceof Error ? error.message : String(error),
+          windowId: redId,
+          compositor,
+          shell,
+        })
+        throw error
+      }
     } finally {
       await pointerButton(base, 0x110, 'release')
       await keyAction(base, SUPER_KEYCODE, 'release')
@@ -1286,22 +1313,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const floated2x2 = await waitFor(
       'wait for settings float reposition after 2x2 snap',
       async () => {
-        const { compositor, shell } = await getSnapshots(base)
+        const { compositor } = await getSnapshots(base)
         const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
-        const titlebar = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.titlebar
-        if (!window || !titlebar) return null
-        return titlebar.global_y >= output2x2.y + 48 ? { compositor, shell, window, titlebar } : null
+        if (!window) return null
+        if (compositor.shell_move_window_id !== null || compositor.shell_pointer_grab_window_id !== null) return null
+        return window.y >= output2x2.y + 48 ? { compositor, window } : null
       },
       2000,
       125,
     )
-    await movePoint(base, rectGlobalCenter(floated2x2.titlebar).x, rectGlobalCenter(floated2x2.titlebar).y)
+    const floated2x2TitlebarPoint = shellHostedTitlebarPoint(floated2x2.window)
+    await movePoint(base, floated2x2TitlebarPoint.x, floated2x2TitlebarPoint.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
       const preview2x2 = await dragToTopRightEdgePreview(
         base,
         output2x2,
         'wait for 2x2 top-right edge preview',
+        (candidate) => {
+          const rect = candidate.snap_preview_rect
+          if (!candidate.snap_preview_visible || !rect) return false
+          const work = monitorFrameRect(output2x2.name, compositor2x2, candidate)
+          const halfWidth = Math.round(work.width / 2)
+          const halfHeight = Math.round(work.height / 2)
+          return (
+            Math.abs(rect.global_x - (work.x + halfWidth)) <= 28 &&
+            Math.abs(rect.global_y - work.y) <= 28 &&
+            Math.abs(rect.width - (work.width - halfWidth)) <= 36 &&
+            Math.abs(rect.height - halfHeight) <= 36
+          )
+        },
       )
       const work2x2 = monitorFrameRect(output2x2.name, compositor2x2, preview2x2)
       const halfWidth2x2 = Math.round(work2x2.width / 2)
@@ -1384,22 +1425,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const floated3x2 = await waitFor(
       'wait for settings float reposition after 3x2 snap',
       async () => {
-        const { compositor, shell } = await getSnapshots(base)
+        const { compositor } = await getSnapshots(base)
         const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
-        const titlebar = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.titlebar
-        if (!window || !titlebar) return null
-        return titlebar.global_y >= output3x2.y + 48 ? { compositor, shell, window, titlebar } : null
+        if (!window) return null
+        if (compositor.shell_move_window_id !== null || compositor.shell_pointer_grab_window_id !== null) return null
+        return window.y >= output3x2.y + 48 ? { compositor, window } : null
       },
       2000,
       125,
     )
-    await movePoint(base, rectGlobalCenter(floated3x2.titlebar).x, rectGlobalCenter(floated3x2.titlebar).y)
+    const floated3x2TitlebarPoint = shellHostedTitlebarPoint(floated3x2.window)
+    await movePoint(base, floated3x2TitlebarPoint.x, floated3x2TitlebarPoint.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
       const preview3x2 = await dragToTopRightEdgePreview(
         base,
         output3x2,
         'wait for 3x2 top-right edge preview',
+        (candidate) => {
+          const rect = candidate.snap_preview_rect
+          if (!candidate.snap_preview_visible || !rect) return false
+          const work = monitorFrameRect(output3x2.name, compositor3x2, candidate)
+          const twoThirdWidth = Math.round((work.width * 2) / 3)
+          const halfHeight = Math.round(work.height / 2)
+          return (
+            Math.abs(rect.global_x - (work.x + twoThirdWidth)) <= 28 &&
+            Math.abs(rect.global_y - work.y) <= 28 &&
+            Math.abs(rect.width - (work.width - twoThirdWidth)) <= 36 &&
+            Math.abs(rect.height - halfHeight) <= 36
+          )
+        },
       )
       const work3x2 = monitorFrameRect(output3x2.name, compositor3x2, preview3x2)
       const twoThirdWidth3x2 = Math.round((work3x2.width * 2) / 3)

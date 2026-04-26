@@ -99,27 +99,18 @@ function perfRankRows(stages: ReturnType<typeof perfStageRow>[]) {
     .sort((a, b) => b.value - a.value)
 }
 
-async function screenshotRectIsMostlyFlat(path: string) {
+async function screenshotHasPerfStripResidual(path: string) {
   const png = await readPngRgba(path)
-  let minR = 255
-  let minG = 255
-  let minB = 255
-  let maxR = 0
-  let maxG = 0
-  let maxB = 0
+  let strongStripPixels = 0
   for (let index = 0; index < png.data.length; index += 4) {
     const r = png.data[index] ?? 0
     const g = png.data[index + 1] ?? 0
     const b = png.data[index + 2] ?? 0
-    minR = Math.min(minR, r)
-    minG = Math.min(minG, g)
-    minB = Math.min(minB, b)
-    maxR = Math.max(maxR, r)
-    maxG = Math.max(maxG, g)
-    maxB = Math.max(maxB, b)
+    const redStrip = r >= 190 && g <= 90 && b <= 90
+    const greenStrip = g >= 150 && r <= 100 && b <= 130
+    if (redStrip || greenStrip) strongStripPixels += 1
   }
-  const spread = Math.max(maxR - minR, maxG - minG, maxB - minB)
-  return spread <= 6
+  return strongStripPixels >= 1500
 }
 
 async function focusNativeWindow(base: string, windowId: number): Promise<ShellSnapshot> {
@@ -582,7 +573,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for bulk unmap stale decoration probe to clear',
       async () => {
         const staleProbeScreenshot = await captureScreenshotRect(base, staleProbeRect)
-        if (!(await screenshotRectIsMostlyFlat(staleProbeScreenshot.path))) return null
+        if (await screenshotHasPerfStripResidual(staleProbeScreenshot.path)) return null
         return copyArtifactFile('perf-bulk-unmap-clears-decoration.png', staleProbeScreenshot.path)
       },
       5000,

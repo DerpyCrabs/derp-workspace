@@ -87,6 +87,7 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
   ) => {
     if ((buttons & 1) !== 0) return false
     syncPointerPosition(clientX, clientY)
+    options.endShellWindowMove(reason)
     options.endShellWindowResize(reason)
     pointerGestureBlurPendingRelease = false
     return true
@@ -117,27 +118,27 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
 
   const onWindowPointerUp = (event: PointerEvent) => {
     if (!event.isPrimary) return
-    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
     options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
     syncPointerPosition(event.clientX, event.clientY)
+    options.endShellWindowMove('window-pointerup')
     options.endShellWindowResize('window-pointerup')
     pointerGestureBlurPendingRelease = false
   }
 
   const onWindowMouseUp = (event: MouseEvent) => {
     if (event.button !== 0) return
-    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
     options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
     syncPointerPosition(event.clientX, event.clientY)
+    options.endShellWindowMove('window-mouseup')
     options.endShellWindowResize('window-mouseup')
     pointerGestureBlurPendingRelease = false
   }
 
   const onWindowPointerCancel = (event: PointerEvent) => {
     if (!event.isPrimary) return
-    options.applyShellWindowMove(event.clientX, event.clientY, event.metaKey, event.buttons)
     options.applyShellWindowResize(event.clientX, event.clientY, event.buttons)
     syncPointerPosition(event.clientX, event.clientY)
+    options.endShellWindowMove('window-pointercancel')
     options.endShellWindowResize('window-pointercancel')
     pointerGestureBlurPendingRelease = false
   }
@@ -147,13 +148,14 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
       dragWindowId: options.getShellWindowDragId(),
       resizeWindowId: options.getShellWindowResizeId(),
     }
-    if (state.resizeWindowId !== null) {
+    if (state.dragWindowId !== null || state.resizeWindowId !== null) {
       pointerGestureBlurPendingRelease = true
     }
     options.onWindowBlur(state)
   }
 
   const onWindowTouchEnd = () => {
+    options.endShellWindowMove('window-touchend')
     options.endShellWindowResize('window-touchend')
     pointerGestureBlurPendingRelease = false
   }
