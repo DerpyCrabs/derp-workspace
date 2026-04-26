@@ -76,6 +76,18 @@ type E2eTabDragTarget = {
   insertIndex: number
 }
 
+type E2ePortalPickerWindow = {
+  window_id: number
+  capture_identifier: string
+  title: string
+  rect: E2eRectSnapshot | null
+}
+
+type E2ePortalPickerMonitor = {
+  name: string
+  rect: E2eRectSnapshot | null
+}
+
 export type BuildE2eShellSnapshotArgs = {
   document: Document
   viewport: unknown
@@ -463,6 +475,18 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',
     rect: snapshotRect(taskbarEl, args.origin),
   }))
+  const portalPickerPanel = queryRect(cache, '[data-shell-portal-picker-panel]', args.origin)
+  const portalPickerCancel = queryRect(cache, '[data-shell-portal-picker-cancel]', args.origin)
+  const portalPickerWindows = cache.queryAllAttr('data-shell-portal-picker-window').map((button) => ({
+    window_id: Number.parseInt(button.getAttribute('data-shell-portal-picker-window') ?? '', 10),
+    capture_identifier: button.getAttribute('data-shell-portal-picker-window-capture') ?? '',
+    title: button.getAttribute('data-shell-portal-picker-window-title') ?? '',
+    rect: snapshotRect(button, args.origin),
+  })).filter((entry): entry is E2ePortalPickerWindow => Number.isInteger(entry.window_id) && entry.window_id > 0)
+  const portalPickerMonitors = cache.queryAllAttr('data-shell-portal-picker-monitor-name').map((button) => ({
+    name: button.getAttribute('data-shell-portal-picker-monitor-name') ?? '',
+    rect: snapshotRect(button, args.origin),
+  })).filter((entry): entry is E2ePortalPickerMonitor => entry.name.trim().length > 0)
   const taskbarWindowButtons = args.taskbarGroupRows.map((row) => ({
     group_id: row.group_id,
     window_id: row.window_id,
@@ -846,6 +870,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         }
       : null,
     compositor_interaction_state: args.compositorInteractionState,
+    portal_picker_visible: portalPickerPanel !== null,
+    portal_picker_panel: portalPickerPanel,
+    portal_picker_cancel: portalPickerCancel,
+    portal_picker_windows: portalPickerWindows,
+    portal_picker_monitors: portalPickerMonitors,
     window_interaction_capture: windowInteractionCaptureRect,
     window_interaction_capture_blocks_pointer: windowInteractionCaptureBlocksPointer,
     window_interaction_capture_hit_pointer: windowInteractionCaptureHitPointer,

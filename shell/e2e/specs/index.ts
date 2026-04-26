@@ -6,6 +6,7 @@ import notificationsGroup from './notifications.spec.ts'
 import restartInputGroup from './restart-input.spec.ts'
 import perfSmokeGroup from './perf-smoke.spec.ts'
 import restartPersistenceGroup from './restart-persistence.spec.ts'
+import screenCaptureGroup from './screen-capture.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
 import shellChromeSessionGroup from './shell-chrome-session.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
@@ -26,6 +27,7 @@ export const defaultGroups = [
   windowParityGroup,
   x11WindowsGroup,
   xdgActivationGroup,
+  screenCaptureGroup,
   snapAssistGroup,
   tabGroupsGroup,
   launcherMultimonitorGroup,

@@ -439,6 +439,18 @@ export interface PdfViewerWindowSnapshot {
   title: string
 }
 
+export interface PortalPickerWindowSnapshot {
+  window_id: number
+  capture_identifier: string
+  title: string
+  rect: Rect | null
+}
+
+export interface PortalPickerMonitorSnapshot {
+  name: string
+  rect: Rect | null
+}
+
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
@@ -492,6 +504,11 @@ export interface ShellSnapshot {
   image_viewer_windows?: ImageViewerWindowSnapshot[]
   text_editor_windows?: TextEditorWindowSnapshot[]
   pdf_viewer_windows?: PdfViewerWindowSnapshot[]
+  portal_picker_visible?: boolean
+  portal_picker_panel?: Rect | null
+  portal_picker_cancel?: Rect | null
+  portal_picker_windows?: PortalPickerWindowSnapshot[]
+  portal_picker_monitors?: PortalPickerMonitorSnapshot[]
   file_browser_context_menu?: FileBrowserContextMenuActionSnapshot[]
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null

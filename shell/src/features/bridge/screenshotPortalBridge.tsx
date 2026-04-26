@@ -486,6 +486,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                 ref={(element) => {
                   panel = element
                 }}
+                data-shell-portal-picker-panel
                 class="absolute border border-white/12 bg-(--shell-overlay) p-5 text-(--shell-text) shadow-2xl"
                 style={
                   portalPickerLayout()?.placement ?? {
@@ -517,6 +518,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                   <button
                     type="button"
                     disabled={portalPickerBusy()}
+                    data-shell-portal-picker-cancel
                     class="rounded-lg border border-(--shell-border) px-3 py-1.5 text-sm text-(--shell-text-muted) transition-colors hover:bg-(--shell-hover)"
                     onClick={() => {
                       void resolvePortalPicker(null)
@@ -551,6 +553,9 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                               <button
                                 type="button"
                                 disabled={portalPickerBusy()}
+                                data-shell-portal-picker-window={window.window_id}
+                                data-shell-portal-picker-window-capture={window.capture_identifier}
+                                data-shell-portal-picker-window-title={title}
                                 class="border border-(--shell-border) bg-(--shell-surface-elevated) hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
                                 onClick={() => {
                                   void resolvePortalPicker(`Window: ${window.capture_identifier}`)
@@ -619,6 +624,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                                 <button
                                   type="button"
                                   disabled={portalPickerBusy() || !rect.row.name}
+                                  data-shell-portal-picker-monitor-name={rect.row.name}
                                   class="border border-(--shell-display-card-border) bg-(--shell-display-card-bg) text-(--shell-text) absolute flex flex-col items-start justify-between overflow-hidden rounded-md px-2 py-1.5 text-left transition-shadow hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
                                   classList={{
                                     'border-(--shell-display-card-primary-border) bg-(--shell-display-card-primary-bg)':

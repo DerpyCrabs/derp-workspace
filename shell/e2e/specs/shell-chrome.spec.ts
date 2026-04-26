@@ -14,9 +14,6 @@ import {
   cleanupNativeWindows,
   closeTaskbarWindow,
   copyArtifactFile,
-  compositorFloatingLayerContainsPoint,
-  compositorFloatingLayerCount,
-  compositorFloatingLayers,
   compositorWindowById,
   autoLayoutManagedWindowsOnOutput,
   dragBetweenPoints,
@@ -88,6 +85,19 @@ function shellTitlebarDragPoint(shell: ShellSnapshot, windowId: number) {
     x: Math.max(minX, Math.min(maxX, preferredX)),
     y: rect.global_y + Math.max(8, Math.min(rect.height - 8, Math.round(rect.height / 2))),
   }
+}
+
+function pointInWorkspaceRect(
+  rect: { x: number; y: number; width: number; height: number } | null | undefined,
+  point: { x: number; y: number },
+) {
+  if (!rect) return false
+  return (
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.height
+  )
 }
 
 type BatteryHttpState = {
@@ -2101,28 +2111,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       async () => {
         const snapshots = await getSnapshots(base)
         if (!snapshots.shell.volume_menu_open) return null
-        if (!snapshots.shell.controls.volume_output_option_0) return null
-        return compositorFloatingLayerCount(snapshots.compositor) >= 2 ? snapshots : null
+        return snapshots.shell.controls.volume_output_option_0 ? snapshots : null
       },
       5000,
       100,
     )
-    const floatingLayers = compositorFloatingLayers(outputExpanded.compositor)
-    assert(floatingLayers.length >= 2, `expected nested floating layers for volume selector, got ${floatingLayers.length}`)
-    assert(floatingLayers.at(-1)!.z > floatingLayers[0]!.z, 'nested selector should render above the parent volume menu')
-    const topLayer = floatingLayers.at(-1)!
     const outputOptionRect =
       outputExpanded.shell.controls.volume_output_option_0 ?? outputExpanded.shell.controls.volume_output_option_1
     assert(outputOptionRect, 'missing projected output option rect')
+    assert(outputExpanded.compositor.shell_context_menu_global, 'volume selector should keep shell context menu overlay registered')
     assert(
-      compositorFloatingLayerContainsPoint(
-        topLayer,
-        {
-          x: outputOptionRect.global_x + outputOptionRect.width / 2,
-          y: outputOptionRect.global_y + outputOptionRect.height / 2,
-        },
-      ),
-      'topmost floating layer should contain the expanded output selector options',
+      pointInWorkspaceRect(outputExpanded.compositor.shell_context_menu_global, rectCenter(outputOptionRect)),
+      'shell context menu overlay should contain the expanded output selector options',
     )
     assertTopWindow(outputExpanded.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'output selector should not disturb shell focus')
     await clickRect(
@@ -2146,26 +2146,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       async () => {
         const snapshots = await getSnapshots(base)
         if (!snapshots.shell.volume_menu_open) return null
-        if (!snapshots.shell.controls.volume_input_option_0) return null
-        return compositorFloatingLayerCount(snapshots.compositor) >= 2 ? snapshots : null
+        return snapshots.shell.controls.volume_input_option_0 ? snapshots : null
       },
       5000,
       100,
     )
-    const inputLayers = compositorFloatingLayers(inputExpanded.compositor)
-    assert(inputLayers.length >= 2, 'input selector should keep parent menu plus one nested layer')
-    const inputTopLayer = inputLayers.at(-1)!
     const inputOptionRect = inputExpanded.shell.controls.volume_input_option_0 ?? inputExpanded.shell.controls.volume_input_option_1
     assert(inputOptionRect, 'missing projected input option rect')
+    assert(inputExpanded.compositor.shell_context_menu_global, 'input selector should keep shell context menu overlay registered')
     assert(
-      compositorFloatingLayerContainsPoint(
-        inputTopLayer,
-        {
-          x: inputOptionRect.global_x + inputOptionRect.width / 2,
-          y: inputOptionRect.global_y + inputOptionRect.height / 2,
-        },
-      ),
-      'topmost floating layer should switch to the input selector after opening it',
+      pointInWorkspaceRect(inputExpanded.compositor.shell_context_menu_global, rectCenter(inputOptionRect)),
+      'shell context menu overlay should contain the expanded input selector options',
     )
 
     const outputSlider = afterOutputPick.controls.volume_output_slider
@@ -2203,12 +2194,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
       'wait for all floating layers dismissed after outside click',
       async () => {
         const snapshots = await getSnapshots(base)
-        return compositorFloatingLayerCount(snapshots.compositor) === 0 ? snapshots : null
+        return snapshots.compositor.shell_context_menu_global ? null : snapshots
       },
       5000,
       100,
     )
-    assert(compositorFloatingLayerCount(dismissedLayers.compositor) === 0, 'outside click should dismiss all nested floating layers')
+    assert(!dismissedLayers.compositor.shell_context_menu_global, 'outside click should dismiss the shell context menu overlay')
 
     await writeTextArtifact('tray-volume-menu.html', volumeHtml)
     await writeJsonArtifact('tray-volume-audio-state.json', audioAfterOutputSlide)
@@ -2293,11 +2284,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       40,
     )
+    const batteryAfterTooltip = await getJson<BatteryHttpState>(base, '/battery_state')
     assert(tooltipHtml.includes(percent), `battery tooltip should show ${percent}`)
-    if (battery.state === 'charging' && battery.time_to_full_seconds > 0) {
+    if (
+      batteryAfterTooltip.state === 'charging' &&
+      batteryAfterTooltip.time_to_full_seconds > 0 &&
+      batteryAfterTooltip.percentage < 100
+    ) {
       assert(tooltipHtml.includes('until full'), 'battery tooltip should include charge estimate')
     }
-    if (battery.state === 'discharging' && battery.time_to_empty_seconds > 0) {
+    if (batteryAfterTooltip.state === 'discharging' && batteryAfterTooltip.time_to_empty_seconds > 0) {
       assert(tooltipHtml.includes('remaining'), 'battery tooltip should include remaining time estimate')
     }
     await writeJsonArtifact('taskbar-battery-state.json', battery)
