@@ -5,13 +5,22 @@ import { promisify } from 'node:util'
 
 import {
   assert,
+  buildNativeSpawnCommand,
   compositorWindowById,
   defineGroup,
+  getJson,
   getSnapshots,
+  getShellHtml,
+  KEY,
   syncTest,
+  tapKey,
+  typeText,
+  waitFor,
   waitForNativeFocus,
+  waitForProgramsMenuClosed,
+  waitForSpawnedWindow,
 } from '../lib/runtime.ts'
-import { openShellTestWindow, spawnNativeWindow } from '../lib/setup.ts'
+import { openProgramsMenu, openShellTestWindow, spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -95,6 +104,25 @@ async function derpctl(args: string[]): Promise<DerpctlReply> {
 
 async function derpctlTransaction(actions: Array<{ method: string; params: Record<string, unknown> }>) {
   return derpctl(['transaction', JSON.stringify(actions)])
+}
+
+async function searchCommandPalette(base: string, query: string, requireItem = true) {
+  const before = await getJson(base, '/test/state/shell')
+  if (before.programs_menu_open) {
+    await tapKey(base, KEY.escape)
+    await waitForProgramsMenuClosed(base)
+  }
+  await openProgramsMenu(base, 'keybind')
+  await typeText(base, query)
+  return waitFor(
+    `wait for command palette query ${query}`,
+    async () => {
+      const shell = await getJson(base, '/test/state/shell')
+      return shell.programs_menu_query === query && (!requireItem || shell.controls?.programs_menu_first_item) ? shell : null
+    },
+    5000,
+    100,
+  )
 }
 
 function eventStream(args: string[]) {
@@ -244,5 +272,82 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await derpctl(['window', 'maximize', String(nativeId), '--enabled', 'false'])
       await getSnapshots(base)
     }
+  })
+
+  test('derpctl registers runtime command palette categories and actions', async ({ base, state }) => {
+    const stamp = Date.now()
+    const owner = `e2e.${stamp}`
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Palette Focus ${stamp}`,
+      token: `palette-focus-${stamp}`,
+      strip: 'red',
+    })
+    const nativeId = native.window.window_id
+    state.spawnedNativeWindowIds.add(nativeId)
+
+    const spawnTitle = `Derp Palette Spawn ${stamp}`
+    const spawnCommand = buildNativeSpawnCommand({
+      title: spawnTitle,
+      token: `palette-spawn-${stamp}`,
+      strip: 'green',
+    })
+
+    await derpctl(['palette', 'category', 'upsert', owner, 'external-tools', 'External Tools', '--order', '5'])
+    await derpctl([
+      'palette',
+      'action',
+      'upsert',
+      JSON.stringify({
+        owner,
+        id: 'focus-red',
+        category_id: 'external-tools',
+        label: `Focus palette red ${stamp}`,
+        subtitle: 'External control',
+        keywords: ['palettered'],
+        run: { type: 'control', method: 'window.focus', params: { window_id: nativeId } },
+      }),
+    ])
+    await derpctl([
+      'palette',
+      'action',
+      'upsert',
+      JSON.stringify({
+        owner,
+        id: 'spawn-green',
+        category_id: 'external-tools',
+        label: `Spawn palette green ${stamp}`,
+        subtitle: 'External control',
+        keywords: ['palettegreen'],
+        run: { type: 'spawn', command: spawnCommand },
+      }),
+    ])
+
+    const stateReply = await derpctl(['state', '--domains', 'palette'])
+    assert(stateReply.result?.palette?.actions?.length >= 2, 'state palette missing registered actions')
+
+    await searchCommandPalette(base, 'palettered')
+    let html = await getShellHtml(base, '[aria-label="Command palette"]')
+    assert(html.includes('External Tools'), 'external palette category missing')
+    assert(html.includes(`Focus palette red ${stamp}`), 'external focus action missing')
+    await tapKey(base, KEY.enter)
+    await waitForNativeFocus(base, nativeId)
+
+    await searchCommandPalette(base, 'palettegreen')
+    html = await getShellHtml(base, '[aria-label="Command palette"]')
+    assert(html.includes(`Spawn palette green ${stamp}`), 'external spawn action missing')
+    await tapKey(base, KEY.enter)
+    await waitForProgramsMenuClosed(base)
+    const spawned = await waitForSpawnedWindow(base, state.knownWindowIds, {
+      title: spawnTitle,
+      appId: 'derp.e2e.native',
+      command: spawnCommand,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+
+    await derpctl(['palette', 'clear-owner', owner])
+    await searchCommandPalette(base, 'palettered', false)
+    html = await getShellHtml(base, '[aria-label="Command palette"]')
+    assert(!html.includes(`Focus palette red ${stamp}`), 'external focus action remained after owner clear')
+    assert(!html.includes(`Spawn palette green ${stamp}`), 'external spawn action remained after owner clear')
   })
 })

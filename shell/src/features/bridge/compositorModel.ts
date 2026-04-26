@@ -13,6 +13,7 @@ import {
   workspaceSnapshotsEqual,
   type WorkspaceSnapshot,
 } from '@/features/workspace/workspaceSnapshot'
+import type { ExternalCommandPaletteState } from '@/features/command-palette/commandPalette'
 
 export type CompositorFollowup = {
   flushWindows?: boolean
@@ -32,6 +33,7 @@ export type CompositorApplyResult = {
     | 'window_mapped'
     | 'window_metadata'
     | 'shell_hosted_app_state'
+    | 'command_palette_state'
     | 'ignored'
     | 'recovery_requested'
   detailType: DerpShellDetail['type']
@@ -55,6 +57,7 @@ type SnapshotAuthoritativeState = {
   windowOrder?: { revision: number; rows: unknown[] }
   workspaceSnapshot?: { revision: number; state: WorkspaceSnapshot }
   shellHostedAppByWindow?: { revision: number; byWindowId: Record<number, unknown> }
+  commandPalette?: { revision: number; state: ExternalCommandPaletteState }
 }
 
 function coerceRevision(raw: unknown): number {
@@ -223,6 +226,13 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
       }
       continue
     }
+    if (detail.type === 'command_palette_state') {
+      next.commandPalette = {
+        revision: coerceRevision(detail.revision),
+        state: detail.state,
+      }
+      continue
+    }
     if (detail.type === 'focus_changed') {
       next.focusedWindowId = coerceShellWindowId(detail.window_id)
     }
@@ -247,6 +257,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const [focusedWindowId, setFocusedWindowId] = createSignal<number | null>(null)
   const [shellHostedAppByWindow, setShellHostedAppByWindow] = createSignal<Readonly<Record<number, unknown>>>({})
   const [shellHostedAppRevision, setShellHostedAppRevision] = createSignal(-1)
+  const [commandPaletteState, setCommandPaletteState] = createSignal<ExternalCommandPaletteState>({
+    revision: 0,
+    categories: [],
+    actions: [],
+  })
+  const [commandPaletteRevision, setCommandPaletteRevision] = createSignal(-1)
   let pendingFocusedWindowId: number | null = null
   const pendingWindowDetails = new Map<number, Map<DerpShellDetail['type'], DerpShellDetail>>()
 
@@ -484,6 +500,19 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         continue
       }
 
+      if (detail.type === 'command_palette_state') {
+        const revision = coerceRevision(detail.revision)
+        if (revision !== commandPaletteRevision()) {
+          setCommandPaletteState(detail.state)
+          setCommandPaletteRevision(revision)
+        }
+        results.push({
+          kind: 'command_palette_state',
+          detailType: detail.type,
+        })
+        continue
+      }
+
       if (detail.type === 'window_state') {
         const windowId = coerceShellWindowId(detail.window_id)
         const previousWindow = windowId !== null ? currentWindows().get(windowId) ?? null : null
@@ -644,6 +673,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         setShellHostedAppRevision(authoritative.shellHostedAppByWindow.revision)
       }
     }
+    if (authoritative.commandPalette !== undefined) {
+      if (authoritative.commandPalette.revision !== commandPaletteRevision()) {
+        setCommandPaletteState(authoritative.commandPalette.state)
+        setCommandPaletteRevision(authoritative.commandPalette.revision)
+      }
+    }
     const nextFocusedWindowId = authoritative.focusedWindowId
     if (nextFocusedWindowId !== undefined) {
       setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
@@ -687,6 +722,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     focusedWindowId: liveFocusedWindowId,
     setFocusedWindowId,
     shellHostedAppByWindow,
+    commandPaletteState,
     applyCompositorSnapshot,
     applyCompositorDetails,
     applyCompositorDetail,

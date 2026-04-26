@@ -1209,6 +1209,16 @@ fn append_snapshot_message(
                 "shell hosted app state",
             )?;
         }
+        shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
+            revision,
+            state_json,
+        } => {
+            extend_snapshot_packet(
+                payload,
+                shell_wire::encode_compositor_command_palette_state(*revision, state_json),
+                "command palette state",
+            )?;
+        }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
             pointer_x,

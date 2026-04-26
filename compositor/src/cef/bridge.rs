@@ -40,6 +40,7 @@ enum PendingCompositorMessageStaticKey {
     WorkspaceState,
     WorkspaceStateBinary,
     ShellHostedAppState,
+    CommandPaletteState,
     InteractionState,
     NotificationsState,
 }
@@ -153,6 +154,11 @@ fn pending_message_dedup_key(
         shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
             Some(PendingCompositorMessageDedupKey::Static(
                 PendingCompositorMessageStaticKey::ShellHostedAppState,
+            ))
+        }
+        shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. } => {
+            Some(PendingCompositorMessageDedupKey::Static(
+                PendingCompositorMessageStaticKey::CommandPaletteState,
             ))
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {

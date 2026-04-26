@@ -862,6 +862,22 @@ fn apply_message(
                 message_snapshot_epoch,
             ));
         }
+        shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
+            revision,
+            state_json,
+        } => {
+            let Ok(state) = serde_json::from_str::<Value>(&state_json) else {
+                return;
+            };
+            pending_details.push(detail_with_snapshot_epoch(
+                json!({
+                    "type": "command_palette_state",
+                    "revision": revision,
+                    "state": state,
+                }),
+                message_snapshot_epoch,
+            ));
+        }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
             pointer_x,

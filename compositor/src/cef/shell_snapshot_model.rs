@@ -26,6 +26,7 @@ pub(crate) struct ShellSnapshotModel {
     keyboard_layout: Option<shell_wire::DecodedCompositorToShellMessage>,
     workspace_state: Option<shell_wire::DecodedCompositorToShellMessage>,
     shell_hosted_app_state: Option<shell_wire::DecodedCompositorToShellMessage>,
+    command_palette_state: Option<shell_wire::DecodedCompositorToShellMessage>,
     interaction_state: Option<shell_wire::DecodedCompositorToShellMessage>,
     native_drag_preview: Option<shell_wire::DecodedCompositorToShellMessage>,
     tray_hints: Option<shell_wire::DecodedCompositorToShellMessage>,
@@ -437,6 +438,9 @@ impl ShellSnapshotModel {
             shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
                 self.shell_hosted_app_state = Some(message.clone());
             }
+            shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. } => {
+                self.command_palette_state = Some(message.clone());
+            }
             shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
                 self.interaction_state = Some(message.clone());
             }
@@ -512,6 +516,11 @@ impl ShellSnapshotModel {
                 messages.push(message);
             }
         }
+        if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_COMMAND_PALETTE != 0 {
+            if let Some(message) = self.command_palette_state.clone() {
+                messages.push(message);
+            }
+        }
         if domains & shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION != 0 {
             if let Some(message) = self.interaction_state.clone() {
                 messages.push(message);
@@ -576,6 +585,9 @@ pub(crate) fn snapshot_domain_for_message(
         }
         shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. } => {
             shell_wire::SHELL_SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
+        }
+        shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. } => {
+            shell_wire::SHELL_SNAPSHOT_DOMAIN_COMMAND_PALETTE
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState { .. } => {
             shell_wire::SHELL_SNAPSHOT_DOMAIN_INTERACTION

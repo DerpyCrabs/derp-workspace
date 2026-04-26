@@ -304,6 +304,10 @@ fn handle_uplink_list(
             let cmd = cef_string_userfree_to_string(&args.string(1));
             uplink.spawn_wayland_client(cmd);
         }
+        "command_palette_activate" => {
+            let json = cef_string_userfree_to_string(&args.string(1));
+            uplink.command_palette_activate(json);
+        }
         "move_begin" => {
             let wid = args.int(1) as u32;
             tracing::debug!(target: "derp_shell_move", wid, "cef uplink: move_begin");
@@ -681,15 +685,15 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                 }
                 "quit" => {}
-                "backed_window_open" | "hosted_window_open" | "workspace_mutation" | "taskbar_pin_add" | "taskbar_pin_remove" | "taskbar_pin_launch" | "shell_hosted_window_state" | "shell_hosted_window_title" => {
+                "backed_window_open" | "hosted_window_open" | "workspace_mutation" | "taskbar_pin_add" | "taskbar_pin_remove" | "taskbar_pin_launch" | "shell_hosted_window_state" | "shell_hosted_window_title" | "command_palette_activate" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!(
-                            "hosted_window_open/backed_window_open/workspace_mutation/taskbar_pin_add/taskbar_pin_remove/taskbar_pin_launch/shell_hosted_window_state/shell_hosted_window_title requires JSON string"
+                            "hosted_window_open/backed_window_open/workspace_mutation/taskbar_pin_add/taskbar_pin_remove/taskbar_pin_launch/shell_hosted_window_state/shell_hosted_window_title/command_palette_activate requires JSON string"
                         );
                     };
                     if a1.is_string() == 0 {
                         return_exception!(
-                            "hosted_window_open/backed_window_open/workspace_mutation/taskbar_pin_add/taskbar_pin_remove/taskbar_pin_launch/shell_hosted_window_state/shell_hosted_window_title: second arg must be a string"
+                            "hosted_window_open/backed_window_open/workspace_mutation/taskbar_pin_add/taskbar_pin_remove/taskbar_pin_launch/shell_hosted_window_state/shell_hosted_window_title/command_palette_activate: second arg must be a string"
                         );
                     }
                     let json = cef_string_userfree_to_string(&a1.string_value());
@@ -1249,7 +1253,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, shell_ipc_pong, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

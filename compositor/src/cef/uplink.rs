@@ -108,6 +108,22 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn command_palette_activate(&self, json: String) {
+        self.run(move |s| {
+            let value = match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let Some(owner) = value.get("owner").and_then(|value| value.as_str()) else {
+                return;
+            };
+            let Some(id) = value.get("id").and_then(|value| value.as_str()) else {
+                return;
+            };
+            let _ = s.control_palette_activate(owner, id);
+        });
+    }
+
     pub fn shell_close(&self, window_id: u32) {
         self.run(move |s| {
             s.window_op_close(window_id);

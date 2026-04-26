@@ -713,6 +713,8 @@ pub struct CompositorState {
     pub(crate) control_workspace_revision: u64,
     pub(crate) control_settings_revision: u64,
     pub(crate) control_event_hub: crate::control::ControlEventHub,
+    pub(crate) command_palette_registry: crate::control::CommandPaletteRegistry,
+    pub(crate) command_palette_revision: u64,
     pub(crate) shell_hosted_app_state_revision: u64,
     pub(crate) shell_interaction_revision: u64,
     pub(crate) shell_interaction_last_sent_at: Option<Instant>,
@@ -1552,6 +1554,8 @@ impl CompositorState {
             control_workspace_revision: 0,
             control_settings_revision: 0,
             control_event_hub: crate::control::ControlEventHub::default(),
+            command_palette_registry: crate::control::CommandPaletteRegistry::default(),
+            command_palette_revision: 0,
             shell_hosted_app_state_revision: 0,
             shell_interaction_revision: 0,
             shell_interaction_last_sent_at: None,
@@ -3047,6 +3051,7 @@ impl CompositorState {
             | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
             | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
             | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
+            | shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. }
             | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
             | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
             | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
@@ -7472,6 +7477,12 @@ impl CompositorState {
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
         self.shell_hosted_app_state_send();
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
+                revision: self.command_palette_revision,
+                state_json: self.command_palette_state_value().to_string(),
+            },
+        );
         self.shell_send_to_cef(self.notifications_state_message());
         let window_id = self.logical_focused_window_id();
         let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));

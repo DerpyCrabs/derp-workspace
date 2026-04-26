@@ -41,6 +41,7 @@ export type ShellCompositorWireOp =
   | 'taskbar_pin_add'
   | 'taskbar_pin_remove'
   | 'taskbar_pin_launch'
+  | 'command_palette_activate'
   | 'shell_hosted_window_state'
   | 'shell_hosted_window_title'
   | 'hosted_window_open'

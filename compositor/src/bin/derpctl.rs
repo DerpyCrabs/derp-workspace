@@ -49,6 +49,10 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
+    Palette {
+        #[command(subcommand)]
+        command: PaletteCommand,
+    },
     Transaction {
         actions: String,
     },
@@ -116,6 +120,42 @@ enum SettingsCommand {
     Set { section: String, value: String },
 }
 
+#[derive(Subcommand, Debug)]
+enum PaletteCommand {
+    Category {
+        #[command(subcommand)]
+        command: PaletteCategoryCommand,
+    },
+    Action {
+        #[command(subcommand)]
+        command: PaletteActionCommand,
+    },
+    ClearOwner {
+        owner: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PaletteCategoryCommand {
+    Upsert {
+        owner: String,
+        id: String,
+        label: String,
+        #[arg(long)]
+        order: Option<i32>,
+    },
+    Remove {
+        owner: String,
+        id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PaletteActionCommand {
+    Upsert { action: String },
+    Remove { owner: String, id: String },
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let _json = cli.json;
@@ -148,6 +188,7 @@ fn build_request(command: Command) -> Result<Value, String> {
         Command::Layout { command } => build_layout_request(id, command)?,
         Command::Workspace { command } => build_workspace_request(id, command)?,
         Command::Settings { command } => build_settings_request(id, command)?,
+        Command::Palette { command } => build_palette_request(id, command)?,
         Command::Transaction { actions } => build_transaction_request(id, actions)?,
     };
     Ok(request)
@@ -243,6 +284,51 @@ fn build_settings_request(id: u64, command: SettingsCommand) -> Result<Value, St
             Ok(
                 json!({ "id": id, "method": "settings.set", "params": { "section": section, "value": value } }),
             )
+        }
+    }
+}
+
+fn build_palette_request(id: u64, command: PaletteCommand) -> Result<Value, String> {
+    match command {
+        PaletteCommand::Category { command } => match command {
+            PaletteCategoryCommand::Upsert {
+                owner,
+                id: category_id,
+                label,
+                order,
+            } => {
+                let mut category = json!({
+                    "owner": owner,
+                    "id": category_id,
+                    "label": label,
+                });
+                if let Some(order) = order {
+                    category["order"] = json!(order);
+                }
+                Ok(json!({ "id": id, "method": "palette.category.upsert", "params": category }))
+            }
+            PaletteCategoryCommand::Remove {
+                owner,
+                id: category_id,
+            } => Ok(
+                json!({ "id": id, "method": "palette.category.remove", "params": { "owner": owner, "id": category_id } }),
+            ),
+        },
+        PaletteCommand::Action { command } => match command {
+            PaletteActionCommand::Upsert { action } => {
+                let action = serde_json::from_str::<Value>(&action)
+                    .map_err(|e| format!("invalid action json: {e}"))?;
+                Ok(json!({ "id": id, "method": "palette.action.upsert", "params": action }))
+            }
+            PaletteActionCommand::Remove {
+                owner,
+                id: action_id,
+            } => Ok(
+                json!({ "id": id, "method": "palette.action.remove", "params": { "owner": owner, "id": action_id } }),
+            ),
+        },
+        PaletteCommand::ClearOwner { owner } => {
+            Ok(json!({ "id": id, "method": "palette.owner.clear", "params": { "owner": owner } }))
         }
     }
 }

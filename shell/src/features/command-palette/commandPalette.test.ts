@@ -75,4 +75,16 @@ describe('command palette search', () => {
     )
     expect(results.map((result) => result.id)).toEqual(['app:files', 'app:desktop-shell'])
   })
+
+  it('orders external categories after built-ins by dynamic category order', () => {
+    const results = filterCommandPaletteItems(
+      [
+        item({ id: 'external:late', category: 'external:test:late', categoryLabel: 'Late', categoryOrder: 1020, label: 'Probe' }),
+        item({ id: 'workspace:save', category: 'workspace', label: 'Probe' }),
+        item({ id: 'external:early', category: 'external:test:early', categoryLabel: 'Early', categoryOrder: 1010, label: 'Probe' }),
+      ],
+      'probe',
+    )
+    expect(results.map((result) => result.id)).toEqual(['workspace:save', 'external:early', 'external:late'])
+  })
 })

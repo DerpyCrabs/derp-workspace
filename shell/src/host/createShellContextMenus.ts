@@ -25,6 +25,7 @@ import { shellHostedProgramsMenuDefinitions } from '@/features/shell-ui/shellHos
 import {
   filterCommandPaletteItems,
   type CommandPaletteItem,
+  type ExternalCommandPaletteState,
 } from '@/features/command-palette/commandPalette'
 import { SETTINGS_NAV, type SettingsPageId } from '@/apps/settings/settingsNavigation'
 import { setNotificationsEnabledViaShell, type ShellNotificationsState } from '@/features/notifications/notificationsState'
@@ -75,6 +76,7 @@ type CreateShellContextMenusArgs = {
   windowSwitcherSelectedWindowId: Accessor<number | null>
   focusedWindowId: Accessor<number | null>
   notificationsState: Accessor<ShellNotificationsState | null>
+  commandPaletteState: Accessor<ExternalCommandPaletteState>
   taskbarPins: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
   setShellPrimary: (name: string) => boolean
   setUiScale: (pct: 100 | 150 | 200) => boolean
@@ -88,6 +90,7 @@ type CreateShellContextMenusArgs = {
       | 'taskbar_pin_add'
       | 'taskbar_pin_remove'
       | 'taskbar_activate'
+      | 'command_palette_activate'
       | 'close'
       | 'minimize'
       | 'set_maximized'
@@ -169,6 +172,17 @@ function commandWindowLabel(window: DerpWindow): string {
     window.app_id.trim() ||
     (windowIsShellHosted(window) ? `Shell window ${window.window_id}` : `Window ${window.window_id}`)
   )
+}
+
+const BUILTIN_COMMAND_PALETTE_CATEGORY_LABELS: Record<string, string> = {
+  apps: 'Apps',
+  windows: 'Windows',
+  settings: 'Settings',
+  workspace: 'Workspace',
+}
+
+function externalCommandPaletteCategoryKey(owner: string, id: string): string {
+  return `external:${owner}:${id}`
 }
 
 export function createShellContextMenus(args: CreateShellContextMenusArgs) {
@@ -1084,6 +1098,45 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         action: args.exitSession,
       },
     )
+    const externalState = args.commandPaletteState()
+    const externalCategories = new Map<string, { key: string; label: string; order: number }>()
+    for (const category of externalState.categories) {
+      const owner = category.owner.trim()
+      const id = category.id.trim()
+      const label = category.label.trim()
+      if (!owner || !id || !label || BUILTIN_COMMAND_PALETTE_CATEGORY_LABELS[id]) continue
+      externalCategories.set(`${owner}:${id}`, {
+        key: externalCommandPaletteCategoryKey(owner, id),
+        label,
+        order: 1000 + (Number.isFinite(category.order) ? Math.trunc(category.order ?? 0) : 0),
+      })
+    }
+    for (const action of externalState.actions) {
+      const owner = action.owner.trim()
+      const id = action.id.trim()
+      const categoryId = action.category_id.trim()
+      const label = action.label.trim()
+      if (!owner || !id || !categoryId || !label) continue
+      const builtInLabel = BUILTIN_COMMAND_PALETTE_CATEGORY_LABELS[categoryId]
+      const externalCategory = externalCategories.get(`${owner}:${categoryId}`)
+      if (!builtInLabel && !externalCategory) continue
+      items.push({
+        id: `external:${owner}:${id}`,
+        category: builtInLabel ? categoryId : externalCategory!.key,
+        categoryLabel: builtInLabel ?? externalCategory!.label,
+        categoryOrder: builtInLabel ? undefined : externalCategory!.order,
+        label,
+        subtitle: action.subtitle?.trim() || undefined,
+        badge: action.badge?.trim() || undefined,
+        keywords: action.keywords ?? [],
+        defaultRank: action.default_rank ?? undefined,
+        showOnEmpty: action.show_on_empty ?? undefined,
+        disabled: action.disabled === true,
+        action: () => {
+          args.shellWireSend('command_palette_activate', JSON.stringify({ owner, id }))
+        },
+      })
+    }
     return items
   })
 

@@ -20,12 +20,13 @@ const MSG_COMPOSITOR_INTERACTION_STATE = 60
 const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW = 61
 const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY = 62
 const MSG_WINDOW_ORDER = 63
+const MSG_COMPOSITOR_COMMAND_PALETTE_STATE = 64
 
 const SNAPSHOT_MAGIC = 0x44525053
 const SNAPSHOT_DOMAIN_CHUNKS_MAGIC = 0x4452444d
 const SNAPSHOT_DELTA_CHUNK_FLAG = 0x80000000
 const SNAPSHOT_HEADER_BYTES = 32
-const SNAPSHOT_DOMAIN_COUNT = 13
+const SNAPSHOT_DOMAIN_COUNT = 14
 const SNAPSHOT_DOMAIN_REVISION_BYTES = SNAPSHOT_DOMAIN_COUNT * 8
 const SNAPSHOT_DOMAIN_OUTPUTS = 1 << 0
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
@@ -40,6 +41,7 @@ const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
 const SNAPSHOT_DOMAIN_WINDOW_GEOMETRY = 1 << 10
 const SNAPSHOT_DOMAIN_WINDOW_METADATA = 1 << 11
 const SNAPSHOT_DOMAIN_WINDOW_STATE = 1 << 12
+const SNAPSHOT_DOMAIN_COMMAND_PALETTE = 1 << 13
 const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
@@ -458,6 +460,21 @@ function decodeShellHostedAppState(bytes: Uint8Array, view: DataView, offset: nu
   }
 }
 
+function decodeCommandPaletteState(bytes: Uint8Array, view: DataView, offset: number): DerpShellDetail | null {
+  if (offset + 16 > view.byteLength) return null
+  const revision = Number(view.getBigUint64(offset + 4, true))
+  const jsonLen = view.getUint32(offset + 12, true)
+  if (jsonLen === 0) return null
+  const json = readUtf8(bytes, offset + 16, jsonLen)
+  if (json == null || offset + 16 + jsonLen !== view.byteLength) return null
+  try {
+    const state = JSON.parse(json)
+    return { type: 'command_palette_state', revision, state }
+  } catch {
+    return null
+  }
+}
+
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
   if (offset + 80 !== view.byteLength) return null
   const decodeVisual = (windowId: number, base: number) => {
@@ -554,6 +571,8 @@ function domainForMessageType(msgType: number): number {
       return SNAPSHOT_DOMAIN_WORKSPACE
     case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
       return SNAPSHOT_DOMAIN_SHELL_HOSTED_APPS
+    case MSG_COMPOSITOR_COMMAND_PALETTE_STATE:
+      return SNAPSHOT_DOMAIN_COMMAND_PALETTE
     case MSG_COMPOSITOR_INTERACTION_STATE:
       return SNAPSHOT_DOMAIN_INTERACTION
     case MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW:
@@ -844,6 +863,8 @@ function decodeSnapshotPacket(bodyBytes: Uint8Array, bodyView: DataView): DerpSh
       return decodeWorkspaceStateBinary(bodyBytes, bodyView, 0)
     case MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE:
       return decodeShellHostedAppState(bodyBytes, bodyView, 0)
+    case MSG_COMPOSITOR_COMMAND_PALETTE_STATE:
+      return decodeCommandPaletteState(bodyBytes, bodyView, 0)
     case MSG_COMPOSITOR_INTERACTION_STATE:
       return decodeInteractionState(bodyView, 0)
     case MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW:

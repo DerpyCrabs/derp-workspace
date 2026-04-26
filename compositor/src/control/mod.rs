@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::{
@@ -21,7 +22,7 @@ use crate::{
     window_registry::WindowKind,
 };
 
-const DOMAINS: &[&str] = &["outputs", "windows", "workspace", "settings"];
+const DOMAINS: &[&str] = &["outputs", "windows", "workspace", "settings", "palette"];
 const COMMANDS: &[&str] = &[
     "schema",
     "commands",
@@ -37,8 +38,21 @@ const COMMANDS: &[&str] = &[
     "layout set-monitor",
     "workspace mutate",
     "settings set",
+    "palette category upsert",
+    "palette category remove",
+    "palette action upsert",
+    "palette action remove",
+    "palette owner clear",
     "transaction",
 ];
+const PALETTE_MAX_CATEGORIES: usize = 64;
+const PALETTE_MAX_ACTIONS: usize = 256;
+const PALETTE_MAX_KEYWORDS: usize = 16;
+const PALETTE_ID_MAX: usize = 64;
+const PALETTE_LABEL_MAX: usize = 128;
+const PALETTE_SUBTITLE_MAX: usize = 256;
+const PALETTE_BADGE_MAX: usize = 32;
+const BUILTIN_PALETTE_CATEGORIES: &[&str] = &["apps", "windows", "settings", "workspace"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ControlDomains {
@@ -46,6 +60,7 @@ pub struct ControlDomains {
     windows: bool,
     workspace: bool,
     settings: bool,
+    palette: bool,
 }
 
 impl ControlDomains {
@@ -55,6 +70,7 @@ impl ControlDomains {
             windows: true,
             workspace: true,
             settings: true,
+            palette: true,
         }
     }
 
@@ -97,11 +113,14 @@ impl ControlDomains {
         if self.settings {
             out.push("settings");
         }
+        if self.palette {
+            out.push("palette");
+        }
         out
     }
 
     fn is_empty(self) -> bool {
-        !self.outputs && !self.windows && !self.workspace && !self.settings
+        !self.outputs && !self.windows && !self.workspace && !self.settings && !self.palette
     }
 
     fn intersection(self, other: Self) -> Self {
@@ -110,6 +129,7 @@ impl ControlDomains {
             windows: self.windows && other.windows,
             workspace: self.workspace && other.workspace,
             settings: self.settings && other.settings,
+            palette: self.palette && other.palette,
         }
     }
 }
@@ -122,6 +142,7 @@ fn parse_domain_names<'a>(values: impl Iterator<Item = &'a str>) -> Result<Contr
             "windows" => domains.windows = true,
             "workspace" => domains.workspace = true,
             "settings" => domains.settings = true,
+            "palette" => domains.palette = true,
             "all" => return Ok(ControlDomains::all()),
             "" => {}
             other => return Err(format!("unknown domain {other}")),
@@ -140,6 +161,7 @@ pub(crate) struct ControlRevisions {
     windows: u64,
     workspace: u64,
     settings: u64,
+    palette: u64,
 }
 
 impl ControlRevisions {
@@ -148,6 +170,7 @@ impl ControlRevisions {
             .max(self.windows)
             .max(self.workspace)
             .max(self.settings)
+            .max(self.palette)
     }
 
     fn changed_since(self, previous: Self) -> ControlDomains {
@@ -156,6 +179,7 @@ impl ControlRevisions {
             windows: self.windows != previous.windows,
             workspace: self.workspace != previous.workspace,
             settings: self.settings != previous.settings,
+            palette: self.palette != previous.palette,
         }
     }
 }
@@ -184,6 +208,192 @@ impl ControlEventHub {
             tx,
         });
         rx
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PaletteKey {
+    owner: String,
+    id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommandPaletteCategory {
+    owner: String,
+    id: String,
+    label: String,
+    #[serde(default)]
+    order: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommandPaletteAction {
+    owner: String,
+    id: String,
+    category_id: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subtitle: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    keywords: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    badge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_rank: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    show_on_empty: Option<bool>,
+    #[serde(default)]
+    disabled: bool,
+    run: CommandPaletteRun,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum CommandPaletteRun {
+    Control {
+        method: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<Value>,
+    },
+    Transaction {
+        actions: Vec<Value>,
+    },
+    Spawn {
+        command: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        desktop_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+    },
+}
+
+#[derive(Default)]
+pub(crate) struct CommandPaletteRegistry {
+    categories: HashMap<PaletteKey, CommandPaletteCategory>,
+    actions: HashMap<PaletteKey, CommandPaletteAction>,
+}
+
+impl CommandPaletteRegistry {
+    fn category_exists(&self, owner: &str, id: &str) -> bool {
+        BUILTIN_PALETTE_CATEGORIES.contains(&id)
+            || self.categories.contains_key(&PaletteKey {
+                owner: owner.to_string(),
+                id: id.to_string(),
+            })
+    }
+
+    fn sorted_categories(&self) -> Vec<CommandPaletteCategory> {
+        let mut out = self.categories.values().cloned().collect::<Vec<_>>();
+        out.sort_by(|left, right| {
+            left.order
+                .cmp(&right.order)
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.owner.cmp(&right.owner))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        out
+    }
+
+    fn sorted_actions(&self) -> Vec<CommandPaletteAction> {
+        let mut out = self.actions.values().cloned().collect::<Vec<_>>();
+        out.sort_by(|left, right| {
+            left.owner
+                .cmp(&right.owner)
+                .then_with(|| left.category_id.cmp(&right.category_id))
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        out
+    }
+
+    fn state_value(&self) -> Value {
+        let categories = self.sorted_categories();
+        let actions = self
+            .sorted_actions()
+            .into_iter()
+            .map(|action| {
+                json!({
+                    "owner": action.owner,
+                    "id": action.id,
+                    "category_id": action.category_id,
+                    "label": action.label,
+                    "subtitle": action.subtitle,
+                    "keywords": action.keywords,
+                    "badge": action.badge,
+                    "default_rank": action.default_rank,
+                    "show_on_empty": action.show_on_empty,
+                    "disabled": action.disabled,
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "categories": categories,
+            "actions": actions,
+        })
+    }
+
+    fn upsert_category(&mut self, category: CommandPaletteCategory) -> Result<(), String> {
+        let key = PaletteKey {
+            owner: category.owner.clone(),
+            id: category.id.clone(),
+        };
+        if !self.categories.contains_key(&key) && self.categories.len() >= PALETTE_MAX_CATEGORIES {
+            return Err("too many palette categories".into());
+        }
+        self.categories.insert(key, category);
+        Ok(())
+    }
+
+    fn remove_category(&mut self, owner: &str, id: &str) -> bool {
+        let key = PaletteKey {
+            owner: owner.to_string(),
+            id: id.to_string(),
+        };
+        let removed = self.categories.remove(&key).is_some();
+        self.actions
+            .retain(|_, action| !(action.owner == owner && action.category_id == id));
+        removed
+    }
+
+    fn upsert_action(&mut self, action: CommandPaletteAction) -> Result<(), String> {
+        if !self.category_exists(&action.owner, &action.category_id) {
+            return Err(format!("unknown palette category {}", action.category_id));
+        }
+        let key = PaletteKey {
+            owner: action.owner.clone(),
+            id: action.id.clone(),
+        };
+        if !self.actions.contains_key(&key) && self.actions.len() >= PALETTE_MAX_ACTIONS {
+            return Err("too many palette actions".into());
+        }
+        self.actions.insert(key, action);
+        Ok(())
+    }
+
+    fn remove_action(&mut self, owner: &str, id: &str) -> bool {
+        self.actions
+            .remove(&PaletteKey {
+                owner: owner.to_string(),
+                id: id.to_string(),
+            })
+            .is_some()
+    }
+
+    fn clear_owner(&mut self, owner: &str) -> bool {
+        let categories_before = self.categories.len();
+        let actions_before = self.actions.len();
+        self.categories.retain(|key, _| key.owner != owner);
+        self.actions.retain(|key, _| key.owner != owner);
+        self.categories.len() != categories_before || self.actions.len() != actions_before
+    }
+
+    fn action(&self, owner: &str, id: &str) -> Option<CommandPaletteAction> {
+        self.actions
+            .get(&PaletteKey {
+                owner: owner.to_string(),
+                id: id.to_string(),
+            })
+            .cloned()
     }
 }
 
@@ -378,6 +588,33 @@ fn apply_request(state: &mut CompositorState, request: ControlRequest) -> Result
             state.control_state_value(domains)
         }
         "transaction.apply" => apply_transaction(state, request.params.as_ref()),
+        "palette.category.upsert" => {
+            let category = palette_category_param(request.params.as_ref())?;
+            state.control_palette_upsert_category(category)?;
+            Ok(json!({ "accepted": true }))
+        }
+        "palette.category.remove" => {
+            let owner = required_palette_identifier(request.params.as_ref(), "owner")?;
+            let id = required_palette_identifier(request.params.as_ref(), "id")?;
+            state.control_palette_remove_category(&owner, &id);
+            Ok(json!({ "accepted": true }))
+        }
+        "palette.action.upsert" => {
+            let action = palette_action_param(request.params.as_ref())?;
+            state.control_palette_upsert_action(action)?;
+            Ok(json!({ "accepted": true }))
+        }
+        "palette.action.remove" => {
+            let owner = required_palette_identifier(request.params.as_ref(), "owner")?;
+            let id = required_palette_identifier(request.params.as_ref(), "id")?;
+            state.control_palette_remove_action(&owner, &id);
+            Ok(json!({ "accepted": true }))
+        }
+        "palette.owner.clear" => {
+            let owner = required_palette_identifier(request.params.as_ref(), "owner")?;
+            state.control_palette_clear_owner(&owner);
+            Ok(json!({ "accepted": true }))
+        }
         "window.focus" => {
             let id = required_u32(request.params.as_ref(), "window_id")?;
             ensure_window(state, id)?;
@@ -548,6 +785,11 @@ fn transaction_method_allowed(method: &str) -> bool {
             | "workspace.mutate"
             | "layout.set_monitor"
             | "settings.set"
+            | "palette.category.upsert"
+            | "palette.category.remove"
+            | "palette.action.upsert"
+            | "palette.action.remove"
+            | "palette.owner.clear"
     )
 }
 
@@ -569,6 +811,11 @@ fn schema_json() -> Value {
             { "method": "layout.set_monitor", "params": { "output_name": "string", "layout": "manual-snap|master-stack|columns|grid|custom-auto", "params": "object" } },
             { "method": "workspace.mutate", "params": { "mutation": "WorkspaceMutation json" } },
             { "method": "settings.set", "params": { "section": "theme|keyboard|default_applications|files|scratchpads|notifications", "value": "object" } },
+            { "method": "palette.category.upsert", "params": { "owner": "identifier", "id": "identifier", "label": "string", "order": "i32?" } },
+            { "method": "palette.category.remove", "params": { "owner": "identifier", "id": "identifier" } },
+            { "method": "palette.action.upsert", "params": { "owner": "identifier", "id": "identifier", "category_id": "identifier", "label": "string", "run": "control|transaction|spawn" } },
+            { "method": "palette.action.remove", "params": { "owner": "identifier", "id": "identifier" } },
+            { "method": "palette.owner.clear", "params": { "owner": "identifier" } },
             { "method": "transaction.apply", "params": { "actions": [{ "method": "window.focus", "params": { "window_id": "u32" } }] } }
         ],
     })
@@ -617,6 +864,141 @@ fn bool_param(params: Option<&Value>, name: &str, default: bool) -> Result<bool,
             .ok_or_else(|| format!("{name} must be a bool")),
         None => Ok(default),
     }
+}
+
+fn validate_palette_identifier(value: &str, name: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > PALETTE_ID_MAX {
+        return Err(format!("{name} must be 1..{PALETTE_ID_MAX} bytes"));
+    }
+    if !value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+    {
+        return Err(format!("{name} must be an ascii identifier"));
+    }
+    Ok(())
+}
+
+fn required_palette_identifier(params: Option<&Value>, name: &str) -> Result<String, String> {
+    let value = required_string(params, name)?;
+    validate_palette_identifier(&value, name)?;
+    Ok(value)
+}
+
+fn validate_palette_text(value: &str, name: &str, max: usize) -> Result<(), String> {
+    if value.trim().is_empty() || value.len() > max {
+        return Err(format!("{name} must be 1..{max} bytes"));
+    }
+    Ok(())
+}
+
+fn validate_palette_optional_text(
+    value: &Option<String>,
+    name: &str,
+    max: usize,
+) -> Result<(), String> {
+    if let Some(value) = value {
+        validate_palette_text(value, name, max)?;
+    }
+    Ok(())
+}
+
+fn palette_object_param(params: Option<&Value>, name: &str) -> Result<Value, String> {
+    let params = params.ok_or_else(|| format!("missing {name}"))?;
+    if let Some(value) = params.get(name) {
+        if value.is_object() {
+            return Ok(value.clone());
+        }
+        if let Some(raw) = value.as_str() {
+            return serde_json::from_str::<Value>(raw).map_err(|e| e.to_string());
+        }
+        return Err(format!("{name} must be an object or json string"));
+    }
+    Ok(params.clone())
+}
+
+fn validate_palette_run(run: &CommandPaletteRun) -> Result<(), String> {
+    match run {
+        CommandPaletteRun::Control { method, .. } => {
+            if !transaction_method_allowed(method) {
+                return Err(format!("palette control method {method} is not allowed"));
+            }
+        }
+        CommandPaletteRun::Transaction { actions } => {
+            if actions.is_empty() {
+                return Err("palette transaction actions must not be empty".into());
+            }
+            for (index, action) in actions.iter().enumerate() {
+                let method = action
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("palette transaction action {index} missing method"))?;
+                if !transaction_method_allowed(method) {
+                    return Err(format!(
+                        "palette transaction action {index} method {method} is not allowed"
+                    ));
+                }
+            }
+        }
+        CommandPaletteRun::Spawn {
+            command,
+            desktop_id,
+            app_name,
+        } => {
+            validate_palette_text(
+                command,
+                "command",
+                shell_wire::MAX_SPAWN_COMMAND_BYTES as usize,
+            )?;
+            validate_palette_optional_text(desktop_id, "desktop_id", PALETTE_LABEL_MAX)?;
+            validate_palette_optional_text(app_name, "app_name", PALETTE_LABEL_MAX)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_palette_category(category: &CommandPaletteCategory) -> Result<(), String> {
+    validate_palette_identifier(&category.owner, "owner")?;
+    validate_palette_identifier(&category.id, "id")?;
+    if BUILTIN_PALETTE_CATEGORIES.contains(&category.id.as_str()) {
+        return Err(format!(
+            "cannot redefine built-in palette category {}",
+            category.id
+        ));
+    }
+    validate_palette_text(&category.label, "label", PALETTE_LABEL_MAX)
+}
+
+fn validate_palette_action(action: &CommandPaletteAction) -> Result<(), String> {
+    validate_palette_identifier(&action.owner, "owner")?;
+    validate_palette_identifier(&action.id, "id")?;
+    validate_palette_identifier(&action.category_id, "category_id")?;
+    validate_palette_text(&action.label, "label", PALETTE_LABEL_MAX)?;
+    validate_palette_optional_text(&action.subtitle, "subtitle", PALETTE_SUBTITLE_MAX)?;
+    validate_palette_optional_text(&action.badge, "badge", PALETTE_BADGE_MAX)?;
+    if action.keywords.len() > PALETTE_MAX_KEYWORDS {
+        return Err("too many palette keywords".into());
+    }
+    for keyword in &action.keywords {
+        validate_palette_text(keyword, "keyword", PALETTE_ID_MAX)?;
+    }
+    validate_palette_run(&action.run)
+}
+
+fn palette_category_param(params: Option<&Value>) -> Result<CommandPaletteCategory, String> {
+    let value = palette_object_param(params, "category")?;
+    let category = serde_json::from_value::<CommandPaletteCategory>(value)
+        .map_err(|e| format!("invalid palette category: {e}"))?;
+    validate_palette_category(&category)?;
+    Ok(category)
+}
+
+fn palette_action_param(params: Option<&Value>) -> Result<CommandPaletteAction, String> {
+    let value = palette_object_param(params, "action")?;
+    let action = serde_json::from_value::<CommandPaletteAction>(value)
+        .map_err(|e| format!("invalid palette action: {e}"))?;
+    validate_palette_action(&action)?;
+    Ok(action)
 }
 
 fn workspace_mutation_param(params: Option<&Value>) -> Result<String, String> {
@@ -673,6 +1055,7 @@ impl CompositorState {
                 .shell_workspace_revision
                 .max(self.control_workspace_revision),
             settings: self.control_settings_revision,
+            palette: self.command_palette_revision,
         }
     }
 
@@ -704,6 +1087,9 @@ impl CompositorState {
         }
         if domains.settings {
             state.insert("settings".into(), control_settings_value()?);
+        }
+        if domains.palette {
+            state.insert("palette".into(), self.command_palette_state_value());
         }
         Ok(Value::Object(state))
     }
@@ -764,6 +1150,103 @@ impl CompositorState {
             })
             .collect::<Vec<_>>();
         Value::Array(windows)
+    }
+
+    pub(crate) fn command_palette_state_value(&self) -> Value {
+        let mut state = self.command_palette_registry.state_value();
+        if let Some(object) = state.as_object_mut() {
+            object.insert("revision".into(), json!(self.command_palette_revision));
+        }
+        state
+    }
+
+    fn control_bump_palette_revision(&mut self) {
+        self.command_palette_revision = self.command_palette_revision.wrapping_add(1).max(1);
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
+                revision: self.command_palette_revision,
+                state_json: self.command_palette_state_value().to_string(),
+            },
+        );
+    }
+
+    pub(crate) fn control_palette_upsert_category(
+        &mut self,
+        category: CommandPaletteCategory,
+    ) -> Result<(), String> {
+        self.command_palette_registry.upsert_category(category)?;
+        self.control_bump_palette_revision();
+        Ok(())
+    }
+
+    pub(crate) fn control_palette_remove_category(&mut self, owner: &str, id: &str) {
+        self.command_palette_registry.remove_category(owner, id);
+        self.control_bump_palette_revision();
+    }
+
+    pub(crate) fn control_palette_upsert_action(
+        &mut self,
+        action: CommandPaletteAction,
+    ) -> Result<(), String> {
+        self.command_palette_registry.upsert_action(action)?;
+        self.control_bump_palette_revision();
+        Ok(())
+    }
+
+    pub(crate) fn control_palette_remove_action(&mut self, owner: &str, id: &str) {
+        self.command_palette_registry.remove_action(owner, id);
+        self.control_bump_palette_revision();
+    }
+
+    pub(crate) fn control_palette_clear_owner(&mut self, owner: &str) {
+        self.command_palette_registry.clear_owner(owner);
+        self.control_bump_palette_revision();
+    }
+
+    pub(crate) fn control_palette_activate(&mut self, owner: &str, id: &str) -> Result<(), String> {
+        validate_palette_identifier(owner, "owner")?;
+        validate_palette_identifier(id, "id")?;
+        let action = self
+            .command_palette_registry
+            .action(owner, id)
+            .ok_or_else(|| format!("unknown palette action {owner}/{id}"))?;
+        if action.disabled {
+            return Err(format!("palette action {owner}/{id} is disabled"));
+        }
+        if !self
+            .command_palette_registry
+            .category_exists(&action.owner, &action.category_id)
+        {
+            return Err(format!("unknown palette category {}", action.category_id));
+        }
+        match action.run {
+            CommandPaletteRun::Control { method, params } => {
+                validate_palette_run(&CommandPaletteRun::Control {
+                    method: method.clone(),
+                    params: params.clone(),
+                })?;
+                apply_request(
+                    self,
+                    ControlRequest {
+                        id: Value::Null,
+                        method,
+                        params,
+                    },
+                )?;
+            }
+            CommandPaletteRun::Transaction { actions } => {
+                validate_palette_run(&CommandPaletteRun::Transaction {
+                    actions: actions.clone(),
+                })?;
+                let params = json!({ "actions": actions });
+                apply_transaction(self, Some(&params))?;
+            }
+            CommandPaletteRun::Spawn { command, .. } => {
+                self.try_spawn_wayland_client_sh(&command)?;
+            }
+        }
+        self.control_publish_if_changed();
+        Ok(())
     }
 
     pub fn control_publish_if_changed(&mut self) {
@@ -932,8 +1415,72 @@ mod tests {
     fn transaction_allows_window_mutations_only() {
         assert!(transaction_method_allowed("window.focus"));
         assert!(transaction_method_allowed("layout.set_monitor"));
+        assert!(transaction_method_allowed("palette.action.upsert"));
         assert!(!transaction_method_allowed("state.get"));
         assert!(!transaction_method_allowed("events.subscribe"));
+    }
+
+    #[test]
+    fn palette_category_validation_rejects_builtin_redefine() {
+        let err = palette_category_param(Some(&json!({
+            "owner": "test",
+            "id": "apps",
+            "label": "Apps"
+        })))
+        .unwrap_err();
+        assert!(err.contains("built-in"));
+    }
+
+    #[test]
+    fn palette_registry_orders_external_categories() {
+        let mut registry = CommandPaletteRegistry::default();
+        registry
+            .upsert_category(CommandPaletteCategory {
+                owner: "test".into(),
+                id: "second".into(),
+                label: "Second".into(),
+                order: 20,
+            })
+            .unwrap();
+        registry
+            .upsert_category(CommandPaletteCategory {
+                owner: "test".into(),
+                id: "first".into(),
+                label: "First".into(),
+                order: 10,
+            })
+            .unwrap();
+        let categories = registry.sorted_categories();
+        assert_eq!(categories[0].id, "first");
+        assert_eq!(categories[1].id, "second");
+    }
+
+    #[test]
+    fn palette_action_validation_allows_spawn_and_control() {
+        assert!(palette_action_param(Some(&json!({
+            "owner": "test",
+            "id": "spawn",
+            "category_id": "apps",
+            "label": "Spawn",
+            "run": { "type": "spawn", "command": "foot" }
+        })))
+        .is_ok());
+        assert!(palette_action_param(Some(&json!({
+            "owner": "test",
+            "id": "focus",
+            "category_id": "workspace",
+            "label": "Focus",
+            "run": { "type": "control", "method": "window.focus", "params": { "window_id": 1 } }
+        })))
+        .is_ok());
+        assert!(palette_action_param(Some(&json!({
+            "owner": "test",
+            "id": "bad",
+            "category_id": "workspace",
+            "label": "Bad",
+            "run": { "type": "control", "method": "state.get" }
+        })))
+        .is_err());
     }
 
     #[test]

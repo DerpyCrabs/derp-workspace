@@ -96,6 +96,7 @@ const SNAPSHOT_DOMAIN_WINDOW_ORDER = 1 << 9
 const SNAPSHOT_DOMAIN_WINDOW_GEOMETRY = 1 << 10
 const SNAPSHOT_DOMAIN_WINDOW_METADATA = 1 << 11
 const SNAPSHOT_DOMAIN_WINDOW_STATE = 1 << 12
+const SNAPSHOT_DOMAIN_COMMAND_PALETTE = 1 << 13
 
 function runtimeDetailSnapshotEpoch(detail: DerpShellDetail) {
   const raw = (detail as { snapshot_epoch?: unknown }).snapshot_epoch
@@ -110,6 +111,7 @@ function runtimeDetailCanBeSupersededBySnapshot(detail: DerpShellDetail) {
     detail.type === 'focus_changed' ||
     detail.type === 'workspace_state' ||
     detail.type === 'shell_hosted_app_state' ||
+    detail.type === 'command_palette_state' ||
     detail.type === 'output_layout' ||
     detail.type === 'keyboard_layout' ||
     detail.type === 'tray_hints' ||
@@ -140,6 +142,8 @@ function runtimeDetailSnapshotDomainFlags(detail: DerpShellDetail) {
       return SNAPSHOT_DOMAIN_WINDOW_METADATA
     case 'window_state':
       return SNAPSHOT_DOMAIN_WINDOW_STATE
+    case 'command_palette_state':
+      return SNAPSHOT_DOMAIN_COMMAND_PALETTE
     default:
       return 0
   }
@@ -317,6 +321,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainWorkspace = 1 << 4
   const snapshotDomainShellHostedApps = 1 << 5
   const snapshotDomainInteraction = 1 << 6
+  const snapshotDomainCommandPalette = 1 << 13
 
   const countWindowUnmapped = (details: readonly DerpShellDetail[]) => {
     let count = 0
@@ -363,6 +368,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         return snapshotDomainWorkspace
       case 'shell_hosted_app_state':
         return snapshotDomainShellHostedApps
+      case 'command_palette_state':
+        return snapshotDomainCommandPalette
       case 'interaction_state':
         return snapshotDomainInteraction
       case 'native_drag_preview':
@@ -907,6 +914,13 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       })
       return
     }
+    if (d.type === 'command_palette_state') {
+      options.applyModelCompositorDetail(d, {
+        fallbackMonitorKey: options.fallbackMonitorKey,
+        requestWindowSyncRecovery: options.requestWindowSyncRecovery,
+      })
+      return
+    }
     if (d.type === 'window_state') {
       options.markHasSeenCompositorWindowSync()
       const result = options.applyModelCompositorDetail(d, {
@@ -958,6 +972,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     d.type === 'window_order' ||
     d.type === 'workspace_state' ||
     d.type === 'shell_hosted_app_state' ||
+    d.type === 'command_palette_state' ||
     d.type === 'window_state' ||
     d.type === 'window_unmapped' ||
     d.type === 'window_geometry' ||

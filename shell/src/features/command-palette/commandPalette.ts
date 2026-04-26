@@ -1,16 +1,43 @@
 import type { ShellContextMenuItem } from '@/host/contextMenu'
 
-export type CommandPaletteCategoryId = 'apps' | 'windows' | 'settings' | 'workspace'
+export type CommandPaletteCategoryId = 'apps' | 'windows' | 'settings' | 'workspace' | string
 
 export type CommandPaletteItem = ShellContextMenuItem & {
   id: string
   category: CommandPaletteCategoryId
   categoryLabel: string
+  categoryOrder?: number
   subtitle?: string
   keywords?: string[]
   score?: number
   defaultRank?: number
   showOnEmpty?: boolean
+}
+
+export type ExternalCommandPaletteCategory = {
+  owner: string
+  id: string
+  label: string
+  order?: number
+}
+
+export type ExternalCommandPaletteAction = {
+  owner: string
+  id: string
+  category_id: string
+  label: string
+  subtitle?: string | null
+  keywords?: string[]
+  badge?: string | null
+  default_rank?: number | null
+  show_on_empty?: boolean | null
+  disabled?: boolean
+}
+
+export type ExternalCommandPaletteState = {
+  revision: number
+  categories: ExternalCommandPaletteCategory[]
+  actions: ExternalCommandPaletteAction[]
 }
 
 export const COMMAND_PALETTE_CATEGORY_ORDER: CommandPaletteCategoryId[] = [
@@ -83,7 +110,8 @@ export function filterCommandPaletteItems(
     .filter((entry): entry is { item: CommandPaletteItem; index: number; score: number } => entry !== null)
     .sort((left, right) => {
       const categoryDelta =
-        (categoryOrder.get(left.item.category) ?? 99) - (categoryOrder.get(right.item.category) ?? 99)
+        (left.item.categoryOrder ?? categoryOrder.get(left.item.category) ?? 99) -
+        (right.item.categoryOrder ?? categoryOrder.get(right.item.category) ?? 99)
       if (categoryDelta !== 0) return categoryDelta
       if (left.score !== right.score) return right.score - left.score
       const defaultDelta = (right.item.defaultRank ?? 0) - (left.item.defaultRank ?? 0)

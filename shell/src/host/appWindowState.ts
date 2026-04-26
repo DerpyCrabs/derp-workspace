@@ -1,6 +1,7 @@
 import { pickScreenForWindow, type CanvasOrigin } from '@/lib/shellCoords'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import { groupIdForWindow, type WorkspaceSnapshot } from '@/features/workspace/workspaceSnapshot'
+import type { ExternalCommandPaletteState } from '@/features/command-palette/commandPalette'
 import type { LayoutScreen } from './types'
 
 export type DerpShellDetail = ({
@@ -80,6 +81,7 @@ export type DerpShellDetail = ({
   | { type: 'window_order'; revision?: number; windows: unknown[] }
   | { type: 'workspace_state'; revision?: number; state: WorkspaceSnapshot }
   | { type: 'shell_hosted_app_state'; revision?: number; state: { byWindowId?: Record<string, unknown> } }
+  | { type: 'command_palette_state'; revision?: number; state: ExternalCommandPaletteState }
   | {
       type: 'interaction_state'
       revision?: number

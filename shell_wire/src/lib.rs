@@ -107,6 +107,7 @@ pub const MSG_COMPOSITOR_INTERACTION_STATE: u32 = 60;
 pub const MSG_COMPOSITOR_NATIVE_DRAG_PREVIEW: u32 = 61;
 pub const MSG_COMPOSITOR_WORKSPACE_STATE_BINARY: u32 = 62;
 pub const MSG_WINDOW_ORDER: u32 = 63;
+pub const MSG_COMPOSITOR_COMMAND_PALETTE_STATE: u32 = 64;
 
 /// Bit flags for [`MSG_SHELL_RESIZE_BEGIN`] `edges` (align with Wayland `resize_edge` enum values used in compositor).
 pub const RESIZE_EDGE_TOP: u32 = 1;
@@ -140,6 +141,7 @@ pub const MAX_SHELL_UI_WINDOWS: u32 = 32;
 pub const MAX_WORKSPACE_JSON_BYTES: u32 = 64 * 1024;
 pub const MAX_WORKSPACE_BINARY_BYTES: u32 = 256 * 1024;
 pub const MAX_SHELL_HOSTED_APP_STATE_JSON_BYTES: u32 = 64 * 1024;
+pub const MAX_COMMAND_PALETTE_STATE_JSON_BYTES: u32 = 64 * 1024;
 pub const SHELL_SHARED_SNAPSHOT_MAGIC: u32 = 0x4452_5053;
 pub const SHELL_SHARED_SNAPSHOT_HEADER_BYTES: u32 = 32;
 pub const SHELL_SNAPSHOT_DOMAIN_OUTPUTS: u32 = 1 << 0;
@@ -155,7 +157,8 @@ pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_ORDER: u32 = 1 << 9;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_GEOMETRY: u32 = 1 << 10;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_METADATA: u32 = 1 << 11;
 pub const SHELL_SNAPSHOT_DOMAIN_WINDOW_STATE: u32 = 1 << 12;
-pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 13;
+pub const SHELL_SNAPSHOT_DOMAIN_COMMAND_PALETTE: u32 = 1 << 13;
+pub const SHELL_SNAPSHOT_DOMAIN_COUNT: usize = 14;
 pub const SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES: usize = SHELL_SNAPSHOT_DOMAIN_COUNT * 8;
 
 /// `flags` bitfield for [`MSG_FRAME_DMABUF_COMMIT`].
@@ -1319,6 +1322,10 @@ pub enum DecodedCompositorToShellMessage {
         revision: u64,
         state_json: String,
     },
+    CommandPaletteState {
+        revision: u64,
+        state_json: String,
+    },
     InteractionState {
         revision: u64,
         pointer_x: i32,
@@ -1716,6 +1723,28 @@ pub fn encode_compositor_shell_hosted_app_state(
     let mut v = Vec::with_capacity(4 + body_len as usize);
     v.extend_from_slice(&body_len.to_le_bytes());
     v.extend_from_slice(&MSG_COMPOSITOR_SHELL_HOSTED_APP_STATE.to_le_bytes());
+    v.extend_from_slice(&revision.to_le_bytes());
+    v.extend_from_slice(&len.to_le_bytes());
+    v.extend_from_slice(b);
+    Some(v)
+}
+
+pub fn encode_compositor_command_palette_state(revision: u64, state_json: &str) -> Option<Vec<u8>> {
+    let b = state_json.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let len = u32::try_from(b.len()).ok()?;
+    if len > MAX_COMMAND_PALETTE_STATE_JSON_BYTES {
+        return None;
+    }
+    let body_len = 16u32.checked_add(len)?;
+    if body_len > MAX_BODY_BYTES {
+        return None;
+    }
+    let mut v = Vec::with_capacity(4 + body_len as usize);
+    v.extend_from_slice(&body_len.to_le_bytes());
+    v.extend_from_slice(&MSG_COMPOSITOR_COMMAND_PALETTE_STATE.to_le_bytes());
     v.extend_from_slice(&revision.to_le_bytes());
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(b);
@@ -2349,6 +2378,29 @@ fn decode_compositor_to_shell_body(
                 .map_err(|_| DecodeError::BadUtf8Command)?
                 .to_string();
             Ok(DecodedCompositorToShellMessage::ShellHostedAppState {
+                revision,
+                state_json,
+            })
+        }
+        MSG_COMPOSITOR_COMMAND_PALETTE_STATE => {
+            if body.len() < 16 {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let revision = u64::from_le_bytes(body[4..12].try_into().unwrap());
+            let len = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+            if len == 0 || len > MAX_COMMAND_PALETTE_STATE_JSON_BYTES as usize {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let end = 16usize
+                .checked_add(len)
+                .ok_or(DecodeError::BadCompositorToShellPayload)?;
+            if body.len() != end {
+                return Err(DecodeError::BadCompositorToShellPayload);
+            }
+            let state_json = std::str::from_utf8(&body[16..end])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            Ok(DecodedCompositorToShellMessage::CommandPaletteState {
                 revision,
                 state_json,
             })

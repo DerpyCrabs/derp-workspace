@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { decodeCompositorSnapshot } from './compositorSnapshot'
 
 const encoder = new TextEncoder()
-const DOMAIN_COUNT = 13
+const DOMAIN_COUNT = 14
 
 function u32(value: number): number[] {
   return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]

@@ -271,7 +271,8 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     (op === 'workspace_mutation' ||
       op === 'taskbar_pin_add' ||
       op === 'taskbar_pin_remove' ||
-      op === 'taskbar_pin_launch') &&
+      op === 'taskbar_pin_launch' ||
+      op === 'command_palette_activate') &&
     typeof arg === 'string'
   ) {
     fn(op, arg)
@@ -334,6 +335,7 @@ function App() {
     workspaceSnapshot,
     focusedWindowId,
     shellHostedAppByWindow,
+    commandPaletteState,
     applyCompositorSnapshot: applyModelCompositorSnapshot,
     applyCompositorDetails: applyModelCompositorDetails,
     applyCompositorDetail: applyModelCompositorDetail,
@@ -959,6 +961,7 @@ function App() {
       compositorInteractionState()?.window_switcher_selected_window_id ?? null,
     focusedWindowId,
     notificationsState,
+    commandPaletteState,
     activateWindow: (windowId) => shellWireSend('activate_window', windowId),
     setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
     setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
