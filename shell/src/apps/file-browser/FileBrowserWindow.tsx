@@ -5,6 +5,7 @@ import {
   listFileBrowserDirectory,
   listFileBrowserRoots,
   fileBrowserReadUrl,
+  fileBrowserWatchUrl,
   mkdirFileBrowserEntry,
   removeFileBrowserPath,
   renameFileBrowserPath,
@@ -201,9 +202,74 @@ type FileSystemEntryLike = {
 }
 
 const FILE_BROWSER_MUTATED_EVENT = 'derp-file-browser-mutated'
-const FILE_BROWSER_LIVE_REFRESH_MS = 1200
 
 let nextFileBrowserMountSeq = 0
+let nextFileBrowserWatchSubscriptionId = 0
+
+type FileBrowserWatchSubscription = {
+  path: string
+  onChange: () => void
+}
+
+const fileBrowserWatchSubscriptions = new Map<number, FileBrowserWatchSubscription>()
+let sharedFileBrowserWatchSource: EventSource | null = null
+let sharedFileBrowserWatchKey = ''
+
+function closeSharedFileBrowserWatch() {
+  sharedFileBrowserWatchSource?.close()
+  sharedFileBrowserWatchSource = null
+  sharedFileBrowserWatchKey = ''
+}
+
+function eventPathsFromFileBrowserWatchEvent(event: MessageEvent): string[] {
+  try {
+    const parsed = JSON.parse(event.data) as unknown
+    if (!parsed || typeof parsed !== 'object') return []
+    const paths = (parsed as { paths?: unknown }).paths
+    return Array.isArray(paths) ? paths.filter((path): path is string => typeof path === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function fileBrowserWatchEventTouchesPath(eventPaths: readonly string[], watchPath: string): boolean {
+  if (eventPaths.length === 0) return true
+  return eventPaths.some((eventPath) => pathWithinRoot(eventPath, watchPath))
+}
+
+function syncSharedFileBrowserWatch() {
+  if (typeof EventSource !== 'function') {
+    closeSharedFileBrowserWatch()
+    return
+  }
+  const paths = Array.from(new Set(Array.from(fileBrowserWatchSubscriptions.values()).map((entry) => entry.path))).sort()
+  const watchUrl = fileBrowserWatchUrl(paths, shellHttpBase())
+  if (!watchUrl) {
+    closeSharedFileBrowserWatch()
+    return
+  }
+  if (sharedFileBrowserWatchKey === watchUrl && sharedFileBrowserWatchSource) return
+  closeSharedFileBrowserWatch()
+  const source = new EventSource(watchUrl)
+  source.addEventListener('change', (event) => {
+    const eventPaths = eventPathsFromFileBrowserWatchEvent(event as MessageEvent)
+    for (const subscription of fileBrowserWatchSubscriptions.values()) {
+      if (fileBrowserWatchEventTouchesPath(eventPaths, subscription.path)) subscription.onChange()
+    }
+  })
+  sharedFileBrowserWatchSource = source
+  sharedFileBrowserWatchKey = watchUrl
+}
+
+function subscribeSharedFileBrowserWatch(path: string, onChange: () => void): () => void {
+  const id = ++nextFileBrowserWatchSubscriptionId
+  fileBrowserWatchSubscriptions.set(id, { path, onChange })
+  syncSharedFileBrowserWatch()
+  return () => {
+    fileBrowserWatchSubscriptions.delete(id)
+    syncSharedFileBrowserWatch()
+  }
+}
 
 export function FileBrowserWindow(props: FileBrowserWindowProps) {
   const mountSeq = ++nextFileBrowserMountSeq
@@ -226,8 +292,10 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let lastFavoritesReloadKey = ''
   let typeSearchBuffer = ''
   let typeSearchTimer: number | null = null
-  let liveRefreshTimer: number | null = null
-  let liveRefreshInFlight = false
+  let watchRefreshInFlight = false
+  let watchRefreshPending = false
+  let unsubscribeFileBrowserWatch: (() => void) | null = null
+  let fileBrowserWatchPath: string | null = null
   let suppressClickAfterPointerDrag = false
   let lastRowClick: { path: string; timeStamp: number; x: number; y: number } | null = null
 
@@ -312,14 +380,18 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     return true
   }
 
-  async function liveRefreshDirectory() {
-    if (liveRefreshInFlight || busy() || uploadBusy() || state.status !== 'ready') return
+  async function refreshWatchedDirectory() {
+    if (watchRefreshInFlight) {
+      watchRefreshPending = true
+      return
+    }
+    if (busy() || uploadBusy() || state.status !== 'ready') return
     const activePath = state.activePath
     if (!activePath) return
     const showHidden = state.showHidden
     const runId = requestSeq
     const base = shellHttpBase()
-    liveRefreshInFlight = true
+    watchRefreshInFlight = true
     try {
       if (activePath === FILE_BROWSER_FAVORITES_PATH) {
         const entries = await listFavoriteEntries(base)
@@ -328,7 +400,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
         setLoadCount((count) => count + 1)
         setState('parentPath', null)
         setState('entries', entries)
-        setState('selectedPath', clampFileBrowserSelection(entries, state.selectedPath))
+        setState('selectedPath', state.selectedPath === null ? null : clampFileBrowserSelection(entries, state.selectedPath))
         return
       }
       const listing = await listFileBrowserDirectory(activePath, showHidden, base)
@@ -344,7 +416,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       setState('activePath', listing.path)
       setState('parentPath', listing.parent_path)
       setState('entries', listing.entries)
-      setState('selectedPath', clampFileBrowserSelection(listing.entries, state.selectedPath))
+      setState('selectedPath', state.selectedPath === null ? null : clampFileBrowserSelection(listing.entries, state.selectedPath))
     } catch (error) {
       if (runId !== requestSeq || state.activePath !== activePath || state.showHidden !== showHidden || state.status !== 'ready') return
       setLoadCount((count) => count + 1)
@@ -353,7 +425,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       setState('status', 'error')
       setState('errorMessage', error instanceof Error ? error.message : String(error))
     } finally {
-      liveRefreshInFlight = false
+      watchRefreshInFlight = false
+      if (watchRefreshPending) {
+        watchRefreshPending = false
+        queueMicrotask(() => {
+          void refreshWatchedDirectory()
+        })
+      }
     }
   }
 
@@ -521,6 +599,25 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   async function refreshAfterMutation(targetPath?: string | null) {
     notifyFileBrowserMutated()
     await loadDirectory(targetPath ?? state.activePath, true)
+  }
+
+  function closeFileBrowserWatch() {
+    unsubscribeFileBrowserWatch?.()
+    unsubscribeFileBrowserWatch = null
+    fileBrowserWatchPath = null
+  }
+
+  function syncFileBrowserWatch() {
+    if (state.status !== 'ready' || !state.activePath || state.activePath === FILE_BROWSER_FAVORITES_PATH) {
+      closeFileBrowserWatch()
+      return
+    }
+    if (fileBrowserWatchPath === state.activePath && unsubscribeFileBrowserWatch) return
+    closeFileBrowserWatch()
+    fileBrowserWatchPath = state.activePath
+    unsubscribeFileBrowserWatch = subscribeSharedFileBrowserWatch(state.activePath, () => {
+      void refreshWatchedDirectory()
+    })
   }
 
   async function toggleFavoritePath(path: string) {
@@ -1185,9 +1282,6 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     lastAppliedRestoredStateVersion = primedShellWindowStateVersion(wid)
     const target = restored?.activePath ?? primed ?? null
     void loadDirectory(target, true, showHidden)
-    liveRefreshTimer = window.setInterval(() => {
-      void liveRefreshDirectory()
-    }, FILE_BROWSER_LIVE_REFRESH_MS)
     queueMicrotask(() => rootRef?.focus())
   })
 
@@ -1203,7 +1297,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   window.addEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
   onCleanup(() => {
     window.removeEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
-    if (liveRefreshTimer !== null) window.clearInterval(liveRefreshTimer)
+    closeFileBrowserWatch()
     clearPointerDragListeners()
     props.onClearInTabDropPreview?.()
     if (typeSearchTimer !== null) window.clearTimeout(typeSearchTimer)
@@ -1276,6 +1370,12 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     void state.status
     if (state.status !== 'ready') return
     pushFileBrowserTitleToCompositor(fileBrowserTitleForPath(state.activePath))
+  })
+
+  createEffect(() => {
+    void state.activePath
+    void state.status
+    syncFileBrowserWatch()
   })
 
   createEffect(() => {

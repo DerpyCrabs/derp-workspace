@@ -337,6 +337,9 @@ impl CompositorState {
             self.shell_keyboard_capture_clear();
         }
         self.window_registry.remove_shell_hosted(window_id);
+        if self.shell_hosted_app_state.remove(&window_id).is_some() {
+            self.shell_hosted_app_state_send();
+        }
         self.scratchpad_forget_window(window_id);
         self.capture_forget_window_source_cache(window_id);
         self.shell_window_stack_forget(window_id);

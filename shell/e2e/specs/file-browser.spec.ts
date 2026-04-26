@@ -18,6 +18,7 @@ import {
   assertRectMinSize,
   assert,
   clickRect,
+  cleanupShellWindows,
   doubleClickRect,
   dragBetweenPoints,
   defineGroup,
@@ -196,34 +197,58 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
-  test('file browser live refresh picks up external current-folder changes without remounting', async ({ base, state }) => {
+  test('file browser live refresh picks up external current-folder changes without remounting across many windows', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
+    const openedWindowIds: number[] = []
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
-    const before = fileBrowserSnapshot(navigated.shell, navigated.windowId)
-    assert(before?.active_path === fixtures.root_path, 'expected fixture root before live refresh')
-    assert(before.mount_seq && before.mount_seq > 0, 'expected file browser mount sequence before live refresh')
-    const externalPath = path.posix.join(fixtures.root_path, 'external-live-refresh.txt')
-    await writeFile(externalPath, 'created outside the file browser\n', 'utf8')
-    const refreshed = await waitFor(
-      'wait for live refresh external row',
-      async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const fb = fileBrowserSnapshot(shell, navigated.windowId)
-        const row = fileBrowserRow(shell, 'external-live-refresh.txt', navigated.windowId)
-        if (fb?.active_path !== fixtures.root_path || fb.list_state !== 'ready' || !row?.rect) return null
-        return { shell, fb, row }
-      },
-      7000,
-      100,
-    )
-    assert(refreshed.fb.mount_seq === before.mount_seq, 'expected live refresh to avoid remounting file browser')
-    assert(refreshed.fb.active_path === fixtures.root_path, 'expected live refresh to keep current folder')
-    assert(refreshed.fb.list_state === 'ready', 'expected live refresh to keep list ready')
-    await writeJsonArtifact('file-browser-live-refresh.json', {
-      windowId: navigated.windowId,
-      before,
-      row: refreshed.row,
-    })
+    openedWindowIds.push(navigated.windowId)
+    const extraWindows: Array<{ shell: ShellSnapshot; windowId: number }> = []
+    try {
+      for (let i = 0; i < 6; i += 1) {
+        const extraWindow = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+        extraWindows.push(extraWindow)
+        openedWindowIds.push(extraWindow.windowId)
+      }
+      const before = fileBrowserSnapshot(navigated.shell, navigated.windowId)
+      assert(before?.active_path === fixtures.root_path, 'expected fixture root before live refresh')
+      assert(before.mount_seq && before.mount_seq > 0, 'expected file browser mount sequence before live refresh')
+      const lastWindowId = extraWindows[extraWindows.length - 1]?.windowId ?? navigated.windowId
+      const lastBefore = fileBrowserSnapshot(extraWindows[extraWindows.length - 1]?.shell ?? navigated.shell, lastWindowId)
+      assert(lastBefore?.active_path === fixtures.root_path, 'expected final fixture root before live refresh')
+      assert(lastBefore.mount_seq && lastBefore.mount_seq > 0, 'expected final file browser mount sequence before live refresh')
+      const externalPath = path.posix.join(fixtures.root_path, 'external-live-refresh.txt')
+      await writeFile(externalPath, 'created outside the file browser\n', 'utf8')
+      const refreshed = await waitFor(
+        'wait for live refresh external row in first and seventh windows',
+        async () => {
+          const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const fb = fileBrowserSnapshot(shell, navigated.windowId)
+          const row = fileBrowserRow(shell, 'external-live-refresh.txt', navigated.windowId)
+          const lastFb = fileBrowserSnapshot(shell, lastWindowId)
+          const lastRow = fileBrowserRow(shell, 'external-live-refresh.txt', lastWindowId)
+          if (fb?.active_path !== fixtures.root_path || fb.list_state !== 'ready' || !row?.rect) return null
+          if (lastFb?.active_path !== fixtures.root_path || lastFb.list_state !== 'ready' || !lastRow?.rect) return null
+          return { shell, fb, row, lastFb, lastRow }
+        },
+        7000,
+        100,
+      )
+      assert(refreshed.fb.mount_seq === before.mount_seq, 'expected live refresh to avoid remounting file browser')
+      assert(refreshed.lastFb.mount_seq === lastBefore.mount_seq, 'expected seventh live refresh to avoid remounting file browser')
+      assert(refreshed.fb.active_path === fixtures.root_path, 'expected live refresh to keep current folder')
+      assert(refreshed.fb.list_state === 'ready', 'expected live refresh to keep list ready')
+      await writeJsonArtifact('file-browser-live-refresh.json', {
+        windowId: navigated.windowId,
+        lastWindowId,
+        before,
+        row: refreshed.row,
+        lastBefore,
+        lastRow: refreshed.lastRow,
+      })
+    } finally {
+      await cleanupShellWindows(base, openedWindowIds)
+      for (const windowId of openedWindowIds) state.spawnedShellWindowIds.delete(windowId)
+    }
   })
 
   test('file browser view mode favorites custom icons and ask target persist through settings', async ({ base, state }) => {
@@ -542,6 +567,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('file browser open in new window lists the selected directory path', async ({ base, state }) => {
+    await cleanupShellWindows(base, [...state.spawnedShellWindowIds])
+    state.spawnedShellWindowIds.clear()
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     const rootPath = fixtures.root_path

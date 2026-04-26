@@ -113,6 +113,21 @@ fn canonicalize_existing_path(raw_path: &str) -> Result<PathBuf, FileBrowserHttp
     })
 }
 
+pub(crate) fn file_browser_watch_directory_path(
+    raw_path: &str,
+) -> Result<PathBuf, FileBrowserHttpError> {
+    let canonical = canonicalize_existing_path(raw_path)?;
+    if !canonical.is_dir() {
+        return Err(http_error(
+            400,
+            "not_directory",
+            format!("path is not a directory: {}", canonical.display()),
+            Some(&canonical),
+        ));
+    }
+    Ok(canonical)
+}
+
 fn modified_ms(metadata: &fs::Metadata) -> Option<u64> {
     metadata
         .modified()

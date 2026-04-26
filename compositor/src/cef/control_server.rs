@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use cef::{
     post_task, rc::Rc, wrap_task, Browser, CefString, ImplBrowser, ImplFrame, ImplTask, Task,
     ThreadId, WrapTask,
 };
+use notify::{RecursiveMode, Watcher};
 
 use crate::cef::e2e_bridge;
 use crate::cef::uplink::UplinkToCompositor;
@@ -223,6 +225,80 @@ fn write_http_no_content(stream: &mut std::net::TcpStream) -> std::io::Result<()
     stream.flush()
 }
 
+fn write_sse_event(
+    stream: &mut std::net::TcpStream,
+    event: &str,
+    data: &serde_json::Value,
+) -> std::io::Result<()> {
+    stream.write_all(format!("event: {event}\n").as_bytes())?;
+    stream.write_all(format!("data: {}\n\n", data).as_bytes())?;
+    stream.flush()
+}
+
+fn write_file_browser_watch_stream(
+    stream: &mut std::net::TcpStream,
+    raw_paths: &[String],
+) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    let mut paths = Vec::new();
+    for raw_path in raw_paths {
+        let path = match crate::cef::file_browser::file_browser_watch_directory_path(raw_path) {
+            Ok(path) => path,
+            Err(error) => {
+                write_file_browser_http_error(stream, &error).map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        };
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    if paths.is_empty() {
+        write_http_json(stream, 400, r#"{"error":"missing_watch_path"}"#)
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })
+    .map_err(|e| format!("file browser watcher init failed: {e}"))?;
+    for path in &paths {
+        watcher
+            .watch(path, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("file browser watch failed for {}: {e}", path.display()))?;
+    }
+    let _ = stream.set_write_timeout(None);
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n{}Content-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n",
+        cors_headers(),
+    );
+    stream
+        .write_all(head.as_bytes())
+        .map_err(|e| e.to_string())?;
+    write_sse_event(
+        stream,
+        "ready",
+        &serde_json::json!({ "paths": paths.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>() }),
+    )
+    .map_err(|e| e.to_string())?;
+    while let Ok(event) = rx.recv() {
+        let data = match event {
+            Ok(event) => serde_json::json!({
+                "kind": format!("{:?}", event.kind),
+                "paths": event.paths.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+            }),
+            Err(error) => serde_json::json!({
+                "error": error.to_string(),
+            }),
+        };
+        if write_sse_event(stream, "change", &data).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
     path_with_query
         .split_once('?')
@@ -257,6 +333,21 @@ fn query_param_raw<'a>(query: &'a str, key: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn query_params_raw<'a>(query: &'a str, key: &str) -> Vec<&'a str> {
+    query
+        .split('&')
+        .filter_map(|part| {
+            let part = part.trim_end_matches('\r');
+            let (k, v) = part.split_once('=')?;
+            if k == key {
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn percent_decode_component(input: &str) -> Result<String, String> {
@@ -791,6 +882,16 @@ fn handle_one(
                 write_http_json(stream, error.status, &error.body).map_err(|e| e.to_string())?
             }
         }
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/file_browser/watch" {
+        let q = query_str.ok_or_else(|| "file_browser/watch: missing query".to_string())?;
+        let paths = query_params_raw(q, "p")
+            .into_iter()
+            .map(percent_decode_component)
+            .collect::<Result<Vec<_>, _>>()?;
+        write_file_browser_watch_stream(stream, &paths)?;
         return Ok(());
     }
 

@@ -173,6 +173,13 @@ export function fileBrowserStreamUrl(path: string, base: string | null): string 
   return `${origin}/file_browser/stream?p=${encodeURIComponent(path)}`
 }
 
+export function fileBrowserWatchUrl(paths: readonly string[], base: string | null): string {
+  const origin = (base ?? shellHttpBase() ?? '').replace(/\/$/, '')
+  if (!origin) return ''
+  const query = paths.map((path) => `p=${encodeURIComponent(path)}`).join('&')
+  return query ? `${origin}/file_browser/watch?${query}` : ''
+}
+
 export async function writeFileBrowserFile(path: string, content: string, base: string | null): Promise<void> {
   try {
     await postShellJson('/file_browser/write', { path, content }, base)
