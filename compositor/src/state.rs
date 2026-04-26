@@ -33,7 +33,7 @@ use smithay::{
     desktop::{
         layer_map_for_output,
         space::{Space, SpaceElement},
-        utils::under_from_surface_tree,
+        utils::{under_from_surface_tree, with_surfaces_surface_tree},
         LayerSurface as DesktopLayerSurface, PopupManager, Window, WindowSurfaceType,
     },
     input::{
@@ -58,6 +58,7 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
         dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        fifo::FifoManagerState,
         foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
         idle_inhibit::IdleInhibitManagerState,
@@ -504,6 +505,7 @@ pub struct CompositorState {
     pub event_loop_stop: Arc<AtomicBool>,
 
     pub compositor_state: WlCompositorState,
+    pub(crate) _fifo_manager_state: FifoManagerState,
     pub xdg_shell_state: XdgShellState,
     pub xdg_activation_state: XdgActivationState,
     pub xdg_decoration_state: XdgDecorationState,
@@ -1186,6 +1188,7 @@ impl CompositorState {
         let dh = display.handle();
 
         let compositor_state = WlCompositorState::new_v6::<Self>(&dh);
+        let fifo_manager_state = FifoManagerState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
@@ -1339,6 +1342,7 @@ impl CompositorState {
             event_loop_stop,
             socket_name,
             compositor_state,
+            _fifo_manager_state: fifo_manager_state,
             xdg_shell_state,
             xdg_activation_state,
             xdg_decoration_state,
@@ -3889,6 +3893,93 @@ impl CompositorState {
 
     pub(crate) fn xwayland_client_scale_for_shell_ui(shell_ui_scale: f64) -> f64 {
         Self::xwayland_client_scale_for_output_scale(shell_ui_scale)
+    }
+
+    pub(crate) fn signal_fifo_barriers_for_output(&mut self, output: &Output) {
+        let mut clients: HashMap<ClientId, Client> = HashMap::new();
+
+        for elem in self.space.elements_for_output(output) {
+            match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    window.with_surfaces(|surface, states| {
+                        let barrier = states
+                            .cached_state
+                            .get::<smithay::wayland::fifo::FifoBarrierCachedState>()
+                            .current()
+                            .barrier
+                            .take();
+                        if let Some(barrier) = barrier {
+                            barrier.signal();
+                            if let Some(client) = surface.client() {
+                                clients.insert(client.id(), client);
+                            }
+                        }
+                    });
+                }
+                DerpSpaceElem::X11(x11) => {
+                    if let Some(surface) = x11.wl_surface() {
+                        with_surfaces_surface_tree(&surface, |surface, states| {
+                            let barrier = states
+                                .cached_state
+                                .get::<smithay::wayland::fifo::FifoBarrierCachedState>()
+                                .current()
+                                .barrier
+                                .take();
+                            if let Some(barrier) = barrier {
+                                barrier.signal();
+                                if let Some(client) = surface.client() {
+                                    clients.insert(client.id(), client);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        let layer_map = layer_map_for_output(output);
+        for layer_surface in layer_map.layers() {
+            layer_surface.with_surfaces(|surface, states| {
+                let barrier = states
+                    .cached_state
+                    .get::<smithay::wayland::fifo::FifoBarrierCachedState>()
+                    .current()
+                    .barrier
+                    .take();
+                if let Some(barrier) = barrier {
+                    barrier.signal();
+                    if let Some(client) = surface.client() {
+                        clients.insert(client.id(), client);
+                    }
+                }
+            });
+        }
+        drop(layer_map);
+
+        if let CursorImageStatus::Surface(surface) = &self.pointer_cursor_image {
+            with_surfaces_surface_tree(surface, |surface, states| {
+                let barrier = states
+                    .cached_state
+                    .get::<smithay::wayland::fifo::FifoBarrierCachedState>()
+                    .current()
+                    .barrier
+                    .take();
+                if let Some(barrier) = barrier {
+                    barrier.signal();
+                    if let Some(client) = surface.client() {
+                        clients.insert(client.id(), client);
+                    }
+                }
+            });
+        }
+
+        let dh = self.display_handle.clone();
+        for client in clients.into_values() {
+            <Self as smithay::wayland::compositor::CompositorHandler>::client_compositor_state(
+                self, &client,
+            )
+            .blocker_cleared(self, &dh);
+        }
     }
 
     pub(crate) fn apply_xwayland_client_scale(&self) {
@@ -13158,6 +13249,7 @@ smithay::delegate_viewporter!(crate::CompositorState);
 smithay::delegate_cursor_shape!(crate::CompositorState);
 smithay::delegate_xwayland_shell!(crate::CompositorState);
 smithay::delegate_dmabuf!(crate::CompositorState);
+smithay::delegate_fifo!(crate::CompositorState);
 
 #[derive(Default)]
 pub struct ClientState {

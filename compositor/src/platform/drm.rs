@@ -388,6 +388,8 @@ impl DrmHead {
 
         self.pending_frame_complete = true;
 
+        state.signal_fifo_barriers_for_output(output);
+
         state.space.elements().for_each(|elem| match elem {
             DerpSpaceElem::Wayland(window) => {
                 window.send_frame(

@@ -12,10 +12,12 @@ import {
   postJson,
   taskbarEntry,
   waitFor,
+  waitForTaskbarEntry,
   waitForWindowGone,
   writeJsonArtifact,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
+import { spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -191,6 +193,33 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await access(scenario.before.html)
     await access(scenario.after.html)
     await writeJsonArtifact('harness-drag-file-browser-no-reload-result.json', result)
+  })
+
+  test('native clients can use fifo-v1 barriers', async ({ base, state }) => {
+    const fifo = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp E2E FIFO Native Test',
+      token: 'native-fifo',
+      strip: 'cyan',
+      fifoSmoke: true,
+    })
+    state.spawnedNativeWindowIds.add(fifo.window.window_id)
+    const shell = await waitForTaskbarEntry(base, fifo.window.window_id)
+    const entry = taskbarEntry(shell, fifo.window.window_id)
+    assert(entry, 'fifo native window should appear in taskbar')
+    await waitFor(
+      'wait for fifo client redraw through barrier',
+      async () => {
+        const snapshot = await getJson<{ windows: Array<{ window_id: number; title: string }> }>(
+          base,
+          '/test/state/compositor',
+        )
+        return snapshot.windows.find((window) => window.window_id === fifo.window.window_id && window.title.includes('fifo='))
+          ?? null
+      },
+      2000,
+      40,
+    )
+    await writeJsonArtifact('native-fifo-v1-window.json', fifo.window)
   })
 
   test('crash probe window disappears from compositor and shell', async ({ base, state }) => {

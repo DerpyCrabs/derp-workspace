@@ -2756,6 +2756,7 @@ export function buildNativeSpawnCommand({
   dropBufferAfterDraw = false,
   pointerConstraint = 'none',
   spawnOnPressCommand,
+  fifoSmoke = false,
 }: {
   title: string
   appId?: string
@@ -2766,6 +2767,7 @@ export function buildNativeSpawnCommand({
   dropBufferAfterDraw?: boolean
   pointerConstraint?: 'none' | 'lock' | 'confine'
   spawnOnPressCommand?: string
+  fifoSmoke?: boolean
 }): string {
   const parts = [
     nativeBin(),
@@ -2785,6 +2787,7 @@ export function buildNativeSpawnCommand({
     shellQuote(pointerConstraint),
   ]
   if (dropBufferAfterDraw) parts.push('--drop-buffer-after-draw')
+  if (fifoSmoke) parts.push('--fifo-smoke')
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -2808,6 +2811,7 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,
+    fifoSmoke,
   }: {
     title: string
     appId?: string
@@ -2818,6 +2822,7 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw?: boolean
     pointerConstraint?: 'none' | 'lock' | 'confine'
     spawnOnPressCommand?: string
+    fifoSmoke?: boolean
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -2830,6 +2835,7 @@ export async function spawnNativeWindow(
     dropBufferAfterDraw,
     pointerConstraint,
     spawnOnPressCommand,
+    fifoSmoke,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

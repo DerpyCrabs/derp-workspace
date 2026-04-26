@@ -2308,7 +2308,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await writeJsonArtifact('taskbar-battery-state.json', battery)
       return
     }
-    const percent = `${Math.round(battery.percentage)}%`
     const html = await waitFor(
       'taskbar battery indicator mounts',
       async () => {
@@ -2319,8 +2318,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       40,
     )
     assert(html.length > 0, 'battery indicator should render when battery is present')
-    assert(!html.includes(`>${percent}<`), 'battery indicator should keep percentage out of the panel text')
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const observedBattery = shell.shell_battery ?? battery
+    const percent = `${Math.round(observedBattery.percentage)}%`
+    assert(!html.includes(`>${percent}<`), 'battery indicator should keep percentage out of the panel text')
     assert(shell.controls.taskbar_battery_indicator, 'battery indicator rect should be projected for hover tooltip')
     await movePoint(base, rectCenter(shell.controls.taskbar_battery_indicator!).x, rectCenter(shell.controls.taskbar_battery_indicator!).y)
     const tooltipHtml = await waitFor(
@@ -2332,19 +2333,18 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       40,
     )
-    const batteryAfterTooltip = await getJson<BatteryHttpState>(base, '/battery_state')
     assert(tooltipHtml.includes(percent), `battery tooltip should show ${percent}`)
     if (
-      batteryAfterTooltip.state === 'charging' &&
-      batteryAfterTooltip.time_to_full_seconds > 0 &&
-      batteryAfterTooltip.percentage < 100
+      observedBattery.state === 'charging' &&
+      observedBattery.time_to_full_seconds > 0 &&
+      observedBattery.percentage < 100
     ) {
       assert(tooltipHtml.includes('until full'), 'battery tooltip should include charge estimate')
     }
-    if (batteryAfterTooltip.state === 'discharging' && batteryAfterTooltip.time_to_empty_seconds > 0) {
+    if (observedBattery.state === 'discharging' && observedBattery.time_to_empty_seconds > 0) {
       assert(tooltipHtml.includes('remaining'), 'battery tooltip should include remaining time estimate')
     }
-    await writeJsonArtifact('taskbar-battery-state.json', battery)
+    await writeJsonArtifact('taskbar-battery-state.json', observedBattery)
     await writeTextArtifact('taskbar-battery-indicator.html', html)
     await writeTextArtifact('taskbar-battery-tooltip.html', tooltipHtml)
   })

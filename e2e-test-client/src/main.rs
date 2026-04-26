@@ -29,11 +29,13 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
+    delegate_noop,
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, QueueHandle,
 };
 use wayland_protocols::wp::{
+    fifo::v1::client::{wp_fifo_manager_v1::WpFifoManagerV1, wp_fifo_v1::WpFifoV1},
     pointer_constraints::zv1::client::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
     },
@@ -100,6 +102,8 @@ struct Args {
     pointer_constraint: String,
     #[arg(long)]
     spawn_on_press_command: Option<String>,
+    #[arg(long, default_value_t = false)]
+    fifo_smoke: bool,
 }
 
 fn main() {
@@ -120,6 +124,15 @@ fn main() {
     let seat_state = SeatState::new(&globals, &qh);
     let relative_pointer_state = RelativePointerState::bind(&globals, &qh);
     let pointer_constraint_state = PointerConstraintsState::bind(&globals, &qh);
+    let fifo_manager = if args.fifo_smoke {
+        Some(
+            globals
+                .bind::<WpFifoManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind wp_fifo_manager_v1"),
+        )
+    } else {
+        None
+    };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -133,6 +146,9 @@ fn main() {
     window.set_min_size(Some((args.width, args.height)));
     window.set_max_size(Some((args.width, args.height)));
     window.commit();
+    let fifo = fifo_manager
+        .as_ref()
+        .map(|manager| manager.get_fifo(window.wl_surface(), &qh, ()));
 
     let pool = SlotPool::new((args.width * args.height * 4) as usize, &shm_state)
         .expect("create shared memory pool");
@@ -167,6 +183,8 @@ fn main() {
         spawn_on_press_command: args.spawn_on_press_command,
         spawn_on_press_requested: false,
         pointer_constraint_mode,
+        fifo,
+        fifo_smoke_draws: 0,
         keyboard: None,
         keyboard_seat: None,
         pointer: None,
@@ -216,6 +234,8 @@ struct TestClient {
     spawn_on_press_command: Option<String>,
     spawn_on_press_requested: bool,
     pointer_constraint_mode: PointerConstraintMode,
+    fifo: Option<WpFifoV1>,
+    fifo_smoke_draws: u32,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -287,6 +307,17 @@ impl TestClient {
         self.window
             .wl_surface()
             .frame(qh, self.window.wl_surface().clone());
+        if let Some(fifo) = self.fifo.as_ref() {
+            if self.fifo_smoke_draws > 0 {
+                fifo.wait_barrier();
+            }
+            fifo.set_barrier();
+            self.fifo_smoke_draws = self.fifo_smoke_draws.saturating_add(1);
+            self.window.set_title(format!(
+                "{} | fifo={}",
+                self.base_title, self.fifo_smoke_draws
+            ));
+        }
         buffer
             .attach_to(self.window.wl_surface())
             .expect("attach buffer");
@@ -985,6 +1016,8 @@ delegate_seat!(TestClient);
 delegate_registry!(TestClient);
 delegate_activation!(TestClient);
 delegate_keyboard!(TestClient);
+delegate_noop!(TestClient: ignore WpFifoManagerV1);
+delegate_noop!(TestClient: ignore WpFifoV1);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {
