@@ -461,6 +461,8 @@ fn apply_message(
                         "height": screen.h,
                         "transform": screen.transform,
                         "refresh_milli_hz": screen.refresh_milli_hz,
+                        "vrr_supported": screen.vrr_supported,
+                        "vrr_enabled": screen.vrr_enabled,
                     })
                 })
                 .collect();

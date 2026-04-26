@@ -119,6 +119,7 @@ export type SettingsDisplaysPageProps = {
   setOrientationPickerOpen: Setter<number | null>
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
+  setOutputVrr: (name: string, enabled: boolean) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
 }
@@ -463,6 +464,19 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       onChange={(v) => props.setScreenDraft('rows', i(), 'transform', v)}
                     />
                   </label>
+                  <Show when={row.vrr_supported}>
+                    <label class="flex items-center gap-2 text-[0.78rem] font-medium text-(--shell-text-muted)">
+                      <input
+                        type="checkbox"
+                        class="accent-(--shell-accent) size-4"
+                        checked={row.vrr_enabled}
+                        data-settings-vrr-toggle
+                        data-settings-vrr-output={row.name}
+                        onChange={(e) => props.setOutputVrr(row.name, e.currentTarget.checked)}
+                      />
+                      VRR
+                    </label>
+                  </Show>
                 </div>
               </div>
             )}

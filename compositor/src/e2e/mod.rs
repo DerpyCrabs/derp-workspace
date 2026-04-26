@@ -131,6 +131,8 @@ struct E2eOutputSnapshot {
     scale: f64,
     transform: String,
     refresh_milli_hz: u32,
+    vrr_supported: bool,
+    vrr_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -543,6 +545,7 @@ impl CompositorState {
                     .map(|mode| mode.refresh)
                     .unwrap_or_default()
                     .max(0) as u32;
+                let (vrr_supported, vrr_enabled) = self.output_vrr_state(output.name().as_str());
                 Some(E2eOutputSnapshot {
                     name: output.name(),
                     x: geometry.loc.x,
@@ -552,6 +555,8 @@ impl CompositorState {
                     scale: output.current_scale().fractional_scale(),
                     transform: format!("{:?}", output.current_transform()),
                     refresh_milli_hz,
+                    vrr_supported,
+                    vrr_enabled,
                 })
             })
             .collect();

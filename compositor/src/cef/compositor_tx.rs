@@ -52,5 +52,6 @@ impl LatestShellDmabuf {
 pub enum CefToCompositor {
     ShellRxNote,
     DmabufReady(Arc<LatestShellDmabuf>),
+    SetOutputVrr { name: String, enabled: bool },
     Run(Box<dyn FnOnce(&mut crate::state::CompositorState) + Send>),
 }

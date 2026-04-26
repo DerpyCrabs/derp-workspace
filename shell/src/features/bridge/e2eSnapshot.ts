@@ -945,6 +945,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_keyboard: queryRect(cache, '[data-settings-tab="keyboard"]', args.origin),
       settings_tab_notifications: queryRect(cache, '[data-settings-tab="notifications"]', args.origin),
       settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
+      settings_vrr_toggle: queryRect(cache, '[data-settings-vrr-toggle]', args.origin),
       settings_notifications_page: queryRect(cache, '[data-settings-notifications-page]', args.origin),
       settings_notifications_enable: queryRect(cache, '[data-settings-notifications-enable]', args.origin),
       settings_notifications_disable: queryRect(cache, '[data-settings-notifications-disable]', args.origin),

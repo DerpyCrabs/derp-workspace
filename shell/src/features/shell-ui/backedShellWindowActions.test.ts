@@ -56,6 +56,8 @@ const monitor: LayoutScreen = {
   height: 900,
   transform: 0,
   refresh_milli_hz: 60000,
+  vrr_supported: false,
+  vrr_enabled: false,
 }
 
 describe('backedShellWindowActions', () => {

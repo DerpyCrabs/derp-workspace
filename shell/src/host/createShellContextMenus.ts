@@ -103,6 +103,8 @@ function layoutScreenCssRect(
     height: screen.height,
     transform: screen.transform,
     refresh_milli_hz: screen.refresh_milli_hz,
+    vrr_supported: screen.vrr_supported,
+    vrr_enabled: screen.vrr_enabled,
   }
 }
 

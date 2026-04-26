@@ -28,6 +28,8 @@ pub struct ScreenEntry {
     pub y: i32,
     #[serde(default)]
     pub transform: u32,
+    #[serde(default)]
+    pub vrr_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -349,6 +351,38 @@ pub fn apply_stored_from_heads(
     true
 }
 
+pub fn stored_vrr_by_head_name(drm: &DrmDevice, heads: &[DrmHead]) -> HashMap<String, bool> {
+    let Some(path) = display_config_path() else {
+        return HashMap::new();
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            tracing::warn!(target: "derp_display_config", ?e, path = %path.display(), "read display config for vrr");
+            return HashMap::new();
+        }
+    };
+    let cfg: DisplayConfigFile = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(target: "derp_display_config", ?e, "parse display config for vrr");
+            return HashMap::new();
+        }
+    };
+    if cfg.version != 1 {
+        return HashMap::new();
+    }
+    let live = live_heads_from_drm(drm, heads);
+    cfg.screens
+        .iter()
+        .filter_map(|s| {
+            resolve_entry(&s.connector, s.monitor_id.as_ref(), &live)
+                .map(|name| (name, s.vrr_enabled))
+        })
+        .collect()
+}
+
 fn write_atomic(path: &Path, src: &DisplayConfigFile) -> std::io::Result<()> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(p) = parent {
@@ -394,6 +428,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
                 x: g.loc.x,
                 y: g.loc.y,
                 transform: transform_to_wire(out.current_transform()),
+                vrr_enabled: h.vrr_supported && h.vrr_enabled,
             })
         })
         .collect();

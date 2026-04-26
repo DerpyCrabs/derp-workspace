@@ -272,6 +272,8 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_ui_scale' && typeof arg === 'number') {
     fn(op, arg)
+  } else if (op === 'set_output_vrr' && typeof arg === 'string' && typeof arg2 === 'number') {
+    fn(op, arg, arg2)
   } else if (
     op === 'native_drag_preview_ready' &&
     typeof arg === 'number' &&
@@ -769,6 +771,8 @@ function App() {
         height: ch,
         transform: 0,
         refresh_milli_hz: 0,
+        vrr_supported: false,
+        vrr_enabled: false,
       }
       return { primary: single, secondary: [] as LayoutScreen[] }
     }
@@ -1375,6 +1379,7 @@ function App() {
       openCustomLayoutOverlay,
       setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
       setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
+      setOutputVrr: (name, enabled) => shellWireSend('set_output_vrr', name, enabled ? 1 : 0),
       applyCompositorLayoutFromDraft: () => {
         const screens = screenDraft.rows.map((r) => ({
           name: r.name,

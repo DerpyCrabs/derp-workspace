@@ -18,6 +18,8 @@ export function screensListForLayout(
         width: canvas.w,
         height: canvas.h,
         transform: 0,
+        vrr_supported: false,
+        vrr_enabled: false,
       },
     ]
   }
@@ -35,6 +37,8 @@ export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): Layo
     height: loc.h,
     transform: s.transform,
     refresh_milli_hz: s.refresh_milli_hz,
+    vrr_supported: s.vrr_supported,
+    vrr_enabled: s.vrr_enabled,
   }
 }
 

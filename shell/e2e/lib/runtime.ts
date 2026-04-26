@@ -88,6 +88,8 @@ export interface OutputSnapshot {
   scale?: number
   transform?: string
   refresh_milli_hz?: number
+  vrr_supported?: boolean
+  vrr_enabled?: boolean
 }
 
 export interface WindowSnapshot {
@@ -295,6 +297,7 @@ export interface ShellControls {
   settings_tab_scratchpads?: Rect | null
   settings_tab_keyboard?: Rect | null
   settings_tab_notifications?: Rect | null
+  settings_vrr_toggle?: Rect | null
   settings_tiling_layout_trigger?: Rect | null
   settings_notifications_page?: Rect | null
   settings_notifications_enable?: Rect | null

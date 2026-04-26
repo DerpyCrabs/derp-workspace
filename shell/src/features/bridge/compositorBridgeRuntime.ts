@@ -474,6 +474,8 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       height: s.height,
       transform: s.transform,
       refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
+      vrr_supported: s.vrr_supported === true,
+      vrr_enabled: s.vrr_supported === true && s.vrr_enabled === true,
     }))
     const pr =
       typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0

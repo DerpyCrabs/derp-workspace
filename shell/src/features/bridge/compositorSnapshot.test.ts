@@ -182,6 +182,8 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(1080),
       ...u32(0),
       ...u32(60000),
+      ...u32(1),
+      ...u32(0),
       ...u32(name.length),
       ...name,
     ])
@@ -220,6 +222,8 @@ describe('decodeCompositorSnapshot', () => {
               height: 1080,
               transform: 0,
               refresh_milli_hz: 60000,
+              vrr_supported: true,
+              vrr_enabled: false,
             },
           ],
           shell_chrome_primary: 'DP-1',

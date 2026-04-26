@@ -62,6 +62,7 @@ export type SettingsPanelProps = {
   openCustomLayoutOverlay: (detail: { outputName: string; layoutId?: string | null }) => void
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
+  setOutputVrr: (name: string, enabled: boolean) => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
@@ -133,6 +134,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setOrientationPickerOpen={setOrientationPickerOpen}
             setShellPrimary={props.setShellPrimary}
             setUiScale={props.setUiScale}
+            setOutputVrr={props.setOutputVrr}
             applyCompositorLayoutFromDraft={props.applyCompositorLayoutFromDraft}
             monitorRefreshLabel={props.monitorRefreshLabel}
           />

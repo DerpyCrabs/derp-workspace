@@ -414,6 +414,54 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await writeJsonArtifact('desktop-applications.json', desktopApplications)
   })
 
+  test('display settings exposes vrr only for supported outputs', async ({ base }) => {
+    await openSettings(base, 'click')
+    await switchSettingsPage(base, 'settings_tab_displays', 'displays', 'data-settings-displays-page')
+    const before = await getSnapshots(base)
+    const supportedOutputs = before.compositor.outputs.filter((output) => output.vrr_supported)
+    if (supportedOutputs.length === 0) {
+      assert(!before.shell.controls.settings_vrr_toggle, 'VRR toggle should be hidden when no output supports VRR')
+      assert(
+        before.compositor.outputs.every((output) => output.vrr_enabled !== true),
+        'unsupported outputs should not report VRR enabled',
+      )
+      await writeJsonArtifact('display-vrr-unsupported.json', before)
+      return
+    }
+    const toggle = before.shell.controls.settings_vrr_toggle
+    assert(toggle, 'supported output should expose a VRR toggle')
+    assert(
+      supportedOutputs.every((output) => output.vrr_enabled !== true),
+      'VRR should start disabled for supported outputs',
+    )
+    await clickRect(base, toggle)
+    const enabled = await waitFor(
+      'wait for vrr enabled',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        return snapshots.compositor.outputs.some((entry) => entry.vrr_supported && entry.vrr_enabled === true)
+          ? snapshots
+          : null
+      },
+      5000,
+      100,
+    )
+    assert(enabled.shell.controls.settings_vrr_toggle, 'missing VRR toggle while disabling')
+    await clickRect(base, enabled.shell.controls.settings_vrr_toggle)
+    const disabled = await waitFor(
+      'wait for vrr disabled',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        return snapshots.compositor.outputs.every((entry) => !entry.vrr_supported || entry.vrr_enabled !== true)
+          ? snapshots
+          : null
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('display-vrr-toggle.json', disabled)
+  })
+
   test('volume and power menus mount portaled panels with visible geometry', async ({ base }) => {
     const vol = await openVolumeMenu(base)
     assert(vol.volume_menu_open, 'volume menu should be open')

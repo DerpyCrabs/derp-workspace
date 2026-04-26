@@ -315,6 +315,8 @@ pub struct OutputLayoutScreen {
     pub h: u32,
     pub transform: u32,
     pub refresh_milli_hz: u32,
+    pub vrr_supported: bool,
+    pub vrr_enabled: bool,
 }
 
 pub fn encode_output_layout(
@@ -353,7 +355,7 @@ pub fn encode_output_layout(
             .checked_add(nl as usize)?
             .checked_add(4)?
             .checked_add(il as usize)?
-            .checked_add(24)?;
+            .checked_add(32)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
     let body_len = u32::try_from(body_sz).ok()?;
@@ -384,6 +386,8 @@ pub fn encode_output_layout(
         v.extend_from_slice(&s.h.to_le_bytes());
         v.extend_from_slice(&s.transform.to_le_bytes());
         v.extend_from_slice(&s.refresh_milli_hz.to_le_bytes());
+        v.extend_from_slice(&(if s.vrr_supported { 1u32 } else { 0u32 }).to_le_bytes());
+        v.extend_from_slice(&(if s.vrr_enabled { 1u32 } else { 0u32 }).to_le_bytes());
     }
     let pl = u32::try_from(prim_bytes.len()).ok()?;
     v.extend_from_slice(&pl.to_le_bytes());
@@ -456,13 +460,34 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
         off += il;
+        let fixed_len = {
+            let remaining = body.len().saturating_sub(off);
+            if remaining >= 32 {
+                32
+            } else {
+                24
+            }
+        };
+        if off + fixed_len > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
         let x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
         let y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
         let w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
         let h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
         let transform = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
         let refresh_milli_hz = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-        off += 24;
+        let (vrr_supported, vrr_enabled) = if fixed_len == 32 {
+            let supported = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+            let enabled = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+            if supported > 1 || enabled > 1 || enabled > supported {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            (supported != 0, enabled != 0)
+        } else {
+            (false, false)
+        };
+        off += fixed_len;
         screens.push(OutputLayoutScreen {
             name,
             identity,
@@ -472,6 +497,8 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             h,
             transform,
             refresh_milli_hz,
+            vrr_supported,
+            vrr_enabled,
         });
     }
     if off + 4 > body.len() {
@@ -2759,6 +2786,8 @@ mod tests {
                 h: 2160,
                 transform: 0,
                 refresh_milli_hz: 60000,
+                vrr_supported: true,
+                vrr_enabled: false,
             }],
             Some("DP-1"),
         )
@@ -2782,6 +2811,8 @@ mod tests {
                     h: 2160,
                     transform: 0,
                     refresh_milli_hz: 60000,
+                    vrr_supported: true,
+                    vrr_enabled: false,
                 }],
                 shell_chrome_primary: Some("DP-1".to_string()),
             })

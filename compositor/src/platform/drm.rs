@@ -11,7 +11,7 @@ use smithay::backend::{
         gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         Format, Fourcc,
     },
-    drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface, GbmBufferedSurface},
+    drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface, GbmBufferedSurface, VrrSupport},
     egl::{context::ContextPriority, EGLContext, EGLDisplay},
     libinput::{LibinputInputBackend, LibinputSessionInterface},
     renderer::{
@@ -87,6 +87,8 @@ pub struct DrmHead {
     pub connector_name: String,
     pub connector: connector::Handle,
     crtc: crtc::Handle,
+    pub vrr_supported: bool,
+    pub vrr_enabled: bool,
     pending_frame_complete: bool,
     last_vblank_at: Option<Instant>,
 }
@@ -412,6 +414,26 @@ impl DrmHead {
     }
 }
 
+fn head_vrr_supported(
+    surface: &GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
+    connector: connector::Handle,
+    connector_name: &str,
+) -> bool {
+    match surface.vrr_supported(connector) {
+        Ok(VrrSupport::Supported | VrrSupport::RequiresModeset) => true,
+        Ok(VrrSupport::NotSupported) => false,
+        Err(error) => {
+            warn!(
+                target: "derp_drm",
+                ?error,
+                connector = %connector_name,
+                "query vrr support"
+            );
+            false
+        }
+    }
+}
+
 pub struct DrmSession {
     pub drm: DrmDevice,
     pub renderer: Arc<Mutex<GlesRenderer>>,
@@ -427,6 +449,79 @@ pub struct DrmSession {
 }
 
 impl DrmSession {
+    pub fn sync_vrr_state_to_compositor(&self, state: &mut CompositorState) {
+        state.set_output_vrr_states(self.heads.iter().map(|head| {
+            (
+                head.connector_name.clone(),
+                head.vrr_supported,
+                head.vrr_enabled,
+            )
+        }));
+    }
+
+    pub fn apply_stored_vrr_from_display_config(&mut self, state: &mut CompositorState) {
+        let stored =
+            crate::controls::display_config::stored_vrr_by_head_name(&self.drm, &self.heads);
+        for head in &mut self.heads {
+            let enabled = stored.get(&head.connector_name).copied().unwrap_or(false);
+            let target = head.vrr_supported && enabled;
+            match head.gbm_surface.use_vrr(target) {
+                Ok(()) => {
+                    head.vrr_enabled = target;
+                }
+                Err(error) => {
+                    warn!(
+                        target: "derp_drm",
+                        ?error,
+                        connector = %head.connector_name,
+                        enabled = target,
+                        "apply stored vrr"
+                    );
+                    head.vrr_enabled = head.gbm_surface.vrr_enabled();
+                }
+            }
+        }
+        self.sync_vrr_state_to_compositor(state);
+    }
+
+    pub fn set_output_vrr(&mut self, state: &mut CompositorState, name: String, enabled: bool) {
+        let Some(index) = self
+            .heads
+            .iter()
+            .position(|head| head.connector_name == name)
+        else {
+            return;
+        };
+        let head = &mut self.heads[index];
+        if !head.vrr_supported {
+            state.set_output_vrr_state(head.connector_name.clone(), false, false);
+            state.send_shell_output_layout();
+            return;
+        }
+        let target = enabled;
+        match head.gbm_surface.use_vrr(target) {
+            Ok(()) => {
+                head.vrr_enabled = target;
+                state.set_output_vrr_state(head.connector_name.clone(), true, target);
+                state.send_shell_output_layout();
+                state.display_config_request_save();
+            }
+            Err(error) => {
+                warn!(
+                    target: "derp_drm",
+                    ?error,
+                    connector = %head.connector_name,
+                    enabled = target,
+                    "set output vrr"
+                );
+                head.vrr_enabled = head.gbm_surface.vrr_enabled();
+                state.set_output_vrr_state(head.connector_name.clone(), true, head.vrr_enabled);
+                state.send_shell_output_layout();
+            }
+        }
+        self.request_render();
+    }
+
     fn frame_interval(&self) -> Duration {
         self.heads
             .iter()
@@ -699,6 +794,8 @@ impl DrmSession {
             cursor_x = cursor_x.saturating_add(lw);
 
             let damage_tracker = OutputDamageTracker::from_output(&output);
+            let vrr_supported = head_vrr_supported(&gbm_surface, conns[0], &output_name);
+            let vrr_enabled = gbm_surface.vrr_enabled();
 
             self.heads.push(DrmHead {
                 gbm_surface,
@@ -707,6 +804,8 @@ impl DrmSession {
                 connector_name: output_name,
                 connector: conns[0],
                 crtc: crtc_h,
+                vrr_supported,
+                vrr_enabled,
                 pending_frame_complete: false,
                 last_vblank_at: None,
             });
@@ -732,6 +831,7 @@ impl DrmSession {
         );
         let _ =
             crate::controls::display_config::apply_stored_from_heads(state, &self.drm, &self.heads);
+        self.apply_stored_vrr_from_display_config(state);
         state.shell_after_drm_topology_changed();
         self.schedule_drm_idle_render_coalesced();
     }
@@ -1167,6 +1267,8 @@ pub fn init_drm(
         cursor_x = cursor_x.saturating_add(logical_stride_w);
 
         let damage_tracker = OutputDamageTracker::from_output(&output);
+        let vrr_supported = head_vrr_supported(&gbm_surface, conns[0], &output_name);
+        let vrr_enabled = gbm_surface.vrr_enabled();
 
         heads.push(DrmHead {
             gbm_surface,
@@ -1175,14 +1277,12 @@ pub fn init_drm(
             connector_name: output_name,
             connector: conns[0],
             crtc: crtc_h,
+            vrr_supported,
+            vrr_enabled,
             pending_frame_complete: false,
             last_vblank_at: None,
         });
     }
-
-    let _ = crate::controls::display_config::apply_stored_from_heads(&mut data.state, &drm, &heads);
-    data.state.shell_after_drm_topology_changed();
-    data.state.shell_embedded_notify_output_ready();
 
     std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
 
@@ -1192,6 +1292,29 @@ pub fn init_drm(
         .udev_assign_seat(session.seat().as_ref())
         .map_err(|()| "udev_assign_seat failed".to_string())?;
     let libinput_backend = LibinputInputBackend::new(libinput_context.clone());
+
+    let mut drm_session = DrmSession {
+        drm,
+        renderer,
+        heads,
+        libinput: libinput_context,
+        loop_handle: loop_handle_static,
+        _egl_display: egl_display,
+        _gbm_device: gbm,
+        output_formats: format_vec,
+        hotplug_retry_after: HashMap::new(),
+        drm_idle_render_armed: false,
+        drm_late_render_armed: false,
+    };
+
+    let _ = crate::controls::display_config::apply_stored_from_heads(
+        &mut data.state,
+        &drm_session.drm,
+        &drm_session.heads,
+    );
+    drm_session.apply_stored_vrr_from_display_config(&mut data.state);
+    data.state.shell_after_drm_topology_changed();
+    data.state.shell_embedded_notify_output_ready();
 
     let lh_libinput = loop_handle.clone();
     event_loop
@@ -1213,19 +1336,7 @@ pub fn init_drm(
         })
         .map_err(|e| format!("drm notifier: {e}"))?;
 
-    data.drm = Some(DrmSession {
-        drm,
-        renderer,
-        heads,
-        libinput: libinput_context,
-        loop_handle: loop_handle_static,
-        _egl_display: egl_display,
-        _gbm_device: gbm,
-        output_formats: format_vec,
-        hotplug_retry_after: HashMap::new(),
-        drm_idle_render_armed: false,
-        drm_late_render_armed: false,
-    });
+    data.drm = Some(drm_session);
 
     let drm_monitor = udev::MonitorBuilder::new()
         .map_err(|e| format!("udev MonitorBuilder: {e}"))?

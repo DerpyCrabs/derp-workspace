@@ -6,4 +6,6 @@ export type SettingsLayoutScreen = {
   height: number
   transform: number
   refresh_milli_hz: number
+  vrr_supported: boolean
+  vrr_enabled: boolean
 }

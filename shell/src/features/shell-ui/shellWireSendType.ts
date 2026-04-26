@@ -33,6 +33,7 @@ export type ShellCompositorWireOp =
   | 'set_output_layout'
   | 'set_shell_primary'
   | 'set_ui_scale'
+  | 'set_output_vrr'
   | 'set_tile_preview'
   | 'set_chrome_metrics'
   | 'set_desktop_background'

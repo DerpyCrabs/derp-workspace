@@ -294,6 +294,12 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_set_output_vrr(&self, name: String, enabled: bool) {
+        let _ = self
+            .cef_tx
+            .send(CefToCompositor::SetOutputVrr { name, enabled });
+    }
+
     pub fn shell_shared_state_sync(&self, kind: u32) {
         self.run(move |s| {
             s.sync_shell_shared_state(kind);

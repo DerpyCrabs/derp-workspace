@@ -114,14 +114,17 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     const identity = readUtf8(bytes, cursor, identityLen)
     if (identity == null) return null
     cursor += identityLen
-    if (cursor + 24 > view.byteLength) return null
+    if (cursor + 32 > view.byteLength) return null
     const x = view.getInt32(cursor, true)
     const y = view.getInt32(cursor + 4, true)
     const width = view.getUint32(cursor + 8, true)
     const height = view.getUint32(cursor + 12, true)
     const transform = view.getUint32(cursor + 16, true)
     const refreshMilliHz = view.getUint32(cursor + 20, true)
-    cursor += 24
+    const vrrSupported = view.getUint32(cursor + 24, true)
+    const vrrEnabled = view.getUint32(cursor + 28, true)
+    if (vrrSupported > 1 || vrrEnabled > 1 || vrrEnabled > vrrSupported) return null
+    cursor += 32
     screens.push({
       name,
       identity,
@@ -131,6 +134,8 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
       height,
       transform,
       refresh_milli_hz: refreshMilliHz,
+      vrr_supported: vrrSupported !== 0,
+      vrr_enabled: vrrEnabled !== 0,
     })
     if (!haveOrigin) {
       minX = x

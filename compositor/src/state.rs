@@ -576,6 +576,7 @@ pub struct CompositorState {
     pub(crate) shell_canvas_logical_size: (u32, u32),
     pub(crate) shell_ui_scale: f64,
     pub(crate) shell_primary_output_name: Option<String>,
+    output_vrr_by_name: HashMap<String, (bool, bool)>,
     pub(crate) display_config_save_pending: bool,
     pub(crate) display_config_save_suppressed: bool,
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
@@ -1270,6 +1271,14 @@ impl CompositorState {
                         break;
                     }
                 },
+                CalloopChannelEvent::Msg(
+                    crate::cef::compositor_tx::CefToCompositor::SetOutputVrr { name, enabled },
+                ) => {
+                    d.state.shell_note_shell_ipc_rx();
+                    if let Some(drms) = d.drm.as_mut() {
+                        drms.set_output_vrr(&mut d.state, name, enabled);
+                    }
+                }
                 CalloopChannelEvent::Msg(crate::cef::compositor_tx::CefToCompositor::Run(f)) => {
                     f(&mut d.state);
                 }
@@ -1392,6 +1401,7 @@ impl CompositorState {
             shell_canvas_logical_size: (1, 1),
             shell_ui_scale: 1.5,
             shell_primary_output_name: None,
+            output_vrr_by_name: HashMap::new(),
             display_config_save_pending: false,
             display_config_save_suppressed: false,
             touch_abs_is_window_pixels: false,
@@ -6924,6 +6934,7 @@ impl CompositorState {
                 let tf = o.current_transform();
                 let mode = o.current_mode()?;
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
+                let (vrr_supported, vrr_enabled) = self.output_vrr_state(o.name().as_str());
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
                     identity: Self::shell_output_identity(o),
@@ -6933,6 +6944,8 @@ impl CompositorState {
                     h: u32::try_from(g.size.h).ok()?.max(1),
                     transform: transform_to_wire(tf),
                     refresh_milli_hz,
+                    vrr_supported,
+                    vrr_enabled,
                 })
             })
             .collect();
@@ -6976,6 +6989,28 @@ impl CompositorState {
             .outputs()
             .find(|output| output.name() == output_name)
             .map(Self::shell_output_identity)
+    }
+
+    pub(crate) fn set_output_vrr_states<I>(&mut self, states: I)
+    where
+        I: IntoIterator<Item = (String, bool, bool)>,
+    {
+        self.output_vrr_by_name = states
+            .into_iter()
+            .map(|(name, supported, enabled)| (name, (supported, supported && enabled)))
+            .collect();
+    }
+
+    pub(crate) fn set_output_vrr_state(&mut self, name: String, supported: bool, enabled: bool) {
+        self.output_vrr_by_name
+            .insert(name, (supported, supported && enabled));
+    }
+
+    pub(crate) fn output_vrr_state(&self, name: &str) -> (bool, bool) {
+        self.output_vrr_by_name
+            .get(name)
+            .copied()
+            .unwrap_or((false, false))
     }
 
     pub fn send_shell_output_layout(&mut self) {

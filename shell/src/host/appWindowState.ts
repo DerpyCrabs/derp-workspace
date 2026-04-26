@@ -25,6 +25,8 @@ export type DerpShellDetail = ({
         height: number
         transform: number
         refresh_milli_hz?: number
+        vrr_supported?: boolean
+        vrr_enabled?: boolean
       }>
       shell_chrome_primary?: string | null
     }
