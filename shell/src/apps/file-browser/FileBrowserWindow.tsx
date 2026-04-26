@@ -201,6 +201,7 @@ type FileSystemEntryLike = {
 }
 
 const FILE_BROWSER_MUTATED_EVENT = 'derp-file-browser-mutated'
+const FILE_BROWSER_LIVE_REFRESH_MS = 1200
 
 let nextFileBrowserMountSeq = 0
 
@@ -225,6 +226,8 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   let lastFavoritesReloadKey = ''
   let typeSearchBuffer = ''
   let typeSearchTimer: number | null = null
+  let liveRefreshTimer: number | null = null
+  let liveRefreshInFlight = false
   let suppressClickAfterPointerDrag = false
   let lastRowClick: { path: string; timeStamp: number; x: number; y: number } | null = null
 
@@ -286,6 +289,72 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       } catch {}
     }
     return entries
+  }
+
+  function entriesMatch(a: readonly FileBrowserEntry[], b: readonly FileBrowserEntry[]): boolean {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) {
+      const left = a[i]
+      const right = b[i]
+      if (
+        left.path !== right.path ||
+        left.name !== right.name ||
+        left.kind !== right.kind ||
+        left.hidden !== right.hidden ||
+        left.symlink !== right.symlink ||
+        left.writable !== right.writable ||
+        left.size !== right.size ||
+        left.modified_ms !== right.modified_ms
+      ) {
+        return false
+      }
+    }
+    return true
+  }
+
+  async function liveRefreshDirectory() {
+    if (liveRefreshInFlight || busy() || uploadBusy() || state.status !== 'ready') return
+    const activePath = state.activePath
+    if (!activePath) return
+    const showHidden = state.showHidden
+    const runId = requestSeq
+    const base = shellHttpBase()
+    liveRefreshInFlight = true
+    try {
+      if (activePath === FILE_BROWSER_FAVORITES_PATH) {
+        const entries = await listFavoriteEntries(base)
+        if (runId !== requestSeq || state.activePath !== activePath || state.showHidden !== showHidden || state.status !== 'ready') return
+        if (state.parentPath === null && entriesMatch(state.entries, entries)) return
+        setLoadCount((count) => count + 1)
+        setState('parentPath', null)
+        setState('entries', entries)
+        setState('selectedPath', clampFileBrowserSelection(entries, state.selectedPath))
+        return
+      }
+      const listing = await listFileBrowserDirectory(activePath, showHidden, base)
+      if (runId !== requestSeq || state.activePath !== activePath || state.showHidden !== showHidden || state.status !== 'ready') return
+      if (
+        state.activePath === listing.path &&
+        state.parentPath === listing.parent_path &&
+        entriesMatch(state.entries, listing.entries)
+      ) {
+        return
+      }
+      setLoadCount((count) => count + 1)
+      setState('activePath', listing.path)
+      setState('parentPath', listing.parent_path)
+      setState('entries', listing.entries)
+      setState('selectedPath', clampFileBrowserSelection(listing.entries, state.selectedPath))
+    } catch (error) {
+      if (runId !== requestSeq || state.activePath !== activePath || state.showHidden !== showHidden || state.status !== 'ready') return
+      setLoadCount((count) => count + 1)
+      setState('entries', [])
+      setState('selectedPath', null)
+      setState('status', 'error')
+      setState('errorMessage', error instanceof Error ? error.message : String(error))
+    } finally {
+      liveRefreshInFlight = false
+    }
   }
 
   async function loadDirectory(targetPath?: string | null, forceRoots = false, showHiddenOverride?: boolean) {
@@ -1116,6 +1185,9 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     lastAppliedRestoredStateVersion = primedShellWindowStateVersion(wid)
     const target = restored?.activePath ?? primed ?? null
     void loadDirectory(target, true, showHidden)
+    liveRefreshTimer = window.setInterval(() => {
+      void liveRefreshDirectory()
+    }, FILE_BROWSER_LIVE_REFRESH_MS)
     queueMicrotask(() => rootRef?.focus())
   })
 
@@ -1131,6 +1203,7 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
   window.addEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
   onCleanup(() => {
     window.removeEventListener(FILE_BROWSER_MUTATED_EVENT, onFileBrowserMutated)
+    if (liveRefreshTimer !== null) window.clearInterval(liveRefreshTimer)
     clearPointerDragListeners()
     props.onClearInTabDropPreview?.()
     if (typeSearchTimer !== null) window.clearTimeout(typeSearchTimer)

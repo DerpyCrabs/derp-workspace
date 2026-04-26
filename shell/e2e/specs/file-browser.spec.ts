@@ -196,6 +196,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await waitForActivePath(base, fixtures.root_path, navigated.windowId)
   })
 
+  test('file browser live refresh picks up external current-folder changes without remounting', async ({ base, state }) => {
+    const fixtures = await prepareFileBrowserFixtures(base)
+    const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
+    const before = fileBrowserSnapshot(navigated.shell, navigated.windowId)
+    assert(before?.active_path === fixtures.root_path, 'expected fixture root before live refresh')
+    assert(before.mount_seq && before.mount_seq > 0, 'expected file browser mount sequence before live refresh')
+    const externalPath = path.posix.join(fixtures.root_path, 'external-live-refresh.txt')
+    await writeFile(externalPath, 'created outside the file browser\n', 'utf8')
+    const refreshed = await waitFor(
+      'wait for live refresh external row',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const fb = fileBrowserSnapshot(shell, navigated.windowId)
+        const row = fileBrowserRow(shell, 'external-live-refresh.txt', navigated.windowId)
+        if (fb?.active_path !== fixtures.root_path || fb.list_state !== 'ready' || !row?.rect) return null
+        return { shell, fb, row }
+      },
+      7000,
+      100,
+    )
+    assert(refreshed.fb.mount_seq === before.mount_seq, 'expected live refresh to avoid remounting file browser')
+    assert(refreshed.fb.active_path === fixtures.root_path, 'expected live refresh to keep current folder')
+    assert(refreshed.fb.list_state === 'ready', 'expected live refresh to keep list ready')
+    await writeJsonArtifact('file-browser-live-refresh.json', {
+      windowId: navigated.windowId,
+      before,
+      row: refreshed.row,
+    })
+  })
+
   test('file browser view mode favorites custom icons and ask target persist through settings', async ({ base, state }) => {
     await postJson(base, '/settings_files', blankFilesSettings())
     const fixtures = await prepareFileBrowserFixtures(base)
