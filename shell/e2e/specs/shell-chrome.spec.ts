@@ -142,7 +142,7 @@ async function waitForShellWindowAligned(base: string, windowId: number, label: 
 
 async function waitForProgramsMenuScrollStable(base: string, minimumTop: number) {
   let lastTop = -1
-  let lastChangedAt = Date.now()
+  let stableSamples = 0
   await waitFor(
     'wait for programs menu scroll settle',
     async () => {
@@ -152,10 +152,11 @@ async function waitForProgramsMenuScrollStable(base: string, minimumTop: number)
       if (metrics.scroll_top < minimumTop) return null
       if (Math.abs(metrics.scroll_top - lastTop) > 1) {
         lastTop = metrics.scroll_top
-        lastChangedAt = Date.now()
+        stableSamples = 0
         return null
       }
-      return Date.now() - lastChangedAt >= 75 ? shell : null
+      stableSamples += 1
+      return stableSamples >= 2 ? shell : null
     },
     400,
     25,
@@ -2027,8 +2028,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(!programsOpen.power_menu_open, 'power menu should close when programs menu opens')
     assert(programsOpen.settings_window_visible, 'settings should stay visible when switching power menu to programs menu')
     assert(taskbarEntry(programsOpen, SHELL_UI_SETTINGS_WINDOW_ID)?.activate, 'settings taskbar row should stay visible when programs menu opens')
-    const programsHtml = await getShellHtml(base, '[aria-label="Application search"]')
-    assert(programsHtml.includes('Search apps, keywords, and commands'), 'programs menu missing search placeholder')
+    const programsHtml = await getShellHtml(base, '[aria-label="Command palette"]')
+    assert(programsHtml.includes('Search apps, windows, settings, and commands'), 'command palette missing search placeholder')
 
     await clickPoint(
       base,

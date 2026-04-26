@@ -13,6 +13,7 @@ import { SettingsTilingPage } from './SettingsTilingPage'
 import { SettingsUserPage } from './SettingsUserPage'
 import { SettingsWifiPage } from './SettingsWifiPage'
 import type { SettingsLayoutScreen } from './settingsTypes'
+import { SETTINGS_NAV, type SettingsPageId } from './settingsNavigation'
 import type { DefaultApplicationsController } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
@@ -20,34 +21,9 @@ import type { DerpWindow } from '@/host/appWindowState'
 
 export type { SettingsLayoutScreen }
 
-type SettingsPageId =
-  | 'user'
-  | 'displays'
-  | 'tiling'
-  | 'scratchpads'
-  | 'keyboard'
-  | 'notifications'
-  | 'sound'
-  | 'wifi'
-  | 'bluetooth'
-  | 'appearance'
-  | 'default-applications'
-
-const NAV: { id: SettingsPageId; label: string }[] = [
-  { id: 'user', label: 'User' },
-  { id: 'displays', label: 'Displays' },
-  { id: 'tiling', label: 'Tiling' },
-  { id: 'scratchpads', label: 'Scratchpads' },
-  { id: 'keyboard', label: 'Keyboard' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'sound', label: 'Sound' },
-  { id: 'wifi', label: 'Wi-Fi' },
-  { id: 'bluetooth', label: 'Bluetooth' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'default-applications', label: 'Default apps' },
-]
-
 export type SettingsPanelProps = {
+  activePage?: Accessor<SettingsPageId>
+  setActivePage?: Setter<SettingsPageId>
   screenDraft: { rows: SettingsLayoutScreen[] }
   setScreenDraft: SetStoreFunction<{ rows: SettingsLayoutScreen[] }>
   currentMonitorName: Accessor<string | null>
@@ -76,7 +52,9 @@ export type SettingsPanelProps = {
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
-  const [activePage, setActivePage] = createSignal<SettingsPageId>('displays')
+  const [localActivePage, setLocalActivePage] = createSignal<SettingsPageId>('displays')
+  const activePage = props.activePage ?? localActivePage
+  const setActivePage = props.setActivePage ?? setLocalActivePage
   const [orientationPickerOpen, setOrientationPickerOpen] = createSignal<number | null>(null)
 
   return (
@@ -91,7 +69,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <p class="mb-2 px-2 text-[0.68rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
           Settings
         </p>
-        <For each={NAV}>
+        <For each={SETTINGS_NAV}>
           {(item) => (
             <button
               type="button"

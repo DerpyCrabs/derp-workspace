@@ -32,6 +32,7 @@ import {
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
 import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
+import type { SettingsPageId } from '@/apps/settings/settingsNavigation'
 
 export type ShellHostedWindowContentEnv = {
   windowById: (windowId: number) => Accessor<DerpWindow | undefined>
@@ -89,6 +90,8 @@ export type ShellHostedWindowContentEnv = {
   rootPointerDowns: Accessor<number>
   exclusionZonesHud: Accessor<ExclusionHudZone[]>
   screenDraft: { rows: LayoutScreen[] }
+  settingsActivePage: Accessor<SettingsPageId>
+  setSettingsActivePage: Setter<SettingsPageId>
   setScreenDraft: SetStoreFunction<{ rows: LayoutScreen[] }>
   autoShellChromeMonitorName: Accessor<string | null>
   canSessionControl: Accessor<boolean>
@@ -142,6 +145,8 @@ export function renderShellHostedWindowContent(
   if (windowId === SHELL_UI_SETTINGS_WINDOW_ID) {
     return (
       <SettingsPanel
+        activePage={env.settingsActivePage}
+        setActivePage={env.setSettingsActivePage}
         screenDraft={env.screenDraft}
         setScreenDraft={env.setScreenDraft}
         currentMonitorName={() => env.windowById(SHELL_UI_SETTINGS_WINDOW_ID)()?.output_name ?? null}

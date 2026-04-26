@@ -1,4 +1,5 @@
 import {
+  desktopAppLaunchCount,
   getDesktopAppUsageCounts,
   recordDesktopAppLaunch,
   refreshDesktopAppUsageFromRemote,
@@ -13,7 +14,6 @@ import {
 } from 'solid-js'
 import { type ShellContextMenuItem } from '@/host/contextMenu'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
-import { searchDesktopApplications } from '@/features/desktop/desktopAppSearch'
 import type { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import type { DesktopAppEntry } from '@/features/bridge/shellBridge'
@@ -21,10 +21,16 @@ import { canvasRectToClientCss, clientRectToGlobalLogical } from '@/lib/shellCoo
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import type { BackedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
+import { shellHostedProgramsMenuDefinitions } from '@/features/shell-ui/shellHostedAppsRegistry'
 import {
-  shellHostedProgramsBuiltinMatchesQuery,
-  shellHostedProgramsMenuDefinitions,
-} from '@/features/shell-ui/shellHostedAppsRegistry'
+  filterCommandPaletteItems,
+  type CommandPaletteItem,
+} from '@/features/command-palette/commandPalette'
+import { SETTINGS_NAV, type SettingsPageId } from '@/apps/settings/settingsNavigation'
+import { setNotificationsEnabledViaShell, type ShellNotificationsState } from '@/features/notifications/notificationsState'
+import { getThemeSettings, setTheme, type ThemeMode, type ThemePalette } from '@/features/theme/themeStore'
+import { setMonitorLayout } from '@/features/tiling/tilingConfig'
+import type { LayoutType } from '@/features/tiling/layouts'
 import { windowIsShellHosted, type DerpWindow } from './appWindowState'
 import { screensListForLayout } from './appLayout'
 import type { LayoutScreen } from './types'
@@ -51,7 +57,9 @@ type CreateShellContextMenusArgs = {
   screenshotMode: Accessor<boolean>
   stopScreenshotMode: () => void
   closeAllAtlasSelects: () => boolean
+  bumpShellRepaint: () => void
   openShellHostedApp: (kind: BackedShellWindowKind) => boolean
+  openSettingsPage: (page: SettingsPageId) => void
   spawnInCompositor: (
     cmd: string,
     launch?: { command: string; desktopId: string | null; appName: string | null } | null,
@@ -66,11 +74,26 @@ type CreateShellContextMenusArgs = {
   windows: Accessor<readonly DerpWindow[]>
   windowSwitcherSelectedWindowId: Accessor<number | null>
   focusedWindowId: Accessor<number | null>
+  notificationsState: Accessor<ShellNotificationsState | null>
   taskbarPins: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
+  setShellPrimary: (name: string) => boolean
+  setUiScale: (pct: 100 | 150 | 200) => boolean
+  setOutputVrr: (name: string, enabled: boolean) => boolean
+  bumpTilingConfig: () => void
   activateWindow: (windowId: number) => boolean
   shellWireSend: (
-    op: 'programs_menu_opened' | 'programs_menu_closed' | 'taskbar_pin_add' | 'taskbar_pin_remove',
+    op:
+      | 'programs_menu_opened'
+      | 'programs_menu_closed'
+      | 'taskbar_pin_add'
+      | 'taskbar_pin_remove'
+      | 'taskbar_activate'
+      | 'close'
+      | 'minimize'
+      | 'set_maximized'
+      | 'invalidate_view',
     arg?: number | string,
+    arg2?: number,
   ) => boolean
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
@@ -117,6 +140,35 @@ function layoutScreenCssRect(
 function desktopAppPinId(app: DesktopAppEntry): string {
   const desktopId = app.desktop_id.trim()
   return `app:${desktopId || app.exec.trim()}`
+}
+
+const THEME_MODES: { value: ThemeMode; label: string; keywords: string[] }[] = [
+  { value: 'light', label: 'Light theme', keywords: ['appearance', 'bright'] },
+  { value: 'dark', label: 'Dark theme', keywords: ['appearance', 'night'] },
+  { value: 'system', label: 'System theme', keywords: ['appearance', 'auto'] },
+]
+
+const THEME_PALETTES: { value: ThemePalette; label: string; keywords: string[] }[] = [
+  { value: 'default', label: 'Default palette', keywords: ['appearance', 'theme'] },
+  { value: 'caffeine', label: 'Caffeine palette', keywords: ['appearance', 'theme'] },
+  { value: 'cosmic-night', label: 'Cosmic Night palette', keywords: ['appearance', 'theme'] },
+]
+
+const UI_SCALES: Array<100 | 150 | 200> = [100, 150, 200]
+const MONITOR_LAYOUTS: { value: LayoutType; label: string; keywords: string[] }[] = [
+  { value: 'manual-snap', label: 'Manual snap layout', keywords: ['tiling', 'snap'] },
+  { value: 'master-stack', label: 'Master stack layout', keywords: ['tiling', 'master'] },
+  { value: 'columns', label: 'Columns layout', keywords: ['tiling', 'vertical'] },
+  { value: 'grid', label: 'Grid layout', keywords: ['tiling', 'grid'] },
+  { value: 'custom-auto', label: 'Custom auto layout', keywords: ['tiling', 'custom'] },
+]
+
+function commandWindowLabel(window: DerpWindow): string {
+  return (
+    window.title.trim() ||
+    window.app_id.trim() ||
+    (windowIsShellHosted(window) ? `Shell window ${window.window_id}` : `Window ${window.window_id}`)
+  )
 }
 
 export function createShellContextMenus(args: CreateShellContextMenusArgs) {
@@ -211,6 +263,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       args.shellWireSend('programs_menu_closed')
     }
     scheduleOverlayExclusionSync()
+    args.bumpShellRepaint()
+    queueMicrotask(() => args.shellWireSend('invalidate_view'))
   }
 
   function openRootContextMenu(trigger: object) {
@@ -225,6 +279,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     setActiveMenuTrigger(trigger)
     setCtxMenuOpen(true)
     scheduleOverlayExclusionSync()
+    args.bumpShellRepaint()
+    queueMicrotask(() => args.shellWireSend('invalidate_view'))
   }
 
   function triggerIsOpen(trigger: object) {
@@ -669,52 +725,371 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     }
   })
 
-  const programsMenuListItems = createMemo((): ShellContextMenuItem[] => {
+  const commandPaletteSourceItems = createMemo((): CommandPaletteItem[] => {
     if (!programsMenuOpen()) return []
-    const query = programsMenuQuery().trim().toLocaleLowerCase()
-    const builtins: ShellContextMenuItem[] = []
+    const items: CommandPaletteItem[] = []
     for (const def of shellHostedProgramsMenuDefinitions()) {
-      if (!shellHostedProgramsBuiltinMatchesQuery(query, def.matchTokens)) continue
-      builtins.push({
+      items.push({
+        id: `shell:${def.kind}`,
+        category: 'apps',
+        categoryLabel: 'Apps',
         label: def.label,
+        subtitle: def.title ?? 'Open shell app',
         badge: def.badge,
         title: def.title,
+        keywords: def.matchTokens,
+        score: 100000,
+        defaultRank: def.kind === 'settings' ? 92 : 88,
         action: () => {
-          hideContextMenu(false)
           void args.openShellHostedApp(def.kind)
         },
       })
     }
     if (desktopApps.busy() && !desktopApps.loaded()) {
-      return builtins.length > 0 ? [...builtins, { label: 'Loading…', action: () => {} }] : [{ label: 'Loading…', action: () => {} }]
+      items.push({
+        id: 'apps:loading',
+        category: 'apps',
+        categoryLabel: 'Apps',
+        label: 'Loading applications',
+        subtitle: 'Reading desktop entries',
+        disabled: true,
+        action: () => {},
+      })
+      return items
     }
     const err = desktopApps.err()
     if (err && !desktopApps.loaded()) {
-      return builtins.length > 0 ? [...builtins, { label: err, action: () => {} }] : [{ label: err, action: () => {} }]
+      items.push({
+        id: 'apps:error',
+        category: 'apps',
+        categoryLabel: 'Apps',
+        label: 'Applications unavailable',
+        subtitle: err,
+        disabled: true,
+        action: () => {},
+      })
+      return items
     }
-    const q = programsMenuQuery().trim()
     const raw = desktopApps.items()
     if (desktopApps.loaded() && raw.length === 0) {
-      return builtins.length > 0 ? builtins : [{ label: 'No applications found.', action: () => {} }]
+      items.push({
+        id: 'apps:empty',
+        category: 'apps',
+        categoryLabel: 'Apps',
+        label: 'No applications found',
+        disabled: true,
+        action: () => {},
+      })
     }
-    if (raw.length === 0) return builtins.length > 0 ? builtins : [{ label: 'Loading…', action: () => {} }]
-    return [
-      ...builtins,
-      ...searchDesktopApplications(raw, q, programsUsageCounts()).map((app) => ({
+    for (const app of raw) {
+      items.push({
+        id: `app:${app.desktop_id.trim() || app.exec.trim() || app.name}`,
+        category: 'apps',
+        categoryLabel: 'Apps',
         label: app.name,
+        subtitle: app.generic_name || app.executable || app.exec,
         badge: app.terminal ? 'tty' : undefined,
+        title: app.exec,
+        keywords: [
+          app.desktop_id,
+          app.exec,
+          app.executable ?? '',
+          app.generic_name ?? '',
+          app.full_name ?? '',
+          ...(app.keywords ?? []),
+        ],
+        score: desktopAppLaunchCount(app, programsUsageCounts()) * 8,
+        defaultRank: 60 + desktopAppLaunchCount(app, programsUsageCounts()) * 8,
         contextItems: () => desktopAppPinContextItems(app),
         action: () => {
           setProgramsUsageCounts(recordDesktopAppLaunch(app))
-          hideContextMenu(false)
           void args.spawnInCompositor(app.exec, {
             command: app.exec,
             desktopId: app.desktop_id.trim() || null,
             appName: app.name.trim() || null,
           })
         },
-      })),
-    ]
+      })
+    }
+    const sortedWindows = [...args.windows()]
+      .filter((window) => window.workspace_visible || window.minimized)
+      .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
+    for (const window of sortedWindows) {
+      const label = commandWindowLabel(window)
+      const focused = args.focusedWindowId() === window.window_id
+      items.push({
+        id: `window:${window.window_id}`,
+        category: 'windows',
+        categoryLabel: 'Windows',
+        actionId: String(window.window_id),
+        label,
+        subtitle: `${window.output_name || 'Display'}${window.app_id.trim() ? ` · ${window.app_id.trim()}` : ''}`,
+        badge: focused ? 'active' : window.minimized ? 'minimized' : windowIsShellHosted(window) ? 'shell' : undefined,
+        title: window.app_id.trim() || undefined,
+        keywords: [window.title, window.app_id, window.output_name, windowIsShellHosted(window) ? 'shell hosted' : 'native'],
+        score: focused ? 24 : Math.max(0, window.stack_z),
+        defaultRank: focused ? 95 : 74 + Math.max(0, Math.min(20, window.stack_z)),
+        action: () => {
+          if (!args.shellWireSend('taskbar_activate', window.window_id)) {
+            args.activateWindow(window.window_id)
+          }
+        },
+        contextItems: () => [
+          {
+            actionId: 'focus',
+            label: 'Focus window',
+            action: () => {
+              if (!args.shellWireSend('taskbar_activate', window.window_id)) {
+                args.activateWindow(window.window_id)
+              }
+            },
+          },
+          {
+            actionId: 'minimize',
+            label: 'Minimize window',
+            disabled: window.minimized,
+            action: () => {
+              args.shellWireSend('minimize', window.window_id)
+            },
+          },
+          {
+            actionId: window.maximized ? 'restore' : 'maximize',
+            label: window.maximized ? 'Restore window' : 'Maximize window',
+            action: () => {
+              args.shellWireSend('set_maximized', window.window_id, window.maximized ? 0 : 1)
+            },
+          },
+          {
+            actionId: 'close',
+            label: 'Close window',
+            action: () => {
+              args.shellWireSend('close', window.window_id)
+            },
+          },
+        ],
+      })
+    }
+    for (const page of SETTINGS_NAV) {
+      items.push({
+        id: `settings:${page.id}`,
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: page.label,
+        subtitle: 'Open Settings',
+        badge: 'tab',
+        keywords: page.keywords,
+        defaultRank: page.id === 'displays' ? 70 : 54,
+        action: () => args.openSettingsPage(page.id),
+      })
+    }
+    const notificationsEnabled = args.notificationsState()?.enabled
+    items.push(
+      {
+        id: 'settings:notifications-enable',
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: 'Enable notification banners',
+        subtitle: 'Notifications',
+        keywords: ['notifications', 'banners', 'notify'],
+        disabled: shellHttpBase() === null || notificationsEnabled === true,
+        showOnEmpty: false,
+        action: () => {
+          void setNotificationsEnabledViaShell(true, shellHttpBase())
+        },
+      },
+      {
+        id: 'settings:notifications-disable',
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: 'Disable notification banners',
+        subtitle: 'Notifications',
+        keywords: ['notifications', 'banners', 'notify'],
+        disabled: shellHttpBase() === null || notificationsEnabled === false,
+        showOnEmpty: false,
+        action: () => {
+          void setNotificationsEnabledViaShell(false, shellHttpBase())
+        },
+      },
+    )
+    for (const mode of THEME_MODES) {
+      items.push({
+        id: `settings:theme-mode:${mode.value}`,
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: mode.label,
+        subtitle: 'Appearance',
+        keywords: mode.keywords,
+        disabled: getThemeSettings().mode === mode.value,
+        showOnEmpty: false,
+        action: () => {
+          const current = getThemeSettings()
+          setTheme(current.palette, mode.value)
+        },
+      })
+    }
+    for (const palette of THEME_PALETTES) {
+      items.push({
+        id: `settings:theme-palette:${palette.value}`,
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: palette.label,
+        subtitle: 'Appearance',
+        keywords: palette.keywords,
+        disabled: getThemeSettings().palette === palette.value,
+        showOnEmpty: false,
+        action: () => {
+          const current = getThemeSettings()
+          setTheme(palette.value, current.mode)
+        },
+      })
+    }
+    for (const pct of UI_SCALES) {
+      items.push({
+        id: `settings:ui-scale:${pct}`,
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: `Set UI scale to ${pct}%`,
+        subtitle: 'Displays',
+        keywords: ['display', 'scale', 'ui', 'monitor'],
+        disabled: false,
+        showOnEmpty: false,
+        action: () => {
+          args.setUiScale(pct)
+        },
+      })
+    }
+    for (const screen of args.screenDraftRows()) {
+      items.push({
+        id: `settings:primary:${screen.name}`,
+        category: 'settings',
+        categoryLabel: 'Settings',
+        label: `Set ${screen.name} as primary display`,
+        subtitle: 'Displays',
+        keywords: ['display', 'monitor', 'primary', screen.name],
+        disabled: args.shellChromePrimaryName() === screen.name,
+        showOnEmpty: false,
+        action: () => {
+          args.setShellPrimary(screen.name)
+        },
+      })
+      if (screen.vrr_supported) {
+        const nextEnabled = !screen.vrr_enabled
+        items.push({
+          id: `settings:vrr:${screen.name}:${nextEnabled ? 'enable' : 'disable'}`,
+          category: 'settings',
+          categoryLabel: 'Settings',
+          label: `${nextEnabled ? 'Enable' : 'Disable'} VRR on ${screen.name}`,
+          subtitle: 'Displays',
+          keywords: ['display', 'monitor', 'vrr', 'variable refresh', screen.name],
+          showOnEmpty: false,
+          action: () => {
+            args.setOutputVrr(screen.name, nextEnabled)
+          },
+        })
+      }
+      for (const layout of MONITOR_LAYOUTS) {
+        items.push({
+          id: `settings:layout:${screen.name}:${layout.value}`,
+          category: 'settings',
+          categoryLabel: 'Settings',
+          label: `Use ${layout.label} on ${screen.name}`,
+          subtitle: 'Tiling',
+          keywords: [...layout.keywords, 'monitor', screen.name],
+          showOnEmpty: false,
+          action: () => {
+            setMonitorLayout(screen.name, layout.value)
+            args.bumpTilingConfig()
+          },
+        })
+      }
+    }
+    const http = shellHttpBase() !== null
+    const sysTitle = http ? undefined : 'Needs shell HTTP (cef_host control server) for system power'
+    items.push(
+      {
+        id: 'workspace:save-session',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'save-session',
+        label: 'Save workspace',
+        subtitle: 'Persist the current workspace snapshot',
+        badge: 'session',
+        disabled: !args.canSaveSessionSnapshot(),
+        keywords: ['session', 'snapshot', 'workspace'],
+        defaultRank: 52,
+        action: args.saveSessionSnapshot,
+      },
+      {
+        id: 'workspace:restore-session',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'restore-session',
+        label: 'Restore workspace',
+        subtitle: 'Apply the saved workspace snapshot',
+        badge: 'session',
+        disabled: !args.canRestoreSessionSnapshot(),
+        keywords: ['session', 'snapshot', 'workspace'],
+        defaultRank: 51,
+        action: args.restoreSessionSnapshot,
+      },
+      {
+        id: 'workspace:suspend',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'suspend',
+        label: 'Suspend',
+        subtitle: 'System power',
+        disabled: !http,
+        title: sysTitle,
+        keywords: ['sleep', 'power'],
+        showOnEmpty: false,
+        action: () => void args.postSessionPower('suspend'),
+      },
+      {
+        id: 'workspace:restart',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'restart',
+        label: 'Restart',
+        subtitle: 'System power',
+        disabled: !http,
+        title: sysTitle,
+        keywords: ['reboot', 'power'],
+        showOnEmpty: false,
+        action: () => void args.postSessionPower('reboot'),
+      },
+      {
+        id: 'workspace:shutdown',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'shutdown',
+        label: 'Shut down',
+        subtitle: 'System power',
+        disabled: !http,
+        title: sysTitle,
+        keywords: ['poweroff', 'power'],
+        showOnEmpty: false,
+        action: () => void args.postSessionPower('poweroff'),
+      },
+      {
+        id: 'workspace:exit-session',
+        category: 'workspace',
+        categoryLabel: 'Workspace',
+        actionId: 'exit-session',
+        label: 'Exit session',
+        subtitle: 'End compositor session',
+        disabled: !args.canSessionControl(),
+        keywords: ['quit', 'logout', 'session'],
+        showOnEmpty: false,
+        action: args.exitSession,
+      },
+    )
+    return items
+  })
+
+  const programsMenuListItems = createMemo((): CommandPaletteItem[] => {
+    if (!programsMenuOpen()) return []
+    return filterCommandPaletteItems(commandPaletteSourceItems(), programsMenuQuery())
   })
 
   const windowSwitcherListItems = createMemo((): ShellContextMenuItem[] => {
@@ -770,6 +1145,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const items = programsMenuListItems()
     const item = items[programsMenuHighlightIdx()]
     if (!item || items.length === 0) return
+    if (item.disabled) return
     item.action()
     hideContextMenu()
   }

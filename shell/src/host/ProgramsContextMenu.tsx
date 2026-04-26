@@ -3,6 +3,7 @@ import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { FileBrowserContextMenu } from '@/apps/file-browser/FileBrowserContextMenu'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
+import type { CommandPaletteItem } from '@/features/command-palette/commandPalette'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
 export function ProgramsContextMenu() {
@@ -56,10 +57,11 @@ export function ProgramsContextMenu() {
   return (
     <DropdownMenuContent
       data-shell-programs-menu-panel
+      data-command-palette-panel
       data-shell-exclusion-floating
       class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 absolute flex flex-col overflow-hidden"
       role="group"
-      aria-label="Application search"
+      aria-label="Command palette"
       ref={registerPanel}
       style={props.placement() ?? undefined}
     >
@@ -69,8 +71,8 @@ export function ProgramsContextMenu() {
           inputMode="search"
           autocomplete="off"
           class="bg-(--shell-input-bg) placeholder:text-(--shell-text-dim) focus:outline-none focus-visible:outline-none box-border w-full border-0 px-4 py-4 text-[1.15rem] font-inherit text-inherit"
-          placeholder="Search apps, keywords, and commands"
-          aria-label="Search applications"
+          placeholder="Search apps, windows, settings, and commands"
+          aria-label="Search commands"
           value={props.query()}
           ref={(el) => {
             searchRef = el
@@ -90,55 +92,82 @@ export function ProgramsContextMenu() {
       </div>
       <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2" data-programs-menu-scroll>
         <For each={props.items()}>
-          {(item, idx) => (
-            <button
-              type="button"
-              class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-2 border-0 px-4 py-3 text-left text-[1rem] font-inherit text-inherit"
-              classList={{
-                'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
-                  props.highlightIdx() === idx(),
-                'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
-              }}
-              tabIndex={-1}
-              title={item.title}
-              data-programs-menu-idx={idx()}
-              onPointerDown={(e) => {
-                if (!e.isPrimary || e.button !== 0) return
-                e.preventDefault()
-                e.stopPropagation()
-                if (item.disabled) return
-                item.action()
-                props.closeContextMenu()
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault()
-              }}
-              onClick={(e) => {
-                if (e.detail !== 0) return
-                if (item.disabled) return
-                item.action()
-                props.closeContextMenu()
-              }}
-              onContextMenu={(e) => {
-                const contextItems = item.contextItems?.() ?? []
-                if (contextItems.length === 0) return
-                e.preventDefault()
-                e.stopPropagation()
-                setItemMenu({ x: e.clientX, y: e.clientY, items: contextItems })
-              }}
-            >
-              <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                {item.label}
-              </span>
-              <Show when={item.badge} keyed>
-                {(badge) => (
-                  <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
-                    {badge}
+          {(item, idx) => {
+            const commandItem = item as CommandPaletteItem
+            const showHeading = () => {
+              const previous = props.items()[idx() - 1] as CommandPaletteItem | undefined
+              return idx() === 0 || previous?.category !== commandItem.category
+            }
+            return (
+              <>
+                <Show when={showHeading()}>
+                  <div
+                    class="px-3 pt-2 pb-1 text-[0.68rem] font-semibold tracking-wide text-(--shell-text-dim) uppercase"
+                    data-command-palette-category={commandItem.category}
+                  >
+                    {commandItem.categoryLabel ?? 'Commands'}
+                  </div>
+                </Show>
+                <button
+                  type="button"
+                  class="bg-transparent hover:bg-(--shell-overlay-hover) flex w-full cursor-pointer items-center justify-between gap-3 border-0 px-4 py-2.5 text-left font-inherit text-inherit"
+                  classList={{
+                    'bg-[color-mix(in_srgb,var(--shell-overlay-active)_78%,var(--shell-accent-soft)_22%)] text-inherit shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
+                      props.highlightIdx() === idx(),
+                    'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                  }}
+                  tabIndex={-1}
+                  title={item.title ?? commandItem.subtitle}
+                  data-programs-menu-idx={idx()}
+                  data-command-palette-idx={idx()}
+                  data-command-palette-id={commandItem.id}
+                  data-command-palette-category-row={commandItem.category}
+                  onPointerDown={(e) => {
+                    if (!e.isPrimary || e.button !== 0) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (item.disabled) return
+                    item.action()
+                    props.closeContextMenu()
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                  }}
+                  onClick={(e) => {
+                    if (e.detail !== 0) return
+                    if (item.disabled) return
+                    item.action()
+                    props.closeContextMenu()
+                  }}
+                  onContextMenu={(e) => {
+                    const contextItems = item.contextItems?.() ?? []
+                    if (contextItems.length === 0) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setItemMenu({ x: e.clientX, y: e.clientY, items: contextItems })
+                  }}
+                >
+                  <span class="min-w-0 flex flex-1 flex-col gap-0.5">
+                    <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.96rem]">
+                      {item.label}
+                    </span>
+                    <Show when={commandItem.subtitle}>
+                      <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.76rem] text-(--shell-text-dim)">
+                        {commandItem.subtitle}
+                      </span>
+                    </Show>
                   </span>
-                )}
-              </Show>
-            </button>
-          )}
+                  <Show when={item.badge} keyed>
+                    {(badge) => (
+                      <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
+                        {badge}
+                      </span>
+                    )}
+                  </Show>
+                </button>
+              </>
+            )
+          }}
         </For>
       </div>
       <FileBrowserContextMenu

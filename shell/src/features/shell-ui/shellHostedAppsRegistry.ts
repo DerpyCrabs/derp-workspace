@@ -22,6 +22,13 @@ export const SHELL_HOSTED_APP_REGISTRY: ShellHostedAppRegistryEntry[] = [
   {
     kind: 'settings',
     sessionCaptureCompositorFallback: false,
+    programsMenu: {
+      kind: 'settings',
+      label: 'Settings',
+      badge: 'shell',
+      title: 'Open Derp settings',
+      matchTokens: ['settings', 'preferences', 'control'],
+    },
   },
   {
     kind: 'test',

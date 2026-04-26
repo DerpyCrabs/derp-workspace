@@ -21,6 +21,11 @@ import {
 import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
 import { useShellBatteryState } from '@/apps/settings/useShellBatteryState'
 import {
+  settingsActivePage,
+  setSettingsActivePage,
+  type SettingsPageId,
+} from '@/apps/settings/settingsNavigation'
+import {
   flushShellUiWindowsSyncNow,
   invalidateAllShellUiWindows,
   SHELL_UI_DEBUG_WINDOW_ID,
@@ -846,6 +851,10 @@ function App() {
     const w = windows().get(SHELL_UI_SETTINGS_WINDOW_ID)
     return !!w && !w.minimized
   })
+  function openSettingsPage(page: SettingsPageId) {
+    setSettingsActivePage(page)
+    backedShellWindowActions.openSettingsShellWindow()
+  }
   const debugHudRuntime = createDebugHudRuntime({
     debugHudFrameVisible,
   })
@@ -932,7 +941,9 @@ function App() {
     screenshotMode,
     stopScreenshotMode,
     closeAllAtlasSelects,
+    bumpShellRepaint: bumpSnapChrome,
     openShellHostedApp: (kind) => backedShellWindowActions.openShellHostedApp(kind),
+    openSettingsPage,
     spawnInCompositor,
     saveSessionSnapshot: () => void sessionPersistenceRuntime.saveCurrentSessionSnapshot(),
     restoreSessionSnapshot: () => void sessionPersistenceRuntime.restoreSavedSessionSnapshot(),
@@ -947,8 +958,16 @@ function App() {
     windowSwitcherSelectedWindowId: () =>
       compositorInteractionState()?.window_switcher_selected_window_id ?? null,
     focusedWindowId,
+    notificationsState,
     activateWindow: (windowId) => shellWireSend('activate_window', windowId),
-    shellWireSend: (op, arg) => shellWireSend(op, arg),
+    setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
+    setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
+    setOutputVrr: (name, enabled) => shellWireSend('set_output_vrr', name, enabled ? 1 : 0),
+    bumpTilingConfig: () => {
+      setTilingCfgRev((n) => n + 1)
+      bumpSnapChrome()
+    },
+    shellWireSend: (op, arg, arg2) => shellWireSend(op, arg, arg2),
     exitSession: () => {
       if (shellWireSend('quit')) {
         clearShellActionIssue()
@@ -1415,6 +1434,8 @@ function App() {
       rootPointerDowns: debugHudRuntime.rootPointerDowns,
       exclusionZonesHud: debugHudRuntime.exclusionZonesHud,
       screenDraft,
+      settingsActivePage,
+      setSettingsActivePage,
       setScreenDraft,
       autoShellChromeMonitorName,
       canSessionControl,

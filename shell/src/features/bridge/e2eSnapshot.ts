@@ -942,7 +942,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       volume_input_option_1: volumeMenuRect('[data-select-panel="volume-input"] [data-select-option-idx="1"]'),
       volume_output_slider: volumeMenuRect('[data-shell-volume-output-default] input[type="range"]'),
       volume_playback_first_slider: volumeMenuRect('[data-shell-volume-playback-row="first"] input[type="range"]'),
-      programs_menu_search: queryRect(cache, 'input[aria-label="Search applications"]', args.origin),
+      programs_menu_search: queryRect(cache, 'input[aria-label="Search commands"]', args.origin) ?? queryRect(cache, 'input[aria-label="Search applications"]', args.origin),
       programs_menu_first_item: queryRect(cache, '[data-programs-menu-idx="0"]', args.origin),
       programs_menu_panel: queryRect(cache, '[data-shell-programs-menu-panel]', args.origin),
       programs_menu_list: queryRect(cache, '[data-programs-menu-scroll]', args.origin),

@@ -140,6 +140,20 @@ async function launchTerminalAppFromProgramsMenu(
   }
 }
 
+async function searchCommandPalette(base: string, query: string): Promise<ShellSnapshot> {
+  await ensureProgramsMenuSearchReady(base, await openProgramsMenuBySuper(base))
+  await typeText(base, query)
+  return waitFor(
+    `wait for command palette query ${query}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      return shell.programs_menu_query === query && shell.controls?.programs_menu_first_item ? shell : null
+    },
+    5000,
+    100,
+  )
+}
+
 async function closeLaunchedWindowAndAssertNoGhost(
   base: string,
   launchedWindow: WindowSnapshot,
@@ -213,6 +227,68 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await clickRect(base, shellAfterLaunch.controls.taskbar_programs_toggle)
       await waitForProgramsMenuClosed(base)
     }
+  })
+
+  test('command palette switches windows opens settings tabs and toggles notifications', async ({ base, state }) => {
+    const { red, green } = await ensureNativePair(base, state)
+    await raiseTaskbarWindow(base, green.window.window_id)
+    await searchCommandPalette(base, 'red')
+    await tapKey(base, KEY.enter)
+    const redFocused = await waitFor(
+      'wait for command palette window focus',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (shell.programs_menu_open) return null
+        return compositor.focused_window_id === red.window.window_id ? { compositor, shell } : null
+      },
+      5000,
+      100,
+    )
+
+    await searchCommandPalette(base, 'hotkey')
+    await tapKey(base, KEY.enter)
+    const keyboardSettings = await waitFor(
+      'wait for command palette settings keyboard tab',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        if (shell.programs_menu_open) return null
+        if (!shell.settings_window_visible) return null
+        const html = await getShellHtml(base, '[data-settings-root]')
+        return html.includes('data-settings-active-page="keyboard"') ? { shell, html } : null
+      },
+      5000,
+      100,
+    )
+
+    const beforeNotifications = (await getJson<ShellSnapshot>(base, '/test/state/shell')).notifications?.enabled ?? true
+    await searchCommandPalette(base, beforeNotifications ? 'disable' : 'enable')
+    await tapKey(base, KEY.enter)
+    const toggledNotifications = await waitFor(
+      'wait for command palette notification toggle',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.notifications?.enabled === !beforeNotifications ? shell : null
+      },
+      5000,
+      100,
+    )
+    await searchCommandPalette(base, beforeNotifications ? 'enable' : 'disable')
+    await tapKey(base, KEY.enter)
+    await waitFor(
+      'wait for command palette notification restore',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return shell.notifications?.enabled === beforeNotifications ? shell : null
+      },
+      5000,
+      100,
+    )
+
+    await writeJsonArtifact('command-palette-window-settings-notifications.json', {
+      redFocused,
+      keyboardSettingsShell: keyboardSettings.shell,
+      toggledNotifications,
+    })
   })
 
   test('launcher app closes cleanly without leaving tiny native ghost windows', async ({ base, state }) => {
