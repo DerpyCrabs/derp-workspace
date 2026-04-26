@@ -675,6 +675,8 @@ pub struct CompositorState {
     pub shell_view_px: Option<(u32, u32)>,
     pub shell_frame_is_dmabuf: bool,
     pub shell_dmabuf: Option<Dmabuf>,
+    pub(crate) shell_software_frame: Option<Vec<u8>>,
+    pub(crate) shell_software_generation: u32,
     pub(crate) shell_dmabuf_generation: u32,
     pub(crate) shell_dmabuf_overlay_id: Id,
     pub(crate) shell_dmabuf_commit: CommitCounter,
@@ -1296,6 +1298,29 @@ impl CompositorState {
                     }
                 },
                 CalloopChannelEvent::Msg(
+                    crate::cef::compositor_tx::CefToCompositor::SoftwareFrameReady(latest_frame),
+                ) => loop {
+                    let Some(frame) = latest_frame.take() else {
+                        if latest_frame.finish_dispatch() {
+                            continue;
+                        }
+                        break;
+                    };
+                    d.state.accept_shell_software_frame_from_cef(
+                        frame.width,
+                        frame.height,
+                        frame.generation,
+                        frame.pixels,
+                        frame.dirty_buffer,
+                    );
+                    if let Some(drms) = d.drm.as_mut() {
+                        drms.request_render();
+                    }
+                    if !latest_frame.finish_dispatch() {
+                        break;
+                    }
+                },
+                CalloopChannelEvent::Msg(
                     crate::cef::compositor_tx::CefToCompositor::SetOutputVrr { name, enabled },
                 ) => {
                     d.state.shell_note_shell_ipc_rx();
@@ -1492,6 +1517,8 @@ impl CompositorState {
             shell_view_px: None,
             shell_frame_is_dmabuf: false,
             shell_dmabuf: None,
+            shell_software_frame: None,
+            shell_software_generation: 0,
             shell_dmabuf_generation: 0,
             shell_dmabuf_overlay_id: Id::new(),
             shell_dmabuf_commit: CommitCounter::default(),
@@ -3796,6 +3823,31 @@ impl CompositorState {
             }
             Err(e) => {
                 tracing::warn!(target: "derp_hotplug_shell", ?e, "shell dma-buf frame rejected")
+            }
+        }
+    }
+
+    pub(crate) fn accept_shell_software_frame_from_cef(
+        &mut self,
+        width: u32,
+        height: u32,
+        generation: u32,
+        pixels: Vec<u8>,
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
+    ) {
+        self.shell_note_shell_ipc_rx();
+        if width == 0 || height == 0 || pixels.is_empty() {
+            return;
+        }
+        if self.shell_has_frame && generation <= self.shell_software_generation {
+            return;
+        }
+        match self.apply_shell_frame_software(width, height, pixels, dirty_buffer) {
+            Ok(()) => {
+                self.shell_software_generation = generation;
+            }
+            Err(e) => {
+                tracing::warn!(target: "derp_hotplug_shell", ?e, "shell software frame rejected")
             }
         }
     }
@@ -12567,6 +12619,7 @@ impl CompositorState {
         }
 
         self.shell_dmabuf = Some(dmabuf);
+        self.shell_software_frame = None;
         self.shell_frame_is_dmabuf = true;
         if handoff_shell_move_proxy || released_move_proxy {
             self.shell_send_interaction_state();
@@ -12647,12 +12700,134 @@ impl CompositorState {
         Ok(())
     }
 
+    pub fn apply_shell_frame_software(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+        dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
+    ) -> Result<(), &'static str> {
+        if width == 0 || height == 0 {
+            return Err("bad dimensions");
+        }
+        let need = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("software frame too large")?;
+        if pixels.len() < need {
+            return Err("software frame buffer too small");
+        }
+        let (pw, ph) = self.shell_window_physical_px;
+        if pw > 0 && ph > 0 && self.workspace_logical_bounds().is_some() {
+            let exp_w = u32::try_from(pw).unwrap_or(width).max(1);
+            let exp_h = u32::try_from(ph).unwrap_or(height).max(1);
+            const LO: u64 = 97;
+            const HI: u64 = 103;
+            let ew = exp_w as u64;
+            let eh = exp_h as u64;
+            let ww = width as u64;
+            let hh = height as u64;
+            let w_ok = ww * 100 >= ew * LO && ww * 100 <= ew * HI;
+            let h_ok = hh * 100 >= eh * LO && hh * 100 <= eh * HI;
+            if !w_ok || !h_ok {
+                self.shell_nudge_cef_repaint();
+                tracing::debug!(
+                    target: "derp_hotplug_shell",
+                    width,
+                    height,
+                    exp_w,
+                    exp_h,
+                    "apply_shell_frame_software reject mismatched size pending CEF resize paint"
+                );
+                return Err("software frame size mismatch shell_window_physical_px");
+            }
+        }
+        let force_env = std::env::var_os("DERP_SHELL_OSR_FULL_DAMAGE").is_some_and(|v| {
+            v.as_os_str() == std::ffi::OsStr::new("1")
+                || v.as_os_str()
+                    .eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
+        });
+        let resized = self.shell_view_px.is_some_and(|p| p != (width, height));
+        let dirty_supplied_len = dirty_buffer.as_ref().map(|v| v.len());
+        let dirty_list = dirty_buffer.filter(|v| !v.is_empty());
+        let bbox_full = dirty_list
+            .as_ref()
+            .map(|v| Self::shell_osr_dirty_bbox_covers_buffer(v, width, height))
+            .unwrap_or(true);
+        let pending_force_full = self.shell_dmabuf_next_force_full;
+        self.shell_dmabuf_next_force_full = false;
+        let mut force_full =
+            force_env || pending_force_full || resized || dirty_list.is_none() || bbox_full;
+        let buffer_rects: Vec<Rectangle<i32, Buffer>> = if let Some(ref dl) = dirty_list {
+            let mut rects = Vec::with_capacity(dl.len());
+            for &(x, y, w, h) in dl {
+                if w > 0 && h > 0 {
+                    rects.push(Rectangle::new(
+                        Point::<i32, Buffer>::from((x, y)),
+                        Size::<i32, Buffer>::from((w, h)),
+                    ));
+                }
+            }
+            if !force_full && rects.is_empty() {
+                force_full = true;
+            }
+            rects
+        } else {
+            Vec::new()
+        };
+        self.shell_dmabuf_dirty_force_full = force_full;
+        if force_full {
+            self.shell_dmabuf_dirty_buffer.clear();
+        } else {
+            self.shell_dmabuf_dirty_buffer = buffer_rects;
+        }
+        self.shell_dmabuf_commit.increment();
+        self.shell_dmabuf = None;
+        self.shell_software_frame = Some(pixels);
+        self.shell_frame_is_dmabuf = false;
+        self.shell_has_frame = true;
+        self.shell_view_px = Some((width, height));
+        self.shell_move_proxy_try_arm_capture();
+        self.shell_move_try_activate_deferred();
+        if let Ok(g) = self.shell_to_cef.lock() {
+            if let Some(link) = g.as_ref() {
+                link.sync_osr_physical_from_dmabuf(width as i32, height as i32);
+            }
+        }
+        self.shell_move_flush_pending_deltas();
+        if resized {
+            tracing::warn!(
+                target: "derp_hotplug_shell",
+                width,
+                height,
+                "apply_shell_frame_software OSR size changed shell_has_frame true"
+            );
+        }
+        tracing::debug!(
+            target: "derp_shell_osr_damage",
+            width,
+            height,
+            force_full,
+            force_env,
+            pending_force_full,
+            resized,
+            dirty_supplied = dirty_supplied_len,
+            bbox_full,
+            partial_rects = self.shell_dmabuf_dirty_buffer.len(),
+            commit = ?self.shell_dmabuf_commit,
+            "apply_shell_frame_software damage"
+        );
+        Ok(())
+    }
+
     pub fn clear_shell_frame(&mut self) {
         tracing::warn!(target: "derp_hotplug_shell", "clear_shell_frame");
         self.shell_has_frame = false;
         self.shell_view_px = None;
         self.shell_frame_is_dmabuf = false;
         self.shell_dmabuf = None;
+        self.shell_software_frame = None;
+        self.shell_software_generation = 0;
         self.shell_dmabuf_generation = 0;
         self.shell_dmabuf_overlay_id = Id::new();
         self.shell_dmabuf_commit = CommitCounter::default();

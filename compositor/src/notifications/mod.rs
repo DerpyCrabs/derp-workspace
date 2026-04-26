@@ -646,8 +646,7 @@ fn emit_notification_closed(connection: Option<&Connection>, id: u32, reason: u3
     let Some(connection) = connection else {
         return;
     };
-    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications")
-    else {
+    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications") else {
         return;
     };
     let _ = zbus::block_on(NotificationsDbus::notification_closed(&ctxt, id, reason));
@@ -657,8 +656,7 @@ fn emit_action_invoked(connection: Option<&Connection>, id: u32, action_key: &st
     let Some(connection) = connection else {
         return;
     };
-    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications")
-    else {
+    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications") else {
         return;
     };
     let _ = zbus::block_on(NotificationsDbus::action_invoked(&ctxt, id, action_key));

@@ -15,7 +15,7 @@ use smithay::backend::renderer::{
     },
     gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture},
     utils::{CommitCounter, DamageSet, OpaqueRegions},
-    ContextId, Frame, ImportDma, Renderer,
+    ContextId, Frame, ImportDma, ImportMem, Renderer,
 };
 use smithay::desktop::space::SpaceRenderElements;
 use smithay::utils::user_data::UserDataMap;
@@ -777,6 +777,37 @@ pub fn shell_dmabuf_overlay_element(
     damage_phys: Option<Vec<Rectangle<i32, Physical>>>,
 ) -> Result<ShellDmaElement, GlesError> {
     let texture = renderer.import_dmabuf(dmabuf, None)?;
+    let context_id = renderer.context_id();
+    Ok(ShellDmaElement {
+        id: overlay_id,
+        context_id,
+        location: shell_loc_phys,
+        dst_logical_size: shell_size_logical,
+        texture,
+        buffer_src,
+        commit,
+        damage_phys,
+        alpha: 1.0,
+    })
+}
+
+pub fn shell_memory_overlay_element(
+    renderer: &mut GlesRenderer,
+    pixels: &[u8],
+    overlay_id: Id,
+    shell_loc_phys: Point<f64, Physical>,
+    shell_size_logical: Size<i32, Logical>,
+    buffer_src: Rectangle<f64, Buffer>,
+    buffer_size: Size<i32, Buffer>,
+    commit: CommitCounter,
+    damage_phys: Option<Vec<Rectangle<i32, Physical>>>,
+) -> Result<ShellDmaElement, GlesError> {
+    let texture = renderer.import_memory(
+        pixels,
+        crate::render::shell_overlay::SHELL_OSR_MEMORY_FOURCC,
+        buffer_size,
+        false,
+    )?;
     let context_id = renderer.context_id();
     Ok(ShellDmaElement {
         id: overlay_id,

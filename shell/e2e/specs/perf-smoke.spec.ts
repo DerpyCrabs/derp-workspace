@@ -278,6 +278,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       moveDelta.begin_frame.cef_software_paints === 0,
       `CEF shell should stay on accelerated OSR during move, got software paints=${moveDelta.begin_frame.cef_software_paints}`,
     )
+    assert(
+      moveDelta.begin_frame.cef_accelerated_paints >= 1,
+      `CEF shell should produce accelerated OSR paints during move, got ${moveDelta.begin_frame.cef_accelerated_paints}`,
+    )
     assert(moveDelta.latency.samples >= 1, `window move should expose latency samples, got ${moveDelta.latency.samples}`)
     assert(
       moveDelta.latency.schedule_to_render_us > 0,

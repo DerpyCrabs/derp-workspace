@@ -289,6 +289,53 @@ fn build_main_shell_dmabuf_element(
     }
 }
 
+fn build_main_shell_memory_element(
+    state: &CompositorState,
+    renderer: &mut GlesRenderer,
+    output_geo: Rectangle<i32, Logical>,
+    output: &Output,
+    buf_w: u32,
+    buf_h: u32,
+) -> Result<Option<ShellDmaElement>, GlesError> {
+    let Some(ref pixels) = state.shell_software_frame else {
+        return Ok(None);
+    };
+    let Some(buffer_src) = shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h) else {
+        return Ok(None);
+    };
+
+    let shell_loc_phys = Point::<f64, Physical>::from((0.0_f64, 0.0_f64));
+    let shell_size_logical = output_geo.size;
+    let output_scale = Scale::from(output.current_scale().fractional_scale());
+
+    let damage_phys = if state.shell_dmabuf_dirty_force_full {
+        None
+    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
+        None
+    } else {
+        let mapped = shell_dmabuf_dirty_buffer_to_physical(
+            buffer_src,
+            Rectangle::new(output_geo.loc, output_geo.size),
+            output_scale,
+            &state.shell_dmabuf_dirty_buffer,
+        );
+        Some(mapped)
+    };
+
+    crate::desktop::desktop_stack::shell_memory_overlay_element(
+        renderer,
+        pixels,
+        state.shell_dmabuf_overlay_id.clone(),
+        shell_loc_phys,
+        shell_size_logical,
+        buffer_src,
+        Size::<i32, BufferCoord>::from((buf_w as i32, buf_h as i32)),
+        state.shell_dmabuf_commit,
+        damage_phys,
+    )
+    .map(Some)
+}
+
 fn shell_move_proxy_target_texture_global_rect(
     source_global_rect: Rectangle<i32, Logical>,
     texture_global_rect: Rectangle<i32, Logical>,
@@ -724,7 +771,7 @@ pub fn compositor_shell_render_elements(
     capture_shell_move_proxy_texture(state, renderer)?;
     render.move_proxy = build_shell_move_proxy_elements(state, renderer, output);
 
-    if state.shell_has_frame && state.shell_frame_is_dmabuf {
+    if state.shell_has_frame {
         if let (Some(output_geo), Some((buf_w, buf_h))) = (output_geo, state.shell_view_px) {
             let key = ShellMainCacheKey {
                 output_geo,
@@ -735,6 +782,11 @@ pub fn compositor_shell_render_elements(
             };
             let (element, force_full_damage) =
                 cache_shell_element(&mut cache.main, key, state.shell_dmabuf_commit, || {
+                    if !state.shell_frame_is_dmabuf {
+                        return build_main_shell_memory_element(
+                            state, renderer, output_geo, output, buf_w, buf_h,
+                        );
+                    }
                     build_main_shell_dmabuf_element(
                         state, renderer, output_geo, output, buf_w, buf_h,
                     )

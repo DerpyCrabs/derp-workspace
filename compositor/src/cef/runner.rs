@@ -37,6 +37,23 @@ fn cef_color_to_drm_format(ct: ColorType) -> u32 {
 
 #[cfg(unix)]
 static FIRST_ACCELERATED_PAINT_LOG: std::sync::Once = std::sync::Once::new();
+static FIRST_SOFTWARE_PAINT_LOG: std::sync::Once = std::sync::Once::new();
+
+fn env_flag(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| {
+        value.as_os_str() == std::ffi::OsStr::new("1")
+            || value
+                .as_os_str()
+                .eq_ignore_ascii_case(std::ffi::OsStr::new("true"))
+            || value
+                .as_os_str()
+                .eq_ignore_ascii_case(std::ffi::OsStr::new("yes"))
+    })
+}
+
+fn cef_software_rendering_enabled() -> bool {
+    env_flag("DERP_CEF_SOFTWARE_RENDERING") || env_flag("DERP_SOFTWARE_RENDERING")
+}
 
 struct ExternalMessagePump {
     next_work_at: Mutex<Option<Instant>>,
@@ -220,12 +237,18 @@ wrap_app! {
             command_line: Option<&mut CommandLine>,
         ) {
             if let Some(cmd) = command_line {
+                let software_rendering = cef_software_rendering_enabled();
                 cmd.append_switch(Some(&CefString::from("no-sandbox")));
                 cmd.append_switch(Some(&CefString::from("allow-file-access-from-files")));
-                cmd.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
-                cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
-                cmd.append_switch(Some(&CefString::from("enable-native-gpu-memory-buffers")));
-                cmd.append_switch(Some(&CefString::from("disable-gpu-sandbox")));
+                if software_rendering {
+                    cmd.append_switch(Some(&CefString::from("disable-gpu")));
+                    cmd.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+                } else {
+                    cmd.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
+                    cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
+                    cmd.append_switch(Some(&CefString::from("enable-native-gpu-memory-buffers")));
+                    cmd.append_switch(Some(&CefString::from("disable-gpu-sandbox")));
+                }
                 cmd.append_switch(Some(&CefString::from(
                     "disable-gpu-memory-buffer-video-frames",
                 )));
@@ -257,10 +280,12 @@ wrap_app! {
                     cmd.append_switch(Some(&CefString::from("disable-component-update")));
                     cmd.append_switch(Some(&CefString::from("enable-media-stream")));
                     cmd.append_switch(Some(&CefString::from("enable-webrtc-pipewire-capturer")));
-                    cmd.append_switch_with_value(
-                        Some(&CefString::from("use-angle")),
-                        Some(&CefString::from("gl-egl")),
-                    );
+                    if !software_rendering {
+                        cmd.append_switch_with_value(
+                            Some(&CefString::from("use-angle")),
+                            Some(&CefString::from("gl-egl")),
+                        );
+                    }
                     cmd.append_switch_with_value(
                         Some(&CefString::from("ozone-platform")),
                         Some(&CefString::from("wayland")),
@@ -274,12 +299,16 @@ wrap_app! {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    cmd.append_switch_with_value(
-                        Some(&CefString::from("use-angle")),
-                        Some(&CefString::from(crate::cef::angle_backend_for_osr())),
-                    );
+                    if !software_rendering {
+                        cmd.append_switch_with_value(
+                            Some(&CefString::from("use-angle")),
+                            Some(&CefString::from(crate::cef::angle_backend_for_osr())),
+                        );
+                    }
                 }
-                cmd.append_switch(Some(&CefString::from("in-process-gpu")));
+                if !software_rendering {
+                    cmd.append_switch(Some(&CefString::from("in-process-gpu")));
+                }
             }
         }
 
@@ -552,12 +581,30 @@ wrap_render_handler! {
             if buffer.is_null() {
                 return;
             }
-            tracing::warn!(
-                target: "derp_shell_osr",
-                width,
-                height,
-                "cef: software OnPaint before accelerated dma-buf frame"
-            );
+            let len = (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|n| n.checked_mul(4));
+            let Some(len) = len else {
+                return;
+            };
+            let dirty_buffer = cef_dirty_rects_for_dmabuf(_dirty_rects, width as u32, height as u32);
+            let pixels = unsafe { std::slice::from_raw_parts(buffer, len) };
+            if let Err(e) = self.frame_sink.lock().expect("frame_sink").push_software_frame(
+                width as u32,
+                height as u32,
+                pixels,
+                dirty_buffer,
+            ) {
+                tracing::warn!(target: "derp_shell_osr", "cef: software frame: {e}");
+            }
+            FIRST_SOFTWARE_PAINT_LOG.call_once(|| {
+                tracing::warn!(
+                    target: "derp_shell_osr",
+                    width,
+                    height,
+                    "cef: software OnPaint"
+                );
+            });
             let notify = {
                 let Ok(mut g) = self.view_state.lock() else {
                     return;
@@ -716,6 +763,10 @@ fn run_cef(
     shutdown_from_main: Arc<AtomicBool>,
 ) {
     tracing::debug!(target: "derp_shell_osr", "cef: dma-buf OSR (in-process)");
+    let software_rendering = cef_software_rendering_enabled();
+    if software_rendering {
+        tracing::warn!(target: "derp_shell_osr", "cef: software rendering requested");
+    }
     #[cfg(target_os = "linux")]
     {
         tracing::debug!(
@@ -787,9 +838,11 @@ fn run_cef(
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let latest_dmabuf = Arc::new(crate::cef::compositor_tx::LatestShellDmabuf::new());
+    let latest_software = Arc::new(crate::cef::compositor_tx::LatestShellSoftwareFrame::new());
     let frame_sink = Arc::new(Mutex::new(DirectDmabufSink::new(
         cef_tx.clone(),
         latest_dmabuf,
+        latest_software,
     )));
     let link = Arc::new(ShellToCefLink::new(
         browser_holder.clone(),
@@ -882,7 +935,7 @@ fn run_cef(
         .unwrap_or((OSR_BOOTSTRAP_LOGICAL_WIDTH, OSR_BOOTSTRAP_LOGICAL_HEIGHT));
     window_info.bounds.width = init_w;
     window_info.bounds.height = init_h;
-    window_info.shared_texture_enabled = 1;
+    window_info.shared_texture_enabled = if software_rendering { 0 } else { 1 };
     let mut window_info = window_info.set_as_windowless(0);
     window_info.external_begin_frame_enabled = 1;
     tracing::debug!(

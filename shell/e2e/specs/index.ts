@@ -11,6 +11,7 @@ import restartPersistenceGroup from './restart-persistence.spec.ts'
 import screenCaptureGroup from './screen-capture.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
 import shellChromeSessionGroup from './shell-chrome-session.spec.ts'
+import softwareRenderingGroup from './software-rendering.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
 import scratchpadsGroup from './scratchpads.spec.ts'
 import tabGroupsGroup from './tab-groups.spec.ts'
@@ -49,4 +50,4 @@ export const defaultGroups = [
 
 export const sessionRestoreGroups = [restartPersistenceGroup, restartInputGroup, shellChromeSessionGroup]
 
-export const allGroups = [...defaultGroups, ...sessionRestoreGroups]
+export const allGroups = [...defaultGroups, softwareRenderingGroup, ...sessionRestoreGroups]

@@ -30,6 +30,69 @@ done
 remote_args_str="${remote_args[*]:-}"
 
 DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
+DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-0}"
+
+e2e_remote_restore_session_env() {
+  [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]] || return 0
+  ssh_base bash -s <<EOF >/dev/null 2>&1 || true
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+env_file="scripts/derp-session.local.env"
+backup_file="scripts/.derp-session.local.env.e2e-backup"
+if [[ -f "\$backup_file" ]]; then
+  {
+    printf 'unset DERP_CEF_SOFTWARE_RENDERING\\n'
+    printf 'unset DERP_SOFTWARE_RENDERING\\n'
+    cat "\$backup_file"
+  } >"\$env_file"
+else
+  {
+    printf 'unset DERP_CEF_SOFTWARE_RENDERING\\n'
+    printf 'unset DERP_SOFTWARE_RENDERING\\n'
+  } >"\$env_file"
+fi
+mapfile -t pids < <(pgrep -u "\$(id -un)" -x compositor || true)
+roots=()
+for pid in "\${pids[@]}"; do
+  ppid=\$(ps -o ppid= -p "\$pid" | tr -d ' ')
+  if ! printf '%s\n' "\${pids[@]}" | grep -qx "\$ppid"; then
+    roots+=("\$pid")
+  fi
+done
+for pid in "\${roots[@]}"; do
+  kill -USR2 "\$pid" || true
+done
+deadline=\$((SECONDS + 20))
+for old in "\${roots[@]}"; do
+  while kill -0 "\$old" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.1
+  done
+done
+while (( SECONDS < deadline )); do
+  mapfile -t next_pids < <(pgrep -u "\$(id -un)" -x compositor || true)
+  next_roots=()
+  for pid in "\${next_pids[@]}"; do
+    ppid=\$(ps -o ppid= -p "\$pid" | tr -d ' ')
+    if ! printf '%s\n' "\${next_pids[@]}" | grep -qx "\$ppid"; then
+      next_roots+=("\$pid")
+    fi
+  done
+  if [[ \${#next_roots[@]} -gt 0 ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -f "\$backup_file" ]]; then
+  mv "\$backup_file" "\$env_file"
+else
+  rm -f "\$env_file"
+fi
+EOF
+}
+
+if [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]]; then
+  trap e2e_remote_restore_session_env EXIT
+fi
 
 e2e_remote_list_sync_paths() {
   (
@@ -133,6 +196,27 @@ if [[ -f shell/package.json ]]; then
   bash ../scripts/ensure-shell-node-modules.sh .
   exec npm run build
 fi
+EOF
+fi
+
+if [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]]; then
+  echo "=== enable remote CEF software rendering for e2e ==="
+  ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+mkdir -p scripts
+env_file="scripts/derp-session.local.env"
+backup_file="scripts/.derp-session.local.env.e2e-backup"
+rm -f "\$backup_file"
+if [[ -f "\$env_file" ]]; then
+  cp -a "\$env_file" "\$backup_file"
+fi
+{
+  [[ -f "\$env_file" ]] && cat "\$env_file"
+  printf '\\nexport DERP_CEF_SOFTWARE_RENDERING=1\\n'
+  printf 'export DERP_SOFTWARE_RENDERING=1\\n'
+} >"\$env_file.tmp"
+mv "\$env_file.tmp" "\$env_file"
 EOF
 fi
 

@@ -49,9 +49,57 @@ impl LatestShellDmabuf {
     }
 }
 
+pub struct PendingShellSoftwareFrame {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub generation: u32,
+    pub dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
+}
+
+pub struct LatestShellSoftwareFrame {
+    frame: Mutex<Option<PendingShellSoftwareFrame>>,
+    notified: AtomicBool,
+}
+
+impl LatestShellSoftwareFrame {
+    pub fn new() -> Self {
+        Self {
+            frame: Mutex::new(None),
+            notified: AtomicBool::new(false),
+        }
+    }
+
+    pub fn replace(&self, frame: PendingShellSoftwareFrame) -> bool {
+        *self.frame.lock().expect("latest_shell_software_frame") = Some(frame);
+        !self.notified.swap(true, Ordering::AcqRel)
+    }
+
+    pub fn take(&self) -> Option<PendingShellSoftwareFrame> {
+        self.frame
+            .lock()
+            .expect("latest_shell_software_frame")
+            .take()
+    }
+
+    pub fn finish_dispatch(&self) -> bool {
+        self.notified.store(false, Ordering::Release);
+        if self
+            .frame
+            .lock()
+            .expect("latest_shell_software_frame")
+            .is_none()
+        {
+            return false;
+        }
+        !self.notified.swap(true, Ordering::AcqRel)
+    }
+}
+
 pub enum CefToCompositor {
     ShellRxNote,
     DmabufReady(Arc<LatestShellDmabuf>),
+    SoftwareFrameReady(Arc<LatestShellSoftwareFrame>),
     SetOutputVrr { name: String, enabled: bool },
     Run(Box<dyn FnOnce(&mut crate::state::CompositorState) + Send>),
 }
