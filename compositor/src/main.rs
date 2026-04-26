@@ -123,6 +123,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         drm: None,
     };
 
+    match compositor::control::start_control_server(data.state.cef_to_compositor_tx.clone()) {
+        Ok(path) => {
+            tracing::warn!(target: "derp_control", path = %path.display(), "control socket listening")
+        }
+        Err(e) => tracing::warn!(target: "derp_control", %e, "control socket disabled"),
+    }
+
     let vt_session = session.clone();
     drm::init_drm(&mut event_loop, &mut data, session, notifier)?;
     data.state.set_vt_session(Some(vt_session));
@@ -180,7 +187,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dispatch_result =
             catch_unwind(AssertUnwindSafe(|| event_loop.dispatch(None, &mut data)));
         match dispatch_result {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                data.state.control_publish_if_changed();
+            }
             Ok(Err(e)) => {
                 tracing::error!(?e, "event_loop dispatch error");
                 break;

@@ -116,6 +116,7 @@ if [[ "$SKIP_SYNC" -eq 0 ]]; then
 set -euo pipefail
 cd $(printf '%q' "$REMOTE_REPO")
 sudo install -Dm755 target/release/compositor /usr/local/bin/compositor
+sudo install -Dm755 target/release/derpctl /usr/local/bin/derpctl
 sudo install -Dm755 target/release/derp-test-client /usr/local/bin/derp-test-client
 EOF
 fi

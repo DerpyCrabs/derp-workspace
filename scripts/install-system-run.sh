@@ -72,7 +72,7 @@ ensure_runtime_packages() {
 ensure_runtime_packages
 
 if [[ "$SHELL_ONLY" -eq 0 ]]; then
-  echo "=== cargo build --release (compositor + derp-test-client) ==="
+  echo "=== cargo build --release (compositor + derpctl + derp-test-client) ==="
   cargo build --release -p compositor -p derp-test-client
 else
   echo "=== (--shell-only) skip cargo ==="
@@ -147,6 +147,7 @@ rendered_xdpw_config="$(mktemp)"
 sed "s|@DERP_SCREENCAST_PICKER@|$SCREENCAST_PICKER_DST|g" "$XDPW_CONFIG_TEMPLATE_SRC" >"$rendered_xdpw_config"
 sudo install -d "$BIN_DIR" "$SESSION_DIR" "$PORTAL_CONFIG_DIR" "$XDPW_CONFIG_DIR"
 sudo install -Dm755 "$REPO_ROOT/target/release/compositor" "$BIN_DIR/compositor"
+sudo install -Dm755 "$REPO_ROOT/target/release/derpctl" "$BIN_DIR/derpctl"
 sudo install -Dm644 "$DESKTOP_SRC" "$DESKTOP_DST"
 sudo install -Dm644 "$PORTAL_CONFIG_SRC" "$PORTAL_CONFIG_DST"
 sudo install -Dm644 "$rendered_xdpw_config" "$XDPW_CONFIG_DST"

@@ -686,6 +686,10 @@ pub struct CompositorState {
     pub(crate) shell_output_topology_revision: u64,
     pub(crate) shell_window_domain_revision: u64,
     pub(crate) shell_workspace_revision: u64,
+    pub(crate) control_windows_revision: u64,
+    pub(crate) control_workspace_revision: u64,
+    pub(crate) control_settings_revision: u64,
+    pub(crate) control_event_hub: crate::control::ControlEventHub,
     pub(crate) shell_hosted_app_state_revision: u64,
     pub(crate) shell_interaction_revision: u64,
     pub(crate) shell_interaction_last_sent_at: Option<Instant>,
@@ -1478,6 +1482,10 @@ impl CompositorState {
             shell_output_topology_revision: 0,
             shell_window_domain_revision: 0,
             shell_workspace_revision: 0,
+            control_windows_revision: 0,
+            control_workspace_revision: 0,
+            control_settings_revision: 0,
+            control_event_hub: crate::control::ControlEventHub::default(),
             shell_hosted_app_state_revision: 0,
             shell_interaction_revision: 0,
             shell_interaction_last_sent_at: None,
@@ -6939,7 +6947,7 @@ impl CompositorState {
         })
     }
 
-    fn shell_output_identity(output: &Output) -> String {
+    pub(crate) fn shell_output_identity(output: &Output) -> String {
         let props = output.physical_properties();
         let mut parts = Vec::new();
         for part in [
@@ -6963,7 +6971,7 @@ impl CompositorState {
         identity
     }
 
-    fn workspace_output_identity_for_name(&self, output_name: &str) -> Option<String> {
+    pub(crate) fn workspace_output_identity_for_name(&self, output_name: &str) -> Option<String> {
         self.space
             .outputs()
             .find(|output| output.name() == output_name)
@@ -9695,7 +9703,7 @@ impl CompositorState {
         self.shell_send_to_cef(msg);
     }
 
-    fn workspace_state_for_shell(&self) -> WorkspaceState {
+    pub(crate) fn workspace_state_for_shell(&self) -> WorkspaceState {
         let mut state = self.workspace_state.clone();
         for monitor in &mut state.monitor_tiles {
             if monitor.output_id.is_empty() {

@@ -10,6 +10,7 @@ pub use api::window_ops;
 pub use api::window_registry;
 
 pub mod cef;
+pub mod control;
 mod controls;
 mod desktop;
 mod e2e;

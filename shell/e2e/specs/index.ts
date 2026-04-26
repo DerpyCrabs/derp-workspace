@@ -1,4 +1,5 @@
 import artifactsGroup from './artifacts.spec.ts'
+import externalControlGroup from './external-control.spec.ts'
 import fileBrowserGroup from './file-browser.spec.ts'
 import launcherMultimonitorGroup from './launcher-multimonitor.spec.ts'
 import nativeWindowsGroup from './native-windows.spec.ts'
@@ -35,6 +36,7 @@ export const defaultGroups = [
   textEditorGroup,
   taskbarMinimizeGroup,
   taskbarCloseGroup,
+  externalControlGroup,
   artifactsGroup,
   scratchpadsGroup,
 ]
