@@ -90,6 +90,16 @@ function shellTitlebarDragPoint(shell: ShellSnapshot, windowId: number) {
   }
 }
 
+type BatteryHttpState = {
+  backend: string
+  is_present: boolean
+  percentage: number
+  state: string
+  time_to_empty_seconds: number
+  time_to_full_seconds: number
+  icon_name: string
+}
+
 async function waitForShellWindowAligned(base: string, windowId: number, label: string) {
   return waitFor(
     label,
@@ -2249,6 +2259,50 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     await writeJsonArtifact('taskbar-row-tooltip-floating.json', tooltipOverlay)
     await cleanupNativeWindows(base, new Set([redId, green.window.window_id]))
+  })
+
+  test('taskbar battery indicator follows system battery presence and tooltip', async ({ base }) => {
+    const battery = await getJson<BatteryHttpState>(base, '/battery_state')
+    if (!battery.is_present) {
+      const html = await getShellHtml(base, '[data-shell-battery-indicator]')
+      assert(html.length === 0, 'battery indicator should stay hidden when no battery is present')
+      await writeJsonArtifact('taskbar-battery-state.json', battery)
+      return
+    }
+    const percent = `${Math.round(battery.percentage)}%`
+    const html = await waitFor(
+      'taskbar battery indicator mounts',
+      async () => {
+        const current = await getShellHtml(base, '[data-shell-battery-indicator]')
+        return current.length > 0 ? current : null
+      },
+      3000,
+      40,
+    )
+    assert(html.length > 0, 'battery indicator should render when battery is present')
+    assert(!html.includes(`>${percent}<`), 'battery indicator should keep percentage out of the panel text')
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(shell.controls.taskbar_battery_indicator, 'battery indicator rect should be projected for hover tooltip')
+    await movePoint(base, rectCenter(shell.controls.taskbar_battery_indicator!).x, rectCenter(shell.controls.taskbar_battery_indicator!).y)
+    const tooltipHtml = await waitFor(
+      'taskbar battery tooltip mounts',
+      async () => {
+        const current = await getShellHtml(base, '[data-shell-taskbar-control-tooltip]')
+        return current.includes(percent) ? current : null
+      },
+      3000,
+      40,
+    )
+    assert(tooltipHtml.includes(percent), `battery tooltip should show ${percent}`)
+    if (battery.state === 'charging' && battery.time_to_full_seconds > 0) {
+      assert(tooltipHtml.includes('until full'), 'battery tooltip should include charge estimate')
+    }
+    if (battery.state === 'discharging' && battery.time_to_empty_seconds > 0) {
+      assert(tooltipHtml.includes('remaining'), 'battery tooltip should include remaining time estimate')
+    }
+    await writeJsonArtifact('taskbar-battery-state.json', battery)
+    await writeTextArtifact('taskbar-battery-indicator.html', html)
+    await writeTextArtifact('taskbar-battery-tooltip.html', tooltipHtml)
   })
 
   test('taskbar exclusion covers programs gutter and right edge', async ({ base, state }) => {

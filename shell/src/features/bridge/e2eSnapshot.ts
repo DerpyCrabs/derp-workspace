@@ -4,6 +4,7 @@ import { canvasOriginXY, canvasRectToClientCss, type CanvasOrigin } from '@/lib/
 import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { SessionSnapshot } from './sessionSnapshot'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
+import type { ShellBatteryState } from '@/apps/settings/batteryState'
 
 export type E2eRectSnapshot = {
   x: number
@@ -111,6 +112,7 @@ export type BuildE2eShellSnapshotArgs = {
   taskbarGroupRows: E2eSnapshotTaskbarRow[]
   workspaceGroups: E2eSnapshotWorkspaceGroup[]
   focusedWindowId: number | null
+  batteryState: ShellBatteryState | null
   keyboardLayoutLabel: string | null
   screenshotMode: unknown
   crosshairCursor: boolean
@@ -770,6 +772,16 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     viewport: args.viewport,
     canvas_origin: args.origin ? { x: args.origin.x, y: args.origin.y } : null,
     focused_window_id: args.focusedWindowId,
+    shell_battery: args.batteryState
+      ? {
+          is_present: args.batteryState.is_present,
+          percentage: args.batteryState.percentage,
+          state: args.batteryState.state,
+          time_to_empty_seconds: args.batteryState.time_to_empty_seconds,
+          time_to_full_seconds: args.batteryState.time_to_full_seconds,
+        }
+      : null,
+    battery_indicator_dom: !!cache.query('[data-shell-battery-indicator]'),
     shell_keyboard_layout: args.keyboardLayoutLabel,
     screenshot_mode: args.screenshotMode,
     crosshair_cursor: args.crosshairCursor,
@@ -875,6 +887,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       taskbar_settings_toggle: queryRect(cache, '[data-shell-settings-toggle]', args.origin),
       taskbar_debug_toggle: queryRect(cache, '[data-shell-debug-toggle]', args.origin),
       taskbar_volume_toggle: queryRect(cache, '[data-shell-volume-toggle]', args.origin),
+      taskbar_battery_indicator: queryRect(cache, '[data-shell-battery-indicator]', args.origin),
       taskbar_power_toggle: queryRect(cache, '[data-shell-power-toggle]', args.origin),
       volume_menu_panel: volumeMenuRect('[data-shell-volume-menu-panel]'),
       volume_output_select: volumeMenuRect('[data-shell-volume-output-select] button'),

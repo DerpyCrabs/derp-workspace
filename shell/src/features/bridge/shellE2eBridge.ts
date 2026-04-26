@@ -5,6 +5,7 @@ import type { WorkspaceGroupModel } from '@/features/workspace/workspaceSelector
 import { buildE2eShellHtml, buildE2eShellSnapshot, type E2eRectSnapshot } from './e2eSnapshot'
 import type { SessionSnapshot } from './sessionSnapshot'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
+import type { ShellBatteryState } from '@/apps/settings/batteryState'
 
 type CanvasSize = {
   w: number
@@ -84,6 +85,7 @@ type RegisterShellE2eBridgeOptions = {
   getWorkspaceGroups: () => WorkspaceGroupModel[]
   getTaskbarRowsByMonitor: () => ReadonlyMap<string, readonly TaskbarRowLike[]>
   getFocusedWindowId: () => number | null
+  getBatteryState: () => ShellBatteryState | null
   getKeyboardLayoutLabel: () => string | null
   getScreenshotMode: () => unknown
   getCrosshairCursor: () => boolean
@@ -151,6 +153,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
           taskbarGroupRows: flattenTaskbarRowsByMonitor(options.getTaskbarRowsByMonitor()),
           workspaceGroups,
           focusedWindowId: options.getFocusedWindowId(),
+          batteryState: options.getBatteryState(),
           keyboardLayoutLabel: options.getKeyboardLayoutLabel(),
           screenshotMode: options.getScreenshotMode(),
           crosshairCursor: options.getCrosshairCursor(),

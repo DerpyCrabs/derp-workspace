@@ -479,6 +479,14 @@ export interface ShellSnapshot {
   snap_hover_span?: AssistSpanSnapshot | null
   window_stack_order?: number[]
   focused_window_id?: number | null
+  shell_battery?: {
+    is_present: boolean
+    percentage: number
+    state: string
+    time_to_empty_seconds: number
+    time_to_full_seconds: number
+  } | null
+  battery_indicator_dom?: boolean
   file_browser?: FileBrowserSnapshot | null
   file_browser_windows?: FileBrowserWindowSnapshot[]
   image_viewer_windows?: ImageViewerWindowSnapshot[]

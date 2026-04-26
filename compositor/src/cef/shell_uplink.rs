@@ -90,6 +90,50 @@ fn dirty_snapshot_read_result_value(status: &str, bytes: Option<&[u8]>) -> Optio
     Some(object)
 }
 
+fn set_global_optional_string(
+    global: &mut V8Value,
+    attrs: sys::cef_v8_propertyattribute_t,
+    key: &str,
+    value: Option<&str>,
+) {
+    let name = CefString::from(key);
+    let mut js_value = match value {
+        Some(text) => {
+            let text = CefString::from(text);
+            v8_value_create_string(Some(&text))
+        }
+        None => v8_value_create_null(),
+    };
+    let _ = global.set_value_bykey(Some(&name), js_value.as_mut(), attrs.into());
+}
+
+fn set_global_u32(global: &mut V8Value, attrs: sys::cef_v8_propertyattribute_t, key: &str, value: u32) {
+    let name = CefString::from(key);
+    let mut js_value = v8_value_create_double(value as f64);
+    let _ = global.set_value_bykey(Some(&name), js_value.as_mut(), attrs.into());
+}
+
+fn shell_http_base_from_runtime() -> Option<String> {
+    let path = crate::cef::runtime_dir().join("derp-shell-http-url");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| value.starts_with("http://127.0.0.1:"))
+}
+
+fn set_shell_bootstrap_globals(global: &mut V8Value, attrs: sys::cef_v8_propertyattribute_t) {
+    let http_base = shell_http_base_from_runtime();
+    set_global_optional_string(global, attrs, "__DERP_SHELL_HTTP", http_base.as_deref());
+    let spawn_url = http_base.as_ref().map(|base| format!("{base}/spawn"));
+    set_global_optional_string(global, attrs, "__DERP_SPAWN_URL", spawn_url.as_deref());
+    set_global_u32(
+        global,
+        attrs,
+        "__DERP_SHELL_SHARED_STATE_ABI",
+        crate::cef::shared_state::SHELL_SHARED_STATE_ABI_VERSION,
+    );
+}
+
 fn call_global_function(frame: &Frame, name: &str, arguments: &[Option<V8Value>]) -> bool {
     let Some(mut context) = frame.v8_context() else {
         return false;
@@ -1577,7 +1621,7 @@ wrap_render_process_handler! {
             let Some(context) = context else {
                 return;
             };
-            let Some(global) = context.global() else {
+            let Some(mut global) = context.global() else {
                 return;
             };
             let is_main = frame.is_main();
@@ -1611,6 +1655,7 @@ wrap_render_process_handler! {
                 Some(&mut snapshot_read_dirty_if_changed_handler),
             );
             let attrs = sys::cef_v8_propertyattribute_t(0);
+            set_shell_bootstrap_globals(&mut global, attrs);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
             let _ = global.set_value_bykey(
                 Some(&shared_state_write_name),

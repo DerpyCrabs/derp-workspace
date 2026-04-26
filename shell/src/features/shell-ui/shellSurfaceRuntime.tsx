@@ -1,4 +1,5 @@
 import type { Accessor } from 'solid-js'
+import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
 import type { TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
@@ -16,6 +17,7 @@ type ShellSurfaceRuntimeOptions = {
   taskbarHeight: number
   screenTaskbarHiddenForFullscreen: (screen: LayoutScreen) => boolean
   isPrimaryTaskbarScreen: (screen: LayoutScreen) => boolean
+  batteryState: Accessor<ShellBatteryState | null>
   trayVolumeState: Accessor<{
     muted: boolean
     volumePercent: number | null
@@ -89,6 +91,7 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         taskbarHeight={options.taskbarHeight}
         screenTaskbarHiddenForFullscreen={options.screenTaskbarHiddenForFullscreen}
         isPrimaryTaskbarScreen={options.isPrimaryTaskbarScreen}
+        batteryState={options.batteryState}
         volumeMuted={() => options.trayVolumeState().muted}
         volumePercent={() => options.trayVolumeState().volumePercent}
         taskbarRowsForScreen={options.taskbarRowsForScreen}

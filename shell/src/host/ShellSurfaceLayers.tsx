@@ -1,4 +1,5 @@
 import { createMemo, For, Show, type Accessor } from 'solid-js'
+import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { canvasRectToClientCss } from '@/lib/shellCoords'
 import { assistShapeToDims } from '@/features/tiling/assistGrid'
 import { listCustomLayoutZones } from '@/features/tiling/customLayouts'
@@ -17,6 +18,7 @@ type ShellSurfaceLayersProps = {
   taskbarHeight: number
   screenTaskbarHiddenForFullscreen: (screen: LayoutScreen) => boolean
   isPrimaryTaskbarScreen: (screen: LayoutScreen) => boolean
+  batteryState: Accessor<ShellBatteryState | null>
   volumeMuted: Accessor<boolean>
   volumePercent: Accessor<number | null>
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
@@ -138,6 +140,9 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                 <Taskbar
                   monitorName={screen.name}
                   isPrimary={props.isPrimaryTaskbarScreen(screen)}
+                  batteryState={
+                    props.isPrimaryTaskbarScreen(screen) ? props.batteryState() : null
+                  }
                   trayReservedPx={
                     props.isPrimaryTaskbarScreen(screen) ? props.trayReservedPx() : 0
                   }

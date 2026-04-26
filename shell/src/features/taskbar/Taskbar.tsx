@@ -21,6 +21,7 @@ import {
 import { VolumeContextMenu } from '@/host/VolumeContextMenu'
 import { taskbarRowTooltip, taskbarWindowLabel } from '@/features/taskbar/taskbarRowTooltip'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
+import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { TaskbarWindowIcon } from './taskbarIcons'
 
 export type TaskbarWindowRow = {
@@ -46,6 +47,7 @@ export type TaskbarSniItem = {
 export type TaskbarProps = {
   monitorName: string
   isPrimary: boolean
+  batteryState: ShellBatteryState | null
   trayReservedPx: number
   sniTrayItems: TaskbarSniItem[]
   trayIconSlotPx: number
@@ -75,10 +77,50 @@ const clockDateFormatter = new Intl.DateTimeFormat([], {
 })
 
 type TaskbarRowHoverTip = { groupId: string; windowId: number; text: string; left: number; top: number }
+type TaskbarControlHoverTip = { id: string; text: string; left: number; top: number }
 
 function keyboardIndicator(label: string) {
   const compact = label.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
   return compact.slice(0, 3) || label.trim().toUpperCase().slice(0, 3)
+}
+
+function batteryStateLabel(state: string) {
+  switch (state) {
+    case 'charging':
+      return 'Charging'
+    case 'discharging':
+      return 'On battery'
+    case 'fully-charged':
+      return 'Fully charged'
+    case 'empty':
+      return 'Battery empty'
+    case 'pending-charge':
+      return 'Waiting to charge'
+    case 'pending-discharge':
+      return 'Waiting to discharge'
+    default:
+      return 'Battery'
+  }
+}
+
+function formatBatteryDuration(totalSeconds: number) {
+  const totalMinutes = Math.max(0, Math.round(totalSeconds / 60))
+  if (totalMinutes <= 0) return ''
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`
+  if (hours > 0) return `${hours}h`
+  return `${minutes}m`
+}
+
+function batteryTooltipText(battery: ShellBatteryState) {
+  const percent = `${Math.round(battery.percentage)}%`
+  const state = batteryStateLabel(battery.state)
+  const chargeTime = formatBatteryDuration(battery.time_to_full_seconds)
+  const drainTime = formatBatteryDuration(battery.time_to_empty_seconds)
+  if (battery.state === 'charging' && chargeTime) return `${state} ${percent}, ${chargeTime} until full`
+  if (battery.state === 'discharging' && drainTime) return `${state} ${percent}, ${drainTime} remaining`
+  return `${state} ${percent}`
 }
 
 function TaskbarWindowRows(props: {
@@ -194,6 +236,7 @@ export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
   const [windowRailWidth, setWindowRailWidth] = createSignal(0)
   const [rowHoverTip, setRowHoverTip] = createSignal<TaskbarRowHoverTip | null>(null)
+  const [controlHoverTip, setControlHoverTip] = createSignal<TaskbarControlHoverTip | null>(null)
   let windowRailRef: HTMLDivElement | undefined
   let rowHoverTipRaf = 0
   let pendingRowHoverTip: { window: TaskbarWindowRow; rowEl: HTMLElement } | null = null
@@ -211,6 +254,15 @@ export function Taskbar(props: TaskbarProps) {
     if (perWindow < 82) return 'tight'
     if (perWindow < 132) return 'compact'
     return 'normal'
+  })
+  const battery = createMemo(() => {
+    const current = props.batteryState
+    return current?.is_present ? current : null
+  })
+  const batteryFillWidth = createMemo(() => {
+    const pct = Math.max(0, Math.min(100, Math.round(battery()?.percentage ?? 0)))
+    if (pct <= 0) return 0
+    return Math.max(2, Math.round((pct / 100) * 14))
   })
 
   if (props.isPrimary) {
@@ -286,6 +338,29 @@ export function Taskbar(props: TaskbarProps) {
     rowHoverTipRaf = requestAnimationFrame(flushRowHoverTip)
   }
 
+  function reportControlHoverTip(payload: { id: string; text: string; el: HTMLElement } | null) {
+    if (!payload) {
+      setControlHoverTip(null)
+      return
+    }
+    const r = payload.el.getBoundingClientRect()
+    setControlHoverTip((prev) => {
+      const next = {
+        id: payload.id,
+        text: payload.text,
+        left: r.left + r.width / 2,
+        top: r.top - 8,
+      }
+      return prev &&
+        prev.id === next.id &&
+        prev.text === next.text &&
+        prev.left === next.left &&
+        prev.top === next.top
+        ? prev
+        : next
+    })
+  }
+
   function registerTrayStrip(el: HTMLElement) {
     const registration = registerShellExclusionElement('tray-strip', 'tray-strip', el)
     onCleanup(registration.unregister)
@@ -299,6 +374,7 @@ export function Taskbar(props: TaskbarProps) {
   onCleanup(() => {
     if (rowHoverTipRaf) cancelAnimationFrame(rowHoverTipRaf)
     setRowHoverTip(null)
+    setControlHoverTip(null)
   })
 
   return (
@@ -501,6 +577,34 @@ export function Taskbar(props: TaskbarProps) {
           >
             <Bug class="h-4 w-4" stroke-width={2} />
           </button>
+          <Show when={battery()}>
+            {(currentBattery) => (
+              <span
+                data-shell-battery-indicator
+                class="flex h-full w-10 shrink-0 items-center justify-center bg-transparent text-(--shell-text-muted)"
+                classList={{
+                  'text-(--shell-warning-text)':
+                    currentBattery().state === 'discharging' && currentBattery().percentage <= 15,
+                }}
+                aria-label={batteryTooltipText(currentBattery())}
+                onPointerEnter={(e) =>
+                  reportControlHoverTip({
+                    id: 'battery',
+                    text: batteryTooltipText(currentBattery()),
+                    el: e.currentTarget,
+                  })}
+                onPointerLeave={() => reportControlHoverTip(null)}
+              >
+                <span class="relative box-border h-3.5 w-5 shrink-0 rounded-[3px] border border-current">
+                  <span
+                    class="absolute top-[2px] bottom-[2px] left-[2px] rounded-[1px] bg-current opacity-85"
+                    style={{ width: `${batteryFillWidth()}px` }}
+                  />
+                  <span class="absolute top-[3px] -right-[3px] h-1.5 w-0.5 rounded-r-sm bg-current" />
+                </span>
+              </span>
+            )}
+          </Show>
           <PowerTaskbarMenu>
             <TaskbarContextMenuTrigger>
               {(menu) => (
@@ -549,6 +653,24 @@ export function Taskbar(props: TaskbarProps) {
           role="tooltip"
         >
           {rowHoverTip()!.text}
+        </div>
+      </Portal>
+    </Show>
+    <Show when={controlHoverTip() !== null && typeof document !== 'undefined'}>
+      <Portal mount={document.body}>
+        <div
+          data-shell-taskbar-control-tooltip
+          data-shell-exclusion-floating
+          class="pointer-events-none fixed z-430000 max-w-[min(28rem,calc(100vw-1rem))] rounded-md border border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-2.5 py-1.5 text-left text-xs leading-snug text-(--shell-text) shadow-lg"
+          ref={registerFloatingExclusion}
+          style={{
+            left: `${controlHoverTip()!.left}px`,
+            top: `${controlHoverTip()!.top}px`,
+            transform: 'translate(-50%, -100%)',
+          }}
+          role="tooltip"
+        >
+          {controlHoverTip()!.text}
         </div>
       </Portal>
     </Show>

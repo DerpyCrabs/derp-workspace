@@ -19,6 +19,7 @@ import {
   globalPointToClientCss,
 } from '@/lib/shellCoords'
 import { defaultAudioDevice, useShellAudioState } from '@/apps/settings/useShellAudioState'
+import { useShellBatteryState } from '@/apps/settings/useShellBatteryState'
 import {
   flushShellUiWindowsSyncNow,
   invalidateAllShellUiWindows,
@@ -440,6 +441,7 @@ function App() {
     }
   })
   const shellAudio = useShellAudioState()
+  const shellBattery = useShellBatteryState()
   createEffect(() => {
     const sink = defaultAudioDevice(shellAudio.state()?.sinks ?? [])
     if (!sink) return
@@ -1632,6 +1634,7 @@ function App() {
     taskbarHeight: TASKBAR_HEIGHT,
     screenTaskbarHiddenForFullscreen: workspaceLayoutBridge.screenTaskbarHiddenForFullscreen,
     isPrimaryTaskbarScreen: (screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary),
+    batteryState: shellBattery.state,
     trayVolumeState,
     taskbarRowsForScreen: workspaceLayoutBridge.taskbarRowsForScreen,
     focusedTaskbarWindowId,
@@ -1793,6 +1796,7 @@ function App() {
         getWorkspaceGroups: workspaceGroups,
         getTaskbarRowsByMonitor: taskbarRowsByMonitor,
         getFocusedWindowId: focusedWindowId,
+        getBatteryState: shellBattery.state,
         getKeyboardLayoutLabel: keyboardLayoutLabel,
         getScreenshotMode: screenshotMode,
         getCrosshairCursor: crosshairCursor,

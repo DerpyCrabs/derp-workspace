@@ -925,6 +925,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/battery_state" {
+        let json = crate::controls::battery_control::read_battery_state_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/bluetooth_state" {
         let json = crate::controls::bluetooth_control::read_bluetooth_state_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
