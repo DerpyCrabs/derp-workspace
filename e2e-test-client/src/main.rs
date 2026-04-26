@@ -104,6 +104,10 @@ struct Args {
     spawn_on_press_command: Option<String>,
     #[arg(long, default_value_t = false)]
     fifo_smoke: bool,
+    #[arg(long = "require-global")]
+    require_global: Vec<String>,
+    #[arg(long, default_value_t = false)]
+    list_globals: bool,
 }
 
 fn main() {
@@ -115,6 +119,24 @@ fn main() {
     let conn = Connection::connect_to_env().expect("connect to wayland compositor");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("init registry");
     let qh = event_queue.handle();
+
+    if args.list_globals || !args.require_global.is_empty() {
+        let globals_list = globals.contents().clone_list();
+        if args.list_globals {
+            for global in &globals_list {
+                println!("{} {}", global.interface, global.version);
+            }
+        }
+        for required in &args.require_global {
+            if !globals_list
+                .iter()
+                .any(|global| global.interface == *required)
+            {
+                panic!("missing required global {required}");
+            }
+        }
+        return;
+    }
 
     let compositor_state = CompositorState::bind(&globals, &qh).expect("bind wl_compositor");
     let shm_state = Shm::bind(&globals, &qh).expect("bind wl_shm");

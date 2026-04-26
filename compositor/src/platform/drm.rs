@@ -1138,6 +1138,7 @@ pub fn init_drm(
         .map_err(|e| format!("session.open drm: {e}"))?;
     let drm_fd = DrmDeviceFd::new(DeviceFd::from(fd));
     let gbm_drm_fd = drm_fd.clone();
+    let syncobj_import_device = drm_fd.clone();
     let (mut drm, drm_notifier) =
         DrmDevice::new(drm_fd, true).map_err(|e| format!("DrmDevice::new: {e}"))?;
 
@@ -1190,6 +1191,7 @@ pub fn init_drm(
     let linux_dmabuf_formats = crate::state::formats_for_linux_dmabuf_global(&renderer);
     data.state
         .init_linux_dmabuf_global(&renderer, linux_dmabuf_formats.iter().copied());
+    data.state.init_drm_syncobj_global(syncobj_import_device);
 
     let renderer = Arc::new(Mutex::new(renderer));
     data.state.dmabuf_import_renderer = Some(Arc::downgrade(&renderer));

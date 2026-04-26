@@ -29,6 +29,7 @@ const allowedRuntimeImports = new Map([
   ['tab-groups.spec.ts', new Set(['closeWindow', 'openShellTestWindow', 'postJson', 'runKeybind'])],
   ['taskbar-close.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures'])],
   ['text-editor.spec.ts', new Set(['prepareFileBrowserFixtures'])],
+  ['wayland-protocols.spec.ts', new Set(['spawnCommand'])],
   ['x11-windows.spec.ts', new Set(['runKeybind'])],
 ])
 const allowedRawInputEndpoint = new Set([

@@ -18,6 +18,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::{
     backend::allocator::dmabuf::{Dmabuf, DmabufFlags},
     backend::allocator::{Format, Fourcc, Modifier},
+    backend::drm::DrmDeviceFd,
     backend::egl::EGLDevice,
     backend::input::{KeyState, Keycode, TouchSlot},
     backend::renderer::{
@@ -58,6 +59,7 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
         cursor_shape::CursorShapeManagerState,
         dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjHandler, DrmSyncobjState},
         fifo::FifoManagerState,
         foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState},
         fractional_scale::{FractionalScaleHandler, FractionalScaleManagerState},
@@ -502,6 +504,7 @@ pub struct CompositorState {
 
     pub space: Space<DerpSpaceElem>,
     pub loop_signal: LoopSignal,
+    pub(crate) loop_handle: LoopHandle<'static, CalloopData>,
     pub event_loop_stop: Arc<AtomicBool>,
 
     pub compositor_state: WlCompositorState,
@@ -516,6 +519,7 @@ pub struct CompositorState {
     pub dmabuf_state: DmabufState,
     /// Populated when [`Self::init_linux_dmabuf_global`] runs (DRM or winit).
     dmabuf_global: Option<DmabufGlobal>,
+    pub(crate) drm_syncobj_state: Option<DrmSyncobjState>,
     /// DRM: validate client dma-bufs with the scanout GLES stack. Nested winit leaves this unset.
     pub(crate) dmabuf_import_renderer: Option<Weak<Mutex<GlesRenderer>>>,
     pub(crate) capture_dmabuf_formats: Vec<Format>,
@@ -1236,6 +1240,8 @@ impl CompositorState {
         )?;
 
         let loop_signal = event_loop.get_signal();
+        let loop_handle: LoopHandle<'static, CalloopData> =
+            unsafe { std::mem::transmute(event_loop.handle().clone()) };
         let event_loop_stop = Arc::new(AtomicBool::new(false));
 
         let (cef_to_compositor_tx, cef_rx) = channel::channel();
@@ -1339,6 +1345,7 @@ impl CompositorState {
             display_handle: dh,
             space,
             loop_signal,
+            loop_handle,
             event_loop_stop,
             socket_name,
             compositor_state,
@@ -1352,6 +1359,7 @@ impl CompositorState {
             shm_state,
             dmabuf_state,
             dmabuf_global: None,
+            drm_syncobj_state: None,
             dmabuf_import_renderer: None,
             capture_dmabuf_formats: Vec::new(),
             capture_dmabuf_device: None,
@@ -3800,6 +3808,24 @@ impl CompositorState {
             .collect();
         self.capture_dmabuf_device = render_node_dev_id;
         tracing::debug!("linux-dmabuf global created");
+    }
+
+    pub fn init_drm_syncobj_global(&mut self, import_device: DrmDeviceFd) -> bool {
+        if self.drm_syncobj_state.is_some() {
+            return true;
+        }
+        if !supports_syncobj_eventfd(&import_device) {
+            tracing::debug!(
+                "linux-drm-syncobj-v1 global skipped (DRM syncobj eventfd unsupported)"
+            );
+            return false;
+        }
+        self.drm_syncobj_state = Some(DrmSyncobjState::new::<Self>(
+            &self.display_handle,
+            import_device,
+        ));
+        tracing::debug!("linux-drm-syncobj-v1 global created");
+        true
     }
 
     /// DRM session handle for **Ctrl+Alt+F1–F12** VT switching ([`crate::input`]).
@@ -13242,6 +13268,12 @@ impl DmabufHandler for CompositorState {
     }
 }
 
+impl DrmSyncobjHandler for CompositorState {
+    fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
+        self.drm_syncobj_state.as_mut()
+    }
+}
+
 smithay::delegate_xdg_activation!(crate::CompositorState);
 smithay::delegate_xdg_decoration!(crate::CompositorState);
 smithay::delegate_fractional_scale!(crate::CompositorState);
@@ -13249,6 +13281,7 @@ smithay::delegate_viewporter!(crate::CompositorState);
 smithay::delegate_cursor_shape!(crate::CompositorState);
 smithay::delegate_xwayland_shell!(crate::CompositorState);
 smithay::delegate_dmabuf!(crate::CompositorState);
+smithay::delegate_drm_syncobj!(crate::CompositorState);
 smithay::delegate_fifo!(crate::CompositorState);
 
 #[derive(Default)]
