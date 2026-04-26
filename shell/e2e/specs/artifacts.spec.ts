@@ -4,20 +4,23 @@ import { promisify } from 'node:util'
 
 import {
   CRASH_NATIVE_TITLE,
+  NATIVE_APP_ID,
   assert,
+  buildNativeSpawnCommand,
   crashWindow,
   defineGroup,
   ensureNativeWindow,
   getJson,
   postJson,
+  spawnCommand,
   taskbarEntry,
   waitFor,
   waitForTaskbarEntry,
   waitForWindowGone,
   writeJsonArtifact,
+  type CompositorSnapshot,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
-import { spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -196,12 +199,32 @@ export default defineGroup(import.meta.url, ({ test }) => {
   })
 
   test('native clients can use fifo-v1 barriers', async ({ base, state }) => {
-    const fifo = await spawnNativeWindow(base, state.knownWindowIds, {
-      title: 'Derp E2E FIFO Native Test',
+    const title = 'Derp E2E FIFO Native Test'
+    const command = buildNativeSpawnCommand({
+      title,
       token: 'native-fifo',
       strip: 'cyan',
       fifoSmoke: true,
     })
+    await spawnCommand(base, command)
+    const fifo = await waitFor(
+      'wait for fifo native test window',
+      async () => {
+        const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = snapshot.windows.find(
+          (entry) =>
+            !entry.shell_hosted &&
+            !state.knownWindowIds.has(entry.window_id) &&
+            entry.app_id === NATIVE_APP_ID &&
+            (entry.title === title || entry.title.startsWith(`${title} | fifo=`)),
+        )
+        if (!window) return null
+        return { snapshot, window, command }
+      },
+      5000,
+      40,
+    )
+    state.knownWindowIds.add(fifo.window.window_id)
     state.spawnedNativeWindowIds.add(fifo.window.window_id)
     const shell = await waitForTaskbarEntry(base, fifo.window.window_id)
     const entry = taskbarEntry(shell, fifo.window.window_id)

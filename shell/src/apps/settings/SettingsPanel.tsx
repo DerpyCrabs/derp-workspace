@@ -156,7 +156,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <SettingsScratchpadsPage windows={props.windowsList} />
         </Show>
         <Show when={activePage() === 'keyboard'}>
-          <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} />
+          <SettingsKeyboardPage keyboardLayoutLabel={props.keyboardLayoutLabel} desktopApps={props.desktopApps} />
         </Show>
         <Show when={activePage() === 'notifications'}>
           <SettingsNotificationsPage notificationsState={props.notificationsState} />

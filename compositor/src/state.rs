@@ -260,6 +260,17 @@ pub(crate) struct ScratchpadWindowState {
     pub scratchpad_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SuperHotkeyAction {
+    Builtin(String),
+    Launch {
+        command: String,
+        desktop_id: String,
+        app_name: String,
+    },
+    Scratchpad(String),
+}
+
 pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
     smithay::wayland::compositor::with_states(wl, |states| {
         let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
@@ -604,6 +615,7 @@ pub struct CompositorState {
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
     pub(crate) shell_hosted_app_state: HashMap<u32, serde_json::Value>,
+    pub(crate) hotkey_settings: crate::session::settings_config::HotkeySettingsFile,
     pub(crate) scratchpad_settings: crate::session::settings_config::ScratchpadSettingsFile,
     pub(crate) scratchpad_windows: HashMap<u32, ScratchpadWindowState>,
     pub(crate) scratchpad_last_window_by_id: HashMap<String, u32>,
@@ -1430,6 +1442,7 @@ impl CompositorState {
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
             shell_hosted_app_state: HashMap::new(),
+            hotkey_settings: crate::session::settings_config::read_hotkey_settings(),
             scratchpad_settings: crate::session::settings_config::read_scratchpad_settings(),
             scratchpad_windows: HashMap::new(),
             scratchpad_last_window_by_id: HashMap::new(),
@@ -3637,11 +3650,34 @@ impl CompositorState {
                     }
                 }
             }
-            "launch_terminal" | "open_settings" | "tab_next" | "tab_previous" => {
-                self.shell_send_keybind(action)
+            "launch_terminal" => {
+                if let Err(error) = self.try_spawn_wayland_client_sh("foot") {
+                    tracing::warn!(%error, "launch terminal hotkey failed");
+                }
             }
+            "open_settings" | "tab_next" | "tab_previous" => self.shell_send_keybind(action),
             "cycle_keyboard_layout" => self.keyboard_cycle_layout_for_shortcut(),
             _ => {}
+        }
+    }
+
+    pub(crate) fn handle_super_hotkey_action(&mut self, action: SuperHotkeyAction) {
+        match action {
+            SuperHotkeyAction::Builtin(action) => self.handle_super_keybind(&action),
+            SuperHotkeyAction::Launch {
+                command,
+                desktop_id: _,
+                app_name: _,
+            } => {
+                self.programs_menu_super_chord = true;
+                if let Err(error) = self.try_spawn_wayland_client_sh(&command) {
+                    tracing::warn!(%error, command = %command, "hotkey launch failed");
+                }
+            }
+            SuperHotkeyAction::Scratchpad(id) => {
+                self.programs_menu_super_chord = true;
+                self.toggle_scratchpad(&id);
+            }
         }
     }
 
@@ -9432,6 +9468,15 @@ impl CompositorState {
         Ok(())
     }
 
+    pub(crate) fn apply_hotkey_settings(
+        &mut self,
+        settings: crate::session::settings_config::HotkeySettingsFile,
+    ) -> Result<(), String> {
+        crate::session::settings_config::write_hotkey_settings(settings)?;
+        self.hotkey_settings = crate::session::settings_config::read_hotkey_settings();
+        Ok(())
+    }
+
     pub(crate) fn toggle_scratchpad(&mut self, scratchpad_id: &str) {
         if self.scratchpad_config_by_id(scratchpad_id).is_none() {
             return;
@@ -9466,7 +9511,7 @@ impl CompositorState {
         }
     }
 
-    fn scratchpad_key_token_matches(raw_sym: u32, token: &str) -> bool {
+    fn super_hotkey_key_token_matches(raw_sym: u32, token: &str) -> bool {
         let t = token.trim().to_ascii_lowercase();
         match t.as_str() {
             "`" | "grave" | "backquote" => raw_sym == keysyms::KEY_grave,
@@ -9501,37 +9546,74 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn scratchpad_action_for_super_chord(
+    fn super_hotkey_chord_matches(
+        raw_sym: u32,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        chord: &str,
+    ) -> bool {
+        let Some(chord) = crate::session::settings_config::normalize_hotkey_chord(chord) else {
+            return false;
+        };
+        let parts: Vec<String> = chord
+            .split('+')
+            .map(|part| part.trim().to_ascii_lowercase())
+            .filter(|part| !part.is_empty())
+            .collect();
+        if parts.is_empty() || !parts.iter().any(|part| part == "super") {
+            return false;
+        }
+        let wants_ctrl = parts.iter().any(|part| part == "ctrl");
+        let wants_alt = parts.iter().any(|part| part == "alt");
+        let wants_shift = parts.iter().any(|part| part == "shift");
+        if wants_ctrl != ctrl || wants_alt != alt || wants_shift != shift {
+            return false;
+        }
+        let Some(key) = parts
+            .iter()
+            .find(|part| !matches!(part.as_str(), "super" | "ctrl" | "alt" | "shift"))
+        else {
+            return false;
+        };
+        Self::super_hotkey_key_token_matches(raw_sym, key)
+    }
+
+    pub(crate) fn super_hotkey_action_for_chord(
         &self,
         raw_sym: u32,
         ctrl: bool,
+        alt: bool,
         shift: bool,
-    ) -> Option<String> {
-        for scratchpad in &self.scratchpad_settings.items {
-            let parts: Vec<String> = scratchpad
-                .hotkey
-                .split('+')
-                .map(|part| part.trim().to_ascii_lowercase())
-                .filter(|part| !part.is_empty())
-                .collect();
-            if parts.is_empty() || !parts.iter().any(|part| part == "super" || part == "mod4") {
+    ) -> Option<SuperHotkeyAction> {
+        use crate::session::settings_config::HotkeyActionFile;
+        for binding in &self.hotkey_settings.bindings {
+            if !binding.enabled {
                 continue;
             }
-            let wants_ctrl = parts.iter().any(|part| part == "ctrl" || part == "control");
-            let wants_shift = parts.iter().any(|part| part == "shift");
-            if wants_ctrl != ctrl || wants_shift != shift {
+            if !Self::super_hotkey_chord_matches(raw_sym, ctrl, alt, shift, &binding.chord) {
                 continue;
             }
-            let Some(key) = parts.iter().find(|part| {
-                !matches!(
-                    part.as_str(),
-                    "super" | "mod4" | "ctrl" | "control" | "shift"
-                )
-            }) else {
-                continue;
+            return match binding.action {
+                HotkeyActionFile::Builtin => {
+                    Some(SuperHotkeyAction::Builtin(binding.builtin.clone()))
+                }
+                HotkeyActionFile::Launch => Some(SuperHotkeyAction::Launch {
+                    command: binding.command.clone(),
+                    desktop_id: binding.desktop_id.clone(),
+                    app_name: binding.app_name.clone(),
+                }),
+                HotkeyActionFile::Scratchpad => {
+                    Some(SuperHotkeyAction::Scratchpad(binding.scratchpad_id.clone()))
+                }
             };
-            if Self::scratchpad_key_token_matches(raw_sym, key) {
-                return Some(format!("toggle_scratchpad:{}", scratchpad.id));
+        }
+        for scratchpad in &self.scratchpad_settings.items {
+            if scratchpad.hotkey.trim().is_empty() {
+                continue;
+            }
+            if Self::super_hotkey_chord_matches(raw_sym, ctrl, alt, shift, &scratchpad.hotkey) {
+                return Some(SuperHotkeyAction::Scratchpad(scratchpad.id.clone()));
             }
         }
         None

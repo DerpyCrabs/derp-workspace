@@ -889,6 +889,12 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_hotkeys" {
+        let json = crate::session::settings_config::read_hotkey_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_default_applications" {
         let json = crate::session::settings_config::read_default_applications_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
@@ -989,7 +995,10 @@ fn handle_one(
         || req_path == "/session_shell_snapshot"
     {
         512 * 1024
-    } else if req_path == "/settings_scratchpads" || req_path == "/settings_files" {
+    } else if req_path == "/settings_scratchpads"
+        || req_path == "/settings_files"
+        || req_path == "/settings_hotkeys"
+    {
         64 * 1024
     } else if req_path == "/file_browser/write" || req_path == "/file_browser/write_bytes" {
         (crate::cef::file_browser::FILE_BROWSER_READ_MAX_BYTES as usize).saturating_mul(2)
@@ -1451,6 +1460,12 @@ fn handle_one(
                 serde_json::from_value::<crate::session::settings_config::KeyboardSettingsFile>(v)
                     .map_err(|e| format!("invalid keyboard settings: {e}"))?;
             uplink.settings_keyboard_apply(keyboard)?;
+        }
+        "/settings_hotkeys" => {
+            let hotkeys =
+                serde_json::from_value::<crate::session::settings_config::HotkeySettingsFile>(v)
+                    .map_err(|e| format!("invalid hotkey settings: {e}"))?;
+            uplink.settings_hotkeys_apply(hotkeys)?;
         }
         "/settings_default_applications" => {
             let default_applications = serde_json::from_value::<

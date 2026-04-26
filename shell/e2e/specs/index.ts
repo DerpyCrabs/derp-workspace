@@ -1,4 +1,5 @@
 import artifactsGroup from './artifacts.spec.ts'
+import customHotkeysGroup from './custom-hotkeys.spec.ts'
 import externalControlGroup from './external-control.spec.ts'
 import fileBrowserGroup from './file-browser.spec.ts'
 import launcherMultimonitorGroup from './launcher-multimonitor.spec.ts'
@@ -40,6 +41,7 @@ export const defaultGroups = [
   taskbarCloseGroup,
   externalControlGroup,
   artifactsGroup,
+  customHotkeysGroup,
   scratchpadsGroup,
 ]
 

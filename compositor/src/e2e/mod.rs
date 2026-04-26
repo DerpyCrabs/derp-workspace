@@ -427,14 +427,12 @@ impl CompositorState {
                         && !is_super
                         && !state.seat.keyboard_shortcuts_inhibited()
                     {
-                        let scratchpad_action =
-                            state.scratchpad_action_for_super_chord(raw_sym, mods.ctrl, mods.shift);
-                        if let Some(action) = scratchpad_action.as_deref().or_else(|| {
-                            crate::input::super_keybind_action(raw_sym, mods.ctrl, mods.shift)
-                        }) {
+                        if let Some(action) = state
+                            .super_hotkey_action_for_chord(raw_sym, mods.ctrl, mods.alt, mods.shift)
+                        {
                             state.programs_menu_super_chord = true;
                             if state.shell_cef_active() {
-                                state.handle_super_keybind(action);
+                                state.handle_super_hotkey_action(action);
                             }
                             return FilterResult::Intercept(());
                         }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,51 @@ pub struct KeyboardSettingsFile {
     pub layouts: Vec<KeyboardLayoutEntryFile>,
     pub repeat_rate: u32,
     pub repeat_delay_ms: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyActionFile {
+    #[default]
+    Builtin,
+    Launch,
+    Scratchpad,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HotkeyBindingFile {
+    pub id: String,
+    pub enabled: bool,
+    pub chord: String,
+    pub action: HotkeyActionFile,
+    pub builtin: String,
+    pub command: String,
+    pub desktop_id: String,
+    pub app_name: String,
+    pub scratchpad_id: String,
+}
+
+impl Default for HotkeyBindingFile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            chord: String::new(),
+            action: HotkeyActionFile::Builtin,
+            builtin: String::new(),
+            command: String::new(),
+            desktop_id: String::new(),
+            app_name: String::new(),
+            scratchpad_id: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HotkeySettingsFile {
+    pub bindings: Vec<HotkeyBindingFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,6 +229,14 @@ impl Default for KeyboardSettingsFile {
     }
 }
 
+impl Default for HotkeySettingsFile {
+    fn default() -> Self {
+        Self {
+            bindings: default_hotkey_bindings(),
+        }
+    }
+}
+
 impl Default for ThemeSettingsFile {
     fn default() -> Self {
         Self {
@@ -199,6 +252,7 @@ pub struct SettingsFile {
     pub version: u32,
     pub theme: ThemeSettingsFile,
     pub keyboard: KeyboardSettingsFile,
+    pub hotkeys: HotkeySettingsFile,
     pub default_applications: DefaultApplicationsFile,
     pub files: FilesSettingsFile,
     pub notifications: NotificationsSettingsFile,
@@ -211,6 +265,7 @@ impl Default for SettingsFile {
             version: 1,
             theme: ThemeSettingsFile::default(),
             keyboard: KeyboardSettingsFile::default(),
+            hotkeys: HotkeySettingsFile::default(),
             default_applications: DefaultApplicationsFile::default(),
             files: FilesSettingsFile::default(),
             notifications: NotificationsSettingsFile::default(),
@@ -278,6 +333,305 @@ pub fn sanitize_keyboard_settings(keyboard: KeyboardSettingsFile) -> KeyboardSet
         repeat_rate: keyboard.repeat_rate.clamp(1, 60),
         repeat_delay_ms: keyboard.repeat_delay_ms.clamp(100, 1000),
     }
+}
+
+fn hotkey_binding(
+    id: &str,
+    chord: &str,
+    action: HotkeyActionFile,
+    builtin: &str,
+    command: &str,
+) -> HotkeyBindingFile {
+    HotkeyBindingFile {
+        id: id.into(),
+        enabled: true,
+        chord: chord.into(),
+        action,
+        builtin: builtin.into(),
+        command: command.into(),
+        desktop_id: String::new(),
+        app_name: String::new(),
+        scratchpad_id: String::new(),
+    }
+}
+
+fn default_hotkey_bindings() -> Vec<HotkeyBindingFile> {
+    use HotkeyActionFile::{Builtin, Launch};
+    vec![
+        hotkey_binding(
+            "cycle-keyboard-layout",
+            "Super+Space",
+            Builtin,
+            "cycle_keyboard_layout",
+            "",
+        ),
+        hotkey_binding("open-settings", "Super+Comma", Builtin, "open_settings", ""),
+        hotkey_binding("launch-terminal", "Super+Return", Launch, "", "foot"),
+        hotkey_binding("close-focused", "Super+Q", Builtin, "close_focused", ""),
+        hotkey_binding(
+            "toggle-programs-menu",
+            "Super+D",
+            Builtin,
+            "toggle_programs_menu",
+            "",
+        ),
+        hotkey_binding(
+            "toggle-fullscreen",
+            "Super+F",
+            Builtin,
+            "toggle_fullscreen",
+            "",
+        ),
+        hotkey_binding("toggle-maximize", "Super+M", Builtin, "toggle_maximize", ""),
+        hotkey_binding(
+            "tab-previous",
+            "Super+BracketLeft",
+            Builtin,
+            "tab_previous",
+            "",
+        ),
+        hotkey_binding("tab-next", "Super+BracketRight", Builtin, "tab_next", ""),
+        hotkey_binding("tile-left", "Super+Left", Builtin, "tile_left", ""),
+        hotkey_binding("tile-right", "Super+Right", Builtin, "tile_right", ""),
+        hotkey_binding("tile-up", "Super+Up", Builtin, "tile_up", ""),
+        hotkey_binding("tile-down", "Super+Down", Builtin, "tile_down", ""),
+        hotkey_binding(
+            "move-monitor-left",
+            "Super+Shift+Left",
+            Builtin,
+            "move_monitor_left",
+            "",
+        ),
+        hotkey_binding(
+            "move-monitor-right",
+            "Super+Shift+Right",
+            Builtin,
+            "move_monitor_right",
+            "",
+        ),
+        hotkey_binding(
+            "screenshot-current-output",
+            "Super+Ctrl+S",
+            Builtin,
+            "screenshot_current_output",
+            "",
+        ),
+        hotkey_binding(
+            "screenshot-region",
+            "Super+Shift+S",
+            Builtin,
+            "screenshot_region",
+            "",
+        ),
+    ]
+}
+
+fn sanitize_hotkey_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 80 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn sanitize_hotkey_text(value: &str, max_len: usize) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(max_len)
+        .collect()
+}
+
+fn normalize_hotkey_key_token(value: &str) -> Option<String> {
+    let t = value.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "`" | "grave" | "backquote" => Some("Grave".into()),
+        "space" => Some("Space".into()),
+        "return" | "enter" => Some("Return".into()),
+        "tab" => Some("Tab".into()),
+        "left" => Some("Left".into()),
+        "right" => Some("Right".into()),
+        "up" => Some("Up".into()),
+        "down" => Some("Down".into()),
+        "," | "comma" => Some("Comma".into()),
+        "." | "period" => Some("Period".into()),
+        "/" | "slash" => Some("Slash".into()),
+        ";" | "semicolon" => Some("Semicolon".into()),
+        "'" | "apostrophe" => Some("Apostrophe".into()),
+        "[" | "bracketleft" => Some("BracketLeft".into()),
+        "]" | "bracketright" => Some("BracketRight".into()),
+        _ if t.len() == 1 => {
+            let ch = t.as_bytes()[0];
+            if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+                Some(t.to_ascii_uppercase())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn normalize_hotkey_chord(value: &str) -> Option<String> {
+    let parts = value
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() < 2 {
+        return None;
+    }
+    let mut has_super = false;
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut key: Option<String> = None;
+    for part in parts {
+        match part.to_ascii_lowercase().as_str() {
+            "super" | "win" | "meta" | "mod4" => has_super = true,
+            "ctrl" | "control" => ctrl = true,
+            "alt" => alt = true,
+            "shift" => shift = true,
+            _ => {
+                if key.is_some() {
+                    return None;
+                }
+                key = normalize_hotkey_key_token(part);
+            }
+        }
+    }
+    if !has_super {
+        return None;
+    }
+    let key = key?;
+    let mut out = vec!["Super".to_string()];
+    if ctrl {
+        out.push("Ctrl".into());
+    }
+    if alt {
+        out.push("Alt".into());
+    }
+    if shift {
+        out.push("Shift".into());
+    }
+    out.push(key);
+    Some(out.join("+"))
+}
+
+fn valid_builtin_hotkey_action(value: &str) -> bool {
+    matches!(
+        value,
+        "cycle_keyboard_layout"
+            | "open_settings"
+            | "close_focused"
+            | "toggle_programs_menu"
+            | "toggle_fullscreen"
+            | "toggle_maximize"
+            | "tab_previous"
+            | "tab_next"
+            | "tile_left"
+            | "tile_right"
+            | "tile_up"
+            | "tile_down"
+            | "move_monitor_left"
+            | "move_monitor_right"
+            | "screenshot_current_output"
+            | "screenshot_region"
+            | "launch_terminal"
+    )
+}
+
+fn sanitize_hotkey_binding(item: HotkeyBindingFile) -> Option<HotkeyBindingFile> {
+    let id = sanitize_hotkey_id(&item.id)?;
+    let chord = normalize_hotkey_chord(&item.chord)?;
+    let builtin = sanitize_hotkey_text(&item.builtin, 96);
+    let command = sanitize_hotkey_text(&item.command, shell_wire::MAX_SPAWN_COMMAND_BYTES as usize);
+    let desktop_id = sanitize_hotkey_text(&item.desktop_id, 256);
+    let app_name = sanitize_hotkey_text(&item.app_name, 256);
+    let scratchpad_id = sanitize_hotkey_text(&item.scratchpad_id, 80);
+    match item.action {
+        HotkeyActionFile::Builtin => {
+            if !valid_builtin_hotkey_action(&builtin) {
+                return None;
+            }
+        }
+        HotkeyActionFile::Launch => {
+            if command.is_empty() {
+                return None;
+            }
+        }
+        HotkeyActionFile::Scratchpad => {
+            if scratchpad_id.is_empty() {
+                return None;
+            }
+        }
+    }
+    Some(HotkeyBindingFile {
+        id,
+        enabled: item.enabled,
+        chord,
+        action: item.action,
+        builtin,
+        command,
+        desktop_id,
+        app_name,
+        scratchpad_id,
+    })
+}
+
+pub fn sanitize_hotkey_settings(settings: HotkeySettingsFile) -> HotkeySettingsFile {
+    let mut bindings = Vec::new();
+    let mut ids = HashSet::new();
+    let mut active_chords = HashSet::new();
+    for item in settings.bindings {
+        let Some(binding) = sanitize_hotkey_binding(item) else {
+            continue;
+        };
+        if !ids.insert(binding.id.clone()) {
+            continue;
+        }
+        if binding.enabled && !active_chords.insert(binding.chord.clone()) {
+            continue;
+        }
+        bindings.push(binding);
+        if bindings.len() >= 128 {
+            break;
+        }
+    }
+    HotkeySettingsFile { bindings }
+}
+
+pub fn sanitize_hotkey_settings_for_write(
+    settings: HotkeySettingsFile,
+) -> Result<HotkeySettingsFile, String> {
+    let mut bindings = Vec::new();
+    let mut ids = HashSet::new();
+    let mut active_chords = HashSet::new();
+    for item in settings.bindings {
+        let raw_id = item.id.clone();
+        let raw_chord = item.chord.clone();
+        let Some(binding) = sanitize_hotkey_binding(item) else {
+            return Err(format!("invalid hotkey binding {raw_id}"));
+        };
+        if !ids.insert(binding.id.clone()) {
+            return Err(format!("duplicate hotkey id {}", binding.id));
+        }
+        if binding.enabled && !active_chords.insert(binding.chord.clone()) {
+            return Err(format!("duplicate hotkey chord {}", raw_chord.trim()));
+        }
+        bindings.push(binding);
+        if bindings.len() > 128 {
+            return Err("too many hotkey bindings".into());
+        }
+    }
+    Ok(HotkeySettingsFile { bindings })
 }
 
 fn sanitize_default_app_token(value: &str, fallback: &str) -> String {
@@ -606,6 +960,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
         Ok(mut cfg) => {
             cfg.theme = sanitize_theme_settings(cfg.theme);
             cfg.keyboard = sanitize_keyboard_settings(cfg.keyboard);
+            cfg.hotkeys = sanitize_hotkey_settings(cfg.hotkeys);
             cfg.default_applications =
                 sanitize_default_applications_settings(cfg.default_applications);
             cfg.files = sanitize_files_settings(cfg.files);
@@ -633,6 +988,41 @@ pub fn read_scratchpad_settings() -> ScratchpadSettingsFile {
         return ScratchpadSettingsFile::default();
     };
     read_settings_file_from_path(&path).scratchpads
+}
+
+pub fn read_hotkey_settings() -> HotkeySettingsFile {
+    let Some(path) = settings_config_path() else {
+        return HotkeySettingsFile::default();
+    };
+    read_settings_file_from_path(&path).hotkeys
+}
+
+pub fn read_hotkey_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_hotkey_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_hotkey_settings(settings: HotkeySettingsFile) -> Result<(), String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let hotkeys = sanitize_hotkey_settings_for_write(settings)?;
+    if cfg.version == 1 && cfg.hotkeys == hotkeys {
+        return Ok(());
+    }
+    cfg.version = 1;
+    cfg.hotkeys = hotkeys;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })
 }
 
 pub fn read_notifications_settings() -> NotificationsSettingsFile {
@@ -806,9 +1196,11 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::{
-        read_keyboard_settings, read_theme_settings, sanitize_keyboard_settings,
-        sanitize_theme_settings, settings_config_path, write_keyboard_settings,
-        write_theme_settings, KeyboardLayoutEntryFile, KeyboardSettingsFile, ThemeSettingsFile,
+        normalize_hotkey_chord, read_hotkey_settings, read_keyboard_settings, read_theme_settings,
+        sanitize_hotkey_settings_for_write, sanitize_keyboard_settings, sanitize_theme_settings,
+        settings_config_path, write_hotkey_settings, write_keyboard_settings, write_theme_settings,
+        HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile, KeyboardLayoutEntryFile,
+        KeyboardSettingsFile, ThemeSettingsFile,
     };
 
     fn env_lock() -> &'static Mutex<()> {
@@ -951,6 +1343,87 @@ mod tests {
         assert!(raw.contains("\"keyboard\""));
         assert!(raw.contains("\"repeat_rate\": 30"));
         assert!(raw.contains("\"repeat_delay_ms\": 250"));
+
+        let _ = std::fs::remove_file(&path);
+        std::env::remove_var("DERP_SETTINGS_CONFIG");
+    }
+
+    #[test]
+    fn normalizes_hotkey_chords() {
+        assert_eq!(
+            normalize_hotkey_chord("win + shift + enter"),
+            Some("Super+Shift+Return".into())
+        );
+        assert_eq!(
+            normalize_hotkey_chord("Super+Ctrl+s"),
+            Some("Super+Ctrl+S".into())
+        );
+        assert_eq!(normalize_hotkey_chord("Ctrl+S"), None);
+    }
+
+    #[test]
+    fn hotkeys_reject_duplicate_active_chords() {
+        let err = sanitize_hotkey_settings_for_write(HotkeySettingsFile {
+            bindings: vec![
+                HotkeyBindingFile {
+                    id: "one".into(),
+                    chord: "Super+B".into(),
+                    action: HotkeyActionFile::Launch,
+                    command: "foot".into(),
+                    ..HotkeyBindingFile::default()
+                },
+                HotkeyBindingFile {
+                    id: "two".into(),
+                    chord: "Win+b".into(),
+                    action: HotkeyActionFile::Builtin,
+                    builtin: "open_settings".into(),
+                    ..HotkeyBindingFile::default()
+                },
+            ],
+        })
+        .unwrap_err();
+        assert!(err.contains("duplicate hotkey chord"));
+    }
+
+    #[test]
+    fn read_and_write_hotkey_settings_round_trip() {
+        let _guard = env_lock().lock().unwrap();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "derp-settings-config-hotkey-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("DERP_SETTINGS_CONFIG", &path);
+
+        write_hotkey_settings(HotkeySettingsFile {
+            bindings: vec![HotkeyBindingFile {
+                id: "browser".into(),
+                chord: "win+shift+b".into(),
+                action: HotkeyActionFile::Launch,
+                command: "firefox".into(),
+                desktop_id: "firefox.desktop".into(),
+                app_name: "Firefox".into(),
+                ..HotkeyBindingFile::default()
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(
+            read_hotkey_settings(),
+            HotkeySettingsFile {
+                bindings: vec![HotkeyBindingFile {
+                    id: "browser".into(),
+                    chord: "Super+Shift+B".into(),
+                    action: HotkeyActionFile::Launch,
+                    command: "firefox".into(),
+                    desktop_id: "firefox.desktop".into(),
+                    app_name: "Firefox".into(),
+                    ..HotkeyBindingFile::default()
+                }],
+            }
+        );
 
         let _ = std::fs::remove_file(&path);
         std::env::remove_var("DERP_SETTINGS_CONFIG");

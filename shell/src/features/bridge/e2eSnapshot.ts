@@ -962,6 +962,24 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
       settings_scratchpad_list: queryRect(cache, '[data-settings-scratchpad-list]', args.origin),
       settings_scratchpad_save: queryRect(cache, '[data-settings-scratchpad-save]', args.origin),
+      settings_hotkey_enabled_trigger: queryRect(cache, '[data-settings-hotkey-enabled]', args.origin),
+      settings_hotkey_enabled_off_option: queryRect(
+        cache,
+        '[data-settings-hotkey-enabled-option="no"]',
+        args.origin,
+      ),
+      settings_hotkey_action_trigger: queryRect(cache, '[data-settings-hotkey-action]', args.origin),
+      settings_hotkey_action_scratchpad_option: queryRect(
+        cache,
+        '[data-settings-hotkey-action-option="scratchpad"]',
+        args.origin,
+      ),
+      settings_hotkey_builtin_trigger: queryRect(cache, '[data-settings-hotkey-builtin]', args.origin),
+      settings_hotkey_builtin_close_option: queryRect(
+        cache,
+        '[data-settings-hotkey-builtin-option="close"]',
+        args.origin,
+      ),
       settings_tiling_layout_trigger: settingsTilingLayoutTriggerRect,
       settings_tiling_layout_option_grid: queryRect(
         cache,

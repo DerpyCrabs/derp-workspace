@@ -18,6 +18,7 @@ const blocked = new Set([
 const allowedRuntimeImports = new Map([
   ['artifacts.spec.ts', new Set(['crashWindow', 'postJson'])],
   ['compositor-snapshot.spec.ts', new Set(['spawnNativeWindow'])],
+  ['custom-hotkeys.spec.ts', new Set(['postJson'])],
   ['file-browser.spec.ts', new Set(['prepareFileBrowserFixtures', 'postJson', 'resetFileBrowserFixtures'])],
   ['launcher-multimonitor.spec.ts', new Set(['closeWindow'])],
   ['native-windows.spec.ts', new Set(['closeWindow', 'postJson', 'runKeybind', 'spawnNativeWindow'])],

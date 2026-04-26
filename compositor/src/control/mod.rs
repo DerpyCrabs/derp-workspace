@@ -825,6 +825,13 @@ impl CompositorState {
                 self.keyboard_apply_settings(&settings)?;
                 crate::session::settings_config::write_keyboard_settings(settings)?;
             }
+            "hotkeys" => {
+                let settings = serde_json::from_value::<
+                    crate::session::settings_config::HotkeySettingsFile,
+                >(value)
+                .map_err(|e| format!("invalid hotkey settings: {e}"))?;
+                self.apply_hotkey_settings(settings)?;
+            }
             "default_applications" => {
                 let settings = serde_json::from_value::<
                     crate::session::settings_config::DefaultApplicationsFile,
@@ -865,6 +872,7 @@ fn control_settings_value() -> Result<Value, String> {
     Ok(json!({
         "theme": serde_json::from_str::<Value>(&crate::session::settings_config::read_theme_settings_json()?).map_err(|e| e.to_string())?,
         "keyboard": serde_json::from_str::<Value>(&crate::session::settings_config::read_keyboard_settings_json()?).map_err(|e| e.to_string())?,
+        "hotkeys": serde_json::from_str::<Value>(&crate::session::settings_config::read_hotkey_settings_json()?).map_err(|e| e.to_string())?,
         "default_applications": serde_json::from_str::<Value>(&crate::session::settings_config::read_default_applications_settings_json()?).map_err(|e| e.to_string())?,
         "files": serde_json::from_str::<Value>(&crate::session::settings_config::read_files_settings_json()?).map_err(|e| e.to_string())?,
         "scratchpads": serde_json::from_str::<Value>(&crate::session::settings_config::read_scratchpad_settings_json()?).map_err(|e| e.to_string())?,

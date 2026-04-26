@@ -25,41 +25,6 @@ use crate::{derp_space::DerpSpaceElem, state::CompositorState, CalloopData};
 
 static TOUCH_LEFTMOST_FALLBACK_LOG: OnceLock<()> = OnceLock::new();
 
-#[allow(non_upper_case_globals)]
-pub(crate) fn super_keybind_action(raw_sym: u32, ctrl: bool, shift: bool) -> Option<&'static str> {
-    use keysyms::*;
-    if ctrl {
-        return match raw_sym {
-            KEY_s | KEY_S => Some("screenshot_current_output"),
-            _ => None,
-        };
-    }
-    if shift {
-        return match raw_sym {
-            KEY_s | KEY_S => Some("screenshot_region"),
-            KEY_Left => Some("move_monitor_left"),
-            KEY_Right => Some("move_monitor_right"),
-            _ => None,
-        };
-    }
-    match raw_sym {
-        KEY_space => Some("cycle_keyboard_layout"),
-        KEY_comma => Some("open_settings"),
-        KEY_Return | KEY_KP_Enter => Some("launch_terminal"),
-        KEY_q | KEY_Q => Some("close_focused"),
-        KEY_d | KEY_D => Some("toggle_programs_menu"),
-        KEY_f | KEY_F => Some("toggle_fullscreen"),
-        KEY_m | KEY_M => Some("toggle_maximize"),
-        KEY_bracketleft => Some("tab_previous"),
-        KEY_bracketright => Some("tab_next"),
-        KEY_Left => Some("tile_left"),
-        KEY_Right => Some("tile_right"),
-        KEY_Up => Some("tile_up"),
-        KEY_Down => Some("tile_down"),
-        _ => None,
-    }
-}
-
 pub(crate) fn keysym_is_super(keysym: &smithay::input::keyboard::KeysymHandle<'_>) -> bool {
     keysym.raw_syms().into_iter().any(|sym| {
         matches!(
@@ -840,15 +805,12 @@ impl CompositorState {
                                 && !is_super
                                 && !state.seat.keyboard_shortcuts_inhibited()
                             {
-                                let scratchpad_action = state.scratchpad_action_for_super_chord(
-                                    raw_sym, mods.ctrl, mods.shift,
-                                );
-                                if let Some(action) = scratchpad_action.as_deref().or_else(|| {
-                                    super_keybind_action(raw_sym, mods.ctrl, mods.shift)
-                                }) {
+                                if let Some(action) = state.super_hotkey_action_for_chord(
+                                    raw_sym, mods.ctrl, mods.alt, mods.shift,
+                                ) {
                                     state.programs_menu_super_chord = true;
                                     if state.shell_cef_active() {
-                                        state.handle_super_keybind(action);
+                                        state.handle_super_hotkey_action(action);
                                     }
                                     return FilterResult::Intercept(());
                                 }
