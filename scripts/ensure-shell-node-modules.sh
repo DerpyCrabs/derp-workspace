@@ -11,6 +11,12 @@ fi
 cd "$SHELL_DIR"
 
 have_valid_shell_node_modules() {
+  if [[ -f node_modules/.package-lock.json ]]; then
+    [[ ! -f package-lock.json || ! package-lock.json -nt node_modules/.package-lock.json ]] || return 1
+    [[ ! -f package.json || ! package.json -nt node_modules/.package-lock.json ]] || return 1
+  else
+    [[ ! -f package-lock.json && ! -f package.json ]] || return 1
+  fi
   [[ -x node_modules/.bin/tsc ]] \
     && [[ -f node_modules/typescript/lib/lib.es2023.d.ts ]] \
     && [[ -f node_modules/typescript/lib/lib.dom.d.ts ]] \

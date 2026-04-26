@@ -4,6 +4,7 @@ use std::time::Duration;
 use smithay::reexports::calloop::channel::Sender;
 use zbus::blocking::{connection::Builder, Connection, Proxy};
 use zbus::interface;
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedStructure, Signature, Value};
 
 use shell_wire::{SniTrayLoopMsg, TraySniItemWire, TraySniMenuEntryWire, TraySniMenuWire};
@@ -49,13 +50,13 @@ impl WatcherState {
 
     #[zbus(signal, name = "StatusNotifierItemRegistered")]
     async fn status_notifier_item_registered(
-        signal_ctxt: &zbus::SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         service: &str,
     ) -> zbus::Result<()>;
 
     #[zbus(signal, name = "StatusNotifierItemUnregistered")]
     async fn status_notifier_item_unregistered(
-        signal_ctxt: &zbus::SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         service: &str,
     ) -> zbus::Result<()>;
 
@@ -63,7 +64,7 @@ impl WatcherState {
     fn register_item(
         &mut self,
         service: &str,
-        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
+        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
         if let Ok(mut g) = self.items.lock() {
             if !g.iter().any(|s| s == service) {
@@ -78,7 +79,7 @@ impl WatcherState {
     fn unregister_item(
         &mut self,
         service: &str,
-        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
+        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
         if let Ok(mut g) = self.items.lock() {
             g.retain(|s| s != service);
@@ -440,17 +441,8 @@ fn dbusmenu_parse_get_layout_reply(
     dest: &str,
     menu_path: &str,
 ) -> Vec<TraySniMenuEntryWire> {
-    let Some(full_sig) = body.signature() else {
-        tracing::warn!(
-            target: "derp_sni_menu",
-            notifier_id = %notifier_id,
-            dest = %dest,
-            menu_path = %menu_path,
-            "dbusmenu GetLayout reply missing body signature"
-        );
-        return Vec::new();
-    };
-    let full = full_sig.as_str();
+    let full_sig = body.signature();
+    let full = full_sig.to_string();
     let layout_sig = match full.strip_prefix('u') {
         Some(rest) => match Signature::try_from(rest) {
             Ok(s) => s,
@@ -480,9 +472,8 @@ fn dbusmenu_parse_get_layout_reply(
         }
     };
     let data = body.data();
-    let (rev, n1) = match data
-        .deserialize_for_dynamic_signature::<_, u32>(Signature::from_static_str_unchecked("u"))
-    {
+    let revision_sig = Signature::try_from("u").expect("valid dbus u signature");
+    let (rev, n1) = match data.deserialize_for_dynamic_signature::<_, u32>(revision_sig) {
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!(

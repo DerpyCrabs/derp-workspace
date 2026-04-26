@@ -6,6 +6,7 @@ use serde::Serialize;
 use smithay::reexports::calloop::channel::Sender;
 use zbus::blocking::{connection::Builder, Connection};
 use zbus::interface;
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedValue;
 
 const DEFAULT_TIMEOUT_MS: i32 = 5000;
@@ -386,7 +387,7 @@ impl NotificationsDbus {
     fn close_notification(
         &self,
         id: u32,
-        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
+        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
         let closed = {
             let Ok(mut runtime) = self.runtime.lock() else {
@@ -418,14 +419,14 @@ impl NotificationsDbus {
 
     #[zbus(signal, name = "NotificationClosed")]
     async fn notification_closed(
-        signal_ctxt: &zbus::SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         id: u32,
         reason: u32,
     ) -> zbus::Result<()>;
 
     #[zbus(signal, name = "ActionInvoked")]
     async fn action_invoked(
-        signal_ctxt: &zbus::SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         id: u32,
         action_key: &str,
     ) -> zbus::Result<()>;
@@ -645,7 +646,7 @@ fn emit_notification_closed(connection: Option<&Connection>, id: u32, reason: u3
     let Some(connection) = connection else {
         return;
     };
-    let Ok(ctxt) = zbus::SignalContext::new(connection.inner(), "/org/freedesktop/Notifications")
+    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications")
     else {
         return;
     };
@@ -656,7 +657,7 @@ fn emit_action_invoked(connection: Option<&Connection>, id: u32, action_key: &st
     let Some(connection) = connection else {
         return;
     };
-    let Ok(ctxt) = zbus::SignalContext::new(connection.inner(), "/org/freedesktop/Notifications")
+    let Ok(ctxt) = SignalEmitter::new(connection.inner(), "/org/freedesktop/Notifications")
     else {
         return;
     };
