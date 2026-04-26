@@ -12,6 +12,7 @@ export function FileBrowserContextMenu(props: {
   anchor: () => { x: number; y: number } | null
   items: () => ShellContextMenuItem[]
   onRequestClose: () => void
+  portalMount?: () => Node | undefined
 }) {
   let panelEl: HTMLDivElement | undefined
   const [placed, setPlaced] = createSignal({ left: 0, top: 0, maxHeight: 320 })
@@ -63,12 +64,12 @@ export function FileBrowserContextMenu(props: {
       }}
     >
       <Show when={props.open() && props.anchor()}>
-        <ContextMenuPortal mount={document.body}>
+        <ContextMenuPortal mount={props.portalMount?.() ?? document.body}>
           <ContextMenuContent
             ref={(el) => {
               panelEl = el
             }}
-            class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
+            class="pointer-events-auto border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
             aria-label="Files"
             style={{
               left: `${placed().left}px`,
@@ -91,6 +92,14 @@ export function FileBrowserContextMenu(props: {
                       }}
                       data-file-browser-context-idx={idx()}
                       {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
+                      onPointerDown={(e) => {
+                        if (e.button !== 0) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (item.disabled) return
+                        item.action()
+                        props.onRequestClose()
+                      }}
                       onMouseDown={(e) => {
                         e.preventDefault()
                       }}

@@ -3,7 +3,7 @@ import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { canvasRectToClientCss } from '@/lib/shellCoords'
 import { assistShapeToDims } from '@/features/tiling/assistGrid'
 import { listCustomLayoutZones } from '@/features/tiling/customLayouts'
-import { Taskbar, type TaskbarSniItem, type TaskbarWindowRow } from '@/features/taskbar/Taskbar'
+import { Taskbar, type TaskbarPin, type TaskbarSniItem, type TaskbarWindowRow } from '@/features/taskbar/Taskbar'
 import { SnapAssistTopStrip } from './SnapAssistTopStrip'
 import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from './types'
 
@@ -21,6 +21,7 @@ type ShellSurfaceLayersProps = {
   batteryState: Accessor<ShellBatteryState | null>
   volumeMuted: Accessor<boolean>
   volumePercent: Accessor<number | null>
+  taskbarPinsForScreen: (screen: LayoutScreen) => TaskbarPin[]
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
   focusedWindowId: Accessor<number | null>
   keyboardLayoutLabel: Accessor<string | null>
@@ -29,6 +30,8 @@ type ShellSurfaceLayersProps = {
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
+  onTaskbarPinActivate: (pin: TaskbarPin, monitorName: string) => void
+  onTaskbarPinUnpin: (pin: TaskbarPin, monitorName: string) => void
   trayReservedPx: Accessor<number>
   sniTrayItems: Accessor<TaskbarSniItem[]>
   trayIconSlotPx: Accessor<number>
@@ -156,6 +159,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                   onSniTrayContextMenu={props.onSniTrayContextMenu}
                   volumeMuted={props.volumeMuted()}
                   volumePercent={props.volumePercent()}
+                  pins={props.taskbarPinsForScreen(screen)}
                   windows={props.taskbarRowsForScreen(screen)}
                   focusedWindowId={props.focusedWindowId()}
                   keyboardLayoutLabel={
@@ -167,6 +171,8 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                   onDebugPanelToggle={props.onDebugPanelToggle}
                   onTaskbarActivate={props.onTaskbarActivate}
                   onTaskbarClose={props.onTaskbarClose}
+                  onTaskbarPinActivate={props.onTaskbarPinActivate}
+                  onTaskbarPinUnpin={props.onTaskbarPinUnpin}
                 />
               </div>
             </Show>

@@ -31,11 +31,16 @@ import {
 } from '@/apps/default-applications/defaultApplications'
 import type { DesktopApplicationsController } from '@/features/desktop/desktopApplicationsState'
 import type { ShellNotificationsState } from '@/features/notifications/notificationsState'
+import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
 
 export type ShellHostedWindowContentEnv = {
   windowById: (windowId: number) => Accessor<DerpWindow | undefined>
   shellHostedAppByWindow: () => Record<number, unknown>
   shellWireSend: ShellCompositorWireSend
+  taskbarPins: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
+  taskbarPinMonitorForWindow: (windowId: number) => { outputName: string; outputId: string | null } | null
+  onTaskbarPinFolderAdd: (monitor: { outputName: string; outputId: string | null }, path: string, label: string) => void
+  onTaskbarPinFolderRemove: (monitor: { outputName: string; outputId: string | null }, pinId: string) => void
   onOpenFileBrowserInNewWindow: (path: string) => void
   onOpenImageFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
   onOpenVideoFile: (detail: { path: string; directory: string; showHidden: boolean }) => void
@@ -185,6 +190,16 @@ export function renderShellHostedWindowContent(
             windowId={id}
             compositorAppState={() => env.shellHostedAppByWindow()[id] ?? null}
             shellWireSend={env.shellWireSend}
+            taskbarPins={env.taskbarPins}
+            taskbarPinMonitor={() => env.taskbarPinMonitorForWindow(id)}
+            onTaskbarPinFolderAdd={(path, label) => {
+              const monitor = env.taskbarPinMonitorForWindow(id)
+              if (monitor) env.onTaskbarPinFolderAdd(monitor, path, label)
+            }}
+            onTaskbarPinFolderRemove={(pinId) => {
+              const monitor = env.taskbarPinMonitorForWindow(id)
+              if (monitor) env.onTaskbarPinFolderRemove(monitor, pinId)
+            }}
             onOpenFile={(path, context) => {
               const category = fileOpenCategoryForPath(path)
               const option = env.defaultApps.settings()[category]

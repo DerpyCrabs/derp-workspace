@@ -2,7 +2,7 @@ import type { Accessor } from 'solid-js'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { ShellSurfaceLayers } from '@/host/ShellSurfaceLayers'
 import { SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/shellUiWindows'
-import type { TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
+import type { TaskbarPin, TaskbarSniItem, TaskbarWindowRow } from '@/features/taskbar/Taskbar'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from '@/host/types'
 
@@ -22,6 +22,7 @@ type ShellSurfaceRuntimeOptions = {
     muted: boolean
     volumePercent: number | null
   }>
+  taskbarPinsForScreen: (screen: LayoutScreen) => TaskbarPin[]
   taskbarRowsForScreen: (screen: LayoutScreen) => TaskbarWindowRow[]
   focusedTaskbarWindowId: Accessor<number | null>
   keyboardLayoutLabel: Accessor<string | null>
@@ -34,6 +35,8 @@ type ShellSurfaceRuntimeOptions = {
   windows: Accessor<ReadonlyMap<number, DerpWindow>>
   closeGroupWindow: (windowId: number) => void
   activateTaskbarGroup: (windowId: number) => void
+  activateTaskbarPin: (pin: TaskbarPin, monitorName: string) => void
+  unpinTaskbarPin: (pin: TaskbarPin, monitorName: string) => void
   openSettingsShellWindow: () => void
   openDebugShellWindow: () => void
   openTraySniMenu: (notifierId: string, requestSerial: number, clientX: number, clientY: number) => void
@@ -94,6 +97,7 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         batteryState={options.batteryState}
         volumeMuted={() => options.trayVolumeState().muted}
         volumePercent={() => options.trayVolumeState().volumePercent}
+        taskbarPinsForScreen={options.taskbarPinsForScreen}
         taskbarRowsForScreen={options.taskbarRowsForScreen}
         focusedWindowId={options.focusedTaskbarWindowId}
         keyboardLayoutLabel={options.keyboardLayoutLabel}
@@ -102,6 +106,8 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         onDebugPanelToggle={toggleDebugShellWindow}
         onTaskbarActivate={options.activateTaskbarGroup}
         onTaskbarClose={options.closeGroupWindow}
+        onTaskbarPinActivate={options.activateTaskbarPin}
+        onTaskbarPinUnpin={options.unpinTaskbarPin}
         trayReservedPx={options.trayReservedPx}
         sniTrayItems={options.sniTrayItems}
         trayIconSlotPx={options.trayIconSlotPx}

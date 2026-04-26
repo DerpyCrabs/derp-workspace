@@ -126,7 +126,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     }
   }
 
-  const resolveMonitorContext = () => {
+  const resolveMonitorContext = (preferredMonitorName?: string | null) => {
     const screens = screensListForLayout(
       options.getScreenDraftRows(),
       options.getOutputGeom(),
@@ -136,6 +136,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     const primaryMonitorName = options.getPrimaryMonitorName()
     const hint = options.getHostedWindowSpawnMonitorName?.() ?? null
     const monitor =
+      (preferredMonitorName ? screens.find((screen) => screen.name === preferredMonitorName) : undefined) ??
       (hint ? screens.find((screen) => screen.name === hint) : undefined) ??
       screens.find((screen) => screen.name === primaryMonitorName) ??
       screens[0] ??
@@ -407,8 +408,8 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
   const openPdfViewerWindow = (detail: { path: string; directory: string; showHidden: boolean }) =>
     openPdfViewerWindowWithId(detail) !== null
 
-  const openFileBrowserWindowWithId = (path?: string | null) => {
-    const context = resolveMonitorContext()
+  const openFileBrowserWindowWithId = (path?: string | null, monitorName?: string | null) => {
+    const context = resolveMonitorContext(monitorName)
     if (!context) return null
     pruneReservedBackedWindowIds()
     const windowId = nextWindowId(
@@ -445,6 +446,8 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
   }
 
   const openFileBrowserWindow = (path?: string | null) => openFileBrowserWindowWithId(path) !== null
+  const openFileBrowserWindowAtMonitor = (path: string | null | undefined, monitorName: string) =>
+    openFileBrowserWindowWithId(path, monitorName) !== null
 
   const dispose = () => {
     if (backedWindowOpenRaf !== 0) cancelAnimationFrame(backedWindowOpenRaf)
@@ -472,6 +475,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
     openShellTestWindowWithId,
     openFileBrowserWindow,
     openFileBrowserWindowWithId,
+    openFileBrowserWindowAtMonitor,
     openImageViewerWindow,
     openImageViewerWindowWithId,
     openVideoViewerWindow,

@@ -752,6 +752,43 @@ function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: n
     if (windowId === null || x === null || y === null || width === null || height === null) return null
     preTileGeometry.push({ windowId, bounds: { x, y, width, height } })
   }
+  const taskbarPinMonitorCount = cursor.u32()
+  if (taskbarPinMonitorCount === null) return null
+  const taskbarPins: unknown[] = []
+  for (let i = 0; i < taskbarPinMonitorCount; i += 1) {
+    const outputId = cursor.string()
+    const outputName = cursor.string()
+    const pinCount = cursor.u32()
+    if (outputId === null || outputName === null || pinCount === null) return null
+    const pins: unknown[] = []
+    for (let pinIndex = 0; pinIndex < pinCount; pinIndex += 1) {
+      const kind = cursor.u32()
+      const id = cursor.string()
+      const label = cursor.string()
+      if (kind === null || id === null || label === null) return null
+      if (kind === 1) {
+        const path = cursor.string()
+        if (path === null) return null
+        pins.push({ kind: 'folder', id, label, path })
+      } else {
+        const command = cursor.string()
+        const desktopId = cursor.string()
+        const appName = cursor.string()
+        const desktopIcon = cursor.string()
+        if (command === null || desktopId === null || appName === null || desktopIcon === null) return null
+        pins.push({
+          kind: 'app',
+          id,
+          label,
+          command,
+          desktopId: desktopId || null,
+          appName: appName || null,
+          desktopIcon: desktopIcon || null,
+        })
+      }
+    }
+    taskbarPins.push({ outputId, outputName, pins })
+  }
   const nextGroupSeq = cursor.u32()
   if (nextGroupSeq === null || cursor.offset !== view.byteLength) return null
   return {
@@ -765,6 +802,7 @@ function decodeWorkspaceStateBinary(bytes: Uint8Array, view: DataView, offset: n
       monitorTiles,
       monitorLayouts,
       preTileGeometry,
+      taskbarPins,
       nextGroupSeq,
     }),
   }

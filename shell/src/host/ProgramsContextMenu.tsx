@@ -1,11 +1,15 @@
-import { For, Show, onCleanup, onMount } from 'solid-js'
+import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
 import { DropdownMenuContent } from '@/components/ui/dropdown-menu'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
+import { FileBrowserContextMenu } from '@/apps/file-browser/FileBrowserContextMenu'
+import type { ShellContextMenuItem } from '@/host/contextMenu'
 import { useShellContextMenus } from './ShellContextMenusContext'
 
 export function ProgramsContextMenu() {
   const props = useShellContextMenus().programsMenuProps
   let searchRef: HTMLInputElement | undefined
+  let panelRef: HTMLDivElement | undefined
+  const [itemMenu, setItemMenu] = createSignal<{ x: number; y: number; items: ShellContextMenuItem[] } | null>(null)
 
   const syncSearchFocus = () => {
     queueMicrotask(() => searchRef?.focus())
@@ -43,6 +47,7 @@ export function ProgramsContextMenu() {
   })
 
   function registerPanel(el: HTMLDivElement) {
+    panelRef = el
     props.setPanelRef(el)
     const registration = registerShellExclusionElement('floating', 'floating', el)
     onCleanup(registration.unregister)
@@ -114,6 +119,13 @@ export function ProgramsContextMenu() {
                 item.action()
                 props.closeContextMenu()
               }}
+              onContextMenu={(e) => {
+                const contextItems = item.contextItems?.() ?? []
+                if (contextItems.length === 0) return
+                e.preventDefault()
+                e.stopPropagation()
+                setItemMenu({ x: e.clientX, y: e.clientY, items: contextItems })
+              }}
             >
               <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                 {item.label}
@@ -129,6 +141,16 @@ export function ProgramsContextMenu() {
           )}
         </For>
       </div>
+      <FileBrowserContextMenu
+        open={() => itemMenu() !== null}
+        anchor={() => {
+          const menu = itemMenu()
+          return menu ? { x: menu.x, y: menu.y } : null
+        }}
+        items={() => itemMenu()?.items ?? []}
+        onRequestClose={() => setItemMenu(null)}
+        portalMount={() => panelRef}
+      />
     </DropdownMenuContent>
   )
 }

@@ -73,6 +73,7 @@ import {
   subscribeShellWindowState,
 } from '@/features/shell-ui/shellWindowState'
 import type { ShellContextMenuItem } from '@/host/contextMenu'
+import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
 import { FileBrowserContextMenu } from './FileBrowserContextMenu'
 import { isImageFilePath } from '@/apps/image-viewer/imageViewerCore'
 import type { OpenWithOption } from '@/apps/default-applications/defaultApplications'
@@ -106,6 +107,10 @@ type FileBrowserWindowProps = {
   windowId: number
   compositorAppState: Accessor<unknown | null>
   shellWireSend: (op: 'shell_hosted_window_state' | 'shell_hosted_window_title', json: string) => boolean
+  taskbarPins?: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
+  taskbarPinMonitor?: Accessor<{ outputName: string; outputId: string | null } | null>
+  onTaskbarPinFolderAdd?: (path: string, label: string) => void
+  onTaskbarPinFolderRemove?: (pinId: string) => void
   onOpenFile: (
     path: string,
     context: { directory: string; showHidden: boolean },
@@ -148,6 +153,10 @@ function menuSeparator(): ShellContextMenuItem {
 function tinyIcon(icon: typeof Folder) {
   const Icon = icon
   return <Icon class="h-4 w-4" stroke-width={2} />
+}
+
+function folderTaskbarPinId(path: string): string {
+  return `folder:${path}`
 }
 
 function clipboardCanWritePath(): boolean {
@@ -708,6 +717,36 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
     setCtxMenu(null)
   }
 
+  function folderPinnedToTaskbar(path: string): boolean {
+    const monitor = props.taskbarPinMonitor?.() ?? null
+    if (!monitor) return false
+    const pinId = folderTaskbarPinId(path)
+    return (props.taskbarPins?.() ?? []).some((entry) => {
+      const monitorMatches =
+        monitor.outputId && entry.outputId
+          ? entry.outputId === monitor.outputId
+          : entry.outputName === monitor.outputName
+      return monitorMatches && entry.pins.some((pin) => pin.id === pinId)
+    })
+  }
+
+  function folderPinMenuItem(path: string, label: string): ShellContextMenuItem | null {
+    if (!props.onTaskbarPinFolderAdd || !props.onTaskbarPinFolderRemove || !props.taskbarPinMonitor?.()) {
+      return null
+    }
+    const pinId = folderTaskbarPinId(path)
+    const pinned = folderPinnedToTaskbar(path)
+    return {
+      actionId: pinned ? 'unpin-from-monitor' : 'pin-to-monitor',
+      label: pinned ? 'Unpin from this monitor' : 'Pin to this monitor',
+      icon: tinyIcon(Folder),
+      action: () => {
+        if (pinned) props.onTaskbarPinFolderRemove?.(pinId)
+        else props.onTaskbarPinFolderAdd?.(path, label)
+      },
+    }
+  }
+
   function entryContextItems(entry: FileBrowserEntry): ShellContextMenuItem[] {
     const clip = clipboardCanWritePath()
     const writable = entry.writable === true
@@ -769,6 +808,13 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       })
     }
     if (items.length > 0) items.push(menuSeparator())
+    if (isDir) {
+      const pinItem = folderPinMenuItem(entry.path, normalizeDisplayName(entry))
+      if (pinItem) {
+        items.push(pinItem)
+        items.push(menuSeparator())
+      }
+    }
     items.push({
       actionId: favoritePathSet().has(normalizeFilesSettingsPath(entry.path)) ? 'unfavorite' : 'favorite',
       label: favoritePathSet().has(normalizeFilesSettingsPath(entry.path)) ? 'Unfavorite' : 'Favorite',
@@ -906,6 +952,11 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
       })
     }
     if (items.length > 0) items.push(menuSeparator())
+    const pinItem = folderPinMenuItem(root.path, root.label)
+    if (pinItem) {
+      items.push(pinItem)
+      items.push(menuSeparator())
+    }
     items.push({
       actionId: 'set-icon',
       label: 'Set icon…',
@@ -1407,6 +1458,10 @@ export function FileBrowserWindow(props: FileBrowserWindowProps) {
                                   ]
                                 : []),
                               ...(props.onOpenInNewWindow ? [menuSeparator()] : []),
+                              ...(() => {
+                                const item = folderPinMenuItem(crumbRow().crumb.path, crumbRow().crumb.label)
+                                return item ? [item, menuSeparator()] : []
+                              })(),
                               {
                                 actionId: 'copy-path',
                                 label: 'Copy path',

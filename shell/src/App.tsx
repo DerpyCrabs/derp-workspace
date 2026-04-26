@@ -71,7 +71,7 @@ import {
   useDefaultApplicationsState,
   type OpenWithOption,
 } from '@/apps/default-applications/defaultApplications'
-import type { TaskbarSniItem } from '@/features/taskbar/Taskbar'
+import type { TaskbarPin, TaskbarSniItem } from '@/features/taskbar/Taskbar'
 import {
   nativeWindowRef,
   type NativeLaunchMetadata,
@@ -262,7 +262,13 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_desktop_background' && typeof arg === 'string') {
     fn(op, arg)
-  } else if (op === 'workspace_mutation' && typeof arg === 'string') {
+  } else if (
+    (op === 'workspace_mutation' ||
+      op === 'taskbar_pin_add' ||
+      op === 'taskbar_pin_remove' ||
+      op === 'taskbar_pin_launch') &&
+    typeof arg === 'string'
+  ) {
     fn(op, arg)
   } else if (op === 'window_intent' && typeof arg === 'string') {
     fn(op, arg)
@@ -937,6 +943,7 @@ function App() {
     canSessionControl,
     scheduleOverlayExclusionSync: () => shellSharedStateSync.scheduleOverlayExclusionSync(),
     windows: windowsList,
+    taskbarPins: () => workspaceSnapshot().taskbarPins ?? [],
     windowSwitcherSelectedWindowId: () =>
       compositorInteractionState()?.window_switcher_selected_window_id ?? null,
     focusedWindowId,
@@ -1330,11 +1337,51 @@ function App() {
     setCustomLayoutOverlay(null)
   }
 
+  function taskbarPinMonitorForWindow(windowId: number) {
+    const outputName = windowById(windowId)()?.output_name?.trim() ?? ''
+    if (!outputName) return null
+    return {
+      outputName,
+      outputId: outputIdentityForMonitorName(outputName),
+    }
+  }
+
+  function addFolderTaskbarPin(monitor: { outputName: string; outputId: string | null }, path: string, label: string) {
+    shellWireSend(
+      'taskbar_pin_add',
+      JSON.stringify({
+        outputName: monitor.outputName,
+        outputId: monitor.outputId,
+        pin: {
+          kind: 'folder',
+          id: `folder:${path}`,
+          label,
+          path,
+        },
+      }),
+    )
+  }
+
+  function removeFolderTaskbarPin(monitor: { outputName: string; outputId: string | null }, pinId: string) {
+    shellWireSend(
+      'taskbar_pin_remove',
+      JSON.stringify({
+        outputName: monitor.outputName,
+        outputId: monitor.outputId,
+        pinId,
+      }),
+    )
+  }
+
   function renderShellWindowContent(windowId: number): JSX.Element | undefined {
     return renderShellHostedWindowContent(windowId, {
       windowById,
       shellHostedAppByWindow,
       shellWireSend,
+      taskbarPins: () => workspaceSnapshot().taskbarPins ?? [],
+      taskbarPinMonitorForWindow,
+      onTaskbarPinFolderAdd: addFolderTaskbarPin,
+      onTaskbarPinFolderRemove: removeFolderTaskbarPin,
       onOpenFileBrowserInNewWindow: (path) => backedShellWindowActions.openFileBrowserWindow(path),
       onOpenImageFile: (detail) => backedShellWindowActions.openImageViewerWindow(detail),
       onOpenVideoFile: (detail) => backedShellWindowActions.openVideoViewerWindow(detail),
@@ -1461,6 +1508,45 @@ function App() {
     sendWorkspaceMutation,
     shellWireSend,
   })
+
+  function outputIdentityForMonitorName(monitorName: string): string | null {
+    return liveScreenRows().find((screen) => screen.name === monitorName)?.identity ?? null
+  }
+
+  function taskbarPinsForScreen(screen: LayoutScreen): TaskbarPin[] {
+    const pins = workspaceSnapshot().taskbarPins ?? []
+    const row =
+      (screen.identity
+        ? pins.find((monitor) => (monitor.outputId ?? '') === screen.identity)
+        : undefined) ?? pins.find((monitor) => monitor.outputName === screen.name)
+    return row?.pins ?? []
+  }
+
+  function sendTaskbarPinRemove(pin: TaskbarPin, monitorName: string): boolean {
+    return shellWireSend(
+      'taskbar_pin_remove',
+      JSON.stringify({
+        outputName: monitorName,
+        outputId: outputIdentityForMonitorName(monitorName),
+        pinId: pin.id,
+      }),
+    )
+  }
+
+  function activateTaskbarPin(pin: TaskbarPin, monitorName: string) {
+    if (pin.kind === 'folder') {
+      backedShellWindowActions.openFileBrowserWindowAtMonitor(pin.path, monitorName)
+      return
+    }
+    shellWireSend(
+      'taskbar_pin_launch',
+      JSON.stringify({
+        outputName: monitorName,
+        outputId: outputIdentityForMonitorName(monitorName),
+        pinId: pin.id,
+      }),
+    )
+  }
 
   createEffect(() => {
     void shellWireReadyRev()
@@ -1641,6 +1727,7 @@ function App() {
     isPrimaryTaskbarScreen: (screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary),
     batteryState: shellBattery.state,
     trayVolumeState,
+    taskbarPinsForScreen,
     taskbarRowsForScreen: workspaceLayoutBridge.taskbarRowsForScreen,
     focusedTaskbarWindowId,
     keyboardLayoutLabel,
@@ -1653,6 +1740,8 @@ function App() {
     windows,
     closeGroupWindow,
     activateTaskbarGroup,
+    activateTaskbarPin,
+    unpinTaskbarPin: sendTaskbarPinRemove,
     openSettingsShellWindow: backedShellWindowActions.openSettingsShellWindow,
     openDebugShellWindow: backedShellWindowActions.openDebugShellWindow,
     openTraySniMenu: shellContextMenus.openTraySniMenu,

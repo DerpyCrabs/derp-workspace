@@ -837,6 +837,42 @@ pub(crate) fn encode_workspace_state_binary_payload(state: &WorkspaceState) -> O
         body.extend_from_slice(&entry.bounds.width.to_le_bytes());
         body.extend_from_slice(&entry.bounds.height.to_le_bytes());
     }
+    body.extend_from_slice(&u32::try_from(state.taskbar_pins.len()).ok()?.to_le_bytes());
+    for monitor in &state.taskbar_pins {
+        push_wire_string(&mut body, &monitor.output_id)?;
+        push_wire_string(&mut body, &monitor.output_name)?;
+        body.extend_from_slice(&u32::try_from(monitor.pins.len()).ok()?.to_le_bytes());
+        for pin in &monitor.pins {
+            match pin {
+                crate::session::workspace_model::WorkspaceTaskbarPin::App {
+                    id,
+                    label,
+                    command,
+                    desktop_id,
+                    app_name,
+                    desktop_icon,
+                } => {
+                    body.extend_from_slice(&0u32.to_le_bytes());
+                    push_wire_string(&mut body, id)?;
+                    push_wire_string(&mut body, label)?;
+                    push_wire_string(&mut body, command)?;
+                    push_wire_string(&mut body, desktop_id.as_deref().unwrap_or_default())?;
+                    push_wire_string(&mut body, app_name.as_deref().unwrap_or_default())?;
+                    push_wire_string(&mut body, desktop_icon.as_deref().unwrap_or_default())?;
+                }
+                crate::session::workspace_model::WorkspaceTaskbarPin::Folder {
+                    id,
+                    label,
+                    path,
+                } => {
+                    body.extend_from_slice(&1u32.to_le_bytes());
+                    push_wire_string(&mut body, id)?;
+                    push_wire_string(&mut body, label)?;
+                    push_wire_string(&mut body, path)?;
+                }
+            }
+        }
+    }
     body.extend_from_slice(&state.next_group_seq.to_le_bytes());
     if body.len() > shell_wire::MAX_WORKSPACE_BINARY_BYTES as usize {
         return None;
@@ -953,6 +989,33 @@ fn encode_workspace_state_binary(revision: u64, state_json: &str) -> Option<Vec<
         push_json_i32(&mut body, bounds.get("y"))?;
         push_json_i32(&mut body, bounds.get("width"))?;
         push_json_i32(&mut body, bounds.get("height"))?;
+    }
+    let taskbar_pins = json_array(object.get("taskbarPins"));
+    body.extend_from_slice(&u32::try_from(taskbar_pins.len()).ok()?.to_le_bytes());
+    for monitor in taskbar_pins {
+        let monitor = monitor.as_object()?;
+        push_json_string(&mut body, monitor.get("outputId"))?;
+        push_json_string(&mut body, monitor.get("outputName"))?;
+        let pins = json_array(monitor.get("pins"));
+        body.extend_from_slice(&u32::try_from(pins.len()).ok()?.to_le_bytes());
+        for pin in pins {
+            let pin = pin.as_object()?;
+            let kind = pin.get("kind").and_then(|v| v.as_str()).unwrap_or_default();
+            if kind == "folder" {
+                body.extend_from_slice(&1u32.to_le_bytes());
+                push_json_string(&mut body, pin.get("id"))?;
+                push_json_string(&mut body, pin.get("label"))?;
+                push_json_string(&mut body, pin.get("path"))?;
+            } else {
+                body.extend_from_slice(&0u32.to_le_bytes());
+                push_json_string(&mut body, pin.get("id"))?;
+                push_json_string(&mut body, pin.get("label"))?;
+                push_json_string(&mut body, pin.get("command"))?;
+                push_json_string(&mut body, pin.get("desktopId"))?;
+                push_json_string(&mut body, pin.get("appName"))?;
+                push_json_string(&mut body, pin.get("desktopIcon"))?;
+            }
+        }
     }
     push_json_u32(&mut body, object.get("nextGroupSeq"))?;
     if body.len() > shell_wire::MAX_WORKSPACE_BINARY_BYTES as usize {

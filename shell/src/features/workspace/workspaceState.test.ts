@@ -280,4 +280,100 @@ describe('workspaceState', () => {
     ])
   })
 
+  it('normalizes per-monitor taskbar pins without matching windows', () => {
+    const state = normalizeWorkspaceState({
+      groups: [{ id: 'group-1', windowIds: [1] }],
+      activeTabByGroupId: { 'group-1': 1 },
+      taskbarPins: [
+        {
+          outputId: 'make:model:serial-a',
+          outputName: 'DP-1',
+          pins: [
+            {
+              kind: 'app',
+              id: 'app:org.gnome.Console.desktop',
+              label: 'Console',
+              command: 'kgx',
+              desktopId: 'org.gnome.Console.desktop',
+              appName: 'Console',
+              desktopIcon: 'utilities-terminal',
+            },
+            {
+              kind: 'app',
+              id: 'app:org.gnome.Console.desktop',
+              label: 'Console Duplicate',
+              command: 'kgx',
+            },
+          ],
+        },
+        {
+          outputId: 'make:model:serial-b',
+          outputName: 'DP-1',
+          pins: [
+            {
+              kind: 'folder',
+              id: 'folder:/home/crab/Projects',
+              label: 'Projects',
+              path: '/home/crab/Projects',
+            },
+          ],
+        },
+        {
+          outputId: 'missing-output',
+          outputName: 'HDMI-A-9',
+          pins: [
+            {
+              kind: 'folder',
+              id: 'folder:/home/crab/Archive',
+              label: 'Archive',
+              path: '/home/crab/Archive',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(state.taskbarPins).toEqual([
+      {
+        outputId: 'make:model:serial-a',
+        outputName: 'DP-1',
+        pins: [
+          {
+            kind: 'app',
+            id: 'app:org.gnome.Console.desktop',
+            label: 'Console',
+            command: 'kgx',
+            desktopId: 'org.gnome.Console.desktop',
+            appName: 'Console',
+            desktopIcon: 'utilities-terminal',
+          },
+        ],
+      },
+      {
+        outputId: 'make:model:serial-b',
+        outputName: 'DP-1',
+        pins: [
+          {
+            kind: 'folder',
+            id: 'folder:/home/crab/Projects',
+            label: 'Projects',
+            path: '/home/crab/Projects',
+          },
+        ],
+      },
+      {
+        outputId: 'missing-output',
+        outputName: 'HDMI-A-9',
+        pins: [
+          {
+            kind: 'folder',
+            id: 'folder:/home/crab/Archive',
+            label: 'Archive',
+            path: '/home/crab/Archive',
+          },
+        ],
+      },
+    ])
+  })
+
 })

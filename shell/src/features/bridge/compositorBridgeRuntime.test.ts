@@ -117,6 +117,7 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
       monitorTiles: [],
       monitorLayouts: [],
       preTileGeometry: [],
+      taskbarPins: [],
       nextGroupSeq: 1,
     }),
     occupiedSnapZonesOnMonitor: () => [],

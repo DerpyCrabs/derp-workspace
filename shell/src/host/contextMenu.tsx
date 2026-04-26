@@ -9,6 +9,7 @@ export type ShellContextMenuItem = {
   disabled?: boolean
   title?: string
   separator?: boolean
+  contextItems?: () => ShellContextMenuItem[]
 }
 
 export type LogicalWorkspaceBounds = {

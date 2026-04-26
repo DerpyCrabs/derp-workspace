@@ -16,9 +16,11 @@ import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicati
 import { searchDesktopApplications } from '@/features/desktop/desktopAppSearch'
 import type { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
+import type { DesktopAppEntry } from '@/features/bridge/shellBridge'
 import { canvasRectToClientCss, clientRectToGlobalLogical } from '@/lib/shellCoords'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import type { BackedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
+import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
 import {
   shellHostedProgramsBuiltinMatchesQuery,
   shellHostedProgramsMenuDefinitions,
@@ -64,8 +66,12 @@ type CreateShellContextMenusArgs = {
   windows: Accessor<readonly DerpWindow[]>
   windowSwitcherSelectedWindowId: Accessor<number | null>
   focusedWindowId: Accessor<number | null>
+  taskbarPins: Accessor<readonly WorkspaceTaskbarPinMonitor[]>
   activateWindow: (windowId: number) => boolean
-  shellWireSend: (op: 'programs_menu_opened' | 'programs_menu_closed', arg?: number) => boolean
+  shellWireSend: (
+    op: 'programs_menu_opened' | 'programs_menu_closed' | 'taskbar_pin_add' | 'taskbar_pin_remove',
+    arg?: number | string,
+  ) => boolean
   tabMenuItems: (windowId: number) => ShellContextMenuItem[]
   tabMenuWindowAvailable: (windowId: number) => boolean
   onTraySniMenuPick: (notifierId: string, menuPath: string, dbusmenuId: number) => void
@@ -106,6 +112,11 @@ function layoutScreenCssRect(
     vrr_supported: screen.vrr_supported,
     vrr_enabled: screen.vrr_enabled,
   }
+}
+
+function desktopAppPinId(app: DesktopAppEntry): string {
+  const desktopId = app.desktop_id.trim()
+  return `app:${desktopId || app.exec.trim()}`
 }
 
 export function createShellContextMenus(args: CreateShellContextMenusArgs) {
@@ -415,6 +426,69 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     void refreshDesktopAppUsageFromRemote().then((counts) => setProgramsUsageCounts(counts))
   }
 
+  function programsPinMonitor() {
+    const outputName = programsMenuOutputName() ?? args.shellChromePrimaryName() ?? args.screenDraftRows()[0]?.name ?? ''
+    const screen = args.screenDraftRows().find((row) => row.name === outputName)
+    return {
+      outputName,
+      outputId: screen?.identity ?? null,
+    }
+  }
+
+  function desktopAppPinnedOnProgramsMonitor(app: DesktopAppEntry) {
+    const monitor = programsPinMonitor()
+    const pinId = desktopAppPinId(app)
+    return args.taskbarPins().some((entry) => {
+      const monitorMatches =
+        monitor.outputId && entry.outputId
+          ? entry.outputId === monitor.outputId
+          : entry.outputName === monitor.outputName
+      return monitorMatches && entry.pins.some((pin) => pin.id === pinId)
+    })
+  }
+
+  function desktopAppPinContextItems(app: DesktopAppEntry): ShellContextMenuItem[] {
+    const monitor = programsPinMonitor()
+    if (!monitor.outputName) return []
+    const pinId = desktopAppPinId(app)
+    const pinned = desktopAppPinnedOnProgramsMonitor(app)
+    return [
+      {
+        actionId: pinned ? 'unpin-from-monitor' : 'pin-to-monitor',
+        label: pinned ? 'Unpin from this monitor' : 'Pin to this monitor',
+        action: () => {
+          if (pinned) {
+            args.shellWireSend(
+              'taskbar_pin_remove',
+              JSON.stringify({
+                outputName: monitor.outputName,
+                outputId: monitor.outputId,
+                pinId,
+              }),
+            )
+            return
+          }
+          args.shellWireSend(
+            'taskbar_pin_add',
+            JSON.stringify({
+              outputName: monitor.outputName,
+              outputId: monitor.outputId,
+              pin: {
+                kind: 'app',
+                id: pinId,
+                label: app.name,
+                command: app.exec,
+                desktopId: app.desktop_id.trim() || null,
+                appName: app.name.trim() || null,
+                desktopIcon: app.icon?.trim() || null,
+              },
+            }),
+          )
+        },
+      },
+    ]
+  }
+
   function toggleProgramsMenuMeta(outputName?: string | null) {
     if (triggerIsOpen(programsMenuTrigger)) {
       hideContextMenu()
@@ -629,6 +703,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
       ...searchDesktopApplications(raw, q, programsUsageCounts()).map((app) => ({
         label: app.name,
         badge: app.terminal ? 'tty' : undefined,
+        contextItems: () => desktopAppPinContextItems(app),
         action: () => {
           setProgramsUsageCounts(recordDesktopAppLaunch(app))
           hideContextMenu(false)

@@ -10,6 +10,8 @@ import {
   type WorkspaceMonitorTileEntry,
   type WorkspaceMonitorTileState,
   type WorkspacePreTileGeometry,
+  type WorkspaceTaskbarPin,
+  type WorkspaceTaskbarPinMonitor,
   type WorkspaceSnapshot,
 } from './workspaceProtocol'
 
@@ -22,6 +24,8 @@ export type {
   WorkspaceMonitorTileEntry,
   WorkspaceMonitorTileState,
   WorkspacePreTileGeometry,
+  WorkspaceTaskbarPin,
+  WorkspaceTaskbarPinMonitor,
   WorkspaceSnapshot,
 } from './workspaceProtocol'
 
@@ -62,6 +66,11 @@ export function cloneWorkspaceSnapshot(state: WorkspaceSnapshot): WorkspaceSnaps
       windowId: entry.windowId,
       bounds: { ...entry.bounds },
     })),
+    taskbarPins: (state.taskbarPins ?? []).map((monitor) => ({
+      outputId: monitor.outputId,
+      outputName: monitor.outputName,
+      pins: monitor.pins.map(cloneWorkspaceTaskbarPin),
+    })),
     nextGroupSeq: state.nextGroupSeq,
   }
 }
@@ -75,8 +84,43 @@ export function createEmptyWorkspaceSnapshot(): WorkspaceSnapshot {
     monitorTiles: [],
     monitorLayouts: [],
     preTileGeometry: [],
+    taskbarPins: [],
     nextGroupSeq: 1,
   }
+}
+
+export function cloneWorkspaceTaskbarPin(pin: WorkspaceTaskbarPin): WorkspaceTaskbarPin {
+  if (pin.kind === 'app') {
+    return {
+      kind: 'app',
+      id: pin.id,
+      label: pin.label,
+      command: pin.command,
+      desktopId: pin.desktopId,
+      appName: pin.appName,
+      desktopIcon: pin.desktopIcon,
+    }
+  }
+  return {
+    kind: 'folder',
+    id: pin.id,
+    label: pin.label,
+    path: pin.path,
+  }
+}
+
+function workspaceTaskbarPinsEqual(a: WorkspaceTaskbarPin, b: WorkspaceTaskbarPin): boolean {
+  if (a.kind !== b.kind || a.id !== b.id || a.label !== b.label) return false
+  if (a.kind === 'app' && b.kind === 'app') {
+    return (
+      a.command === b.command &&
+      (a.desktopId ?? '') === (b.desktopId ?? '') &&
+      (a.appName ?? '') === (b.appName ?? '') &&
+      (a.desktopIcon ?? '') === (b.desktopIcon ?? '')
+    )
+  }
+  if (a.kind === 'folder' && b.kind === 'folder') return a.path === b.path
+  return false
 }
 
 export function workspaceSnapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): boolean {
@@ -151,6 +195,19 @@ export function workspaceSnapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapsh
     if (entryA.bounds.y !== entryB.bounds.y) return false
     if (entryA.bounds.width !== entryB.bounds.width) return false
     if (entryA.bounds.height !== entryB.bounds.height) return false
+  }
+  const pinsA = a.taskbarPins ?? []
+  const pinsB = b.taskbarPins ?? []
+  if (pinsA.length !== pinsB.length) return false
+  for (let monitorIndex = 0; monitorIndex < pinsA.length; monitorIndex += 1) {
+    const monitorA = pinsA[monitorIndex]
+    const monitorB = pinsB[monitorIndex]
+    if ((monitorA.outputId ?? '') !== (monitorB.outputId ?? '')) return false
+    if (monitorA.outputName !== monitorB.outputName) return false
+    if (monitorA.pins.length !== monitorB.pins.length) return false
+    for (let pinIndex = 0; pinIndex < monitorA.pins.length; pinIndex += 1) {
+      if (!workspaceTaskbarPinsEqual(monitorA.pins[pinIndex], monitorB.pins[pinIndex])) return false
+    }
   }
   if (a.groups.length !== b.groups.length) return false
   for (let index = 0; index < a.groups.length; index += 1) {
@@ -285,6 +342,56 @@ function normalizePreTileGeometry(raw: unknown): WorkspacePreTileGeometry[] {
     out.push({ windowId, bounds })
   }
   return out
+}
+
+function normalizeTaskbarPins(raw: unknown): WorkspaceTaskbarPinMonitor[] {
+  if (!Array.isArray(raw)) return []
+  const out: WorkspaceTaskbarPinMonitor[] = []
+  const seenMonitors = new Set<string>()
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') continue
+    const record = value as Record<string, unknown>
+    const outputName = typeof record.outputName === 'string' ? record.outputName.trim() : ''
+    const outputId = typeof record.outputId === 'string' ? record.outputId.trim() : ''
+    if (!outputName) continue
+    const monitorKey = workspaceOutputKey(outputName, outputId || undefined)
+    if (seenMonitors.has(monitorKey)) continue
+    seenMonitors.add(monitorKey)
+    const pinsRaw = Array.isArray(record.pins) ? record.pins : []
+    const pins: WorkspaceTaskbarPin[] = []
+    const seenPins = new Set<string>()
+    for (const pinValue of pinsRaw) {
+      const pin = normalizeTaskbarPin(pinValue)
+      if (!pin || seenPins.has(pin.id)) continue
+      seenPins.add(pin.id)
+      pins.push(pin)
+    }
+    if (pins.length > 0) out.push({ ...(outputId ? { outputId } : {}), outputName, pins })
+  }
+  return out
+}
+
+function normalizeTaskbarPin(raw: unknown): WorkspaceTaskbarPin | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  const kind = record.kind
+  const id = typeof record.id === 'string' ? record.id.trim() : ''
+  const label = typeof record.label === 'string' ? record.label.trim() : ''
+  if (!id || !label) return null
+  if (kind === 'app') {
+    const command = typeof record.command === 'string' ? record.command.trim() : ''
+    if (!command) return null
+    const desktopId = typeof record.desktopId === 'string' && record.desktopId.trim() ? record.desktopId.trim() : null
+    const appName = typeof record.appName === 'string' && record.appName.trim() ? record.appName.trim() : null
+    const desktopIcon = typeof record.desktopIcon === 'string' && record.desktopIcon.trim() ? record.desktopIcon.trim() : null
+    return { kind: 'app', id, label, command, desktopId, appName, desktopIcon }
+  }
+  if (kind === 'folder') {
+    const path = typeof record.path === 'string' ? record.path.trim() : ''
+    if (!path) return null
+    return { kind: 'folder', id, label, path }
+  }
+  return null
 }
 
 function isWorkspaceMonitorLayoutType(value: unknown): value is WorkspaceMonitorLayoutType {
@@ -464,6 +571,7 @@ export function normalizeWorkspaceSnapshot(raw: unknown): WorkspaceSnapshot {
   state.monitorTiles = normalizeMonitorTiles(source.monitorTiles)
   state.monitorLayouts = normalizeMonitorLayouts(source.monitorLayouts)
   state.preTileGeometry = normalizePreTileGeometry(source.preTileGeometry)
+  state.taskbarPins = normalizeTaskbarPins(source.taskbarPins)
   const nextRaw = typeof source.nextGroupSeq === 'number' ? source.nextGroupSeq : Number(source.nextGroupSeq)
   const nextSeq = Math.trunc(nextRaw)
   state.nextGroupSeq =

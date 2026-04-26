@@ -99,6 +99,7 @@ use crate::{
         WorkspaceCustomAutoSlot, WorkspaceMonitorLayoutState, WorkspaceMonitorLayoutType,
         WorkspaceMonitorTileEntry, WorkspaceMonitorTileState, WorkspaceMutation, WorkspaceRect,
         WorkspaceSlotRule, WorkspaceSlotRuleField, WorkspaceSlotRuleOp, WorkspaceState,
+        WorkspaceTaskbarPin, WorkspaceTaskbarPinMonitor,
     },
     shell::shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
@@ -635,6 +636,7 @@ pub struct CompositorState {
     /// Hotspot within [`Self::cursor_fallback_buffer`] (logical px).
     pub(crate) cursor_fallback_hotspot: (i32, i32),
     shell_spawn_known_native_window_ids: Option<HashSet<u32>>,
+    shell_spawn_target_output_name: Option<String>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
@@ -716,6 +718,7 @@ pub struct CompositorState {
     pub(crate) shell_move_last_flush_at: Option<Instant>,
     pub(crate) shell_snapshot_epoch: u64,
     pub(crate) workspace_state: WorkspaceState,
+    pub(crate) taskbar_pins: Vec<WorkspaceTaskbarPinMonitor>,
     pub(crate) shell_last_sent_ui_focus_id: Option<u32>,
     pub(crate) shell_last_sent_focus_pair: Option<(Option<u32>, Option<u32>)>,
     pub(crate) shell_last_sent_window_order: Vec<(u32, u32)>,
@@ -1459,6 +1462,7 @@ impl CompositorState {
             cursor_fallback_buffer,
             cursor_fallback_hotspot,
             shell_spawn_known_native_window_ids: None,
+            shell_spawn_target_output_name: None,
             shell_minimized_windows: HashMap::new(),
             shell_minimized_x11_windows: HashMap::new(),
             shell_pending_native_focus_window_id: None,
@@ -1528,6 +1532,7 @@ impl CompositorState {
             shell_move_last_flush_at: None,
             shell_snapshot_epoch: 0,
             workspace_state: WorkspaceState::default(),
+            taskbar_pins: crate::session::taskbar_pins::read_taskbar_pins(),
             shell_last_sent_ui_focus_id: None,
             shell_last_sent_focus_pair: None,
             shell_last_sent_window_order: Vec::new(),
@@ -3459,6 +3464,7 @@ impl CompositorState {
             return;
         }
         self.shell_spawn_known_native_window_ids = None;
+        self.shell_spawn_target_output_name = None;
         self.shell_raise_and_focus_window(window_id);
     }
 
@@ -4185,6 +4191,15 @@ impl CompositorState {
                         return Some(o);
                     }
                 }
+            }
+        }
+        if let Some(target_name) = self.shell_spawn_target_output_name.as_ref() {
+            if let Some(out) = self
+                .space
+                .outputs()
+                .find(|output| output.name() == target_name.as_str())
+            {
+                return Some(out.clone());
             }
         }
         if let Some(ptr) = self.seat.get_pointer() {
@@ -9937,8 +9952,185 @@ impl CompositorState {
         self.shell_send_to_cef(msg);
     }
 
+    fn taskbar_pin_monitor_matches(
+        monitor: &WorkspaceTaskbarPinMonitor,
+        output_name: &str,
+        output_id: &str,
+    ) -> bool {
+        if !output_id.is_empty() && !monitor.output_id.is_empty() {
+            return monitor.output_id == output_id;
+        }
+        monitor.output_name == output_name
+    }
+
+    fn taskbar_pin_monitor_index(&self, output_name: &str, output_id: &str) -> Option<usize> {
+        self.taskbar_pins
+            .iter()
+            .position(|monitor| Self::taskbar_pin_monitor_matches(monitor, output_name, output_id))
+    }
+
+    fn taskbar_pin_current_output_name(&self, output_name: &str, output_id: &str) -> String {
+        if !output_id.is_empty() {
+            if let Some(name) = self
+                .space
+                .outputs()
+                .find(|output| Self::shell_output_identity(output) == output_id)
+                .map(|output| output.name())
+            {
+                return name;
+            }
+        }
+        output_name.to_string()
+    }
+
+    fn write_taskbar_pins_state(&self) {
+        if let Err(error) =
+            crate::session::taskbar_pins::write_taskbar_pins(self.taskbar_pins.clone())
+        {
+            tracing::warn!(%error, "write taskbar pins failed");
+        }
+    }
+
+    pub(crate) fn apply_taskbar_pin_add_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct Params {
+            #[serde(rename = "outputName")]
+            output_name: String,
+            #[serde(default, rename = "outputId")]
+            output_id: Option<String>,
+            pin: WorkspaceTaskbarPin,
+        }
+        let Ok(params) = serde_json::from_str::<Params>(json) else {
+            return;
+        };
+        let output_name = params.output_name.trim();
+        if output_name.is_empty() {
+            return;
+        }
+        let output_id = params.output_id.unwrap_or_default();
+        let output_id = output_id.trim();
+        let mut monitors = self.taskbar_pins.clone();
+        let index = monitors
+            .iter()
+            .position(|monitor| Self::taskbar_pin_monitor_matches(monitor, output_name, output_id))
+            .unwrap_or_else(|| {
+                monitors.push(WorkspaceTaskbarPinMonitor {
+                    output_id: output_id.to_string(),
+                    output_name: output_name.to_string(),
+                    pins: Vec::new(),
+                });
+                monitors.len() - 1
+            });
+        let pin_id = crate::session::taskbar_pins::taskbar_pin_id(&params.pin).to_string();
+        let monitor = &mut monitors[index];
+        monitor.output_name = output_name.to_string();
+        if !output_id.is_empty() {
+            monitor.output_id = output_id.to_string();
+        }
+        if let Some(existing) = monitor
+            .pins
+            .iter_mut()
+            .find(|pin| crate::session::taskbar_pins::taskbar_pin_id(pin) == pin_id)
+        {
+            *existing = params.pin;
+        } else {
+            monitor.pins.push(params.pin);
+        }
+        let next = crate::session::taskbar_pins::sanitize_taskbar_pins(monitors);
+        if next == self.taskbar_pins {
+            return;
+        }
+        self.taskbar_pins = next;
+        self.write_taskbar_pins_state();
+        self.workspace_send_state();
+    }
+
+    pub(crate) fn apply_taskbar_pin_remove_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct Params {
+            #[serde(rename = "outputName")]
+            output_name: String,
+            #[serde(default, rename = "outputId")]
+            output_id: Option<String>,
+            #[serde(rename = "pinId")]
+            pin_id: String,
+        }
+        let Ok(params) = serde_json::from_str::<Params>(json) else {
+            return;
+        };
+        let output_name = params.output_name.trim();
+        if output_name.is_empty() {
+            return;
+        }
+        let output_id = params.output_id.unwrap_or_default();
+        let output_id = output_id.trim();
+        let pin_id = params.pin_id.trim();
+        if pin_id.is_empty() {
+            return;
+        }
+        let mut next = self.taskbar_pins.clone();
+        if let Some(index) = next
+            .iter()
+            .position(|monitor| Self::taskbar_pin_monitor_matches(monitor, output_name, output_id))
+        {
+            next[index]
+                .pins
+                .retain(|pin| crate::session::taskbar_pins::taskbar_pin_id(pin) != pin_id);
+            if next[index].pins.is_empty() {
+                next.remove(index);
+            }
+        }
+        let next = crate::session::taskbar_pins::sanitize_taskbar_pins(next);
+        if next == self.taskbar_pins {
+            return;
+        }
+        self.taskbar_pins = next;
+        self.write_taskbar_pins_state();
+        self.workspace_send_state();
+    }
+
+    pub(crate) fn launch_taskbar_pin_json(&mut self, json: &str) {
+        #[derive(serde::Deserialize)]
+        struct Params {
+            #[serde(rename = "outputName")]
+            output_name: String,
+            #[serde(default, rename = "outputId")]
+            output_id: Option<String>,
+            #[serde(rename = "pinId")]
+            pin_id: String,
+        }
+        let Ok(params) = serde_json::from_str::<Params>(json) else {
+            return;
+        };
+        let output_name = params.output_name.trim();
+        let output_id = params.output_id.unwrap_or_default();
+        let output_id = output_id.trim();
+        let pin_id = params.pin_id.trim();
+        let Some(index) = self.taskbar_pin_monitor_index(output_name, output_id) else {
+            return;
+        };
+        let Some(pin) = self.taskbar_pins[index]
+            .pins
+            .iter()
+            .find(|pin| crate::session::taskbar_pins::taskbar_pin_id(pin) == pin_id)
+            .cloned()
+        else {
+            return;
+        };
+        let WorkspaceTaskbarPin::App { command, .. } = pin else {
+            return;
+        };
+        let target = self.taskbar_pin_current_output_name(output_name, output_id);
+        self.shell_spawn_target_output_name = Some(target);
+        if let Err(error) = self.try_spawn_wayland_client_sh(&command) {
+            self.shell_spawn_target_output_name = None;
+            tracing::warn!(%error, command = %command, "taskbar pin launch failed");
+        }
+    }
+
     pub(crate) fn workspace_state_for_shell(&self) -> WorkspaceState {
         let mut state = self.workspace_state.clone();
+        state.taskbar_pins = self.taskbar_pins.clone();
         for monitor in &mut state.monitor_tiles {
             if monitor.output_id.is_empty() {
                 continue;
@@ -9963,6 +10155,19 @@ impl CompositorState {
                 .map(|output| output.name())
             {
                 layout.output_name = output_name;
+            }
+        }
+        for monitor in &mut state.taskbar_pins {
+            if monitor.output_id.is_empty() {
+                continue;
+            }
+            if let Some(output_name) = self
+                .space
+                .outputs()
+                .find(|output| Self::shell_output_identity(output) == monitor.output_id)
+                .map(|output| output.name())
+            {
+                monitor.output_name = output_name;
             }
         }
         state

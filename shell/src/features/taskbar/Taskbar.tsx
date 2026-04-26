@@ -9,6 +9,7 @@ import X from 'lucide-solid/icons/x'
 import Settings from 'lucide-solid/icons/settings'
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
+import { FileBrowserContextMenu } from '@/apps/file-browser/FileBrowserContextMenu'
 import { PowerContextMenu } from '@/host/PowerContextMenu'
 import { ProgramsContextMenu } from '@/host/ProgramsContextMenu'
 import {
@@ -19,6 +20,8 @@ import {
   VolumeTaskbarMenu,
 } from '@/host/TaskbarContextMenu'
 import { VolumeContextMenu } from '@/host/VolumeContextMenu'
+import type { ShellContextMenuItem } from '@/host/contextMenu'
+import { useShellContextMenus } from '@/host/ShellContextMenusContext'
 import { taskbarRowTooltip, taskbarWindowLabel } from '@/features/taskbar/taskbarRowTooltip'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
@@ -44,6 +47,23 @@ export type TaskbarSniItem = {
   icon_base64: string
 }
 
+export type TaskbarPin =
+  | {
+      kind: 'app'
+      id: string
+      label: string
+      command: string
+      desktopId?: string | null
+      appName?: string | null
+      desktopIcon?: string | null
+    }
+  | {
+      kind: 'folder'
+      id: string
+      label: string
+      path: string
+    }
+
 export type TaskbarProps = {
   monitorName: string
   isPrimary: boolean
@@ -55,6 +75,7 @@ export type TaskbarProps = {
   onSniTrayContextMenu: (id: string, clientX: number, clientY: number) => void
   volumeMuted: boolean
   volumePercent: number | null
+  pins: TaskbarPin[]
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
   keyboardLayoutLabel: string | null
@@ -64,6 +85,8 @@ export type TaskbarProps = {
   onDebugPanelToggle: () => void
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
+  onTaskbarPinActivate: (pin: TaskbarPin, monitorName: string) => void
+  onTaskbarPinUnpin: (pin: TaskbarPin, monitorName: string) => void
 }
 
 const clockTimeFormatter = new Intl.DateTimeFormat([], {
@@ -232,6 +255,90 @@ function TaskbarWindowRows(props: {
   )
 }
 
+function TaskbarPins(props: {
+  monitorName: string
+  pins: TaskbarPin[]
+  compactMode: 'normal' | 'compact' | 'tight'
+  onTaskbarPinActivate: (pin: TaskbarPin, monitorName: string) => void
+  onTaskbarPinUnpin: (pin: TaskbarPin, monitorName: string) => void
+}) {
+  const shellContextMenus = useShellContextMenus()
+  const [pinMenu, setPinMenu] = createSignal<{ x: number; y: number; pin: TaskbarPin } | null>(null)
+  const pinMenuItems = (): ShellContextMenuItem[] => {
+    const current = pinMenu()
+    if (!current) return []
+    return [
+      {
+        actionId: 'unpin-from-monitor',
+        label: 'Unpin from this monitor',
+        action: () => props.onTaskbarPinUnpin(current.pin, props.monitorName),
+      },
+    ]
+  }
+  return (
+    <>
+      <For each={props.pins}>
+        {(pin) => {
+          const title = () => (pin.kind === 'folder' ? `Folder: ${pin.path}` : pin.label)
+          return (
+            <button
+              type="button"
+              class="relative flex h-full shrink-0 cursor-pointer items-center justify-center border-r border-(--shell-border) bg-transparent text-(--shell-text-muted) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+              classList={{
+                'w-11': props.compactMode !== 'tight',
+                'w-9': props.compactMode === 'tight',
+              }}
+              data-shell-taskbar-pin={pin.id}
+              data-shell-taskbar-pin-kind={pin.kind}
+              data-shell-taskbar-pin-monitor={props.monitorName}
+              title={title()}
+              aria-label={title()}
+              onPointerUp={(e) => {
+                if (e.button !== 0) return
+                props.onTaskbarPinActivate(pin, props.monitorName)
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setPinMenu({ x: e.clientX, y: e.clientY, pin })
+              }}
+            >
+              <TaskbarWindowIcon
+                meta={
+                  pin.kind === 'folder'
+                    ? {
+                        title: pin.label,
+                        appId: 'derp.files',
+                        desktopId: null,
+                        desktopIcon: null,
+                        shellFilePath: pin.path,
+                      }
+                    : {
+                        title: pin.label,
+                        appId: pin.appName ?? pin.label,
+                        desktopId: pin.desktopId ?? null,
+                        desktopIcon: pin.desktopIcon ?? null,
+                        shellFilePath: null,
+                      }
+                }
+                active={false}
+                compact
+              />
+            </button>
+          )
+        }}
+      </For>
+      <FileBrowserContextMenu
+        open={() => pinMenu() !== null}
+        anchor={() => pinMenu()}
+        items={pinMenuItems}
+        onRequestClose={() => setPinMenu(null)}
+        portalMount={() => shellContextMenus.menuLayerHostEl() ?? undefined}
+      />
+    </>
+  )
+}
+
 export function Taskbar(props: TaskbarProps) {
   const [now, setNow] = createSignal(new Date())
   const [windowRailWidth, setWindowRailWidth] = createSignal(0)
@@ -247,10 +354,11 @@ export function Taskbar(props: TaskbarProps) {
     return <Icon class="h-4 w-4" stroke-width={2} />
   }
   const compactMode = createMemo<'normal' | 'compact' | 'tight'>(() => {
-    if (props.windows.length === 0) return 'normal'
+    const itemCount = props.windows.length + props.pins.length
+    if (itemCount === 0) return 'normal'
     const width = windowRailWidth()
     if (width <= 0) return 'normal'
-    const perWindow = width / props.windows.length
+    const perWindow = width / itemCount
     if (perWindow < 82) return 'tight'
     if (perWindow < 132) return 'compact'
     return 'normal'
@@ -397,6 +505,13 @@ export function Taskbar(props: TaskbarProps) {
               windowRailRef = el
             }}
           >
+            <TaskbarPins
+              monitorName={props.monitorName}
+              pins={props.pins}
+              compactMode={compactMode()}
+              onTaskbarPinActivate={props.onTaskbarPinActivate}
+              onTaskbarPinUnpin={props.onTaskbarPinUnpin}
+            />
             <TaskbarWindowRows
               windows={props.windows}
               focusedWindowId={props.focusedWindowId}
@@ -446,6 +561,13 @@ export function Taskbar(props: TaskbarProps) {
             windowRailRef = el
           }}
         >
+          <TaskbarPins
+            monitorName={props.monitorName}
+            pins={props.pins}
+            compactMode={compactMode()}
+            onTaskbarPinActivate={props.onTaskbarPinActivate}
+            onTaskbarPinUnpin={props.onTaskbarPinUnpin}
+          />
           <TaskbarWindowRows
             windows={props.windows}
             focusedWindowId={props.focusedWindowId}

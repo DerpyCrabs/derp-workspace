@@ -354,6 +354,7 @@ describe('decodeCompositorSnapshot', () => {
       ...i32(200),
       ...u32(0),
       ...u32(0),
+      ...u32(0),
       ...u32(2),
     ])
     const payload = [...domainRevisions([0, 0, 0, 0, 5]), ...workspace]
@@ -388,6 +389,7 @@ describe('decodeCompositorSnapshot', () => {
             ],
             monitorLayouts: [],
             preTileGeometry: [],
+            taskbarPins: [],
             nextGroupSeq: 2,
           },
         },

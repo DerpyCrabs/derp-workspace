@@ -10,6 +10,7 @@ export const WORKSPACE_STATE_FIELDS = [
   'monitorTiles',
   'monitorLayouts',
   'preTileGeometry',
+  'taskbarPins',
   'nextGroupSeq',
 ] as const
 
@@ -81,6 +82,29 @@ export type WorkspacePreTileGeometry = {
   bounds: Rect
 }
 
+export type WorkspaceTaskbarPin =
+  | {
+      kind: 'app'
+      id: string
+      label: string
+      command: string
+      desktopId?: string | null
+      appName?: string | null
+      desktopIcon?: string | null
+    }
+  | {
+      kind: 'folder'
+      id: string
+      label: string
+      path: string
+    }
+
+export type WorkspaceTaskbarPinMonitor = {
+  outputId?: string
+  outputName: string
+  pins: WorkspaceTaskbarPin[]
+}
+
 export type WorkspaceSlotRule = {
   field: WorkspaceSlotRuleField
   op: WorkspaceSlotRuleOp
@@ -118,6 +142,7 @@ export type WorkspaceState = {
   monitorTiles: WorkspaceMonitorTileState[]
   monitorLayouts: WorkspaceMonitorLayoutState[]
   preTileGeometry: WorkspacePreTileGeometry[]
+  taskbarPins: WorkspaceTaskbarPinMonitor[]
   nextGroupSeq: number
 }
 

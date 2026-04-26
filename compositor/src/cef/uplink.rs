@@ -356,6 +356,24 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn taskbar_pin_add(&self, json: String) {
+        self.run(move |s| {
+            s.apply_taskbar_pin_add_json(&json);
+        });
+    }
+
+    pub fn taskbar_pin_remove(&self, json: String) {
+        self.run(move |s| {
+            s.apply_taskbar_pin_remove_json(&json);
+        });
+    }
+
+    pub fn taskbar_pin_launch(&self, json: String) {
+        self.run(move |s| {
+            s.launch_taskbar_pin_json(&json);
+        });
+    }
+
     pub fn shell_hosted_window_state(&self, json: String) {
         self.run(move |s| {
             s.apply_shell_hosted_window_state_json(&json);

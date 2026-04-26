@@ -46,6 +46,40 @@ pub struct WorkspacePreTileGeometry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkspaceTaskbarPin {
+    App {
+        id: String,
+        label: String,
+        command: String,
+        #[serde(default, rename = "desktopId", skip_serializing_if = "Option::is_none")]
+        desktop_id: Option<String>,
+        #[serde(default, rename = "appName", skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
+        #[serde(
+            default,
+            rename = "desktopIcon",
+            skip_serializing_if = "Option::is_none"
+        )]
+        desktop_icon: Option<String>,
+    },
+    Folder {
+        id: String,
+        label: String,
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceTaskbarPinMonitor {
+    #[serde(default, rename = "outputId", skip_serializing_if = "String::is_empty")]
+    pub output_id: String,
+    #[serde(rename = "outputName")]
+    pub output_name: String,
+    pub pins: Vec<WorkspaceTaskbarPin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceMonitorLayoutType {
     ManualSnap,
@@ -152,6 +186,8 @@ pub struct WorkspaceState {
     pub monitor_layouts: Vec<WorkspaceMonitorLayoutState>,
     #[serde(default, rename = "preTileGeometry")]
     pub pre_tile_geometry: Vec<WorkspacePreTileGeometry>,
+    #[serde(default, rename = "taskbarPins", skip_serializing_if = "Vec::is_empty")]
+    pub taskbar_pins: Vec<WorkspaceTaskbarPinMonitor>,
     #[serde(rename = "nextGroupSeq")]
     pub next_group_seq: u32,
 }
@@ -311,6 +347,7 @@ impl Default for WorkspaceState {
             monitor_tiles: Vec::new(),
             monitor_layouts: Vec::new(),
             pre_tile_geometry: Vec::new(),
+            taskbar_pins: Vec::new(),
             next_group_seq: 1,
         }
     }
@@ -359,6 +396,7 @@ mod tests {
                 params: WorkspaceMonitorLayoutParams::default(),
             }],
             pre_tile_geometry: Vec::new(),
+            taskbar_pins: Vec::new(),
             next_group_seq: 3,
         };
         let mutation = WorkspaceMutation::RestoreSessionWorkspace {
@@ -431,6 +469,7 @@ mod tests {
             monitor_tiles: Vec::new(),
             monitor_layouts: Vec::new(),
             pre_tile_geometry: Vec::new(),
+            taskbar_pins: Vec::new(),
             next_group_seq: 3,
         };
         let next = state
@@ -536,6 +575,7 @@ mod tests {
                 params: WorkspaceMonitorLayoutParams::default(),
             }],
             pre_tile_geometry: Vec::new(),
+            taskbar_pins: Vec::new(),
             next_group_seq: 2,
         };
         let next = state
@@ -646,6 +686,7 @@ mod tests {
                     "monitorTiles",
                     "monitorLayouts",
                     "preTileGeometry",
+                    "taskbarPins",
                     "nextGroupSeq"
                 ],
                 "workspaceDerivedFields": [],
@@ -990,6 +1031,7 @@ fn restore_session_workspace_state(
         monitor_tiles: Vec::new(),
         monitor_layouts: current.monitor_layouts.clone(),
         pre_tile_geometry: Vec::new(),
+        taskbar_pins: current.taskbar_pins.clone(),
         next_group_seq,
     };
     let mut assigned = HashSet::new();

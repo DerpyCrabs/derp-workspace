@@ -21,6 +21,14 @@ type E2eSnapshotTaskbarRow = {
   tab_count: number
 }
 
+type E2eSnapshotTaskbarPin = {
+  id: string
+  kind: string
+  monitor: string
+  title: string
+  rect: E2eRectSnapshot | null
+}
+
 type E2eSnapshotGroupMember = {
   window_id: number
 }
@@ -494,6 +502,13 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     activate: snapshotRect(cache.queryAttr('data-shell-taskbar-window-activate', row.window_id), args.origin),
     close: snapshotRect(cache.queryAttr('data-shell-taskbar-window-close', row.window_id), args.origin),
   }))
+  const taskbarPins: E2eSnapshotTaskbarPin[] = cache.queryAllAttr('data-shell-taskbar-pin').map((pin) => ({
+    id: pin.getAttribute('data-shell-taskbar-pin') ?? '',
+    kind: pin.getAttribute('data-shell-taskbar-pin-kind') ?? '',
+    monitor: pin.getAttribute('data-shell-taskbar-pin-monitor') ?? '',
+    title: pin.getAttribute('title') ?? '',
+    rect: snapshotRect(pin, args.origin),
+  })).filter((pin) => pin.id.length > 0)
   const windowControls = args.windows.map((window) => {
     const nativeDragPreviewEl = cache.queryAttr('data-shell-native-drag-preview', window.window_id)
     const nativeDragPreviewImg = nativeDragPreviewEl?.querySelector('img')
@@ -745,7 +760,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       el.textContent ??
       ''
     ).trim(),
-    rect: snapshotRect(el, args.origin),
+    rect: args.projectCurrentMenuElementRect(el) ?? snapshotRect(el, args.origin),
   }))
 
   const menuLayerHostElResolved =
@@ -1129,8 +1144,9 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
     },
     taskbars: taskbarButtons,
-  taskbar_windows: taskbarWindowButtons,
-  window_controls: windowControls,
+    taskbar_pins: taskbarPins,
+    taskbar_windows: taskbarWindowButtons,
+    window_controls: windowControls,
     bridge_debug:
       typeof window.__DERP_BRIDGE_DEBUG === 'object' && window.__DERP_BRIDGE_DEBUG !== null
         ? window.__DERP_BRIDGE_DEBUG

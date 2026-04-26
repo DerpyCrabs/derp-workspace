@@ -206,6 +206,14 @@ export interface ShellTaskbarWindow {
   close?: Rect | null
 }
 
+export interface ShellTaskbarPin {
+  id: string
+  kind: string
+  monitor: string
+  title: string
+  rect?: Rect | null
+}
+
 export interface ShellTabButton {
   window_id: number
   rect?: Rect | null
@@ -457,6 +465,7 @@ export interface PortalPickerMonitorSnapshot {
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
+  taskbar_pins?: ShellTaskbarPin[]
   taskbar_windows: ShellTaskbarWindow[]
   tab_groups?: ShellTabGroup[]
   window_controls?: ShellWindowControls[]

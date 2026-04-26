@@ -8,6 +8,7 @@
     "monitorTiles",
     "monitorLayouts",
     "preTileGeometry",
+    "taskbarPins",
     "nextGroupSeq"
   ],
   "workspaceDerivedFields": [],

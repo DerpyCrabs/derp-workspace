@@ -14,6 +14,7 @@ import shellChromeSessionGroup from './shell-chrome-session.spec.ts'
 import snapAssistGroup from './snap-assist.spec.ts'
 import scratchpadsGroup from './scratchpads.spec.ts'
 import tabGroupsGroup from './tab-groups.spec.ts'
+import taskbarPinsGroup from './taskbar-pins.spec.ts'
 import taskbarMinimizeGroup from './taskbar-minimize.spec.ts'
 import taskbarCloseGroup from './taskbar-close.spec.ts'
 import textEditorGroup from './text-editor.spec.ts'
@@ -37,6 +38,7 @@ export const defaultGroups = [
   launcherMultimonitorGroup,
   fileBrowserGroup,
   textEditorGroup,
+  taskbarPinsGroup,
   taskbarMinimizeGroup,
   taskbarCloseGroup,
   externalControlGroup,
