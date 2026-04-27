@@ -3,7 +3,6 @@ export type ShellCompositorWireOp =
   | 'quit'
   | 'request_compositor_sync'
   | 'invalidate_view'
-  | 'shell_ipc_pong'
   | 'spawn'
   | 'move_begin'
   | 'move_delta'

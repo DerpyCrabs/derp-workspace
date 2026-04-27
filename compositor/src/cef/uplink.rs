@@ -15,10 +15,7 @@ impl UplinkToCompositor {
     }
 
     fn run(&self, f: impl FnOnce(&mut crate::state::CompositorState) + Send + 'static) {
-        let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(move |s| {
-            s.shell_note_shell_ipc_rx();
-            f(s);
-        })));
+        let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(f)));
     }
 
     fn run_result<T: Send + 'static>(
@@ -28,7 +25,6 @@ impl UplinkToCompositor {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.cef_tx
             .send(CefToCompositor::Run(Box::new(move |s| {
-                s.shell_note_shell_ipc_rx();
                 let _ = tx.send(f(s));
             })))
             .map_err(|_| "failed to queue compositor task".to_string())?;
@@ -39,12 +35,6 @@ impl UplinkToCompositor {
     pub fn quit_compositor(&self) {
         self.run(move |s| {
             s.stop_event_loop();
-        });
-    }
-
-    pub fn shell_ipc_pong(&self) {
-        self.run(move |s| {
-            s.shell_ipc_on_pong();
         });
     }
 

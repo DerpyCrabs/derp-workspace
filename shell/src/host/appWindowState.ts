@@ -121,7 +121,6 @@ export type DerpShellDetail = ({
     }
   | { type: 'context_menu_dismiss' }
   | { type: 'programs_menu_toggle'; output_name?: string }
-  | { type: 'compositor_ping' }
   | { type: 'keybind'; action: string; target_window_id?: number; output_name?: string }
   | { type: 'keyboard_layout'; label: string }
   | {

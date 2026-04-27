@@ -156,7 +156,6 @@ derp_session_resolve_shell_document_url() {
 derp_session_build_args() {
   derp_session_source_local_env
   export DERP_ALLOW_SHELL_SPAWN="${DERP_ALLOW_SHELL_SPAWN:-1}"
-  export DERP_SHELL_WATCHDOG_SEC="${DERP_SHELL_WATCHDOG_SEC:-5}"
   derp_session_merge_rust_log
   derp_session_apply_csd_button_policy
   derp_session_resolve_shell_document_url

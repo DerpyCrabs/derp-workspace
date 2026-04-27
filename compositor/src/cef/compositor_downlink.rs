@@ -1039,10 +1039,5 @@ fn apply_message(
                 "type": "programs_menu_toggle",
             }));
         }
-        shell_wire::DecodedCompositorToShellMessage::Ping => {
-            pending_details.push(json!({
-                "type": "compositor_ping",
-            }));
-        }
     }
 }

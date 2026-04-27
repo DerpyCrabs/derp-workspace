@@ -97,7 +97,6 @@ impl LatestShellSoftwareFrame {
 }
 
 pub enum CefToCompositor {
-    ShellRxNote,
     DmabufReady(Arc<LatestShellDmabuf>),
     SoftwareFrameReady(Arc<LatestShellSoftwareFrame>),
     SetOutputVrr { name: String, enabled: bool },

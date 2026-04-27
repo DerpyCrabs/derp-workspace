@@ -590,7 +590,7 @@ mod tests {
         });
         queue.push(PendingCompositorMessage {
             snapshot_epoch: 0,
-            msg: shell_wire::DecodedCompositorToShellMessage::Ping,
+            msg: shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss,
         });
 
         let drained = queue.take_all();
@@ -600,7 +600,7 @@ mod tests {
         ));
         assert!(matches!(
             drained[1].msg,
-            shell_wire::DecodedCompositorToShellMessage::Ping
+            shell_wire::DecodedCompositorToShellMessage::ContextMenuDismiss
         ));
         assert_eq!(pending_message_dedup_key(&drained[0].msg), None);
         assert_eq!(

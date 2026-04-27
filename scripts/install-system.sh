@@ -21,9 +21,6 @@
 #   Deploy to a test host: bash scripts/remote-update-and-restart.sh
 #   Fetch logs: bash scripts/fetch-logs.sh -n 2000  (uses scripts/remote-install.env)
 #
-# GDM session (`scripts/derp-session.sh`) exports DERP_SHELL_WATCHDOG_SEC=5 by default so a stuck
-# `cef_host` does not leave the session hung; set DERP_SHELL_WATCHDOG_SEC=0 before login to disable.
-#
 # `derp-session` will run `npm install && npm run build` in shell/ if `shell/dist/index.html` is missing
 # (requires Node on the login machine). Prefer a successful install here so GDM start is fast.
 #

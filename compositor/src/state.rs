@@ -405,7 +405,6 @@ pub struct CompositorInitOptions {
     pub chrome_bridge: SharedChromeBridge,
     pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
     pub shell_cef_handshake: Option<Arc<AtomicBool>>,
-    pub shell_ipc_stall_timeout: Option<Duration>,
 }
 
 impl Default for CompositorInitOptions {
@@ -416,7 +415,6 @@ impl Default for CompositorInitOptions {
             chrome_bridge: Arc::new(NoOpChromeBridge),
             shell_to_cef: Arc::new(Mutex::new(None)),
             shell_cef_handshake: None,
-            shell_ipc_stall_timeout: None,
         }
     }
 }
@@ -661,16 +659,6 @@ pub struct CompositorState {
     pub(crate) shell_resize_shell_grab: Option<u32>,
     pub(crate) shell_ui_pointer_grab: Option<u32>,
 
-    /// When [`Self::shell_ipc_stall_timeout`] is set: max gap without any shell→compositor message while connected.
-    shell_ipc_stall_timeout: Option<Duration>,
-    shell_ipc_watchdog_armed: bool,
-    /// Last time a length-prefixed message was decoded from the shell peer.
-    shell_ipc_last_rx: Option<Instant>,
-    /// Last compositor ping sent (throttle while shell may reply with [`shell_wire::MSG_SHELL_PONG`]).
-    pub(crate) shell_ipc_last_compositor_ping: Option<Instant>,
-    pub(crate) shell_ipc_last_pong: Option<Instant>,
-    pub(crate) shell_ipc_unanswered_ping_since: Option<Instant>,
-    pub(crate) shell_ipc_ping_late_warned_for: Option<Instant>,
     pub shell_has_frame: bool,
     pub shell_view_px: Option<(u32, u32)>,
     pub shell_frame_is_dmabuf: bool,
@@ -1238,7 +1226,6 @@ impl CompositorState {
         let chrome_bridge = options.chrome_bridge;
         let shell_to_cef = options.shell_to_cef;
         let shell_cef_handshake = options.shell_cef_handshake;
-        let shell_ipc_stall_timeout = options.shell_ipc_stall_timeout;
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
         let wallpaper_loader = crate::desktop::desktop_background::spawn_wallpaper_loader_thread();
@@ -1267,11 +1254,6 @@ impl CompositorState {
         event_loop
             .handle()
             .insert_source(cef_rx, |ev, _, d: &mut CalloopData| match ev {
-                CalloopChannelEvent::Msg(
-                    crate::cef::compositor_tx::CefToCompositor::ShellRxNote,
-                ) => {
-                    d.state.shell_note_shell_ipc_rx();
-                }
                 CalloopChannelEvent::Msg(
                     crate::cef::compositor_tx::CefToCompositor::DmabufReady(latest_dmabuf),
                 ) => loop {
@@ -1325,7 +1307,6 @@ impl CompositorState {
                 CalloopChannelEvent::Msg(
                     crate::cef::compositor_tx::CefToCompositor::SetOutputVrr { name, enabled },
                 ) => {
-                    d.state.shell_note_shell_ipc_rx();
                     if let Some(drms) = d.drm.as_mut() {
                         drms.set_output_vrr(&mut d.state, name, enabled);
                     }
@@ -1508,13 +1489,6 @@ impl CompositorState {
             shell_resize_accum: (0.0, 0.0),
             shell_resize_shell_grab: None,
             shell_ui_pointer_grab: None,
-            shell_ipc_stall_timeout,
-            shell_ipc_watchdog_armed: false,
-            shell_ipc_last_rx: None,
-            shell_ipc_last_compositor_ping: None,
-            shell_ipc_last_pong: None,
-            shell_ipc_unanswered_ping_since: None,
-            shell_ipc_ping_late_warned_for: None,
             shell_has_frame: false,
             shell_view_px: None,
             shell_frame_is_dmabuf: false,
@@ -3796,7 +3770,6 @@ impl CompositorState {
         mut fds: Vec<OwnedFd>,
         dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) {
-        self.shell_note_shell_ipc_rx();
         crate::cef::begin_frame_diag::note_shell_dmabuf_rx(width, height);
         if width == 0 || height == 0 || planes.is_empty() || planes.len() != fds.len() {
             fds.clear();
@@ -3840,7 +3813,6 @@ impl CompositorState {
         pixels: Vec<u8>,
         dirty_buffer: Option<Vec<(i32, i32, i32, i32)>>,
     ) {
-        self.shell_note_shell_ipc_rx();
         if width == 0 || height == 0 || pixels.is_empty() {
             return;
         }
@@ -7468,11 +7440,6 @@ impl CompositorState {
                 link.set_delivery_ready(true);
             }
         }
-        self.shell_note_shell_ipc_rx();
-        self.shell_ipc_last_compositor_ping = None;
-        self.shell_ipc_last_pong = None;
-        self.shell_ipc_unanswered_ping_since = None;
-        self.shell_ipc_ping_late_warned_for = None;
         self.send_shell_output_geometry();
         self.resync_embedded_shell_host_after_ipc_connect();
         self.shell_reply_window_list();
@@ -7493,22 +7460,12 @@ impl CompositorState {
         self.sync_tray_hints_to_shell();
     }
 
-    pub(crate) fn shell_note_shell_ipc_rx(&mut self) {
-        self.shell_ipc_last_rx = Some(Instant::now());
-    }
-
     pub(crate) fn shell_ipc_on_shell_load_success(&mut self) {
         if let Ok(g) = self.shell_to_cef.lock() {
             if let Some(link) = g.as_ref() {
                 link.set_delivery_ready(true);
             }
         }
-        self.shell_ipc_watchdog_armed = true;
-        self.shell_ipc_last_rx = Some(Instant::now());
-        self.shell_ipc_last_compositor_ping = None;
-        self.shell_ipc_last_pong = None;
-        self.shell_ipc_unanswered_ping_since = None;
-        self.shell_ipc_ping_late_warned_for = None;
         tracing::warn!(
             target: "derp_shell_menu",
             pending_toggle = self.programs_menu_super_pending_toggle,
@@ -7520,73 +7477,6 @@ impl CompositorState {
             self.programs_menu_super_pending_toggle = false;
             self.programs_menu_toggle_from_super(SERIAL_COUNTER.next_serial());
         }
-    }
-
-    pub(crate) fn shell_ipc_on_pong(&mut self) {
-        self.shell_ipc_last_pong = Some(Instant::now());
-        self.shell_ipc_ping_late_warned_for = None;
-        self.shell_ipc_unanswered_ping_since = None;
-    }
-
-    pub(crate) fn shell_check_ipc_watchdog(&mut self) {
-        let Some(limit) = self.shell_ipc_stall_timeout else {
-            return;
-        };
-        if !self.shell_cef_active() {
-            self.shell_ipc_watchdog_armed = false;
-            self.shell_ipc_last_rx = None;
-            self.shell_ipc_last_compositor_ping = None;
-            self.shell_ipc_last_pong = None;
-            self.shell_ipc_unanswered_ping_since = None;
-            self.shell_ipc_ping_late_warned_for = None;
-            return;
-        }
-        if !self.shell_ipc_watchdog_armed {
-            return;
-        }
-        let Some(last_rx) = self.shell_ipc_last_rx else {
-            return;
-        };
-        let idle = last_rx.elapsed();
-        let prod_after =
-            std::cmp::max(limit / 2, Duration::from_millis(500)).min(Duration::from_secs(2));
-        if idle >= prod_after {
-            let throttle = Duration::from_secs(1);
-            if self
-                .shell_ipc_last_compositor_ping
-                .map(|t| t.elapsed() >= throttle)
-                .unwrap_or(true)
-            {
-                let prev = self.shell_ipc_last_compositor_ping;
-                let now = Instant::now();
-                let prev_round_answered = prev.map_or(true, |pp| {
-                    self.shell_ipc_last_pong.map(|p| p >= pp).unwrap_or(false)
-                });
-                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::Ping);
-                self.shell_ipc_last_compositor_ping = Some(now);
-                if prev_round_answered {
-                    self.shell_ipc_unanswered_ping_since = Some(now);
-                }
-            }
-        }
-        if let Some(u) = self.shell_ipc_unanswered_ping_since {
-            if u.elapsed() >= Duration::from_secs(10) {
-                if self.shell_ipc_ping_late_warned_for != Some(u) {
-                    self.shell_ipc_ping_late_warned_for = Some(u);
-                    tracing::warn!(
-                        "shell ipc: no pong within 10s after compositor ping (CEF or shell handler may be stuck)"
-                    );
-                }
-            }
-        }
-        if idle <= limit {
-            return;
-        }
-        tracing::warn!(
-            timeout_secs = limit.as_secs(),
-            "shell watchdog: no CEF/compositor activity within timeout; stopping compositor (stuck shell / JS)"
-        );
-        self.stop_event_loop();
     }
 
     pub(crate) fn sync_tray_hints_to_shell(&mut self) {

@@ -19,17 +19,15 @@
 //! - [`MSG_SPAWN_WAYLAND_CLIENT`], [`MSG_FRAME_DMABUF_COMMIT`],
 //!   [`MSG_SHELL_MOVE_BEGIN`], [`MSG_SHELL_MOVE_DELTA`], [`MSG_SHELL_MOVE_END`],
 //!   [`MSG_SHELL_LIST_WINDOWS`], [`MSG_SHELL_SET_GEOMETRY`], [`MSG_SHELL_CLOSE`], [`MSG_SHELL_SET_FULLSCREEN`],
-//!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`], [`MSG_SHELL_PONG`] (reply to [`MSG_COMPOSITOR_PING`]),
+//!   [`MSG_SHELL_TASKBAR_ACTIVATE`], [`MSG_SHELL_MINIMIZE`], [`MSG_SHELL_QUIT_COMPOSITOR`],
 //!   [`MSG_SHELL_RESIZE_BEGIN`], [`MSG_SHELL_RESIZE_DELTA`], [`MSG_SHELL_RESIZE_END`], [`MSG_SHELL_SET_MAXIMIZED`], [`MSG_SHELL_SET_PRESENTATION_FULLSCREEN`], [`MSG_SHELL_CONTEXT_MENU`], [`MSG_SHELL_TILE_PREVIEW`], [`MSG_SHELL_CHROME_METRICS`], [`MSG_SHELL_WINDOWS_SYNC`] (**breaking:** deploy `compositor` + `cef_host` + `shell_wire` together)
-//! - compositor → shell: [`MSG_WINDOW_LIST`] rows include `shell_flags` ([`SHELL_WINDOW_FLAG_SHELL_HOSTED`] for compositor-backed OSR frames); [`MSG_FOCUS_CHANGED`] is the only compositor → shell focus event; [`MSG_WINDOW_STATE`], [`MSG_COMPOSITOR_PING`]; [`MSG_OUTPUT_LAYOUT`]; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`]; [`MSG_COMPOSITOR_VOLUME_OVERLAY`]
+//! - compositor → shell: [`MSG_WINDOW_LIST`] rows include `shell_flags` ([`SHELL_WINDOW_FLAG_SHELL_HOSTED`] for compositor-backed OSR frames); [`MSG_FOCUS_CHANGED`] is the only compositor → shell focus event; [`MSG_WINDOW_STATE`]; [`MSG_OUTPUT_LAYOUT`]; [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`]; [`MSG_COMPOSITOR_VOLUME_OVERLAY`]
 
 pub const MSG_SPAWN_WAYLAND_CLIENT: u32 = 2;
 pub const MSG_COMPOSITOR_POINTER_MOVE: u32 = 3;
 pub const MSG_COMPOSITOR_POINTER_BUTTON: u32 = 4;
 /// Real touch finger / slot (not pointer-emulated mouse). Maps to CEF [`send_touch_event`].
 pub const MSG_COMPOSITOR_TOUCH: u32 = 31;
-/// Compositor → shell: watchdog keepalive; [`cef_host`] must reply with [`MSG_SHELL_PONG`].
-pub const MSG_COMPOSITOR_PING: u32 = 32;
 
 /// [`MSG_COMPOSITOR_TOUCH`] `phase` values (compositor → `cef_host` → CEF).
 pub const TOUCH_PHASE_MOVED: u32 = 0;
@@ -57,8 +55,6 @@ pub const MSG_SHELL_CLOSE: u32 = 25;
 pub const MSG_SHELL_SET_FULLSCREEN: u32 = 26;
 /// Shell → compositor: stop the compositor event loop (end session).
 pub const MSG_SHELL_QUIT_COMPOSITOR: u32 = 27;
-/// Shell → compositor: reply to [`MSG_COMPOSITOR_PING`] (watchdog liveness).
-pub const MSG_SHELL_PONG: u32 = 30;
 
 /// Shell → compositor: dma-buf frame metadata (`drm_format` = raw DRM FourCC). Plane fds follow via `SCM_RIGHTS`.
 pub const MSG_FRAME_DMABUF_COMMIT: u32 = 33;
@@ -1112,8 +1108,6 @@ pub enum DecodedMessage {
         window_id: u32,
     },
     ShellQuitCompositor,
-    /// Reply to [`MSG_COMPOSITOR_PING`].
-    ShellPong,
     ShellSetOutputLayout {
         layout_json: String,
     },
@@ -1293,8 +1287,6 @@ pub enum DecodedCompositorToShellMessage {
         window_id: u32,
         minimized: bool,
     },
-    /// Compositor requests [`encode_shell_pong`] from `cef_host`.
-    Ping,
     ContextMenuDismiss,
     ProgramsMenuToggle,
     Keybind {
@@ -1440,14 +1432,6 @@ pub fn encode_compositor_pointer_button(
     v.extend_from_slice(&(if mouse_up { 1u32 } else { 0 }).to_le_bytes());
     v.extend_from_slice(&titlebar_drag_window_id.to_le_bytes());
     v.extend_from_slice(&modifiers.to_le_bytes());
-    v
-}
-
-pub fn encode_compositor_ping() -> Vec<u8> {
-    let body_len = 4u32;
-    let mut v = Vec::with_capacity(12);
-    v.extend_from_slice(&body_len.to_le_bytes());
-    v.extend_from_slice(&MSG_COMPOSITOR_PING.to_le_bytes());
     v
 }
 
@@ -1817,14 +1801,6 @@ pub fn encode_compositor_keybind(
         v.extend_from_slice(bytes);
     }
     Some(v)
-}
-
-pub fn encode_shell_pong() -> Vec<u8> {
-    let body_len = 4u32;
-    let mut v = Vec::with_capacity(12);
-    v.extend_from_slice(&body_len.to_le_bytes());
-    v.extend_from_slice(&MSG_SHELL_PONG.to_le_bytes());
-    v
 }
 
 pub fn encode_compositor_touch(touch_id: i32, phase: u32, x: i32, y: i32) -> Vec<u8> {
@@ -2240,12 +2216,6 @@ fn decode_compositor_to_shell_body(
         }
         MSG_WINDOW_LIST => decode_window_list_compositor_body(body),
         MSG_WINDOW_ORDER => decode_window_order_compositor_body(body),
-        MSG_COMPOSITOR_PING => {
-            if body.len() != 4 {
-                return Err(DecodeError::BadCompositorToShellPayload);
-            }
-            Ok(DecodedCompositorToShellMessage::Ping)
-        }
         MSG_COMPOSITOR_CONTEXT_MENU_DISMISS => {
             if body.len() != 4 {
                 return Err(DecodeError::BadCompositorToShellPayload);
@@ -2554,7 +2524,6 @@ fn decode_compositor_to_shell_body(
         | MSG_SHELL_TASKBAR_ACTIVATE
         | MSG_SHELL_MINIMIZE
         | MSG_SHELL_QUIT_COMPOSITOR
-        | MSG_SHELL_PONG
         | MSG_SHELL_TILE_PREVIEW
         | MSG_SHELL_CHROME_METRICS
         | MSG_SHELL_WINDOWS_SYNC
@@ -3139,12 +3108,6 @@ fn decode_shell_to_compositor_body(body: &[u8]) -> Result<DecodedMessage, Decode
                 return Err(DecodeError::BadWindowPayload);
             }
             Ok(DecodedMessage::ShellQuitCompositor)
-        }
-        MSG_SHELL_PONG => {
-            if body.len() != 4 {
-                return Err(DecodeError::BadWindowPayload);
-            }
-            Ok(DecodedMessage::ShellPong)
         }
         MSG_SHELL_SET_OUTPUT_LAYOUT => {
             if body.len() < 8 {

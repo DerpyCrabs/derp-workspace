@@ -839,8 +839,6 @@ impl DrmSession {
     }
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
-        state.shell_check_ipc_watchdog();
-
         if state.display_config_save_pending && !state.display_config_save_suppressed {
             state.display_config_save_pending = false;
             crate::controls::display_config::save_from_drm_session(state, self);

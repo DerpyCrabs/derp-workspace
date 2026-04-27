@@ -73,7 +73,6 @@ type NativeDragPreviewState = {
 
 type CompositorRuntimeWireOp =
   | 'close'
-  | 'shell_ipc_pong'
   | 'invalidate_view'
   | 'set_fullscreen'
   | 'set_maximized'
@@ -817,10 +816,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     }
     if (d.type === 'programs_menu_toggle') {
       options.toggleProgramsMenuMeta(typeof d.output_name === 'string' ? d.output_name : null)
-      return
-    }
-    if (d.type === 'compositor_ping') {
-      options.shellWireSend('shell_ipc_pong')
       return
     }
     if (d.type === 'keyboard_layout') {

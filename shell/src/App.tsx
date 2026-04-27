@@ -257,7 +257,6 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     op === 'quit' ||
     op === 'request_compositor_sync' ||
     op === 'invalidate_view' ||
-    op === 'shell_ipc_pong' ||
     op === 'resize_shell_grab_end'
   ) {
     fn(op)

@@ -79,9 +79,9 @@ describe('installCompositorBatchHandler', () => {
       calls.push([...details])
     })
 
-    window.__DERP_APPLY_COMPOSITOR_BATCH?.([{ type: 'compositor_ping' }])
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([{ type: 'context_menu_dismiss' }])
 
-    expect(calls).toEqual([[{ type: 'compositor_ping' }]])
+    expect(calls).toEqual([[{ type: 'context_menu_dismiss' }]])
 
     dispose()
   })
@@ -94,10 +94,10 @@ describe('installCompositorBatchHandler', () => {
     const dispose = installCompositorBatchHandler(() => {})
 
     dispose()
-    window.__DERP_APPLY_COMPOSITOR_BATCH?.([{ type: 'compositor_ping' }])
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([{ type: 'context_menu_dismiss' }])
 
     expect(window.__DERP_APPLY_COMPOSITOR_BATCH).toBe(previous)
-    expect(previous).toHaveBeenCalledWith([{ type: 'compositor_ping' }])
+    expect(previous).toHaveBeenCalledWith([{ type: 'context_menu_dismiss' }])
   })
 
   it('ignores non-array payloads', () => {
@@ -105,7 +105,7 @@ describe('installCompositorBatchHandler', () => {
     vi.stubGlobal('window', {})
     installCompositorBatchHandler(handler)
 
-    window.__DERP_APPLY_COMPOSITOR_BATCH?.({ type: 'compositor_ping' } as never)
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.({ type: 'context_menu_dismiss' } as never)
 
     expect(handler).not.toHaveBeenCalled()
   })
