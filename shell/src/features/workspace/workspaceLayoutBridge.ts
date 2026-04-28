@@ -22,6 +22,7 @@ type WorkspaceLayoutBridgeOptions = {
   getWindowsByMonitor: () => ReadonlyMap<string, readonly DerpWindow[]>
   getTaskbarRowsByMonitor: () => ReadonlyMap<string, TaskbarWindowRow[]>
   getFallbackMonitorName: () => string
+  taskbarAutoHide: () => boolean
   requestSharedStateSync: (request: ShellSharedStateSyncRequest, timing?: 'now' | 'microtask') => void
   sendWorkspaceMutation?: (mutation: WorkspaceMutation) => boolean
   shellWireSend: (op: 'workspace_mutation', arg?: number | string) => boolean
@@ -114,7 +115,7 @@ export function createWorkspaceLayoutBridge(options: WorkspaceLayoutBridgeOption
   }
 
   function reserveTaskbarForMon(screen: LayoutScreen) {
-    return !screenTaskbarHiddenForFullscreen(screen)
+    return !options.taskbarAutoHide() && !screenTaskbarHiddenForFullscreen(screen)
   }
 
   function occupiedSnapZonesOnMonitor(

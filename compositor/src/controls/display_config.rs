@@ -7,7 +7,7 @@ use smithay::backend::drm::DrmDevice;
 use smithay::reexports::drm::control::{connector, Device as ControlDevice};
 
 use crate::drm::{DrmHead, DrmSession};
-use crate::state::{transform_to_wire, CompositorState};
+use crate::state::{transform_to_wire, CompositorState, ShellTaskbarSide};
 use smithay::input::keyboard::XkbConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,6 +30,8 @@ pub struct ScreenEntry {
     pub transform: u32,
     #[serde(default)]
     pub vrr_enabled: bool,
+    #[serde(default)]
+    pub taskbar_side: ShellTaskbarSide,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -71,6 +73,8 @@ impl Default for DesktopBackgroundConfig {
 pub struct DisplayConfigFile {
     pub version: u32,
     pub ui_scale: f64,
+    #[serde(default)]
+    pub taskbar_auto_hide: bool,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_chrome_primary: Option<MonitorRef>,
@@ -297,6 +301,15 @@ pub fn apply_stored_from_heads(
     {
         state.set_shell_ui_scale(scale);
     }
+    state.taskbar_auto_hide = cfg.taskbar_auto_hide;
+    state.taskbar_side_by_output_name.clear();
+    for s in &cfg.screens {
+        if let Some(n) = resolve_entry(&s.connector, s.monitor_id.as_ref(), &live) {
+            if s.taskbar_side != ShellTaskbarSide::Bottom {
+                state.taskbar_side_by_output_name.insert(n, s.taskbar_side);
+            }
+        }
+    }
 
     let mut by_name: HashMap<String, (i32, i32, u32)> = HashMap::new();
     for s in &cfg.screens {
@@ -429,6 +442,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
                 y: g.loc.y,
                 transform: transform_to_wire(out.current_transform()),
                 vrr_enabled: h.vrr_supported && h.vrr_enabled,
+                taskbar_side: state.taskbar_side_for_output_name(h.connector_name.as_str()),
             })
         })
         .collect();
@@ -461,6 +475,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
     let file = DisplayConfigFile {
         version: 1,
         ui_scale: state.shell_ui_scale,
+        taskbar_auto_hide: state.taskbar_auto_hide,
         shell_chrome_primary,
         screens,
         keyboard,
@@ -536,5 +551,53 @@ mod tests {
         assert_eq!(cfg.desktop_background.fit, "fill");
         assert!(cfg.desktop_background_outputs.is_empty());
         assert!(cfg.shell_chrome_primary.is_none());
+        assert!(!cfg.taskbar_auto_hide);
+    }
+
+    #[test]
+    fn display_config_deserializes_taskbar_side() {
+        let cfg: DisplayConfigFile = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "ui_scale": 1.5,
+            "taskbar_auto_hide": true,
+            "screens": [
+                {
+                    "connector": "DP-1",
+                    "x": 0,
+                    "y": 0,
+                    "taskbar_side": "left"
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert!(cfg.taskbar_auto_hide);
+        assert_eq!(cfg.screens[0].taskbar_side, ShellTaskbarSide::Left);
+    }
+
+    #[test]
+    fn display_config_serializes_taskbar_settings() {
+        let cfg = DisplayConfigFile {
+            version: 1,
+            ui_scale: 1.0,
+            taskbar_auto_hide: true,
+            shell_chrome_primary: None,
+            screens: vec![ScreenEntry {
+                connector: "DP-1".into(),
+                monitor_id: None,
+                x: 0,
+                y: 0,
+                transform: 0,
+                vrr_enabled: false,
+                taskbar_side: ShellTaskbarSide::Right,
+            }],
+            keyboard: KeyboardXkbFile::default(),
+            desktop_background: DesktopBackgroundConfig::default(),
+            desktop_background_outputs: HashMap::new(),
+        };
+        let value = serde_json::to_value(&cfg).unwrap();
+
+        assert_eq!(value["taskbar_auto_hide"], true);
+        assert_eq!(value["screens"][0]["taskbar_side"], "right");
     }
 }

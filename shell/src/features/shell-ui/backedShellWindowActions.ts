@@ -147,7 +147,7 @@ export function createBackedShellWindowActions(options: BackedShellWindowActions
       origin,
       monitor,
       reserveTaskbar,
-      work: monitorWorkAreaGlobal(monitor, reserveTaskbar),
+      work: monitorWorkAreaGlobal(monitor, reserveTaskbar, undefined, undefined, monitor.taskbar_side),
       staggerIndex: hostedWindowStaggerIndex(options.getWindows(), monitor.name),
     }
   }

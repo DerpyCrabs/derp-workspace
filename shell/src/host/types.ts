@@ -12,7 +12,10 @@ export type LayoutScreen = {
   refresh_milli_hz: number
   vrr_supported: boolean
   vrr_enabled: boolean
+  taskbar_side: TaskbarSide
 }
+
+export type TaskbarSide = 'bottom' | 'top' | 'left' | 'right'
 
 export type ExclusionHudZone = {
   label: string

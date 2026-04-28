@@ -83,6 +83,7 @@ export type ShellHostedWindowContentEnv = {
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   panelHostForHud: Accessor<LayoutScreen | null>
   shellChromePrimaryName: Accessor<string | null>
+  taskbarAutoHide: Accessor<boolean>
   viewportCss: Accessor<{ w: number; h: number }>
   windowsList: () => readonly DerpWindow[]
   pointerClient: Accessor<{ x: number; y: number } | null>
@@ -104,6 +105,8 @@ export type ShellHostedWindowContentEnv = {
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   setOutputVrr: (name: string, enabled: boolean) => void
+  setTaskbarAutoHide: (enabled: boolean) => void
+  setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
@@ -152,6 +155,7 @@ export function renderShellHostedWindowContent(
         currentMonitorName={() => env.windowById(SHELL_UI_SETTINGS_WINDOW_ID)()?.output_name ?? null}
         shellChromePrimaryName={env.shellChromePrimaryName}
         autoShellChromeMonitorName={env.autoShellChromeMonitorName}
+        taskbarAutoHide={env.taskbarAutoHide}
         canSessionControl={env.canSessionControl}
         uiScalePercent={env.uiScalePercent}
         tilingCfgRev={env.tilingCfgRev}
@@ -162,6 +166,8 @@ export function renderShellHostedWindowContent(
         setShellPrimary={(name) => env.setShellPrimary(name)}
         setUiScale={(pct) => env.setUiScale(pct)}
         setOutputVrr={(name, enabled) => env.setOutputVrr(name, enabled)}
+        setTaskbarAutoHide={(enabled) => env.setTaskbarAutoHide(enabled)}
+        setTaskbarSide={(name, side) => env.setTaskbarSide(name, side)}
         applyCompositorLayoutFromDraft={env.applyCompositorLayoutFromDraft}
         monitorRefreshLabel={env.monitorRefreshLabel}
         keyboardLayoutLabel={env.keyboardLayoutLabel}

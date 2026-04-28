@@ -155,6 +155,34 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
   const shellChromePrimary = primaryLen === 0 ? null : readUtf8(bytes, cursor, primaryLen)
   if (shellChromePrimary === null && primaryLen !== 0) return null
   cursor += primaryLen
+  let taskbarAutoHide = false
+  if (cursor < view.byteLength) {
+    if (cursor + 8 > view.byteLength) return null
+    const autoHide = view.getUint32(cursor, true)
+    cursor += 4
+    if (autoHide > 1) return null
+    taskbarAutoHide = autoHide !== 0
+    const sideCount = view.getUint32(cursor, true)
+    cursor += 4
+    if (sideCount > MAX_OUTPUT_LAYOUT_SCREENS) return null
+    for (let i = 0; i < sideCount; i += 1) {
+      if (cursor + 4 > view.byteLength) return null
+      const nameLen = view.getUint32(cursor, true)
+      cursor += 4
+      if (nameLen === 0 || nameLen > MAX_OUTPUT_LAYOUT_NAME_BYTES) return null
+      const name = readUtf8(bytes, cursor, nameLen)
+      if (name == null) return null
+      cursor += nameLen
+      if (cursor + 4 > view.byteLength) return null
+      const side = view.getUint32(cursor, true)
+      cursor += 4
+      const taskbarSide =
+        side === 1 ? 'top' : side === 2 ? 'left' : side === 3 ? 'right' : side === 0 ? 'bottom' : null
+      if (taskbarSide === null) return null
+      const screen = screens.find((entry) => entry.name === name)
+      if (screen) screen.taskbar_side = taskbarSide
+    }
+  }
   if (cursor !== view.byteLength) return null
   return {
     type: 'output_layout',
@@ -165,8 +193,9 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     canvas_logical_origin_y: minY,
     canvas_physical_width: canvasPhysicalWidth,
     canvas_physical_height: canvasPhysicalHeight,
-    screens,
+    screens: screens.map((screen) => ({ taskbar_side: 'bottom' as const, ...screen })),
     shell_chrome_primary: shellChromePrimary,
+    taskbar_auto_hide: taskbarAutoHide,
   }
 }
 

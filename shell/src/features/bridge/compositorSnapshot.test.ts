@@ -224,9 +224,11 @@ describe('decodeCompositorSnapshot', () => {
               refresh_milli_hz: 60000,
               vrr_supported: true,
               vrr_enabled: false,
+              taskbar_side: 'bottom',
             },
           ],
           shell_chrome_primary: 'DP-1',
+          taskbar_auto_hide: false,
         },
       ],
     })

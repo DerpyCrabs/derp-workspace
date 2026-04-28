@@ -1054,6 +1054,7 @@ fn append_snapshot_message(
             canvas_physical_h,
             screens,
             shell_chrome_primary,
+            taskbar_auto_hide,
         } => extend_snapshot_packet(
             payload,
             shell_wire::encode_output_layout(
@@ -1064,6 +1065,7 @@ fn append_snapshot_message(
                 *canvas_physical_h,
                 screens,
                 shell_chrome_primary.as_deref(),
+                *taskbar_auto_hide,
             ),
             "output layout",
         )?,

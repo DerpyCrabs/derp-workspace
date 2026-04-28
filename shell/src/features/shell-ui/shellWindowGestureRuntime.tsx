@@ -303,7 +303,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     const monitorLayout = screen ? getMonitorLayout(screen.name) : null
     if (!screen || !monitorLayout || monitorLayout.layout.type !== 'manual-snap') return null
     const reserveTaskbar = options.reserveTaskbarForMon(screen)
-    const workGlobal = monitorTileFrameAreaGlobal(screen, reserveTaskbar)
+    const workGlobal = monitorTileFrameAreaGlobal(screen, reserveTaskbar, screen.taskbar_side)
     const snapLayout = monitorLayout.snapLayout
     return {
       windowId,
@@ -579,7 +579,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         : null)
     const origin = options.layoutCanvasOrigin()
     const reserveTaskbar = options.reserveTaskbarForMon(snapScreen)
-    const work = monitorTileFrameAreaGlobal(snapScreen, reserveTaskbar)
+    const work = monitorTileFrameAreaGlobal(snapScreen, reserveTaskbar, snapScreen.taskbar_side)
     const workRect: TileRect = { x: work.x, y: work.y, width: work.w, height: work.h }
     const occupied = options.occupiedSnapZonesOnMonitor(snapScreen, snapWindowId)
     const globalBounds =

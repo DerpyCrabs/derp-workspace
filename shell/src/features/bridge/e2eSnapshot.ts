@@ -29,6 +29,12 @@ type E2eSnapshotTaskbarPin = {
   rect: E2eRectSnapshot | null
 }
 
+type E2eSnapshotTaskbarSideButton = {
+  output: string
+  side: string
+  rect: E2eRectSnapshot | null
+}
+
 type E2eSnapshotGroupMember = {
   window_id: number
 }
@@ -479,9 +485,15 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
   })()
 
   const stackOrderedWindows = [...args.windows].sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
-  const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-monitor').map((taskbarEl) => ({
+  const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-side').map((taskbarEl) => ({
     monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',
+    side: taskbarEl.getAttribute('data-shell-taskbar-side') ?? '',
     rect: snapshotRect(taskbarEl, args.origin),
+  }))
+  const settingsTaskbarSideButtons: E2eSnapshotTaskbarSideButton[] = cache.queryAllAttr('data-settings-taskbar-side-option').map((button) => ({
+    output: button.getAttribute('data-settings-taskbar-side-output') ?? '',
+    side: button.getAttribute('data-settings-taskbar-side-option') ?? '',
+    rect: snapshotRect(button, args.origin),
   }))
   const portalPickerPanel = queryRect(cache, '[data-shell-portal-picker-panel]', args.origin)
   const portalPickerCancel = queryRect(cache, '[data-shell-portal-picker-cancel]', args.origin)
@@ -961,6 +973,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       settings_tab_notifications: queryRect(cache, '[data-settings-tab="notifications"]', args.origin),
       settings_tab_default_applications: queryRect(cache, '[data-settings-tab="default-applications"]', args.origin),
       settings_vrr_toggle: queryRect(cache, '[data-settings-vrr-toggle]', args.origin),
+      settings_taskbar_auto_hide_on: queryRect(cache, '[data-settings-taskbar-auto-hide-on]', args.origin),
+      settings_taskbar_auto_hide_off: queryRect(cache, '[data-settings-taskbar-auto-hide-off]', args.origin),
+      settings_taskbar_side_left: queryRect(cache, '[data-settings-taskbar-side-option="left"]', args.origin),
+      settings_taskbar_side_right: queryRect(cache, '[data-settings-taskbar-side-option="right"]', args.origin),
+      settings_taskbar_side_top: queryRect(cache, '[data-settings-taskbar-side-option="top"]', args.origin),
+      settings_taskbar_side_bottom: queryRect(cache, '[data-settings-taskbar-side-option="bottom"]', args.origin),
       settings_notifications_page: queryRect(cache, '[data-settings-notifications-page]', args.origin),
       settings_notifications_enable: queryRect(cache, '[data-settings-notifications-enable]', args.origin),
       settings_notifications_disable: queryRect(cache, '[data-settings-notifications-disable]', args.origin),
@@ -1144,6 +1162,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       ),
     },
     taskbars: taskbarButtons,
+    settings_taskbar_side_buttons: settingsTaskbarSideButtons,
     taskbar_pins: taskbarPins,
     taskbar_windows: taskbarWindowButtons,
     window_controls: windowControls,

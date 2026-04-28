@@ -459,6 +459,18 @@ fn handle_uplink_list(
             let enabled = args.int(2) != 0;
             uplink.shell_set_output_vrr(name, enabled);
         }
+        "set_taskbar_auto_hide" => {
+            let enabled = args.int(1) != 0;
+            uplink.shell_set_taskbar_auto_hide(enabled);
+        }
+        "set_taskbar_side" => {
+            let name = cef_string_userfree_to_string(&args.string(1));
+            let side_raw = cef_string_userfree_to_string(&args.string(2));
+            let Some(side) = crate::state::ShellTaskbarSide::from_str(side_raw.as_str()) else {
+                return;
+            };
+            uplink.shell_set_taskbar_side(name, side);
+        }
         "set_tile_preview" => {
             let vis = args.int(1) != 0;
             let x = args.int(2);
@@ -1059,6 +1071,44 @@ wrap_v8_handler! {
                     let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
                     let _ = list.set_int(2, if enabled { 1 } else { 0 });
                 }
+                "set_taskbar_auto_hide" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_auto_hide requires enabled flag");
+                    };
+                    let enabled = if a1.is_bool() != 0 {
+                        a1.bool_value() != 0
+                    } else if a1.is_int() != 0 {
+                        a1.int_value() != 0
+                    } else if a1.is_uint() != 0 {
+                        a1.uint_value() != 0
+                    } else if a1.is_double() != 0 {
+                        a1.double_value() != 0.0
+                    } else {
+                        return_exception!("set_taskbar_auto_hide: enabled must be boolean or number");
+                    };
+                    let _ = list.set_int(1, if enabled { 1 } else { 0 });
+                }
+                "set_taskbar_side" => {
+                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_side requires output name and side");
+                    };
+                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
+                        return_exception!("set_taskbar_side requires output name and side");
+                    };
+                    if a1.is_string() == 0 {
+                        return_exception!("set_taskbar_side: output name must be a string");
+                    }
+                    if a2.is_string() == 0 {
+                        return_exception!("set_taskbar_side: side must be a string");
+                    }
+                    let name = cef_string_userfree_to_string(&a1.string_value());
+                    let side = cef_string_userfree_to_string(&a2.string_value());
+                    if crate::state::ShellTaskbarSide::from_str(side.as_str()).is_none() {
+                        return_exception!("set_taskbar_side: side must be bottom, top, left, or right");
+                    }
+                    let _ = list.set_string(1, Some(&CefString::from(name.as_str())));
+                    let _ = list.set_string(2, Some(&CefString::from(side.as_str())));
+                }
                 "set_tile_preview" => {
                     macro_rules! int_at_tp {
                         ($idx:literal, $label:literal) => {{
@@ -1217,7 +1267,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_taskbar_auto_hide, set_taskbar_side, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

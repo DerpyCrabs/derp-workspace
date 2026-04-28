@@ -1,6 +1,7 @@
 import { CHROME_TASKBAR_RESERVE_PX, CHROME_TITLEBAR_PX } from '@/lib/chromeConstants'
 import { snapZoneFromEdgePointer, type AssistGridShape } from './assistGrid'
 import type { SnapZone } from './tileZones'
+import type { TaskbarSide } from '@/host/types'
 
 export type LayoutScreen = {
   x: number
@@ -14,9 +15,42 @@ export const TILE_SNAP_EDGE_PX = 18
 export function monitorTileFrameAreaGlobal(
   mon: LayoutScreen,
   reserveTaskbar: boolean,
+  taskbarSide: TaskbarSide = 'bottom',
   taskbarReservePx: number = CHROME_TASKBAR_RESERVE_PX,
 ): { x: number; y: number; w: number; h: number } {
   const tb = reserveTaskbar ? taskbarReservePx : 0
+  if (tb <= 0) {
+    return {
+      x: mon.x,
+      y: mon.y,
+      w: Math.max(1, mon.width),
+      h: Math.max(1, mon.height),
+    }
+  }
+  if (taskbarSide === 'top') {
+    return {
+      x: mon.x,
+      y: mon.y + tb,
+      w: Math.max(1, mon.width),
+      h: Math.max(1, mon.height - tb),
+    }
+  }
+  if (taskbarSide === 'left') {
+    return {
+      x: mon.x + tb,
+      y: mon.y,
+      w: Math.max(1, mon.width - tb),
+      h: Math.max(1, mon.height),
+    }
+  }
+  if (taskbarSide === 'right') {
+    return {
+      x: mon.x,
+      y: mon.y,
+      w: Math.max(1, mon.width - tb),
+      h: Math.max(1, mon.height),
+    }
+  }
   return {
     x: mon.x,
     y: mon.y,
@@ -30,8 +64,9 @@ export function monitorWorkAreaGlobal(
   reserveTaskbar: boolean,
   titlebarPx: number = CHROME_TITLEBAR_PX,
   taskbarReservePx: number = CHROME_TASKBAR_RESERVE_PX,
+  taskbarSide: TaskbarSide = 'bottom',
 ): { x: number; y: number; w: number; h: number } {
-  const frame = monitorTileFrameAreaGlobal(mon, reserveTaskbar, taskbarReservePx)
+  const frame = monitorTileFrameAreaGlobal(mon, reserveTaskbar, taskbarSide, taskbarReservePx)
   return {
     x: frame.x,
     y: frame.y + titlebarPx,

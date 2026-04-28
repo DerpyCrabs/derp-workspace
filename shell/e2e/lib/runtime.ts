@@ -195,6 +195,7 @@ export interface CompositorSnapshot {
 
 export interface ShellTaskbar {
   monitor: string
+  side?: string
   rect: Rect
 }
 
@@ -211,6 +212,12 @@ export interface ShellTaskbarPin {
   kind: string
   monitor: string
   title: string
+  rect?: Rect | null
+}
+
+export interface ShellTaskbarSideButton {
+  output: string
+  side: string
   rect?: Rect | null
 }
 
@@ -306,6 +313,12 @@ export interface ShellControls {
   settings_tab_keyboard?: Rect | null
   settings_tab_notifications?: Rect | null
   settings_vrr_toggle?: Rect | null
+  settings_taskbar_auto_hide_on?: Rect | null
+  settings_taskbar_auto_hide_off?: Rect | null
+  settings_taskbar_side_left?: Rect | null
+  settings_taskbar_side_right?: Rect | null
+  settings_taskbar_side_top?: Rect | null
+  settings_taskbar_side_bottom?: Rect | null
   settings_tiling_layout_trigger?: Rect | null
   settings_notifications_page?: Rect | null
   settings_notifications_enable?: Rect | null
@@ -465,6 +478,7 @@ export interface PortalPickerMonitorSnapshot {
 export interface ShellSnapshot {
   windows: WindowSnapshot[]
   taskbars: ShellTaskbar[]
+  settings_taskbar_side_buttons?: ShellTaskbarSideButton[]
   taskbar_pins?: ShellTaskbarPin[]
   taskbar_windows: ShellTaskbarWindow[]
   tab_groups?: ShellTabGroup[]

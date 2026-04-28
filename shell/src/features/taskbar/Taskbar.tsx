@@ -66,6 +66,8 @@ export type TaskbarPin =
 
 export type TaskbarProps = {
   monitorName: string
+  orientation: 'horizontal' | 'vertical'
+  side: 'bottom' | 'top' | 'left' | 'right'
   isPrimary: boolean
   batteryState: ShellBatteryState | null
   trayReservedPx: number
@@ -149,6 +151,7 @@ function batteryTooltipText(battery: ShellBatteryState) {
 function TaskbarWindowRows(props: {
   windows: TaskbarWindowRow[]
   focusedWindowId: number | null
+  orientation: 'horizontal' | 'vertical'
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarActivate: (windowId: number) => void
   onTaskbarClose: (windowId: number) => void
@@ -168,14 +171,18 @@ function TaskbarWindowRows(props: {
         return (
           <div
             role="listitem"
-            class="group relative flex h-full min-w-0 items-stretch gap-1 border-r border-(--shell-border) bg-(--shell-control-muted-bg) text-(--shell-text-muted) after:absolute after:right-0 after:bottom-0 after:left-0 after:h-0.5 after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+            class="group relative flex min-w-0 items-stretch gap-1 bg-(--shell-control-muted-bg) text-(--shell-text-muted) after:absolute after:bg-transparent hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
             classList={{
               'bg-(--shell-control-muted-hover) text-(--shell-text) after:bg-(--shell-taskbar-focus-indicator)':
                 active(),
               'text-(--shell-text-dim)': row.minimized && !active(),
-              'min-w-[132px] flex-[0_1_220px] px-2': props.compactMode === 'normal',
-              'min-w-[92px] flex-[1_1_112px]': props.compactMode === 'compact',
-              'min-w-[52px] flex-[1_1_64px] px-1': props.compactMode === 'tight',
+              'h-full border-r border-(--shell-border) after:right-0 after:bottom-0 after:left-0 after:h-0.5':
+                props.orientation === 'horizontal',
+              'h-11 w-full border-b border-(--shell-border) after:top-0 after:bottom-0 after:left-0 after:w-0.5':
+                props.orientation === 'vertical',
+              'min-w-[132px] flex-[0_1_220px] px-2': props.orientation === 'horizontal' && props.compactMode === 'normal',
+              'min-w-[92px] flex-[1_1_112px]': props.orientation === 'horizontal' && props.compactMode === 'compact',
+              'min-w-[52px] flex-[1_1_64px] px-1': props.orientation === 'horizontal' && props.compactMode === 'tight',
             }}
             onPointerEnter={(e) => {
               props.reportRowHoverTip({ window: row, rowEl: e.currentTarget }, 'now')
@@ -187,8 +194,8 @@ function TaskbarWindowRows(props: {
                 type="button"
                 class="flex min-h-0 min-w-0 flex-1 items-center overflow-hidden text-left text-xs touch-manipulation"
                 classList={{
-                  'gap-1.5 px-0.5': props.compactMode !== 'tight',
-                  'justify-center gap-0': props.compactMode === 'tight',
+                  'gap-1.5 px-0.5': props.orientation === 'horizontal' && props.compactMode !== 'tight',
+                  'justify-center gap-0': props.orientation === 'vertical' || props.compactMode === 'tight',
                 }}
                 data-shell-taskbar-group={row.group_id}
                 data-shell-taskbar-window-activate={row.window_id}
@@ -222,32 +229,34 @@ function TaskbarWindowRows(props: {
                   active={active()}
                   compact={props.compactMode !== 'normal'}
                 />
-                <Show when={props.compactMode !== 'tight'}>
+                <Show when={props.orientation === 'horizontal' && props.compactMode !== 'tight'}>
                   <span class="min-w-0 truncate">{label()}</span>
                 </Show>
               </button>
             </div>
-            <button
-              type="button"
-              class="sticky right-0 z-1 flex h-full shrink-0 cursor-pointer items-center justify-center bg-(--shell-control-muted-bg) text-(--shell-text-dim) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) group-hover:bg-(--shell-control-muted-hover)"
-              classList={{
-                'w-8': props.compactMode !== 'tight',
-                'w-6': props.compactMode === 'tight',
-                'bg-(--shell-control-muted-hover)': active(),
-              }}
-              data-shell-taskbar-window-close={row.window_id}
-              aria-label={`Close ${label()}`}
-              title={`Close ${label()}`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onPointerUp={(e) => {
-                if (e.button !== 0) return
-                e.preventDefault()
-                e.stopPropagation()
-                props.onTaskbarClose(row.window_id)
-              }}
-            >
-              <X class="h-4 w-4" stroke-width={2} />
-            </button>
+            <Show when={props.orientation === 'horizontal'}>
+              <button
+                type="button"
+                class="sticky right-0 z-1 flex h-full shrink-0 cursor-pointer items-center justify-center bg-(--shell-control-muted-bg) text-(--shell-text-dim) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) group-hover:bg-(--shell-control-muted-hover)"
+                classList={{
+                  'w-8': props.compactMode !== 'tight',
+                  'w-6': props.compactMode === 'tight',
+                  'bg-(--shell-control-muted-hover)': active(),
+                }}
+                data-shell-taskbar-window-close={row.window_id}
+                aria-label={`Close ${label()}`}
+                title={`Close ${label()}`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => {
+                  if (e.button !== 0) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  props.onTaskbarClose(row.window_id)
+                }}
+              >
+                <X class="h-4 w-4" stroke-width={2} />
+              </button>
+            </Show>
           </div>
         )
       }}
@@ -258,6 +267,7 @@ function TaskbarWindowRows(props: {
 function TaskbarPins(props: {
   monitorName: string
   pins: TaskbarPin[]
+  orientation: 'horizontal' | 'vertical'
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarPinActivate: (pin: TaskbarPin, monitorName: string) => void
   onTaskbarPinUnpin: (pin: TaskbarPin, monitorName: string) => void
@@ -283,10 +293,11 @@ function TaskbarPins(props: {
           return (
             <button
               type="button"
-              class="relative flex h-full shrink-0 cursor-pointer items-center justify-center border-r border-(--shell-border) bg-transparent text-(--shell-text-muted) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
+              class="relative flex shrink-0 cursor-pointer items-center justify-center bg-transparent text-(--shell-text-muted) touch-manipulation hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text)"
               classList={{
-                'w-11': props.compactMode !== 'tight',
-                'w-9': props.compactMode === 'tight',
+                'h-full border-r border-(--shell-border) w-11': props.orientation === 'horizontal' && props.compactMode !== 'tight',
+                'h-full border-r border-(--shell-border) w-9': props.orientation === 'horizontal' && props.compactMode === 'tight',
+                'h-11 w-full border-b border-(--shell-border)': props.orientation === 'vertical',
               }}
               data-shell-taskbar-pin={pin.id}
               data-shell-taskbar-pin-kind={pin.kind}
@@ -354,6 +365,7 @@ export function Taskbar(props: TaskbarProps) {
     return <Icon class="h-4 w-4" stroke-width={2} />
   }
   const compactMode = createMemo<'normal' | 'compact' | 'tight'>(() => {
+    if (props.orientation === 'vertical') return 'tight'
     const itemCount = props.windows.length + props.pins.length
     if (itemCount === 0) return 'normal'
     const width = windowRailWidth()
@@ -490,7 +502,13 @@ export function Taskbar(props: TaskbarProps) {
     <div
       data-shell-taskbar-exclude
       data-shell-taskbar-monitor={props.monitorName}
-      class="pointer-events-auto absolute bottom-0 left-0 right-0 z-50000 box-border flex h-11 items-stretch overflow-hidden border-t border-(--shell-border) bg-(--shell-taskbar-bg-solid) px-1 text-(--shell-text)"
+      data-shell-taskbar-side={props.side}
+      class="pointer-events-auto absolute inset-0 z-50000 box-border flex overflow-hidden bg-(--shell-taskbar-bg-solid) text-(--shell-text)"
+      classList={{
+        'h-full w-full items-stretch border-t border-(--shell-border) px-1': props.orientation === 'horizontal',
+        'h-full w-full flex-col items-stretch border-r border-(--shell-border) py-1': props.orientation === 'vertical' && props.side === 'left',
+        'h-full w-full flex-col items-stretch border-l border-(--shell-border) py-1': props.orientation === 'vertical' && props.side === 'right',
+      }}
     >
       <Show
         when={props.isPrimary}
@@ -499,6 +517,10 @@ export function Taskbar(props: TaskbarProps) {
             data-shell-taskbar-exclude
             data-shell-taskbar-monitor={props.monitorName}
             class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+            classList={{
+              'flex-row': props.orientation === 'horizontal',
+              'min-h-0 flex-col overflow-x-hidden overflow-y-auto': props.orientation === 'vertical',
+            }}
             role="list"
             aria-label="Windows"
             ref={(el) => {
@@ -508,6 +530,7 @@ export function Taskbar(props: TaskbarProps) {
             <TaskbarPins
               monitorName={props.monitorName}
               pins={props.pins}
+              orientation={props.orientation}
               compactMode={compactMode()}
               onTaskbarPinActivate={props.onTaskbarPinActivate}
               onTaskbarPinUnpin={props.onTaskbarPinUnpin}
@@ -515,6 +538,7 @@ export function Taskbar(props: TaskbarProps) {
             <TaskbarWindowRows
               windows={props.windows}
               focusedWindowId={props.focusedWindowId}
+              orientation={props.orientation}
               compactMode={compactMode()}
               onTaskbarActivate={props.onTaskbarActivate}
               onTaskbarClose={props.onTaskbarClose}
@@ -526,14 +550,22 @@ export function Taskbar(props: TaskbarProps) {
         <div
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
-          class="mr-1 flex h-full shrink-0 items-stretch"
+          class="flex shrink-0 items-stretch"
+          classList={{
+            'mr-1 h-full': props.orientation === 'horizontal',
+            'mb-1 w-full flex-col': props.orientation === 'vertical',
+          }}
         >
           <ProgramsTaskbarMenu>
             <TaskbarContextMenuTrigger>
               {(menu) => (
                 <button
                   type="button"
-                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
+                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) shrink-0 cursor-pointer"
+                  classList={{
+                    'h-full w-10': props.orientation === 'horizontal',
+                    'h-10 w-full': props.orientation === 'vertical',
+                  }}
                   data-shell-programs-toggle
                   aria-expanded={menu.open()}
                   aria-haspopup="menu"
@@ -555,6 +587,10 @@ export function Taskbar(props: TaskbarProps) {
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
           class="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+          classList={{
+            'flex-row': props.orientation === 'horizontal',
+            'min-h-0 flex-col overflow-x-hidden overflow-y-auto': props.orientation === 'vertical',
+          }}
           role="list"
           aria-label="Windows"
           ref={(el) => {
@@ -564,6 +600,7 @@ export function Taskbar(props: TaskbarProps) {
           <TaskbarPins
             monitorName={props.monitorName}
             pins={props.pins}
+            orientation={props.orientation}
             compactMode={compactMode()}
             onTaskbarPinActivate={props.onTaskbarPinActivate}
             onTaskbarPinUnpin={props.onTaskbarPinUnpin}
@@ -571,6 +608,7 @@ export function Taskbar(props: TaskbarProps) {
           <TaskbarWindowRows
             windows={props.windows}
             focusedWindowId={props.focusedWindowId}
+            orientation={props.orientation}
             compactMode={compactMode()}
             onTaskbarActivate={props.onTaskbarActivate}
             onTaskbarClose={props.onTaskbarClose}
@@ -580,11 +618,19 @@ export function Taskbar(props: TaskbarProps) {
         <div
           data-shell-taskbar-exclude
           data-shell-taskbar-monitor={props.monitorName}
-          class="ml-auto flex shrink-0 items-stretch"
+          class="flex shrink-0 items-stretch"
+          classList={{
+            'ml-auto': props.orientation === 'horizontal',
+            'mt-auto w-full flex-col': props.orientation === 'vertical',
+          }}
         >
           <Show when={props.keyboardLayoutLabel}>
             <span
-              class="flex h-full min-w-11 shrink-0 items-center justify-center border-l border-(--shell-border) bg-transparent px-2 text-center text-[0.72rem] font-normal tabular-nums uppercase tracking-[0.08em] text-(--shell-text-muted)"
+              class="flex shrink-0 items-center justify-center bg-transparent px-2 text-center text-[0.72rem] font-normal tabular-nums uppercase tracking-[0.08em] text-(--shell-text-muted)"
+              classList={{
+                'h-full min-w-11 border-l border-(--shell-border)': props.orientation === 'horizontal',
+                'h-10 w-full border-t border-(--shell-border)': props.orientation === 'vertical',
+              }}
               title="Keyboard layout"
             >
               {keyboardIndicator(props.keyboardLayoutLabel!)}
@@ -592,8 +638,15 @@ export function Taskbar(props: TaskbarProps) {
           </Show>
           <div
             data-shell-tray-strip
-            class="flex h-full shrink-0 items-stretch border-l border-(--shell-border) bg-transparent"
-            style={{ width: `${Math.max(0, props.trayReservedPx)}px`, 'min-width': `${Math.max(0, props.trayReservedPx)}px` }}
+            class="flex shrink-0 items-stretch bg-transparent"
+            classList={{
+              'h-full border-l border-(--shell-border)': props.orientation === 'horizontal',
+              'w-full flex-col border-t border-(--shell-border)': props.orientation === 'vertical',
+            }}
+            style={{
+              width: props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
+              'min-width': props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
+            }}
             aria-label="Tray"
             ref={registerTrayStrip}
           >
@@ -606,7 +659,11 @@ export function Taskbar(props: TaskbarProps) {
                   <button
                     type="button"
                     class="box-border flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent px-0.5 text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) touch-manipulation"
-                    style={{ width: `${slot()}px`, 'min-width': `${slot()}px` }}
+                    style={{
+                      width: props.orientation === 'horizontal' ? `${slot()}px` : undefined,
+                      'min-width': props.orientation === 'horizontal' ? `${slot()}px` : undefined,
+                      height: props.orientation === 'vertical' ? `${slot()}px` : undefined,
+                    }}
                     title={it.title}
                     onClick={() => props.onSniTrayActivate(it.id)}
                     onContextMenu={(e) => {
@@ -632,8 +689,10 @@ export function Taskbar(props: TaskbarProps) {
               {(menu) => (
                 <button
                   type="button"
-                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
                   classList={{
+                    'h-full w-10': props.orientation === 'horizontal',
+                    'h-10 w-full': props.orientation === 'vertical',
                     'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
                   }}
                   data-shell-volume-toggle
@@ -653,8 +712,10 @@ export function Taskbar(props: TaskbarProps) {
           </VolumeTaskbarMenu>
           <button
             type="button"
-            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+            class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
             classList={{
+              'h-full w-10': props.orientation === 'horizontal',
+              'h-10 w-full': props.orientation === 'vertical',
               'bg-(--shell-control-muted-hover) text-(--shell-text)': props.settingsPanelOpen,
             }}
             data-shell-settings-toggle
@@ -677,8 +738,10 @@ export function Taskbar(props: TaskbarProps) {
           </button>
           <button
             type="button"
-            class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+            class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
             classList={{
+              'h-full w-10': props.orientation === 'horizontal',
+              'h-10 w-full': props.orientation === 'vertical',
               'bg-(--shell-control-muted-hover) text-(--shell-text)': props.debugPanelOpen,
             }}
             data-shell-debug-toggle
@@ -703,8 +766,10 @@ export function Taskbar(props: TaskbarProps) {
             {(currentBattery) => (
               <span
                 data-shell-battery-indicator
-                class="flex h-full w-10 shrink-0 items-center justify-center bg-transparent text-(--shell-text-muted)"
+                class="flex shrink-0 items-center justify-center bg-transparent text-(--shell-text-muted)"
                 classList={{
+                  'h-full w-10': props.orientation === 'horizontal',
+                  'h-10 w-full': props.orientation === 'vertical',
                   'text-(--shell-warning-text)':
                     currentBattery().state === 'discharging' && currentBattery().percentage <= 15,
                 }}
@@ -732,8 +797,10 @@ export function Taskbar(props: TaskbarProps) {
               {(menu) => (
                 <button
                   type="button"
-                  class="inline-flex h-full w-10 items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
+                  class="inline-flex items-center justify-center border-0 bg-transparent text-(--shell-text-muted) hover:bg-(--shell-control-muted-hover) hover:text-(--shell-text) cursor-pointer"
                   classList={{
+                    'h-full w-10': props.orientation === 'horizontal',
+                    'h-10 w-full': props.orientation === 'vertical',
                     'bg-(--shell-control-muted-hover) text-(--shell-text)': menu.open(),
                   }}
                   data-shell-power-toggle
@@ -751,7 +818,13 @@ export function Taskbar(props: TaskbarProps) {
               <PowerContextMenu />
             </TaskbarContextMenuContent>
           </PowerTaskbarMenu>
-          <div class="flex min-w-18 shrink-0 flex-col items-end justify-center border-l border-(--shell-border) px-2 text-[10px] leading-tight text-(--shell-text-dim)">
+          <div
+            class="flex shrink-0 flex-col justify-center px-2 text-[10px] leading-tight text-(--shell-text-dim)"
+            classList={{
+              'min-w-18 items-end border-l border-(--shell-border)': props.orientation === 'horizontal',
+              'h-11 w-full items-center border-t border-(--shell-border)': props.orientation === 'vertical',
+            }}
+          >
             <span class="text-[0.76rem] font-semibold text-(--shell-text)">
               {clockTimeFormatter.format(now())}
             </span>

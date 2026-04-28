@@ -29,6 +29,7 @@ export type SettingsPanelProps = {
   currentMonitorName: Accessor<string | null>
   shellChromePrimaryName: Accessor<string | null>
   autoShellChromeMonitorName: Accessor<string | null>
+  taskbarAutoHide: Accessor<boolean>
   canSessionControl: Accessor<boolean>
   uiScalePercent: Accessor<100 | 150 | 200>
   tilingCfgRev: Accessor<number>
@@ -39,6 +40,8 @@ export type SettingsPanelProps = {
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   setOutputVrr: (name: string, enabled: boolean) => void
+  setTaskbarAutoHide: (enabled: boolean) => void
+  setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
   keyboardLayoutLabel: Accessor<string | null>
@@ -106,6 +109,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setScreenDraft={props.setScreenDraft}
             shellChromePrimaryName={props.shellChromePrimaryName}
             autoShellChromeMonitorName={props.autoShellChromeMonitorName}
+            taskbarAutoHide={props.taskbarAutoHide}
             canSessionControl={props.canSessionControl}
             uiScalePercent={props.uiScalePercent}
             orientationPickerOpen={orientationPickerOpen}
@@ -113,6 +117,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             setShellPrimary={props.setShellPrimary}
             setUiScale={props.setUiScale}
             setOutputVrr={props.setOutputVrr}
+            setTaskbarAutoHide={props.setTaskbarAutoHide}
+            setTaskbarSide={props.setTaskbarSide}
             applyCompositorLayoutFromDraft={props.applyCompositorLayoutFromDraft}
             monitorRefreshLabel={props.monitorRefreshLabel}
           />

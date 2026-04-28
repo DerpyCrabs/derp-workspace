@@ -1,4 +1,4 @@
-import { createMemo, For, Show, type Accessor } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Show, type Accessor } from 'solid-js'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { canvasRectToClientCss } from '@/lib/shellCoords'
 import { assistShapeToDims } from '@/features/tiling/assistGrid'
@@ -16,6 +16,9 @@ type ShellSurfaceLayersProps = {
   debugHudFrameVisible: Accessor<boolean>
   taskbarScreens: Accessor<LayoutScreen[]>
   taskbarHeight: number
+  taskbarAutoHide: Accessor<boolean>
+  taskbarPortalMenusOpen: Accessor<boolean>
+  pointerInMain: Accessor<{ x: number; y: number } | null>
   screenTaskbarHiddenForFullscreen: (screen: LayoutScreen) => boolean
   isPrimaryTaskbarScreen: (screen: LayoutScreen) => boolean
   batteryState: Accessor<ShellBatteryState | null>
@@ -129,51 +132,84 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
       <For each={props.taskbarScreens()}>
         {(screen) => {
           const loc = props.screenCssRect(screen)
+          const taskbar = () => taskbarRectForScreen(loc, screen.taskbar_side, props.taskbarHeight)
+          const trigger = () => taskbarTriggerRectForScreen(loc, screen.taskbar_side)
+          const [edgeRevealed, setEdgeRevealed] = createSignal(false)
+          const hiddenByFullscreen = () => props.screenTaskbarHiddenForFullscreen(screen)
+          createEffect(() => {
+            if (!props.taskbarAutoHide() || hiddenByFullscreen()) {
+              setEdgeRevealed(false)
+              return
+            }
+            if (props.taskbarPortalMenusOpen()) {
+              setEdgeRevealed(true)
+              return
+            }
+            const pointer = props.pointerInMain()
+            if (!pointer) {
+              setEdgeRevealed(false)
+              return
+            }
+            const inTrigger = pointInRect(trigger(), pointer)
+            const inTaskbar = pointInRect(taskbar(), pointer)
+            setEdgeRevealed((wasRevealed) => inTrigger || (wasRevealed && inTaskbar))
+          })
+          const revealed = () => {
+            if (!props.taskbarAutoHide()) return true
+            if (props.taskbarPortalMenusOpen()) return true
+            return edgeRevealed()
+          }
+          const visible = () => !hiddenByFullscreen() && revealed()
+          const layerRect = () => (visible() ? taskbar() : trigger())
           return (
-            <Show when={!props.screenTaskbarHiddenForFullscreen(screen)}>
+            <Show when={!hiddenByFullscreen() || props.taskbarAutoHide()}>
               <div
                 class="pointer-events-auto absolute z-401000"
                 style={{
-                  left: `${loc.x}px`,
-                  top: `${loc.y + loc.height - props.taskbarHeight}px`,
-                  width: `${loc.width}px`,
-                  height: `${props.taskbarHeight}px`,
+                  left: `${layerRect().x}px`,
+                  top: `${layerRect().y}px`,
+                  width: `${layerRect().width}px`,
+                  height: `${layerRect().height}px`,
                 }}
               >
-                <Taskbar
-                  monitorName={screen.name}
-                  isPrimary={props.isPrimaryTaskbarScreen(screen)}
-                  batteryState={
-                    props.isPrimaryTaskbarScreen(screen) ? props.batteryState() : null
-                  }
-                  trayReservedPx={
-                    props.isPrimaryTaskbarScreen(screen) ? props.trayReservedPx() : 0
-                  }
-                  sniTrayItems={
-                    props.isPrimaryTaskbarScreen(screen) ? props.sniTrayItems() : []
-                  }
-                  trayIconSlotPx={
-                    props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 40
-                  }
-                  onSniTrayActivate={props.onSniTrayActivate}
-                  onSniTrayContextMenu={props.onSniTrayContextMenu}
-                  volumeMuted={props.volumeMuted()}
-                  volumePercent={props.volumePercent()}
-                  pins={props.taskbarPinsForScreen(screen)}
-                  windows={props.taskbarRowsForScreen(screen)}
-                  focusedWindowId={props.focusedWindowId()}
-                  keyboardLayoutLabel={
-                    props.isPrimaryTaskbarScreen(screen) ? props.keyboardLayoutLabel() : null
-                  }
-                  settingsPanelOpen={props.settingsHudFrameVisible()}
-                  onSettingsPanelToggle={props.onSettingsPanelToggle}
-                  debugPanelOpen={props.debugHudFrameVisible()}
-                  onDebugPanelToggle={props.onDebugPanelToggle}
-                  onTaskbarActivate={props.onTaskbarActivate}
-                  onTaskbarClose={props.onTaskbarClose}
-                  onTaskbarPinActivate={props.onTaskbarPinActivate}
-                  onTaskbarPinUnpin={props.onTaskbarPinUnpin}
-                />
+                <Show when={visible()}>
+                  <Taskbar
+                    monitorName={screen.name}
+                    orientation={screen.taskbar_side === 'left' || screen.taskbar_side === 'right' ? 'vertical' : 'horizontal'}
+                    side={screen.taskbar_side}
+                    isPrimary={props.isPrimaryTaskbarScreen(screen)}
+                    batteryState={
+                      props.isPrimaryTaskbarScreen(screen) ? props.batteryState() : null
+                    }
+                    trayReservedPx={
+                      props.isPrimaryTaskbarScreen(screen) ? props.trayReservedPx() : 0
+                    }
+                    sniTrayItems={
+                      props.isPrimaryTaskbarScreen(screen) ? props.sniTrayItems() : []
+                    }
+                    trayIconSlotPx={
+                      props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 40
+                    }
+                    onSniTrayActivate={props.onSniTrayActivate}
+                    onSniTrayContextMenu={props.onSniTrayContextMenu}
+                    volumeMuted={props.volumeMuted()}
+                    volumePercent={props.volumePercent()}
+                    pins={props.taskbarPinsForScreen(screen)}
+                    windows={props.taskbarRowsForScreen(screen)}
+                    focusedWindowId={props.focusedWindowId()}
+                    keyboardLayoutLabel={
+                      props.isPrimaryTaskbarScreen(screen) ? props.keyboardLayoutLabel() : null
+                    }
+                    settingsPanelOpen={props.settingsHudFrameVisible()}
+                    onSettingsPanelToggle={props.onSettingsPanelToggle}
+                    debugPanelOpen={props.debugHudFrameVisible()}
+                    onDebugPanelToggle={props.onDebugPanelToggle}
+                    onTaskbarActivate={props.onTaskbarActivate}
+                    onTaskbarClose={props.onTaskbarClose}
+                    onTaskbarPinActivate={props.onTaskbarPinActivate}
+                    onTaskbarPinUnpin={props.onTaskbarPinUnpin}
+                  />
+                </Show>
               </div>
             </Show>
           )
@@ -181,6 +217,21 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
       </For>
     </>
   )
+}
+
+function taskbarRectForScreen(screen: LayoutScreen, side: LayoutScreen['taskbar_side'], size: number) {
+  if (side === 'top') return { x: screen.x, y: screen.y, width: screen.width, height: size }
+  if (side === 'left') return { x: screen.x, y: screen.y, width: size, height: screen.height }
+  if (side === 'right') return { x: screen.x + screen.width - size, y: screen.y, width: size, height: screen.height }
+  return { x: screen.x, y: screen.y + screen.height - size, width: screen.width, height: size }
+}
+
+function taskbarTriggerRectForScreen(screen: LayoutScreen, side: LayoutScreen['taskbar_side']) {
+  return taskbarRectForScreen(screen, side, 2)
+}
+
+function pointInRect(rect: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height
 }
 
 function AssistGridOutlineOverlay(props: {

@@ -284,6 +284,10 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     fn(op, arg)
   } else if (op === 'set_output_vrr' && typeof arg === 'string' && typeof arg2 === 'number') {
     fn(op, arg, arg2)
+  } else if (op === 'set_taskbar_auto_hide' && typeof arg === 'number') {
+    fn(op, arg)
+  } else if (op === 'set_taskbar_side' && typeof arg === 'string' && typeof arg2 === 'string') {
+    fn(op, arg, arg2)
   } else if (
     op === 'native_drag_preview_ready' &&
     typeof arg === 'number' &&
@@ -402,6 +406,7 @@ function App() {
   const layoutCanvasOrigin = createMemo(() => outputTopology()?.origin ?? null)
   const uiScalePercent = createMemo(() => outputTopology()?.uiScalePercent ?? 150)
   const shellChromePrimaryName = createMemo(() => outputTopology()?.shellChromePrimaryName ?? null)
+  const taskbarAutoHide = createMemo(() => outputTopology()?.taskbarAutoHide ?? false)
   const nativeDragPreviewKey = createMemo(() => {
     const preview = nativeDragPreview()
     return preview ? `${preview.window_id}:${preview.generation}:${preview.image_path}` : null
@@ -784,6 +789,7 @@ function App() {
         refresh_milli_hz: 0,
         vrr_supported: false,
         vrr_enabled: false,
+        taskbar_side: 'bottom',
       }
       return { primary: single, secondary: [] as LayoutScreen[] }
     }
@@ -1428,6 +1434,7 @@ function App() {
       layoutCanvasOrigin,
       panelHostForHud,
       shellChromePrimaryName,
+      taskbarAutoHide,
       viewportCss,
       windowsList,
       pointerClient,
@@ -1449,6 +1456,8 @@ function App() {
       setShellPrimary: (name) => shellWireSend('set_shell_primary', name),
       setUiScale: (pct) => shellWireSend('set_ui_scale', pct),
       setOutputVrr: (name, enabled) => shellWireSend('set_output_vrr', name, enabled ? 1 : 0),
+      setTaskbarAutoHide: (enabled) => shellWireSend('set_taskbar_auto_hide', enabled ? 1 : 0),
+      setTaskbarSide: (name, side) => shellWireSend('set_taskbar_side', name, side),
       applyCompositorLayoutFromDraft: () => {
         const screens = screenDraft.rows.map((r) => ({
           name: r.name,
@@ -1501,6 +1510,7 @@ function App() {
     layoutCanvasOrigin,
     taskbarScreens,
     taskbarHeight: TASKBAR_HEIGHT,
+    taskbarAutoHide,
     windows: windowsList,
     isWindowVisible: (window) => shellExclusionVisibleWindowIds().has(window.window_id),
     onHudChange: debugHudRuntime.setExclusionZonesHud,
@@ -1526,6 +1536,7 @@ function App() {
     getWindowsByMonitor: windowsByMonitor,
     getTaskbarRowsByMonitor: taskbarRowsByMonitor,
     getFallbackMonitorName: fallbackMonitorName,
+    taskbarAutoHide,
     requestSharedStateSync: shellSharedStateSync.requestSharedStateSync,
     sendWorkspaceMutation,
     shellWireSend,
@@ -1745,6 +1756,12 @@ function App() {
     debugHudFrameVisible,
     taskbarScreens,
     taskbarHeight: TASKBAR_HEIGHT,
+    taskbarAutoHide,
+    taskbarPortalMenusOpen: () =>
+      shellContextMenus.programsMenuOpen() ||
+      shellContextMenus.powerMenuOpen() ||
+      shellContextMenus.volumeMenuOpen(),
+    pointerInMain,
     screenTaskbarHiddenForFullscreen: workspaceLayoutBridge.screenTaskbarHiddenForFullscreen,
     isPrimaryTaskbarScreen: (screen) => isPrimaryTaskbarScreen(screen, workspacePartition().primary),
     batteryState: shellBattery.state,

@@ -5,6 +5,7 @@ import {
   ensureNativePair,
   RED_NATIVE_TITLE,
   SHELL_UI_SETTINGS_WINDOW_ID,
+  SkipError,
   activateTaskbarWindow,
   assert,
   assertTopWindow,
@@ -272,6 +273,93 @@ function pointCoveredByShellExclusion(compositor: CompositorSnapshot, point: { x
   )
 }
 
+function outputForWindow(compositor: CompositorSnapshot, window: { x: number; y: number; width: number; height: number; output_name?: string | null }) {
+  if (window.output_name) {
+    const named = compositor.outputs.find((output) => output.name === window.output_name)
+    if (named) return named
+  }
+  const cx = window.x + Math.floor(window.width / 2)
+  const cy = window.y + Math.floor(window.height / 2)
+  return compositor.outputs.find(
+    (output) =>
+      cx >= output.x &&
+      cx < output.x + output.width &&
+      cy >= output.y &&
+      cy < output.y + output.height,
+  ) ?? null
+}
+
+function expectedTaskbarRect(output: CompositorSnapshot['outputs'][number], side: string, size = 44) {
+  if (side === 'top') return { x: output.x, y: output.y, width: output.width, height: size }
+  if (side === 'left') return { x: output.x, y: output.y, width: size, height: output.height }
+  if (side === 'right') return { x: output.x + output.width - size, y: output.y, width: size, height: output.height }
+  return { x: output.x, y: output.y + output.height - size, width: output.width, height: size }
+}
+
+function expectedMaximizedRect(output: CompositorSnapshot['outputs'][number], side: string, autoHide: boolean) {
+  const titlebar = 26
+  const taskbar = autoHide ? 0 : 44
+  if (side === 'top') return { x: output.x, y: output.y + taskbar + titlebar, width: output.width, height: output.height - taskbar - titlebar }
+  if (side === 'left') return { x: output.x + taskbar, y: output.y + titlebar, width: output.width - taskbar, height: output.height - titlebar }
+  if (side === 'right') return { x: output.x, y: output.y + titlebar, width: output.width - taskbar, height: output.height - titlebar }
+  return { x: output.x, y: output.y + titlebar, width: output.width, height: output.height - taskbar - titlebar }
+}
+
+function assertRectNear(label: string, actual: { x: number; y: number; width: number; height: number }, expected: { x: number; y: number; width: number; height: number }) {
+  for (const key of ['x', 'y', 'width', 'height'] as const) {
+    assert(
+      Math.abs(actual[key] - expected[key]) <= 2,
+      `${label} ${key} expected ${expected[key]} got ${actual[key]}`,
+    )
+  }
+}
+
+function taskbarRevealPoint(output: CompositorSnapshot['outputs'][number], side: string) {
+  if (side === 'top') return { x: output.x + Math.floor(output.width / 2), y: output.y + 1 }
+  if (side === 'left') return { x: output.x + 1, y: output.y + Math.floor(output.height / 2) }
+  if (side === 'right') return { x: output.x + output.width - 1, y: output.y + Math.floor(output.height / 2) }
+  return { x: output.x + Math.floor(output.width / 2), y: output.y + output.height - 1 }
+}
+
+function taskbarBodyNonTriggerPoint(output: CompositorSnapshot['outputs'][number], side: string) {
+  if (side === 'top') return { x: output.x + Math.floor(output.width / 2), y: output.y + 20 }
+  if (side === 'left') return { x: output.x + 20, y: output.y + Math.floor(output.height / 2) }
+  if (side === 'right') return { x: output.x + output.width - 20, y: output.y + Math.floor(output.height / 2) }
+  return { x: output.x + Math.floor(output.width / 2), y: output.y + output.height - 20 }
+}
+
+async function clickSettingsTaskbarSide(base: string, outputName: string, side: 'bottom' | 'top' | 'left' | 'right') {
+  const ready = await waitFor(
+    `wait for taskbar side ${side} button for ${outputName}`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const button = shell.settings_taskbar_side_buttons?.find(
+        (entry) => entry.output === outputName && entry.side === side && entry.rect,
+      )
+      return button?.rect ? { shell, rect: button.rect } : null
+    },
+    5000,
+    100,
+  )
+  await clickRect(base, ready.rect)
+}
+
+async function waitForTaskbarOnSide(base: string, outputName: string, side: string) {
+  return waitFor(
+    `wait for ${outputName} taskbar on ${side}`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      const output = snapshots.compositor.outputs.find((entry) => entry.name === outputName)
+      const taskbar = taskbarForMonitor(snapshots.shell, outputName)
+      if (!output || !taskbar?.rect || taskbar.side !== side) return null
+      assertRectNear(`${outputName} taskbar ${side}`, taskbar.rect, expectedTaskbarRect(output, side))
+      return { ...snapshots, output, taskbar }
+    },
+    5000,
+    100,
+  )
+}
+
 async function waitForSettingsTilingLayoutTriggerReady(base: string) {
   let lastRectKey = ''
   return waitFor(
@@ -462,6 +550,119 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     await writeJsonArtifact('display-vrr-toggle.json', disabled)
+  })
+
+  test('display settings controls taskbar side and auto-hide work area', async ({ base, state }) => {
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    const focused = await waitForShellUiFocus(base, windowId)
+    const maximize = assertRectMinSize(
+      'shell test maximize button before taskbar settings',
+      windowControls(focused.shell, windowId)?.maximize,
+      12,
+    )
+    await clickRect(base, maximize)
+    const maximized = await waitFor(
+      'wait for shell test maximized before taskbar settings',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        if (!window?.maximized) return null
+        const output = outputForWindow(snapshots.compositor, window)
+        return output ? { ...snapshots, window, output } : null
+      },
+      5000,
+      100,
+    )
+    const targetOutput = maximized.output
+    const targetSide = taskbarForMonitor(maximized.shell, targetOutput.name)?.side === 'right' ? 'left' : 'right'
+
+    await openSettings(base, 'keybind')
+    await switchSettingsPage(base, 'settings_tab_displays', 'displays', 'data-settings-displays-page')
+    let settingsShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    if (!settingsShell.settings_taskbar_side_buttons?.some((entry) => entry.output === targetOutput.name)) {
+      throw new SkipError(`settings taskbar controls missing output ${targetOutput.name}`)
+    }
+    if (settingsShell.controls.settings_taskbar_auto_hide_off) {
+      await clickRect(base, settingsShell.controls.settings_taskbar_auto_hide_off)
+    }
+    await clickSettingsTaskbarSide(base, targetOutput.name, 'bottom')
+    await waitForTaskbarOnSide(base, targetOutput.name, 'bottom')
+
+    await clickSettingsTaskbarSide(base, targetOutput.name, targetSide)
+    const sideSet = await waitForTaskbarOnSide(base, targetOutput.name, targetSide)
+    const verticalHtml = await getShellHtml(base, `[data-shell-taskbar-monitor="${targetOutput.name}"][data-shell-taskbar-side]`)
+    assert(
+      !verticalHtml.includes(`data-shell-taskbar-window-close="${windowId}"`),
+      'vertical taskbar rows should not expose close buttons',
+    )
+    if (opened.window.title.trim().length > 0) {
+      assert(!verticalHtml.includes(opened.window.title), 'vertical taskbar rows should omit title text')
+    }
+    const sideWindow = compositorWindowById(sideSet.compositor, windowId)
+    assert(sideWindow, 'missing maximized shell test after taskbar side change')
+    assertRectNear(
+      'maximized shell test with pinned vertical taskbar',
+      sideWindow!,
+      expectedMaximizedRect(targetOutput, targetSide, false),
+    )
+
+    const autoHideOn = assertRectMinSize(
+      'taskbar auto-hide on button',
+      sideSet.shell.controls.settings_taskbar_auto_hide_on,
+      8,
+    )
+    await clickRect(base, autoHideOn)
+    await movePoint(
+      base,
+      targetOutput.x + Math.floor(targetOutput.width / 2),
+      targetOutput.y + Math.floor(targetOutput.height / 2),
+    )
+    const hidden = await waitFor(
+      `wait for ${targetOutput.name} taskbar hidden by auto-hide`,
+      async () => {
+        const snapshots = await getSnapshots(base)
+        if (taskbarForMonitor(snapshots.shell, targetOutput.name)) return null
+        const window = compositorWindowById(snapshots.compositor, windowId)
+        if (!window?.maximized) return null
+        assertRectNear(
+          'maximized shell test with auto-hidden taskbar',
+          window,
+          expectedMaximizedRect(targetOutput, targetSide, true),
+        )
+        return { ...snapshots, window }
+      },
+      5000,
+      100,
+    )
+
+    const nonTrigger = taskbarBodyNonTriggerPoint(targetOutput, targetSide)
+    await movePoint(base, nonTrigger.x, nonTrigger.y)
+    const stillHidden = await getSnapshots(base)
+    assert(
+      !taskbarForMonitor(stillHidden.shell, targetOutput.name),
+      'auto-hidden taskbar should not reveal from the old full taskbar body',
+    )
+
+    const edge = taskbarRevealPoint(targetOutput, targetSide)
+    await movePoint(base, edge.x, edge.y)
+    await waitForTaskbarOnSide(base, targetOutput.name, targetSide)
+
+    settingsShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    const autoHideOff = assertRectMinSize(
+      'taskbar auto-hide off button',
+      settingsShell.controls.settings_taskbar_auto_hide_off,
+      8,
+    )
+    await clickRect(base, autoHideOff)
+    await clickSettingsTaskbarSide(base, targetOutput.name, 'bottom')
+    const restored = await waitForTaskbarOnSide(base, targetOutput.name, 'bottom')
+    await writeJsonArtifact('taskbar-side-auto-hide.json', {
+      targetOutput: targetOutput.name,
+      targetSide,
+      hidden: hidden.shell,
+      restored: restored.shell,
+    })
   })
 
   test('volume and power menus mount portaled panels with visible geometry', async ({ base }) => {

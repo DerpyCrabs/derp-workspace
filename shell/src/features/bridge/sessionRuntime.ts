@@ -126,7 +126,7 @@ export function createSessionRuntime(options: SessionRuntimeOptions) {
     const target = screenBySavedOutput(outputId, outputName)
     if (!target) return bounds
     const reserveTb = options.reserveTaskbarForMon(target)
-    const work = monitorWorkAreaGlobal(target, reserveTb)
+    const work = monitorWorkAreaGlobal(target, reserveTb, undefined, undefined, target.taskbar_side)
     const globalRect = rectCanvasLocalToGlobal(
       bounds.x,
       bounds.y,

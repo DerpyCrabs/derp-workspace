@@ -440,6 +440,7 @@ fn apply_message(
             canvas_physical_h,
             screens,
             shell_chrome_primary,
+            taskbar_auto_hide,
         } => {
             apply_output_dimensions_to_osr(
                 canvas_logical_w,
@@ -463,6 +464,12 @@ fn apply_message(
                         "refresh_milli_hz": screen.refresh_milli_hz,
                         "vrr_supported": screen.vrr_supported,
                         "vrr_enabled": screen.vrr_enabled,
+                        "taskbar_side": match screen.taskbar_side {
+                            shell_wire::TASKBAR_SIDE_TOP => "top",
+                            shell_wire::TASKBAR_SIDE_LEFT => "left",
+                            shell_wire::TASKBAR_SIDE_RIGHT => "right",
+                            _ => "bottom",
+                        },
                     })
                 })
                 .collect();
@@ -476,6 +483,7 @@ fn apply_message(
                     "canvas_physical_height": canvas_physical_h,
                     "screens": screens,
                     "shell_chrome_primary": shell_chrome_primary,
+                    "taskbar_auto_hide": taskbar_auto_hide,
                 }),
                 message_snapshot_epoch,
             ));

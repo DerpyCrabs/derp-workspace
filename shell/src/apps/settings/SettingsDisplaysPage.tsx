@@ -1,6 +1,10 @@
 import { For, Show, batch, createMemo, createSignal, onCleanup } from 'solid-js'
 import type { Setter } from 'solid-js'
 import type { SetStoreFunction } from 'solid-js/store'
+import ArrowDownToLine from 'lucide-solid/icons/arrow-down-to-line'
+import ArrowLeftToLine from 'lucide-solid/icons/arrow-left-to-line'
+import ArrowRightToLine from 'lucide-solid/icons/arrow-right-to-line'
+import ArrowUpToLine from 'lucide-solid/icons/arrow-up-to-line'
 import { Select } from '@/host/Select'
 import { TransformPicker } from '@/features/tiling/TransformPicker'
 import type { SettingsLayoutScreen } from './settingsTypes'
@@ -113,6 +117,7 @@ export type SettingsDisplaysPageProps = {
   setScreenDraft: SetStoreFunction<{ rows: SettingsLayoutScreen[] }>
   shellChromePrimaryName: () => string | null
   autoShellChromeMonitorName: () => string | null
+  taskbarAutoHide: () => boolean
   canSessionControl: () => boolean
   uiScalePercent: () => 100 | 150 | 200
   orientationPickerOpen: () => number | null
@@ -120,9 +125,18 @@ export type SettingsDisplaysPageProps = {
   setShellPrimary: (name: string) => void
   setUiScale: (pct: 100 | 150 | 200) => void
   setOutputVrr: (name: string, enabled: boolean) => void
+  setTaskbarAutoHide: (enabled: boolean) => void
+  setTaskbarSide: (name: string, side: 'bottom' | 'top' | 'left' | 'right') => void
   applyCompositorLayoutFromDraft: () => void
   monitorRefreshLabel: (milli: number) => string
 }
+
+const TASKBAR_SIDE_OPTIONS = [
+  { side: 'bottom' as const, label: 'Bottom', Icon: ArrowDownToLine },
+  { side: 'top' as const, label: 'Top', Icon: ArrowUpToLine },
+  { side: 'left' as const, label: 'Left', Icon: ArrowLeftToLine },
+  { side: 'right' as const, label: 'Right', Icon: ArrowRightToLine },
+]
 
 export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
   const [draggingIndex, setDraggingIndex] = createSignal<number | null>(null)
@@ -296,6 +310,35 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
             onClick={() => props.setUiScale(200)}
           >
             200%
+          </button>
+        </div>
+        <div class="mb-[0.6rem] flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8rem]">
+          <span class="mr-1 text-(--shell-text-muted)">Taskbar auto-hide</span>
+          <button
+            type="button"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-[0.3rem] px-[0.55rem] py-1 font-inherit disabled:cursor-default"
+            classList={{
+              'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
+                !props.taskbarAutoHide(),
+            }}
+            disabled={!props.canSessionControl() || !props.taskbarAutoHide()}
+            data-settings-taskbar-auto-hide-off
+            onClick={() => props.setTaskbarAutoHide(false)}
+          >
+            Off
+          </button>
+          <button
+            type="button"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-[0.3rem] px-[0.55rem] py-1 font-inherit disabled:cursor-default"
+            classList={{
+              'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
+                props.taskbarAutoHide(),
+            }}
+            disabled={!props.canSessionControl() || props.taskbarAutoHide()}
+            data-settings-taskbar-auto-hide-on
+            onClick={() => props.setTaskbarAutoHide(true)}
+          >
+            On
           </button>
         </div>
         <ul class="mb-2.5 list-none pl-[18px] text-xs leading-snug text-(--shell-text-muted)">
@@ -477,6 +520,34 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       VRR
                     </label>
                   </Show>
+                  <div class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-(--shell-text-dim)">
+                    taskbar
+                    <div class="flex overflow-hidden rounded border border-(--shell-border-strong)" data-settings-taskbar-side={row.name}>
+                      <For each={TASKBAR_SIDE_OPTIONS}>
+                        {(option) => {
+                          const Icon = option.Icon
+                          return (
+                            <button
+                              type="button"
+                              class="bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) flex h-7 w-8 cursor-pointer items-center justify-center border-0 border-r border-(--shell-border-strong) last:border-r-0 disabled:cursor-default"
+                              classList={{
+                                'bg-(--shell-accent) text-(--shell-accent-foreground) hover:bg-(--shell-accent-hover)':
+                                  row.taskbar_side === option.side,
+                              }}
+                              disabled={!props.canSessionControl() || row.taskbar_side === option.side}
+                              title={option.label}
+                              aria-label={`${option.label} taskbar`}
+                              data-settings-taskbar-side-option={option.side}
+                              data-settings-taskbar-side-output={row.name}
+                              onClick={() => props.setTaskbarSide(row.name, option.side)}
+                            >
+                              <Icon class="h-4 w-4" stroke-width={2} />
+                            </button>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

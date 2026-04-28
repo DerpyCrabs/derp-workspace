@@ -3,6 +3,7 @@ import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
 import { snapZoneToBounds } from './tileZones'
 import {
   monitorTileFrameAreaGlobal,
+  monitorWorkAreaGlobal,
   tiledClientRectToFrameRect,
   tiledFrameRectToClientRect,
 } from './tileSnap'
@@ -37,5 +38,33 @@ describe('tileSnap', () => {
       snap_tiled: true,
     })
     expect(topOuter.y + topOuter.h).toBe(bottomOuter.y)
+  })
+
+  it.each([
+    ['bottom', { x: 100, y: 200, w: 800, h: 556 }],
+    ['top', { x: 100, y: 244, w: 800, h: 556 }],
+    ['left', { x: 144, y: 200, w: 756, h: 600 }],
+    ['right', { x: 100, y: 200, w: 756, h: 600 }],
+  ] as const)('reserves taskbar space on the %s edge', (side, expected) => {
+    expect(
+      monitorTileFrameAreaGlobal(
+        { x: 100, y: 200, width: 800, height: 600 },
+        true,
+        side,
+        44,
+      ),
+    ).toEqual(expected)
+  })
+
+  it('uses the full monitor area when the taskbar is not reserved', () => {
+    expect(
+      monitorWorkAreaGlobal(
+        { x: 100, y: 200, width: 800, height: 600 },
+        false,
+        26,
+        44,
+        'left',
+      ),
+    ).toEqual({ x: 100, y: 226, w: 800, h: 574 })
   })
 })

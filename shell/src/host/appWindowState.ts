@@ -28,8 +28,10 @@ export type DerpShellDetail = ({
         refresh_milli_hz?: number
         vrr_supported?: boolean
         vrr_enabled?: boolean
+        taskbar_side?: 'bottom' | 'top' | 'left' | 'right'
       }>
       shell_chrome_primary?: string | null
+      taskbar_auto_hide?: boolean
     }
   | {
       type: 'window_mapped'

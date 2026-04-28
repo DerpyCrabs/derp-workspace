@@ -88,6 +88,7 @@ export type CompositorOutputTopology = {
   uiScalePercent: 100 | 150 | 200
   screens: LayoutScreen[]
   shellChromePrimaryName: string | null
+  taskbarAutoHide: boolean
 }
 
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
@@ -466,6 +467,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
         outputUiScalePercent(d.logical_width, prev?.physical?.w ?? d.logical_width),
       screens: prev?.screens ?? [],
       shellChromePrimaryName: prev?.shellChromePrimaryName ?? null,
+      taskbarAutoHide: prev?.taskbarAutoHide ?? false,
     }))
     options.scheduleCompositorFollowup({ syncExclusion: true, flushWindows: true })
   }
@@ -482,6 +484,10 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       refresh_milli_hz: typeof s.refresh_milli_hz === 'number' ? s.refresh_milli_hz : 0,
       vrr_supported: s.vrr_supported === true,
       vrr_enabled: s.vrr_supported === true && s.vrr_enabled === true,
+      taskbar_side:
+        s.taskbar_side === 'top' || s.taskbar_side === 'left' || s.taskbar_side === 'right'
+          ? s.taskbar_side
+          : ('bottom' as const),
     }))
     const pr =
       typeof d.shell_chrome_primary === 'string' && d.shell_chrome_primary.length > 0
@@ -501,6 +507,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       uiScalePercent: outputUiScalePercent(d.canvas_logical_width, d.canvas_physical_width),
       screens,
       shellChromePrimaryName: pr,
+      taskbarAutoHide: d.taskbar_auto_hide === true,
     })
     ;(window as Window & { __DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION?: number }).__DERP_LAST_COMPOSITOR_OUTPUT_LAYOUT_REVISION =
       typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0

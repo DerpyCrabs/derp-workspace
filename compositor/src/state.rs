@@ -148,6 +148,77 @@ fn shell_shared_state_payload_stale_reason(
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 26;
 pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellTaskbarSide {
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
+impl Default for ShellTaskbarSide {
+    fn default() -> Self {
+        Self::Bottom
+    }
+}
+
+impl ShellTaskbarSide {
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "bottom" => Some(Self::Bottom),
+            "top" => Some(Self::Top),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn to_wire(self) -> u32 {
+        match self {
+            Self::Bottom => shell_wire::TASKBAR_SIDE_BOTTOM,
+            Self::Top => shell_wire::TASKBAR_SIDE_TOP,
+            Self::Left => shell_wire::TASKBAR_SIDE_LEFT,
+            Self::Right => shell_wire::TASKBAR_SIDE_RIGHT,
+        }
+    }
+}
+
+fn apply_taskbar_reserve_to_global_rect(
+    rect: Rectangle<i32, Logical>,
+    side: ShellTaskbarSide,
+    reserve: i32,
+) -> Rectangle<i32, Logical> {
+    let tb = reserve.max(0);
+    let (x, y, w, h) = match side {
+        ShellTaskbarSide::Bottom => (
+            rect.loc.x,
+            rect.loc.y,
+            rect.size.w.max(1),
+            rect.size.h.saturating_sub(tb).max(1),
+        ),
+        ShellTaskbarSide::Top => (
+            rect.loc.x,
+            rect.loc.y.saturating_add(tb),
+            rect.size.w.max(1),
+            rect.size.h.saturating_sub(tb).max(1),
+        ),
+        ShellTaskbarSide::Left => (
+            rect.loc.x.saturating_add(tb),
+            rect.loc.y,
+            rect.size.w.saturating_sub(tb).max(1),
+            rect.size.h.max(1),
+        ),
+        ShellTaskbarSide::Right => (
+            rect.loc.x,
+            rect.loc.y,
+            rect.size.w.saturating_sub(tb).max(1),
+            rect.size.h.max(1),
+        ),
+    };
+    Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+}
+
 /// Default **position** (output top-left + offset) for new xdg toplevels in **logical** px.
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_X: i32 = 200;
 pub const DEFAULT_XDG_TOPLEVEL_OFFSET_Y: i32 = 200;
@@ -593,6 +664,8 @@ pub struct CompositorState {
     pub(crate) shell_canvas_logical_size: (u32, u32),
     pub(crate) shell_ui_scale: f64,
     pub(crate) shell_primary_output_name: Option<String>,
+    pub(crate) taskbar_auto_hide: bool,
+    pub(crate) taskbar_side_by_output_name: HashMap<String, ShellTaskbarSide>,
     output_vrr_by_name: HashMap<String, (bool, bool)>,
     pub(crate) display_config_save_pending: bool,
     pub(crate) display_config_save_suppressed: bool,
@@ -1437,6 +1510,8 @@ impl CompositorState {
             shell_canvas_logical_size: (1, 1),
             shell_ui_scale: 1.5,
             shell_primary_output_name: None,
+            taskbar_auto_hide: false,
+            taskbar_side_by_output_name: HashMap::new(),
             output_vrr_by_name: HashMap::new(),
             display_config_save_pending: false,
             display_config_save_suppressed: false,
@@ -4471,12 +4546,17 @@ impl CompositorState {
         output: &Output,
     ) -> Option<Rectangle<i32, Logical>> {
         let geo = self.space.output_geometry(output)?;
-        Some(Rectangle::new(
-            geo.loc,
-            Size::from((
-                geo.size.w.max(1),
-                geo.size.h.saturating_sub(SHELL_TASKBAR_RESERVE_PX).max(1),
-            )),
+        if self.taskbar_auto_hide {
+            return Some(Rectangle::new(
+                geo.loc,
+                Size::from((geo.size.w.max(1), geo.size.h.max(1))),
+            ));
+        }
+        let side = self.taskbar_side_for_output_name(output.name().as_str());
+        Some(apply_taskbar_reserve_to_global_rect(
+            geo,
+            side,
+            SHELL_TASKBAR_RESERVE_PX,
         ))
     }
 
@@ -5970,12 +6050,21 @@ impl CompositorState {
     ) -> Option<Rectangle<i32, Logical>> {
         let g = self.space.output_geometry(output)?;
         let th = self.shell_chrome_titlebar_h.max(0);
-        let tb = SHELL_TASKBAR_RESERVE_PX;
-        let h = g.size.h.saturating_sub(th).saturating_sub(tb).max(1);
-        let w = g.size.w.max(1);
-        Some(Rectangle::new(
+        if self.taskbar_auto_hide {
+            return Some(Rectangle::new(
+                Point::from((g.loc.x, g.loc.y.saturating_add(th))),
+                Size::from((g.size.w.max(1), g.size.h.saturating_sub(th).max(1))),
+            ));
+        }
+        let side = self.taskbar_side_for_output_name(output.name().as_str());
+        let without_titlebar = Rectangle::new(
             Point::from((g.loc.x, g.loc.y.saturating_add(th))),
-            Size::from((w, h)),
+            Size::from((g.size.w.max(1), g.size.h.saturating_sub(th).max(1))),
+        );
+        Some(apply_taskbar_reserve_to_global_rect(
+            without_titlebar,
+            side,
+            SHELL_TASKBAR_RESERVE_PX,
         ))
     }
 
@@ -7099,6 +7188,7 @@ impl CompositorState {
                 let mode = o.current_mode()?;
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(o.name().as_str());
+                let taskbar_side = self.taskbar_side_for_output_name(o.name().as_str());
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
                     identity: Self::shell_output_identity(o),
@@ -7110,6 +7200,7 @@ impl CompositorState {
                     refresh_milli_hz,
                     vrr_supported,
                     vrr_enabled,
+                    taskbar_side: taskbar_side.to_wire(),
                 })
             })
             .collect();
@@ -7121,6 +7212,7 @@ impl CompositorState {
             canvas_physical_h: physical_h,
             screens,
             shell_chrome_primary: self.shell_primary_output_name.clone(),
+            taskbar_auto_hide: self.taskbar_auto_hide,
         })
     }
 
@@ -7177,6 +7269,87 @@ impl CompositorState {
             .unwrap_or((false, false))
     }
 
+    pub(crate) fn taskbar_side_for_output_name(&self, name: &str) -> ShellTaskbarSide {
+        self.taskbar_side_by_output_name
+            .get(name)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn set_taskbar_auto_hide(&mut self, enabled: bool) {
+        if self.taskbar_auto_hide == enabled {
+            return;
+        }
+        self.taskbar_auto_hide = enabled;
+        if self.display_config_save_suppressed {
+            return;
+        }
+        self.refresh_taskbar_dependent_window_layouts();
+        self.resync_embedded_shell_host_after_ipc_connect();
+        self.send_shell_output_layout();
+        self.display_config_request_save();
+    }
+
+    pub fn set_taskbar_side(&mut self, output_name: String, side: ShellTaskbarSide) {
+        if !self.space.outputs().any(|o| o.name() == output_name.as_str()) {
+            return;
+        }
+        if side == ShellTaskbarSide::Bottom {
+            if self.taskbar_side_by_output_name.remove(&output_name).is_none() {
+                return;
+            }
+        } else if self.taskbar_side_by_output_name.get(&output_name).copied() == Some(side) {
+            return;
+        } else {
+            self.taskbar_side_by_output_name.insert(output_name, side);
+        }
+        if self.display_config_save_suppressed {
+            return;
+        }
+        self.refresh_taskbar_dependent_window_layouts();
+        self.resync_embedded_shell_host_after_ipc_connect();
+        self.send_shell_output_layout();
+        self.display_config_request_save();
+    }
+
+    fn refresh_taskbar_dependent_window_layouts(&mut self) {
+        self.workspace_apply_auto_layout_for_all_outputs();
+        let maximized: Vec<_> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| record.info.maximized && !record.info.minimized)
+            .map(|record| record.info.window_id)
+            .collect();
+        let mut changed = false;
+        for window_id in maximized {
+            if self.window_registry.is_shell_hosted(window_id) {
+                changed |= self.shell_backed_set_window_maximized_if_any(window_id, true);
+                continue;
+            }
+            let Some(surface_id) = self.window_registry.surface_id_for_window(window_id) else {
+                continue;
+            };
+            if let Some(window) = self.find_window_by_surface_id(surface_id) {
+                changed |= self.apply_toplevel_maximize_layout(&window);
+                continue;
+            }
+            let Some(x11) = self.find_x11_window_by_surface_id(surface_id) else {
+                continue;
+            };
+            let Some(output) = self.x11_target_output(window_id) else {
+                continue;
+            };
+            let Some(rect) = self.shell_maximize_work_area_global_for_output(&output) else {
+                continue;
+            };
+            changed |= self.apply_x11_window_bounds(window_id, &x11, rect, true, false, true);
+        }
+        if changed {
+            self.shell_reply_window_list();
+        }
+    }
+
     pub fn send_shell_output_layout(&mut self) {
         let cleared_stale_primary = self.shell_clear_stale_primary_output();
         let Some(msg) = self.shell_output_layout_message() else {
@@ -7198,6 +7371,7 @@ impl CompositorState {
             canvas_physical_h,
             screens,
             shell_chrome_primary,
+            taskbar_auto_hide,
         } = &msg
         else {
             return;
@@ -7212,6 +7386,7 @@ impl CompositorState {
             n_screens = screens.len(),
             ?screen_names,
             primary = ?shell_chrome_primary,
+            taskbar_auto_hide = *taskbar_auto_hide,
             suppressed = self.display_config_save_suppressed,
             "send_shell_output_layout shell_send_to_cef OutputLayout"
         );
@@ -13683,6 +13858,58 @@ mod output_name_pick_tests {
             pick_output_name_for_global_window_rect_from_output_rects(&pairs, 10, 10, 400, 300)
                 .unwrap();
         assert_eq!(got, "ONLY");
+    }
+}
+
+#[cfg(test)]
+mod taskbar_work_area_tests {
+    use super::{
+        apply_taskbar_reserve_to_global_rect, Logical, Point, Rectangle, ShellTaskbarSide, Size,
+    };
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn taskbar_reserve_applies_to_each_edge() {
+        let input = rect(100, 200, 800, 600);
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(input, ShellTaskbarSide::Bottom, 44),
+            rect(100, 200, 800, 556)
+        );
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(input, ShellTaskbarSide::Top, 44),
+            rect(100, 244, 800, 556)
+        );
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(input, ShellTaskbarSide::Left, 44),
+            rect(144, 200, 756, 600)
+        );
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(input, ShellTaskbarSide::Right, 44),
+            rect(100, 200, 756, 600)
+        );
+    }
+
+    #[test]
+    fn taskbar_reserve_keeps_minimum_size() {
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(
+                rect(10, 20, 8, 7),
+                ShellTaskbarSide::Left,
+                44
+            ),
+            rect(54, 20, 1, 7)
+        );
+        assert_eq!(
+            apply_taskbar_reserve_to_global_rect(
+                rect(10, 20, 8, 7),
+                ShellTaskbarSide::Top,
+                44
+            ),
+            rect(10, 64, 8, 1)
+        );
     }
 }
 

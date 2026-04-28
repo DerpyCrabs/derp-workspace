@@ -32,6 +32,8 @@ export type ShellCompositorWireOp =
   | 'set_shell_primary'
   | 'set_ui_scale'
   | 'set_output_vrr'
+  | 'set_taskbar_auto_hide'
+  | 'set_taskbar_side'
   | 'set_tile_preview'
   | 'set_chrome_metrics'
   | 'set_desktop_background'

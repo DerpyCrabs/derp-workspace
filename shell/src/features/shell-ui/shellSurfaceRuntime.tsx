@@ -15,6 +15,9 @@ type ShellSurfaceRuntimeOptions = {
   debugHudFrameVisible: Accessor<boolean>
   taskbarScreens: Accessor<LayoutScreen[]>
   taskbarHeight: number
+  taskbarAutoHide: Accessor<boolean>
+  taskbarPortalMenusOpen: Accessor<boolean>
+  pointerInMain: Accessor<{ x: number; y: number } | null>
   screenTaskbarHiddenForFullscreen: (screen: LayoutScreen) => boolean
   isPrimaryTaskbarScreen: (screen: LayoutScreen) => boolean
   batteryState: Accessor<ShellBatteryState | null>
@@ -92,6 +95,9 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         debugHudFrameVisible={options.debugHudFrameVisible}
         taskbarScreens={options.taskbarScreens}
         taskbarHeight={options.taskbarHeight}
+        taskbarAutoHide={options.taskbarAutoHide}
+        taskbarPortalMenusOpen={options.taskbarPortalMenusOpen}
+        pointerInMain={options.pointerInMain}
         screenTaskbarHiddenForFullscreen={options.screenTaskbarHiddenForFullscreen}
         isPrimaryTaskbarScreen={options.isPrimaryTaskbarScreen}
         batteryState={options.batteryState}

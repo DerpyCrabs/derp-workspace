@@ -137,6 +137,7 @@ function layoutScreenCssRect(
     refresh_milli_hz: screen.refresh_milli_hz,
     vrr_supported: screen.vrr_supported,
     vrr_enabled: screen.vrr_enabled,
+    taskbar_side: screen.taskbar_side,
   }
 }
 

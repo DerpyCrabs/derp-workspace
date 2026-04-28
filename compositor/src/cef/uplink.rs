@@ -307,6 +307,18 @@ impl UplinkToCompositor {
             .send(CefToCompositor::SetOutputVrr { name, enabled });
     }
 
+    pub fn shell_set_taskbar_auto_hide(&self, enabled: bool) {
+        self.run(move |s| {
+            s.set_taskbar_auto_hide(enabled);
+        });
+    }
+
+    pub fn shell_set_taskbar_side(&self, name: String, side: crate::state::ShellTaskbarSide) {
+        self.run(move |s| {
+            s.set_taskbar_side(name, side);
+        });
+    }
+
     pub fn shell_shared_state_sync(&self, kind: u32) {
         self.run(move |s| {
             s.sync_shell_shared_state(kind);

@@ -20,6 +20,7 @@ export function screensListForLayout(
         transform: 0,
         vrr_supported: false,
         vrr_enabled: false,
+        taskbar_side: 'bottom',
       },
     ]
   }
@@ -39,6 +40,7 @@ export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): Layo
     refresh_milli_hz: s.refresh_milli_hz,
     vrr_supported: s.vrr_supported,
     vrr_enabled: s.vrr_enabled,
+    taskbar_side: s.taskbar_side,
   }
 }
 

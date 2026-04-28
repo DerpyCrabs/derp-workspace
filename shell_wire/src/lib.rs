@@ -127,6 +127,11 @@ pub const MAX_OUTPUT_LAYOUT_SCREENS: u32 = 16;
 pub const MAX_OUTPUT_LAYOUT_NAME_BYTES: u32 = 128;
 /// Max UTF-8 bytes in [`MSG_SHELL_SET_OUTPUT_LAYOUT`] JSON payload.
 pub const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES: u32 = 4096;
+
+pub const TASKBAR_SIDE_BOTTOM: u32 = 0;
+pub const TASKBAR_SIDE_TOP: u32 = 1;
+pub const TASKBAR_SIDE_LEFT: u32 = 2;
+pub const TASKBAR_SIDE_RIGHT: u32 = 3;
 pub const MAX_KEYBIND_ACTION_BYTES: u32 = 256;
 /// Max UTF-8 bytes for [`MSG_COMPOSITOR_KEYBOARD_LAYOUT`] `label`.
 pub const MAX_KEYBOARD_LAYOUT_LABEL_BYTES: u32 = 32;
@@ -316,6 +321,7 @@ pub struct OutputLayoutScreen {
     pub refresh_milli_hz: u32,
     pub vrr_supported: bool,
     pub vrr_enabled: bool,
+    pub taskbar_side: u32,
 }
 
 pub fn encode_output_layout(
@@ -326,6 +332,7 @@ pub fn encode_output_layout(
     canvas_physical_h: u32,
     screens: &[OutputLayoutScreen],
     shell_chrome_primary: Option<&str>,
+    taskbar_auto_hide: bool,
 ) -> Option<Vec<u8>> {
     let n = u32::try_from(screens.len()).ok()?;
     if n == 0 || n > MAX_OUTPUT_LAYOUT_SCREENS {
@@ -349,6 +356,9 @@ pub fn encode_output_layout(
         if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES || il > MAX_OUTPUT_LAYOUT_NAME_BYTES {
             return None;
         }
+        if s.taskbar_side > TASKBAR_SIDE_RIGHT {
+            return None;
+        }
         body_sz = body_sz
             .checked_add(4)?
             .checked_add(nl as usize)?
@@ -357,6 +367,14 @@ pub fn encode_output_layout(
             .checked_add(32)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
+    body_sz = body_sz.checked_add(8)?;
+    for s in screens {
+        let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
+        body_sz = body_sz
+            .checked_add(4)?
+            .checked_add(nl as usize)?
+            .checked_add(4)?;
+    }
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -391,6 +409,15 @@ pub fn encode_output_layout(
     let pl = u32::try_from(prim_bytes.len()).ok()?;
     v.extend_from_slice(&pl.to_le_bytes());
     v.extend_from_slice(prim_bytes);
+    v.extend_from_slice(&(if taskbar_auto_hide { 1u32 } else { 0u32 }).to_le_bytes());
+    v.extend_from_slice(&n.to_le_bytes());
+    for s in screens {
+        let nb = s.name.as_bytes();
+        let nl = nb.len() as u32;
+        v.extend_from_slice(&nl.to_le_bytes());
+        v.extend_from_slice(nb);
+        v.extend_from_slice(&s.taskbar_side.to_le_bytes());
+    }
     Some(v)
 }
 
@@ -498,6 +525,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             refresh_milli_hz,
             vrr_supported,
             vrr_enabled,
+            taskbar_side: TASKBAR_SIDE_BOTTOM,
         });
     }
     if off + 4 > body.len() {
@@ -521,6 +549,48 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         )
     };
     off += pl;
+    let mut taskbar_auto_hide = false;
+    if off < body.len() {
+        if off + 8 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let auto_hide = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+        off += 4;
+        if auto_hide > 1 {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        taskbar_auto_hide = auto_hide != 0;
+        let side_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if side_count > MAX_OUTPUT_LAYOUT_SCREENS as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        for _ in 0..side_count {
+            if off + 4 > body.len() {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+            off += 4;
+            if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            if off + nl + 4 > body.len() {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            let name = std::str::from_utf8(&body[off..off + nl])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            off += nl;
+            let side = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+            off += 4;
+            if side > TASKBAR_SIDE_RIGHT {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            if let Some(screen) = screens.iter_mut().find(|screen| screen.name == name) {
+                screen.taskbar_side = side;
+            }
+        }
+    }
     if off != body.len() {
         return Err(DecodeError::BadOutputLayoutPayload);
     }
@@ -532,6 +602,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         canvas_physical_h: canvas_physical_h.max(1),
         screens,
         shell_chrome_primary,
+        taskbar_auto_hide,
     })
 }
 
@@ -1226,6 +1297,7 @@ pub enum DecodedCompositorToShellMessage {
         canvas_physical_h: u32,
         screens: Vec<OutputLayoutScreen>,
         shell_chrome_primary: Option<String>,
+        taskbar_auto_hide: bool,
     },
     WindowMapped {
         window_id: u32,
@@ -2809,8 +2881,10 @@ mod tests {
                 refresh_milli_hz: 60000,
                 vrr_supported: true,
                 vrr_enabled: false,
+                taskbar_side: TASKBAR_SIDE_LEFT,
             }],
             Some("DP-1"),
+            true,
         )
         .unwrap();
         let mut buf = packet;
@@ -2834,11 +2908,67 @@ mod tests {
                     refresh_milli_hz: 60000,
                     vrr_supported: true,
                     vrr_enabled: false,
+                    taskbar_side: TASKBAR_SIDE_LEFT,
                 }],
                 shell_chrome_primary: Some("DP-1".to_string()),
+                taskbar_auto_hide: true,
             })
         );
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn output_layout_decode_defaults_legacy_taskbar_settings() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&MSG_OUTPUT_LAYOUT.to_le_bytes());
+        body.extend_from_slice(&3u64.to_le_bytes());
+        body.extend_from_slice(&800u32.to_le_bytes());
+        body.extend_from_slice(&600u32.to_le_bytes());
+        body.extend_from_slice(&800u32.to_le_bytes());
+        body.extend_from_slice(&600u32.to_le_bytes());
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(b"DP-1");
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&10i32.to_le_bytes());
+        body.extend_from_slice(&20i32.to_le_bytes());
+        body.extend_from_slice(&800u32.to_le_bytes());
+        body.extend_from_slice(&600u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&60000u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        packet.extend_from_slice(&body);
+
+        assert_eq!(
+            pop_compositor_to_shell_message(&mut packet).unwrap(),
+            Some(DecodedCompositorToShellMessage::OutputLayout {
+                revision: 3,
+                canvas_logical_w: 800,
+                canvas_logical_h: 600,
+                canvas_physical_w: 800,
+                canvas_physical_h: 600,
+                screens: vec![OutputLayoutScreen {
+                    name: "DP-1".into(),
+                    identity: "".into(),
+                    x: 10,
+                    y: 20,
+                    w: 800,
+                    h: 600,
+                    transform: 0,
+                    refresh_milli_hz: 60000,
+                    vrr_supported: false,
+                    vrr_enabled: false,
+                    taskbar_side: TASKBAR_SIDE_BOTTOM,
+                }],
+                shell_chrome_primary: None,
+                taskbar_auto_hide: false,
+            })
+        );
+        assert!(packet.is_empty());
     }
 
     #[test]

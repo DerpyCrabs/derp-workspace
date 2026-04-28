@@ -17,6 +17,7 @@ type ShellExclusionSyncOptions = {
   layoutCanvasOrigin: Accessor<{ x: number; y: number } | null>
   taskbarScreens: Accessor<readonly LayoutScreen[]>
   taskbarHeight: number
+  taskbarAutoHide: Accessor<boolean>
   windows: Accessor<readonly DerpWindow[]>
   isWindowVisible?: (window: DerpWindow) => boolean
   onHudChange: (zones: ExclusionHudZone[]) => void
@@ -62,6 +63,7 @@ function markShellExclusionTokenDirty(token: number) {
 }
 
 export function invalidateAllShellExclusionRects() {
+  exclusionStructureDirty = true
   for (const token of exclusionRegistry.keys()) dirtyExclusionTokens.add(token)
   scheduleExclusionRegistrySync()
 }
@@ -151,6 +153,21 @@ function cloneExclusionRectArray(rects: readonly ShellExclusionRect[]): ShellExc
   return rects.map((rect) => ({ ...rect }))
 }
 
+function taskbarExclusionRect(screen: LayoutScreen, size: number, autoHide: boolean): ShellExclusionRect {
+  const side = screen.taskbar_side
+  const thickness = autoHide ? 2 : size
+  if (side === 'top') {
+    return { x: screen.x, y: screen.y, w: screen.width, h: thickness }
+  }
+  if (side === 'left') {
+    return { x: screen.x, y: screen.y, w: thickness, h: screen.height }
+  }
+  if (side === 'right') {
+    return { x: screen.x + screen.width - thickness, y: screen.y, w: thickness, h: screen.height }
+  }
+  return { x: screen.x, y: screen.y + screen.height - thickness, w: screen.width, h: thickness }
+}
+
 export function registerShellExclusionElement(
   kind: ShellExclusionKind,
   label: string,
@@ -189,7 +206,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     }
     return options
       .taskbarScreens()
-      .map((screen) => `${screen.name}:${fullscreenSetsHideTaskbar(outputNames, outputIds, screen) ? 1 : 0}`)
+      .map((screen) => `${screen.name}:${screen.taskbar_side}:${options.taskbarAutoHide() ? 1 : 0}:${fullscreenSetsHideTaskbar(outputNames, outputIds, screen) ? 1 : 0}`)
       .join('|')
   }
 
@@ -234,14 +251,15 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
     const fullscreen = fullscreenOutputSets()
     const taskbarBase = options
       .taskbarScreens()
-      .filter((screen) => !fullscreenSetsHideTaskbar(fullscreen.outputNames, fullscreen.outputIds, screen))
-      .map((screen) => ({
-        label: `taskbar:${screen.name}`,
-        x: screen.x,
-        y: screen.y + screen.height - options.taskbarHeight,
-        w: screen.width,
-        h: options.taskbarHeight,
-      }))
+      .map((screen) => {
+        const hiddenForFullscreen = fullscreenSetsHideTaskbar(fullscreen.outputNames, fullscreen.outputIds, screen)
+        if (hiddenForFullscreen && !options.taskbarAutoHide()) return null
+        return {
+          label: `taskbar:${screen.name}`,
+          ...taskbarExclusionRect(screen, options.taskbarHeight, options.taskbarAutoHide() || hiddenForFullscreen),
+        }
+      })
+      .filter((entry): entry is ShellExclusionRect & { label: string } => entry !== null)
     const rects = [
       ...taskbarBase.map(({ label: _label, ...rect }) => rect),
       ...snapshot.base.map(({ label: _label, ...rect }) => rect),
