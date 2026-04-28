@@ -186,12 +186,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     compositor::sidecar::terminate_sidecar(&mut data.command_child);
 
     cef_shutdown.store(true, Ordering::SeqCst);
-    if cef_join.join().is_err() {
-        tracing::warn!("cef UI thread panicked during shutdown");
-    }
-
     if request_restart.load(Ordering::SeqCst) {
         std::process::exit(42);
+    }
+    if cef_join.join().is_err() {
+        tracing::warn!("cef UI thread panicked during shutdown");
     }
 
     Ok(())

@@ -242,7 +242,7 @@ fn handle_downlink_process_message(frame: &Frame, message: &ProcessMessage) -> b
     }
 }
 
-fn maybe_invalidate_shell_view_after_move_delta(
+fn maybe_invalidate_shell_view_after_resize_delta(
     browser: Option<&mut Browser>,
     reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
 ) {
@@ -276,8 +276,6 @@ fn invalidate_shell_view_unthrottled(
         if let Some(host) = b.host() {
             crate::cef::begin_frame_diag::note_shell_view_invalidate(reason);
             host.invalidate(PaintElementType::VIEW);
-            host.send_external_begin_frame();
-            crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
         }
     }
 }
@@ -313,12 +311,6 @@ fn handle_uplink_list(
             tracing::debug!(target: "derp_shell_move", wid, "cef uplink: move_begin");
             reset_drag_invalidate_throttle();
             uplink.shell_move_begin(wid);
-        }
-        "move_delta" => {
-            let dx = args.int(1) as i32;
-            let dy = args.int(2) as i32;
-            tracing::debug!(target: "derp_shell_move", dx, dy, "cef uplink: move_delta");
-            uplink.shell_move_delta(dx, dy);
         }
         "move_end" => {
             let wid = args.int(1) as u32;
@@ -356,7 +348,7 @@ fn handle_uplink_list(
             let dy = args.int(2) as i32;
             tracing::debug!(target: "derp_shell_resize", dx, dy, "cef uplink: resize_delta");
             uplink.shell_resize_delta(dx, dy);
-            maybe_invalidate_shell_view_after_move_delta(
+            maybe_invalidate_shell_view_after_resize_delta(
                 browser,
                 crate::cef::begin_frame_diag::ShellViewInvalidateReason::ResizeDelta,
             );
@@ -797,30 +789,6 @@ wrap_v8_handler! {
                     let _ = list.set_int(1, id);
                     let _ = list.set_int(2, edges);
                 }
-                "move_delta" => {
-                    let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_delta requires dx");
-                    };
-                    let Some(a2) = args.get(2).and_then(|a| a.as_ref()) else {
-                        return_exception!("move_delta requires dy");
-                    };
-                    let dx = if a1.is_int() != 0 {
-                        a1.int_value()
-                    } else if a1.is_double() != 0 {
-                        a1.double_value() as i32
-                    } else {
-                        return_exception!("move_delta: dx must be a number");
-                    };
-                    let dy = if a2.is_int() != 0 {
-                        a2.int_value()
-                    } else if a2.is_double() != 0 {
-                        a2.double_value() as i32
-                    } else {
-                        return_exception!("move_delta: dy must be a number");
-                    };
-                    let _ = list.set_int(1, dx);
-                    let _ = list.set_int(2, dy);
-                }
                 "resize_delta" => {
                     let Some(a1) = args.get(1).and_then(|a| a.as_ref()) else {
                         return_exception!("resize_delta requires dx");
@@ -1249,7 +1217,7 @@ wrap_v8_handler! {
                 }
                 _ => {
                     return_exception!(
-                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_delta, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
+                        "unknown op (use close, quit, hosted_window_open, backed_window_open, workspace_mutation, taskbar_pin_add, taskbar_pin_remove, taskbar_pin_launch, shell_hosted_window_state, shell_hosted_window_title, command_palette_activate, request_compositor_sync, spawn, move_begin, move_end, native_drag_preview_begin, native_drag_preview_cancel, native_drag_preview_ready, resize_begin, resize_delta, resize_end, resize_shell_grab_begin, resize_shell_grab_end, taskbar_activate, activate_window, shell_focus_ui_window, shell_blur_ui_window, programs_menu_opened, programs_menu_closed, shell_ui_grab_begin, shell_ui_grab_end, minimize, set_geometry, set_fullscreen, set_maximized, presentation_fullscreen, set_output_layout, window_intent, set_shell_primary, set_ui_scale, set_output_vrr, set_tile_preview, set_chrome_metrics, set_desktop_background, sni_tray_activate, sni_tray_open_menu, sni_tray_menu_event, e2e_snapshot_response, e2e_html_response, e2e_perf_response, e2e_test_window_open_response, e2e_reset_tiling_config_response)"
                     );
                 }
             }

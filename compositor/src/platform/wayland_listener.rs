@@ -43,6 +43,11 @@ pub fn init_wayland_listener(
                     }
                 }
                 state.state.handle_pending_wayland_client_disconnects();
+                if std::mem::take(&mut state.state.wayland_commit_needs_render) {
+                    if let Some(drms) = state.drm.as_mut() {
+                        drms.request_render();
+                    }
+                }
                 Ok(PostAction::Continue)
             },
         )

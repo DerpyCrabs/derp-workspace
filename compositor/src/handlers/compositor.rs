@@ -111,6 +111,7 @@ impl CompositorHandler for CompositorState {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
+            self.wayland_commit_needs_render = true;
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
                 root = parent;

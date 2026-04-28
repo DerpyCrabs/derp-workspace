@@ -284,10 +284,40 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
 
+    const existingFileBrowserIds = new Set(
+      (await getJson<ShellSnapshot>(base, '/test/state/shell')).windows
+        .filter((window) => window.shell_hosted && window.app_id === 'derp.files')
+        .map((window) => window.window_id),
+    )
+    await searchCommandPalette(base, 'files')
+    await tapKey(base, KEY.enter)
+    const fileBrowserLaunch = await waitFor(
+      'wait for command palette files app focus',
+      async () => {
+        const { compositor, shell } = await getSnapshots(base)
+        if (shell.programs_menu_open) return null
+        const window = shell.windows.find(
+          (entry) =>
+            entry.shell_hosted &&
+            entry.app_id === 'derp.files' &&
+            !entry.minimized &&
+            !existingFileBrowserIds.has(entry.window_id),
+        )
+        if (!window) return null
+        if (shell.focused_window_id !== window.window_id) return null
+        if (compositor.focused_shell_ui_window_id !== window.window_id) return null
+        return { compositor, shell, windowId: window.window_id }
+      },
+      5000,
+      100,
+    )
+    state.spawnedShellWindowIds.add(fileBrowserLaunch.windowId)
+
     await writeJsonArtifact('command-palette-window-settings-notifications.json', {
       redFocused,
       keyboardSettingsShell: keyboardSettings.shell,
       toggledNotifications,
+      fileBrowserLaunch,
     })
   })
 

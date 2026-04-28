@@ -22,7 +22,6 @@ const allowedRuntimeImports = new Map([
   ['file-browser.spec.ts', new Set(['prepareFileBrowserFixtures', 'postJson', 'resetFileBrowserFixtures'])],
   ['launcher-multimonitor.spec.ts', new Set(['closeWindow'])],
   ['native-windows.spec.ts', new Set(['closeWindow', 'postJson', 'runKeybind', 'spawnNativeWindow'])],
-  ['perf-smoke.spec.ts', new Set(['postJson', 'runKeybind', 'spawnNativeWindow'])],
   ['restart-persistence.spec.ts', new Set(['openShellTestWindow', 'prepareFileBrowserFixtures', 'runKeybind', 'spawnNativeWindow'])],
   ['shell-chrome-session.spec.ts', new Set(['openShellTestWindow', 'postJson'])],
   ['shell-chrome.spec.ts', new Set(['openShellTestWindow', 'spawnNativeWindow'])],
@@ -35,7 +34,6 @@ const allowedRuntimeImports = new Map([
 ])
 const allowedRawInputEndpoint = new Set([
   'native-windows.spec.ts',
-  'perf-smoke.spec.ts',
   'snap-assist.spec.ts',
 ])
 const allowedRawFloatingLayers = new Set(['shell-chrome.spec.ts'])

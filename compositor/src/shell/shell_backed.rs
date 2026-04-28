@@ -251,6 +251,9 @@ impl CompositorState {
             return;
         }
         if self.window_registry.window_info(id).is_some() {
+            if self.window_registry.is_shell_hosted(id) {
+                self.shell_focus_shell_ui_window(id);
+            }
             return;
         }
         let inserted = self.window_registry.register_shell_hosted(
@@ -429,7 +432,11 @@ impl CompositorState {
         true
     }
 
-    pub(crate) fn shell_move_try_begin_backed(&mut self, window_id: u32) -> bool {
+    pub(crate) fn shell_move_try_begin_backed(
+        &mut self,
+        window_id: u32,
+        pointer_driven: bool,
+    ) -> bool {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return false;
         };
@@ -449,7 +456,7 @@ impl CompositorState {
         self.shell_resize_end_active();
         self.shell_keyboard_capture_shell_ui();
         self.shell_focus_shell_ui_window(window_id);
-        self.shell_move_activate_backed_now(window_id, (0, 0));
+        self.shell_move_activate_backed_now(window_id, (0, 0), pointer_driven);
         true
     }
 
@@ -480,6 +487,7 @@ impl CompositorState {
         else {
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_move_deferred_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -500,6 +508,7 @@ impl CompositorState {
         self.shell_move_flush_pending_deltas_backed();
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_move_pointer_driven = false;
         self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
         if let Some(info) = self.window_registry.window_info(window_id) {

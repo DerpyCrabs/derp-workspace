@@ -963,6 +963,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       1000,
       20,
     )
+    const duringTitlebar = assertRectMinSize('during native drag titlebar', duringDrag.controls.titlebar, 80, 16)
+    const titlebarMoveDx = duringTitlebar.global_x - titlebar.global_x
+    const titlebarMoveDy = duringTitlebar.global_y - titlebar.global_y
+    assert(
+      Math.abs(titlebarMoveDx) <= Math.abs(dx) + 32,
+      `native titlebar drag x moved ${titlebarMoveDx} for pointer dx ${dx}`,
+    )
+    assert(
+      Math.abs(titlebarMoveDy) <= Math.abs(dy) + 32,
+      `native titlebar drag y moved ${titlebarMoveDy} for pointer dy ${dy}`,
+    )
     const previewFixture = fileURLToPath(
       new URL('../fixtures/visual/native-drag-preview-green.png', import.meta.url),
     )
@@ -1094,6 +1105,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       previewSourceHeight: duringDrag.controls.native_drag_preview_source_height,
       previewBackingWidth: duringDrag.controls.native_drag_preview_backing_width,
       previewBackingHeight: duringDrag.controls.native_drag_preview_backing_height,
+      titlebarMoveDx,
+      titlebarMoveDy,
       previewActualArtifact,
       previewVisual,
       dragScreenshot,

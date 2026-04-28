@@ -127,8 +127,8 @@ export function ProgramsContextMenu() {
                     e.preventDefault()
                     e.stopPropagation()
                     if (item.disabled) return
-                    item.action()
                     props.closeContextMenu()
+                    item.action()
                   }}
                   onMouseDown={(e) => {
                     e.preventDefault()
@@ -136,8 +136,8 @@ export function ProgramsContextMenu() {
                   onClick={(e) => {
                     if (e.detail !== 0) return
                     if (item.disabled) return
-                    item.action()
                     props.closeContextMenu()
+                    item.action()
                   }}
                   onContextMenu={(e) => {
                     const contextItems = item.contextItems?.() ?? []

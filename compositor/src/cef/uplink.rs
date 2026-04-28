@@ -126,12 +126,6 @@ impl UplinkToCompositor {
         });
     }
 
-    pub fn shell_move_delta(&self, dx: i32, dy: i32) {
-        self.run(move |s| {
-            s.window_op_move_delta(dx, dy);
-        });
-    }
-
     pub fn shell_move_end(&self, window_id: u32) {
         self.run(move |s| {
             s.window_op_end_move(window_id);

@@ -77,11 +77,7 @@ impl ExternalMessagePump {
         let Ok(mut next) = self.next_work_at.lock() else {
             return;
         };
-        let should_update = match *next {
-            Some(prev) => due < prev,
-            None => true,
-        };
-        if should_update {
+        if next.is_none_or(|current| due < current) {
             *next = Some(due);
             self.cv.notify_one();
         }
@@ -92,22 +88,38 @@ impl ExternalMessagePump {
             thread::sleep(fallback);
             return;
         };
-        if let Some(due) = *next {
+        let fallback_deadline = Instant::now() + fallback;
+        loop {
             let now = Instant::now();
-            if due <= now {
-                *next = None;
+            if now >= fallback_deadline {
                 return;
             }
-            let wait = due.saturating_duration_since(now).min(fallback);
-            let Ok((mut next_after, _)) = self.cv.wait_timeout(next, wait) else {
+            let wait_until = match *next {
+                Some(due) if due <= now => {
+                    *next = None;
+                    return;
+                }
+                Some(due) => due.min(fallback_deadline),
+                None => fallback_deadline,
+            };
+            let wait = wait_until.saturating_duration_since(now);
+            let Ok((next_after, wait_result)) = self.cv.wait_timeout(next, wait) else {
                 return;
             };
-            if next_after.is_some_and(|scheduled| scheduled <= Instant::now()) {
-                *next_after = None;
+            next = next_after;
+            if wait_result.timed_out() {
+                if next.is_some_and(|scheduled| scheduled <= Instant::now()) {
+                    *next = None;
+                }
+                return;
             }
-            return;
         }
-        let _ = self.cv.wait_timeout(next, fallback);
+    }
+}
+
+impl crate::cef::bridge::CefMessagePumpWake for ExternalMessagePump {
+    fn wake_cef(&self) {
+        self.schedule(0);
     }
 }
 
@@ -252,8 +264,6 @@ wrap_app! {
                 cmd.append_switch(Some(&CefString::from(
                     "disable-gpu-memory-buffer-video-frames",
                 )));
-                cmd.append_switch(Some(&CefString::from("disable-gpu-vsync")));
-                cmd.append_switch(Some(&CefString::from("disable-frame-rate-limit")));
                 cmd.append_switch(Some(&CefString::from("disable-breakpad")));
                 cmd.append_switch(Some(&CefString::from("disable-crash-reporter")));
                 cmd.append_switch(Some(&CefString::from("disable-domain-reliability")));
@@ -329,7 +339,6 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            crate::cef::begin_frame_diag::note_cef_message_pump_scheduled(delay_ms);
             self.message_pump.schedule(delay_ms);
         }
     }
@@ -443,6 +452,7 @@ wrap_life_span_handler! {
                 }
             })));
         }
+
     }
 }
 
@@ -834,7 +844,6 @@ fn run_cef(
         );
         return;
     }
-
     let browser_holder: Arc<Mutex<Option<Browser>>> = Arc::new(Mutex::new(None));
     let view_state = Arc::new(Mutex::new(OsrViewState::new_bootstrap()));
     let latest_dmabuf = Arc::new(crate::cef::compositor_tx::LatestShellDmabuf::new());
@@ -847,6 +856,7 @@ fn run_cef(
     let link = Arc::new(ShellToCefLink::new(
         browser_holder.clone(),
         view_state.clone(),
+        message_pump.clone(),
     ));
     let snapshot_path = link
         .shared_snapshot_path()
@@ -915,14 +925,6 @@ fn run_cef(
         }
     };
     let capture = CaptureBrowser::new(browser_holder.clone(), cef_tx.clone(), handshake.clone());
-    let deadline = Instant::now() + Duration::from_millis(800);
-    while !handshake.load(Ordering::SeqCst) && Instant::now() < deadline {
-        do_message_loop_work();
-        thread::sleep(Duration::from_millis(1));
-    }
-    for _ in 0..32 {
-        do_message_loop_work();
-    }
 
     let rh = OsrToCompositor::new(view_state.clone(), frame_sink);
     let lh = ShellLoadHandler::new(inject_js, cef_tx.clone());
@@ -937,10 +939,10 @@ fn run_cef(
     window_info.bounds.height = init_h;
     window_info.shared_texture_enabled = if software_rendering { 0 } else { 1 };
     let mut window_info = window_info.set_as_windowless(0);
-    window_info.external_begin_frame_enabled = 1;
+    window_info.external_begin_frame_enabled = 0;
     tracing::debug!(
         target: "derp_cef_begin_frame",
-        "browser create: window_info.external_begin_frame_enabled=1 (compositor drives BeginFrame)"
+        "browser create: window_info.external_begin_frame_enabled=0 (CEF drives OSR frames)"
     );
 
     let mut browser_settings = BrowserSettings::default();
@@ -973,11 +975,7 @@ fn run_cef(
     while !shutdown_requested.load(Ordering::Relaxed) && !shutdown_from_main.load(Ordering::SeqCst)
     {
         do_message_loop_work();
-        message_pump.wait(Duration::from_millis(if link.has_pending_shell_updates() {
-            1
-        } else {
-            4
-        }));
+        message_pump.wait(Duration::from_millis(250));
     }
 
     if let Ok(g) = browser_holder.lock() {

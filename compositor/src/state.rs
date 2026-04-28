@@ -578,6 +578,7 @@ pub struct CompositorState {
     pub window_registry: WindowRegistry,
     pub(crate) pending_deferred_toplevels: HashMap<(ClientId, u32), PendingDeferredToplevel>,
     pub(crate) pending_gnome_initial_toplevels: HashSet<u32>,
+    pub(crate) wayland_commit_needs_render: bool,
 
     pub shell_to_cef: Arc<Mutex<Option<Arc<crate::cef::ShellToCefLink>>>>,
     pub cef_to_compositor_tx: channel::Sender<crate::cef::compositor_tx::CefToCompositor>,
@@ -646,6 +647,7 @@ pub struct CompositorState {
     /// Pending delta for [`Self::shell_move_flush_pending_deltas`]. Applied from each [`Self::shell_move_delta`]
     /// (immediate flush) and from [`Self::shell_move_end`].
     pub(crate) shell_move_pending_delta: (i32, i32),
+    pub(crate) shell_move_pointer_driven: bool,
     pub(crate) shell_move_deferred: Option<ShellMoveDeferredStartState>,
     pub(crate) shell_move_proxy: Option<ShellMoveProxyState>,
     pub(crate) shell_native_drag_preview: Option<NativeDragPreviewState>,
@@ -742,8 +744,6 @@ pub struct CompositorState {
     pub(crate) backdrop_wallpaper_id_cache: HashMap<String, BackdropWallpaperIdCache>,
     pub(crate) backdrop_layers_by_output: HashMap<String, CachedBackdropLayers>,
     pub(crate) shell_render_cache_by_output: HashMap<String, CachedShellRenderOutput>,
-    pub(crate) shell_begin_frame_last: Option<Instant>,
-    pub(crate) shell_begin_frame_fast_until: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1425,6 +1425,7 @@ impl CompositorState {
             window_registry,
             pending_deferred_toplevels: HashMap::new(),
             pending_gnome_initial_toplevels: HashSet::new(),
+            wayland_commit_needs_render: false,
             shell_to_cef,
             cef_to_compositor_tx,
             shell_cef_handshake,
@@ -1478,6 +1479,7 @@ impl CompositorState {
             shell_close_refocus_targets: HashMap::new(),
             shell_move_window_id: None,
             shell_move_pending_delta: (0, 0),
+            shell_move_pointer_driven: false,
             shell_move_deferred: None,
             shell_move_proxy: None,
             shell_native_drag_preview: None,
@@ -1562,8 +1564,6 @@ impl CompositorState {
             backdrop_wallpaper_id_cache: HashMap::new(),
             backdrop_layers_by_output: HashMap::new(),
             shell_render_cache_by_output: HashMap::new(),
-            shell_begin_frame_last: None,
-            shell_begin_frame_fast_until: None,
         };
         crate::controls::display_config::apply_keyboard_from_display_file(&mut s);
         let keyboard_settings = crate::session::settings_config::read_keyboard_settings();
@@ -3075,36 +3075,6 @@ impl CompositorState {
         }
     }
 
-    const SHELL_BEGIN_FRAME_INTERACTION_HOLD: Duration = Duration::from_millis(160);
-    const SHELL_BEGIN_FRAME_FORCED_REPAINT_HOLD: Duration = Duration::from_millis(450);
-
-    fn shell_begin_frame_fast_track_for(&mut self, hold: Duration) {
-        let until = Instant::now() + hold;
-        match self.shell_begin_frame_fast_until {
-            Some(prev) if prev >= until => {}
-            _ => self.shell_begin_frame_fast_until = Some(until),
-        }
-    }
-
-    pub(crate) fn shell_begin_frame_note_shell_input(&mut self) {
-        self.shell_begin_frame_fast_track_for(Self::SHELL_BEGIN_FRAME_INTERACTION_HOLD);
-    }
-
-    pub(crate) fn shell_begin_frame_note_forced_repaint(&mut self) {
-        self.shell_begin_frame_fast_track_for(Self::SHELL_BEGIN_FRAME_FORCED_REPAINT_HOLD);
-    }
-
-    pub(crate) fn shell_begin_frame_interaction_active(&self, now: Instant) -> bool {
-        self.shell_move_needs_shell_begin_frame()
-            || self.shell_resize_is_active()
-            || self.shell_ui_pointer_grab_active()
-            || self.screenshot_selection_active()
-            || self.touch_routes_to_cef
-            || self
-                .shell_begin_frame_fast_until
-                .is_some_and(|until| now < until)
-    }
-
     fn shell_hot_interaction_due(last: &mut Option<Instant>, interval: Duration) -> bool {
         let now = Instant::now();
         if last.is_some_and(|sent| now.duration_since(sent) < interval) {
@@ -3115,14 +3085,13 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_nudge_cef_repaint(&mut self) {
-        self.shell_begin_frame_note_forced_repaint();
         let Ok(g) = self.shell_to_cef.lock() else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint shell_to_cef lock poisoned");
             return;
         };
         if let Some(link) = g.as_ref() {
-            link.schedule_external_begin_frame(
-                crate::cef::begin_frame_diag::CompositorScheduleKind::Forced,
+            link.invalidate_view(
+                crate::cef::begin_frame_diag::ShellViewInvalidateReason::ForcedRepaint,
             );
         } else {
             tracing::warn!(target: "derp_hotplug_shell", "shell_nudge_cef_repaint no ShellToCefLink");
@@ -3203,7 +3172,6 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_send_keybind_ex(&mut self, action: &str, target_window_id: Option<u32>) {
-        self.shell_begin_frame_note_shell_input();
         self.shell_emit_chrome_event(ChromeEvent::Keybind {
             action: action.to_string(),
             target_window_id,
@@ -3472,6 +3440,7 @@ impl CompositorState {
         self.shell_spawn_known_native_window_ids = None;
         self.shell_spawn_target_output_name = None;
         self.shell_raise_and_focus_window(window_id);
+        self.shell_reply_window_list();
     }
 
     fn shell_prepare_spawned_toplevel_stack(&mut self, window_id: u32) {
@@ -5828,9 +5797,7 @@ impl CompositorState {
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
                 if pending_activation_focus {
                     self.shell_raise_and_focus_window(spawn_focus_wid);
-                    if let Some(window_order) = self.shell_window_order_message_if_changed() {
-                        self.shell_send_to_cef(window_order);
-                    }
+                    self.shell_reply_window_list();
                 } else {
                     self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
                 }
@@ -8013,6 +7980,7 @@ impl CompositorState {
         &mut self,
         window_id: u32,
         initial_pending_delta: (i32, i32),
+        pointer_driven: bool,
     ) -> bool {
         let Some(info) = self.window_registry.window_info(window_id) else {
             return false;
@@ -8022,6 +7990,7 @@ impl CompositorState {
         }
         self.shell_move_window_id = Some(window_id);
         self.shell_move_pending_delta = initial_pending_delta;
+        self.shell_move_pointer_driven = pointer_driven;
         self.shell_move_last_flush_at = None;
         self.shell_move_proxy_cancel(Some(window_id));
         self.shell_keyboard_capture_shell_ui();
@@ -8040,7 +8009,7 @@ impl CompositorState {
             self.shell_move_deferred = Some(pending);
             return;
         }
-        if !self.shell_move_activate_backed_now(pending.window_id, pending.pending_delta) {
+        if !self.shell_move_activate_backed_now(pending.window_id, pending.pending_delta, true) {
             self.shell_move_proxy_cancel(Some(pending.window_id));
             self.shell_send_interaction_state();
         }
@@ -8050,17 +8019,8 @@ impl CompositorState {
         self.shell_move_window_id.is_some()
     }
 
-    fn shell_move_needs_shell_begin_frame(&self) -> bool {
-        let Some(window_id) = self.shell_move_window_id else {
-            return false;
-        };
-        if self.window_registry.is_shell_hosted(window_id) {
-            return true;
-        }
-        !self
-            .shell_move_proxy
-            .as_ref()
-            .is_some_and(|proxy| proxy.window_id == window_id && proxy.texture.is_some())
+    pub(crate) fn shell_move_accepts_pointer_delta(&self) -> bool {
+        self.shell_move_pointer_driven
     }
 
     pub(crate) fn shell_move_end_active(&mut self) {
@@ -8336,9 +8296,17 @@ impl CompositorState {
     }
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
+        self.shell_move_begin_inner(window_id, true);
+    }
+
+    pub fn shell_move_begin_from_shell(&mut self, window_id: u32) {
+        self.shell_move_begin_inner(window_id, true);
+    }
+
+    fn shell_move_begin_inner(&mut self, window_id: u32, pointer_driven: bool) {
         self.shell_resize_end_active();
         self.shell_restore_maximized_drag_window_if_needed(window_id);
-        if self.shell_move_try_begin_backed(window_id) {
+        if self.shell_move_try_begin_backed(window_id, pointer_driven) {
             return;
         }
         let Some(info) = self.window_registry.window_info(window_id) else {
@@ -8402,6 +8370,7 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = pointer_driven;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
@@ -8425,6 +8394,7 @@ impl CompositorState {
 
             self.shell_move_window_id = Some(window_id);
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = pointer_driven;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_begin(window_id);
             self.shell_send_interaction_state();
@@ -8458,6 +8428,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_flush: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -8494,6 +8465,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_flush: window gone");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -8515,6 +8487,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, ?error, "shell_move_flush: x11 configure failed");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -8564,6 +8537,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, "shell_move_delta: registry lost window");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -8590,6 +8564,7 @@ impl CompositorState {
             tracing::warn!(target: "derp_shell_move", wid, sid, "shell_move_delta: window gone from space");
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(wid));
             self.shell_move_proxy_cancel(Some(wid));
@@ -8626,6 +8601,7 @@ impl CompositorState {
         }
         self.shell_move_window_id = None;
         self.shell_native_drag_preview_cancel(Some(window_id));
+        self.shell_move_pointer_driven = false;
         self.notify_geometry_for_window(window, true);
         self.shell_move_proxy_release(window_id);
         self.shell_move_last_flush_at = None;
@@ -8662,6 +8638,7 @@ impl CompositorState {
             );
             self.shell_move_window_id = None;
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(window_id));
             self.shell_move_proxy_cancel(Some(window_id));
@@ -8679,6 +8656,7 @@ impl CompositorState {
                 self.shell_move_window_id = None;
             }
             self.shell_move_pending_delta = (0, 0);
+            self.shell_move_pointer_driven = false;
             self.shell_move_last_flush_at = None;
             self.shell_native_drag_preview_cancel(Some(window_id));
             self.emit_x11_window_updates(&x11, true, false);
@@ -8694,6 +8672,7 @@ impl CompositorState {
         );
         self.shell_move_window_id = None;
         self.shell_move_pending_delta = (0, 0);
+        self.shell_move_pointer_driven = false;
         self.shell_move_last_flush_at = None;
         self.shell_native_drag_preview_cancel(Some(window_id));
         self.shell_move_proxy_cancel(Some(window_id));
@@ -12891,7 +12870,6 @@ impl CompositorState {
         if !self.shell_cef_active() || !self.shell_has_frame {
             return;
         }
-        self.shell_begin_frame_note_shell_input();
         let sym = keysym.modified_sym();
         let mut mods_u = Self::cef_flags_from_modifiers(mods);
         if key_state == KeyState::Pressed && is_autorepeat {
@@ -13005,7 +12983,6 @@ impl CompositorState {
         {
             return;
         }
-        self.shell_begin_frame_note_shell_input();
         self.shell_last_pointer_ipc_global_logical = Some(global_key);
         self.shell_last_pointer_ipc_px = Some((bx, by));
         self.shell_last_pointer_ipc_modifiers = Some(modifiers);
@@ -13040,7 +13017,6 @@ impl CompositorState {
         let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) else {
             return;
         };
-        self.shell_begin_frame_note_shell_input();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::PointerAxis {
             x: bx,
             y: by,

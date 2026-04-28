@@ -55,13 +55,6 @@ static SHELL_DIRTY_RECT_EMPTY: AtomicU64 = AtomicU64::new(0);
 static LATENCY: Mutex<LatencyTrace> = Mutex::new(LatencyTrace::new());
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CompositorScheduleKind {
-    Idle,
-    Active,
-    Forced,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) enum ShellViewInvalidateReason {
     MoveEnd,
     ResizeDelta,
@@ -70,6 +63,7 @@ pub(crate) enum ShellViewInvalidateReason {
     FocusChanged,
     OutputResize,
     BrowserLoad,
+    ForcedRepaint,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,10 +86,7 @@ struct PacingLog {
 static PACING: Mutex<Option<PacingLog>> = Mutex::new(None);
 
 struct LatencyTrace {
-    message_pump_at: Option<Instant>,
-    message_pump_delay_ms: i64,
     compositor_schedule_at: Option<Instant>,
-    compositor_schedule_kind: Option<CompositorScheduleKind>,
     view_invalidate_at: Option<Instant>,
     view_invalidate_reason: Option<ShellViewInvalidateReason>,
     cef_begin_frame_at: Option<Instant>,
@@ -113,10 +104,7 @@ struct LatencyTrace {
 impl LatencyTrace {
     const fn new() -> Self {
         Self {
-            message_pump_at: None,
-            message_pump_delay_ms: 0,
             compositor_schedule_at: None,
-            compositor_schedule_kind: None,
             view_invalidate_at: None,
             view_invalidate_reason: None,
             cef_begin_frame_at: None,
@@ -210,32 +198,6 @@ struct ShellDirtyRectSnapshot {
     bbox_full_count: u64,
     missing_count: u64,
     empty_count: u64,
-}
-
-pub(crate) fn note_schedule_from_compositor(kind: CompositorScheduleKind) {
-    COMPOSITOR_SCHEDULE.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut latency) = LATENCY.lock() {
-        latency.compositor_schedule_at = Some(Instant::now());
-        latency.compositor_schedule_kind = Some(kind);
-    }
-    match kind {
-        CompositorScheduleKind::Idle => {
-            COMPOSITOR_SCHEDULE_IDLE.fetch_add(1, Ordering::Relaxed);
-        }
-        CompositorScheduleKind::Active => {
-            COMPOSITOR_SCHEDULE_ACTIVE.fetch_add(1, Ordering::Relaxed);
-        }
-        CompositorScheduleKind::Forced => {
-            COMPOSITOR_SCHEDULE_FORCED.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-pub(crate) fn note_cef_ui_send_external_begin_frame() {
-    CEF_UI_SEND.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut latency) = LATENCY.lock() {
-        latency.cef_begin_frame_at = Some(Instant::now());
-    }
 }
 
 pub(crate) fn note_shell_view_invalidate(reason: ShellViewInvalidateReason) {
@@ -337,13 +299,6 @@ pub(crate) fn note_shell_shared_state_write(kind: u32, payload_len: usize, row_c
             SHELL_SHARED_STATE_UI_WINDOW_ROWS.fetch_add(row_count, Ordering::Relaxed);
         }
         _ => {}
-    }
-}
-
-pub(crate) fn note_cef_message_pump_scheduled(delay_ms: i64) {
-    if let Ok(mut latency) = LATENCY.lock() {
-        latency.message_pump_at = Some(Instant::now());
-        latency.message_pump_delay_ms = delay_ms;
     }
 }
 
@@ -558,7 +513,6 @@ fn maybe_log_shell_latency() {
     let Some(schedule_at) = latency
         .compositor_schedule_at
         .or(latency.view_invalidate_at)
-        .or(latency.message_pump_at)
     else {
         return;
     };

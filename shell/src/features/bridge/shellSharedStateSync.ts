@@ -79,7 +79,7 @@ export function createShellSharedStateSync(options: ShellSharedStateSyncOptions)
   }
 
   const scheduleOverlayExclusionSync = () => {
-    requestSharedStateSync({ exclusion: 'schedule' })
+    requestSharedStateSync({ exclusion: 'sync' })
     if (overlayExclusionRaf) return
     overlayExclusionRaf = requestAnimationFrame(() => {
       overlayExclusionRaf = 0

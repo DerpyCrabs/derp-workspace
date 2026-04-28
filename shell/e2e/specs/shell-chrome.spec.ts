@@ -63,6 +63,7 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
+import { runKeybind } from '../lib/setup.ts'
 
 function compositorFrameTitlebar(snapshot: CompositorSnapshot, windowId: number): Rect | null {
   const frame = snapshot.shell_window_frames?.find((entry) => entry.id === windowId)?.global
@@ -859,7 +860,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await closeProgramsMenuByTaskbarToggle(base, await getJson<ShellSnapshot>(base, '/test/state/shell'))
   })
 
-  test('settings window opens from taskbar, switches tabs, and reopens from keybind', async ({ base }) => {
+  test('settings window opens from taskbar, switches tabs, and reopens from keybind', async ({ base, state }) => {
     const settingsOpen = await openSettings(base, 'click')
     assert(settingsOpen.shell.controls?.settings_tab_user, 'missing settings user tab rect')
     assert(settingsOpen.shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
@@ -974,6 +975,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       scratchpadSave!.global_y + scratchpadSave!.height >= settingsWindow.y + settingsWindow.height - 18,
       'scratchpad save action should sit near the bottom of the settings pane',
     )
+    const shellTest = await openShellTestWindow(base, state)
+    await waitForShellUiFocus(base, shellTest.window.window_id)
+    await runKeybind(base, 'open_settings')
+    const settingsRefocused = await waitForShellUiFocus(base, SHELL_UI_SETTINGS_WINDOW_ID)
+    assertTopWindow(settingsRefocused.shell, SHELL_UI_SETTINGS_WINDOW_ID, 'settings existing launch refocus')
     const settingsHtml = await switchSettingsPage(
       base,
       'settings_tab_displays',
@@ -1412,12 +1418,28 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
 
     assert(settled.controls?.titlebar, 'missing settled titlebar')
+    const finalUpperWindow = compositorWindowById(settled.compositor, upperId)
+    assert(finalUpperWindow, 'missing settled upper shell window')
+    const pointerTravelX = dragTarget.x - start.x
+    const pointerTravelY = dragTarget.y - start.y
+    const windowTravelX = finalUpperWindow.x - upperWindow.x
+    const windowTravelY = finalUpperWindow.y - upperWindow.y
+    assert(
+      Math.abs(windowTravelX) <= Math.abs(pointerTravelX) + 32,
+      `shell titlebar drag x moved ${windowTravelX} for pointer dx ${pointerTravelX}`,
+    )
+    assert(
+      Math.abs(windowTravelY) <= Math.abs(pointerTravelY) + 32,
+      `shell titlebar drag y moved ${windowTravelY} for pointer dy ${pointerTravelY}`,
+    )
 
     await writeJsonArtifact('shell-drag-live-frame.json', {
       lowerId,
       upperId,
       start,
       dragTarget,
+      pointerTravel: { x: pointerTravelX, y: pointerTravelY },
+      windowTravel: { x: windowTravelX, y: windowTravelY },
       duringDrag: {
         hidden: duringDrag.controls.hidden,
         titlebar: duringDrag.controls.titlebar ?? null,
@@ -1694,33 +1716,36 @@ export default defineGroup(import.meta.url, ({ test }) => {
     let clippedTarget: { x: number; y: number } | null = null
     if (initial.window.y + initial.window.height <= initial.taskbar.global_y + 24) {
       const initialTitlebarCenter = shellTitlebarDragPoint(initial.shell, windowId)
-      await movePoint(base, initialTitlebarCenter.x, initialTitlebarCenter.y)
-      await pointerButton(base, BTN_LEFT, 'press')
-      try {
-        for (let step = 1; step <= 24; step += 1) {
-          const nextTarget = {
-            x: Math.round(initialTitlebarCenter.x),
-            y: Math.round(initialTitlebarCenter.y + step * 12),
-          }
-          clippedTarget = nextTarget
-          await movePoint(base, nextTarget.x, nextTarget.y)
+      const downwardTravel = Math.max(288, initial.taskbar.global_y + 40 - (initial.window.y + initial.window.height))
+      const downwardSteps = Math.ceil(downwardTravel / 12)
+      clippedTarget = {
+        x: Math.round(initialTitlebarCenter.x),
+        y: Math.round(initialTitlebarCenter.y + downwardSteps * 12),
+      }
+      await dragBetweenPoints(
+        base,
+        initialTitlebarCenter.x,
+        initialTitlebarCenter.y,
+        clippedTarget.x,
+        clippedTarget.y,
+        downwardSteps,
+      )
+      positioned = await waitFor(
+        'wait for shell test window taskbar-clipped after downward drag',
+        async () => {
           const snapshots = await getSnapshots(base)
           const window = compositorWindowById(snapshots.compositor, windowId)
           const titlebar = compositorFrameTitlebar(snapshots.compositor, windowId)
           const output = snapshots.compositor.outputs.find((entry) => entry.name === window?.output_name) ?? null
           const taskbar = window ? taskbarForMonitor(snapshots.shell, window.output_name) : null
-          if (!window || !titlebar || !output || !taskbar?.rect) continue
-          if (snapshots.compositor.shell_move_proxy_window_id !== null) continue
-          positioned = { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
-          if (window.y + window.height <= taskbar.rect.global_y + 24) continue
-          break
-        }
-      } finally {
-        await pointerButton(base, BTN_LEFT, 'release')
-      }
-      assert(
-        positioned.window.y + positioned.window.height > positioned.taskbar.global_y + 24,
-        'shell test window should become taskbar-clipped after downward drag',
+          if (!window || !titlebar || !output || !taskbar?.rect) return null
+          if (snapshots.compositor.shell_move_window_id !== null) return null
+          if (snapshots.compositor.shell_move_proxy_window_id !== null) return null
+          if (window.y + window.height <= taskbar.rect.global_y + 24) return null
+          return { compositor: snapshots.compositor, shell: snapshots.shell, window, titlebar, output, taskbar: taskbar.rect }
+        },
+        5000,
+        20,
       )
     }
 

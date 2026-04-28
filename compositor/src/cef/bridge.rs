@@ -6,13 +6,17 @@ use std::sync::{
 };
 
 use cef::{
-    post_task, rc::Rc, wrap_task, Browser, ImplBrowser, ImplBrowserHost, ImplTask, Task, ThreadId,
-    WrapTask,
+    post_task, rc::Rc, wrap_task, Browser, ImplBrowser, ImplBrowserHost, ImplTask,
+    PaintElementType, Task, ThreadId, WrapTask,
 };
 
 use crate::cef::compositor_downlink;
 use crate::cef::osr_view_state::OsrViewState;
 use crate::cef::shell_snapshot::SharedShellSnapshotWriter;
+
+pub(crate) trait CefMessagePumpWake: Send + Sync {
+    fn wake_cef(&self);
+}
 
 struct PendingCompositorMessages {
     scheduled: bool,
@@ -198,51 +202,26 @@ fn pending_message_is_urgent_input(msg: &shell_wire::DecodedCompositorToShellMes
     )
 }
 
-fn pending_message_needs_fast_begin_frame(
-    msg: &shell_wire::DecodedCompositorToShellMessage,
-) -> bool {
-    matches!(
-        msg,
-        shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowList { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
-            | shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
-            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
-            | shell_wire::DecodedCompositorToShellMessage::NotificationsState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::NotificationEvent { .. }
-            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
-            | shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-    )
-}
-
-fn post_external_begin_frame_task(
-    browser_holder: Arc<Mutex<Option<Browser>>>,
-    pending_begin_frame: Arc<AtomicBool>,
-    pending_begin_frame_reschedule: Arc<AtomicBool>,
-    kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
-) {
-    crate::cef::begin_frame_diag::note_schedule_from_compositor(kind);
-    if pending_begin_frame
-        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-        .is_err()
-    {
-        return;
+wrap_task! {
+    struct InvalidateShellViewTask {
+        browser_holder: Arc<Mutex<Option<Browser>>>,
+        reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
     }
-    let mut task = ExternalBeginFrameTask::new(
-        browser_holder,
-        pending_begin_frame.clone(),
-        pending_begin_frame_reschedule,
-    );
-    if post_task(ThreadId::UI, Some(&mut task)) == 0 {
-        pending_begin_frame.store(false, Ordering::Relaxed);
+
+    impl Task {
+        fn execute(&self) {
+            let Ok(guard) = self.browser_holder.lock() else {
+                return;
+            };
+            let Some(browser) = guard.as_ref() else {
+                return;
+            };
+            let Some(host) = browser.host() else {
+                return;
+            };
+            crate::cef::begin_frame_diag::note_shell_view_invalidate(self.reason);
+            host.invalidate(PaintElementType::VIEW);
+        }
     }
 }
 
@@ -252,8 +231,6 @@ wrap_task! {
         view_state: Arc<Mutex<OsrViewState>>,
         pending_messages: Arc<Mutex<PendingCompositorMessages>>,
         pending_work: Arc<AtomicBool>,
-        pending_begin_frame: Arc<AtomicBool>,
-        pending_begin_frame_reschedule: Arc<AtomicBool>,
         shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
     }
 
@@ -279,12 +256,6 @@ wrap_task! {
             if !urgent_messages.is_empty() {
                 compositor_downlink::apply_messages(urgent_messages, &self.browser_holder, &self.view_state);
             }
-            let needs_fast_begin_frame = snapshot_messages
-                .iter()
-                .any(|pending| pending_message_needs_fast_begin_frame(&pending.msg))
-                || messages
-                    .iter()
-                    .any(|pending| pending_message_needs_fast_begin_frame(&pending.msg));
             if !snapshot_messages.is_empty() {
                 if let Ok(mut snapshot) = self.shared_snapshot.lock() {
                     if let Some(snapshot) = snapshot.as_mut() {
@@ -300,14 +271,6 @@ wrap_task! {
             }
             if !messages.is_empty() {
                 compositor_downlink::apply_messages(messages, &self.browser_holder, &self.view_state);
-            }
-            if needs_fast_begin_frame {
-                post_external_begin_frame_task(
-                    self.browser_holder.clone(),
-                    self.pending_begin_frame.clone(),
-                    self.pending_begin_frame_reschedule.clone(),
-                    crate::cef::begin_frame_diag::CompositorScheduleKind::Active,
-                );
             }
             let should_repost = {
                 let Ok(mut guard) = self.pending_messages.lock() else {
@@ -329,8 +292,6 @@ wrap_task! {
                     self.view_state.clone(),
                     self.pending_messages.clone(),
                     self.pending_work.clone(),
-                    self.pending_begin_frame.clone(),
-                    self.pending_begin_frame_reschedule.clone(),
                     self.shared_snapshot.clone(),
                 );
                 if post_task(ThreadId::UI, Some(&mut task)) == 0 {
@@ -343,53 +304,21 @@ wrap_task! {
     }
 }
 
-wrap_task! {
-    struct ExternalBeginFrameTask {
-        browser_holder: Arc<Mutex<Option<Browser>>>,
-        pending_begin_frame: Arc<AtomicBool>,
-        pending_begin_frame_reschedule: Arc<AtomicBool>,
-    }
-
-    impl Task {
-        fn execute(&self) {
-            let Ok(guard) = self.browser_holder.lock() else {
-                self.pending_begin_frame.store(false, Ordering::Relaxed);
-                self.pending_begin_frame_reschedule
-                    .store(false, Ordering::Relaxed);
-                return;
-            };
-            let Some(b) = guard.as_ref() else {
-                self.pending_begin_frame.store(false, Ordering::Relaxed);
-                self.pending_begin_frame_reschedule
-                    .store(false, Ordering::Relaxed);
-                return;
-            };
-            if let Some(host) = b.host() {
-                host.send_external_begin_frame();
-                crate::cef::begin_frame_diag::note_cef_ui_send_external_begin_frame();
-            }
-            self.pending_begin_frame.store(false, Ordering::Relaxed);
-            self.pending_begin_frame_reschedule
-                .store(false, Ordering::Relaxed);
-        }
-    }
-}
-
 pub struct ShellToCefLink {
     browser_holder: Arc<Mutex<Option<Browser>>>,
     view_state: Arc<Mutex<OsrViewState>>,
     pending_messages: Arc<Mutex<PendingCompositorMessages>>,
     delivery_ready: Arc<AtomicBool>,
     pending_work: Arc<AtomicBool>,
-    pending_begin_frame: Arc<AtomicBool>,
-    pending_begin_frame_reschedule: Arc<AtomicBool>,
     shared_snapshot: Arc<Mutex<Option<SharedShellSnapshotWriter>>>,
+    message_pump_wake: Arc<dyn CefMessagePumpWake>,
 }
 
 impl ShellToCefLink {
-    pub fn new(
+    pub(crate) fn new(
         browser_holder: Arc<Mutex<Option<Browser>>>,
         view_state: Arc<Mutex<OsrViewState>>,
+        message_pump_wake: Arc<dyn CefMessagePumpWake>,
     ) -> Self {
         Self {
             browser_holder,
@@ -403,11 +332,10 @@ impl ShellToCefLink {
             })),
             delivery_ready: Arc::new(AtomicBool::new(false)),
             pending_work: Arc::new(AtomicBool::new(false)),
-            pending_begin_frame: Arc::new(AtomicBool::new(false)),
-            pending_begin_frame_reschedule: Arc::new(AtomicBool::new(false)),
             shared_snapshot: Arc::new(Mutex::new(
                 SharedShellSnapshotWriter::new(crate::cef::runtime_dir()).ok(),
             )),
+            message_pump_wake,
         }
     }
 
@@ -477,19 +405,17 @@ impl ShellToCefLink {
             .map(|snapshot| snapshot.path().to_path_buf())
     }
 
-    pub(crate) fn schedule_external_begin_frame(
+    pub(crate) fn invalidate_view(
         &self,
-        kind: crate::cef::begin_frame_diag::CompositorScheduleKind,
+        reason: crate::cef::begin_frame_diag::ShellViewInvalidateReason,
     ) {
         if !self.delivery_ready.load(Ordering::Relaxed) {
             return;
         }
-        post_external_begin_frame_task(
-            self.browser_holder.clone(),
-            self.pending_begin_frame.clone(),
-            self.pending_begin_frame_reschedule.clone(),
-            kind,
-        );
+        let mut task = InvalidateShellViewTask::new(self.browser_holder.clone(), reason);
+        if post_task(ThreadId::UI, Some(&mut task)) != 0 {
+            self.message_pump_wake.wake_cef();
+        }
     }
 
     pub fn set_delivery_ready(&self, ready: bool) {
@@ -505,25 +431,20 @@ impl ShellToCefLink {
         self.delivery_ready.load(Ordering::Relaxed)
     }
 
-    pub fn has_pending_shell_updates(&self) -> bool {
-        self.pending_work.load(Ordering::Relaxed)
-            || self.pending_begin_frame.load(Ordering::Relaxed)
-    }
-
     fn post_pending_messages(&self) {
         let mut task = ApplyCompositorToShellTask::new(
             self.browser_holder.clone(),
             self.view_state.clone(),
             self.pending_messages.clone(),
             self.pending_work.clone(),
-            self.pending_begin_frame.clone(),
-            self.pending_begin_frame_reschedule.clone(),
             self.shared_snapshot.clone(),
         );
         if post_task(ThreadId::UI, Some(&mut task)) == 0 {
             if let Ok(mut guard) = self.pending_messages.lock() {
                 guard.scheduled = false;
             }
+        } else {
+            self.message_pump_wake.wake_cef();
         }
     }
 }

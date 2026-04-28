@@ -134,7 +134,7 @@ declare global {
     __DERP_SHELL_EXCLUSION_STATE_PATH?: string | null
     __DERP_SHELL_UI_WINDOWS_STATE_PATH?: string | null
     __DERP_SHELL_SHARED_STATE_ABI?: number
-    /** Registered by CEF render process: shell→compositor control (`move_delta` uses third arg as `dy`). */
+    /** Registered by CEF render process: shell→compositor control. */
     __derpShellWireSend?: ShellCompositorWireSend
     __derpShellSharedStateWrite?: (
       path: string,
@@ -221,7 +221,6 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
   if (!hasWire) {
     if (
       op === 'move_begin' ||
-      op === 'move_delta' ||
       op === 'move_end' ||
       op === 'resize_begin' ||
       op === 'resize_delta' ||
@@ -233,7 +232,7 @@ const shellWireSend: ShellCompositorWireSend = function shellWireSend(
     }
     return false
   }
-  if ((op === 'move_delta' || op === 'resize_delta') && arg2 !== undefined) {
+  if (op === 'resize_delta' && arg2 !== undefined) {
     fn(op, arg as number, arg2)
   } else if (op === 'resize_begin' && arg2 !== undefined) {
     fn(op, arg as number, arg2)
@@ -1794,12 +1793,16 @@ function App() {
     const compositorResizeWindowId = interactionState?.resize_window_id ?? null
     const compositorPointer = compositorInteractionPointerClient()
     const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
+    const localDragOwnsCompositorMove =
+      localDragWindowId !== null && compositorMoveWindowId === localDragWindowId
     const interactionActive =
       interactionState !== null &&
       (interactionState.move_window_id !== null || interactionState.resize_window_id !== null)
     if (interactionActive && compositorPointer) {
-      syncPointerSignalsFromClient(compositorPointer)
-      if (compositorMoveWindowId !== null) {
+      if (!localDragOwnsCompositorMove) {
+        syncPointerSignalsFromClient(compositorPointer)
+      }
+      if (compositorMoveWindowId !== null && !localDragOwnsCompositorMove) {
         if (localDragWindowId === null) {
           shellWindowGestureRuntime.adoptShellWindowMove(compositorMoveWindowId, compositorPointer.x, compositorPointer.y)
         }

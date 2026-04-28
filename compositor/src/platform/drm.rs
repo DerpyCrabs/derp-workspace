@@ -377,6 +377,10 @@ impl DrmHead {
             _ => None,
         };
 
+        if !content_advanced && state.shell_has_frame {
+            return (false, false);
+        }
+
         if let Err(e) = self
             .gbm_surface
             .queue_buffer(Some(sync_for_queue), damage_for_queue, ())
@@ -546,18 +550,6 @@ impl DrmSession {
             .iter()
             .filter_map(|head| head.last_vblank_at.map(|at| at + interval - margin))
             .min()
-    }
-
-    fn shell_begin_min_when_active(&self) -> Duration {
-        let refresh_milli_hz = self
-            .heads
-            .iter()
-            .filter_map(|head| head.output.current_mode())
-            .filter_map(|mode| u64::try_from(mode.refresh.max(1)).ok())
-            .map(|refresh| refresh.min(60_000))
-            .max()
-            .unwrap_or(60_000);
-        Duration::from_nanos((1_000_000_000_000u64 / refresh_milli_hz.max(1)).max(1))
     }
 
     fn pause(&mut self) {
@@ -862,39 +854,8 @@ impl DrmSession {
             state.shell_native_drag_preview_capture_if_needed(&mut *rg);
         }
 
-        let mut any_advanced = false;
         for head in &mut self.heads {
-            let (advanced, _presented) =
-                head.render_one(drm_ref, &renderer, &loop_handle, state, display);
-            any_advanced |= advanced;
-        }
-
-        const SHELL_BEGIN_MIN_WHEN_IDLE: Duration = Duration::from_millis(250);
-        let now = Instant::now();
-        let schedule_kind = if any_advanced || state.shell_begin_frame_interaction_active(now) {
-            crate::cef::begin_frame_diag::CompositorScheduleKind::Active
-        } else {
-            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle
-        };
-        let shell_begin_min_when_active = self.shell_begin_min_when_active();
-        let min_gap = match schedule_kind {
-            crate::cef::begin_frame_diag::CompositorScheduleKind::Idle => SHELL_BEGIN_MIN_WHEN_IDLE,
-            crate::cef::begin_frame_diag::CompositorScheduleKind::Active
-            | crate::cef::begin_frame_diag::CompositorScheduleKind::Forced => {
-                shell_begin_min_when_active
-            }
-        };
-        let shell_send = match state.shell_begin_frame_last {
-            None => true,
-            Some(t) => now.duration_since(t) >= min_gap,
-        };
-        if shell_send {
-            if let Ok(g) = state.shell_to_cef.lock() {
-                if let Some(link) = g.as_ref() {
-                    link.schedule_external_begin_frame(schedule_kind);
-                }
-            }
-            state.shell_begin_frame_last = Some(now);
+            let _ = head.render_one(drm_ref, &renderer, &loop_handle, state, display);
         }
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
@@ -1323,6 +1284,9 @@ pub fn init_drm(
         .handle()
         .insert_source(libinput_backend, move |event, _, d| {
             d.state.process_input_event(event, &lh_libinput);
+            if let Some(drms) = d.drm.as_mut() {
+                drms.request_render();
+            }
         })
         .map_err(|e| format!("libinput insert_source: {e}"))?;
 

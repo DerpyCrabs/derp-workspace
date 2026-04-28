@@ -49,11 +49,7 @@ impl CompositorState {
     }
 
     pub fn window_op_begin_move(&mut self, window_id: u32) {
-        self.shell_move_begin(window_id);
-    }
-
-    pub fn window_op_move_delta(&mut self, dx: i32, dy: i32) {
-        self.shell_move_delta(dx, dy);
+        self.shell_move_begin_from_shell(window_id);
     }
 
     pub fn window_op_end_move(&mut self, window_id: u32) {

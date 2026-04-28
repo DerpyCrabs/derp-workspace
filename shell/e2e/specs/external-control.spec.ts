@@ -343,6 +343,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       command: spawnCommand,
     })
     state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    await waitForNativeFocus(base, spawned.window.window_id)
 
     await derpctl(['palette', 'clear-owner', owner])
     await searchCommandPalette(base, 'palettered', false)

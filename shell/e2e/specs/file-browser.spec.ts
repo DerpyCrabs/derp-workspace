@@ -885,6 +885,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     state.spawnedShellWindowIds.add(editorWindow.windowId)
+    await waitForShellUiFocus(base, editorWindow.windowId)
   })
 
   test('file browser drags a writable file into a folder', async ({ base, state }) => {

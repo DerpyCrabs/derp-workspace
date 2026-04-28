@@ -181,9 +181,7 @@ impl XdgShellHandler for CompositorState {
             if !self.scratchpad_windows.contains_key(&spawn_focus_wid) {
                 if pending_activation_focus {
                     self.shell_raise_and_focus_window(spawn_focus_wid);
-                    if let Some(window_order) = self.shell_window_order_message_if_changed() {
-                        self.shell_send_to_cef(window_order);
-                    }
+                    self.shell_reply_window_list();
                 } else {
                     self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
                 }

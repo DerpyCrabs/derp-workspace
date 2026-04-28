@@ -5,7 +5,6 @@ export type ShellCompositorWireOp =
   | 'invalidate_view'
   | 'spawn'
   | 'move_begin'
-  | 'move_delta'
   | 'move_end'
   | 'native_drag_preview_begin'
   | 'native_drag_preview_cancel'

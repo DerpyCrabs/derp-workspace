@@ -1199,8 +1199,8 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     const item = items[programsMenuHighlightIdx()]
     if (!item || items.length === 0) return
     if (item.disabled) return
-    item.action()
     hideContextMenu()
+    item.action()
   }
 
   function movePowerMenuHighlight(delta: number) {

@@ -238,9 +238,7 @@ impl XdgActivationHandler for CompositorState {
             self.shell_pending_native_focus_window_id = Some(window_id);
         } else {
             self.shell_raise_and_focus_window(window_id);
-            if let Some(window_order) = self.shell_window_order_message_if_changed() {
-                self.shell_send_to_cef(window_order);
-            }
+            self.shell_reply_window_list();
         }
         self.xdg_activation_state.remove_token(&token);
     }

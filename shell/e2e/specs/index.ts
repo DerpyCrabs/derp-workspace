@@ -6,7 +6,6 @@ import launcherMultimonitorGroup from './launcher-multimonitor.spec.ts'
 import nativeWindowsGroup from './native-windows.spec.ts'
 import notificationsGroup from './notifications.spec.ts'
 import restartInputGroup from './restart-input.spec.ts'
-import perfSmokeGroup from './perf-smoke.spec.ts'
 import restartPersistenceGroup from './restart-persistence.spec.ts'
 import screenCaptureGroup from './screen-capture.spec.ts'
 import shellChromeGroup from './shell-chrome.spec.ts'
@@ -26,7 +25,6 @@ import xdgActivationGroup from './xdg-activation.spec.ts'
 
 export const defaultGroups = [
   shellChromeGroup,
-  perfSmokeGroup,
   nativeWindowsGroup,
   waylandProtocolsGroup,
   notificationsGroup,

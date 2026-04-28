@@ -144,7 +144,6 @@ type ShellWindowGestureRuntimeOptions = {
   shellWireSend: (
     op:
       | 'move_begin'
-      | 'move_delta'
       | 'move_end'
       | 'resize_begin'
       | 'resize_delta'
@@ -1054,27 +1053,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
 
   function applyShellWindowMove(clientX: number, clientY: number, superHeld = false, _buttons?: number) {
     if (!shellWindowDrag) return
-    const beforeX = shellWindowDrag.lastX
-    const beforeY = shellWindowDrag.lastY
     updateShellWindowMovePointer(clientX, clientY, superHeld)
-    const afterDrag = shellWindowDrag
-    if (!afterDrag || afterDrag.windowId !== dragWindowId()) return
-    const dClientX = afterDrag.lastX - beforeX
-    const dClientY = afterDrag.lastY - beforeY
-    if (dClientX === 0 && dClientY === 0) return
-    const measure = afterDrag.measure ?? readDragMeasure(afterDrag.windowId)
-    const { dx, dy } =
-      measure
-        ? clientPointerDeltaToCanvasLogical(
-            dClientX,
-            dClientY,
-            measure.mainRect,
-            measure.output.w,
-            measure.output.h,
-          )
-        : { dx: dClientX, dy: dClientY }
-    if (dx === 0 && dy === 0) return
-    options.shellWireSend('move_delta', dx, dy)
   }
 
   function syncShellWindowMovePointer(clientX: number, clientY: number) {

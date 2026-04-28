@@ -278,9 +278,10 @@ impl CompositorState {
             self.pointer_constraint_maybe_activate(&surface, &pointer, pos);
         }
         if dx != 0 || dy != 0 {
-            if self.shell_move_is_active() {
+            if self.shell_move_is_active() && self.shell_move_accepts_pointer_delta() {
                 self.shell_move_delta(dx, dy);
-            } else if self.shell_move_deferred.is_some() {
+            } else if self.shell_move_deferred.is_some() && self.shell_move_accepts_pointer_delta()
+            {
                 self.shell_move_deferred_accumulate_delta(dx, dy);
             }
             if self.shell_resize_is_active() {
@@ -417,7 +418,6 @@ impl CompositorState {
         if self.programs_menu_super_armed && button_state == ButtonState::Pressed {
             self.programs_menu_super_chord = true;
         }
-        self.shell_begin_frame_note_shell_input();
         if self.handle_screenshot_pointer_button(button, button_state) {
             let pointer = self.seat.get_pointer().unwrap();
             let serial = SERIAL_COUNTER.next_serial();
@@ -977,7 +977,6 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, time);
                 if cef_touch {
-                    self.shell_begin_frame_note_shell_input();
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(
@@ -1025,7 +1024,6 @@ impl CompositorState {
                 );
                 self.pointer_motion_output_local(output_geo, local, Event::time_msec(&event));
                 if self.touch_routes_to_cef {
-                    self.shell_begin_frame_note_shell_input();
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(
@@ -1053,7 +1051,6 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    self.shell_begin_frame_note_shell_input();
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(
@@ -1085,7 +1082,6 @@ impl CompositorState {
                 let time = Event::time_msec(&event);
                 let pos = self.seat.get_pointer().unwrap().current_location();
                 if self.touch_routes_to_cef {
-                    self.shell_begin_frame_note_shell_input();
                     if let Some((bx, by)) = self.shell_pointer_coords_for_cef(pos) {
                         let tid = i32::from(event.slot());
                         self.shell_send_to_cef(

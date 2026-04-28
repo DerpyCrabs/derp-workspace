@@ -183,11 +183,15 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
     options.shellWireSend('presentation_fullscreen', document.fullscreenElement ? 1 : 0)
   }
 
-  window.addEventListener('pointermove', onPointerMove, { passive: true })
-  window.addEventListener('mousemove', onMouseMove, { passive: true })
-  window.addEventListener('pointerup', onWindowPointerUp, { passive: true })
-  window.addEventListener('mouseup', onWindowMouseUp, { passive: true })
-  window.addEventListener('pointercancel', onWindowPointerCancel, { passive: true })
+  const pointerEventsSupported = typeof window.PointerEvent !== 'undefined'
+  if (pointerEventsSupported) {
+    window.addEventListener('pointermove', onPointerMove, { passive: true })
+    window.addEventListener('pointerup', onWindowPointerUp, { passive: true })
+    window.addEventListener('pointercancel', onWindowPointerCancel, { passive: true })
+  } else {
+    window.addEventListener('mousemove', onMouseMove, { passive: true })
+    window.addEventListener('mouseup', onWindowMouseUp, { passive: true })
+  }
   window.addEventListener('blur', onWindowBlur)
   window.addEventListener('touchend', onWindowTouchEnd, { passive: true })
   window.addEventListener('touchcancel', onWindowTouchEnd, { passive: true })
@@ -197,11 +201,14 @@ export function registerAppRuntimeBootstrap(options: AppRuntimeBootstrapOptions)
 
   return () => {
     unregisterCompositorBridgeRuntime()
-    window.removeEventListener('pointermove', onPointerMove)
-    window.removeEventListener('mousemove', onMouseMove)
-    window.removeEventListener('pointerup', onWindowPointerUp)
-    window.removeEventListener('mouseup', onWindowMouseUp)
-    window.removeEventListener('pointercancel', onWindowPointerCancel)
+    if (pointerEventsSupported) {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onWindowPointerUp)
+      window.removeEventListener('pointercancel', onWindowPointerCancel)
+    } else {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onWindowMouseUp)
+    }
     window.removeEventListener('blur', onWindowBlur)
     window.removeEventListener('touchend', onWindowTouchEnd)
     window.removeEventListener('touchcancel', onWindowTouchEnd)
