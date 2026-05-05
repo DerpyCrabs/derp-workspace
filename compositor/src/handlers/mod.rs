@@ -239,6 +239,8 @@ impl XdgActivationHandler for CompositorState {
         } else {
             self.shell_raise_and_focus_window(window_id);
             self.shell_reply_window_list();
+            let order = self.shell_window_order_message();
+            self.shell_send_to_cef(order);
         }
         self.xdg_activation_state.remove_token(&token);
     }

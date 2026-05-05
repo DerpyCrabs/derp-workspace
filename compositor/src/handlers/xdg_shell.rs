@@ -186,6 +186,10 @@ impl XdgShellHandler for CompositorState {
                     self.shell_consider_focus_spawned_toplevel(spawn_focus_wid);
                 }
                 let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
+                if pending_activation_focus {
+                    let order = self.shell_window_order_message();
+                    self.shell_send_to_cef(order);
+                }
             }
         }
     }

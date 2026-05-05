@@ -105,6 +105,83 @@ describe('createCompositorModel', () => {
     })
   })
 
+  it('keeps snapshot window order authoritative when a window list refresh shares its revision', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [
+            { ...nativeWindow(50, 'Launcher'), stack_z: 2 },
+            { ...nativeWindow(51, 'Target'), stack_z: 3 },
+          ],
+        },
+        {
+          type: 'window_order',
+          revision: 3,
+          windows: [
+            { window_id: 50, stack_z: 2 },
+            { window_id: 51, stack_z: 3 },
+          ],
+        },
+      ])
+
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 2,
+          windows: [
+            { ...nativeWindow(50, 'Launcher'), stack_z: 2 },
+            { ...nativeWindow(51, 'Target'), stack_z: 1 },
+          ],
+        },
+        {
+          type: 'window_order',
+          revision: 3,
+          windows: [
+            { window_id: 50, stack_z: 2 },
+            { window_id: 51, stack_z: 3 },
+          ],
+        },
+      ])
+
+      expect(model.windows().get(51)?.stack_z).toBe(3)
+      expect(model.windowsListIds()).toEqual([51, 50])
+      dispose()
+    })
+  })
+
+  it('keeps focused window topmost when focus arrives after a stale order update', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [
+            { ...nativeWindow(50, 'Launcher'), stack_z: 2 },
+            { ...nativeWindow(51, 'Target'), stack_z: 1 },
+          ],
+        },
+        {
+          type: 'window_order',
+          revision: 3,
+          windows: [
+            { window_id: 50, stack_z: 2 },
+            { window_id: 51, stack_z: 1 },
+          ],
+        },
+        { type: 'focus_changed', surface_id: 510, window_id: 51 },
+      ])
+
+      expect(model.focusedWindowId()).toBe(51)
+      expect(model.windows().get(51)?.stack_z).toBe(3)
+      expect(model.windowsListIds()).toEqual([51, 50])
+      dispose()
+    })
+  })
+
   it('updates workspace window projection for geometry-only updates', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()

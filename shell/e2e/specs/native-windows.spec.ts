@@ -36,6 +36,7 @@ import {
   openSettings,
   outputForWindow,
   pointerButton,
+  pointerWheel,
   pointInRect,
   postJson,
   raiseTaskbarWindow,
@@ -231,7 +232,18 @@ async function waitForSettingsTilingLayoutTriggerReady(base: string) {
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const rect = shell.controls?.settings_tiling_layout_trigger
-      if (!rect) return null
+      if (!rect) {
+        const settingsWindow = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (settingsWindow) {
+          await movePoint(
+            base,
+            settingsWindow.x + Math.floor(settingsWindow.width / 2),
+            settingsWindow.y + Math.floor(settingsWindow.height / 2),
+          )
+          await pointerWheel(base, 0, -360)
+        }
+        return null
+      }
       const nextKey = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
       if (nextKey !== lastRectKey) {
         lastRectKey = nextKey
@@ -1773,8 +1785,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       })
     } finally {
       try {
-        await openSettings(base, 'click')
-        await selectSettingsTilingLayout(base, 'manual-snap')
+        await postJson(base, '/test/tiling/reset', {})
       } finally {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         if (shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)) {

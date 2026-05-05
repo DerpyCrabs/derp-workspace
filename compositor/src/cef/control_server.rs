@@ -1468,6 +1468,29 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/taskbar/auto_hide" {
+        let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+        uplink.shell_set_taskbar_auto_hide(enabled);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if req_path == "/test/taskbar/side" {
+        let name = v
+            .get("output")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "taskbar side: missing output".to_string())?
+            .to_string();
+        let side = v
+            .get("side")
+            .and_then(|x| x.as_str())
+            .and_then(crate::state::ShellTaskbarSide::from_str)
+            .ok_or_else(|| "taskbar side: invalid side".to_string())?;
+        uplink.shell_set_taskbar_side(name, side);
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/screenshot" {
         let rect = match (
             v.get("x").and_then(|x| x.as_i64()),

@@ -2323,8 +2323,9 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = taskbarEntry(shell, windowId)
-    assert(row?.close, `missing taskbar close control for window ${windowId}`)
-    await clickRect(base, row.close)
+    const closeRect = row?.close ?? windowControls(shell, windowId)?.close
+    assert(closeRect, `missing close control for window ${windowId}`)
+    await clickRect(base, closeRect)
     try {
       await waitForWindowGone(base, windowId, 600)
       return

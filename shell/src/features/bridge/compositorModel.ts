@@ -1,4 +1,4 @@
-import { batch, createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
+import { batch, createEffect, createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
 import {
   applyDetail,
   applyDetailMutable,
@@ -68,13 +68,19 @@ function coerceRevision(raw: unknown): number {
 
 function collectWindowOrderIds(raw: unknown): number[] {
   if (!Array.isArray(raw)) return []
-  const ids: number[] = []
+  const entries: { id: number; stack: number; index: number }[] = []
   for (const row of raw) {
     if (!row || typeof row !== "object") continue
-    const id = coerceShellWindowId((row as Record<string, unknown>).window_id)
-    if (id !== null) ids.push(id)
+    const record = row as Record<string, unknown>
+    const id = coerceShellWindowId(record.window_id)
+    if (id === null) continue
+    const rawStack = record.stack_z
+    const stack = typeof rawStack === 'number' && Number.isFinite(rawStack) ? Math.trunc(rawStack) : 0
+    entries.push({ id, stack, index: entries.length })
   }
-  return ids
+  return entries
+    .sort((left, right) => right.stack - left.stack || right.id - left.id || left.index - right.index)
+    .map((entry) => entry.id)
 }
 
 function sameNumberArray(left: readonly number[], right: readonly number[]): boolean {
@@ -84,6 +90,19 @@ function sameNumberArray(left: readonly number[], right: readonly number[]): boo
     if (left[index] !== right[index]) return false
   }
   return true
+}
+
+function raiseFocusedWindowInMap(map: Map<number, DerpWindow>, windowId: number): Map<number, DerpWindow> {
+  const focusedWindow = map.get(windowId)
+  if (!focusedWindow) return map
+  let maxStackZ = 0
+  for (const window of map.values()) {
+    if (window.window_id !== windowId && window.stack_z > maxStackZ) maxStackZ = window.stack_z
+  }
+  if (focusedWindow.stack_z > maxStackZ) return map
+  const next = new Map(map)
+  next.set(windowId, { ...focusedWindow, stack_z: maxStackZ + 1 })
+  return next
 }
 
 function sameWindowArray(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
@@ -319,6 +338,18 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       return next
     })
   }
+  createEffect(() => {
+    const windowId = focusedWindowId()
+    if (windowId === null) return
+    const current = windows()
+    const raised = raiseFocusedWindowInMap(current, windowId)
+    if (raised === current) return
+    commitWindows(() => raised)
+    const nextOrderIds = [...raised.values()]
+      .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
+      .map((window) => window.window_id)
+    setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+  })
   const publishWindows = (
     prev: ReadonlyMap<number, DerpWindow>,
     next: Map<number, DerpWindow>,
@@ -417,6 +448,17 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
             continue
           }
           pendingFocusedWindowId = null
+          const raisedWindows = raiseFocusedWindowInMap(currentWindows(), windowId)
+          if (raisedWindows !== currentWindows()) {
+            const mutableWindows = ensureMutableWindows()
+            const raisedWindow = raisedWindows.get(windowId)
+            if (raisedWindow) mutableWindows.set(windowId, raisedWindow)
+            touchedWindowIds.add(windowId)
+            const nextOrderIds = [...mutableWindows.values()]
+              .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
+              .map((window) => window.window_id)
+            setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+          }
           setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
         } else {
           pendingFocusedWindowId = null
@@ -653,10 +695,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
     if (authoritative.windowOrder !== undefined) {
       const windowOrder = authoritative.windowOrder
+      commitWindows((map) => applyDetail(map, { type: 'window_order', windows: windowOrder.rows }))
+      const nextOrderIds = collectWindowOrderIds(windowOrder.rows)
+      setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
       if (windowOrder.revision !== windowOrderRevision()) {
-        commitWindows((map) => applyDetail(map, { type: 'window_order', windows: windowOrder.rows }))
-        const nextOrderIds = collectWindowOrderIds(windowOrder.rows)
-        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
         setWindowOrderRevision(windowOrder.revision)
       }
     }
@@ -680,9 +722,6 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       }
     }
     const nextFocusedWindowId = authoritative.focusedWindowId
-    if (nextFocusedWindowId !== undefined) {
-      setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
-    }
     let hasWindowDetails = false
     const unmappedWindowIds: number[] = []
     for (const detail of details) {
@@ -699,6 +738,18 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       for (const windowId of unmappedWindowIds) {
         setFocusedWindowId((prev) => (prev === windowId ? null : prev))
       }
+    }
+    if (nextFocusedWindowId !== undefined) {
+      if (nextFocusedWindowId !== null) {
+        commitWindows((map) => raiseFocusedWindowInMap(map, nextFocusedWindowId))
+        setWindowOrderIds((prev) => {
+          const nextOrderIds = [...windows().values()]
+            .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
+            .map((window) => window.window_id)
+          return sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds
+        })
+      }
+      setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
     }
     })
   }

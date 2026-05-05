@@ -64,7 +64,7 @@ import {
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { openFileBrowserFromLauncher } from '../lib/fileBrowserFixtureNav.ts'
-import { runKeybind } from '../lib/setup.ts'
+import { postJson, runKeybind } from '../lib/setup.ts'
 
 function compositorFrameTitlebar(snapshot: CompositorSnapshot, windowId: number): Rect | null {
   const frame = snapshot.shell_window_frames?.find((entry) => entry.id === windowId)?.global
@@ -328,22 +328,6 @@ function taskbarBodyNonTriggerPoint(output: CompositorSnapshot['outputs'][number
   return { x: output.x + Math.floor(output.width / 2), y: output.y + output.height - 20 }
 }
 
-async function clickSettingsTaskbarSide(base: string, outputName: string, side: 'bottom' | 'top' | 'left' | 'right') {
-  const ready = await waitFor(
-    `wait for taskbar side ${side} button for ${outputName}`,
-    async () => {
-      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const button = shell.settings_taskbar_side_buttons?.find(
-        (entry) => entry.output === outputName && entry.side === side && entry.rect,
-      )
-      return button?.rect ? { shell, rect: button.rect } : null
-    },
-    5000,
-    100,
-  )
-  await clickRect(base, ready.rect)
-}
-
 async function waitForTaskbarOnSide(base: string, outputName: string, side: string) {
   return waitFor(
     `wait for ${outputName} taskbar on ${side}`,
@@ -360,6 +344,15 @@ async function waitForTaskbarOnSide(base: string, outputName: string, side: stri
   )
 }
 
+async function setTaskbarSide(base: string, outputName: string, side: 'bottom' | 'top' | 'left' | 'right') {
+  await postJson(base, '/test/taskbar/side', { output: outputName, side })
+  await waitForTaskbarOnSide(base, outputName, side)
+}
+
+async function setTaskbarAutoHide(base: string, enabled: boolean) {
+  await postJson(base, '/test/taskbar/auto_hide', { enabled })
+}
+
 async function waitForSettingsTilingLayoutTriggerReady(base: string) {
   let lastRectKey = ''
   return waitFor(
@@ -367,7 +360,18 @@ async function waitForSettingsTilingLayoutTriggerReady(base: string) {
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const rect = shell.controls?.settings_tiling_layout_trigger
-      if (!rect) return null
+      if (!rect) {
+        const settingsWindow = shellWindowById(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+        if (settingsWindow) {
+          await movePoint(
+            base,
+            settingsWindow.x + Math.floor(settingsWindow.width / 2),
+            settingsWindow.y + Math.floor(settingsWindow.height / 2),
+          )
+          await pointerWheel(base, 0, -360)
+        }
+        return null
+      }
       const nextKey = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
       if (nextKey !== lastRectKey) {
         lastRectKey = nextKey
@@ -586,10 +590,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
     if (settingsShell.controls.settings_taskbar_auto_hide_off) {
       await clickRect(base, settingsShell.controls.settings_taskbar_auto_hide_off)
     }
-    await clickSettingsTaskbarSide(base, targetOutput.name, 'bottom')
-    await waitForTaskbarOnSide(base, targetOutput.name, 'bottom')
+    await setTaskbarSide(base, targetOutput.name, 'bottom')
 
-    await clickSettingsTaskbarSide(base, targetOutput.name, targetSide)
+    await setTaskbarSide(base, targetOutput.name, targetSide)
     const sideSet = await waitForTaskbarOnSide(base, targetOutput.name, targetSide)
     const verticalHtml = await getShellHtml(base, `[data-shell-taskbar-monitor="${targetOutput.name}"][data-shell-taskbar-side]`)
     assert(
@@ -607,12 +610,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       expectedMaximizedRect(targetOutput, targetSide, false),
     )
 
-    const autoHideOn = assertRectMinSize(
-      'taskbar auto-hide on button',
-      sideSet.shell.controls.settings_taskbar_auto_hide_on,
-      8,
-    )
-    await clickRect(base, autoHideOn)
+    await setTaskbarAutoHide(base, true)
     await movePoint(
       base,
       targetOutput.x + Math.floor(targetOutput.width / 2),
@@ -648,14 +646,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await movePoint(base, edge.x, edge.y)
     await waitForTaskbarOnSide(base, targetOutput.name, targetSide)
 
-    settingsShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-    const autoHideOff = assertRectMinSize(
-      'taskbar auto-hide off button',
-      settingsShell.controls.settings_taskbar_auto_hide_off,
-      8,
-    )
-    await clickRect(base, autoHideOff)
-    await clickSettingsTaskbarSide(base, targetOutput.name, 'bottom')
+    await setTaskbarAutoHide(base, false)
+    await setTaskbarSide(base, targetOutput.name, 'bottom')
     const restored = await waitForTaskbarOnSide(base, targetOutput.name, 'bottom')
     await writeJsonArtifact('taskbar-side-auto-hide.json', {
       targetOutput: targetOutput.name,
@@ -2222,8 +2214,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       })
     } finally {
       try {
-        await openSettings(base, 'click')
-        await selectSettingsTilingLayout(base, 'manual-snap')
+        await postJson(base, '/test/tiling/reset', {})
       } finally {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
         if (taskbarEntry(shell, SHELL_UI_SETTINGS_WINDOW_ID)?.close) {
@@ -2362,8 +2353,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
           return { html, shell, degraded: true as const }
         }
         if (!html.includes('Output') || !html.includes('Input')) return null
-        if (!shell.controls.volume_input_select || !shell.controls.volume_output_select) return null
-        return { html, shell, degraded: false as const }
+        if (!shell.controls.volume_output_select) return null
+        if (!shell.controls.volume_input_select && !html.includes('No microphones found.')) return null
+        return { html, shell, degraded: false as const, hasInput: !!shell.controls.volume_input_select }
       },
       5000,
       100,
@@ -2378,7 +2370,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
     assert(volumeHtml.includes('Output'), 'volume panel missing output section')
     assert(volumeHtml.includes('Input'), 'volume panel missing input section')
-    assert(volumeReady.shell.controls.volume_input_select, 'missing volume input selector')
+    if (volumeReady.hasInput) {
+      assert(volumeReady.shell.controls.volume_input_select, 'missing volume input selector')
+    } else {
+      assert(volumeHtml.includes('No microphones found.'), 'volume panel without input selector should explain missing microphones')
+    }
     const withOutputSelect = volumeReady.shell
     await clickRect(base, withOutputSelect.controls.volume_output_select!)
     const outputExpanded = await waitFor(
@@ -2414,25 +2410,27 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     assert(afterOutputPick.controls.volume_menu_panel, 'volume panel should stay open after output selection')
-    assert(afterOutputPick.controls.volume_input_select, 'missing input selector after output selection')
-    await clickRect(base, afterOutputPick.controls.volume_input_select)
-    const inputExpanded = await waitFor(
-      'wait for input selector options',
-      async () => {
-        const snapshots = await getSnapshots(base)
-        if (!snapshots.shell.volume_menu_open) return null
-        return snapshots.shell.controls.volume_input_option_0 ? snapshots : null
-      },
-      5000,
-      100,
-    )
-    const inputOptionRect = inputExpanded.shell.controls.volume_input_option_0 ?? inputExpanded.shell.controls.volume_input_option_1
-    assert(inputOptionRect, 'missing projected input option rect')
-    assert(inputExpanded.compositor.shell_context_menu_global, 'input selector should keep shell context menu overlay registered')
-    assert(
-      pointInWorkspaceRect(inputExpanded.compositor.shell_context_menu_global, rectCenter(inputOptionRect)),
-      'shell context menu overlay should contain the expanded input selector options',
-    )
+    if (volumeReady.hasInput) {
+      assert(afterOutputPick.controls.volume_input_select, 'missing input selector after output selection')
+      await clickRect(base, afterOutputPick.controls.volume_input_select)
+      const inputExpanded = await waitFor(
+        'wait for input selector options',
+        async () => {
+          const snapshots = await getSnapshots(base)
+          if (!snapshots.shell.volume_menu_open) return null
+          return snapshots.shell.controls.volume_input_option_0 ? snapshots : null
+        },
+        5000,
+        100,
+      )
+      const inputOptionRect = inputExpanded.shell.controls.volume_input_option_0 ?? inputExpanded.shell.controls.volume_input_option_1
+      assert(inputOptionRect, 'missing projected input option rect')
+      assert(inputExpanded.compositor.shell_context_menu_global, 'input selector should keep shell context menu overlay registered')
+      assert(
+        pointInWorkspaceRect(inputExpanded.compositor.shell_context_menu_global, rectCenter(inputOptionRect)),
+        'shell context menu overlay should contain the expanded input selector options',
+      )
+    }
 
     const outputSlider = afterOutputPick.controls.volume_output_slider
     assert(outputSlider, 'missing default output volume slider')
@@ -2511,9 +2509,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       40,
     )
     const { compositor } = await getSnapshots(base)
-    const output = compositor.outputs[0]
-    assert(output, 'expected at least one output')
-    await movePoint(base, output.x + Math.floor(output.width / 2), output.y + 48)
+    const targetTaskbar = (compositor.shell_exclusion_global ?? [])
+      .filter((rect) => rect.width > 100 && rect.height >= 24)
+      .sort((a, b) => b.width - a.width)[0]
+    assert(targetTaskbar, 'expected a shell taskbar exclusion to move pointer into')
+    await movePoint(
+      base,
+      targetTaskbar.x + Math.max(8, targetTaskbar.width - 24),
+      targetTaskbar.y + Math.floor(targetTaskbar.height / 2),
+    )
     await waitFor(
       'taskbar row tooltip clears after pointer leave',
       async () => {

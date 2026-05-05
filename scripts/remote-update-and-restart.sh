@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Archive this repo over SSH to a remote host (tar|ssh, no rsync on the host), run install-system-run.sh there,
-# then signal the running compositor with SIGUSR2 for in-place restart.
+# then restart the running compositor.
 #
-# Requires on the remote: derp-session from this tree (default: respawn when compositor exits 42).
-# Compositor must handle SIGUSR2 and exit 42 after teardown. See scripts/remote-install.sample.md.
+# Requires on the remote: derp-session from this tree.
 #
 # Session tuning without GDM edits: optional `scripts/derp-session.local.env` in the repo;
-# derp-session re-sources it on every compositor start, including each SIGUSR2 reload.
+# derp-session re-sources it on every compositor start.
 #
 # Config: scripts/remote-install.env (same as remote-install.sh) or env REMOTE_USER,
 # REMOTE_HOST, REMOTE_REPO. quick_shell runs remote npm ci + build by default (tar excludes node_modules).
@@ -160,11 +159,25 @@ EOF
 signal_compositor_restart() {
   ssh_base bash -s <<'REMOTE'
 set -euo pipefail
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
-  echo "remote-update-and-restart: no compositor process for user $(id -un); skipping SIGUSR2." >&2
-  echo "remote-update-and-restart: log into Derp session first; derp-session defaults to respawn-on-exit-42 (see remote-install.sample.md)." >&2
-  exit 0
+  echo "remote-update-and-restart: no compositor process for user $(id -un); restarting GDM." >&2
+  rm -f "$runtime_dir/wayland-d$(id -u)" "$runtime_dir/wayland-d$(id -u).lock" "$runtime_dir/derp-shell-http-url" 2>/dev/null || true
+  sudo systemctl restart gdm.service
+  deadline=$((SECONDS + 60))
+  url_file="${DERP_SHELL_HTTP_URL_FILE:-$runtime_dir/derp-shell-http-url}"
+  while (( SECONDS < deadline )); do
+    if [[ -s "$url_file" ]]; then
+      base="$(tr -d '\r\n' <"$url_file")"
+      if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+        exit 0
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "remote-update-and-restart: compositor did not publish a responsive shell HTTP base after GDM restart." >&2
+  exit 1
 fi
 roots=()
 for pid in "${pids[@]}"; do
@@ -174,18 +187,47 @@ for pid in "${pids[@]}"; do
   fi
 done
 if [[ ${#roots[@]} -eq 0 ]]; then
-  echo "remote-update-and-restart: no root compositor among PIDs (${pids[*]}); skipping SIGUSR2." >&2
+  echo "remote-update-and-restart: no root compositor among PIDs (${pids[*]}); skipping restart." >&2
   exit 0
 fi
 if [[ ${#pids[@]} -gt ${#roots[@]} ]]; then
-  echo "remote-update-and-restart: note: signaling ${#roots[@]} root compositor PID(s) (${roots[*]}), not ${#pids[@]} total (CEF/Chromium children share the same process name)." >&2
+  echo "remote-update-and-restart: note: terminating ${#roots[@]} root compositor PID(s) (${roots[*]}), not ${#pids[@]} total (CEF/Chromium children share the same process name)." >&2
 fi
 if [[ ${#roots[@]} -gt 1 ]]; then
-  echo "remote-update-and-restart: warning: multiple root compositor PIDs (${roots[*]}); sending SIGUSR2 to each." >&2
+  echo "remote-update-and-restart: warning: multiple root compositor PIDs (${roots[*]}); terminating each." >&2
 fi
 for pid in "${roots[@]}"; do
-  kill -USR2 "$pid"
+  kill -TERM "$pid"
 done
+deadline=$((SECONDS + 30))
+for old in "${roots[@]}"; do
+  while kill -0 "$old" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.1
+  done
+done
+if (( SECONDS >= deadline )); then
+  echo "remote-update-and-restart: compositor did not exit after SIGTERM (${roots[*]}), sending SIGKILL." >&2
+  for pid in "${roots[@]}"; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+fi
+if ! pgrep -u "$(id -un)" -x compositor >/dev/null 2>&1; then
+  rm -f "$runtime_dir/wayland-d$(id -u)" "$runtime_dir/wayland-d$(id -u).lock" "$runtime_dir/derp-shell-http-url" 2>/dev/null || true
+  sudo systemctl restart gdm.service
+  deadline=$((SECONDS + 60))
+fi
+url_file="${DERP_SHELL_HTTP_URL_FILE:-$runtime_dir/derp-shell-http-url}"
+while (( SECONDS < deadline )); do
+  if [[ -s "$url_file" ]]; then
+    base="$(tr -d '\r\n' <"$url_file")"
+    if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+      exit 0
+    fi
+  fi
+  sleep 0.1
+done
+echo "remote-update-and-restart: compositor did not publish a responsive shell HTTP base after restart." >&2
+exit 1
 REMOTE
 }
 
@@ -205,11 +247,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   fi
   if [[ "$NO_RESTART" -eq 0 ]]; then
     if [[ "$RESTART_ALWAYS" -eq 1 ]]; then
-      echo "Would: ssh … SIGUSR2 (--restart-always)"
+      echo "Would: ssh … restart compositor (--restart-always)"
     elif [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
-      echo "Would: ssh … SIGUSR2 to compositor"
+      echo "Would: ssh … restart compositor"
     else
-      echo "Would: skip SIGUSR2 (sync_only, or quick_shell with no remote install)"
+      echo "Would: skip restart (sync_only, or quick_shell with no remote install)"
     fi
   fi
   exit 0
@@ -236,7 +278,7 @@ fi
 
 if [[ "$NO_RESTART" -eq 0 ]]; then
   if [[ "$RESTART_ALWAYS" -eq 1 ]] || [[ "$UPDATE_CLASS" == full ]] || { [[ "$UPDATE_CLASS" == quick_shell ]] && [[ "$SKIP_REMOTE_INSTALL" -eq 0 ]]; }; then
-    echo "=== SIGUSR2 compositor (in-place restart) ==="
+    echo "=== restart compositor ==="
     signal_compositor_restart
   fi
 fi
@@ -246,5 +288,5 @@ derp_remote_write_snapshot "$(derp_remote_digest_full)" "$(derp_remote_digest_sh
 echo "Done."
 echo ""
 printf '%s\n' \
-  "remote-update-and-restart: SIGUSR2 reloads the compositor process only." \
+  "remote-update-and-restart: restarts the compositor process through derp-session." \
   "If you added scripts/derp-session.local.env / CEF_* overrides, log out of GDM and back in once."

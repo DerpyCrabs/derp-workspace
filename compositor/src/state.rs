@@ -9839,7 +9839,7 @@ impl CompositorState {
         }
     }
 
-    fn shell_window_order_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
+    pub(crate) fn shell_window_order_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
         let windows: Vec<shell_wire::ShellWindowOrderEntry> = self
             .shell_window_list_rows()
             .into_iter()

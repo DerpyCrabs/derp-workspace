@@ -6,7 +6,7 @@ remote_common_init() {
   REPO_ROOT="$(cd "$REMOTE_COMMON_DIR/.." && pwd)"
   [[ -f "$REMOTE_COMMON_DIR/remote-install.env" ]] && source "$REMOTE_COMMON_DIR/remote-install.env"
 
-  REMOTE_USER="${REMOTE_USER:-$USER}"
+  REMOTE_USER="${REMOTE_USER:-${USER:-${USERNAME:-}}}"
   REMOTE_HOST="${REMOTE_HOST:?${script_name}: set REMOTE_HOST (see scripts/remote-install.env.example)}"
   REMOTE_REPO="${REMOTE_REPO:-/home/${REMOTE_USER}/derp-workspace}"
   REMOTE_COMMON_SCRIPT_NAME="$script_name"

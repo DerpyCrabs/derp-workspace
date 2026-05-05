@@ -60,7 +60,7 @@ for pid in "\${pids[@]}"; do
   fi
 done
 for pid in "\${roots[@]}"; do
-  kill -USR2 "\$pid" || true
+  kill -TERM "\$pid" || true
 done
 deadline=\$((SECONDS + 20))
 for old in "\${roots[@]}"; do
@@ -68,6 +68,15 @@ for old in "\${roots[@]}"; do
     sleep 0.1
   done
 done
+if (( SECONDS >= deadline )); then
+  for pid in "\${roots[@]}"; do
+    kill -KILL "\$pid" 2>/dev/null || true
+  done
+fi
+runtime_dir="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
+rm -f "\$runtime_dir/wayland-d\$(id -u)" "\$runtime_dir/wayland-d\$(id -u).lock" "\$runtime_dir/derp-shell-http-url" 2>/dev/null || true
+sudo systemctl restart gdm.service
+deadline=\$((SECONDS + 60))
 while (( SECONDS < deadline )); do
   mapfile -t next_pids < <(pgrep -u "\$(id -un)" -x compositor || true)
   next_roots=()
@@ -220,7 +229,7 @@ mv "\$env_file.tmp" "\$env_file"
 EOF
 fi
 
-echo "=== SIGUSR2 compositor (before e2e) ==="
+echo "=== restart compositor (before e2e) ==="
 if [[ "$SESSION_RESTORE" -eq 0 ]]; then
   echo "=== disable saved session restore for e2e ==="
   ssh_base bash -s <<'REMOTE'
@@ -232,13 +241,28 @@ REMOTE
 fi
 ssh_base bash -s <<'REMOTE'
 set -euo pipefail
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 artifact_dir="${DERP_E2E_ARTIFACT_DIR:-$HOME/.local/state/derp/e2e/artifacts}"
 rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
 mapfile -t pids < <(pgrep -u "$(id -un)" -x compositor || true)
 if [[ ${#pids[@]} -eq 0 ]]; then
-  echo "e2e-remote: no compositor process for user $(id -un); skipping SIGUSR2." >&2
-  exit 0
+  echo "e2e-remote: no compositor process for user $(id -un); restarting GDM." >&2
+  rm -f "$runtime_dir/wayland-d$(id -u)" "$runtime_dir/wayland-d$(id -u).lock" "$runtime_dir/derp-shell-http-url" 2>/dev/null || true
+  sudo systemctl restart gdm.service
+  deadline=$((SECONDS + 60))
+  url_file="${DERP_SHELL_HTTP_URL_FILE:-$runtime_dir/derp-shell-http-url}"
+  while (( SECONDS < deadline )); do
+    if [[ -s "$url_file" ]]; then
+      base="$(tr -d '\r\n' <"$url_file")"
+      if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+        exit 0
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "e2e-remote: compositor did not publish a responsive shell HTTP base after GDM restart." >&2
+  exit 1
 fi
 roots=()
 for pid in "${pids[@]}"; do
@@ -248,12 +272,41 @@ for pid in "${pids[@]}"; do
   fi
 done
 if [[ ${#roots[@]} -eq 0 ]]; then
-  echo "e2e-remote: no root compositor among PIDs (${pids[*]}); skipping SIGUSR2." >&2
+  echo "e2e-remote: no root compositor among PIDs (${pids[*]}); skipping restart." >&2
   exit 0
 fi
 for pid in "${roots[@]}"; do
-  kill -USR2 "$pid"
+  kill -TERM "$pid"
 done
+deadline=$((SECONDS + 30))
+for old in "${roots[@]}"; do
+  while kill -0 "$old" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 0.1
+  done
+done
+if (( SECONDS >= deadline )); then
+  echo "e2e-remote: compositor did not exit after SIGTERM (${roots[*]}), sending SIGKILL." >&2
+  for pid in "${roots[@]}"; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+fi
+if ! pgrep -u "$(id -un)" -x compositor >/dev/null 2>&1; then
+  rm -f "$runtime_dir/wayland-d$(id -u)" "$runtime_dir/wayland-d$(id -u).lock" "$runtime_dir/derp-shell-http-url" 2>/dev/null || true
+  sudo systemctl restart gdm.service
+  deadline=$((SECONDS + 60))
+fi
+url_file="${DERP_SHELL_HTTP_URL_FILE:-$runtime_dir/derp-shell-http-url}"
+while (( SECONDS < deadline )); do
+  if [[ -s "$url_file" ]]; then
+    base="$(tr -d '\r\n' <"$url_file")"
+    if [[ "$base" == http://127.0.0.1:* ]] && curl -fsS --max-time 2 "$base/test/state/compositor" >/dev/null 2>&1; then
+      exit 0
+    fi
+  fi
+  sleep 0.1
+done
+echo "e2e-remote: compositor did not publish a responsive shell HTTP base after restart." >&2
+exit 1
 REMOTE
 
 echo "=== remote shell/e2e/run.mjs ==="

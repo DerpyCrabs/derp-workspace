@@ -1418,8 +1418,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       base,
       titlebar3x2Center.x,
       titlebar3x2Center.y,
-      output3x2.x + Math.round(output3x2.width * 0.62),
-      output3x2.y + Math.max(140, Math.round(output3x2.height * 0.18)),
+      output3x2.x + Math.round(output3x2.width * 0.55),
+      output3x2.y + Math.max(260, Math.round(output3x2.height * 0.35)),
       18,
     )
     const floated3x2 = await waitFor(
@@ -1726,6 +1726,15 @@ export default defineGroup(import.meta.url, ({ test }) => {
       async () => {
         const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
         return next.controls?.custom_layout_overlay_root ? null : next
+      },
+      3000,
+      100,
+    )
+    shell = await waitFor(
+      'wait for custom snap layout option',
+      async () => {
+        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        return next.controls?.settings_snap_layout_option_custom ? next : null
       },
       3000,
       100,
