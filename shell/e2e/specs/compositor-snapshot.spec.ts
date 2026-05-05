@@ -39,6 +39,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const row = shellWindowById(shell, spawned.window.window_id)
     assert(row, 'spawned native window missing from shell snapshot state')
+    assert(row.client_x === row.x && row.client_y === row.y, 'native row should expose compositor client origin')
+    assert(row.client_width === row.width && row.client_height === row.height, 'native row should expose compositor client size')
+    assert(typeof row.frame_x === 'number' && typeof row.frame_y === 'number', 'native row should expose compositor frame origin')
+    assert(typeof row.frame_width === 'number' && row.frame_width >= row.width, 'native row should expose compositor frame width')
+    assert(typeof row.frame_height === 'number' && row.frame_height > row.height, 'native row should expose compositor frame height')
     await writeStateDiffArtifact(base, 'compositor-snapshot-domain-state-diff.json')
 
     const perf = await getPerfCounters(base)
@@ -48,6 +53,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
 
     const controls = windowControls(shell, spawned.window.window_id)
     assert(controls?.titlebar, 'spawned native window missing shell titlebar controls')
+    assert(
+      Math.abs(controls.titlebar.width - (row.frame_width ?? 0)) <= 1,
+      `titlebar width should come from compositor frame width (${controls.titlebar.width} vs ${row.frame_width})`,
+    )
     const start = rectCenter(controls.titlebar)
     await resetPerfCounters(base)
     await dragBetweenPoints(base, start.x, start.y, start.x + 72, start.y, 8)
@@ -71,6 +80,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(
       (movePerf.shell_runtime?.batch_apply_details ?? 0) >= 1,
       `expected batched shell detail apply details after native window geometry change, got ${movePerf.shell_runtime?.batch_apply_details ?? 0}`,
+    )
+    assert(
+      movePerf.shell_updates.window_geometry_messages <= 20,
+      `expected bounded geometry churn during one drag, got ${movePerf.shell_updates.window_geometry_messages}`,
     )
     assert(movePerf.shell_sync.snapshot_dirty_reads >= 1, 'expected dirty snapshot read after native window geometry change')
     assert(

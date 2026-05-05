@@ -1,12 +1,10 @@
 import { type JSX, type Accessor, Show, createMemo } from 'solid-js'
 import {
-  CHROME_BORDER_PX,
-  CHROME_RESIZE_HANDLE_PX,
   SHELL_RESIZE_BOTTOM,
   SHELL_RESIZE_LEFT,
   SHELL_RESIZE_RIGHT,
 } from '@/lib/chromeConstants'
-import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
+import { emptyShellWindowFrameLayout, shellWindowFrameLayout } from './shellWindowFrameLayout'
 
 export type ShellWindowModel = {
   window_id: number
@@ -15,6 +13,14 @@ export type ShellWindowModel = {
   y: number
   width: number
   height: number
+  client_x?: number
+  client_y?: number
+  client_width?: number
+  client_height?: number
+  frame_x?: number
+  frame_y?: number
+  frame_width?: number
+  frame_height?: number
   title: string
   app_id: string
   maximized: boolean
@@ -67,40 +73,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   })
   const layout = createMemo(() => {
     const w = model()
-    if (!w) {
-      return {
-        th: 0,
-        bd: CHROME_BORDER_PX,
-        rh: CHROME_RESIZE_HANDLE_PX,
-        inset: 0,
-        insetTop: 0,
-        outerW: 1,
-        showBorderChrome: false,
-        ox: 0,
-        oy: 0,
-        ow: 1,
-        oh: 1,
-      }
-    }
-    const bd = CHROME_BORDER_PX
-    const rh = CHROME_RESIZE_HANDLE_PX
-    const noTilingChrome = w.maximized || w.fullscreen
-    const o = shellOuterFrameFromClient({
-      x: w.x,
-      y: w.y,
-      width: w.width,
-      height: w.height,
-      maximized: w.maximized,
-      fullscreen: w.fullscreen,
-      minimized: false,
-      snap_tiled: w.snap_tiled,
-    })
-    const th = o.th
-    const inset = o.inset
-    const insetTop = o.insetTop
-    const outerW = w.width + inset * 2
-    const showBorderChrome = !noTilingChrome
-    return { th, bd, rh, inset, insetTop, outerW, showBorderChrome, ox: o.x, oy: o.y, ow: o.w, oh: o.h }
+    return w ? shellWindowFrameLayout(w) : emptyShellWindowFrameLayout()
   })
   const chromeBg = createMemo(() =>
     readAcc(props.focused)
@@ -184,10 +157,10 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <div
           class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
           style={{
-            left: `${layout().inset}px`,
-            top: `${layout().insetTop + layout().th}px`,
-            width: `${model()?.width ?? 0}px`,
-            height: `${model()?.height ?? 0}px`,
+            left: `${layout().contentLeft}px`,
+            top: `${layout().contentTop}px`,
+            width: `${layout().contentW}px`,
+            height: `${layout().contentH}px`,
             background:
               props.contentBackground !== undefined
                 ? readAcc(props.contentBackground)

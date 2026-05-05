@@ -57,6 +57,7 @@ type RegisterShellE2eBridgeOptions = {
   getViewport: () => unknown
   getPointerClient: () => { x: number; y: number } | null
   getCompositorInteractionState: () => {
+    interaction_serial?: number
     move_window_id: number | null
     resize_window_id: number | null
     move_proxy_window_id: number | null

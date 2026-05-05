@@ -189,6 +189,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
         atMs: number
       }
     | null = null
+  let releasedCompositorMove: { windowId: number; serial: number } | null = null
   let tilePreviewRaf = 0
   let lastTilePreviewKey = ''
   let shellWindowDrag: ShellWindowDragSession | null = null
@@ -1061,12 +1062,25 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     updateShellWindowMovePointer(clientX, clientY, shellWindowDrag.superHeld)
   }
 
-  function endShellWindowMove(reason: string, commitSnap = true, sendMoveEnd = true) {
+  function endShellWindowMove(
+    reason: string,
+    commitSnap = true,
+    sendMoveEnd = true,
+    activeInteractionSerial: number | null = null,
+  ) {
     if (!shellWindowDrag) return
     const drag = shellWindowDrag
     const windowId = drag.windowId
     const moved = dragWindowMoved()
     options.shellMoveLog('titlebar_end', { windowId, reason })
+    let moveEndSent = false
+    if (commitSnap && sendMoveEnd) {
+      if (activeInteractionSerial !== null && activeInteractionSerial > 0) {
+        releasedCompositorMove = { windowId, serial: activeInteractionSerial }
+      }
+      options.shellWireSend('move_end', windowId)
+      moveEndSent = true
+    }
     if (commitSnap) {
       commitSnapAssistSelection(
         windowId,
@@ -1085,7 +1099,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     shellWindowDrag = null
     setDragWindowId(null)
     setDragWindowMoved(false)
-    if (sendMoveEnd) {
+    if (sendMoveEnd && !moveEndSent) {
       options.shellWireSend('move_end', windowId)
       if (moved && (drag.startedTiled || drag.startedMaximized)) {
         options.requestCompositorSync()
@@ -1347,6 +1361,30 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     snapStripState,
     getShellWindowDragId: () => shellWindowDrag?.windowId ?? null,
     getShellWindowResizeId: () => shellWindowResize?.windowId ?? null,
+    shouldIgnoreReleasedCompositorMove: (windowId: number, interactionSerial: number) => {
+      if (releasedCompositorMove?.windowId !== windowId) return false
+      if (interactionSerial <= releasedCompositorMove.serial) return true
+      releasedCompositorMove = null
+      return false
+    },
+    shouldIgnoreReleasedCompositorMoveEnd: (
+      windowId: number,
+      previousInteractionSerial: number,
+      interactionSerial: number,
+    ) => {
+      if (releasedCompositorMove?.windowId !== windowId) return false
+      if (
+        previousInteractionSerial <= releasedCompositorMove.serial &&
+        interactionSerial > releasedCompositorMove.serial
+      ) {
+        releasedCompositorMove = null
+        return true
+      }
+      if (interactionSerial > releasedCompositorMove.serial) {
+        releasedCompositorMove = null
+      }
+      return false
+    },
     getActiveSnapPreviewCanvas: () => activeSnapPreviewCanvas,
     getActiveSnapZone: () => activeSnapZone,
     getDragSuperHeld: () => shellWindowDrag?.superHeld ?? false,

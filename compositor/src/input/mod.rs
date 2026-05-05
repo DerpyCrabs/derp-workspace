@@ -51,6 +51,21 @@ fn pointer_axis_to_cef_delta(amount: f64, discrete_v120: Option<f64>) -> i32 {
     ((amount * 40.0).round() as i32).clamp(-6000, 6000)
 }
 
+fn libinput_device_has(dev: &libinput::Device, cap: libinput::DeviceCapability) -> bool {
+    dev.has_capability(cap)
+}
+
+fn libinput_device_is_touchpad_like(dev: &libinput::Device) -> bool {
+    libinput_device_has(dev, libinput::DeviceCapability::Pointer)
+        && libinput_device_has(dev, libinput::DeviceCapability::Gesture)
+}
+
+fn libinput_device_is_screen_touch(dev: &libinput::Device) -> bool {
+    libinput_device_has(dev, libinput::DeviceCapability::Touch)
+        && !libinput_device_is_touchpad_like(dev)
+        && !libinput_device_has(dev, libinput::DeviceCapability::Pointer)
+}
+
 /// Ctrl+Alt+F*n* → Linux VT *n* (1..=12) for [`Session::change_vt`].
 fn vt_number_from_fkey(sym: u32) -> Option<i32> {
     match sym {
@@ -902,6 +917,10 @@ impl CompositorState {
                 );
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
+                let dev: libinput::Device = event.device();
+                if libinput_device_is_touchpad_like(&dev) {
+                    return;
+                }
                 let Some(ws) = self.workspace_logical_bounds() else {
                     return;
                 };
@@ -930,6 +949,10 @@ impl CompositorState {
                 self.process_pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::TouchDown { event, .. } => {
+                let dev: libinput::Device = event.device();
+                if !libinput_device_is_screen_touch(&dev) {
+                    return;
+                }
                 if self.touch_emulation_slot.is_some() {
                     tracing::debug!(
                         target: "derp_input",
@@ -995,6 +1018,10 @@ impl CompositorState {
                 }
             }
             InputEvent::TouchMotion { event, .. } => {
+                let dev: libinput::Device = event.device();
+                if !libinput_device_is_screen_touch(&dev) {
+                    return;
+                }
                 if self.touch_emulation_slot != Some(event.slot()) {
                     tracing::debug!(
                         target: "derp_input",
@@ -1038,6 +1065,10 @@ impl CompositorState {
                 }
             }
             InputEvent::TouchUp { event, .. } => {
+                let dev: libinput::Device = event.device();
+                if !libinput_device_is_screen_touch(&dev) {
+                    return;
+                }
                 if self.touch_emulation_slot != Some(event.slot()) {
                     tracing::debug!(
                         target: "derp_input",
@@ -1069,6 +1100,10 @@ impl CompositorState {
                 self.touch_routes_to_cef = false;
             }
             InputEvent::TouchCancel { event, .. } => {
+                let dev: libinput::Device = event.device();
+                if !libinput_device_is_screen_touch(&dev) {
+                    return;
+                }
                 if self.touch_emulation_slot != Some(event.slot()) {
                     tracing::debug!(
                         target: "derp_input",

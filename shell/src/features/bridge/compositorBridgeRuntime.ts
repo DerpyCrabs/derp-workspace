@@ -40,6 +40,7 @@ type CompositorFollowup = {
 
 type CompositorInteractionState = {
   revision: number
+  interaction_serial: number
   pointer_x: number
   pointer_y: number
   move_window_id: number | null
@@ -522,9 +523,14 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     const revision = typeof d.revision === 'number' && Number.isFinite(d.revision) ? Math.trunc(d.revision) : 0
     if (revision < lastInteractionRevision) return
     lastInteractionRevision = revision
+    const interactionSerial =
+      typeof d.interaction_serial === 'number' && Number.isFinite(d.interaction_serial)
+        ? Math.max(0, Math.trunc(d.interaction_serial))
+        : 0
     const moveWindowId = coerceShellWindowId(d.move_window_id)
     const nextInteractionState = {
       revision,
+      interaction_serial: interactionSerial,
       pointer_x: d.pointer_x,
       pointer_y: d.pointer_y,
       move_window_id: moveWindowId,

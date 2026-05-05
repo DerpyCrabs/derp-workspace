@@ -158,6 +158,14 @@ impl ShellSnapshotModel {
                         y: row.y,
                         w: row.w,
                         h: row.h,
+                        client_x: row.client_x,
+                        client_y: row.client_y,
+                        client_w: row.client_w,
+                        client_h: row.client_h,
+                        frame_x: row.frame_x,
+                        frame_y: row.frame_y,
+                        frame_w: row.frame_w,
+                        frame_h: row.frame_h,
                         maximized: row.maximized != 0,
                         fullscreen: row.fullscreen != 0,
                         client_side_decoration: row.client_side_decoration != 0,
@@ -273,6 +281,14 @@ impl ShellSnapshotModel {
                     row.y = *y;
                     row.w = *w;
                     row.h = *h;
+                    row.client_x = *x;
+                    row.client_y = *y;
+                    row.client_w = *w;
+                    row.client_h = *h;
+                    row.frame_x = *x;
+                    row.frame_y = *y;
+                    row.frame_w = *w;
+                    row.frame_h = *h;
                     row.minimized = if *minimized { 1 } else { 0 };
                     row.maximized = if *maximized { 1 } else { 0 };
                     row.fullscreen = if *fullscreen { 1 } else { 0 };
@@ -297,6 +313,14 @@ impl ShellSnapshotModel {
                             y: *y,
                             w: *w,
                             h: *h,
+                            client_x: *x,
+                            client_y: *y,
+                            client_w: *w,
+                            client_h: *h,
+                            frame_x: *x,
+                            frame_y: *y,
+                            frame_w: *w,
+                            frame_h: *h,
                             minimized: if *minimized { 1 } else { 0 },
                             maximized: if *maximized { 1 } else { 0 },
                             fullscreen: if *fullscreen { 1 } else { 0 },
@@ -343,6 +367,14 @@ impl ShellSnapshotModel {
                 client_side_decoration,
                 output_id,
                 output_name,
+                client_x,
+                client_y,
+                client_w,
+                client_h,
+                frame_x,
+                frame_y,
+                frame_w,
+                frame_h,
             } => {
                 let changed = if let Some(row) = self.window_row_mut(*window_id) {
                     let changed = row.surface_id != *surface_id
@@ -350,6 +382,14 @@ impl ShellSnapshotModel {
                         || row.y != *y
                         || row.w != *w
                         || row.h != *h
+                        || row.client_x != *client_x
+                        || row.client_y != *client_y
+                        || row.client_w != *client_w
+                        || row.client_h != *client_h
+                        || row.frame_x != *frame_x
+                        || row.frame_y != *frame_y
+                        || row.frame_w != *frame_w
+                        || row.frame_h != *frame_h
                         || row.maximized != if *maximized { 1 } else { 0 }
                         || row.fullscreen != if *fullscreen { 1 } else { 0 }
                         || row.client_side_decoration
@@ -361,6 +401,14 @@ impl ShellSnapshotModel {
                     row.y = *y;
                     row.w = *w;
                     row.h = *h;
+                    row.client_x = *client_x;
+                    row.client_y = *client_y;
+                    row.client_w = *client_w;
+                    row.client_h = *client_h;
+                    row.frame_x = *frame_x;
+                    row.frame_y = *frame_y;
+                    row.frame_w = *frame_w;
+                    row.frame_h = *frame_h;
                     row.maximized = if *maximized { 1 } else { 0 };
                     row.fullscreen = if *fullscreen { 1 } else { 0 };
                     row.client_side_decoration = if *client_side_decoration { 1 } else { 0 };

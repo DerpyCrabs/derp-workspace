@@ -41,6 +41,14 @@ export type DerpShellDetail = ({
       y: number
       width: number
       height: number
+      client_x?: number
+      client_y?: number
+      client_width?: number
+      client_height?: number
+      frame_x?: number
+      frame_y?: number
+      frame_width?: number
+      frame_height?: number
       title: string
       app_id: string
       output_id?: string
@@ -65,6 +73,14 @@ export type DerpShellDetail = ({
       y: number
       width: number
       height: number
+      client_x?: number
+      client_y?: number
+      client_width?: number
+      client_height?: number
+      frame_x?: number
+      frame_y?: number
+      frame_width?: number
+      frame_height?: number
       output_id?: string
       output_name?: string
       maximized?: boolean
@@ -87,6 +103,7 @@ export type DerpShellDetail = ({
   | {
       type: 'interaction_state'
       revision?: number
+      interaction_serial?: number
       pointer_x: number
       pointer_y: number
       move_window_id: number | null
@@ -176,6 +193,14 @@ export type DerpWindow = {
   y: number
   width: number
   height: number
+  client_x?: number
+  client_y?: number
+  client_width?: number
+  client_height?: number
+  frame_x?: number
+  frame_y?: number
+  frame_width?: number
+  frame_height?: number
   title: string
   app_id: string
   output_id: string
@@ -202,6 +227,14 @@ function coerceOutputName(nextValue: unknown, previousValue: string): string {
 
 function coerceOutputId(nextValue: unknown, previousValue: string): string {
   return typeof nextValue === 'string' && nextValue.length > 0 ? nextValue : previousValue
+}
+
+function coerceFiniteNumber(nextValue: unknown, previousValue: number): number {
+  return typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : previousValue
+}
+
+function coerceOptionalFiniteNumber(nextValue: unknown, previousValue?: number): number | undefined {
+  return typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : previousValue
 }
 
 export function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
@@ -276,6 +309,14 @@ export function buildWindowsMapFromList(
       y: Number(r.y) || 0,
       width: Number(r.width) || 0,
       height: Number(r.height) || 0,
+      client_x: coerceOptionalFiniteNumber(r.client_x, previousWindow?.client_x),
+      client_y: coerceOptionalFiniteNumber(r.client_y, previousWindow?.client_y),
+      client_width: coerceOptionalFiniteNumber(r.client_width, previousWindow?.client_width),
+      client_height: coerceOptionalFiniteNumber(r.client_height, previousWindow?.client_height),
+      frame_x: coerceOptionalFiniteNumber(r.frame_x, previousWindow?.frame_x),
+      frame_y: coerceOptionalFiniteNumber(r.frame_y, previousWindow?.frame_y),
+      frame_width: coerceOptionalFiniteNumber(r.frame_width, previousWindow?.frame_width),
+      frame_height: coerceOptionalFiniteNumber(r.frame_height, previousWindow?.frame_height),
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
       output_id: coerceOutputId(r.output_id, previousWindow?.output_id ?? ''),
@@ -327,6 +368,14 @@ function sameDerpWindow(left: DerpWindow, right: DerpWindow): boolean {
     left.y === right.y &&
     left.width === right.width &&
     left.height === right.height &&
+    left.client_x === right.client_x &&
+    left.client_y === right.client_y &&
+    left.client_width === right.client_width &&
+    left.client_height === right.client_height &&
+    left.frame_x === right.frame_x &&
+    left.frame_y === right.frame_y &&
+    left.frame_width === right.frame_width &&
+    left.frame_height === right.frame_height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.output_id === right.output_id &&
@@ -364,6 +413,14 @@ function mappedWindow(detail: Extract<DerpShellDetail, { type: 'window_mapped' }
     y: detail.y,
     width: detail.width,
     height: detail.height,
+    client_x: coerceOptionalFiniteNumber(detail.client_x, current?.client_x),
+    client_y: coerceOptionalFiniteNumber(detail.client_y, current?.client_y),
+    client_width: coerceOptionalFiniteNumber(detail.client_width, current?.client_width),
+    client_height: coerceOptionalFiniteNumber(detail.client_height, current?.client_height),
+    frame_x: coerceOptionalFiniteNumber(detail.frame_x, current?.frame_x),
+    frame_y: coerceOptionalFiniteNumber(detail.frame_y, current?.frame_y),
+    frame_width: coerceOptionalFiniteNumber(detail.frame_width, current?.frame_width),
+    frame_height: coerceOptionalFiniteNumber(detail.frame_height, current?.frame_height),
     title: detail.title,
     app_id: detail.app_id,
     output_id: coerceOutputId(detail.output_id, current?.output_id ?? ''),
@@ -381,6 +438,32 @@ function mappedWindow(detail: Extract<DerpShellDetail, { type: 'window_mapped' }
         : (current?.capture_identifier ?? ''),
     workspace_visible: detail.workspace_visible ?? current?.workspace_visible ?? true,
   } satisfies DerpWindow
+}
+
+function windowWithGeometry(w: DerpWindow, detail: Extract<DerpShellDetail, { type: 'window_geometry' }>): DerpWindow {
+  const dx = detail.x - w.x
+  const dy = detail.y - w.y
+  const dw = detail.width - w.width
+  const dh = detail.height - w.height
+  return {
+    ...w,
+    x: detail.x,
+    y: detail.y,
+    width: detail.width,
+    height: detail.height,
+    client_x: coerceFiniteNumber(detail.client_x, detail.x),
+    client_y: coerceFiniteNumber(detail.client_y, detail.y),
+    client_width: coerceFiniteNumber(detail.client_width, detail.width),
+    client_height: coerceFiniteNumber(detail.client_height, detail.height),
+    frame_x: coerceFiniteNumber(detail.frame_x, (w.frame_x ?? w.x) + dx),
+    frame_y: coerceFiniteNumber(detail.frame_y, (w.frame_y ?? w.y) + dy),
+    frame_width: coerceFiniteNumber(detail.frame_width, (w.frame_width ?? w.width) + dw),
+    frame_height: coerceFiniteNumber(detail.frame_height, (w.frame_height ?? w.height) + dh),
+    output_id: detail.output_id !== undefined ? coerceOutputId(detail.output_id, w.output_id) : w.output_id,
+    output_name: detail.output_name !== undefined ? coerceOutputName(detail.output_name, w.output_name) : w.output_name,
+    maximized: detail.maximized ?? w.maximized,
+    fullscreen: detail.fullscreen ?? w.fullscreen,
+  }
 }
 
 export function applyDetailMutable(map: Map<number, DerpWindow>, detail: DerpShellDetail): boolean {
@@ -404,35 +487,8 @@ export function applyDetailMutable(map: Map<number, DerpWindow>, detail: DerpShe
       if (wid === null) break
       const w = map.get(wid)
       if (!w) break
-      const nextWindow = {
-        ...w,
-        x: detail.x,
-        y: detail.y,
-        width: detail.width,
-        height: detail.height,
-        output_id:
-          detail.output_id !== undefined
-            ? coerceOutputId(detail.output_id, w.output_id)
-            : w.output_id,
-        output_name:
-          detail.output_name !== undefined
-            ? coerceOutputName(detail.output_name, w.output_name)
-            : w.output_name,
-        maximized: detail.maximized ?? w.maximized,
-        fullscreen: detail.fullscreen ?? w.fullscreen,
-      }
-      if (
-        nextWindow.x === w.x &&
-        nextWindow.y === w.y &&
-        nextWindow.width === w.width &&
-        nextWindow.height === w.height &&
-        nextWindow.output_id === w.output_id &&
-        nextWindow.output_name === w.output_name &&
-        nextWindow.maximized === w.maximized &&
-        nextWindow.fullscreen === w.fullscreen
-      ) {
-        return false
-      }
+      const nextWindow = windowWithGeometry(w, detail)
+      if (sameDerpWindow(w, nextWindow)) return false
       map.set(wid, nextWindow)
       return true
     }
@@ -520,35 +576,8 @@ export function applyDetail(map: Map<number, DerpWindow>, detail: DerpShellDetai
       if (wid === null) break
       const w = map.get(wid)
       if (w) {
-        const nextWindow = {
-          ...w,
-          x: detail.x,
-          y: detail.y,
-          width: detail.width,
-          height: detail.height,
-          output_id:
-            detail.output_id !== undefined
-              ? coerceOutputId(detail.output_id, w.output_id)
-              : w.output_id,
-          output_name:
-            detail.output_name !== undefined
-              ? coerceOutputName(detail.output_name, w.output_name)
-              : w.output_name,
-          maximized: detail.maximized ?? w.maximized,
-          fullscreen: detail.fullscreen ?? w.fullscreen,
-        }
-        if (
-          nextWindow.x === w.x &&
-          nextWindow.y === w.y &&
-          nextWindow.width === w.width &&
-          nextWindow.height === w.height &&
-          nextWindow.output_id === w.output_id &&
-          nextWindow.output_name === w.output_name &&
-          nextWindow.maximized === w.maximized &&
-          nextWindow.fullscreen === w.fullscreen
-        ) {
-          return map
-        }
+        const nextWindow = windowWithGeometry(w, detail)
+        if (sameDerpWindow(w, nextWindow)) return map
         const next = new Map(map)
         next.set(wid, nextWindow)
         return next

@@ -39,6 +39,7 @@ import {
   windowControls,
   writeJsonArtifact,
   type CompositorSnapshot,
+  type Rect,
   type ShellSnapshot,
   type WindowSnapshot,
 } from '../lib/runtime.ts'
@@ -470,6 +471,65 @@ function rectGlobalCenter(rect: { global_x: number; global_y: number; width: num
   }
 }
 
+function usableSettingsSnapOption(rect: Rect | null | undefined): rect is Rect {
+  return !!rect && rect.width >= 80 && rect.height >= 72
+}
+
+async function clickSettingsSnapOption(base: string, rect: Rect | null | undefined, label: string) {
+  const target = assertRectMinSize(label, rect, 12)
+  await clickPoint(base, target.global_x + target.width / 2, target.global_y + Math.min(10, target.height / 2))
+}
+
+async function scrollSettingsToCustomSnapOption(base: string): Promise<ShellSnapshot> {
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const custom = shell.controls?.settings_snap_layout_option_custom
+    if (usableSettingsSnapOption(custom)) return shell
+    const add = shell.controls?.settings_custom_layout_add
+    const settingsWindow = shell.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID)
+    const center = add
+      ? rectGlobalCenter(add)
+      : settingsWindow
+        ? {
+            x: settingsWindow.x + Math.min(settingsWindow.width - 24, Math.max(240, Math.round(settingsWindow.width * 0.55))),
+            y: settingsWindow.y + Math.min(settingsWindow.height - 32, Math.max(88, Math.round(settingsWindow.height * 0.55))),
+          }
+        : shell.controls?.settings_tab_tiling
+          ? rectGlobalCenter(shell.controls.settings_tab_tiling)
+          : null
+    assert(center, 'missing settings scroll anchor')
+    await movePoint(base, center.x, center.y)
+    await pointerWheel(base, 0, 120)
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
+  return shell
+}
+
+async function scrollSettingsToSnapLayoutOption(base: string, layout: '2x2' | '3x2'): Promise<ShellSnapshot> {
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const control =
+      layout === '2x2'
+        ? shell.controls?.settings_snap_layout_option_2x2
+        : shell.controls?.settings_snap_layout_option_3x2
+    if (usableSettingsSnapOption(control)) return shell
+    const settingsWindow = shell.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID)
+    const center = settingsWindow
+      ? {
+          x: settingsWindow.x + Math.min(settingsWindow.width - 24, Math.max(240, Math.round(settingsWindow.width * 0.55))),
+          y: settingsWindow.y + Math.min(settingsWindow.height - 32, Math.max(88, Math.round(settingsWindow.height * 0.55))),
+        }
+      : shell.controls?.settings_tab_tiling
+        ? rectGlobalCenter(shell.controls.settings_tab_tiling)
+        : null
+    assert(center, 'missing settings scroll anchor')
+    await movePoint(base, center.x, center.y)
+    await pointerWheel(base, 0, 120)
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
+  return shell
+}
+
 function shellHostedTitlebarPoint(window: WindowSnapshot) {
   return {
     x: window.x + window.width / 2,
@@ -614,16 +674,21 @@ function settingsSnapLayout(shell: ShellSnapshot): string | null {
       }
     | null
   if (!monitorName) return null
-  return sessionSnapshot?.tilingConfig?.monitors?.[monitorName]?.snapLayout ?? null
+  return sessionSnapshot?.tilingConfig?.monitors?.[monitorName]?.snapLayout ?? '3x2'
 }
 
-async function waitForSettingsSnapLayout(base: string, layout: '2x2' | '3x2', requireTitlebar = false) {
+async function waitForSettingsSnapLayout(base: string, layout: '2x2' | '3x2' | 'custom', requireTitlebar = false) {
   return waitFor(
     `wait for settings ${layout} snap layout selection`,
     async () => {
       const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
       const controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
-      if (settingsSnapLayout(shell) !== layout) return null
+      const currentLayout = settingsSnapLayout(shell)
+      if (layout === 'custom') {
+        if (!currentLayout?.startsWith('custom:')) return null
+      } else if (currentLayout !== layout) {
+        return null
+      }
       return requireTitlebar && !controls?.titlebar ? null : shell
     },
     2000,
@@ -637,25 +702,13 @@ async function selectSettingsSnapLayout(base: string, layout: '2x2' | '3x2') {
   let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
   assert(shell.controls?.settings_tab_tiling, 'missing settings tiling tab rect')
   await clickRect(base, shell.controls.settings_tab_tiling)
-  shell = await waitFor(
-    `wait for settings ${layout} snap layout option`,
-    async () => {
-      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-      const control =
-        layout === '2x2'
-          ? next.controls?.settings_snap_layout_option_2x2
-          : next.controls?.settings_snap_layout_option_3x2
-      return control ? next : null
-    },
-    2000,
-    125,
-  )
+  shell = await scrollSettingsToSnapLayoutOption(base, layout)
   const control =
     layout === '2x2'
       ? shell.controls?.settings_snap_layout_option_2x2
       : shell.controls?.settings_snap_layout_option_3x2
-  await clickRect(base, assertRectMinSize(`settings ${layout} snap layout option`, control, 12))
-  shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  await clickSettingsSnapOption(base, control, `settings ${layout} snap layout option`)
+  shell = await waitForSettingsSnapLayout(base, layout)
   await closeTaskbarWindow(base, shell, SHELL_UI_SETTINGS_WINDOW_ID)
   await waitForWindowGone(base, SHELL_UI_SETTINGS_WINDOW_ID)
 }
@@ -774,7 +827,7 @@ async function configureCustomAutoRuleLayout(base: string): Promise<string> {
     3000,
     100,
   )
-  await clickRect(base, assertRectMinSize('custom snap layout option', shell.controls.settings_snap_layout_option_custom, 12))
+  await clickSettingsSnapOption(base, shell.controls.settings_snap_layout_option_custom, 'custom snap layout option')
   await selectSettingsLayoutType(base, 'custom-auto')
   const configured = await getSnapshots(base)
   const settingsWindow = compositorWindowById(configured.compositor, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -1291,7 +1344,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       2000,
       125,
     )
-    await clickRect(base, assertRectMinSize('settings 2x2 snap layout option', shell.controls?.settings_snap_layout_option_2x2, 12))
+    await clickSettingsSnapOption(base, shell.controls?.settings_snap_layout_option_2x2, 'settings 2x2 snap layout option')
     shell = await waitForSettingsSnapLayout(base, '2x2', true)
 
     let controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -1379,31 +1432,40 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await pointerButton(base, BTN_LEFT, 'release')
     }
 
-    await openPickerFromMaximizeButton(base, SHELL_UI_SETTINGS_WINDOW_ID)
-    const { rect: topCenter3x2 } = await revealVisiblePickerControl(
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
+    const titlebarBefore3x2 = assertRectMinSize('settings titlebar before 3x2 selection', controls?.titlebar, 12)
+    const titlebarBefore3x2Center = rectGlobalCenter(titlebarBefore3x2)
+    const compositorBefore3x2 = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+    const windowBefore3x2 = compositorWindowById(compositorBefore3x2, SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(windowBefore3x2, 'missing settings compositor window before 3x2 selection')
+    const outputBefore3x2 = compositorBefore3x2.outputs.find((entry) => entry.name === windowBefore3x2.output_name) ?? null
+    assert(outputBefore3x2, `missing output ${windowBefore3x2.output_name}`)
+    await dragBetweenPoints(
       base,
-      SHELL_UI_SETTINGS_WINDOW_ID,
-      'snap_picker_top_center_cell',
-      '3x2 top-center cell',
+      titlebarBefore3x2Center.x,
+      titlebarBefore3x2Center.y,
+      outputBefore3x2.x + Math.round(outputBefore3x2.width * 0.55),
+      outputBefore3x2.y + Math.max(260, Math.round(outputBefore3x2.height * 0.35)),
+      18,
     )
-    const topCenter3x2Center = rectGlobalCenter(topCenter3x2)
-    await clickPoint(base, topCenter3x2Center.x, topCenter3x2Center.y)
     await waitFor(
-      'wait for settings 3x2 picker snap',
+      'wait for settings float before 3x2 selection',
       async () => {
-        const { compositor, shell } = await getSnapshots(base)
+        const { compositor } = await getSnapshots(base)
         const window = compositorWindowById(compositor, SHELL_UI_SETTINGS_WINDOW_ID)
         if (!window) return null
-        try {
-          assertTopThirdWindow(window, window.output_name, compositor, shell, 'center')
-        } catch {
-          return null
-        }
-        return { compositor, shell, window }
+        if (compositor.shell_move_window_id !== null || compositor.shell_pointer_grab_window_id !== null) return null
+        return window.y >= outputBefore3x2.y + 48 ? { compositor, window } : null
       },
       2000,
       125,
     )
+
+    shell = await scrollSettingsToSnapLayoutOption(base, '3x2')
+    assert(shell.controls?.settings_snap_layout_option_3x2, 'missing settings 3x2 snap layout option')
+    await clickSettingsSnapOption(base, shell.controls?.settings_snap_layout_option_3x2, 'settings 3x2 snap layout option')
+    await waitForSettingsSnapLayout(base, '3x2', true)
 
     shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     controls = windowControls(shell, SHELL_UI_SETTINGS_WINDOW_ID)
@@ -1730,17 +1792,10 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       100,
     )
-    shell = await waitFor(
-      'wait for custom snap layout option',
-      async () => {
-        const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return next.controls?.settings_snap_layout_option_custom ? next : null
-      },
-      3000,
-      100,
-    )
+    shell = await scrollSettingsToCustomSnapOption(base)
     assert(shell.controls?.settings_snap_layout_option_custom, 'missing custom snap layout option')
-    await clickRect(base, shell.controls.settings_snap_layout_option_custom)
+    await clickSettingsSnapOption(base, shell.controls.settings_snap_layout_option_custom, 'custom snap layout option')
+    await waitForSettingsSnapLayout(base, 'custom', true)
 
     const focused = await focusSettingsWindow(base)
     const window = compositorWindowById(focused.compositor, SHELL_UI_SETTINGS_WINDOW_ID)

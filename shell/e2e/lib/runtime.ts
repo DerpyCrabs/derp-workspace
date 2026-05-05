@@ -105,6 +105,14 @@ export interface WindowSnapshot {
   y: number
   width: number
   height: number
+  client_x?: number
+  client_y?: number
+  client_width?: number
+  client_height?: number
+  frame_x?: number
+  frame_y?: number
+  frame_width?: number
+  frame_height?: number
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
@@ -550,6 +558,7 @@ export interface ShellSnapshot {
     insert_index: number
   } | null
   compositor_interaction_state?: {
+    interaction_serial?: number
     move_window_id: number | null
     resize_window_id: number | null
     move_proxy_window_id: number | null

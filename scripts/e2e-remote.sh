@@ -31,8 +31,27 @@ remote_args_str="${remote_args[*]:-}"
 
 DERP_E2E_REMOTE_SNAPSHOT="$SCRIPT_DIR/.derp-e2e-remote-snapshot"
 DERP_E2E_SOFTWARE_SESSION="${DERP_E2E_SOFTWARE_RENDERING:-0}"
+DERP_E2E_VALIDATE_BACKUP="scripts/.derp-session.local.env.e2e-validate-backup"
+DERP_E2E_VALIDATE_HAD_ENV="scripts/.derp-session.local.env.e2e-validate-had-env"
+
+e2e_remote_restore_validate_env() {
+  ssh_base bash -s <<EOF >/dev/null 2>&1 || true
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+env_file="scripts/derp-session.local.env"
+backup_file="$DERP_E2E_VALIDATE_BACKUP"
+had_file="$DERP_E2E_VALIDATE_HAD_ENV"
+if [[ -f "\$backup_file" ]]; then
+  mv "\$backup_file" "\$env_file"
+elif [[ ! -f "\$had_file" ]]; then
+  rm -f "\$env_file"
+fi
+rm -f "\$had_file"
+EOF
+}
 
 e2e_remote_restore_session_env() {
+  e2e_remote_restore_validate_env
   [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]] || return 0
   ssh_base bash -s <<EOF >/dev/null 2>&1 || true
 set -euo pipefail
@@ -99,9 +118,7 @@ fi
 EOF
 }
 
-if [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]]; then
-  trap e2e_remote_restore_session_env EXIT
-fi
+trap e2e_remote_restore_session_env EXIT
 
 e2e_remote_list_sync_paths() {
   (
@@ -228,6 +245,26 @@ fi
 mv "\$env_file.tmp" "\$env_file"
 EOF
 fi
+
+echo "=== enable compositor state validation for e2e ==="
+ssh_base bash -s <<EOF
+set -euo pipefail
+cd $(printf '%q' "$REMOTE_REPO")
+mkdir -p scripts
+env_file="scripts/derp-session.local.env"
+backup_file="$DERP_E2E_VALIDATE_BACKUP"
+had_file="$DERP_E2E_VALIDATE_HAD_ENV"
+rm -f "\$backup_file" "\$had_file"
+if [[ -f "\$env_file" ]]; then
+  cp -a "\$env_file" "\$backup_file"
+  : >"\$had_file"
+fi
+{
+  [[ -f "\$env_file" ]] && grep -v '^export DERP_VALIDATE_STATE=' "\$env_file" || true
+  printf '\\nexport DERP_VALIDATE_STATE=1\\n'
+} >"\$env_file.tmp"
+mv "\$env_file.tmp" "\$env_file"
+EOF
 
 echo "=== restart compositor (before e2e) ==="
 if [[ "$SESSION_RESTORE" -eq 0 ]]; then

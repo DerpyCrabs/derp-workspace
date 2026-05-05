@@ -119,6 +119,33 @@ describe('appWindowState', () => {
       width: 500,
       height: 320,
     })
+    expect(next.get(3)?.frame_width).toBeUndefined()
+  })
+
+  it('does not fabricate compositor frame fields from map-only geometry', () => {
+    const next = applyDetail(new Map(), {
+      type: 'window_mapped',
+      window_id: 3,
+      surface_id: 30,
+      x: 90,
+      y: 120,
+      width: 500,
+      height: 320,
+      title: 'window-3',
+      app_id: 'app.3',
+      output_name: 'HDMI-A-1',
+    })
+
+    expect(next.get(3)).toMatchObject({
+      client_x: undefined,
+      client_y: undefined,
+      client_width: undefined,
+      client_height: undefined,
+      frame_x: undefined,
+      frame_y: undefined,
+      frame_width: undefined,
+      frame_height: undefined,
+    })
   })
 
   it('removes unmapped windows without replacing survivors', () => {

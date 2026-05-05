@@ -18,6 +18,8 @@ const HOT_DETAIL_WINDOW_UNMAPPED: u8 = 3;
 const HOT_DETAIL_FOCUS_CHANGED: u8 = 4;
 const HOT_DETAIL_WINDOW_ORDER: u8 = 5;
 const HOT_DETAIL_INTERACTION_STATE: u8 = 6;
+const HOT_DETAIL_WINDOW_GEOMETRY_BYTES: usize = 57;
+const HOT_DETAIL_INTERACTION_STATE_BYTES: usize = 84;
 static CEF_HOST_FOCUSED_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 
 fn detail_with_snapshot_epoch(mut detail: Value, snapshot_epoch: u64) -> Value {
@@ -118,13 +120,37 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
         "window_geometry" => {
             bytes.push(HOT_DETAIL_WINDOW_GEOMETRY);
             push_u64(bytes, snapshot_epoch);
-            let (Some(window_id), Some(surface_id), Some(x), Some(y), Some(width), Some(height)) = (
+            let fixed_start = bytes.len();
+            let (
+                Some(window_id),
+                Some(surface_id),
+                Some(x),
+                Some(y),
+                Some(width),
+                Some(height),
+                Some(client_x),
+                Some(client_y),
+                Some(client_width),
+                Some(client_height),
+                Some(frame_x),
+                Some(frame_y),
+                Some(frame_width),
+                Some(frame_height),
+            ) = (
                 value_u32(detail, "window_id"),
                 value_u32(detail, "surface_id"),
                 value_i32(detail, "x"),
                 value_i32(detail, "y"),
                 value_i32(detail, "width"),
                 value_i32(detail, "height"),
+                value_i32(detail, "client_x"),
+                value_i32(detail, "client_y"),
+                value_i32(detail, "client_width"),
+                value_i32(detail, "client_height"),
+                value_i32(detail, "frame_x"),
+                value_i32(detail, "frame_y"),
+                value_i32(detail, "frame_width"),
+                value_i32(detail, "frame_height"),
             ) else {
                 return false;
             };
@@ -142,6 +168,18 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                 flags |= 2;
             }
             bytes.push(flags);
+            push_i32(bytes, client_x);
+            push_i32(bytes, client_y);
+            push_i32(bytes, client_width);
+            push_i32(bytes, client_height);
+            push_i32(bytes, frame_x);
+            push_i32(bytes, frame_y);
+            push_i32(bytes, frame_width);
+            push_i32(bytes, frame_height);
+            debug_assert_eq!(
+                bytes.len() - fixed_start,
+                HOT_DETAIL_WINDOW_GEOMETRY_BYTES
+            );
             push_string(bytes, value_string(detail, "output_id").unwrap_or(""))
                 && push_string(bytes, value_string(detail, "output_name").unwrap_or(""))
         }
@@ -223,6 +261,7 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
         "interaction_state" => {
             bytes.push(HOT_DETAIL_INTERACTION_STATE);
             push_u64(bytes, snapshot_epoch);
+            let fixed_start = bytes.len();
             let (Some(pointer_x), Some(pointer_y)) = (
                 value_i32(detail, "pointer_x"),
                 value_i32(detail, "pointer_y"),
@@ -235,6 +274,10 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             let move_capture_window_id = value_u32(detail, "move_capture_window_id").unwrap_or(0);
             let window_switcher_selected_window_id =
                 value_u32(detail, "window_switcher_selected_window_id").unwrap_or(0);
+            let interaction_serial = detail
+                .get("interaction_serial")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             push_u64(
                 bytes,
                 detail.get("revision").and_then(Value::as_u64).unwrap_or(0),
@@ -249,6 +292,11 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                 && push_hot_visual(bytes, detail, "resize_rect")
                 && {
                     push_u32(bytes, window_switcher_selected_window_id);
+                    push_u64(bytes, interaction_serial);
+                    debug_assert_eq!(
+                        bytes.len() - fixed_start,
+                        HOT_DETAIL_INTERACTION_STATE_BYTES
+                    );
                     true
                 }
         }
@@ -544,6 +592,14 @@ fn apply_message(
             y,
             w,
             h,
+            client_x,
+            client_y,
+            client_w,
+            client_h,
+            frame_x,
+            frame_y,
+            frame_w,
+            frame_h,
             maximized,
             fullscreen,
             output_id,
@@ -560,6 +616,14 @@ fn apply_message(
                     "y": y,
                     "width": w,
                     "height": h,
+                    "client_x": client_x,
+                    "client_y": client_y,
+                    "client_width": client_w,
+                    "client_height": client_h,
+                    "frame_x": frame_x,
+                    "frame_y": frame_y,
+                    "frame_width": frame_w,
+                    "frame_height": frame_h,
                     "output_id": output_id,
                     "output_name": output_name,
                     "maximized": maximized,
@@ -888,6 +952,7 @@ fn apply_message(
         }
         shell_wire::DecodedCompositorToShellMessage::InteractionState {
             revision,
+            interaction_serial,
             pointer_x,
             pointer_y,
             move_window_id,
@@ -902,6 +967,7 @@ fn apply_message(
                 json!({
                     "type": "interaction_state",
                     "revision": revision,
+                    "interaction_serial": interaction_serial,
                     "pointer_x": pointer_x,
                     "pointer_y": pointer_y,
                     "move_window_id": move_window_id,

@@ -122,6 +122,14 @@ function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolea
     left.y === right.y &&
     left.width === right.width &&
     left.height === right.height &&
+    left.client_x === right.client_x &&
+    left.client_y === right.client_y &&
+    left.client_width === right.client_width &&
+    left.client_height === right.client_height &&
+    left.frame_x === right.frame_x &&
+    left.frame_y === right.frame_y &&
+    left.frame_width === right.frame_width &&
+    left.frame_height === right.frame_height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
     left.output_id === right.output_id &&

@@ -45,6 +45,11 @@ export const SnapLayoutPicker: Component<{
                 layoutId: layout.id,
               }),
             )
+            const select = () => {
+              if (selected()) return
+              setMonitorSnapLayout(props.outputName, { kind: 'custom', layoutId: layout.id })
+              props.onPersisted()
+            }
             return (
               <button
                 type="button"
@@ -55,10 +60,12 @@ export const SnapLayoutPicker: Component<{
                   'border-(--shell-accent-border) bg-(--shell-accent-soft) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
                     selected(),
                 }}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return
+                  select()
+                }}
                 onClick={() => {
-                  if (selected()) return
-                  setMonitorSnapLayout(props.outputName, { kind: 'custom', layoutId: layout.id })
-                  props.onPersisted()
+                  select()
                 }}
               >
                 <div class="flex items-center justify-between gap-2">
@@ -78,6 +85,11 @@ export const SnapLayoutPicker: Component<{
           {(shape) => {
             const snapLayout = assistMonitorSnapLayout(shape)
             const selected = createMemo(() => monitorSnapLayoutEquals(monitorLayout().snapLayout, snapLayout))
+            const select = () => {
+              if (selected()) return
+              setMonitorSnapLayout(props.outputName, snapLayout)
+              props.onPersisted()
+            }
             return (
               <button
                 type="button"
@@ -87,10 +99,12 @@ export const SnapLayoutPicker: Component<{
                   'border-(--shell-accent-border) bg-(--shell-accent-soft) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]':
                     selected(),
                 }}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return
+                  select()
+                }}
                 onClick={() => {
-                  if (selected()) return
-                  setMonitorSnapLayout(props.outputName, snapLayout)
-                  props.onPersisted()
+                  select()
                 }}
               >
                 <div class="flex items-center justify-between gap-2">

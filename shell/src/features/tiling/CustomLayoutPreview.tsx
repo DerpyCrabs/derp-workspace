@@ -47,23 +47,43 @@ export function CustomLayoutPreview(props: CustomLayoutPreviewProps) {
         {(zone, index) => {
           const zoneKey = customSnapZoneId(local.layout.id, zone.zoneId)
           const attrs = local.zoneAttrs?.(zone.zoneId) ?? {}
+          const zoneClass = `absolute overflow-hidden ${local.square ? '' : 'rounded-lg'} border text-left ${
+            local.selectedZoneId === zone.zoneId
+              ? 'border-(--shell-accent-border) bg-(--shell-accent-soft) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]'
+              : 'border-(--shell-border) bg-(--shell-surface-elevated) hover:bg-(--shell-surface)'
+          } ${local.pickMode || local.onZoneClick ? 'cursor-pointer' : 'pointer-events-none'}`
+          const zoneStyle = {
+            left: `${zone.x * 100}%`,
+            top: `${zone.y * 100}%`,
+            width: `${zone.width * 100}%`,
+            height: `${zone.height * 100}%`,
+          }
+          const zoneLabel = (
+            <span class="pointer-events-none absolute left-2 top-1.5 text-[0.62rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
+              {index() + 1}
+            </span>
+          )
+          if (!local.pickMode && !local.onZoneClick) {
+            return (
+              <div
+                {...attrs}
+                data-custom-layout-zone={zone.zoneId}
+                data-custom-layout-zone-key={zoneKey}
+                class={zoneClass}
+                style={zoneStyle}
+              >
+                {zoneLabel}
+              </div>
+            )
+          }
           return (
             <button
               {...attrs}
               type="button"
               data-custom-layout-zone={zone.zoneId}
               data-custom-layout-zone-key={zoneKey}
-              class={`absolute overflow-hidden ${local.square ? '' : 'rounded-lg'} border text-left ${
-                local.selectedZoneId === zone.zoneId
-                  ? 'border-(--shell-accent-border) bg-(--shell-accent-soft) shadow-[inset_0_0_0_1px_var(--shell-accent-soft-border)]'
-                  : 'border-(--shell-border) bg-(--shell-surface-elevated) hover:bg-(--shell-surface)'
-              } ${local.pickMode ? 'cursor-pointer' : 'cursor-pointer'}`}
-              style={{
-                left: `${zone.x * 100}%`,
-                top: `${zone.y * 100}%`,
-                width: `${zone.width * 100}%`,
-                height: `${zone.height * 100}%`,
-              }}
+              class={zoneClass}
+              style={zoneStyle}
               onPointerDown={(event) => {
                 if (!local.pickMode) return
                 event.preventDefault()
@@ -77,9 +97,7 @@ export function CustomLayoutPreview(props: CustomLayoutPreviewProps) {
                 local.onZoneClick?.({ zoneId: zone.zoneId, zone: zoneKey })
               }}
             >
-              <span class="pointer-events-none absolute left-2 top-1.5 text-[0.62rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
-                {index() + 1}
-              </span>
+              {zoneLabel}
             </button>
           )
         }}

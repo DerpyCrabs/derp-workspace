@@ -83,7 +83,10 @@ export function SettingsTilingPage(props: SettingsTilingPageProps) {
           </p>
           <For each={monitorNames()}>
             {(monitorName) => (
-              <div class="mb-4 flex flex-col gap-3 border-b border-(--shell-border) pb-4 last:mb-0 last:border-0 last:pb-0">
+              <div
+                data-settings-monitor-section={monitorName}
+                class="mb-4 flex flex-col gap-3 border-b border-(--shell-border) pb-4 last:mb-0 last:border-0 last:pb-0"
+              >
                 <span class="min-w-24 text-[0.82rem] font-mono font-semibold text-(--shell-text-muted)">
                   {monitorName}
                 </span>

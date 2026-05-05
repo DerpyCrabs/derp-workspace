@@ -145,6 +145,25 @@ async function waitForChromeSettled(base: string, windowId: number, label: strin
   )
 }
 
+function assertCompositorFrameContract(shell: ShellSnapshot, windowId: number, label: string) {
+  const window = shellWindowById(shell, windowId)
+  const controls = windowControls(shell, windowId)
+  assert(window, `${label} window missing for frame contract`)
+  assert(controls?.titlebar, `${label} titlebar missing for frame contract`)
+  assert(window.client_x === window.x && window.client_y === window.y, `${label} client origin should be compositor-authored`)
+  assert(window.client_width === window.width && window.client_height === window.height, `${label} client size should be compositor-authored`)
+  assert(typeof window.frame_x === 'number' && typeof window.frame_y === 'number', `${label} frame origin should be compositor-authored`)
+  assert(typeof window.frame_width === 'number' && window.frame_width >= window.width, `${label} frame width should cover client`)
+  assert(typeof window.frame_height === 'number' && window.frame_height >= window.height, `${label} frame height should cover client`)
+  if (!window.shell_hosted) {
+    assert(window.frame_height > window.height, `${label} native frame height should include chrome`)
+  }
+  assert(
+    Math.abs(controls.titlebar.width - window.frame_width) <= 1,
+    `${label} titlebar width should match compositor frame width`,
+  )
+}
+
 async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
@@ -152,15 +171,22 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
   const focused = await getJson<ShellSnapshot>(base, '/test/state/shell')
   const visible = shellWindowById(focused, opened.window_id)
   assert(visible && !visible.minimized, `${parity.label} window visible after open`)
+  assertCompositorFrameContract(focused, opened.window_id, parity.label)
 
   await clickMaximize(base, opened.window_id, parity.label)
   const maximized = await waitForMaximized(base, opened.window_id, parity.label)
   assert(maximized.window.maximized, `${parity.label} should maximize through chrome click`)
+  assertCompositorFrameContract(maximized.shell, opened.window_id, `${parity.label} maximized`)
 
+  const serialBeforeDrag = maximized.shell.compositor_interaction_state?.interaction_serial ?? 0
   await dragTitlebarDown(base, opened.window_id, parity.label)
   const restored = await waitForFloating(base, opened.window_id, parity.label)
   assert(restored.window.width > 100 && restored.window.height > 100, `${parity.label} restore keeps usable size`)
-  await waitForChromeSettled(base, opened.window_id, parity.label)
+  const settled = await waitForChromeSettled(base, opened.window_id, parity.label)
+  assert(
+    (settled.shell.compositor_interaction_state?.interaction_serial ?? 0) > serialBeforeDrag,
+    `${parity.label} interaction serial should advance after titlebar drag`,
+  )
 
   await clickMinimize(base, opened.window_id, parity.label)
   const minimized = await waitForWindowMinimized(base, opened.window_id)

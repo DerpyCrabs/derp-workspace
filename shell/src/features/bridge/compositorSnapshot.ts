@@ -46,6 +46,13 @@ const MAX_WINDOW_STRING_BYTES = 4096
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
 const MAX_OUTPUT_LAYOUT_SCREENS = 16
+const WINDOW_LIST_SCHEMA_VERSION = 0x44525702
+const WINDOW_LIST_HEADER_BYTES = 24
+const WINDOW_LIST_HEADER_BYTES_V1 = 16
+const WINDOW_LIST_ROW_BYTES = 92
+const WINDOW_LIST_ROW_BYTES_V1 = 60
+const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION = 0x44524702
+const WINDOW_GEOMETRY_RECTS_BYTES = 36
 
 const utf8 = new TextDecoder()
 
@@ -204,10 +211,20 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
   const revision = Number(view.getBigUint64(offset + 4, true))
   const count = view.getUint32(offset + 12, true)
   if (count > MAX_WINDOW_LIST_ENTRIES) return null
-  let cursor = offset + 16
+  let cursor = offset + WINDOW_LIST_HEADER_BYTES_V1
+  let rowBytes = WINDOW_LIST_ROW_BYTES_V1
+  if (offset + WINDOW_LIST_HEADER_BYTES <= view.byteLength) {
+    const schemaVersion = view.getUint32(offset + 16, true)
+    const candidateRowBytes = view.getUint32(offset + 20, true)
+    if (schemaVersion === WINDOW_LIST_SCHEMA_VERSION) {
+      if (candidateRowBytes !== WINDOW_LIST_ROW_BYTES) return null
+      cursor = offset + WINDOW_LIST_HEADER_BYTES
+      rowBytes = WINDOW_LIST_ROW_BYTES
+    }
+  }
   const windows: unknown[] = []
   for (let i = 0; i < count; i += 1) {
-    if (cursor + 60 > view.byteLength) return null
+    if (cursor + rowBytes > view.byteLength) return null
     const windowId = view.getUint32(cursor, true)
     const surfaceId = view.getUint32(cursor + 4, true)
     const stackZ = view.getUint32(cursor + 8, true)
@@ -215,15 +232,24 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     const y = view.getInt32(cursor + 16, true)
     const width = view.getInt32(cursor + 20, true)
     const height = view.getInt32(cursor + 24, true)
-    const minimized = view.getUint32(cursor + 28, true) !== 0
-    const maximized = view.getUint32(cursor + 32, true) !== 0
-    const fullscreen = view.getUint32(cursor + 36, true) !== 0
-    const clientSideDecoration = view.getUint32(cursor + 40, true) !== 0
-    const workspaceVisible = view.getUint32(cursor + 44, true) !== 0
-    const shellFlags = view.getUint32(cursor + 48, true)
-    const titleLen = view.getUint32(cursor + 52, true)
-    const appLen = view.getUint32(cursor + 56, true)
-    cursor += 60
+    const clientX = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 28, true) : x
+    const clientY = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 32, true) : y
+    const clientWidth = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 36, true) : width
+    const clientHeight = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 40, true) : height
+    const frameX = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 44, true) : x
+    const frameY = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 48, true) : y
+    const frameWidth = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 52, true) : width
+    const frameHeight = rowBytes === WINDOW_LIST_ROW_BYTES ? view.getInt32(cursor + 56, true) : height
+    const minimizedOffset = rowBytes === WINDOW_LIST_ROW_BYTES ? 60 : 28
+    const minimized = view.getUint32(cursor + minimizedOffset, true) !== 0
+    const maximized = view.getUint32(cursor + minimizedOffset + 4, true) !== 0
+    const fullscreen = view.getUint32(cursor + minimizedOffset + 8, true) !== 0
+    const clientSideDecoration = view.getUint32(cursor + minimizedOffset + 12, true) !== 0
+    const workspaceVisible = view.getUint32(cursor + minimizedOffset + 16, true) !== 0
+    const shellFlags = view.getUint32(cursor + minimizedOffset + 20, true)
+    const titleLen = view.getUint32(cursor + minimizedOffset + 24, true)
+    const appLen = view.getUint32(cursor + minimizedOffset + 28, true)
+    cursor += rowBytes
     if (titleLen > MAX_WINDOW_STRING_BYTES || appLen > MAX_WINDOW_STRING_BYTES) return null
     const title = readUtf8(bytes, cursor, titleLen)
     if (title == null) return null
@@ -281,6 +307,14 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       y,
       width,
       height,
+      client_x: clientX,
+      client_y: clientY,
+      client_width: clientWidth,
+      client_height: clientHeight,
+      frame_x: frameX,
+      frame_y: frameY,
+      frame_width: frameWidth,
+      frame_height: frameHeight,
       minimized,
       maximized,
       fullscreen,
@@ -324,6 +358,7 @@ function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number)
   }
   if (cursor + 4 <= view.byteLength) cursor += 4
   let outputName = ''
+  let rectCursor = cursor
   if (cursor < view.byteLength) {
     if (cursor + 4 > view.byteLength) return null
     const len = view.getUint32(cursor, true)
@@ -333,6 +368,29 @@ function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number)
     if (value == null) return null
     outputName = value
     cursor += len
+    rectCursor = cursor
+  }
+  let client_x = x
+  let client_y = y
+  let client_width = width
+  let client_height = height
+  let frame_x = x
+  let frame_y = y
+  let frame_width = width
+  let frame_height = height
+  if (cursor !== view.byteLength) {
+    if (view.byteLength !== rectCursor + WINDOW_GEOMETRY_RECTS_BYTES) return null
+    const schema = view.getUint32(rectCursor, true)
+    if (schema !== WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION) return null
+    client_x = view.getInt32(rectCursor + 4, true)
+    client_y = view.getInt32(rectCursor + 8, true)
+    client_width = view.getInt32(rectCursor + 12, true)
+    client_height = view.getInt32(rectCursor + 16, true)
+    frame_x = view.getInt32(rectCursor + 20, true)
+    frame_y = view.getInt32(rectCursor + 24, true)
+    frame_width = view.getInt32(rectCursor + 28, true)
+    frame_height = view.getInt32(rectCursor + 32, true)
+    cursor = view.byteLength
   }
   if (cursor !== view.byteLength) return null
   return {
@@ -343,6 +401,14 @@ function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number)
     y,
     width,
     height,
+    client_x,
+    client_y,
+    client_width,
+    client_height,
+    frame_x,
+    frame_y,
+    frame_width,
+    frame_height,
     output_id: '',
     output_name: outputName,
     maximized,
@@ -505,7 +571,7 @@ function decodeCommandPaletteState(bytes: Uint8Array, view: DataView, offset: nu
 }
 
 function decodeInteractionState(view: DataView, offset: number): DerpShellDetail | null {
-  if (offset + 80 !== view.byteLength) return null
+  if (offset + 80 !== view.byteLength && offset + 88 !== view.byteLength) return null
   const decodeVisual = (windowId: number, base: number) => {
     if (windowId <= 0) return null
     const flags = view.getUint32(base + 16, true)
@@ -524,9 +590,11 @@ function decodeInteractionState(view: DataView, offset: number): DerpShellDetail
   const moveProxyWindowId = view.getUint32(offset + 28, true)
   const moveCaptureWindowId = view.getUint32(offset + 32, true)
   const windowSwitcherSelectedWindowId = view.getUint32(offset + 76, true)
+  const interactionSerial = offset + 88 === view.byteLength ? Number(view.getBigUint64(offset + 80, true)) : 0
   return {
     type: 'interaction_state',
     revision,
+    interaction_serial: interactionSerial,
     pointer_x: view.getInt32(offset + 12, true),
     pointer_y: view.getInt32(offset + 16, true),
     move_window_id: moveWindowId > 0 ? moveWindowId : null,

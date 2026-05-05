@@ -42,6 +42,7 @@ import {
   getMonitorLayout,
   resetTilingConfig as resetPersistedTilingConfig,
   setMonitorCustomLayouts,
+  setMonitorSnapLayout,
 } from '@/features/tiling/tilingConfig'
 import { ShellFloatingProvider, type ShellFloatingRegistry } from '@/features/floating/ShellFloatingContext'
 import { createFloatingLayerStore } from '@/features/floating/floatingLayers'
@@ -347,6 +348,7 @@ function App() {
   const windowsList = compositorWindowsList
   const [compositorInteractionState, setCompositorInteractionState] = createSignal<{
     revision: number
+    interaction_serial: number
     pointer_x: number
     pointer_y: number
     move_window_id: number | null
@@ -1799,27 +1801,47 @@ function App() {
   })
 
   const endWorkspaceAwareShellWindowMove = (reason: string, sendMoveEnd = true) => {
-    const dropped = workspaceChrome.finishWindowDragDrop(pointerClient() ?? compositorInteractionPointerClient())
-    shellWindowGestureRuntime.endShellWindowMove(reason, !dropped, sendMoveEnd)
+    const snapActive =
+      shellWindowGestureRuntime.snapAssistPicker() !== null ||
+      shellWindowGestureRuntime.getActiveSnapZone() !== null ||
+      shellWindowGestureRuntime.getActiveSnapPreviewCanvas() !== null
+    const dropAllowed = reason !== 'compositor-move-ended' && !snapActive
+    const dropped = dropAllowed
+      ? workspaceChrome.finishWindowDragDrop(pointerClient() ?? compositorInteractionPointerClient())
+      : false
+    shellWindowGestureRuntime.endShellWindowMove(
+      reason,
+      !dropped,
+      sendMoveEnd,
+      compositorInteractionState()?.interaction_serial ?? null,
+    )
   }
 
   let previousCompositorMoveWindowId: number | null = null
+  let previousCompositorInteractionSerial = 0
   createEffect(() => {
     const interactionState = compositorInteractionState()
     const compositorMoveWindowId = interactionState?.move_window_id ?? null
     const compositorResizeWindowId = interactionState?.resize_window_id ?? null
+    const compositorInteractionSerial = interactionState?.interaction_serial ?? 0
     const compositorPointer = compositorInteractionPointerClient()
     const localDragWindowId = shellWindowGestureRuntime.dragWindowId()
     const localDragOwnsCompositorMove =
       localDragWindowId !== null && compositorMoveWindowId === localDragWindowId
+    const ignoreReleasedCompositorMove =
+      compositorMoveWindowId !== null &&
+      shellWindowGestureRuntime.shouldIgnoreReleasedCompositorMove(
+        compositorMoveWindowId,
+        compositorInteractionSerial,
+      )
     const interactionActive =
       interactionState !== null &&
       (interactionState.move_window_id !== null || interactionState.resize_window_id !== null)
     if (interactionActive && compositorPointer) {
-      if (!localDragOwnsCompositorMove) {
+      if (!localDragOwnsCompositorMove && !ignoreReleasedCompositorMove) {
         syncPointerSignalsFromClient(compositorPointer)
       }
-      if (compositorMoveWindowId !== null && !localDragOwnsCompositorMove) {
+      if (compositorMoveWindowId !== null && !localDragOwnsCompositorMove && !ignoreReleasedCompositorMove) {
         if (localDragWindowId === null) {
           shellWindowGestureRuntime.adoptShellWindowMove(compositorMoveWindowId, compositorPointer.x, compositorPointer.y)
         }
@@ -1834,6 +1856,17 @@ function App() {
       previousCompositorMoveWindowId === localDragWindowId &&
       compositorMoveWindowId !== localDragWindowId
     ) {
+      if (
+        shellWindowGestureRuntime.shouldIgnoreReleasedCompositorMoveEnd(
+          localDragWindowId,
+          previousCompositorInteractionSerial,
+          compositorInteractionSerial,
+        )
+      ) {
+        previousCompositorMoveWindowId = compositorMoveWindowId
+        previousCompositorInteractionSerial = compositorInteractionSerial
+        return
+      }
       if (compositorPointer) {
         syncPointerSignalsFromClient(compositorPointer)
         if (
@@ -1847,6 +1880,7 @@ function App() {
       endWorkspaceAwareShellWindowMove('compositor-move-ended', false)
     }
     previousCompositorMoveWindowId = compositorMoveWindowId
+    previousCompositorInteractionSerial = compositorInteractionSerial
   })
 
   async function spawnInCompositor(
@@ -1915,6 +1949,7 @@ function App() {
           const state = compositorInteractionState()
           if (!state) return null
           return {
+            interaction_serial: state.interaction_serial,
             move_window_id: state.move_window_id,
             resize_window_id: state.resize_window_id,
             move_proxy_window_id: state.move_proxy_window_id,
@@ -2189,8 +2224,10 @@ function App() {
       <CustomLayoutOverlay
         state={customLayoutOverlay}
         close={closeCustomLayoutOverlay}
-        saveLayouts={(outputName, layouts) => {
+        saveLayouts={(outputName, layouts, selectedLayoutId) => {
           setMonitorCustomLayouts(outputName, layouts)
+          const selectedLayout = selectedLayoutId ? layouts.find((layout) => layout.id === selectedLayoutId) : null
+          if (selectedLayout) setMonitorSnapLayout(outputName, { kind: 'custom', layoutId: selectedLayout.id })
           setTilingCfgRev((n) => n + 1)
           bumpSnapChrome()
           shellSharedStateSync.requestSharedStateSync({ exclusion: 'schedule' })

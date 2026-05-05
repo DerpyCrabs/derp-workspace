@@ -43,7 +43,7 @@ export type CustomLayoutOverlayState = {
 type CustomLayoutOverlayProps = {
   state: Accessor<CustomLayoutOverlayState | null>
   close: () => void
-  saveLayouts: (outputName: string, layouts: CustomLayout[]) => void
+  saveLayouts: (outputName: string, layouts: CustomLayout[], selectedLayoutId: string | null) => void
   getMenuLayerHostEl: () => HTMLElement | undefined
   getMainEl: () => HTMLElement | undefined
   acquireOverlayPointer: () => void
@@ -476,7 +476,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
   function saveAndClose() {
     const current = props.state()
     if (!current) return
-    props.saveLayouts(current.outputName, draftLayouts())
+    props.saveLayouts(current.outputName, draftLayouts(), selectedLayoutId())
     props.close()
   }
 

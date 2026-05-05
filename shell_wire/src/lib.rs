@@ -121,6 +121,15 @@ pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
+pub const WINDOW_LIST_SCHEMA_VERSION: u32 = 0x44525702;
+pub const WINDOW_LIST_HEADER_BYTES_V1: usize = 16;
+pub const WINDOW_LIST_HEADER_BYTES: usize = 24;
+pub const WINDOW_LIST_ROW_BYTES_V1: usize = 60;
+pub const WINDOW_LIST_ROW_BYTES: usize = 92;
+pub const WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION: u32 = 0x44524702;
+pub const WINDOW_GEOMETRY_RECTS_BYTES: usize = 36;
+pub const COMPOSITOR_INTERACTION_STATE_BYTES_V1: usize = 80;
+pub const COMPOSITOR_INTERACTION_STATE_BYTES: usize = 88;
 /// Max entries in [`MSG_OUTPUT_LAYOUT`].
 pub const MAX_OUTPUT_LAYOUT_SCREENS: u32 = 16;
 /// Max UTF-8 bytes for [`OutputLayoutScreen::name`].
@@ -718,6 +727,14 @@ pub fn encode_window_geometry(
     y: i32,
     w: i32,
     h: i32,
+    client_x: i32,
+    client_y: i32,
+    client_w: i32,
+    client_h: i32,
+    frame_x: i32,
+    frame_y: i32,
+    frame_w: i32,
+    frame_h: i32,
     maximized: bool,
     fullscreen: bool,
     client_side_decoration: bool,
@@ -731,7 +748,10 @@ pub fn encode_window_geometry(
     if ol > MAX_WINDOW_STRING_BYTES {
         return None;
     }
-    let body_len = 40u32.checked_add(4)?.checked_add(ol)?;
+    let body_len = 40u32
+        .checked_add(4)?
+        .checked_add(ol)?
+        .checked_add(WINDOW_GEOMETRY_RECTS_BYTES as u32)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
@@ -749,6 +769,15 @@ pub fn encode_window_geometry(
     v.extend_from_slice(&(if client_side_decoration { 1u32 } else { 0 }).to_le_bytes());
     v.extend_from_slice(&ol.to_le_bytes());
     v.extend_from_slice(ob);
+    v.extend_from_slice(&WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION.to_le_bytes());
+    v.extend_from_slice(&client_x.to_le_bytes());
+    v.extend_from_slice(&client_y.to_le_bytes());
+    v.extend_from_slice(&client_w.to_le_bytes());
+    v.extend_from_slice(&client_h.to_le_bytes());
+    v.extend_from_slice(&frame_x.to_le_bytes());
+    v.extend_from_slice(&frame_y.to_le_bytes());
+    v.extend_from_slice(&frame_w.to_le_bytes());
+    v.extend_from_slice(&frame_h.to_le_bytes());
     Some(v)
 }
 
@@ -854,6 +883,14 @@ pub struct ShellWindowSnapshot {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    pub client_x: i32,
+    pub client_y: i32,
+    pub client_w: i32,
+    pub client_h: i32,
+    pub frame_x: i32,
+    pub frame_y: i32,
+    pub frame_w: i32,
+    pub frame_h: i32,
     /// 0 = normal, 1 = compositor-minimized (hidden from space).
     pub minimized: u32,
     pub maximized: u32,
@@ -886,6 +923,8 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
     body.extend_from_slice(&MSG_WINDOW_LIST.to_le_bytes());
     body.extend_from_slice(&revision.to_le_bytes());
     body.extend_from_slice(&count.to_le_bytes());
+    body.extend_from_slice(&WINDOW_LIST_SCHEMA_VERSION.to_le_bytes());
+    body.extend_from_slice(&(WINDOW_LIST_ROW_BYTES as u32).to_le_bytes());
     for w in windows {
         let tb = w.title.as_bytes();
         let ab = w.app_id.as_bytes();
@@ -921,6 +960,14 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         body.extend_from_slice(&w.y.to_le_bytes());
         body.extend_from_slice(&w.w.to_le_bytes());
         body.extend_from_slice(&w.h.to_le_bytes());
+        body.extend_from_slice(&w.client_x.to_le_bytes());
+        body.extend_from_slice(&w.client_y.to_le_bytes());
+        body.extend_from_slice(&w.client_w.to_le_bytes());
+        body.extend_from_slice(&w.client_h.to_le_bytes());
+        body.extend_from_slice(&w.frame_x.to_le_bytes());
+        body.extend_from_slice(&w.frame_y.to_le_bytes());
+        body.extend_from_slice(&w.frame_w.to_le_bytes());
+        body.extend_from_slice(&w.frame_h.to_le_bytes());
         body.extend_from_slice(&w.minimized.to_le_bytes());
         body.extend_from_slice(&w.maximized.to_le_bytes());
         body.extend_from_slice(&w.fullscreen.to_le_bytes());
@@ -1331,6 +1378,14 @@ pub enum DecodedCompositorToShellMessage {
         y: i32,
         w: i32,
         h: i32,
+        client_x: i32,
+        client_y: i32,
+        client_w: i32,
+        client_h: i32,
+        frame_x: i32,
+        frame_y: i32,
+        frame_w: i32,
+        frame_h: i32,
         maximized: bool,
         fullscreen: bool,
         client_side_decoration: bool,
@@ -1392,6 +1447,7 @@ pub enum DecodedCompositorToShellMessage {
     },
     InteractionState {
         revision: u64,
+        interaction_serial: u64,
         pointer_x: i32,
         pointer_y: i32,
         move_window_id: u32,
@@ -1536,6 +1592,7 @@ pub fn encode_compositor_tray_hints(slot_count: u32, slot_w: i32, reserved_w: u3
 
 pub fn encode_compositor_interaction_state(
     revision: u64,
+    interaction_serial: u64,
     pointer_x: i32,
     pointer_y: i32,
     move_window_id: u32,
@@ -1546,7 +1603,7 @@ pub fn encode_compositor_interaction_state(
     resize_visual: Option<CompositorInteractionVisual>,
     window_switcher_selected_window_id: u32,
 ) -> Vec<u8> {
-    let body_len = 80u32;
+    let body_len = COMPOSITOR_INTERACTION_STATE_BYTES as u32;
     let mut v = Vec::with_capacity(4 + body_len as usize);
     let encode_visual =
         |out: &mut Vec<u8>, visual: Option<CompositorInteractionVisual>| match visual {
@@ -1584,6 +1641,7 @@ pub fn encode_compositor_interaction_state(
     encode_visual(&mut v, move_visual);
     encode_visual(&mut v, resize_visual);
     v.extend_from_slice(&window_switcher_selected_window_id.to_le_bytes());
+    v.extend_from_slice(&interaction_serial.to_le_bytes());
     v
 }
 
@@ -2225,8 +2283,8 @@ fn decode_compositor_to_shell_body(
                     }
                 }
             };
-            let output_name = if body.len() == pos {
-                String::new()
+            let (output_name, rect_pos) = if body.len() == pos {
+                (String::new(), pos)
             } else {
                 if body.len() < pos + 4 {
                     return Err(DecodeError::BadWindowPayload);
@@ -2239,12 +2297,44 @@ fn decode_compositor_to_shell_body(
                     .checked_add(4)
                     .and_then(|a| a.checked_add(ol))
                     .ok_or(DecodeError::BadWindowPayload)?;
-                if body.len() != tail {
+                if body.len() != tail && body.len() != tail + WINDOW_GEOMETRY_RECTS_BYTES {
                     return Err(DecodeError::BadWindowPayload);
                 }
-                std::str::from_utf8(&body[pos + 4..tail])
+                let output_name = std::str::from_utf8(&body[pos + 4..tail])
                     .map_err(|_| DecodeError::BadUtf8Command)?
-                    .to_string()
+                    .to_string();
+                (output_name, tail)
+            };
+            let (
+                client_x,
+                client_y,
+                client_w,
+                client_h,
+                frame_x,
+                frame_y,
+                frame_w,
+                frame_h,
+            ) = if body.len() == rect_pos {
+                (x, y, w, h, x, y, w, h)
+            } else {
+                if body.len() != rect_pos + WINDOW_GEOMETRY_RECTS_BYTES {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                let schema =
+                    u32::from_le_bytes(body[rect_pos..rect_pos + 4].try_into().unwrap());
+                if schema != WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                (
+                    i32::from_le_bytes(body[rect_pos + 4..rect_pos + 8].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 8..rect_pos + 12].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 12..rect_pos + 16].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 16..rect_pos + 20].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 20..rect_pos + 24].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 24..rect_pos + 28].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 28..rect_pos + 32].try_into().unwrap()),
+                    i32::from_le_bytes(body[rect_pos + 32..rect_pos + 36].try_into().unwrap()),
+                )
             };
             Ok(DecodedCompositorToShellMessage::WindowGeometry {
                 window_id,
@@ -2253,6 +2343,14 @@ fn decode_compositor_to_shell_body(
                 y,
                 w,
                 h,
+                client_x,
+                client_y,
+                client_w,
+                client_h,
+                frame_x,
+                frame_y,
+                frame_w,
+                frame_h,
                 maximized,
                 fullscreen,
                 client_side_decoration,
@@ -2448,7 +2546,9 @@ fn decode_compositor_to_shell_body(
             })
         }
         MSG_COMPOSITOR_INTERACTION_STATE => {
-            if body.len() != 80 {
+            if body.len() != COMPOSITOR_INTERACTION_STATE_BYTES_V1
+                && body.len() != COMPOSITOR_INTERACTION_STATE_BYTES
+            {
                 return Err(DecodeError::BadCompositorToShellPayload);
             }
             let decode_visual = |window_id: u32,
@@ -2475,8 +2575,14 @@ fn decode_compositor_to_shell_body(
             let move_capture_window_id = u32::from_le_bytes(body[32..36].try_into().unwrap());
             let window_switcher_selected_window_id =
                 u32::from_le_bytes(body[76..80].try_into().unwrap());
+            let interaction_serial = if body.len() == COMPOSITOR_INTERACTION_STATE_BYTES {
+                u64::from_le_bytes(body[80..88].try_into().unwrap())
+            } else {
+                0
+            };
             Ok(DecodedCompositorToShellMessage::InteractionState {
                 revision,
+                interaction_serial,
                 pointer_x,
                 pointer_y,
                 move_window_id,
@@ -2619,10 +2725,23 @@ fn decode_window_list_compositor_body(
     if count > MAX_WINDOW_LIST_ENTRIES as usize {
         return Err(DecodeError::BadWindowListPayload);
     }
-    let mut off = 16usize;
+    let (mut off, row_bytes) = if body.len() >= WINDOW_LIST_HEADER_BYTES {
+        let schema_version = u32::from_le_bytes(body[16..20].try_into().unwrap());
+        let row_bytes = u32::from_le_bytes(body[20..24].try_into().unwrap()) as usize;
+        if schema_version == WINDOW_LIST_SCHEMA_VERSION {
+            if row_bytes != WINDOW_LIST_ROW_BYTES {
+                return Err(DecodeError::BadWindowListPayload);
+            }
+            (WINDOW_LIST_HEADER_BYTES, row_bytes)
+        } else {
+            (WINDOW_LIST_HEADER_BYTES_V1, WINDOW_LIST_ROW_BYTES_V1)
+        }
+    } else {
+        (WINDOW_LIST_HEADER_BYTES_V1, WINDOW_LIST_ROW_BYTES_V1)
+    };
     let mut windows = Vec::with_capacity(count);
     for _ in 0..count {
-        if off + 60 > body.len() {
+        if off + row_bytes > body.len() {
             return Err(DecodeError::BadWindowListPayload);
         }
         let window_id = u32::from_le_bytes(body[off..off + 4].try_into().unwrap());
@@ -2632,13 +2751,62 @@ fn decode_window_list_compositor_body(
         let y = i32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
         let w = i32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
         let h = i32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-        let minimized = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
-        let maximized = u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap());
-        let fullscreen = u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap());
-        let client_side_decoration =
-            u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap());
-        let workspace_visible = u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap());
-        let shell_flags = u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap());
+        let (
+            client_x,
+            client_y,
+            client_w,
+            client_h,
+            frame_x,
+            frame_y,
+            frame_w,
+            frame_h,
+            minimized,
+            maximized,
+            fullscreen,
+            client_side_decoration,
+            workspace_visible,
+            shell_flags,
+            title_len,
+            app_len,
+        ) = if row_bytes == WINDOW_LIST_ROW_BYTES {
+            (
+                i32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()),
+                i32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 60..off + 64].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 64..off + 68].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 68..off + 72].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 72..off + 76].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 76..off + 80].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 80..off + 84].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 84..off + 88].try_into().unwrap()) as usize,
+                u32::from_le_bytes(body[off + 88..off + 92].try_into().unwrap()) as usize,
+            )
+        } else {
+            (
+                x,
+                y,
+                w,
+                h,
+                x,
+                y,
+                w,
+                h,
+                u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 40..off + 44].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 44..off + 48].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 48..off + 52].try_into().unwrap()),
+                u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize,
+                u32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()) as usize,
+            )
+        };
         if minimized > 1
             || maximized > 1
             || fullscreen > 1
@@ -2647,14 +2815,12 @@ fn decode_window_list_compositor_body(
         {
             return Err(DecodeError::BadWindowListPayload);
         }
-        let title_len = u32::from_le_bytes(body[off + 52..off + 56].try_into().unwrap()) as usize;
-        let app_len = u32::from_le_bytes(body[off + 56..off + 60].try_into().unwrap()) as usize;
         if title_len > MAX_WINDOW_STRING_BYTES as usize
             || app_len > MAX_WINDOW_STRING_BYTES as usize
         {
             return Err(DecodeError::BadWindowListPayload);
         }
-        off += 60;
+        off += row_bytes;
         let tend = off
             .checked_add(title_len)
             .ok_or(DecodeError::BadWindowListPayload)?;
@@ -2769,6 +2935,14 @@ fn decode_window_list_compositor_body(
             y,
             w,
             h,
+            client_x,
+            client_y,
+            client_w,
+            client_h,
+            frame_x,
+            frame_y,
+            frame_w,
+            frame_h,
             minimized,
             maximized,
             fullscreen,
@@ -2983,6 +3157,14 @@ mod tests {
                 y: 15,
                 w: 640,
                 h: 480,
+                client_x: 13,
+                client_y: 15,
+                client_w: 640,
+                client_h: 480,
+                frame_x: 9,
+                frame_y: -11,
+                frame_w: 648,
+                frame_h: 510,
                 minimized: 0,
                 maximized: 1,
                 fullscreen: 0,
@@ -3014,6 +3196,14 @@ mod tests {
                     y: 15,
                     w: 640,
                     h: 480,
+                    client_x: 13,
+                    client_y: 15,
+                    client_w: 640,
+                    client_h: 480,
+                    frame_x: 9,
+                    frame_y: -11,
+                    frame_w: 648,
+                    frame_h: 510,
                     minimized: 0,
                     maximized: 1,
                     fullscreen: 0,

@@ -141,6 +141,8 @@ impl CompositorState {
         let Some(loc) = self.shell_window_info_to_output_local_layout(&info) else {
             return;
         };
+        let outer = self.shell_backed_outer_global_rect(info);
+        let (ox, oy) = self.shell_canvas_logical_origin;
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
                 window_id: loc.window_id,
@@ -149,6 +151,14 @@ impl CompositorState {
                 y: loc.y,
                 w: loc.width.max(1),
                 h: loc.height.max(1),
+                client_x: loc.x,
+                client_y: loc.y,
+                client_w: loc.width.max(1),
+                client_h: loc.height.max(1),
+                frame_x: outer.loc.x.saturating_sub(ox),
+                frame_y: outer.loc.y.saturating_sub(oy),
+                frame_w: outer.size.w.max(1),
+                frame_h: outer.size.h.max(1),
                 maximized: loc.maximized,
                 fullscreen: false,
                 client_side_decoration: false,

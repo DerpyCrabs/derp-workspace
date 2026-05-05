@@ -1,5 +1,6 @@
 import {
   KEY,
+  SHELL_UI_SETTINGS_WINDOW_ID,
   assert,
   buildNativeSpawnCommand,
   clickRect,
@@ -7,7 +8,9 @@ import {
   defineGroup,
   getJson,
   getShellHtml,
+  movePoint,
   openSettings,
+  pointerWheel,
   postJson,
   tapSuperShortcut,
   waitFor,
@@ -58,6 +61,23 @@ async function openKeyboardSettings(base: string): Promise<void> {
   )
 }
 
+async function scrollToHotkeyActionTrigger(base: string): Promise<ShellSnapshot> {
+  let shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (shell.controls?.settings_hotkey_action_trigger) return shell
+    const settingsWindow = shell.windows.find((window) => window.window_id === SHELL_UI_SETTINGS_WINDOW_ID)
+    assert(settingsWindow, 'missing settings window for hotkey scroll')
+    await movePoint(
+      base,
+      settingsWindow.x + Math.round(settingsWindow.width * 0.68),
+      settingsWindow.y + Math.round(settingsWindow.height * 0.62),
+    )
+    await pointerWheel(base, 0, 180)
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
+  return shell
+}
+
 function launchBinding(id: string, chord: string, command: string): HotkeyBinding {
   return {
     id,
@@ -75,15 +95,8 @@ function launchBinding(id: string, chord: string, command: string): HotkeyBindin
 export default defineGroup(import.meta.url, ({ test }) => {
   test('custom hotkey dropdowns respond to pointer selection', async ({ base }) => {
     await openKeyboardSettings(base)
-    const ready = await waitFor(
-      'wait for hotkey dropdown trigger',
-      async () => {
-        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        return shell.controls?.settings_hotkey_action_trigger ? shell : null
-      },
-      5000,
-      100,
-    )
+    const ready = await scrollToHotkeyActionTrigger(base)
+    assert(ready.controls?.settings_hotkey_action_trigger, 'missing hotkey dropdown trigger')
     await clickRect(base, ready.controls!.settings_hotkey_action_trigger!)
     const actionOpen = await waitFor(
       'wait for hotkey action option',

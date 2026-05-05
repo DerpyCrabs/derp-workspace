@@ -1,5 +1,6 @@
 import { canvasRectToClientCss } from '@/lib/shellCoords'
 import { SHELL_LAYOUT_FLOATING } from '@/lib/chromeConstants'
+import { shellOuterFrameFromClient } from '@/lib/exclusionRects'
 import { ShellWindowFrame, type ShellWindowModel } from '@/host/ShellWindowFrame'
 import { WorkspaceTabStrip, type WorkspaceTabStripLayout, type WorkspaceTabStripRect } from './WorkspaceTabStrip'
 import {
@@ -46,6 +47,41 @@ function sameWindowIdList(left: readonly number[], right: readonly number[]): bo
     if (left[index] !== right[index]) return false
   }
   return true
+}
+
+function windowModelWithClientRect(
+  window: DerpWindow,
+  rect: { x: number; y: number; width: number; height: number; maximized?: boolean; fullscreen?: boolean },
+): ShellWindowModel {
+  const maximized = rect.maximized ?? window.maximized
+  const fullscreen = rect.fullscreen ?? window.fullscreen
+  const frame = shellOuterFrameFromClient({
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    maximized,
+    fullscreen,
+    minimized: false,
+    snap_tiled: false,
+  })
+  return {
+    ...window,
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    client_x: rect.x,
+    client_y: rect.y,
+    client_width: rect.width,
+    client_height: rect.height,
+    frame_x: frame.x,
+    frame_y: frame.y,
+    frame_width: frame.w,
+    frame_height: frame.h,
+    maximized,
+    fullscreen,
+  }
 }
 
 function sameTabMergeTarget(left: TabMergeTarget | null, right: TabMergeTarget | null): boolean {
@@ -597,7 +633,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const nextTarget = dragging
       ? findTabMergeTargetFromPointer(drag.windowId, clientX, clientY, ignoreDraggedWindowFrame)
       : drag.target
-    const merged = dragging && nextTarget ? options.applyTabDrop(drag.windowId, nextTarget) : false
+    const merged = dragging && !drag.detached && nextTarget ? options.applyTabDrop(drag.windowId, nextTarget) : false
     const clickTarget = !dragging
       ? (document
           .elementsFromPoint(clientX, clientY)
@@ -740,9 +776,9 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       ? Math.trunc(splitLeftFromDom)
       : splitLeftWindowId(state, prev.sourceGroupId)
     const splitRightStripDrag = splitLeftId !== null && prev.windowId !== splitLeftId
-    const crossGroupMerge = target !== null && target.groupId !== prev.sourceGroupId
-    const splitVerticalTear = splitRightStripDrag && Math.abs(dy) >= 64 && !crossGroupMerge
-    const classicTear = !splitRightStripDrag && target === null && Math.abs(dy) >= 64
+    const verticalTear = Math.abs(dy) >= 64
+    const splitVerticalTear = splitRightStripDrag && verticalTear
+    const classicTear = !splitRightStripDrag && verticalTear
     let detached = prev.detached
     if (dragging && !detached && (splitVerticalTear || classicTear)) {
       detached = options.detachGroupWindow(prev.windowId, event.clientX, event.clientY)
@@ -997,13 +1033,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       const split = splitLayout()
       if (!split && liveFrame) {
         return {
-          ...window,
-          x: liveFrame.x,
-          y: liveFrame.y,
-          width: liveFrame.width,
-          height: liveFrame.height,
-          maximized: liveFrame.maximized,
-          fullscreen: liveFrame.fullscreen,
+          ...windowModelWithClientRect(window, {
+            x: liveFrame.x,
+            y: liveFrame.y,
+            width: liveFrame.width,
+            height: liveFrame.height,
+            maximized: liveFrame.maximized,
+            fullscreen: liveFrame.fullscreen,
+          }),
           snap_tiled:
             options.isWorkspaceWindowTiled(window.window_id) &&
             !liveFrame.maximized &&
@@ -1012,13 +1049,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       }
       if (!split) return { ...window, snap_tiled: options.isWorkspaceWindowTiled(window.window_id) }
       return {
-        ...window,
-        x: split.group.x,
-        y: split.group.y,
-        width: split.group.width,
-        height: split.group.height,
-        maximized: false,
-        fullscreen: false,
+        ...windowModelWithClientRect(window, {
+          x: split.group.x,
+          y: split.group.y,
+          width: split.group.width,
+          height: split.group.height,
+          maximized: false,
+          fullscreen: false,
+        }),
         snap_tiled: false,
       }
     })
@@ -1370,13 +1408,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       const liveFrame = options.interactionFrameForWindow(window.window_id)
       return liveFrame
         ? {
-            ...window,
-            x: liveFrame.x,
-            y: liveFrame.y,
-            width: liveFrame.width,
-            height: liveFrame.height,
-            maximized: liveFrame.maximized,
-            fullscreen: liveFrame.fullscreen,
+            ...windowModelWithClientRect(window, {
+              x: liveFrame.x,
+              y: liveFrame.y,
+              width: liveFrame.width,
+              height: liveFrame.height,
+              maximized: liveFrame.maximized,
+              fullscreen: liveFrame.fullscreen,
+            }),
             snap_tiled: false,
           }
         : { ...window, snap_tiled: false }

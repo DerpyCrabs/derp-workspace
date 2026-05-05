@@ -826,7 +826,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const titlebar = assertRectMinSize('native drag placement titlebar', shellReady, 80, 16)
-    const startX = Math.round(titlebar.global_x + Math.min(140, Math.max(40, titlebar.width * 0.35)))
+    const startX = Math.round(titlebar.global_x + Math.max(40, Math.min(titlebar.width - 136, titlebar.width * 0.72)))
     const startY = Math.round(titlebar.global_y + titlebar.height / 2)
 
     await movePoint(base, startX, startY)
@@ -836,10 +836,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const steps = 28
     for (let index = 1; index <= steps; index += 1) {
       const t = index / steps
-      await postJson(base, '/test/input/pointer_move', {
-        x: startX + dx * t,
-        y: startY + dy * t,
-      })
+      await movePoint(base, startX + dx * t, startY + dy * t)
     }
 
     const duringDrag = await waitFor(
@@ -909,10 +906,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const steps = 30
     for (let index = 1; index <= steps; index += 1) {
       const t = index / steps
-      await postJson(base, '/test/input/pointer_move', {
-        x: startX + dx * t,
-        y: startY + dy * t,
-      })
+      await movePoint(base, startX + dx * t, startY + dy * t)
     }
 
     const duringDrag = await waitFor(
@@ -1048,10 +1042,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const secondStartY = Math.round(afterRelease.titlebar.global_y + afterRelease.titlebar.height / 2)
     await movePoint(base, secondStartX, secondStartY)
     await pointerButton(base, BTN_LEFT, 'press')
-    await postJson(base, '/test/input/pointer_move', {
-      x: secondStartX + 28,
-      y: secondStartY + 16,
-    })
+    await movePoint(base, secondStartX + 28, secondStartY + 16)
     const secondDragStart = await waitFor(
       'wait for second native drag start without stale preview reuse',
       async () => {
@@ -1186,10 +1177,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const dragSteps = 24
     for (let index = 1; index <= dragSteps; index += 1) {
       const t = index / dragSteps
-      await postJson(base, '/test/input/pointer_move', {
-        x: dragStartX + dx * t,
-        y: dragStartY + dy * t,
-      })
+      await movePoint(base, dragStartX + dx * t, dragStartY + dy * t)
     }
 
     const duringDrag = await waitFor(

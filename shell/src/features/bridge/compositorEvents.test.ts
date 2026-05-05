@@ -13,9 +13,9 @@ describe('installCompositorBatchHandler', () => {
   const hotBatch = () => {
     const outputId = new TextEncoder().encode('dp-1')
     const outputName = new TextEncoder().encode('DP-1')
-    const geometryLength = 1 + 8 + 25 + 4 + outputId.length + 4 + outputName.length
+    const geometryLength = 1 + 8 + 57 + 4 + outputId.length + 4 + outputName.length
     const orderLength = 1 + 8 + 8 + 4 + 2 * 8
-    const interactionLength = 1 + 8 + 76
+    const interactionLength = 1 + 8 + 84
     const bytes = new ArrayBuffer(8 + geometryLength + orderLength + interactionLength)
     const view = new DataView(bytes)
     let offset = 0
@@ -32,7 +32,15 @@ describe('installCompositorBatchHandler', () => {
     view.setInt32(offset + 16, 640, true)
     view.setInt32(offset + 20, 480, true)
     view.setUint8(offset + 24, 1)
-    offset += 25
+    view.setInt32(offset + 25, 10, true)
+    view.setInt32(offset + 29, 20, true)
+    view.setInt32(offset + 33, 640, true)
+    view.setInt32(offset + 37, 480, true)
+    view.setInt32(offset + 41, 6, true)
+    view.setInt32(offset + 45, -8, true)
+    view.setInt32(offset + 49, 648, true)
+    view.setInt32(offset + 53, 512, true)
+    offset += 57
     view.setUint32(offset, outputId.length, true)
     offset += 4
     new Uint8Array(bytes, offset, outputId.length).set(outputId)
@@ -69,6 +77,7 @@ describe('installCompositorBatchHandler', () => {
     view.setInt32(offset + 44, 220, true)
     view.setUint32(offset + 48, 3, true)
     view.setUint32(offset + 52, 0, true)
+    view.setBigUint64(offset + 76, 17n, true)
     return bytes
   }
 
@@ -120,6 +129,14 @@ describe('installCompositorBatchHandler', () => {
         y: 20,
         width: 640,
         height: 480,
+        client_x: 10,
+        client_y: 20,
+        client_width: 640,
+        client_height: 480,
+        frame_x: 6,
+        frame_y: -8,
+        frame_width: 648,
+        frame_height: 512,
         output_id: 'dp-1',
         output_name: 'DP-1',
         maximized: true,
@@ -138,6 +155,7 @@ describe('installCompositorBatchHandler', () => {
       {
         type: 'interaction_state',
         revision: 11,
+        interaction_serial: 17,
         pointer_x: 120,
         pointer_y: 160,
         move_window_id: 42,
@@ -175,6 +193,14 @@ describe('installCompositorBatchHandler', () => {
         y: 20,
         width: 640,
         height: 480,
+        client_x: 10,
+        client_y: 20,
+        client_width: 640,
+        client_height: 480,
+        frame_x: 6,
+        frame_y: -8,
+        frame_width: 648,
+        frame_height: 512,
         output_id: 'dp-1',
         output_name: 'DP-1',
         maximized: true,
@@ -193,6 +219,7 @@ describe('installCompositorBatchHandler', () => {
       {
         type: 'interaction_state',
         revision: 11,
+        interaction_serial: 17,
         pointer_x: 120,
         pointer_y: 160,
         move_window_id: 42,
