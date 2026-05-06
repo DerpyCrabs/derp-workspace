@@ -19,6 +19,7 @@ import {
   assert,
   assertTopWindow,
   assertWindowTiled,
+  captureScreenshotRect,
   clickPoint,
   closeWindow,
   compositorWindowById,
@@ -470,6 +471,60 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const { red, green } = await ensureNativePair(base, state)
     await writeJsonArtifact('native-red-spawn.json', red.snapshot)
     await writeJsonArtifact('native-green-spawn.json', green.snapshot)
+  })
+
+  test('native content stays stable after cursor sweep', async ({ base, state }) => {
+    const spawned = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: 'Derp Native Cursor Damage',
+      token: 'native-cursor-damage',
+      strip: 'cyan',
+      width: 680,
+      height: 440,
+    })
+    state.spawnedNativeWindowIds.add(spawned.window.window_id)
+    const windowId = spawned.window.window_id
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const ready = await waitForNativeWindowGeometry(base, windowId, 'wait for native cursor damage geometry')
+    const window = ready.window
+    const rect = {
+      x: window.x + 48,
+      y: window.y + 48,
+      width: Math.min(420, window.width - 96),
+      height: Math.min(260, window.height - 96),
+    }
+    assert(rect.width >= 180 && rect.height >= 120, `native cursor damage rect too small ${rect.width}x${rect.height}`)
+    const outside = {
+      x: window.x + Math.min(window.width - 12, rect.x - window.x + rect.width + 48),
+      y: window.y + Math.min(window.height - 12, rect.y - window.y + rect.height + 48),
+    }
+    await movePoint(base, outside.x, outside.y)
+    const before = await captureScreenshotRect(base, rect)
+    const ys = [
+      rect.y + 16,
+      rect.y + Math.floor(rect.height / 2),
+      rect.y + rect.height - 16,
+    ]
+    for (const y of ys) {
+      for (let x = rect.x + 8; x <= rect.x + rect.width - 8; x += 37) {
+        await movePoint(base, x, y)
+      }
+    }
+    await movePoint(base, outside.x, outside.y)
+    await syncTest(base)
+    const after = await captureScreenshotRect(base, rect)
+    const comparison = await comparePngFixture(after.path, before.path)
+    const beforeArtifact = await copyArtifactFile('native-cursor-damage-before.png', before.path)
+    const afterArtifact = await copyArtifactFile('native-cursor-damage-after.png', after.path)
+    await writeJsonArtifact('native-cursor-damage.json', {
+      windowId,
+      window,
+      rect,
+      outside,
+      before: beforeArtifact,
+      after: afterArtifact,
+      comparison,
+    })
   })
 
   test('decorated native window disappears when its client drops content', async ({ base, state }) => {

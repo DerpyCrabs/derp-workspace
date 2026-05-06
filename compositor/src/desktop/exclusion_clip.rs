@@ -15,17 +15,15 @@ impl ShellExclusionClipCtx {
     ) -> Rectangle<i32, Logical> {
         let scale = Scale::<f64>::from(self.scale_f);
         let out = &self.output_logical;
-        let gtl = out.loc
-            + Point::<f64, Physical>::from((r.loc.x as f64, r.loc.y as f64))
-                .to_logical(scale)
-                .to_i32_round();
-        let gbr = out.loc
-            + Point::<f64, Physical>::from((
-                (r.loc.x + r.size.w) as f64,
-                (r.loc.y + r.size.h) as f64,
-            ))
-            .to_logical(scale)
-            .to_i32_round();
+        let tl =
+            Point::<f64, Physical>::from((r.loc.x as f64, r.loc.y as f64)).to_logical(scale);
+        let br = Point::<f64, Physical>::from((
+            (r.loc.x + r.size.w) as f64,
+            (r.loc.y + r.size.h) as f64,
+        ))
+        .to_logical(scale);
+        let gtl = out.loc + Point::from((tl.x.floor() as i32, tl.y.floor() as i32));
+        let gbr = out.loc + Point::from((br.x.ceil() as i32, br.y.ceil() as i32));
         let w = (gbr.x - gtl.x).max(1);
         let h = (gbr.y - gtl.y).max(1);
         Rectangle::new(gtl, Size::from((w, h)))
@@ -48,9 +46,11 @@ impl ShellExclusionClipCtx {
             on_out.loc.y - self.output_logical.loc.y,
         ));
         let ol = Rectangle::new(oloc, on_out.size);
-        let p0: Point<i32, Physical> = ol.loc.to_physical_precise_round(scale);
+        let p0f = ol.loc.to_f64().to_physical(scale);
         let br_log = ol.loc + ol.size;
-        let p1: Point<i32, Physical> = br_log.to_physical_precise_round(scale);
+        let p1f = br_log.to_f64().to_physical(scale);
+        let p0: Point<i32, Physical> = Point::from((p0f.x.floor() as i32, p0f.y.floor() as i32));
+        let p1: Point<i32, Physical> = Point::from((p1f.x.ceil() as i32, p1f.y.ceil() as i32));
         let pw = (p1.x - p0.x).max(1);
         let ph = (p1.y - p0.y).max(1);
         let phys_out = Rectangle::new(p0, Size::from((pw, ph)));
