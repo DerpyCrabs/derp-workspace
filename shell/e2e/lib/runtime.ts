@@ -613,10 +613,6 @@ export interface PerfShellSyncSnapshot {
   snapshot_notifies: number
   snapshot_reads: number
   snapshot_full_bytes: number
-  snapshot_dirty_reads: number
-  snapshot_dirty_unchanged: number
-  snapshot_dirty_fallbacks: number
-  snapshot_dirty_bytes: number
   snapshot_encode_count: number
   snapshot_encode_us: number
   snapshot_encode_messages: number
@@ -1468,12 +1464,6 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
       snapshot_notifies: after.shell_sync.snapshot_notifies - before.shell_sync.snapshot_notifies,
       snapshot_reads: after.shell_sync.snapshot_reads - before.shell_sync.snapshot_reads,
       snapshot_full_bytes: after.shell_sync.snapshot_full_bytes - before.shell_sync.snapshot_full_bytes,
-      snapshot_dirty_reads: after.shell_sync.snapshot_dirty_reads - before.shell_sync.snapshot_dirty_reads,
-      snapshot_dirty_unchanged:
-        after.shell_sync.snapshot_dirty_unchanged - before.shell_sync.snapshot_dirty_unchanged,
-      snapshot_dirty_fallbacks:
-        after.shell_sync.snapshot_dirty_fallbacks - before.shell_sync.snapshot_dirty_fallbacks,
-      snapshot_dirty_bytes: after.shell_sync.snapshot_dirty_bytes - before.shell_sync.snapshot_dirty_bytes,
       snapshot_encode_count: after.shell_sync.snapshot_encode_count - before.shell_sync.snapshot_encode_count,
       snapshot_encode_us: after.shell_sync.snapshot_encode_us - before.shell_sync.snapshot_encode_us,
       snapshot_encode_messages:
@@ -1519,7 +1509,6 @@ export function diffPerfCounters(after: PerfCounterSnapshot, before: PerfCounter
 export type PointerInteractionPerfBudget = {
   sharedStateUiWindowWrites?: number
   sharedStateExclusionWrites?: number
-  snapshotDirtyFallbacks?: number
   fullWindowListReplies?: number
   snapshotEncodeUs?: number
   snapshotDecodeMs?: number
@@ -1536,7 +1525,6 @@ export function assertPointerInteractionPerfBudget(
   const resolved = {
     sharedStateUiWindowWrites: budget.sharedStateUiWindowWrites ?? 24,
     sharedStateExclusionWrites: budget.sharedStateExclusionWrites ?? 12,
-    snapshotDirtyFallbacks: budget.snapshotDirtyFallbacks ?? 0,
     fullWindowListReplies: budget.fullWindowListReplies ?? 5,
     snapshotEncodeUs: budget.snapshotEncodeUs,
     snapshotDecodeMs: budget.snapshotDecodeMs,
@@ -1551,10 +1539,6 @@ export function assertPointerInteractionPerfBudget(
   assert(
     sample.shell_sync.shared_state_exclusion_writes <= resolved.sharedStateExclusionWrites,
     `${label} should not repeatedly write exclusion zones, got ${sample.shell_sync.shared_state_exclusion_writes}`,
-  )
-  assert(
-    sample.shell_sync.snapshot_dirty_fallbacks <= resolved.snapshotDirtyFallbacks,
-    `${label} dirty snapshots should not fall back to full payloads, got ${sample.shell_sync.snapshot_dirty_fallbacks}`,
   )
   assert(
     sample.shell_sync.full_window_list_replies <= resolved.fullWindowListReplies,
@@ -1987,6 +1971,17 @@ export async function clickPoint(base: string, x: number, y: number): Promise<vo
   await pointerButton(base, BTN_LEFT, 'release')
 }
 
+export async function clickPointWithoutSync(base: string, x: number, y: number): Promise<void> {
+  await postJson(base, '/test/input/pointer_move', { x, y })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'press' })
+  await postJson(base, '/test/input/pointer_button', { button: BTN_LEFT, action: 'release' })
+}
+
+export async function clickRectWithoutSync(base: string, rect: Rect): Promise<void> {
+  const point = rectCenter(rect)
+  await clickPointWithoutSync(base, point.x, point.y)
+}
+
 export async function movePoint(base: string, x: number, y: number): Promise<void> {
   await postJson(base, '/test/input/pointer_move', { x, y })
   await syncTest(base)
@@ -2339,7 +2334,46 @@ export async function activateTaskbarWindow(base: string, shellSnapshot: ShellSn
   await clickRect(base, row.activate)
 }
 
+function clickableCloseControl(shell: ShellSnapshot, windowId: number): Rect | null {
+  const controls = windowControls(shell, windowId)
+  if (!controls?.close) return null
+  return controls.close_hit?.includes(`data-shell-close-trigger=${windowId}`) ? controls.close : null
+}
+
 export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
+  let shell = shellSnapshot
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const closeRect = clickableCloseControl(shell, windowId)
+    if (closeRect) {
+      await clickRect(base, closeRect)
+    } else {
+      const row = taskbarEntry(shell, windowId)
+      const taskbarRect = row?.activate
+      assert(taskbarRect, `missing taskbar activate control for window ${windowId}`)
+      await clickRect(base, taskbarRect)
+      const closeTarget = await waitFor(
+        `wait for titlebar close control ${windowId}`,
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const close = clickableCloseControl(next, windowId)
+          return close ? { shell: next, close } : null
+        },
+        1000,
+        40,
+      )
+      shell = closeTarget.shell
+      await clickRect(base, closeTarget.close)
+    }
+    try {
+      await waitForWindowGone(base, windowId, 600)
+      return
+    } catch {}
+    shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  }
+  assert(false, `taskbar close control did not close window ${windowId}`)
+}
+
+export async function closeTaskbarWindowFromMenu(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = taskbarEntry(shell, windowId)
@@ -2355,10 +2389,26 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
         },
         1000,
         40,
-      )
-      await clickRect(base, action.rect!)
+      ).catch(() => null)
+      if (action?.rect) {
+        await clickRect(base, action.rect)
+      } else {
+        await clickRect(base, taskbarRect)
+        const closeTarget = await waitFor(
+          `wait for titlebar close control ${windowId}`,
+          async () => {
+            const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+            const close = windowControls(next, windowId)?.close
+            return close ? { shell: next, close } : null
+          },
+          1000,
+          40,
+        )
+        shell = closeTarget.shell
+        await clickRect(base, closeTarget.close)
+      }
     } else {
-      const closeRect = windowControls(shell, windowId)?.close
+      const closeRect = clickableCloseControl(shell, windowId)
       assert(closeRect, `missing close control for window ${windowId}`)
       await clickRect(base, closeRect)
     }

@@ -35,6 +35,7 @@ type ShellSurfaceRuntimeOptions = {
   trayIconSlotPx: Accessor<number>
   snapStrip: Accessor<SnapAssistStripState | null>
   snapStripScreen: Accessor<LayoutScreen | null>
+  snapStripExclusionActive: Accessor<boolean>
   windows: Accessor<ReadonlyMap<number, DerpWindow>>
   closeGroupWindow: (windowId: number) => void
   activateTaskbarGroup: (windowId: number) => void
@@ -123,6 +124,7 @@ export function createShellSurfaceRuntime(options: ShellSurfaceRuntimeOptions) {
         onSniTrayContextMenu={openSniTrayContextMenu}
         snapStrip={options.snapStrip}
         snapStripScreen={options.snapStripScreen}
+        snapStripExclusionActive={options.snapStripExclusionActive}
       />
     )
   }

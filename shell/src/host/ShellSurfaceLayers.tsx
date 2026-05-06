@@ -1,9 +1,10 @@
-import { createEffect, createMemo, createSignal, For, Show, type Accessor } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, type Accessor } from 'solid-js'
 import type { ShellBatteryState } from '@/apps/settings/batteryState'
 import { canvasRectToClientCss } from '@/lib/shellCoords'
 import { assistShapeToDims } from '@/features/tiling/assistGrid'
 import { listCustomLayoutZones } from '@/features/tiling/customLayouts'
 import { Taskbar, type TaskbarPin, type TaskbarSniItem, type TaskbarWindowRow } from '@/features/taskbar/Taskbar'
+import { registerShellExclusionRect } from '@/features/bridge/shellExclusionSync'
 import { SnapAssistTopStrip } from './SnapAssistTopStrip'
 import type { AssistOverlayState, LayoutScreen, SnapAssistStripState } from './types'
 
@@ -42,6 +43,7 @@ type ShellSurfaceLayersProps = {
   onSniTrayContextMenu: (id: string, clientX: number, clientY: number) => void
   snapStrip: Accessor<SnapAssistStripState | null>
   snapStripScreen: Accessor<LayoutScreen | null>
+  snapStripExclusionActive: Accessor<boolean>
 }
 
 export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
@@ -126,17 +128,23 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
             strip={props.snapStrip()!}
             screen={props.snapStripScreen()!}
             screenCssRect={props.screenCssRect}
+            exclusionActive={props.snapStripExclusionActive}
           />
         </Show>
       </Show>
 
-      <For each={props.taskbarScreens()}>
+      <Index each={props.taskbarScreens()}>
         {(screen) => {
-          const loc = props.screenCssRect(screen)
-          const taskbar = () => taskbarRectForScreen(loc, screen.taskbar_side, props.taskbarHeight)
-          const trigger = () => taskbarTriggerRectForScreen(loc, screen.taskbar_side)
+          const currentScreen = () => screen()
+          const loc = () => props.screenCssRect(currentScreen())
+          const taskbar = () => taskbarRectForScreen(loc(), currentScreen().taskbar_side, props.taskbarHeight)
+          const trigger = () => taskbarTriggerRectForScreen(loc(), currentScreen().taskbar_side)
+          const menuBounds = () => {
+            const bounds = loc()
+            return { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height }
+          }
           const [edgeRevealed, setEdgeRevealed] = createSignal(false)
-          const hiddenByFullscreen = () => props.screenTaskbarHiddenForFullscreen(screen)
+          const hiddenByFullscreen = () => props.screenTaskbarHiddenForFullscreen(currentScreen())
           createEffect(() => {
             if (!props.taskbarAutoHide() || hiddenByFullscreen()) {
               setEdgeRevealed(false)
@@ -162,6 +170,45 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
           }
           const visible = () => !hiddenByFullscreen() && revealed()
           const layerRect = () => (visible() ? taskbar() : trigger())
+          const trailingTaskbarControlSize = () => {
+            const side = currentScreen().taskbar_side
+            const clock = side === 'left' || side === 'right' ? 36 : 72
+            const battery = props.batteryState()?.is_present ? 36 : 0
+            return 36 + 36 + 36 + battery + 36 + clock
+          }
+          const trayReservedForScreen = () => {
+            if (!props.isPrimaryTaskbarScreen(currentScreen())) return 0
+            const itemReserved = props.sniTrayItems().length * Math.max(24, Math.min(48, props.trayIconSlotPx()))
+            return Math.max(0, props.trayReservedPx(), itemReserved)
+          }
+          const trayRect = () => {
+            if (!props.isPrimaryTaskbarScreen(currentScreen()) || !visible()) return null
+            const reserved = trayReservedForScreen()
+            if (reserved <= 0) return null
+            const rect = taskbar()
+            const trailing = trailingTaskbarControlSize()
+            const side = currentScreen().taskbar_side
+            if (side === 'left' || side === 'right') {
+              return {
+                x: rect.x,
+                y: Math.max(rect.y, rect.y + rect.height - trailing - reserved),
+                w: rect.width,
+                h: reserved,
+              }
+            }
+            return {
+              x: Math.max(rect.x, rect.x + rect.width - trailing - reserved),
+              y: rect.y,
+              w: reserved,
+              h: rect.height,
+            }
+          }
+          const trayRegistration = registerShellExclusionRect('tray-strip', `tray-strip:${currentScreen().name}`, () => trayRect())
+          createEffect(() => {
+            trayRect()
+            trayRegistration.invalidate()
+          })
+          onCleanup(trayRegistration.unregister)
           return (
             <Show when={!hiddenByFullscreen() || props.taskbarAutoHide()}>
               <div
@@ -175,31 +222,32 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
               >
                 <Show when={visible()}>
                   <Taskbar
-                    monitorName={screen.name}
-                    orientation={screen.taskbar_side === 'left' || screen.taskbar_side === 'right' ? 'vertical' : 'horizontal'}
-                    side={screen.taskbar_side}
-                    isPrimary={props.isPrimaryTaskbarScreen(screen)}
+                    monitorName={currentScreen().name}
+                    orientation={currentScreen().taskbar_side === 'left' || currentScreen().taskbar_side === 'right' ? 'vertical' : 'horizontal'}
+                    side={currentScreen().taskbar_side}
+                    isPrimary={props.isPrimaryTaskbarScreen(currentScreen())}
                     batteryState={
-                      props.isPrimaryTaskbarScreen(screen) ? props.batteryState() : null
+                      props.isPrimaryTaskbarScreen(currentScreen()) ? props.batteryState() : null
                     }
+                    menuBounds={menuBounds()}
                     trayReservedPx={
-                      props.isPrimaryTaskbarScreen(screen) ? props.trayReservedPx() : 0
+                      trayReservedForScreen()
                     }
                     sniTrayItems={
-                      props.isPrimaryTaskbarScreen(screen) ? props.sniTrayItems() : []
+                      props.isPrimaryTaskbarScreen(currentScreen()) ? props.sniTrayItems() : []
                     }
                     trayIconSlotPx={
-                      props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 36
+                      props.isPrimaryTaskbarScreen(currentScreen()) ? props.trayIconSlotPx() : 36
                     }
                     onSniTrayActivate={props.onSniTrayActivate}
                     onSniTrayContextMenu={props.onSniTrayContextMenu}
                     volumeMuted={props.volumeMuted()}
                     volumePercent={props.volumePercent()}
-                    pins={props.taskbarPinsForScreen(screen)}
-                    windows={props.taskbarRowsForScreen(screen)}
+                    pins={props.taskbarPinsForScreen(currentScreen())}
+                    windows={props.taskbarRowsForScreen(currentScreen())}
                     focusedWindowId={props.focusedWindowId()}
                     keyboardLayoutLabel={
-                      props.isPrimaryTaskbarScreen(screen) ? props.keyboardLayoutLabel() : null
+                      props.isPrimaryTaskbarScreen(currentScreen()) ? props.keyboardLayoutLabel() : null
                     }
                     settingsPanelOpen={props.settingsHudFrameVisible()}
                     onSettingsPanelToggle={props.onSettingsPanelToggle}
@@ -215,7 +263,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
             </Show>
           )
         }}
-      </For>
+      </Index>
     </>
   )
 }

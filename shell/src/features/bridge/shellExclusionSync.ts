@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, type Accessor } from 'solid-js'
+import { createEffect, createMemo, onCleanup, type Accessor } from 'solid-js'
 import type { DerpWindow } from '@/host/appWindowState'
 import type { ExclusionHudZone, LayoutScreen } from '@/host/types'
 import { mergeExclusionRects } from '@/lib/exclusionRects'
@@ -51,9 +51,28 @@ const dirtyExclusionTokens = new Set<number>()
 let nextExclusionToken = 1
 let exclusionStructureDirty = false
 let exclusionScheduler: (() => void) | null = null
+let exclusionSyncNow: (() => void) | null = null
+let exclusionFlushMicrotaskQueued = false
 
 function scheduleExclusionRegistrySync() {
   exclusionScheduler?.()
+}
+
+function flushExclusionRegistrySync() {
+  if (exclusionSyncNow) {
+    exclusionSyncNow()
+  } else {
+    scheduleExclusionRegistrySync()
+  }
+}
+
+function queueExclusionRegistryFlush() {
+  if (exclusionFlushMicrotaskQueued) return
+  exclusionFlushMicrotaskQueued = true
+  queueMicrotask(() => {
+    exclusionFlushMicrotaskQueued = false
+    flushExclusionRegistrySync()
+  })
 }
 
 function markShellExclusionTokenDirty(token: number) {
@@ -77,14 +96,14 @@ export function registerShellExclusionRect(
   exclusionRegistry.set(token, { kind, label, measure, cached: null })
   exclusionStructureDirty = true
   dirtyExclusionTokens.add(token)
-  scheduleExclusionRegistrySync()
+  queueExclusionRegistryFlush()
   return {
     invalidate: () => markShellExclusionTokenDirty(token),
     unregister: () => {
       exclusionRegistry.delete(token)
       dirtyExclusionTokens.delete(token)
       exclusionStructureDirty = true
-      scheduleExclusionRegistrySync()
+      flushExclusionRegistrySync()
     },
   }
 }
@@ -196,7 +215,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
   let pendingExclusionStateWrite = false
   const isWindowVisible = (window: DerpWindow) => options.isWindowVisible?.(window) ?? true
 
-  const fullscreenTaskbarExclusionSig = () => {
+  const fullscreenTaskbarExclusionSig = createMemo(() => {
     const outputNames = new Set<string>()
     const outputIds = new Set<string>()
     for (const window of options.windows()) {
@@ -208,7 +227,7 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
       .taskbarScreens()
       .map((screen) => `${screen.name}:${screen.taskbar_side}:${options.taskbarAutoHide() ? 1 : 0}:${fullscreenSetsHideTaskbar(outputNames, outputIds, screen) ? 1 : 0}`)
       .join('|')
-  }
+  })
 
   function fullscreenOutputSets() {
     const outputNames = new Set<string>()
@@ -342,10 +361,12 @@ export function createShellExclusionSync(options: ShellExclusionSyncOptions) {
 
   onCleanup(() => {
     if (exclusionScheduler === scheduleExclusionZonesSync) exclusionScheduler = null
+    if (exclusionSyncNow === syncExclusionZonesNow) exclusionSyncNow = null
     if (exclusionZonesRaf) cancelAnimationFrame(exclusionZonesRaf)
   })
 
   exclusionScheduler = scheduleExclusionZonesSync
+  exclusionSyncNow = syncExclusionZonesNow
 
   return {
     scheduleExclusionZonesSync,

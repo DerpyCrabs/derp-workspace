@@ -19,7 +19,7 @@ import {
   VolumeTaskbarMenu,
 } from '@/host/TaskbarContextMenu'
 import { VolumeContextMenu } from '@/host/VolumeContextMenu'
-import type { ShellContextMenuItem } from '@/host/contextMenu'
+import type { ClientMenuBounds, ShellContextMenuItem } from '@/host/contextMenu'
 import { useShellContextMenus } from '@/host/ShellContextMenusContext'
 import { taskbarRowTooltip, taskbarWindowLabel } from '@/features/taskbar/taskbarRowTooltip'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
@@ -70,6 +70,7 @@ export type TaskbarProps = {
   isPrimary: boolean
   batteryState: ShellBatteryState | null
   trayReservedPx: number
+  menuBounds: ClientMenuBounds
   sniTrayItems: TaskbarSniItem[]
   trayIconSlotPx: number
   onSniTrayActivate: (id: string) => void
@@ -187,6 +188,18 @@ function TaskbarWindowRows(props: {
               props.reportRowHoverTip({ window: row, rowEl: e.currentTarget }, 'now')
             }}
             onPointerLeave={() => props.reportRowHoverTip(null)}
+            onPointerUp={(e) => {
+              if (!e.isPrimary || (e.button !== 2 && (e.buttons & 2) === 0)) return
+              e.preventDefault()
+              e.stopPropagation()
+              props.onTaskbarWindowContextMenu(row, e.clientX, e.clientY)
+            }}
+            onMouseUp={(e) => {
+              if (e.button !== 2 && (e.buttons & 2) === 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              props.onTaskbarWindowContextMenu(row, e.clientX, e.clientY)
+            }}
             onContextMenu={(e) => {
               e.preventDefault()
               props.onTaskbarWindowContextMenu(row, e.clientX, e.clientY)
@@ -247,6 +260,7 @@ function TaskbarWindowRows(props: {
 function TaskbarPins(props: {
   monitorName: string
   pins: TaskbarPin[]
+  menuBounds: ClientMenuBounds
   orientation: 'horizontal' | 'vertical'
   compactMode: 'normal' | 'compact' | 'tight'
   onTaskbarPinActivate: (pin: TaskbarPin, monitorName: string) => void
@@ -324,6 +338,7 @@ function TaskbarPins(props: {
         anchor={() => pinMenu()}
         items={pinMenuItems}
         onRequestClose={() => setPinMenu(null)}
+        bounds={() => props.menuBounds}
         portalMount={() => shellContextMenus.menuLayerHostEl() ?? undefined}
       />
     </>
@@ -475,11 +490,6 @@ export function Taskbar(props: TaskbarProps) {
     })
   }
 
-  function registerTrayStrip(el: HTMLElement) {
-    const registration = registerShellExclusionElement('tray-strip', 'tray-strip', el)
-    onCleanup(registration.unregister)
-  }
-
   function registerFloatingExclusion(el: HTMLElement) {
     const registration = registerShellExclusionElement('floating', 'floating', el)
     onCleanup(registration.unregister)
@@ -524,6 +534,7 @@ export function Taskbar(props: TaskbarProps) {
             <TaskbarPins
               monitorName={props.monitorName}
               pins={props.pins}
+              menuBounds={props.menuBounds}
               orientation={props.orientation}
               compactMode={compactMode()}
               onTaskbarPinActivate={props.onTaskbarPinActivate}
@@ -594,6 +605,7 @@ export function Taskbar(props: TaskbarProps) {
           <TaskbarPins
             monitorName={props.monitorName}
             pins={props.pins}
+            menuBounds={props.menuBounds}
             orientation={props.orientation}
             compactMode={compactMode()}
             onTaskbarPinActivate={props.onTaskbarPinActivate}
@@ -642,10 +654,10 @@ export function Taskbar(props: TaskbarProps) {
               'min-width': props.orientation === 'horizontal' ? `${Math.max(0, props.trayReservedPx)}px` : undefined,
             }}
             aria-label="Tray"
-            ref={registerTrayStrip}
           >
             <For each={props.sniTrayItems}>
               {(it) => {
+                let suppressClickAfterPointer = false
                 const slot = () => Math.max(24, Math.min(48, props.trayIconSlotPx))
                 const src = () =>
                   it.icon_base64.length > 0 ? `data:image/png;base64,${it.icon_base64}` : ''
@@ -659,7 +671,18 @@ export function Taskbar(props: TaskbarProps) {
                       height: props.orientation === 'vertical' ? `${slot()}px` : undefined,
                     }}
                     title={it.title}
-                    onClick={() => props.onSniTrayActivate(it.id)}
+                    onPointerUp={(e) => {
+                      if (e.button !== 0) return
+                      suppressClickAfterPointer = true
+                      window.setTimeout(() => {
+                        suppressClickAfterPointer = false
+                      }, 0)
+                      props.onSniTrayActivate(it.id)
+                    }}
+                    onClick={() => {
+                      if (suppressClickAfterPointer) return
+                      props.onSniTrayActivate(it.id)
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       props.onSniTrayContextMenu(it.id, e.clientX, e.clientY)
@@ -832,6 +855,7 @@ export function Taskbar(props: TaskbarProps) {
       anchor={() => windowMenu()}
       items={windowMenuItems}
       onRequestClose={() => setWindowMenu(null)}
+      bounds={() => props.menuBounds}
       portalMount={() => shellContextMenus.menuLayerHostEl() ?? undefined}
     />
     <Show when={rowHoverTip() !== null && typeof document !== 'undefined'}>

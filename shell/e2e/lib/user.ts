@@ -1,6 +1,7 @@
 export {
   clickPoint,
   clickRect,
+  clickRectWithoutSync,
   dragBetweenPoints,
   dragRectToRect,
   keyAction,

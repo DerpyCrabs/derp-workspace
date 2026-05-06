@@ -29,7 +29,7 @@ function nativeWindow(windowId: number, title: string) {
 }
 
 describe('createCompositorModel', () => {
-  it('applies snapshot window detail chunks as one authoritative window update', () => {
+  it('applies snapshot window detail chunks when the snapshot omits an authoritative window list', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
       model.applyCompositorSnapshot([
@@ -62,6 +62,8 @@ describe('createCompositorModel', () => {
             },
           ],
         },
+      ])
+      model.applyCompositorSnapshot([
         {
           type: 'window_geometry',
           window_id: 7,
@@ -100,6 +102,222 @@ describe('createCompositorModel', () => {
         title: 'New',
         app_id: 'new.app',
         minimized: true,
+      })
+      dispose()
+    })
+  })
+
+  it('keeps snapshot window list rows authoritative over duplicate geometry chunks', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [
+            {
+              ...nativeWindow(7, 'Maximized'),
+              x: 1280,
+              y: 26,
+              width: 1920,
+              height: 1218,
+              maximized: true,
+            },
+          ],
+        },
+        {
+          type: 'window_geometry',
+          window_id: 7,
+          surface_id: 70,
+          x: 1280,
+          y: 26,
+          width: 700,
+          height: 491,
+          output_id: 'output-a',
+          output_name: 'DP-1',
+          maximized: true,
+          fullscreen: false,
+        },
+      ])
+
+      expect(model.windows().get(7)).toMatchObject({
+        x: 1280,
+        y: 26,
+        width: 1920,
+        height: 1218,
+        maximized: true,
+      })
+      dispose()
+    })
+  })
+
+  it('keeps batch window list rows authoritative over duplicate geometry details', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_list',
+            revision: 1,
+            windows: [
+              {
+                ...nativeWindow(7, 'Maximized'),
+                x: 1280,
+                y: 26,
+                width: 1920,
+                height: 1218,
+                maximized: true,
+              },
+            ],
+          },
+          {
+            type: 'window_geometry',
+            window_id: 7,
+            surface_id: 70,
+            x: 1280,
+            y: 26,
+            width: 700,
+            height: 491,
+            output_id: 'output-a',
+            output_name: 'DP-1',
+            maximized: true,
+            fullscreen: false,
+          },
+        ],
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+
+      expect(model.windows().get(7)).toMatchObject({
+        x: 1280,
+        y: 26,
+        width: 1920,
+        height: 1218,
+        maximized: true,
+      })
+      dispose()
+    })
+  })
+
+  it('lets same-revision snapshot window list rows replace stale window rows', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 12,
+          windows: [
+            {
+              ...nativeWindow(7, 'Foot'),
+              x: 1280,
+              y: 26,
+              width: 700,
+              height: 491,
+              maximized: true,
+            },
+          ],
+        },
+      ])
+
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 12,
+          windows: [
+            {
+              ...nativeWindow(7, 'Foot'),
+              x: 1280,
+              y: 26,
+              width: 1920,
+              height: 1218,
+              maximized: true,
+            },
+          ],
+        },
+        {
+          type: 'window_geometry',
+          window_id: 7,
+          surface_id: 70,
+          x: 1280,
+          y: 26,
+          width: 700,
+          height: 491,
+          output_id: 'output-a',
+          output_name: 'DP-1',
+          maximized: true,
+          fullscreen: false,
+        },
+      ])
+
+      expect(model.windows().get(7)).toMatchObject({
+        width: 1920,
+        height: 1218,
+        maximized: true,
+      })
+      dispose()
+    })
+  })
+
+  it('lets same-revision batch window list rows replace stale window rows', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      const options = { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} }
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_list',
+            revision: 12,
+            windows: [
+              {
+                ...nativeWindow(7, 'Foot'),
+                x: 1280,
+                y: 26,
+                width: 700,
+                height: 491,
+                maximized: true,
+              },
+            ],
+          },
+        ],
+        options,
+      )
+
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_list',
+            revision: 12,
+            windows: [
+              {
+                ...nativeWindow(7, 'Foot'),
+                x: 1280,
+                y: 26,
+                width: 1920,
+                height: 1218,
+                maximized: true,
+              },
+            ],
+          },
+          {
+            type: 'window_geometry',
+            window_id: 7,
+            surface_id: 70,
+            x: 1280,
+            y: 26,
+            width: 700,
+            height: 491,
+            output_id: 'output-a',
+            output_name: 'DP-1',
+            maximized: true,
+            fullscreen: false,
+          },
+        ],
+        options,
+      )
+
+      expect(model.windows().get(7)).toMatchObject({
+        width: 1920,
+        height: 1218,
+        maximized: true,
       })
       dispose()
     })

@@ -215,8 +215,14 @@ type WorkspaceChromeOptions = {
   focusShellUiWindow: (windowId: number) => void
   activateTaskbarWindowViaShell: (windowId: number) => void
   focusWindowViaShell: (windowId: number) => void
-  beginShellWindowMove: (windowId: number, clientX: number, clientY: number) => void
-  adoptShellWindowMove: (windowId: number, clientX: number, clientY: number, moved?: boolean) => boolean
+  beginShellWindowMove: (windowId: number, clientX: number, clientY: number, options?: { snapAssist?: boolean }) => void
+  adoptShellWindowMove: (
+    windowId: number,
+    clientX: number,
+    clientY: number,
+    moved?: boolean,
+    options?: { snapAssist?: boolean },
+  ) => boolean
   beginShellWindowResize: (windowId: number, edges: number, clientX: number, clientY: number) => void
   toggleShellMaximizeForWindow: (windowId: number) => void
   closeWindow: (windowId: number) => void
@@ -598,7 +604,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     if (splitLeftWindowId(options.workspaceSnapshot(), sourceGroupId) === windowId) return
     const sourceGroup = options.workspaceGroupsById().get(sourceGroupId) ?? null
     if (sourceGroup && sourceGroup.members.length <= 1) {
-      options.beginShellWindowMove(windowId, clientX, clientY)
+      options.beginShellWindowMove(windowId, clientX, clientY, { snapAssist: false })
       return
     }
     const grabWindowId =
@@ -855,7 +861,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
     const drag = tabDragState()
     if (!drag?.detached) return
     if (options.compositorMoveWindowId() !== drag.windowId) return
-    if (!options.adoptShellWindowMove(drag.windowId, drag.currentClientX, drag.currentClientY, drag.dragging)) {
+    if (!options.adoptShellWindowMove(drag.windowId, drag.currentClientX, drag.currentClientY, drag.dragging, { snapAssist: false })) {
       return
     }
     endTabDragPointerGrab()

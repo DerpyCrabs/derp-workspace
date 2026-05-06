@@ -1,8 +1,18 @@
-import { NATIVE_APP_ID, SHELL_TEST_APP_ID, defineGroup, type TestContext, type WindowSnapshot } from '../lib/runtime.ts'
-import { clickRect, dragBetweenPoints } from '../lib/user.ts'
+import {
+  NATIVE_APP_ID,
+  SHELL_TEST_APP_ID,
+  defineGroup,
+  spawnCommand,
+  type CompositorSnapshot,
+  type TestContext,
+  type WindowSnapshot,
+} from '../lib/runtime.ts'
+import { clickRect, clickRectWithoutSync, dragBetweenPoints } from '../lib/user.ts'
 import {
   assert,
   assertRectMinSize,
+  captureScreenshotRect,
+  compositorWindowById,
   getJson,
   getSnapshots,
   shellWindowById,
@@ -38,7 +48,7 @@ async function waitForControlRect(
       const titlebar = controls?.titlebar
       if (!window || !titlebar || !actual || actual.width < 12 || actual.height < 12) return null
       const expectedTitlebarX = window.maximized || window.fullscreen ? window.x : window.x - 4
-      const expectedTitlebarY = window.maximized || window.fullscreen ? window.y - 22 : window.y - 26
+      const expectedTitlebarY = window.y - titlebar.height
       if (Math.abs(titlebar.global_x - expectedTitlebarX) > 2) return null
       if (Math.abs(titlebar.global_y - expectedTitlebarY) > 2) return null
       if (actual.global_y !== titlebar.global_y) return null
@@ -54,6 +64,18 @@ async function waitForControlRect(
 async function clickMaximize(base: string, windowId: number, label: string) {
   const maximize = await waitForControlRect(base, windowId, label, 'maximize')
   await clickRect(base, maximize)
+}
+
+async function clickMaximizeWithoutSync(base: string, windowId: number, label: string) {
+  const maximize = await waitForControlRect(base, windowId, label, 'maximize')
+  await clickRectWithoutSync(base, maximize)
+  return maximize
+}
+
+async function clickMinimizeWithoutSync(base: string, windowId: number, label: string) {
+  const minimize = await waitForControlRect(base, windowId, label, 'minimize')
+  await clickRectWithoutSync(base, minimize)
+  return minimize
 }
 
 async function clickClose(base: string, windowId: number, label: string) {
@@ -80,6 +102,22 @@ async function restoreFromTaskbar(base: string, windowId: number, label: string)
   )
   await clickRect(base, activate)
   return waitForWindowRaised(base, windowId)
+}
+
+async function restoreFromTaskbarWithoutSync(base: string, windowId: number, label: string) {
+  const activate = await waitFor(
+    `${label} taskbar activate control`,
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const row = taskbarEntry(shell, windowId)
+      const rect = row?.activate
+      return rect && rect.width >= 12 && rect.height >= 12 ? rect : null
+    },
+    5000,
+    100,
+  )
+  await clickRectWithoutSync(base, activate)
+  return activate
 }
 
 async function dragTitlebarDown(base: string, windowId: number, label: string) {
@@ -164,25 +202,61 @@ function assertCompositorFrameContract(shell: ShellSnapshot, windowId: number, l
   )
 }
 
+function assertShellTracksCompositor(compositor: CompositorSnapshot, shell: ShellSnapshot, windowId: number, label: string) {
+  const shellWindow = shellWindowById(shell, windowId)
+  const compositorWindow = compositorWindowById(compositor, windowId)
+  assert(shellWindow, `${label} shell window missing`)
+  assert(compositorWindow, `${label} compositor window missing`)
+  assert(shellWindow.x === compositorWindow.x, `${label} x ${shellWindow.x} != compositor ${compositorWindow.x}`)
+  assert(shellWindow.y === compositorWindow.y, `${label} y ${shellWindow.y} != compositor ${compositorWindow.y}`)
+  assert(shellWindow.width === compositorWindow.width, `${label} width ${shellWindow.width} != compositor ${compositorWindow.width}`)
+  assert(shellWindow.height === compositorWindow.height, `${label} height ${shellWindow.height} != compositor ${compositorWindow.height}`)
+  assert(shellWindow.maximized === compositorWindow.maximized, `${label} maximized mismatch`)
+  assert(shellWindow.minimized === compositorWindow.minimized, `${label} minimized mismatch`)
+  assert(shellWindow.fullscreen === compositorWindow.fullscreen, `${label} fullscreen mismatch`)
+  assert(shellWindow.output_name === compositorWindow.output_name, `${label} output mismatch`)
+}
+
+async function waitForShellTracksCompositor(base: string, windowId: number, label: string) {
+  return waitFor(
+    `${label} shell compositor parity`,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      try {
+        assertShellTracksCompositor(snapshots.compositor, snapshots.shell, windowId, label)
+      } catch {
+        return null
+      }
+      return snapshots
+    },
+    5000,
+    40,
+  )
+}
+
 async function runChromeContract(context: TestContext, parity: ParityCase) {
   const { base } = context
   const opened = await parity.open(context)
   await waitForWindowRaised(base, opened.window_id)
-  const focused = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const focusedSnapshots = await getSnapshots(base)
+  const focused = focusedSnapshots.shell
   const visible = shellWindowById(focused, opened.window_id)
   assert(visible && !visible.minimized, `${parity.label} window visible after open`)
+  assertShellTracksCompositor(focusedSnapshots.compositor, focused, opened.window_id, parity.label)
   assertCompositorFrameContract(focused, opened.window_id, parity.label)
 
   await clickMaximize(base, opened.window_id, parity.label)
   const maximized = await waitForMaximized(base, opened.window_id, parity.label)
   assert(maximized.window.maximized, `${parity.label} should maximize through chrome click`)
-  assertCompositorFrameContract(maximized.shell, opened.window_id, `${parity.label} maximized`)
+  const maximizedSnapshots = await waitForShellTracksCompositor(base, opened.window_id, `${parity.label} maximized`)
+  assertCompositorFrameContract(maximizedSnapshots.shell, opened.window_id, `${parity.label} maximized`)
 
   const serialBeforeDrag = maximized.shell.compositor_interaction_state?.interaction_serial ?? 0
   await dragTitlebarDown(base, opened.window_id, parity.label)
   const restored = await waitForFloating(base, opened.window_id, parity.label)
   assert(restored.window.width > 100 && restored.window.height > 100, `${parity.label} restore keeps usable size`)
   const settled = await waitForChromeSettled(base, opened.window_id, parity.label)
+  assertShellTracksCompositor(settled.compositor, settled.shell, opened.window_id, `${parity.label} restored`)
   assert(
     (settled.shell.compositor_interaction_state?.interaction_serial ?? 0) > serialBeforeDrag,
     `${parity.label} interaction serial should advance after titlebar drag`,
@@ -192,9 +266,11 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
   const minimized = await waitForWindowMinimized(base, opened.window_id)
   const minimizedWindow = shellWindowById(minimized.shell, opened.window_id)
   assert(minimizedWindow?.minimized, `${parity.label} should minimize through chrome click`)
+  assertShellTracksCompositor(minimized.compositor, minimized.shell, opened.window_id, `${parity.label} minimized`)
 
   const taskbarRestored = await restoreFromTaskbar(base, opened.window_id, parity.label)
   assert(!taskbarRestored.window.minimized, `${parity.label} should restore through taskbar click`)
+  assertShellTracksCompositor(taskbarRestored.compositor, taskbarRestored.shell, opened.window_id, `${parity.label} taskbar restored`)
 
   await clickClose(base, opened.window_id, parity.label)
   await waitForWindowGone(base, opened.window_id, 5000)
@@ -205,6 +281,61 @@ async function runChromeContract(context: TestContext, parity: ParityCase) {
     restored: restored.window,
     minimized: minimizedWindow,
     taskbarRestored: taskbarRestored.window,
+  })
+}
+
+async function runFootMaximizeWithoutForcedSync(context: TestContext) {
+  const { base, state } = context
+  await spawnCommand(base, 'foot')
+  const opened = await waitFor(
+    'wait for raw foot maximize window',
+    async () => {
+      const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      return snapshot.windows.find(
+        (entry) =>
+          !entry.shell_hosted &&
+          !state.knownWindowIds.has(entry.window_id) &&
+          entry.app_id === 'foot' &&
+          !entry.minimized,
+      ) ?? null
+    },
+    5000,
+    40,
+  )
+  state.knownWindowIds.add(opened.window_id)
+  state.spawnedNativeWindowIds.add(opened.window_id)
+  const maximizeRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw')
+  const maximizedScreenshot = await captureScreenshotRect(base, maximizeRect)
+  const maximizedShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const maximizedCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  assertShellTracksCompositor(maximizedCompositor, maximizedShell, opened.window_id, 'foot raw maximized')
+  assertCompositorFrameContract(maximizedShell, opened.window_id, 'foot raw maximized')
+
+  const restoreRect = await clickMaximizeWithoutSync(base, opened.window_id, 'foot raw restored')
+  const restoredScreenshot = await captureScreenshotRect(base, restoreRect)
+  const restoredShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const restoredCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  assertShellTracksCompositor(restoredCompositor, restoredShell, opened.window_id, 'foot raw restored')
+  assertCompositorFrameContract(restoredShell, opened.window_id, 'foot raw restored')
+
+  const minimizeRect = await clickMinimizeWithoutSync(base, opened.window_id, 'foot raw minimized')
+  await waitForWindowMinimized(base, opened.window_id)
+  const restoreTaskbarRect = await restoreFromTaskbarWithoutSync(base, opened.window_id, 'foot raw taskbar restored')
+  const taskbarRestoredScreenshot = await captureScreenshotRect(base, restoreTaskbarRect)
+  const taskbarRestoredShell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+  const taskbarRestoredCompositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  assertShellTracksCompositor(taskbarRestoredCompositor, taskbarRestoredShell, opened.window_id, 'foot raw taskbar restored')
+  assertCompositorFrameContract(taskbarRestoredShell, opened.window_id, 'foot raw taskbar restored')
+
+  await writeJsonArtifact('window-parity-foot-raw-maximize-restore.json', {
+    windowId: opened.window_id,
+    maximizedScreenshot,
+    restoredScreenshot,
+    taskbarRestoredScreenshot,
+    minimizeRect,
+    shell: shellWindowById(taskbarRestoredShell, opened.window_id),
+    compositor: compositorWindowById(taskbarRestoredCompositor, opened.window_id),
+    controls: windowControls(taskbarRestoredShell, opened.window_id),
   })
 }
 
@@ -231,6 +362,30 @@ export default defineGroup(import.meta.url, ({ test }) => {
         return spawned.window
       },
     },
+    {
+      label: 'foot',
+      open: async ({ base, state }) => {
+        await spawnCommand(base, 'foot')
+        const opened = await waitFor(
+          'wait for foot parity window',
+          async () => {
+            const snapshot = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+            return snapshot.windows.find(
+              (entry) =>
+                !entry.shell_hosted &&
+                !state.knownWindowIds.has(entry.window_id) &&
+                entry.app_id === 'foot' &&
+                !entry.minimized,
+            ) ?? null
+          },
+          5000,
+          40,
+        )
+        state.knownWindowIds.add(opened.window_id)
+        state.spawnedNativeWindowIds.add(opened.window_id)
+        return opened
+      },
+    },
   ]
 
   for (const parity of cases) {
@@ -238,4 +393,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
       await runChromeContract(context, parity)
     })
   }
+
+  test('foot maximize click updates chrome without forced snapshot sync', async (context) => {
+    await runFootMaximizeWithoutForcedSync(context)
+  })
 })

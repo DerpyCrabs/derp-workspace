@@ -5,6 +5,9 @@ import {
   getJson,
   waitFor,
   writeJsonArtifact,
+  type CompositorSnapshot,
+  type OutputSnapshot,
+  type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { ensureNativeWindow, openShellTestWindow, postJson } from '../lib/setup.ts'
@@ -34,19 +37,45 @@ async function waitForPortalPickerClosed(base: string, timeoutMs = 5000): Promis
   )
 }
 
+function containingOutput(rect: Rect, outputs: OutputSnapshot[]): OutputSnapshot | null {
+  const right = rect.global_x + rect.width
+  const bottom = rect.global_y + rect.height
+  return (
+    outputs.find((output) => {
+      const outputRight = output.x + output.width
+      const outputBottom = output.y + output.height
+      return (
+        rect.global_x >= output.x &&
+        rect.global_y >= output.y &&
+        right <= outputRight &&
+        bottom <= outputBottom
+      )
+    }) ?? null
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('portal display capture picks monitor from shell layout', async ({ base }) => {
     const pickPromise = postJson<string>(base, '/portal_screencast_pick', { types: 1 })
     const shell = await waitForPortalPickerVisible(base)
+    const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
 
     assert((shell.portal_picker_windows?.length ?? 0) === 0, 'display-only picker should not show window options')
     assert((shell.portal_picker_monitors?.length ?? 0) > 0, 'display-only picker should show monitor options')
+    assert(shell.portal_picker_panel, 'display-only picker missing panel rect')
+    const panelOutput = containingOutput(shell.portal_picker_panel, compositor.outputs)
+    assert(
+      panelOutput,
+      `display-only picker panel is not contained by a single output: ${JSON.stringify(shell.portal_picker_panel)}`,
+    )
 
     const option = shell.portal_picker_monitors?.[0] ?? null
     assert(option?.rect, 'display-only picker missing first monitor rect')
 
     await writeJsonArtifact('portal-display-capture-picker.json', {
       panel: shell.portal_picker_panel,
+      panel_output: panelOutput?.name ?? null,
+      outputs: compositor.outputs,
       monitors: shell.portal_picker_monitors,
       windows: shell.portal_picker_windows,
     })

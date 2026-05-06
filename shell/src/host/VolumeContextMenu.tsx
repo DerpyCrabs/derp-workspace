@@ -1,5 +1,4 @@
-import { For, Show, onCleanup } from 'solid-js'
-import { createMemo } from 'solid-js'
+import { For, Show, createMemo, onCleanup } from 'solid-js'
 import { Select } from '@/host/Select'
 import { ShellAudioRow } from '@/apps/settings/ShellAudioControls'
 import type { ShellAudioDevice } from '@/apps/settings/audioState'

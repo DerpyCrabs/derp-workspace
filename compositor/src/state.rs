@@ -351,6 +351,17 @@ pub(crate) struct ScratchpadWindowState {
     pub scratchpad_id: String,
 }
 
+#[derive(Clone)]
+struct PendingNativeConfigureFrame {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    output_name: String,
+    maximized: bool,
+    fullscreen: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SuperHotkeyAction {
     Builtin(String),
@@ -706,6 +717,7 @@ pub struct CompositorState {
     keyboard_layout_by_window: HashMap<u32, u32>,
     keyboard_layout_last_focus_window: Option<u32>,
     keyboard_layout_focus_queue: VecDeque<KeyboardLayoutFocusOp>,
+    shell_keyboard_layout_label: String,
     pub(crate) shell_hosted_app_state: HashMap<u32, serde_json::Value>,
     pub(crate) hotkey_settings: crate::session::settings_config::HotkeySettingsFile,
     pub(crate) scratchpad_settings: crate::session::settings_config::ScratchpadSettingsFile,
@@ -731,6 +743,8 @@ pub struct CompositorState {
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
+    shell_pending_native_configure_frames: HashMap<u32, PendingNativeConfigureFrame>,
+    shell_known_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_tray_hidden_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_tray_hidden_x11_window_ids: HashSet<u32>,
     pub(crate) shell_tray_hidden_x11_notifier_window_ids: HashMap<String, u32>,
@@ -1557,6 +1571,7 @@ impl CompositorState {
             keyboard_layout_by_window: HashMap::new(),
             keyboard_layout_last_focus_window: None,
             keyboard_layout_focus_queue: VecDeque::new(),
+            shell_keyboard_layout_label: "?".into(),
             shell_hosted_app_state: HashMap::new(),
             hotkey_settings: crate::session::settings_config::read_hotkey_settings(),
             scratchpad_settings: crate::session::settings_config::read_scratchpad_settings(),
@@ -1578,6 +1593,8 @@ impl CompositorState {
             shell_spawn_target_output_name: None,
             shell_minimized_windows: HashMap::new(),
             shell_minimized_x11_windows: HashMap::new(),
+            shell_pending_native_configure_frames: HashMap::new(),
+            shell_known_x11_windows: HashMap::new(),
             shell_tray_hidden_x11_windows: HashMap::new(),
             shell_tray_hidden_x11_window_ids: HashSet::new(),
             shell_tray_hidden_x11_notifier_window_ids: HashMap::new(),
@@ -3129,7 +3146,7 @@ impl CompositorState {
             self.next_shell_workspace_revision();
         }
         let authoritative_snapshot =
-            self.shell_authoritative_snapshot_delta_messages(&msg, workspace_changed);
+            self.shell_authoritative_snapshot_messages(&msg, workspace_changed);
         let workspace_state_message = if workspace_changed {
             self.workspace_state_message()
         } else {
@@ -3172,62 +3189,44 @@ impl CompositorState {
         }
     }
 
-    fn shell_authoritative_snapshot_delta_messages(
+    fn shell_authoritative_snapshot_messages(
         &mut self,
         msg: &shell_wire::DecodedCompositorToShellMessage,
-        workspace_changed: bool,
+        _workspace_changed: bool,
     ) -> Option<Vec<shell_wire::DecodedCompositorToShellMessage>> {
         self.shell_clear_stale_primary_output();
         let mut messages = Vec::new();
-        match msg {
+        if matches!(
+            msg,
             shell_wire::DecodedCompositorToShellMessage::OutputGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::OutputLayout { .. }
-            | shell_wire::DecodedCompositorToShellMessage::KeyboardLayout { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WorkspaceStateBinary { .. }
-            | shell_wire::DecodedCompositorToShellMessage::ShellHostedAppState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::CommandPaletteState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::InteractionState { .. }
-            | shell_wire::DecodedCompositorToShellMessage::NativeDragPreview { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TrayHints { .. }
-            | shell_wire::DecodedCompositorToShellMessage::TraySni { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowOrder { .. } => {
-                messages.push(msg.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::FocusChanged { .. } => {
-                if let Some(window_order) = self.shell_window_order_message_if_changed() {
-                    messages.push(window_order);
-                }
-                messages.push(msg.clone());
-            }
-            shell_wire::DecodedCompositorToShellMessage::WorkspaceState { .. } => {
-                if let Some(workspace_state) = self.workspace_state_binary_message() {
-                    messages.push(workspace_state);
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowList { .. } => {
-                messages.push(msg.clone());
-                messages.push(self.shell_window_order_message());
-                if let Some(focus) = self.shell_focus_message_if_changed() {
-                    messages.push(focus);
-                }
-            }
-            shell_wire::DecodedCompositorToShellMessage::WindowMapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowUnmapped { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowGeometry { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowMetadata { .. }
-            | shell_wire::DecodedCompositorToShellMessage::WindowState { .. } => {
-                messages.push(msg.clone());
-                if let Some(focus) = self.shell_focus_message_if_changed() {
-                    messages.push(focus);
-                }
-            }
-            _ => {}
+        ) {
+            messages.push(msg.clone());
         }
-        if workspace_changed {
-            if let Some(workspace_state) = self.workspace_state_binary_message() {
-                messages.push(workspace_state);
-            }
+        if let Some(output_layout) = self.shell_output_layout_snapshot_message() {
+            messages.push(output_layout);
         }
+        messages.push(self.shell_window_list_snapshot_message());
+        messages.push(self.shell_window_order_snapshot_message());
+        messages.push(self.shell_focus_snapshot_message());
+        if let Some(workspace_state) = self.workspace_state_binary_message() {
+            messages.push(workspace_state);
+        }
+        messages.push(self.shell_hosted_app_state_message());
+        messages.push(shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
+            revision: self.command_palette_revision,
+            state_json: self.command_palette_state_value().to_string(),
+        });
+        messages.push(self.shell_interaction_state_message());
+        if let Some(native_drag_preview) = self.shell_native_drag_preview_message() {
+            messages.push(native_drag_preview);
+        }
+        messages.push(shell_wire::DecodedCompositorToShellMessage::KeyboardLayout {
+            label: self.shell_keyboard_layout_label.clone(),
+        });
+        messages.push(self.shell_tray_hints_message());
+        messages.push(shell_wire::DecodedCompositorToShellMessage::TraySni {
+            items: self.sni_tray_items.clone(),
+        });
         if messages.is_empty() {
             None
         } else {
@@ -3678,6 +3677,7 @@ impl CompositorState {
             self.shell_window_stack_forget(info.window_id);
             self.shell_minimized_windows.remove(&info.window_id);
             self.shell_minimized_x11_windows.remove(&info.window_id);
+            self.shell_known_x11_windows.remove(&info.window_id);
             self.shell_tray_hidden_x11_windows.remove(&info.window_id);
             self.forget_tray_hidden_x11_window_id(info.window_id);
         }
@@ -5494,6 +5494,7 @@ impl CompositorState {
                     target_h,
                     output_name.to_string(),
                     false,
+                    false,
                 );
                 continue;
             }
@@ -5620,6 +5621,7 @@ impl CompositorState {
                     target_w,
                     target_h,
                     output_name.to_string(),
+                    false,
                     false,
                 );
                 continue;
@@ -5780,6 +5782,7 @@ impl CompositorState {
     pub(crate) fn emit_keyboard_layout_to_shell(&mut self) {
         let raw = self.keyboard_layout_active_name_raw();
         let label = Self::keyboard_layout_label_short(&raw);
+        self.shell_keyboard_layout_label = label.clone();
         self.shell_emit_chrome_event(ChromeEvent::KeyboardLayout { label });
     }
 
@@ -6009,19 +6012,52 @@ impl CompositorState {
         let Some((gx, gy, gw, gh)) = self.wayland_window_shell_rect_and_deco(window) else {
             return;
         };
-        let output_name = self
-            .output_for_window_position(gx, gy, gw, gh)
-            .unwrap_or_default();
+        let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
+            return;
+        };
+        let (max, fs) = read_toplevel_tiling(wl);
+        let mut layout_w = gw;
+        let mut layout_h = gh;
+        let mut layout_max = max;
+        let mut layout_fs = fs;
+        let mut pending_output_name = None;
+        if let Some(pending) = self
+            .shell_pending_native_configure_frames
+            .get(&window_id)
+            .cloned()
+        {
+            if pending.x == gx
+                && pending.y == gy
+                && pending.width == gw
+                && pending.height == gh
+                && pending.maximized == max
+                && pending.fullscreen == fs
+            {
+                self.shell_pending_native_configure_frames
+                    .remove(&window_id);
+                pending_output_name = Some(pending.output_name);
+            } else {
+                layout_w = pending.width;
+                layout_h = pending.height;
+                layout_max = pending.maximized;
+                layout_fs = pending.fullscreen;
+                pending_output_name = Some(
+                    self.output_for_window_position(gx, gy, pending.width, pending.height)
+                        .unwrap_or(pending.output_name),
+                );
+            }
+        }
+        let output_name = pending_output_name.unwrap_or_else(|| {
+            self.output_for_window_position(gx, gy, layout_w, layout_h)
+                .unwrap_or_default()
+        });
         let changed = self
             .window_registry
-            .set_shell_layout(wl, gx, gy, gw, gh, output_name);
-        if let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) {
-            self.capture_refresh_window_source_cache(window_id);
-        }
-        let (max, fs) = read_toplevel_tiling(wl);
+            .set_shell_layout(wl, gx, gy, layout_w, layout_h, output_name);
+        self.capture_refresh_window_source_cache(window_id);
         let tiling_changed = self
             .window_registry
-            .set_tiling_state(wl, max, fs)
+            .set_tiling_state(wl, layout_max, layout_fs)
             .unwrap_or(false);
         let layout_or_tiling = changed == Some(true) || tiling_changed;
         if force_shell_emit || layout_or_tiling {
@@ -6040,7 +6076,20 @@ impl CompositorState {
         h: i32,
         output_name: String,
         maximized: bool,
+        fullscreen: bool,
     ) {
+        self.shell_pending_native_configure_frames.insert(
+            window_id,
+            PendingNativeConfigureFrame {
+                x,
+                y,
+                width: w.max(1),
+                height: h.max(1),
+                output_name: output_name.clone(),
+                maximized,
+                fullscreen,
+            },
+        );
         let snapshot = self.window_registry.update_native(window_id, |info| {
             info.x = x;
             info.y = y;
@@ -6048,7 +6097,7 @@ impl CompositorState {
             info.height = h.max(1);
             info.output_name = output_name.clone();
             info.maximized = maximized;
-            info.fullscreen = false;
+            info.fullscreen = fullscreen;
             info.clone()
         });
         if let Some(info) = snapshot {
@@ -6116,6 +6165,7 @@ impl CompositorState {
     pub(crate) fn clear_toplevel_layout_maps(&mut self, window_id: u32) {
         self.toplevel_floating_restore.remove(&window_id);
         self.toplevel_fullscreen_return_maximized.remove(&window_id);
+        self.shell_pending_native_configure_frames.remove(&window_id);
     }
 
     fn client_wl_output_for(&self, wl_surface: &WlSurface, output: &Output) -> Option<WlOutput> {
@@ -6159,7 +6209,7 @@ impl CompositorState {
         let Some(tl) = window.toplevel() else {
             return false;
         };
-        let geo = {
+        let (geo, output_name) = {
             let o = self
                 .toplevel_rect_snapshot(window)
                 .and_then(|(x, y, w, h)| self.output_for_global_xywh(x, y, w, h))
@@ -6170,7 +6220,7 @@ impl CompositorState {
             let Some(g) = self.shell_maximize_work_area_global_for_output(out) else {
                 return false;
             };
-            g
+            (g, out.name().to_string())
         };
         let wl = tl.wl_surface();
         let Some(window_id) = self.window_registry.window_id_for_wl_surface(wl) else {
@@ -6195,7 +6245,16 @@ impl CompositorState {
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
-        self.notify_geometry_if_changed(window);
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            map_x,
+            map_y,
+            content_w,
+            content_h,
+            output_name,
+            true,
+            false,
+        );
         true
     }
 
@@ -6245,7 +6304,16 @@ impl CompositorState {
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
-        self.notify_geometry_if_changed(window);
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            map_x,
+            map_y,
+            content_w,
+            content_h,
+            sm_out.name(),
+            false,
+            true,
+        );
         true
     }
 
@@ -6273,7 +6341,19 @@ impl CompositorState {
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
-        self.notify_geometry_if_changed(window);
+        let output_name = self
+            .output_for_window_position(x, y, w, h)
+            .unwrap_or_default();
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            x,
+            y,
+            w,
+            h,
+            output_name,
+            false,
+            false,
+        );
         true
     }
 
@@ -6306,7 +6386,24 @@ impl CompositorState {
         self.space
             .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
         tl.send_pending_configure();
-        self.notify_geometry_if_changed(window);
+        let output_name = self
+            .output_for_window_position(
+                x,
+                y,
+                DEFAULT_XDG_TOPLEVEL_WIDTH,
+                DEFAULT_XDG_TOPLEVEL_HEIGHT,
+            )
+            .unwrap_or_default();
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            x,
+            y,
+            DEFAULT_XDG_TOPLEVEL_WIDTH,
+            DEFAULT_XDG_TOPLEVEL_HEIGHT,
+            output_name,
+            false,
+            false,
+        );
         true
     }
 
@@ -6340,7 +6437,24 @@ impl CompositorState {
             self.space
                 .map_element(DerpSpaceElem::Wayland(window.clone()), (x, y), true);
             tl.send_pending_configure();
-            self.notify_geometry_if_changed(window);
+            let output_name = self
+                .output_for_window_position(
+                    x,
+                    y,
+                    DEFAULT_XDG_TOPLEVEL_WIDTH,
+                    DEFAULT_XDG_TOPLEVEL_HEIGHT,
+                )
+                .unwrap_or_default();
+            self.shell_emit_requested_native_geometry(
+                window_id,
+                x,
+                y,
+                DEFAULT_XDG_TOPLEVEL_WIDTH,
+                DEFAULT_XDG_TOPLEVEL_HEIGHT,
+                output_name,
+                false,
+                false,
+            );
             true
         }
     }
@@ -7131,9 +7245,17 @@ impl CompositorState {
         self.space
             .raise_element(&DerpSpaceElem::Wayland(window.clone()), true);
         tl.send_pending_configure();
-        self.notify_geometry_for_window(window, true);
         let tn = target.name().to_string();
-        let _ = self.window_registry.set_output_name_for_wl(wl, tn);
+        self.shell_emit_requested_native_geometry(
+            window_id,
+            map_x,
+            map_y,
+            content_w,
+            content_h,
+            tn,
+            false,
+            false,
+        );
         self.capture_refresh_window_source_cache(window_id);
     }
 
@@ -7266,10 +7388,27 @@ impl CompositorState {
     fn shell_output_layout_message(
         &mut self,
     ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        self.shell_output_layout_message_with_revision(true)
+    }
+
+    fn shell_output_layout_snapshot_message(
+        &mut self,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
+        self.shell_output_layout_message_with_revision(false)
+    }
+
+    fn shell_output_layout_message_with_revision(
+        &mut self,
+        bump_revision: bool,
+    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
         if self.workspace_logical_bounds().is_none() {
             return None;
         }
-        let revision = self.next_shell_output_topology_revision();
+        let revision = if bump_revision {
+            self.next_shell_output_topology_revision()
+        } else {
+            self.shell_output_topology_revision
+        };
         self.recompute_shell_canvas_from_outputs();
         let (lw, lh) = self.shell_canvas_logical_size;
         let (pw, ph) = self.shell_window_physical_px;
@@ -7919,7 +8058,15 @@ impl CompositorState {
         if let Some(tx) = &self.sni_tray_cmd_tx {
             let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::Activate { id: id.clone() });
         }
-        if let Some(window_id) = self.tray_hidden_x11_window_id_for_sni_item(&id) {
+        let fallback_window_id = if self.shell_tray_hidden_x11_windows.len() == 1 {
+            self.shell_tray_hidden_x11_windows.keys().next().copied()
+        } else {
+            None
+        };
+        if let Some(window_id) = self
+            .tray_hidden_x11_window_id_for_sni_item(&id)
+            .or(fallback_window_id)
+        {
             let _ = self.shell_restore_tray_hidden_x11_window_to_space(window_id);
         }
     }
@@ -8212,6 +8359,7 @@ impl CompositorState {
         self.remember_tray_hidden_x11_window_id(window_id, info.as_ref());
         self.shell_tray_hidden_x11_windows
             .insert(window_id, x11.clone());
+        self.shell_known_x11_windows.insert(window_id, x11.clone());
         if self.shell_pending_native_focus_window_id == Some(window_id) {
             self.shell_pending_native_focus_window_id = None;
         }
@@ -8260,7 +8408,12 @@ impl CompositorState {
     }
 
     fn shell_restore_tray_hidden_x11_window_to_space(&mut self, window_id: u32) -> bool {
-        let Some(x11) = self.shell_tray_hidden_x11_windows.get(&window_id).cloned() else {
+        let Some(x11) = self
+            .shell_tray_hidden_x11_windows
+            .get(&window_id)
+            .or_else(|| self.shell_known_x11_windows.get(&window_id))
+            .cloned()
+        else {
             return false;
         };
         let Some(info) = self.window_registry.window_info(window_id) else {
@@ -8397,7 +8550,12 @@ impl CompositorState {
             self.window_registry
                 .register_toplevel(surface, title, app_id, pid);
         }
-        self.emit_x11_window_updates(window, false, true)
+        let info = self.emit_x11_window_updates(window, false, true);
+        if let Some(info) = &info {
+            self.shell_known_x11_windows
+                .insert(info.window_id, window.clone());
+        }
+        info
     }
 
     fn cleanup_x11_window(&mut self, window: &X11Surface, emit_unmapped: bool) {
@@ -8410,6 +8568,7 @@ impl CompositorState {
             .is_some_and(|window_id| self.keyboard_focused_window_id() == Some(window_id));
         self.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
         if let Some(window_id) = window_id_pre {
+            self.shell_known_x11_windows.remove(&window_id);
             self.clear_toplevel_layout_maps(window_id);
             self.shell_close_pending_native_windows.remove(&window_id);
             if self.shell_pending_native_focus_window_id == Some(window_id) {
@@ -10236,9 +10395,14 @@ impl CompositorState {
         );
     }
 
-    fn shell_window_list_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
+    fn shell_window_list_rows_inner(
+        &mut self,
+        sync_capture_handles: bool,
+    ) -> Vec<shell_wire::ShellWindowSnapshot> {
         self.shell_window_stack_seed_known_windows();
-        self.capture_sync_toplevel_handles();
+        if sync_capture_handles {
+            self.capture_sync_toplevel_handles();
+        }
         let records = self.window_registry.all_records();
         let mut windows: Vec<shell_wire::ShellWindowSnapshot> = Vec::new();
         for record in records {
@@ -10265,10 +10429,21 @@ impl CompositorState {
         windows
     }
 
+    fn shell_window_list_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
+        self.shell_window_list_rows_inner(true)
+    }
+
     fn shell_window_list_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
         shell_wire::DecodedCompositorToShellMessage::WindowList {
             revision: self.next_shell_window_domain_revision(),
             windows: self.shell_window_list_rows(),
+        }
+    }
+
+    fn shell_window_list_snapshot_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
+        shell_wire::DecodedCompositorToShellMessage::WindowList {
+            revision: self.next_shell_window_domain_revision(),
+            windows: self.shell_window_list_rows_inner(false),
         }
     }
 
@@ -10293,29 +10468,25 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn shell_window_order_message_if_changed(
+    fn shell_window_order_snapshot_message(
         &mut self,
-    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
-        let windows: Vec<_> = self
-            .shell_window_list_rows()
+    ) -> shell_wire::DecodedCompositorToShellMessage {
+        let windows: Vec<shell_wire::ShellWindowOrderEntry> = self
+            .shell_window_list_rows_inner(false)
             .into_iter()
             .map(|window| shell_wire::ShellWindowOrderEntry {
                 window_id: window.window_id,
                 stack_z: window.stack_z,
             })
             .collect();
-        let signature: Vec<_> = windows
+        self.shell_last_sent_window_order = windows
             .iter()
             .map(|window| (window.window_id, window.stack_z))
             .collect();
-        if signature == self.shell_last_sent_window_order {
-            return None;
-        }
-        self.shell_last_sent_window_order = signature;
-        Some(shell_wire::DecodedCompositorToShellMessage::WindowOrder {
+        shell_wire::DecodedCompositorToShellMessage::WindowOrder {
             revision: self.next_shell_window_domain_revision(),
             windows,
-        })
+        }
     }
 
     fn enrich_shell_live_message(
@@ -10946,20 +11117,28 @@ impl CompositorState {
         }
     }
 
-    fn shell_focus_message_if_changed(
-        &mut self,
-    ) -> Option<shell_wire::DecodedCompositorToShellMessage> {
-        let window_id = self.logical_focused_window_id();
-        let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
-        let pair = (surface_id, window_id);
-        if self.shell_last_sent_focus_pair == Some(pair) {
-            return None;
-        }
-        self.shell_last_sent_focus_pair = Some(pair);
-        Some(shell_wire::DecodedCompositorToShellMessage::FocusChanged {
+    fn shell_focus_snapshot_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
+        let (surface_id, window_id) = self.shell_last_sent_focus_pair.unwrap_or((None, None));
+        let window_id = window_id.filter(|window_id| {
+            self.window_registry
+                .window_info(*window_id)
+                .map(|info| {
+                    !info.minimized
+                        && !self.window_info_is_solid_shell_host(&info)
+                        && shell_window_row_should_show(&info)
+                        && !self.shell_x11_window_is_tray_hidden(info.window_id)
+                })
+                .unwrap_or(false)
+        });
+        let surface_id = window_id.and_then(|window_id| {
+            self.window_registry
+                .surface_id_for_window(window_id)
+                .or(surface_id)
+        });
+        shell_wire::DecodedCompositorToShellMessage::FocusChanged {
             surface_id,
             window_id,
-        })
+        }
     }
 
     fn shell_tray_hints_message(&self) -> shell_wire::DecodedCompositorToShellMessage {
@@ -12272,6 +12451,7 @@ impl CompositorState {
                 content_h,
                 target_output_name,
                 layout_state == 1,
+                false,
             );
             let next_output_name = self
                 .window_registry
@@ -12474,6 +12654,10 @@ impl CompositorState {
             if self.x11_window_should_hide_to_tray_on_close(&info)
                 && self.window_registry.window_kind(window_id) == Some(WindowKind::Native)
             {
+                if let Some(x11) = self.shell_known_x11_windows.get(&window_id).cloned() {
+                    self.shell_hide_x11_window_to_tray(window_id, &x11);
+                    return;
+                }
                 self.remember_tray_hidden_x11_window_id(window_id, Some(&info));
                 self.shell_close_pending_native_windows.remove(&window_id);
                 self.shell_close_refocus_targets.remove(&window_id);
@@ -13039,7 +13223,16 @@ impl CompositorState {
                 }
             });
 
-            self.notify_geometry_if_changed(&window);
+            self.shell_emit_requested_native_geometry(
+                window_id,
+                info.x,
+                info.y,
+                info.width,
+                info.height,
+                info.output_name.clone(),
+                info.maximized,
+                info.fullscreen,
+            );
             self.shell_emit_window_state(window_id, false);
             return;
         }

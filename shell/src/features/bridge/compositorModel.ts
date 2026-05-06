@@ -110,6 +110,16 @@ function isWindowSnapshotDetail(detail: DerpShellDetail) {
   )
 }
 
+function isWindowRowDeltaDetail(detail: DerpShellDetail) {
+  return (
+    detail.type === 'window_geometry' ||
+    detail.type === 'window_metadata' ||
+    detail.type === 'window_state' ||
+    detail.type === 'window_mapped' ||
+    detail.type === 'window_unmapped'
+  )
+}
+
 function applyWindowSnapshotDetailsFromSnapshot(
   map: Map<number, DerpWindow>,
   details: readonly DerpShellDetail[],
@@ -189,7 +199,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   const windowAccessors = new Map<number, Accessor<DerpWindow | undefined>>()
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
   const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
-  const [windowsRevision, setWindowsRevision] = createSignal(-1)
+  const [, setWindowsRevision] = createSignal(-1)
   const [workspaceSnapshot, setWorkspaceSnapshot] = createSignal<WorkspaceSnapshot>(
     options.initialWorkspaceState ?? createEmptyWorkspaceSnapshot(),
   )
@@ -290,7 +300,15 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       return nextWindows
     }
 
+    const batchHasWindowList = details.some((detail) => detail.type === 'window_list')
     for (const detail of details) {
+      if (batchHasWindowList && isWindowRowDeltaDetail(detail)) {
+        results.push({
+          kind: 'ignored',
+          detailType: detail.type,
+        })
+        continue
+      }
       if (detail.type === 'focus_changed') {
         const windowId = coerceShellWindowId(detail.window_id)
         if (windowId !== null) {
@@ -320,13 +338,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
       if (detail.type === 'window_list') {
         const revision = coerceRevision(detail.revision)
-        if (revision !== windowsRevision()) {
-          nextWindows = buildWindowsMapFromList(detail.windows, currentWindows())
-          windowsMutated = nextWindows !== baseWindows
-          const nextOrderIds = collectWindowOrderIds(detail.windows)
-          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-          setWindowsRevision(revision)
-        }
+        nextWindows = buildWindowsMapFromList(detail.windows, currentWindows())
+        windowsMutated = nextWindows !== baseWindows
+        const nextOrderIds = collectWindowOrderIds(detail.windows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        setWindowsRevision((prev) => (prev === revision ? prev : revision))
         pendingWindowDetails.clear()
         if (pendingFocusedWindowId !== null && nextWindows.get(pendingFocusedWindowId)) {
           setFocusedWindowId((prev) => (prev === pendingFocusedWindowId ? prev : pendingFocusedWindowId))
@@ -518,14 +534,12 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const authoritative = collectSnapshotAuthoritativeState(details)
       let nextWindowsMap: Map<number, DerpWindow> | null = null
       if (authoritative.windows !== undefined) {
-        if (authoritative.windows.revision !== windowsRevision()) {
-          const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
-          commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
-          const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
-          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-          setWindowsRevision(authoritative.windows.revision)
-          nextWindowsMap = nextWindows
-        }
+        const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
+        commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+        const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        setWindowsRevision((prev) => (prev === authoritative.windows!.revision ? prev : authoritative.windows!.revision))
+        nextWindowsMap = nextWindows
         if (authoritative.focusedWindowId === undefined) {
           const map = nextWindowsMap ?? windows()
           setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
@@ -562,8 +576,9 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       const nextFocusedWindowId = authoritative.focusedWindowId
       let hasWindowDetails = false
       const unmappedWindowIds: number[] = []
+      const windowListIsAuthoritative = authoritative.windows !== undefined
       for (const detail of details) {
-        if (isWindowSnapshotDetail(detail)) {
+        if (!windowListIsAuthoritative && isWindowSnapshotDetail(detail)) {
           hasWindowDetails = true
           if (detail.type === 'window_unmapped') {
             const windowId = coerceShellWindowId(detail.window_id)

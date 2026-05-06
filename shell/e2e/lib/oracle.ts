@@ -5,6 +5,7 @@ export {
   assertTopWindow,
   assertWindowTiled,
   captureFailureArtifacts,
+  captureScreenshotRect,
   compositorFloatingLayerContainsPoint,
   compositorFloatingLayerCount,
   compositorFloatingLayerRect,

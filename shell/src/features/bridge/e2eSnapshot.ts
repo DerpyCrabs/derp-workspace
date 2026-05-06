@@ -488,7 +488,6 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     const hit = args.document.elementFromPoint(args.pointerClient.x, args.pointerClient.y)
     return !!(hit && customLayoutOverlayEl.contains(hit))
   })()
-
   const stackOrderedWindows = [...args.windows].sort((a, b) => b.stack_z - a.stack_z || b.window_id - a.window_id)
   const taskbarButtons = cache.queryAllAttr('data-shell-taskbar-side').map((taskbarEl) => ({
     monitor: taskbarEl.getAttribute('data-shell-taskbar-monitor') ?? '',

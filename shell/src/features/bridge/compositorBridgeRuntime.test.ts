@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  queuedCompositorDetailSurvivesSnapshotSync,
-  registerCompositorBridgeRuntime,
-} from './compositorBridgeRuntime'
+import { registerCompositorBridgeRuntime } from './compositorBridgeRuntime'
 import type { CompositorApplyResult } from './compositorModel'
 import type { DerpShellDetail } from '@/host/appWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 
-const DOMAIN_COUNT = 13
+const DOMAIN_COUNT = 14
 const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
 const SNAPSHOT_DOMAIN_KEYBOARD = 1 << 3
 
@@ -35,7 +32,8 @@ function domainRevisions(overrides: Partial<Record<number, bigint>> = {}): numbe
 }
 
 function snapshot(sequence: bigint, domainFlags = 0, revisions: Partial<Record<number, bigint>> = {}, packets: number[] = []): ArrayBuffer {
-  const payload = [...domainRevisions(revisions), ...u32(0x4452444d), ...u32(0), ...packets]
+  const chunks = packets.length > 0 ? [...u32(domainFlags), ...u32(packets.length), ...packets] : []
+  const payload = [...domainRevisions(revisions), ...u32(0x4452444d), ...u32(packets.length > 0 ? 1 : 0), ...chunks]
   return new Uint8Array([
     ...u32(0x44525053),
     ...u32(0),
@@ -62,6 +60,15 @@ function utf8Bytes(text: string): number[] {
 function keyboardLayoutSnapshot(sequence: bigint, label: string, revision: bigint): ArrayBuffer {
   const body = [...u64(revision), ...u32(label.length), ...utf8Bytes(label)]
   return snapshot(sequence, SNAPSHOT_DOMAIN_KEYBOARD, { 3: revision }, [ ...packet(52, body) ])
+}
+
+function emptyWindowListSnapshot(sequence: bigint, revision = 2n): ArrayBuffer {
+  return snapshot(sequence, SNAPSHOT_DOMAIN_WINDOWS, { 1: revision }, [
+    ...packet(11, [
+      ...u64(revision),
+      ...u32(0),
+    ]),
+  ])
 }
 
 function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRuntime>[0]> = {}) {
@@ -169,78 +176,7 @@ describe('registerCompositorBridgeRuntime', () => {
     dispose()
   })
 
-  it('drops queued stale geometry after newer snapshot claims geometry domain', () => {
-    expect(
-      queuedCompositorDetailSurvivesSnapshotSync(
-        {
-          type: 'window_geometry',
-          window_id: 7,
-          surface_id: 70,
-          x: 3197,
-          y: 279,
-          width: 560,
-          height: 360,
-          output_name: 'DP-1',
-          maximized: false,
-          fullscreen: false,
-          snapshot_epoch: 174,
-        } satisfies DerpShellDetail,
-        {
-          sequence: 188,
-          domainFlags: 1 << 10,
-          incremental: true,
-        },
-      ),
-    ).toBe(false)
-  })
-
-  it('keeps queued geometry when newer snapshot omitted geometry domain', () => {
-    expect(
-      queuedCompositorDetailSurvivesSnapshotSync(
-        {
-          type: 'window_geometry',
-          window_id: 7,
-          surface_id: 70,
-          x: 3197,
-          y: 279,
-          width: 560,
-          height: 360,
-          output_name: 'DP-1',
-          maximized: false,
-          fullscreen: false,
-          snapshot_epoch: 174,
-        } satisfies DerpShellDetail,
-        {
-          sequence: 188,
-          domainFlags: SNAPSHOT_DOMAIN_KEYBOARD,
-          incremental: true,
-        },
-      ),
-    ).toBe(true)
-  })
-
-  it('keeps compositor window order details even when a newer snapshot claims the order domain', () => {
-    expect(
-      queuedCompositorDetailSurvivesSnapshotSync(
-        {
-          type: 'window_order',
-          revision: 12,
-          windows: [
-            { window_id: 50, stack_z: 2 },
-            { window_id: 51, stack_z: 3 },
-          ],
-          snapshot_epoch: 174,
-        } satisfies DerpShellDetail,
-        {
-          sequence: 188,
-          domainFlags: 1 << 9,
-          incremental: true,
-        },
-      ),
-    ).toBe(true)
-  })
-
-  it('keeps newer hot window details live while snapshot catchup is pending', async () => {
+  it('does not apply compositor state details directly while snapshot catchup is pending', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
@@ -264,11 +200,11 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetail).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.applyModelCompositorDetail).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('applies newer focus details directly instead of forcing compositor resync', async () => {
+  it('does not apply focus details directly instead of snapshot replacement', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
@@ -288,12 +224,12 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('keeps stale mapped details live when a newer incremental snapshot only covered another domain', async () => {
+  it('does not keep stale mapped details live when a snapshot only covered another domain', async () => {
     const readSnapshot = vi
       .fn()
       .mockReturnValueOnce(emptySnapshot(10n))
@@ -337,7 +273,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -380,7 +316,7 @@ describe('registerCompositorBridgeRuntime', () => {
     dispose()
   })
 
-  it('keeps same-epoch geometry details live after an unrelated snapshot from the same epoch', async () => {
+  it('does not apply same-epoch geometry details directly after an unrelated snapshot', async () => {
     const readSnapshot = vi
       .fn()
       .mockReturnValueOnce(emptySnapshot(10n))
@@ -421,71 +357,12 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('ignores same-epoch snapshot geometry after a newer direct geometry detail already landed', async () => {
-    const readSnapshot = vi
-      .fn()
-      .mockReturnValueOnce(emptySnapshot(10n))
-      .mockReturnValueOnce(
-        snapshot(
-          12n,
-          1 << 10,
-          { 10: 2n },
-          [
-            ...packet(8, [
-              ...u32(7),
-              ...u32(70),
-              ...u32(11),
-              ...u32(12),
-              ...u32(640),
-              ...u32(480),
-              ...u32(0),
-              ...u32(0),
-              ...u32(0),
-              ...u32(4),
-              ...utf8Bytes('DP-4'),
-            ]),
-          ],
-        ),
-      )
-    vi.stubGlobal('window', {
-      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
-      __derpCompositorSnapshotRead: readSnapshot,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })
-    const runtimeOptions = options()
-    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
-
-    await Promise.resolve()
-    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
-      {
-        type: 'window_geometry',
-        window_id: 7,
-        surface_id: 70,
-        x: 2160,
-        y: 242,
-        width: 900,
-        height: 820,
-        output_name: 'DP-4',
-        maximized: false,
-        fullscreen: false,
-        snapshot_epoch: 12,
-      } satisfies DerpShellDetail,
-    ])
-
-    vi.mocked(runtimeOptions.applyModelCompositorSnapshot).mockClear()
-    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
-
-    expect(runtimeOptions.applyModelCompositorSnapshot).not.toHaveBeenCalled()
-    dispose()
-  })
-
-  it('applies newer interaction state details immediately while snapshot catchup is pending', async () => {
+  it('does not apply interaction state details directly while snapshot catchup is pending', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
@@ -518,31 +395,12 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.setCompositorInteractionState).toHaveBeenCalledWith({
-      revision: 0,
-      interaction_serial: 0,
-      pointer_x: 42,
-      pointer_y: 64,
-      move_window_id: 7,
-      window_switcher_selected_window_id: null,
-      resize_window_id: null,
-      move_proxy_window_id: null,
-      move_capture_window_id: null,
-      move_rect: {
-        x: 11,
-        y: 12,
-        width: 640,
-        height: 480,
-        maximized: false,
-        fullscreen: false,
-      },
-      resize_rect: null,
-    })
+    expect(runtimeOptions.setCompositorInteractionState).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('keeps interaction state when a partial snapshot omits the interaction domain', async () => {
+  it('does not synthesize interaction state from direct details when snapshot omits the interaction domain', async () => {
     const readSnapshot = vi
       .fn()
       .mockReturnValueOnce(emptySnapshot(10n))
@@ -584,27 +442,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.setCompositorInteractionState).toHaveBeenNthCalledWith(1, {
-      revision: 0,
-      interaction_serial: 0,
-      pointer_x: 42,
-      pointer_y: 64,
-      move_window_id: 7,
-      window_switcher_selected_window_id: null,
-      resize_window_id: null,
-      move_proxy_window_id: null,
-      move_capture_window_id: null,
-      move_rect: {
-        x: 11,
-        y: 12,
-        width: 640,
-        height: 480,
-        maximized: false,
-        fullscreen: false,
-      },
-      resize_rect: null,
-    })
-    expect(runtimeOptions.setCompositorInteractionState).not.toHaveBeenCalledWith(null)
+    expect(runtimeOptions.setCompositorInteractionState).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -685,9 +523,10 @@ describe('registerCompositorBridgeRuntime', () => {
   })
 
   it('forces a shell repaint after window unmap', async () => {
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(emptyWindowListSnapshot(12n))
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
-      __derpCompositorSnapshotRead: vi.fn(() => emptySnapshot(10n)),
+      __derpCompositorSnapshotRead: readSnapshot,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })
@@ -705,13 +544,20 @@ describe('registerCompositorBridgeRuntime', () => {
   })
 
   it('flushes shared shell state and repaints for compositor chrome-affecting batches', async () => {
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(emptyWindowListSnapshot(12n))
     vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })
     const runtimeOptions = options()
     const dispose = registerCompositorBridgeRuntime(runtimeOptions)
 
+    await Promise.resolve()
+    vi.mocked(runtimeOptions.scheduleCompositorFollowup).mockClear()
+    vi.mocked(runtimeOptions.bumpSnapChrome).mockClear()
+    vi.mocked(runtimeOptions.shellWireSend).mockClear()
     window.__DERP_APPLY_COMPOSITOR_BATCH?.([
       {
         type: 'window_geometry',
@@ -748,27 +594,7 @@ describe('registerCompositorBridgeRuntime', () => {
   })
 
   it('flushes shared shell state and repaints for compositor chrome-affecting snapshots', async () => {
-    const geometrySnapshot = snapshot(
-      12n,
-      1 << 10,
-      { 10: 2n },
-      [
-        ...packet(8, [
-          ...u32(7),
-          ...u32(70),
-          ...u32(11),
-          ...u32(12),
-          ...u32(640),
-          ...u32(480),
-          ...u32(0),
-          ...u32(0),
-          ...u32(0),
-          ...u32(4),
-          ...utf8Bytes('DP-1'),
-        ]),
-      ],
-    )
-    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(geometrySnapshot)
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(emptyWindowListSnapshot(12n))
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
       __derpCompositorSnapshotRead: readSnapshot,
@@ -793,17 +619,7 @@ describe('registerCompositorBridgeRuntime', () => {
   })
 
   it('flushes shared shell state and repaints for authoritative window list snapshots', async () => {
-    const windowListSnapshot = snapshot(
-      12n,
-      SNAPSHOT_DOMAIN_WINDOWS,
-      { 1: 2n },
-      [
-        ...packet(11, [
-          ...u64(2n),
-          ...u32(0),
-        ]),
-      ],
-    )
+    const windowListSnapshot = emptyWindowListSnapshot(12n)
     const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(windowListSnapshot)
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',

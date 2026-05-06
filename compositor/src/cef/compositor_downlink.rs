@@ -398,23 +398,23 @@ fn dispatch_shell_snapshot_notify(browser: &Browser) {
 fn flush_shell_updates(
     browser: Option<&Browser>,
     details: &mut Vec<Value>,
-    snapshot_dirty: &mut bool,
+    snapshot_notify_pending: &mut bool,
 ) {
-    if !*snapshot_dirty && details.is_empty() {
+    if !*snapshot_notify_pending && details.is_empty() {
         return;
     }
     let Some(browser) = browser else {
         details.clear();
-        *snapshot_dirty = false;
+        *snapshot_notify_pending = false;
         return;
     };
     if !details.is_empty() {
         dispatch_shell_detail_batch(browser, details);
         details.clear();
     }
-    if *snapshot_dirty {
+    if *snapshot_notify_pending {
         dispatch_shell_snapshot_notify(browser);
-        *snapshot_dirty = false;
+        *snapshot_notify_pending = false;
     }
 }
 
@@ -437,7 +437,7 @@ pub fn apply_messages(
         Err(_) => return,
     };
     let mut pending_details = Vec::new();
-    let mut snapshot_dirty = false;
+    let mut snapshot_notify_pending = false;
     for pending in messages {
         apply_message(
             pending.msg,
@@ -445,10 +445,10 @@ pub fn apply_messages(
             browser.as_ref(),
             view_state,
             &mut pending_details,
-            &mut snapshot_dirty,
+            &mut snapshot_notify_pending,
         );
     }
-    flush_shell_updates(browser.as_ref(), &mut pending_details, &mut snapshot_dirty);
+    flush_shell_updates(browser.as_ref(), &mut pending_details, &mut snapshot_notify_pending);
 }
 
 fn apply_message(
@@ -457,7 +457,7 @@ fn apply_message(
     browser: Option<&Browser>,
     view_state: &Mutex<OsrViewState>,
     pending_details: &mut Vec<Value>,
-    _snapshot_dirty: &mut bool,
+    _snapshot_notify_pending: &mut bool,
 ) {
     match msg {
         shell_wire::DecodedCompositorToShellMessage::OutputGeometry {

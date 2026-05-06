@@ -114,11 +114,16 @@ type ShellWindowDragSession = {
   lastY: number
   startX: number
   superHeld: boolean
+  snapAssist: boolean
   stripArmed: boolean
   edgeSnapArmed: boolean
   startedTiled: boolean
   startedMaximized: boolean
   measure: ShellDragMeasureCache | null
+}
+
+type ShellWindowDragOptions = {
+  snapAssist?: boolean
 }
 
 type ShellWindowGestureRuntimeOptions = {
@@ -786,7 +791,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     options.shellWireSend('set_maximized', windowId, 1)
   }
 
-  function beginShellWindowMove(windowId: number, clientX: number, clientY: number) {
+  function beginShellWindowMove(windowId: number, clientX: number, clientY: number, dragOptions: ShellWindowDragOptions = {}) {
     if (shellWindowResize !== null) return
     options.shellMoveLog('titlebar_begin_request', { windowId, clientX, clientY })
     shellMoveDeltaLogSeq = 0
@@ -843,6 +848,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       lastY: Math.round(clientY),
       startX: Math.round(clientX),
       superHeld: false,
+      snapAssist: dragOptions.snapAssist ?? true,
       stripArmed,
       edgeSnapArmed: !window?.maximized && !startedTiled,
       startedTiled,
@@ -854,7 +860,13 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
     options.shellMoveLog('titlebar_begin_armed', { windowId, clientX, clientY })
   }
 
-  function adoptShellWindowMove(windowId: number, clientX: number, clientY: number, moved = true) {
+  function adoptShellWindowMove(
+    windowId: number,
+    clientX: number,
+    clientY: number,
+    moved = true,
+    dragOptions: ShellWindowDragOptions = {},
+  ) {
     if (shellWindowResize !== null) return false
     const cx = Math.round(clientX)
     const cy = Math.round(clientY)
@@ -873,6 +885,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
       lastY: cy,
       startX: cx,
       superHeld: false,
+      snapAssist: dragOptions.snapAssist ?? true,
       stripArmed: true,
       edgeSnapArmed:
         !window?.maximized &&
@@ -888,6 +901,7 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   }
 
   function updateDragSnapAssist(windowId: number, clientX: number, clientY: number, superHeld: boolean) {
+    if (!shellWindowDrag?.snapAssist) return
     const measure = readDragMeasure(windowId)
     if (!measure) return
     const global = clientPointToGlobalLogical(
@@ -1270,6 +1284,8 @@ export function createShellWindowGestureRuntime(options: ShellWindowGestureRunti
   const dragSnapAssistContext = createMemo(() => {
     const windowId = dragWindowId()
     if (windowId == null) return null
+    if (shellWindowDrag?.windowId !== windowId) return null
+    if (!shellWindowDrag.snapAssist) return null
     return resolveSnapAssistContext(windowId)
   })
 

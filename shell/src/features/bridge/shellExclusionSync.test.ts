@@ -1,4 +1,4 @@
-import { createRoot } from 'solid-js'
+import { createRoot, createSignal } from 'solid-js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
@@ -116,6 +116,125 @@ describe('createShellExclusionSync', () => {
 
     registration.unregister()
     dispose()
+  })
+
+  it('flushes removed exclusions immediately', async () => {
+    const send = vi.fn().mockReturnValue(true)
+    vi.stubGlobal('window', {
+      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
+      __derpShellSharedStateWrite: send,
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellExclusionSync')
+    const main = {
+      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
+    } as unknown as HTMLElement
+
+    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
+    const dispose = createRoot((dispose) => {
+      runtime = mod.createShellExclusionSync({
+        mainEl: () => main,
+        outputGeom: () => ({ w: 1920, h: 1080 }),
+        layoutCanvasOrigin: () => null,
+        taskbarScreens: () => [],
+        taskbarHeight: 36,
+        taskbarAutoHide: () => false,
+        windows: () => [],
+        onHudChange: vi.fn(),
+        exclusionReactiveDeps: () => 0,
+      })
+      return dispose
+    })
+
+    const registration = mod.registerShellExclusionRect('floating', 'menu', () => ({ x: 1, y: 2, w: 3, h: 4 }))
+    runtime!.syncExclusionZonesNow()
+    send.mockClear()
+
+    registration.unregister()
+    expect(send).toHaveBeenCalledTimes(1)
+
+    dispose()
+  })
+
+  it('does not dirty exclusions for window geometry changes that do not affect taskbar fullscreen state', async () => {
+    const send = vi.fn().mockReturnValue(true)
+    vi.stubGlobal('window', {
+      __DERP_SHELL_EXCLUSION_STATE_PATH: '/tmp/exclusion.bin',
+      __derpShellSharedStateWrite: send,
+    })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const mod = await import('./shellExclusionSync')
+    const main = {
+      getBoundingClientRect: vi.fn(() => rect(0, 0, 1920, 1080)),
+    } as unknown as HTMLElement
+    const screen = {
+      name: 'DP-1',
+      identity: 'make:model:serial',
+      x: 0,
+      y: 0,
+      width: 1200,
+      height: 900,
+      physical_width: 1200,
+      physical_height: 900,
+      transform: 0,
+      refresh_milli_hz: 60000,
+      vrr_supported: false,
+      vrr_enabled: false,
+      taskbar_side: 'bottom' as const,
+    }
+    const windowRow = {
+      window_id: 7,
+      surface_id: 7,
+      stack_z: 1,
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+      title: 'moving',
+      app_id: 'test',
+      output_id: 'make:model:serial',
+      output_name: 'DP-1',
+      kind: 'native',
+      x11_class: '',
+      x11_instance: '',
+      minimized: false,
+      maximized: false,
+      fullscreen: false,
+      shell_flags: 0,
+      capture_identifier: '',
+      workspace_visible: true,
+    }
+
+    let runtime: ReturnType<typeof mod.createShellExclusionSync> | null = null
+    const dispose = createRoot((dispose) => {
+      const [windows, setWindows] = createSignal([windowRow])
+      runtime = mod.createShellExclusionSync({
+        mainEl: () => main,
+        outputGeom: () => ({ w: 1920, h: 1080 }),
+        layoutCanvasOrigin: () => null,
+        taskbarScreens: () => [screen],
+        taskbarHeight: 36,
+        taskbarAutoHide: () => false,
+        windows,
+        onHudChange: vi.fn(),
+        exclusionReactiveDeps: () => 0,
+      })
+      return { dispose, setWindows }
+    })
+
+    runtime!.syncExclusionZonesNow()
+    send.mockClear()
+
+    dispose.setWindows([{ ...windowRow, x: 100, y: 40 }])
+    await Promise.resolve()
+    runtime!.syncExclusionZonesNow()
+    expect(send).not.toHaveBeenCalled()
+
+    dispose.dispose()
   })
 
   it('emits taskbar exclusions for configured sides and auto-hide trigger strips', async () => {

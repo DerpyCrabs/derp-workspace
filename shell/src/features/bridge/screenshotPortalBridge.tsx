@@ -33,6 +33,7 @@ type ScreenshotSelectionState = {
 const PORTAL_PICKER_PREVIEW_W = 520
 const PORTAL_PICKER_PREVIEW_H = 260
 const PORTAL_PICKER_PREVIEW_PAD = 16
+const PORTAL_PICKER_EDGE_PAD = 24
 
 type ScreenshotPortalBridgeOptions = {
   getMainRef: () => HTMLElement | undefined
@@ -302,17 +303,19 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
       og.w,
       og.h,
     )
-    const width = Math.max(320, Math.min(960, screenCss.width - 48))
-    const maxHeight = Math.max(280, screenCss.height - 48)
-    const mainRect = main.getBoundingClientRect()
-    const stripHeight = Math.max(1, mainRect.height)
+    const edgePad = Math.min(PORTAL_PICKER_EDGE_PAD, Math.max(0, Math.floor(Math.min(screenCss.width, screenCss.height) / 8)))
+    const availableW = Math.max(1, screenCss.width - edgePad * 2)
+    const availableH = Math.max(1, screenCss.height - edgePad * 2)
+    const width = Math.max(1, Math.min(960, availableW))
+    const maxHeight = Math.max(1, Math.min(760, availableH))
+    const left = screenCss.left + edgePad + Math.max(0, (availableW - width) / 2)
+    const top = screenCss.top + edgePad + Math.max(0, (availableH - maxHeight) / 2)
     return {
       placement: {
-        left: '50%',
-        top: `${Math.max(8, Math.round((stripHeight - maxHeight) / 2))}px`,
+        left: `${Math.round(left)}px`,
+        top: `${Math.round(top)}px`,
         width: `${Math.round(width)}px`,
         'max-height': `${Math.round(maxHeight)}px`,
-        transform: 'translateX(-50%)',
       } as const,
     }
   })
@@ -439,6 +442,13 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
       onCleanup(registration.unregister)
     }
 
+    function activatePortalPickerChoice(event: PointerEvent, selection: string | null) {
+      if (!event.isPrimary || event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      void resolvePortalPicker(selection)
+    }
+
     onMount(() => {
       options.acquireOverlayPointer()
       const onKeyDown = (event: KeyboardEvent) => {
@@ -487,7 +497,7 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                   panel = element
                 }}
                 data-shell-portal-picker-panel
-                class="absolute border border-white/12 bg-(--shell-overlay) p-5 text-(--shell-text) shadow-2xl"
+                class="absolute overflow-auto border border-white/12 bg-(--shell-overlay) p-5 text-(--shell-text) shadow-2xl"
                 style={
                   portalPickerLayout()?.placement ?? {
                     left: '50%',
@@ -520,6 +530,9 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                     disabled={portalPickerBusy()}
                     data-shell-portal-picker-cancel
                     class="rounded-lg border border-(--shell-border) px-3 py-1.5 text-sm text-(--shell-text-muted) transition-colors hover:bg-(--shell-hover)"
+                    onPointerUp={(event) => {
+                      activatePortalPickerChoice(event, null)
+                    }}
                     onClick={() => {
                       void resolvePortalPicker(null)
                     }}
@@ -557,6 +570,9 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                                 data-shell-portal-picker-window-capture={window.capture_identifier}
                                 data-shell-portal-picker-window-title={title}
                                 class="border border-(--shell-border) bg-(--shell-surface-elevated) hover:border-(--shell-accent-border) hover:bg-(--shell-surface-hover) flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--shell-accent)"
+                                onPointerUp={(event) => {
+                                  activatePortalPickerChoice(event, `Window: ${window.capture_identifier}`)
+                                }}
                                 onClick={() => {
                                   void resolvePortalPicker(`Window: ${window.capture_identifier}`)
                                 }}
@@ -635,6 +651,9 @@ export function createScreenshotPortalBridge(options: ScreenshotPortalBridgeOpti
                                     top: `${(rect.top / PORTAL_PICKER_PREVIEW_H) * 100}%`,
                                     width: `${(rect.width / PORTAL_PICKER_PREVIEW_W) * 100}%`,
                                     height: `${(rect.height / PORTAL_PICKER_PREVIEW_H) * 100}%`,
+                                  }}
+                                  onPointerUp={(event) => {
+                                    activatePortalPickerChoice(event, `Monitor: ${rect.row.name}`)
                                   }}
                                   onClick={() => {
                                     void resolvePortalPicker(`Monitor: ${rect.row.name}`)

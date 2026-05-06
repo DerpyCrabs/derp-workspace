@@ -32,6 +32,9 @@ import {
   windowControls,
   writeJsonArtifact,
   X11_XTERM_APP_ID,
+  type CompositorSnapshot,
+  type OutputSnapshot,
+  type Rect,
   type ShellSnapshot,
 } from '../lib/runtime.ts'
 
@@ -42,6 +45,23 @@ const execFileAsync = promisify(execFile)
 
 function v2rayNWindow(shell: ShellSnapshot) {
   return shell.windows.find((window) => /v2rayn/i.test(`${window.title} ${window.app_id}`))
+}
+
+function containingOutput(rect: Rect, outputs: OutputSnapshot[]): OutputSnapshot | null {
+  const right = rect.global_x + rect.width
+  const bottom = rect.global_y + rect.height
+  return (
+    outputs.find((output) => {
+      const outputRight = output.x + output.width
+      const outputBottom = output.y + output.height
+      return (
+        rect.global_x >= output.x &&
+        rect.global_y >= output.y &&
+        right <= outputRight &&
+        bottom <= outputBottom
+      )
+    }) ?? null
+  )
 }
 
 async function waitForV2rayNVisible(base: string) {
@@ -72,7 +92,11 @@ async function closeV2rayNTaskbarRow(base: string, shell: ShellSnapshot, windowI
     2000,
     40,
   )
-  await clickRect(base, assertRectMinSize('v2rayN close window action', action.rect, 32, 18))
+  const closeRect = assertRectMinSize('v2rayN close window action', action.rect, 32, 18)
+  const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+  const output = containingOutput(closeRect, compositor.outputs)
+  assert(output, `v2rayN close menu action is not contained by one output: ${JSON.stringify(closeRect)}`)
+  await clickRect(base, closeRect)
 }
 
 async function waitForV2rayNTrayHidden(base: string, windowId: number) {

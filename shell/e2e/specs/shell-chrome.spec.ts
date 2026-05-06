@@ -954,7 +954,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
           sharedStateUiWindowWrites: 8,
           sharedStateExclusionWrites: 8,
           fullWindowListReplies: 2,
-          snapshotDirtyFallbacks: 0,
         },
       },
     )

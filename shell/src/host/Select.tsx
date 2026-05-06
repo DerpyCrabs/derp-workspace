@@ -40,14 +40,30 @@ const DEFAULT_LIST_CLASS =
 const DEFAULT_INLINE_LIST_CLASS =
   'border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) mt-1 flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-0.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]'
 
+const durableFloatingSelectOpen = new Map<string, ReturnType<typeof createSignal<boolean>>>()
+
+function durableFloatingSelectSignal(id: string) {
+  let signal = durableFloatingSelectOpen.get(id)
+  if (!signal) {
+    signal = createSignal(false)
+    durableFloatingSelectOpen.set(id, signal)
+  }
+  return signal
+}
+
 export const Select: Component<SelectProps<unknown>> = (props) => {
   const shellFloat = useShellFloating()
   const [internalOpen, setInternalOpen] = createSignal(false)
+  const durableOpen = props.panelDataId && props.placement === 'floating' && props.contextMenuPolicy === 'preserve'
+    ? durableFloatingSelectSignal(props.panelDataId)
+    : null
   const isOpen = () =>
-    props.open !== undefined ? props.open() : internalOpen()
+    durableOpen ? durableOpen[0]() : props.open !== undefined ? props.open() : internalOpen()
   const setIsOpen = (v: boolean) => {
     props.setOpen?.(v)
-    if (props.open === undefined) setInternalOpen(v)
+    if (durableOpen) {
+      durableOpen[1](v)
+    } else if (props.open === undefined) setInternalOpen(v)
   }
   const behavior = () =>
     resolveSelectBehavior({
@@ -61,7 +77,8 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
   let panelEl: HTMLDivElement | undefined
   let suppressTriggerClick = false
   let handledTriggerPointerDown = false
-  const layerId = `select:${createUniqueId()}`
+  const generatedLayerId = createUniqueId()
+  const layerId = `select:${props.panelDataId ?? generatedLayerId}`
 
   const [parentLayerId, setParentLayerId] = createSignal<string | null>(null)
   const [floatingStyle, setFloatingStyle] = createSignal<Record<string, string>>({})
@@ -70,6 +87,7 @@ export const Select: Component<SelectProps<unknown>> = (props) => {
 
   createEffect(() => {
     if (!isOpen() || !floatingPlacement()) return
+    if (preserveContextMenu()) return
     shellFloat.acquireOverlayPointer()
     onCleanup(() => shellFloat.releaseOverlayPointer())
   })

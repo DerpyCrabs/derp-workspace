@@ -5,17 +5,25 @@ import {
   ContextMenuItem,
   ContextMenuPortal,
 } from '@/components/ui/context-menu'
-import type { ShellContextMenuItem } from '@/host/contextMenu'
+import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
+import { fitContextMenuClientPosition, type ClientMenuBounds, type ShellContextMenuItem } from '@/host/contextMenu'
 
 export function FileBrowserContextMenu(props: {
   open: () => boolean
-  anchor: () => { x: number; y: number } | null
+  anchor: () => { x: number; y: number; alignAboveY?: number } | null
   items: () => ShellContextMenuItem[]
   onRequestClose: () => void
+  bounds?: () => ClientMenuBounds | null
   portalMount?: () => Node | undefined
 }) {
   let panelEl: HTMLDivElement | undefined
   const [placed, setPlaced] = createSignal({ left: 0, top: 0, maxHeight: 320 })
+
+  function registerPanel(el: HTMLDivElement) {
+    panelEl = el
+    const registration = registerShellExclusionElement('floating', 'floating', el)
+    onCleanup(registration.unregister)
+  }
 
   createEffect(() => {
     if (!props.open() || !props.anchor()) return
@@ -23,15 +31,11 @@ export function FileBrowserContextMenu(props: {
     const list = props.items()
     const estW = 220
     const margin = 6
-    const maxHeight = Math.max(44, window.innerHeight - margin * 2)
+    const bounds = props.bounds?.() ?? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }
+    const maxHeight = Math.max(44, bounds.h - margin * 2)
     const estH = Math.min(maxHeight, Math.max(44, list.length * 40) + 8)
-    let left = a.x
-    let top = a.y
-    if (left + estW > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - estW - margin)
-    if (top + estH > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - estH - margin)
-    if (left < margin) left = margin
-    if (top < margin) top = margin
-    setPlaced({ left, top, maxHeight })
+    const fitted = fitContextMenuClientPosition(a, estW, estH, bounds, margin)
+    setPlaced({ left: fitted.left, top: fitted.top, maxHeight: Math.max(44, fitted.maxHeight) })
   })
 
   createEffect(() => {
@@ -66,9 +70,8 @@ export function FileBrowserContextMenu(props: {
       <Show when={props.open() && props.anchor()}>
         <ContextMenuPortal mount={props.portalMount?.() ?? document.body}>
           <ContextMenuContent
-            ref={(el) => {
-              panelEl = el
-            }}
+            ref={registerPanel}
+            data-shell-exclusion-floating
             class="pointer-events-auto border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) fixed z-95000 flex min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-1 shadow-lg"
             aria-label="Files"
             style={{
@@ -79,50 +82,56 @@ export function FileBrowserContextMenu(props: {
           >
             <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
               <For each={props.items()}>
-                {(item, idx) => (
-                  <Show
-                    when={!item.separator}
-                    fallback={<div class="my-1 h-px bg-(--shell-overlay-border)" role="separator" />}
-                  >
-                    <ContextMenuItem
-                      title={item.title}
-                      disabled={!!item.disabled}
-                      classList={{
-                        'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
-                      }}
-                      data-file-browser-context-idx={idx()}
-                      {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
-                      onPointerDown={(e) => {
-                        if (e.button !== 0) return
-                        e.preventDefault()
-                        e.stopPropagation()
-                        if (item.disabled) return
-                        item.action()
-                        props.onRequestClose()
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                      }}
-                      onClick={() => {
-                        if (item.disabled) return
-                        item.action()
-                        props.onRequestClose()
-                      }}
+                {(item, idx) => {
+                  let activated = false
+                  const activate = () => {
+                    if (activated || item.disabled) return
+                    activated = true
+                    item.action()
+                    props.onRequestClose()
+                  }
+                  return (
+                    <Show
+                      when={!item.separator}
+                      fallback={<div class="my-1 h-px bg-(--shell-overlay-border)" role="separator" />}
                     >
-                      <Show when={item.icon} keyed>
-                        {(icon) => <span class="shrink-0 text-(--shell-text-dim)">{icon}</span>}
-                      </Show>
-                      <span data-file-browser-context-label class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
-                      <Show when={item.badge} keyed>
-                        {(badge) => (
-                          <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
-                            {badge}
-                          </span>
-                        )}
-                      </Show>
-                    </ContextMenuItem>
-                  </Show>
-                )}
+                      <ContextMenuItem
+                        title={item.title}
+                        disabled={!!item.disabled}
+                        classList={{
+                          'cursor-not-allowed text-(--shell-text-dim)': !!item.disabled,
+                        }}
+                        data-file-browser-context-idx={idx()}
+                        {...(item.actionId ? { 'data-file-browser-context-action': item.actionId } : {})}
+                        onPointerDown={(e) => {
+                          if (e.button !== 0) return
+                          e.preventDefault()
+                          e.stopPropagation()
+                          activate()
+                        }}
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return
+                          e.preventDefault()
+                          e.stopPropagation()
+                          activate()
+                        }}
+                        onClick={() => activate()}
+                      >
+                        <Show when={item.icon} keyed>
+                          {(icon) => <span class="shrink-0 text-(--shell-text-dim)">{icon}</span>}
+                        </Show>
+                        <span data-file-browser-context-label class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{item.label}</span>
+                        <Show when={item.badge} keyed>
+                          {(badge) => (
+                            <span class="border border-(--shell-accent-soft-border) bg-(--shell-accent-soft) text-(--shell-accent-soft-text) shrink-0 rounded px-[0.35rem] py-[0.15rem] text-[0.65rem] tracking-wide uppercase">
+                              {badge}
+                            </span>
+                          )}
+                        </Show>
+                      </ContextMenuItem>
+                    </Show>
+                  )
+                }}
               </For>
             </div>
           </ContextMenuContent>

@@ -74,22 +74,6 @@ fn shared_state_row_count(kind: u32, payload: &[u8]) -> u64 {
         .saturating_add(floating) as u64
 }
 
-fn dirty_snapshot_read_result_value(status: &str, bytes: Option<&[u8]>) -> Option<V8Value> {
-    let object = v8_value_create_object(None, None)?;
-    let attrs = sys::cef_v8_propertyattribute_t(0);
-    let status_key = CefString::from("status");
-    let status_value = CefString::from(status);
-    let mut status_value = v8_value_create_string(Some(&status_value));
-    let _ = object.set_value_bykey(Some(&status_key), status_value.as_mut(), attrs.into());
-    if let Some(bytes) = bytes {
-        let buffer_key = CefString::from("buffer");
-        let mut buffer_value =
-            v8_value_create_array_buffer_with_copy(bytes.as_ptr() as *mut u8, bytes.len());
-        let _ = object.set_value_bykey(Some(&buffer_key), buffer_value.as_mut(), attrs.into());
-    }
-    Some(object)
-}
-
 fn set_global_optional_string(
     global: &mut V8Value,
     attrs: sys::cef_v8_propertyattribute_t,
@@ -540,15 +524,6 @@ fn handle_uplink_list(
             let payload_len = args.int(2).max(0) as usize;
             match kind.as_str() {
                 "full" => crate::cef::begin_frame_diag::note_shell_snapshot_read(payload_len),
-                "dirty" => {
-                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_read(payload_len)
-                }
-                "dirty_fallback" => {
-                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_fallback(payload_len)
-                }
-                "dirty_unchanged" => {
-                    crate::cef::begin_frame_diag::note_shell_dirty_snapshot_unchanged()
-                }
                 _ => {}
             }
         }
@@ -1548,103 +1523,6 @@ wrap_v8_handler! {
     }
 }
 
-wrap_v8_handler! {
-    pub struct SharedSnapshotReadDirtyIfChangedV8Handler {
-        frame: Frame,
-    }
-
-    impl V8Handler {
-        fn execute(
-            &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
-        ) -> i32 {
-            macro_rules! return_exception {
-                ($message:expr) => {{
-                    if let Some(ex) = exception {
-                        *ex = CefString::from($message);
-                    }
-                    return 1;
-                }};
-            }
-
-            let Some(args) = arguments else {
-                return_exception!("expected snapshot path");
-            };
-            let Some(path_v) = args.first().and_then(|a| a.as_ref()) else {
-                return_exception!("expected snapshot path");
-            };
-            if path_v.is_string() == 0 {
-                return_exception!("snapshot path must be a string");
-            }
-            let path = cef_string_userfree_to_string(&path_v.string_value());
-            if path.is_empty() {
-                return_exception!("snapshot path must not be empty");
-            }
-            let Some(last_sequence_v) = args.get(1).and_then(|a| a.as_ref()) else {
-                return_exception!("expected last snapshot sequence");
-            };
-            let last_sequence = if last_sequence_v.is_double() != 0 && last_sequence_v.double_value() >= 0.0 {
-                last_sequence_v.double_value() as u64
-            } else if last_sequence_v.is_uint() != 0 {
-                u64::from(last_sequence_v.uint_value())
-            } else if last_sequence_v.is_int() != 0 && last_sequence_v.int_value() >= 0 {
-                last_sequence_v.int_value() as u64
-            } else {
-                return_exception!("last snapshot sequence must be a non-negative number");
-            };
-            let Some(revisions_v) = args.get(2).and_then(|a| a.as_ref()) else {
-                return_exception!("expected snapshot domain revisions");
-            };
-            if revisions_v.is_array_buffer() == 0 {
-                return_exception!("snapshot domain revisions must be an ArrayBuffer");
-            }
-            let revisions_len = revisions_v.array_buffer_byte_length();
-            if revisions_len != shell_wire::SHELL_SNAPSHOT_DOMAIN_REVISION_BYTES {
-                return_exception!("snapshot domain revisions have wrong length");
-            }
-            let revisions_ptr = revisions_v.array_buffer_data();
-            if revisions_ptr.is_null() {
-                return_exception!("snapshot domain revisions pointer missing");
-            }
-            let revisions_bytes = unsafe {
-                std::slice::from_raw_parts(revisions_ptr as *const u8, revisions_len)
-            };
-            let mut previous_domain_revisions = [0u64; shell_wire::SHELL_SNAPSHOT_DOMAIN_COUNT];
-            for (index, revision) in previous_domain_revisions.iter_mut().enumerate() {
-                let offset = index * 8;
-                *revision = u64::from_le_bytes(revisions_bytes[offset..offset + 8].try_into().unwrap());
-            }
-            let value = match shell_snapshot::snapshot_read_dirty_if_changed(
-                std::path::Path::new(&path),
-                last_sequence,
-                &previous_domain_revisions,
-            ) {
-                Ok(shell_snapshot::SnapshotDirtyRead::Dirty { bytes, payload_len }) => {
-                    send_snapshot_perf(&self.frame, "dirty", payload_len);
-                    dirty_snapshot_read_result_value("dirty", Some(&bytes))
-                }
-                Ok(shell_snapshot::SnapshotDirtyRead::Fallback { bytes, payload_len }) => {
-                    send_snapshot_perf(&self.frame, "dirty_fallback", payload_len);
-                    dirty_snapshot_read_result_value("fallback", Some(&bytes))
-                }
-                Ok(shell_snapshot::SnapshotDirtyRead::Unchanged) => {
-                    send_snapshot_perf(&self.frame, "dirty_unchanged", 0);
-                    dirty_snapshot_read_result_value("unchanged", None)
-                }
-                Err(_) => dirty_snapshot_read_result_value("error", None),
-            };
-            if let Some(retval) = retval {
-                *retval = value;
-            }
-            1
-        }
-    }
-}
-
 wrap_render_process_handler! {
     pub struct DerpRenderProcessHandler;
 
@@ -1712,13 +1590,6 @@ wrap_render_process_handler! {
                 Some(&snapshot_read_if_changed_name),
                 Some(&mut snapshot_read_if_changed_handler),
             );
-            let snapshot_read_dirty_if_changed_name = CefString::from("__derpCompositorSnapshotReadDirtyIfChanged");
-            let mut snapshot_read_dirty_if_changed_handler =
-                SharedSnapshotReadDirtyIfChangedV8Handler::new(frame.clone());
-            let mut snapshot_read_dirty_if_changed_func = v8_value_create_function(
-                Some(&snapshot_read_dirty_if_changed_name),
-                Some(&mut snapshot_read_dirty_if_changed_handler),
-            );
             let attrs = sys::cef_v8_propertyattribute_t(0);
             set_shell_bootstrap_globals(&mut global, attrs);
             let _ = global.set_value_bykey(Some(&fname), func.as_mut(), attrs.into());
@@ -1740,11 +1611,6 @@ wrap_render_process_handler! {
             let _ = global.set_value_bykey(
                 Some(&snapshot_read_if_changed_name),
                 snapshot_read_if_changed_func.as_mut(),
-                attrs.into(),
-            );
-            let _ = global.set_value_bykey(
-                Some(&snapshot_read_dirty_if_changed_name),
-                snapshot_read_dirty_if_changed_func.as_mut(),
                 attrs.into(),
             );
             tracing::warn!(

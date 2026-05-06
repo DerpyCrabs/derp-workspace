@@ -85,10 +85,9 @@ export default defineGroup(import.meta.url, ({ test }) => {
       movePerf.shell_updates.window_geometry_messages <= 20,
       `expected bounded geometry churn during one drag, got ${movePerf.shell_updates.window_geometry_messages}`,
     )
-    assert(movePerf.shell_sync.snapshot_dirty_reads >= 1, 'expected dirty snapshot read after native window geometry change')
     assert(
-      movePerf.shell_sync.snapshot_reads <= 1,
-      `expected geometry change to avoid full snapshot reads, got ${movePerf.shell_sync.snapshot_reads}`,
+      movePerf.shell_sync.snapshot_reads >= 1,
+      `expected immutable snapshot read after native window geometry change, got ${movePerf.shell_sync.snapshot_reads}`,
     )
   })
 })
