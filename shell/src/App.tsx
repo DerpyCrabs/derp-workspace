@@ -177,7 +177,7 @@ function rectFromWindow(window: Pick<DerpWindow, 'x' | 'y' | 'width' | 'height'>
   }
 }
 
-const TASKBAR_HEIGHT = 44
+const TASKBAR_HEIGHT = 36
 
 function sameStringList(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false
@@ -530,7 +530,7 @@ function App() {
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
   const [trayReservedPx, setTrayReservedPx] = createSignal(0)
   const [sniTrayItems, setSniTrayItems] = createSignal<TaskbarSniItem[]>([])
-  const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(40)
+  const [trayIconSlotPx, setTrayIconSlotPx] = createSignal(36)
   const [snapChromeRev, setSnapChromeRev] = createSignal(0)
   const [customLayoutOverlay, setCustomLayoutOverlay] = createSignal<CustomLayoutOverlayState | null>(null)
   const [sessionRestoreSnapshot, setSessionRestoreSnapshot] = createSignal<SessionSnapshot | null>(null)
@@ -787,6 +787,8 @@ function App() {
         y: 0,
         width: cw,
         height: ch,
+        physical_width: cw,
+        physical_height: ch,
         transform: 0,
         refresh_milli_hz: 0,
         vrr_supported: false,
@@ -1977,6 +1979,7 @@ function App() {
           !!document.querySelector('[data-shell-programs-menu-panel]'),
         getPowerMenuOpen: shellContextMenus.powerMenuOpen,
         getVolumeMenuOpen: shellContextMenus.volumeMenuOpen,
+        getTraySniMenuOpen: shellContextMenus.traySniMenuOpen,
         getDebugWindowVisible: debugHudFrameVisible,
         getSettingsWindowVisible: settingsHudFrameVisible,
         getSnapAssistPicker: shellWindowGestureRuntime.snapAssistPicker,

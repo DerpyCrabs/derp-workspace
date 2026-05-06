@@ -6,6 +6,7 @@ import ArrowLeftToLine from 'lucide-solid/icons/arrow-left-to-line'
 import ArrowRightToLine from 'lucide-solid/icons/arrow-right-to-line'
 import ArrowUpToLine from 'lucide-solid/icons/arrow-up-to-line'
 import { Select } from '@/host/Select'
+import { formatMonitorPixels } from '@/host/appLayout'
 import { TransformPicker } from '@/features/tiling/TransformPicker'
 import type { SettingsLayoutScreen } from './settingsTypes'
 
@@ -51,6 +52,14 @@ function screenUnionBBox(rows: SettingsLayoutScreen[]): { x: number; y: number; 
     w: Math.max(1, Math.round(maxR - minX)),
     h: Math.max(1, Math.round(maxB - minY)),
   }
+}
+
+function monitorPhysicalSize(row: SettingsLayoutScreen): string {
+  return formatMonitorPixels(row.physical_width || row.width, row.physical_height || row.height)
+}
+
+function monitorLogicalSize(row: SettingsLayoutScreen): string {
+  return formatMonitorPixels(row.width, row.height)
 }
 
 function snapDisplayDraftPosition(
@@ -372,8 +381,9 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       </span>
                     </Show>
                     <span class="text-(--shell-text-muted)">
-                      @ {row.x},{row.y} · {row.width}×{row.height} ·{' '}
-                      {props.monitorRefreshLabel(row.refresh_milli_hz)} · orientation {row.transform}
+                      @ {row.x},{row.y} · physical {monitorPhysicalSize(row)} · logical{' '}
+                      {monitorLogicalSize(row)} · {props.monitorRefreshLabel(row.refresh_milli_hz)} · orientation{' '}
+                      {row.transform}
                     </span>
                   </div>
                   <span class="text-[0.72rem] text-(--shell-text-dim)">
@@ -434,7 +444,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                           <div class="min-w-0">
                             <div class="truncate text-[0.74rem] font-semibold">{rect.row.name || '—'}</div>
                             <div class="text-[0.66rem] text-(--shell-text-muted)">
-                              {rect.row.width}×{rect.row.height}
+                              {monitorPhysicalSize(rect.row)}
                             </div>
                           </div>
                           <Show when={badge()}>
@@ -471,7 +481,8 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                     </Show>
                   </div>
                   <span class="text-[0.75rem] text-(--shell-text-dim)">
-                    {row.width}×{row.height} · {props.monitorRefreshLabel(row.refresh_milli_hz)}
+                    physical {monitorPhysicalSize(row)} · logical {monitorLogicalSize(row)} ·{' '}
+                    {props.monitorRefreshLabel(row.refresh_milli_hz)}
                   </span>
                 </div>
                 <div class="flex flex-wrap items-center gap-x-[0.65rem] gap-y-[0.45rem] text-[0.82rem]">

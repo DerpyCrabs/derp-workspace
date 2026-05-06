@@ -12,12 +12,18 @@ import {
   type Accessor,
   type JSX,
 } from 'solid-js'
-import { type ShellContextMenuItem } from '@/host/contextMenu'
+import { type ClientMenuBounds, type ShellContextMenuItem } from '@/host/contextMenu'
 import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicationsState'
 import type { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import type { DesktopAppEntry } from '@/features/bridge/shellBridge'
-import { canvasRectToClientCss, clientRectToGlobalLogical } from '@/lib/shellCoords'
+import {
+  canvasOriginXY,
+  canvasRectToClientCss,
+  clientPointToGlobalLogical,
+  clientRectToGlobalLogical,
+  rectGlobalToCanvasLocal,
+} from '@/lib/shellCoords'
 import { shellMenuPlacementWarn } from '@/host/shellMenuPlacementWarn'
 import type { BackedShellWindowKind } from '@/features/shell-ui/backedShellWindows'
 import type { WorkspaceTaskbarPinMonitor } from '@/features/workspace/workspaceProtocol'
@@ -133,6 +139,8 @@ function layoutScreenCssRect(
     y: screen.y - oy,
     width: screen.width,
     height: screen.height,
+    physical_width: screen.physical_width,
+    physical_height: screen.physical_height,
     transform: screen.transform,
     refresh_milli_hz: screen.refresh_milli_hz,
     vrr_supported: screen.vrr_supported,
@@ -154,6 +162,7 @@ const THEME_MODES: { value: ThemeMode; label: string; keywords: string[] }[] = [
 
 const THEME_PALETTES: { value: ThemePalette; label: string; keywords: string[] }[] = [
   { value: 'default', label: 'Default palette', keywords: ['appearance', 'theme'] },
+  { value: 'gray', label: 'Gray palette', keywords: ['appearance', 'theme', 'neutral'] },
   { value: 'caffeine', label: 'Caffeine palette', keywords: ['appearance', 'theme'] },
   { value: 'cosmic-night', label: 'Cosmic Night palette', keywords: ['appearance', 'theme'] },
 ]
@@ -224,7 +233,6 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
   function setMenuPanelRef(el: HTMLDivElement) {
     menuPanelRef = el
   }
-
 
   const triggerOpen = (token: object) => createMemo(() => ctxMenuOpen() && activeMenuTrigger() === token)
   const programsMenuOpen = triggerOpen(programsMenuTrigger)
@@ -302,35 +310,62 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     return ctxMenuOpen() && activeMenuTrigger() === trigger
   }
 
-  const volumeMenuBounds = createMemo(() => {
+  function clientBoundsForContextAnchor(anchor: { x: number; y: number; alignAboveY?: number }): ClientMenuBounds {
     const og = args.outputGeom()
-    const screens = screensListForLayout(args.screenDraftRows(), og, args.layoutCanvasOrigin())
-    const anchor = ctxMenuAnchor()
-    const probeX = anchor.x - 1
-    const probeY = (anchor.alignAboveY ?? anchor.y) + 1
-    const matched =
-      screens.find(
-        (screen) =>
-          probeX >= screen.x &&
-          probeX < screen.x + screen.width &&
-          probeY >= screen.y &&
-          probeY < screen.y + screen.height,
-      ) ?? screens[0]
-    if (matched) {
-      return {
-        x: matched.x,
-        y: matched.y,
-        w: matched.width,
-        h: matched.height,
-      }
-    }
+    const main = args.mainEl()
     const canvas = args.canvasCss()
-    return {
+    const fallback = {
       x: 0,
       y: 0,
       w: canvas.w,
       h: canvas.h,
     }
+    if (!og || !main) return fallback
+    const mainRect = main.getBoundingClientRect()
+    const origin = args.layoutCanvasOrigin()
+    const screens = screensListForLayout(args.screenDraftRows(), og, args.layoutCanvasOrigin())
+    const probe = clientPointToGlobalLogical(
+      anchor.x - 1,
+      (anchor.alignAboveY ?? anchor.y) + 1,
+      mainRect,
+      og.w,
+      og.h,
+      origin,
+    )
+    const matched = screens.find(
+      (screen) =>
+        probe.x >= screen.x &&
+        probe.x < screen.x + screen.width &&
+        probe.y >= screen.y &&
+        probe.y < screen.y + screen.height,
+    )
+    const screen = matched ?? screens[0]
+    if (screen) {
+      const { ox, oy } = canvasOriginXY(origin)
+      const local = rectGlobalToCanvasLocal(
+        screen.x,
+        screen.y,
+        screen.width,
+        screen.height,
+        { x: ox, y: oy },
+      )
+      const rect = canvasRectToClientCss(local.x, local.y, local.w, local.h, mainRect, og.w, og.h)
+      return {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.max(1, Math.round(rect.width)),
+        h: Math.max(1, Math.round(rect.height)),
+      }
+    }
+    return fallback
+  }
+
+  const volumeMenuBounds = createMemo(() => {
+    return clientBoundsForContextAnchor(ctxMenuAnchor())
+  })
+
+  const traySniMenuBounds = createMemo(() => {
+    return clientBoundsForContextAnchor(ctxMenuAnchor())
   })
 
   function programsMenuMetrics(outputName?: string | null) {
@@ -1655,6 +1690,7 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
     },
     traySniMenuProps: {
       anchor: ctxMenuAnchor,
+      bounds: traySniMenuBounds,
       items: traySniMenuListItems,
       highlightIdx: traySniHighlightIdx,
       setPanelRef: setMenuPanelRef,

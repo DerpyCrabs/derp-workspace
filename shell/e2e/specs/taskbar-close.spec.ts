@@ -12,6 +12,7 @@ import {
   clickRect,
   closeTaskbarWindow,
   defineGroup,
+  dragRectToRect,
   ensureWorkspaceTabShowsWindow,
   getJson,
   getShellHtml,
@@ -19,7 +20,10 @@ import {
   openShellTestWindow,
   prepareFileBrowserFixtures,
   rectCenter,
+  rightClickRect,
   shellWindowStack,
+  shellWindowById,
+  tabGroupByWindow,
   taskbarEntry,
   waitFor,
   waitForWindowGone,
@@ -28,6 +32,14 @@ import {
 } from '../lib/runtime.ts'
 
 const TEXT_EDITOR_APP_ID = 'derp.text-editor'
+
+function tabRect(shell: ShellSnapshot, windowId: number) {
+  const group = tabGroupByWindow(shell, windowId)
+  assert(group, `missing tab group for window ${windowId}`)
+  const tab = group.tabs.find((entry) => entry.window_id === windowId)
+  assert(tab?.rect, `missing tab rect for window ${windowId}`)
+  return tab.rect
+}
 
 function resolveTextEditorWindowId(
   shell: ShellSnapshot,
@@ -51,7 +63,7 @@ function resolveTextEditorWindowId(
 }
 
 export default defineGroup(import.meta.url, ({ test }) => {
-  test('taskbar close removes markdown text editor and exposes close rect', async ({ base, state }) => {
+  test('taskbar context menu close removes markdown text editor', async ({ base, state }) => {
     const fixtures = await prepareFileBrowserFixtures(base)
     const navigated = await navigateToFixtureRoot(base, state.spawnedShellWindowIds, fixtures)
     const notesPath = path.posix.join(fixtures.root_path, 'notes')
@@ -89,32 +101,43 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await ensureWorkspaceTabShowsWindow(base, editor.windowId)
     const shellBefore = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const entry = taskbarEntry(shellBefore, editor.windowId)
-    assert(entry?.close, 'taskbar row must expose close rect for text editor')
-    assertRectMinSize('taskbar close hit target', entry.close, 4, 4)
-    await closeTaskbarWindow(base, shellBefore, editor.windowId)
+    assert(entry?.activate, 'taskbar row must expose activate rect for text editor')
+    assert(!entry.close, 'taskbar row should not expose an inline close rect')
+    await rightClickRect(base, assertRectMinSize('taskbar row hit target', entry.activate, 12, 12))
+    const closeAction = await waitFor(
+      'wait taskbar close window action',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'close-window')
+        return item?.rect ? item : null
+      },
+      5000,
+      40,
+    )
+    await clickRect(base, assertRectMinSize('taskbar close window action', closeAction.rect, 32, 18))
     await waitForWindowGone(base, editor.windowId, 5000)
   })
 
-  test('taskbar close removes shell test window when taskbar rail crowded', async ({ base, state }) => {
+  test('taskbar context menu close removes shell test window when taskbar rail crowded', async ({ base, state }) => {
     for (let i = 0; i < 6; i += 1) {
       await openShellTestWindow(base, state)
     }
     const target = await openShellTestWindow(base, state)
     const wid = target.window.window_id
     await waitFor(
-      'wait taskbar close rect for crowded shell test window',
+      'wait taskbar row for crowded shell test window',
       async () => {
         const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
-        const close = taskbarEntry(shell, wid)?.close
-        return close && close.width >= 4 && close.height >= 4 ? shell : null
+        const activate = taskbarEntry(shell, wid)?.activate
+        return activate && activate.width >= 12 && activate.height >= 12 ? shell : null
       },
       5000,
       100,
     )
     const shell0 = await getJson<ShellSnapshot>(base, '/test/state/shell')
     const row = taskbarEntry(shell0, wid)
-    assert(row?.close, 'missing taskbar close under crowded rail')
-    assertRectMinSize('crowded taskbar close', row.close, 4, 4)
+    assert(row?.activate, 'missing taskbar row under crowded rail')
+    assert(!row.close, 'crowded taskbar row should not expose inline close')
     await closeTaskbarWindow(base, shell0, wid)
     await waitForWindowGone(base, wid, 5000)
   })
@@ -155,5 +178,43 @@ export default defineGroup(import.meta.url, ({ test }) => {
       3000,
       40,
     )
+  })
+
+  test('taskbar context menu closes whole tab group', async ({ base, state }) => {
+    const first = await openShellTestWindow(base, state)
+    const second = await openShellTestWindow(base, state)
+    const firstId = first.window.window_id
+    const secondId = second.window.window_id
+    const beforeGroup = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    await dragRectToRect(base, tabRect(beforeGroup, secondId), tabRect(beforeGroup, firstId))
+    const grouped = await waitFor(
+      'wait taskbar grouped row',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const group = tabGroupByWindow(shell, firstId)
+        const row = group ? taskbarEntry(shell, group.visible_window_id) : null
+        if (!group || !row?.activate || row.tab_count !== 2) return null
+        return { shell, row, group }
+      },
+      5000,
+      100,
+    )
+    await rightClickRect(base, assertRectMinSize('group taskbar row', grouped.row.activate, 12, 12))
+    const closeAction = await waitFor(
+      'wait taskbar close group action',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const item = shell.file_browser_context_menu?.find((entry) => entry.id === 'close-group')
+        return item?.rect ? item : null
+      },
+      5000,
+      40,
+    )
+    await clickRect(base, assertRectMinSize('taskbar close group action', closeAction.rect, 32, 18))
+    await waitForWindowGone(base, firstId, 5000)
+    await waitForWindowGone(base, secondId, 5000)
+    const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+    assert(!shellWindowById(shell, firstId), 'first grouped window survived close group')
+    assert(!shellWindowById(shell, secondId), 'second grouped window survived close group')
   })
 })

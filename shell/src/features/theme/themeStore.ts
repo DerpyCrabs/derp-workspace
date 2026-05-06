@@ -1,7 +1,7 @@
 import { postShellJson } from '@/features/bridge/shellBridge'
 import { waitForShellHttpBase } from '@/features/bridge/shellHttp'
 
-export type ThemePalette = 'default' | 'caffeine' | 'cosmic-night'
+export type ThemePalette = 'default' | 'gray' | 'caffeine' | 'cosmic-night'
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 export type ThemeSettings = {
@@ -24,7 +24,7 @@ let refreshPromise: Promise<ThemeSettings> | null = null
 let pendingPersistTheme: ThemeSettings | null = null
 
 function isThemePalette(value: unknown): value is ThemePalette {
-  return value === 'default' || value === 'caffeine' || value === 'cosmic-night'
+  return value === 'default' || value === 'gray' || value === 'caffeine' || value === 'cosmic-night'
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {

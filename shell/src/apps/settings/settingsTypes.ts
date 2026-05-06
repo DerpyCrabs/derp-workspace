@@ -4,6 +4,8 @@ export type SettingsLayoutScreen = {
   y: number
   width: number
   height: number
+  physical_width: number
+  physical_height: number
   transform: number
   refresh_milli_hz: number
   vrr_supported: boolean

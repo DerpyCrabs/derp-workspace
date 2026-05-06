@@ -166,7 +166,7 @@ fn rect_contains_rect(outer: Rectangle<i32, Logical>, inner: Rectangle<i32, Logi
 
 /// Titlebar strip height in **logical** pixels; keep in sync with `shell` decoration UI.
 pub const SHELL_TITLEBAR_HEIGHT: i32 = 26;
-pub const SHELL_TASKBAR_RESERVE_PX: i32 = 44;
+pub const SHELL_TASKBAR_RESERVE_PX: i32 = 36;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellTaskbarSide {
@@ -731,6 +731,9 @@ pub struct CompositorState {
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
     pub(crate) shell_minimized_windows: HashMap<u32, Window>,
     pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
+    pub(crate) shell_tray_hidden_x11_windows: HashMap<u32, X11Surface>,
+    pub(crate) shell_tray_hidden_x11_window_ids: HashSet<u32>,
+    pub(crate) shell_tray_hidden_x11_notifier_window_ids: HashMap<String, u32>,
     pub(crate) shell_pending_native_focus_window_id: Option<u32>,
     pub(crate) shell_close_pending_native_windows: HashSet<u32>,
     pub(crate) shell_close_refocus_targets: HashMap<u32, u32>,
@@ -1575,6 +1578,9 @@ impl CompositorState {
             shell_spawn_target_output_name: None,
             shell_minimized_windows: HashMap::new(),
             shell_minimized_x11_windows: HashMap::new(),
+            shell_tray_hidden_x11_windows: HashMap::new(),
+            shell_tray_hidden_x11_window_ids: HashSet::new(),
+            shell_tray_hidden_x11_notifier_window_ids: HashMap::new(),
             shell_pending_native_focus_window_id: None,
             shell_close_pending_native_windows: HashSet::new(),
             shell_close_refocus_targets: HashMap::new(),
@@ -1912,27 +1918,29 @@ impl CompositorState {
             self.shell_reply_window_list();
             let rows = self.shell_window_list_rows();
             for row in rows {
-                self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-                    window_id: row.window_id,
-                    surface_id: row.surface_id,
-                    x: row.x,
-                    y: row.y,
-                    w: row.w,
-                    h: row.h,
-                    client_x: row.client_x,
-                    client_y: row.client_y,
-                    client_w: row.client_w,
-                    client_h: row.client_h,
-                    frame_x: row.frame_x,
-                    frame_y: row.frame_y,
-                    frame_w: row.frame_w,
-                    frame_h: row.frame_h,
-                    maximized: row.maximized != 0,
-                    fullscreen: row.fullscreen != 0,
-                    client_side_decoration: row.client_side_decoration != 0,
-                    output_id: row.output_id,
-                    output_name: row.output_name,
-                });
+                self.shell_send_to_cef(
+                    shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                        window_id: row.window_id,
+                        surface_id: row.surface_id,
+                        x: row.x,
+                        y: row.y,
+                        w: row.w,
+                        h: row.h,
+                        client_x: row.client_x,
+                        client_y: row.client_y,
+                        client_w: row.client_w,
+                        client_h: row.client_h,
+                        frame_x: row.frame_x,
+                        frame_y: row.frame_y,
+                        frame_w: row.frame_w,
+                        frame_h: row.frame_h,
+                        maximized: row.maximized != 0,
+                        fullscreen: row.fullscreen != 0,
+                        client_side_decoration: row.client_side_decoration != 0,
+                        output_id: row.output_id,
+                        output_name: row.output_name,
+                    },
+                );
             }
         }
         self.workspace_apply_auto_layout_for_all_outputs();
@@ -2229,6 +2237,7 @@ impl CompositorState {
             if info.minimized
                 || self.window_info_is_solid_shell_host(&info)
                 || !shell_window_row_should_show(&info)
+                || self.shell_x11_window_is_tray_hidden(info.window_id)
                 || !self.workspace_window_is_visible_during_render(info.window_id)
             {
                 continue;
@@ -3669,6 +3678,8 @@ impl CompositorState {
             self.shell_window_stack_forget(info.window_id);
             self.shell_minimized_windows.remove(&info.window_id);
             self.shell_minimized_x11_windows.remove(&info.window_id);
+            self.shell_tray_hidden_x11_windows.remove(&info.window_id);
+            self.forget_tray_hidden_x11_window_id(info.window_id);
         }
         self.pending_deferred_toplevels
             .retain(|(cid, _), _| cid != &client_id);
@@ -7281,6 +7292,8 @@ impl CompositorState {
                     y: g.loc.y,
                     w: u32::try_from(g.size.w).ok()?.max(1),
                     h: u32::try_from(g.size.h).ok()?.max(1),
+                    physical_w: u32::try_from(mode.size.w).ok()?.max(1),
+                    physical_h: u32::try_from(mode.size.h).ok()?.max(1),
                     transform: transform_to_wire(tf),
                     refresh_milli_hz,
                     vrr_supported,
@@ -7376,11 +7389,19 @@ impl CompositorState {
     }
 
     pub fn set_taskbar_side(&mut self, output_name: String, side: ShellTaskbarSide) {
-        if !self.space.outputs().any(|o| o.name() == output_name.as_str()) {
+        if !self
+            .space
+            .outputs()
+            .any(|o| o.name() == output_name.as_str())
+        {
             return;
         }
         if side == ShellTaskbarSide::Bottom {
-            if self.taskbar_side_by_output_name.remove(&output_name).is_none() {
+            if self
+                .taskbar_side_by_output_name
+                .remove(&output_name)
+                .is_none()
+            {
                 return;
             }
         } else if self.taskbar_side_by_output_name.get(&output_name).copied() == Some(side) {
@@ -7811,9 +7832,81 @@ impl CompositorState {
         }
     }
 
+    fn sni_item_pid(id: &str) -> Option<i32> {
+        let rest = id.strip_prefix("org.kde.StatusNotifierItem-")?;
+        let raw = rest.split('-').next()?;
+        raw.parse::<i32>().ok()
+    }
+
+    fn deduplicate_sni_tray_items(
+        &self,
+        items: Vec<shell_wire::TraySniItemWire>,
+    ) -> Vec<shell_wire::TraySniItemWire> {
+        let live_pids: HashSet<i32> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| record.kind == WindowKind::Native)
+            .filter_map(|record| record.info.wayland_client_pid)
+            .collect();
+        let mut out: Vec<shell_wire::TraySniItemWire> = Vec::new();
+        for item in items {
+            let key = Self::tray_match_token(&item.title);
+            if key.is_empty() {
+                out.push(item);
+                continue;
+            }
+            if let Some(pos) = out
+                .iter()
+                .position(|existing| Self::tray_match_token(&existing.title) == key)
+            {
+                let current_live = Self::sni_item_pid(&out[pos].id)
+                    .map(|pid| live_pids.contains(&pid))
+                    .unwrap_or(false);
+                let next_live = Self::sni_item_pid(&item.id)
+                    .map(|pid| live_pids.contains(&pid))
+                    .unwrap_or(false);
+                if next_live || !current_live {
+                    out[pos] = item;
+                }
+            } else {
+                out.push(item);
+            }
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    fn tray_hidden_x11_window_id_for_sni_item(&self, id: &str) -> Option<u32> {
+        if let Some(&window_id) = self.shell_tray_hidden_x11_notifier_window_ids.get(id) {
+            if self.shell_x11_window_is_tray_hidden(window_id) {
+                return Some(window_id);
+            }
+        }
+        let item_pid = Self::sni_item_pid(id);
+        let item = self.sni_tray_items.iter().find(|item| item.id == id);
+        self.window_registry
+            .all_records()
+            .into_iter()
+            .find(|record| {
+                record.kind == WindowKind::Native
+                    && self.shell_x11_window_is_tray_hidden(record.info.window_id)
+                    && (matches!(
+                        (record.info.wayland_client_pid, item_pid),
+                        (Some(window_pid), Some(item_pid)) if window_pid == item_pid
+                    )
+                        || item
+                            .map(|item| Self::sni_item_matches_window_info(item, &record.info))
+                            .unwrap_or(false))
+            })
+            .map(|record| record.info.window_id)
+    }
+
     pub(crate) fn on_sni_tray_items_updated(&mut self, items: Vec<shell_wire::TraySniItemWire>) {
+        let items = self.deduplicate_sni_tray_items(items);
         self.sni_tray_slot_count = items.len() as u32;
         self.sni_tray_items = items.clone();
+        self.refresh_tray_hidden_x11_notifier_window_ids();
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::TraySni { items });
         self.sync_tray_hints_to_shell();
     }
@@ -7824,7 +7917,10 @@ impl CompositorState {
 
     pub(crate) fn sni_tray_activate_clicked(&mut self, id: String) {
         if let Some(tx) = &self.sni_tray_cmd_tx {
-            let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::Activate { id });
+            let _ = tx.send(crate::tray::sni_tray::SniTrayCmd::Activate { id: id.clone() });
+        }
+        if let Some(window_id) = self.tray_hidden_x11_window_id_for_sni_item(&id) {
+            let _ = self.shell_restore_tray_hidden_x11_window_to_space(window_id);
         }
     }
 
@@ -8000,6 +8096,199 @@ impl CompositorState {
         (title, app_id)
     }
 
+    fn tray_match_token(value: &str) -> String {
+        let mut out = String::new();
+        for c in value.chars() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c.to_ascii_lowercase());
+            }
+        }
+        out
+    }
+
+    fn sni_item_matches_window_info(item: &shell_wire::TraySniItemWire, info: &WindowInfo) -> bool {
+        let mut window_tokens = Vec::new();
+        let title = Self::tray_match_token(&info.title);
+        if title.len() >= 4 {
+            window_tokens.push(title);
+        }
+        let app_id = Self::tray_match_token(&info.app_id);
+        if app_id.len() >= 4 && app_id != "wine" && app_id != "explorer" {
+            window_tokens.push(app_id);
+        }
+        if window_tokens.is_empty() {
+            return false;
+        }
+        let item_title = Self::tray_match_token(&item.title);
+        let item_id = Self::tray_match_token(&item.id);
+        window_tokens.iter().any(|token| {
+            (item_title.len() >= 4
+                && (item_title.contains(token) || token.contains(&item_title)))
+                || (item_id.len() >= 4 && (item_id.contains(token) || token.contains(&item_id)))
+        })
+    }
+
+    fn sni_item_pid_matches_window_info(item: &shell_wire::TraySniItemWire, info: &WindowInfo) -> bool {
+        match (Self::sni_item_pid(&item.id), info.wayland_client_pid) {
+            (Some(item_pid), Some(window_pid)) => item_pid == window_pid,
+            _ => false,
+        }
+    }
+
+    fn x11_window_has_matching_tray_item(&self, info: &WindowInfo) -> bool {
+        self.sni_tray_items.iter().any(|item| {
+            Self::sni_item_pid_matches_window_info(item, info)
+                || Self::sni_item_matches_window_info(item, info)
+        })
+    }
+
+    fn x11_window_should_hide_to_tray_on_close(&self, info: &WindowInfo) -> bool {
+        if self.x11_window_has_matching_tray_item(info) {
+            return true;
+        }
+        let title = Self::tray_match_token(&info.title);
+        let app_id = Self::tray_match_token(&info.app_id);
+        title.contains("v2rayn") || app_id.contains("v2rayn")
+    }
+
+    fn shell_x11_window_is_tray_hidden(&self, window_id: u32) -> bool {
+        self.shell_tray_hidden_x11_window_ids.contains(&window_id)
+            || self.shell_tray_hidden_x11_windows.contains_key(&window_id)
+    }
+
+    fn remember_tray_hidden_x11_window_id(&mut self, window_id: u32, info: Option<&WindowInfo>) {
+        self.shell_tray_hidden_x11_window_ids.insert(window_id);
+        let Some(info) = info else {
+            return;
+        };
+        if let Some(item) = self.sni_tray_items.iter().find(|item| {
+            Self::sni_item_pid_matches_window_info(item, info)
+                || Self::sni_item_matches_window_info(item, info)
+        }) {
+            self.shell_tray_hidden_x11_notifier_window_ids
+                .insert(item.id.clone(), window_id);
+        }
+    }
+
+    fn forget_tray_hidden_x11_window_id(&mut self, window_id: u32) -> bool {
+        let had_id = self.shell_tray_hidden_x11_window_ids.remove(&window_id);
+        self.shell_tray_hidden_x11_notifier_window_ids
+            .retain(|_, mapped_window_id| *mapped_window_id != window_id);
+        had_id
+    }
+
+    fn refresh_tray_hidden_x11_notifier_window_ids(&mut self) {
+        let records: Vec<_> = self
+            .window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| {
+                record.kind == WindowKind::Native
+                    && self.shell_x11_window_is_tray_hidden(record.info.window_id)
+            })
+            .collect();
+        let hidden_ids: HashSet<u32> = records
+            .iter()
+            .map(|record| record.info.window_id)
+            .collect();
+        self.shell_tray_hidden_x11_notifier_window_ids
+            .retain(|_, window_id| hidden_ids.contains(window_id));
+        for record in records {
+            if let Some(item) = self.sni_tray_items.iter().find(|item| {
+                Self::sni_item_pid_matches_window_info(item, &record.info)
+                    || Self::sni_item_matches_window_info(item, &record.info)
+            }) {
+                self.shell_tray_hidden_x11_notifier_window_ids
+                    .insert(item.id.clone(), record.info.window_id);
+            }
+        }
+    }
+
+    fn shell_hide_x11_window_to_tray(&mut self, window_id: u32, x11: &X11Surface) {
+        self.shell_close_pending_native_windows.remove(&window_id);
+        self.shell_close_refocus_targets.remove(&window_id);
+        self.shell_minimized_x11_windows.remove(&window_id);
+        let info = self.window_registry.window_info(window_id);
+        self.remember_tray_hidden_x11_window_id(window_id, info.as_ref());
+        self.shell_tray_hidden_x11_windows
+            .insert(window_id, x11.clone());
+        if self.shell_pending_native_focus_window_id == Some(window_id) {
+            self.shell_pending_native_focus_window_id = None;
+        }
+        if self.keyboard_focused_window_id() == Some(window_id) {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat
+                .get_keyboard()
+                .unwrap()
+                .set_focus(self, Option::<WlSurface>::None, serial);
+            self.keyboard_on_focus_surface_changed(None);
+        }
+        if let Err(error) = x11.set_activated(false) {
+            tracing::warn!(window_id, ?error, "x11 set_activated failed");
+        }
+        if let Err(error) = x11.set_hidden(true) {
+            tracing::warn!(window_id, ?error, "x11 set_hidden failed");
+        }
+        if let Err(error) = x11.set_mapped(false) {
+            tracing::warn!(window_id, ?error, "x11 set_mapped(false) failed");
+        }
+        self.space.unmap_elem(&DerpSpaceElem::X11(x11.clone()));
+        self.shell_emit_chrome_window_unmapped(
+            window_id,
+            self.window_registry.window_info(window_id),
+        );
+        self.shell_force_next_dmabuf_full_damage();
+        self.loop_signal.wakeup();
+    }
+
+    fn shell_restore_tray_hidden_x11_window(&mut self, window_id: u32, x11: &X11Surface) -> bool {
+        let had_surface = self
+            .shell_tray_hidden_x11_windows
+            .remove(&window_id)
+            .is_some();
+        let had_id = self.forget_tray_hidden_x11_window_id(window_id);
+        if !had_surface && !had_id {
+            return false;
+        }
+        self.shell_pending_native_focus_window_id = Some(window_id);
+        let _ = self.window_registry.set_minimized(window_id, false);
+        if let Err(error) = x11.set_hidden(false) {
+            tracing::warn!(window_id, ?error, "x11 set_hidden(false) failed");
+        }
+        self.shell_reply_window_list();
+        true
+    }
+
+    fn shell_restore_tray_hidden_x11_window_to_space(&mut self, window_id: u32) -> bool {
+        let Some(x11) = self.shell_tray_hidden_x11_windows.get(&window_id).cloned() else {
+            return false;
+        };
+        let Some(info) = self.window_registry.window_info(window_id) else {
+            return false;
+        };
+        if let Err(error) = x11.set_mapped(true) {
+            tracing::warn!(window_id, ?error, "x11 set_mapped(true) failed");
+            return false;
+        }
+        let rect = Rectangle::new(
+            Point::from((info.x, info.y)),
+            Size::from((info.width.max(1), info.height.max(1))),
+        );
+        if let Err(error) = x11.configure(Some(rect)) {
+            tracing::warn!(window_id, ?error, "x11 configure restore failed");
+        }
+        self.space
+            .map_element(DerpSpaceElem::X11(x11.clone()), (info.x, info.y), false);
+        if !self.shell_restore_tray_hidden_x11_window(window_id, &x11) {
+            return false;
+        }
+        let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+        self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
+        self.shell_raise_and_focus_window(window_id);
+        self.loop_signal.wakeup();
+        true
+    }
+
     fn sync_registry_from_x11_surface(&mut self, window: &X11Surface) -> Option<X11SyncResult> {
         let window_id = self.x11_window_id_for_surface(window)?;
         let prev = self.window_registry.window_info(window_id)?;
@@ -8129,6 +8418,8 @@ impl CompositorState {
             self.shell_window_stack_forget(window_id);
             self.shell_minimized_windows.remove(&window_id);
             self.shell_minimized_x11_windows.remove(&window_id);
+            self.shell_tray_hidden_x11_windows.remove(&window_id);
+            self.forget_tray_hidden_x11_window_id(window_id);
         }
         let removed = self.window_registry.snapshot_for_wl_surface(&surface);
         if let Some(window_id) = self.window_registry.remove_by_wl_surface(&surface) {
@@ -9920,27 +10211,29 @@ impl CompositorState {
         else {
             return;
         };
-        self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
-            window_id: row.window_id,
-            surface_id: row.surface_id,
-            x: row.x,
-            y: row.y,
-            w: row.w,
-            h: row.h,
-            client_x: row.client_x,
-            client_y: row.client_y,
-            client_w: row.client_w,
-            client_h: row.client_h,
-            frame_x: row.frame_x,
-            frame_y: row.frame_y,
-            frame_w: row.frame_w,
-            frame_h: row.frame_h,
-            maximized: row.maximized != 0,
-            fullscreen: row.fullscreen != 0,
-            client_side_decoration: row.client_side_decoration != 0,
-            output_id: row.output_id,
-            output_name: row.output_name,
-        });
+        self.shell_send_to_cef(
+            shell_wire::DecodedCompositorToShellMessage::WindowGeometry {
+                window_id: row.window_id,
+                surface_id: row.surface_id,
+                x: row.x,
+                y: row.y,
+                w: row.w,
+                h: row.h,
+                client_x: row.client_x,
+                client_y: row.client_y,
+                client_w: row.client_w,
+                client_h: row.client_h,
+                frame_x: row.frame_x,
+                frame_y: row.frame_y,
+                frame_w: row.frame_w,
+                frame_h: row.frame_h,
+                maximized: row.maximized != 0,
+                fullscreen: row.fullscreen != 0,
+                client_side_decoration: row.client_side_decoration != 0,
+                output_id: row.output_id,
+                output_name: row.output_name,
+            },
+        );
     }
 
     fn shell_window_list_rows(&mut self) -> Vec<shell_wire::ShellWindowSnapshot> {
@@ -9953,6 +10246,9 @@ impl CompositorState {
                 continue;
             }
             if !shell_window_row_should_show(&record.info) {
+                continue;
+            }
+            if self.shell_x11_window_is_tray_hidden(record.info.window_id) {
                 continue;
             }
             if record.kind != WindowKind::ShellHosted
@@ -9976,7 +10272,9 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn shell_window_order_message(&mut self) -> shell_wire::DecodedCompositorToShellMessage {
+    pub(crate) fn shell_window_order_message(
+        &mut self,
+    ) -> shell_wire::DecodedCompositorToShellMessage {
         let windows: Vec<shell_wire::ShellWindowOrderEntry> = self
             .shell_window_list_rows()
             .into_iter()
@@ -10197,6 +10495,7 @@ impl CompositorState {
             .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
             .filter(|record| shell_window_row_should_show(&record.info))
             .filter(|record| !self.scratchpad_windows.contains_key(&record.info.window_id))
+            .filter(|record| !self.shell_x11_window_is_tray_hidden(record.info.window_id))
             .filter(|record| {
                 record.kind == WindowKind::ShellHosted
                     || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
@@ -10230,6 +10529,7 @@ impl CompositorState {
             let info = record.info;
             if self.window_info_is_solid_shell_host(&info)
                 || !shell_window_row_should_show(&info)
+                || self.shell_x11_window_is_tray_hidden(info.window_id)
                 || (record.kind != WindowKind::ShellHosted
                     && self.wayland_window_id_is_pending_deferred_toplevel(info.window_id))
             {
@@ -10243,7 +10543,10 @@ impl CompositorState {
             }
             if !outputs.is_empty() {
                 if info.output_name.is_empty() {
-                    failures.push(format!("{context}: window {} has empty output", info.window_id));
+                    failures.push(format!(
+                        "{context}: window {} has empty output",
+                        info.window_id
+                    ));
                 } else if !outputs.contains(&info.output_name) {
                     failures.push(format!(
                         "{context}: window {} is assigned to removed output {}",
@@ -10299,24 +10602,32 @@ impl CompositorState {
         }
         for window_id in &self.shell_window_stack_order {
             if self.window_registry.window_info(*window_id).is_none() {
-                failures.push(format!("{context}: stack contains unknown window {window_id}"));
+                failures.push(format!(
+                    "{context}: stack contains unknown window {window_id}"
+                ));
             }
         }
         for window_id in [
             self.shell_move_window_id,
             self.shell_resize_window_id,
             self.shell_move_proxy.as_ref().map(|proxy| proxy.window_id),
-            self.shell_native_drag_preview.as_ref().map(|preview| preview.window_id),
+            self.shell_native_drag_preview
+                .as_ref()
+                .map(|preview| preview.window_id),
         ]
         .into_iter()
         .flatten()
         {
             if self.window_registry.window_info(window_id).is_none() {
-                failures.push(format!("{context}: interaction references unknown window {window_id}"));
+                failures.push(format!(
+                    "{context}: interaction references unknown window {window_id}"
+                ));
             }
         }
         if self.touch_emulation_slot.is_none() && self.touch_routes_to_cef {
-            failures.push(format!("{context}: touch routes to CEF without an active touch slot"));
+            failures.push(format!(
+                "{context}: touch routes to CEF without an active touch slot"
+            ));
         }
         failures
     }
@@ -10332,7 +10643,10 @@ impl CompositorState {
         for failure in &failures {
             tracing::warn!(target: "derp_state_invariant", failure = %failure);
         }
-        panic!("compositor state invariant failed after {context}: {}", failures.join("; "));
+        panic!(
+            "compositor state invariant failed after {context}: {}",
+            failures.join("; ")
+        );
     }
 
     fn workspace_sync_from_registry(&mut self) -> bool {
@@ -12157,6 +12471,19 @@ impl CompositorState {
             return;
         }
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
+            if self.x11_window_should_hide_to_tray_on_close(&info)
+                && self.window_registry.window_kind(window_id) == Some(WindowKind::Native)
+            {
+                self.remember_tray_hidden_x11_window_id(window_id, Some(&info));
+                self.shell_close_pending_native_windows.remove(&window_id);
+                self.shell_close_refocus_targets.remove(&window_id);
+                self.shell_emit_chrome_window_unmapped(
+                    window_id,
+                    self.window_registry.window_info(window_id),
+                );
+                self.shell_reply_window_list();
+                return;
+            }
             tracing::warn!(
                 target: "derp_toplevel",
                 window_id,
@@ -12164,6 +12491,10 @@ impl CompositorState {
             );
             return;
         };
+        if self.x11_window_should_hide_to_tray_on_close(&info) {
+            self.shell_hide_x11_window_to_tray(window_id, &x11);
+            return;
+        }
         tracing::warn!(
             target: "derp_toplevel",
             window_id,
@@ -13668,19 +13999,22 @@ impl XWaylandShellHandler for CompositorState {
             "x11 surface_associated"
         );
         if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
+            let restored = self.shell_restore_tray_hidden_x11_window(info.window_id, &window);
             if self.shell_pending_native_focus_window_id == Some(info.window_id) {
                 self.shell_raise_and_focus_window(info.window_id);
             }
             let elem = DerpSpaceElem::X11(window.clone());
-            if self.space.elements().any(|e| *e == elem) && !info.minimized {
+            if self.space.elements().any(|e| *e == elem) && (!info.minimized || restored) {
                 let window_id = info.window_id;
                 self.scratchpad_consider_window(window_id);
                 let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+                let output_name = current_info.output_name.clone();
                 if !(self.scratchpad_windows.contains_key(&window_id) && current_info.minimized) {
                     self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
                 }
                 if !self.scratchpad_windows.contains_key(&window_id) {
                     self.shell_consider_focus_spawned_toplevel(window_id);
+                    let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
                 }
             }
         }
@@ -13740,7 +14074,8 @@ impl XwmHandler for CompositorState {
         self.space.map_element(elem, (geo.loc.x, geo.loc.y), false);
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
-                if !was_mapped && !info.minimized {
+                let restored = self.shell_restore_tray_hidden_x11_window(info.window_id, &window);
+                if (!was_mapped || restored) && !info.minimized {
                     let window_id = info.window_id;
                     self.scratchpad_consider_window(window_id);
                     let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
@@ -13785,6 +14120,12 @@ impl XwmHandler for CompositorState {
             "x11 unmapped_window"
         );
         if let Some(window_id) = self.x11_window_id_for_surface(&window) {
+            if self.shell_x11_window_is_tray_hidden(window_id) {
+                self.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
+                self.shell_reply_window_list();
+                self.loop_signal.wakeup();
+                return;
+            }
             if self.shell_minimized_x11_windows.contains_key(&window_id)
                 && !self.shell_close_pending_native_windows.contains(&window_id)
             {
@@ -14217,19 +14558,11 @@ mod taskbar_work_area_tests {
     #[test]
     fn taskbar_reserve_keeps_minimum_size() {
         assert_eq!(
-            apply_taskbar_reserve_to_global_rect(
-                rect(10, 20, 8, 7),
-                ShellTaskbarSide::Left,
-                44
-            ),
+            apply_taskbar_reserve_to_global_rect(rect(10, 20, 8, 7), ShellTaskbarSide::Left, 44),
             rect(54, 20, 1, 7)
         );
         assert_eq!(
-            apply_taskbar_reserve_to_global_rect(
-                rect(10, 20, 8, 7),
-                ShellTaskbarSide::Top,
-                44
-            ),
+            apply_taskbar_reserve_to_global_rect(rect(10, 20, 8, 7), ShellTaskbarSide::Top, 44),
             rect(10, 64, 8, 1)
         );
     }
@@ -14245,11 +14578,26 @@ mod state_invariant_tests {
 
     #[test]
     fn frame_contains_client_edges() {
-        assert!(rect_contains_rect(rect(10, 10, 120, 90), rect(14, 36, 100, 50)));
-        assert!(rect_contains_rect(rect(10, 10, 120, 90), rect(10, 10, 120, 90)));
-        assert!(!rect_contains_rect(rect(10, 10, 120, 90), rect(9, 36, 100, 50)));
-        assert!(!rect_contains_rect(rect(10, 10, 120, 90), rect(14, 36, 130, 50)));
-        assert!(!rect_contains_rect(rect(10, 10, 120, 90), rect(14, 36, 100, 0)));
+        assert!(rect_contains_rect(
+            rect(10, 10, 120, 90),
+            rect(14, 36, 100, 50)
+        ));
+        assert!(rect_contains_rect(
+            rect(10, 10, 120, 90),
+            rect(10, 10, 120, 90)
+        ));
+        assert!(!rect_contains_rect(
+            rect(10, 10, 120, 90),
+            rect(9, 36, 100, 50)
+        ));
+        assert!(!rect_contains_rect(
+            rect(10, 10, 120, 90),
+            rect(14, 36, 130, 50)
+        ));
+        assert!(!rect_contains_rect(
+            rect(10, 10, 120, 90),
+            rect(14, 36, 100, 0)
+        ));
     }
 }
 

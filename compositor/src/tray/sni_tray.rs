@@ -443,33 +443,29 @@ fn dbusmenu_parse_get_layout_reply(
 ) -> Vec<TraySniMenuEntryWire> {
     let full_sig = body.signature();
     let full = full_sig.to_string();
-    let layout_sig = match full.strip_prefix('u') {
-        Some(rest) => match Signature::try_from(rest) {
-            Ok(s) => s,
-            Err(e) => {
+    let layout_sig = match full
+        .strip_prefix('u')
+        .and_then(|rest| Signature::try_from(rest).ok())
+    {
+        Some(sig) => sig,
+        None => match full
+            .strip_prefix("(u")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .and_then(|rest| Signature::try_from(rest).ok())
+        {
+            Some(sig) => sig,
+            None => {
                 tracing::warn!(
                     target: "derp_sni_menu",
                     notifier_id = %notifier_id,
                     dest = %dest,
                     menu_path = %menu_path,
                     body_sig = %full,
-                    error = %e,
-                    "dbusmenu GetLayout layout signature parse failed"
+                    "dbusmenu GetLayout body signature is unsupported"
                 );
                 return Vec::new();
             }
         },
-        None => {
-            tracing::warn!(
-                target: "derp_sni_menu",
-                notifier_id = %notifier_id,
-                dest = %dest,
-                menu_path = %menu_path,
-                body_sig = %full,
-                "dbusmenu GetLayout body signature does not start with u"
-            );
-            return Vec::new();
-        }
     };
     let data = body.data();
     let revision_sig = Signature::try_from("u").expect("valid dbus u signature");

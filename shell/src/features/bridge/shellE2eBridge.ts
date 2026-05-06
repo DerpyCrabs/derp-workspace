@@ -93,6 +93,7 @@ type RegisterShellE2eBridgeOptions = {
   getProgramsMenuOpen: () => boolean
   getPowerMenuOpen: () => boolean
   getVolumeMenuOpen: () => boolean
+  getTraySniMenuOpen: () => boolean
   getDebugWindowVisible: () => boolean
   getSettingsWindowVisible: () => boolean
   getSnapAssistPicker: () => SnapAssistPickerLike | null
@@ -161,6 +162,7 @@ export function registerShellE2eBridge(options: RegisterShellE2eBridgeOptions) {
           programsMenuOpen: options.getProgramsMenuOpen(),
           powerMenuOpen: options.getPowerMenuOpen(),
           volumeMenuOpen: options.getVolumeMenuOpen(),
+          traySniMenuOpen: options.getTraySniMenuOpen(),
           debugWindowVisible: options.getDebugWindowVisible(),
           settingsWindowVisible: options.getSettingsWindowVisible(),
           snapAssistPicker: options.getSnapAssistPicker(),

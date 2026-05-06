@@ -54,6 +54,8 @@ const monitor: LayoutScreen = {
   y: 0,
   width: 1200,
   height: 900,
+  physical_width: 1200,
+  physical_height: 900,
   transform: 0,
   refresh_milli_hz: 60000,
   vrr_supported: false,

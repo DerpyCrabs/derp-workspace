@@ -1,4 +1,4 @@
-import { For, Show, createMemo, onCleanup, type Accessor } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup, type Accessor } from 'solid-js'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -6,12 +6,13 @@ import {
   ContextMenuSeparator,
 } from '@/components/ui/context-menu'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
-import type { ShellContextMenuItem } from '@/host/contextMenu'
+import { fitContextMenuClientPosition, type ClientMenuBounds, type ShellContextMenuItem } from '@/host/contextMenu'
 
 type CtxMenuAnchor = { x: number; y: number; alignAboveY?: number }
 
 type TraySniContextMenuProps = {
   anchor: Accessor<CtxMenuAnchor>
+  bounds: Accessor<ClientMenuBounds>
   items: Accessor<ShellContextMenuItem[]>
   highlightIdx: Accessor<number>
   setPanelRef: (el: HTMLDivElement) => void
@@ -19,22 +20,45 @@ type TraySniContextMenuProps = {
 }
 
 export function TraySniContextMenu(props: TraySniContextMenuProps) {
+  const [panelSize, setPanelSize] = createSignal({ w: 192, h: 40 })
   const panelStyle = createMemo(() => {
     const a = props.anchor()
+    const size = panelSize()
+    const estimateH = Math.max(40, Math.min(520, props.items().length * 32 + 8))
+    const placement = fitContextMenuClientPosition(
+      a,
+      Math.max(192, size.w),
+      Math.max(estimateH, size.h),
+      props.bounds(),
+    )
     return {
-      left: `${Math.round(a.x)}px`,
-      top: `${Math.round(a.y)}px`,
+      left: `${placement.left}px`,
+      top: `${placement.top}px`,
+      'max-height': `${Math.round(placement.maxHeight)}px`,
     }
   })
   function registerPanel(el: HTMLElement) {
     props.setPanelRef(el as HTMLDivElement)
+    const updateSize = () => {
+      setPanelSize({
+        w: Math.max(1, Math.round(el.offsetWidth)),
+        h: Math.max(1, Math.round(el.scrollHeight || el.offsetHeight)),
+      })
+    }
+    updateSize()
+    const observer = new ResizeObserver(updateSize)
+    observer.observe(el)
     const registration = registerShellExclusionElement('floating', 'floating', el)
-    onCleanup(registration.unregister)
+    onCleanup(() => {
+      observer.disconnect()
+      registration.unregister()
+    })
   }
   return (
     <ContextMenu defaultOpen>
       <ContextMenuContent
         data-shell-exclusion-floating
+        data-shell-tray-sni-menu-panel
         class="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) z-90000 fixed flex min-w-48 flex-col overflow-hidden rounded-[0.35rem]"
         aria-label="Tray"
         when={() => true}

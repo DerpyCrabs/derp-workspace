@@ -289,7 +289,7 @@ function outputForWindow(compositor: CompositorSnapshot, window: { x: number; y:
   ) ?? null
 }
 
-function expectedTaskbarRect(output: CompositorSnapshot['outputs'][number], side: string, size = 44) {
+function expectedTaskbarRect(output: CompositorSnapshot['outputs'][number], side: string, size = 36) {
   if (side === 'top') return { x: output.x, y: output.y, width: output.width, height: size }
   if (side === 'left') return { x: output.x, y: output.y, width: size, height: output.height }
   if (side === 'right') return { x: output.x + output.width - size, y: output.y, width: size, height: output.height }
@@ -298,7 +298,7 @@ function expectedTaskbarRect(output: CompositorSnapshot['outputs'][number], side
 
 function expectedMaximizedRect(output: CompositorSnapshot['outputs'][number], side: string, autoHide: boolean) {
   const titlebar = 26
-  const taskbar = autoHide ? 0 : 44
+  const taskbar = autoHide ? 0 : 36
   if (side === 'top') return { x: output.x, y: output.y + taskbar + titlebar, width: output.width, height: output.height - taskbar - titlebar }
   if (side === 'left') return { x: output.x + taskbar, y: output.y + titlebar, width: output.width - taskbar, height: output.height - titlebar }
   if (side === 'right') return { x: output.x, y: output.y + titlebar, width: output.width - taskbar, height: output.height - titlebar }

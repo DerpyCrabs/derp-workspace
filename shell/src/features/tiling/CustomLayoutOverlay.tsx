@@ -13,6 +13,7 @@ import { screensListForLayout } from '@/host/appLayout'
 import type { LayoutScreen } from '@/host/types'
 import { registerShellExclusionElement } from '@/features/bridge/shellExclusionSync'
 import { canvasRectToClientCss, rectGlobalToCanvasLocal } from '@/lib/shellCoords'
+import { CHROME_TASKBAR_RESERVE_PX } from '@/lib/chromeConstants'
 import {
   clampCustomLayoutRatio,
   createCustomLayout,
@@ -211,7 +212,7 @@ export function CustomLayoutOverlay(props: CustomLayoutOverlayProps) {
       canvas.w,
       canvas.h,
     )
-    const taskbarReserve = props.reserveTaskbarForMon(screen) ? 44 : 0
+    const taskbarReserve = props.reserveTaskbarForMon(screen) ? CHROME_TASKBAR_RESERVE_PX : 0
     const work = {
       x: screen.x,
       y: screen.y,

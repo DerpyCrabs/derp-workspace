@@ -51,7 +51,7 @@ describe('createShellExclusionSync', () => {
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
         taskbarScreens: () => [],
-        taskbarHeight: 44,
+        taskbarHeight: 36,
         taskbarAutoHide: () => false,
         windows: () => [],
         onHudChange,
@@ -100,7 +100,7 @@ describe('createShellExclusionSync', () => {
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
         taskbarScreens: () => [],
-        taskbarHeight: 44,
+        taskbarHeight: 36,
         taskbarAutoHide: () => false,
         windows: () => [],
         onHudChange: vi.fn(),
@@ -139,6 +139,8 @@ describe('createShellExclusionSync', () => {
         y: 0,
         width: 1200,
         height: 900,
+        physical_width: 1200,
+        physical_height: 900,
         transform: 0,
         refresh_milli_hz: 60000,
         vrr_supported: false,
@@ -151,6 +153,8 @@ describe('createShellExclusionSync', () => {
         y: 0,
         width: 720,
         height: 900,
+        physical_width: 720,
+        physical_height: 900,
         transform: 0,
         refresh_milli_hz: 60000,
         vrr_supported: false,
@@ -167,7 +171,7 @@ describe('createShellExclusionSync', () => {
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
         taskbarScreens: () => screens,
-        taskbarHeight: 44,
+        taskbarHeight: 36,
         taskbarAutoHide: () => autoHide,
         windows: () => [],
         onHudChange,
@@ -178,8 +182,8 @@ describe('createShellExclusionSync', () => {
 
     runtime!.syncExclusionZonesNow()
     expect(onHudChange).toHaveBeenLastCalledWith([
-      { label: 'taskbar:DP-1', x: 0, y: 0, w: 44, h: 900 },
-      { label: 'taskbar:HDMI-A-1', x: 1876, y: 0, w: 44, h: 900 },
+      { label: 'taskbar:DP-1', x: 0, y: 0, w: 36, h: 900 },
+      { label: 'taskbar:HDMI-A-1', x: 1884, y: 0, w: 36, h: 900 },
     ])
 
     autoHide = true
@@ -214,6 +218,8 @@ describe('createShellExclusionSync', () => {
       y: 0,
       width: 1200,
       height: 900,
+      physical_width: 1200,
+      physical_height: 900,
       transform: 0,
       refresh_milli_hz: 60000,
       vrr_supported: false,
@@ -251,7 +257,7 @@ describe('createShellExclusionSync', () => {
         outputGeom: () => ({ w: 1920, h: 1080 }),
         layoutCanvasOrigin: () => null,
         taskbarScreens: () => [screen],
-        taskbarHeight: 44,
+        taskbarHeight: 36,
         taskbarAutoHide: () => autoHide,
         windows: () => [fullscreenWindow],
         onHudChange,

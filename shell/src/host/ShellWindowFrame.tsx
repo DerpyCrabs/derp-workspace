@@ -219,7 +219,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
         <Show when={layout().insetTop > 0}>
           <div class="shrink-0" style={{ height: `${layout().insetTop}px` }} />
         </Show>
-        <div class="flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden border-b border-(--shell-border) py-0 pr-1.5 pl-2.5">
+        <div class="flex min-h-0 min-w-0 flex-1 flex-row items-stretch gap-1.5 overflow-hidden py-0 pr-1.5 pl-2.5">
         <Show
           when={props.tabStrip}
           fallback={

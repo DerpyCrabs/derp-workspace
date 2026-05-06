@@ -85,6 +85,8 @@ export interface OutputSnapshot {
   y: number
   width: number
   height: number
+  physical_width?: number
+  physical_height?: number
   scale?: number
   transform?: string
   refresh_milli_hz?: number
@@ -444,6 +446,11 @@ export interface FileBrowserContextMenuActionSnapshot {
   rect: Rect | null
 }
 
+export interface TraySniContextMenuActionSnapshot {
+  label: string
+  rect: Rect | null
+}
+
 export interface FileBrowserWindowSnapshot extends FileBrowserSnapshot {
   window_id: number
 }
@@ -497,6 +504,7 @@ export interface ShellSnapshot {
   programs_menu_open: boolean
   power_menu_open: boolean
   volume_menu_open?: boolean
+  tray_sni_menu_open?: boolean
   menu_layer_host_connected?: boolean
   menu_layer_host_z_index?: number | null
   menu_portal_hit_test?: {
@@ -507,6 +515,7 @@ export interface ShellSnapshot {
     host_connected: boolean
     volume_panel_dom: boolean
     power_menu_dom: boolean
+    tray_sni_menu_dom?: boolean
     programs_menu_dom: boolean
     window_switcher_dom?: boolean
   } | null
@@ -544,6 +553,8 @@ export interface ShellSnapshot {
   portal_picker_windows?: PortalPickerWindowSnapshot[]
   portal_picker_monitors?: PortalPickerMonitorSnapshot[]
   file_browser_context_menu?: FileBrowserContextMenuActionSnapshot[]
+  taskbar_tray_sni_buttons?: Array<{ title: string; rect: Rect | null }>
+  tray_sni_context_menu?: TraySniContextMenuActionSnapshot[]
   session_snapshot?: Record<string, unknown> | null
   session_snapshot_error?: string | null
   session_restore_active?: boolean
@@ -2332,9 +2343,25 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = taskbarEntry(shell, windowId)
-    const closeRect = row?.close ?? windowControls(shell, windowId)?.close
-    assert(closeRect, `missing close control for window ${windowId}`)
-    await clickRect(base, closeRect)
+    const taskbarRect = row?.activate
+    if (taskbarRect) {
+      await rightClickRect(base, taskbarRect)
+      const action = await waitFor(
+        `wait for taskbar close menu action ${windowId}`,
+        async () => {
+          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+          const item = next.file_browser_context_menu?.find((entry) => entry.id === 'close-group' || entry.id === 'close-window')
+          return item?.rect ? item : null
+        },
+        1000,
+        40,
+      )
+      await clickRect(base, action.rect!)
+    } else {
+      const closeRect = windowControls(shell, windowId)?.close
+      assert(closeRect, `missing close control for window ${windowId}`)
+      await clickRect(base, closeRect)
+    }
     try {
       await waitForWindowGone(base, windowId, 600)
       return

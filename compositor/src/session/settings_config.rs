@@ -275,7 +275,7 @@ impl Default for SettingsFile {
 }
 
 fn is_valid_theme_palette(value: &str) -> bool {
-    matches!(value, "default" | "caffeine" | "cosmic-night")
+    matches!(value, "default" | "gray" | "caffeine" | "cosmic-night")
 }
 
 fn is_valid_theme_mode(value: &str) -> bool {
@@ -1216,6 +1216,16 @@ mod tests {
                 mode: "wrong".into(),
             }),
             ThemeSettingsFile::default()
+        );
+        assert_eq!(
+            sanitize_theme_settings(ThemeSettingsFile {
+                palette: "gray".into(),
+                mode: "dark".into(),
+            }),
+            ThemeSettingsFile {
+                palette: "gray".into(),
+                mode: "dark".into(),
+            }
         );
     }
 

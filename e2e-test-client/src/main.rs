@@ -665,7 +665,7 @@ impl CompositorHandler for TestClient {
     ) {
         if self.drop_buffer_after_draw && !self.buffer_dropped {
             self.pending_presentation_loops = self.pending_presentation_loops.saturating_add(1);
-            if self.pending_presentation_loops < 5 {
+            if self.pending_presentation_loops < 20 {
                 self.window
                     .wl_surface()
                     .frame(qh, self.window.wl_surface().clone());

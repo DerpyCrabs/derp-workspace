@@ -326,6 +326,8 @@ pub struct OutputLayoutScreen {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    pub physical_w: u32,
+    pub physical_h: u32,
     pub transform: u32,
     pub refresh_milli_hz: u32,
     pub vrr_supported: bool,
@@ -373,7 +375,7 @@ pub fn encode_output_layout(
             .checked_add(nl as usize)?
             .checked_add(4)?
             .checked_add(il as usize)?
-            .checked_add(32)?;
+            .checked_add(40)?;
     }
     body_sz = body_sz.checked_add(4)?.checked_add(prim_bytes.len())?;
     body_sz = body_sz.checked_add(8)?;
@@ -414,6 +416,8 @@ pub fn encode_output_layout(
         v.extend_from_slice(&s.refresh_milli_hz.to_le_bytes());
         v.extend_from_slice(&(if s.vrr_supported { 1u32 } else { 0u32 }).to_le_bytes());
         v.extend_from_slice(&(if s.vrr_enabled { 1u32 } else { 0u32 }).to_le_bytes());
+        v.extend_from_slice(&s.physical_w.max(1).to_le_bytes());
+        v.extend_from_slice(&s.physical_h.max(1).to_le_bytes());
     }
     let pl = u32::try_from(prim_bytes.len()).ok()?;
     v.extend_from_slice(&pl.to_le_bytes());
@@ -497,7 +501,22 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         off += il;
         let fixed_len = {
             let remaining = body.len().saturating_sub(off);
-            if remaining >= 32 {
+            let candidate_w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap());
+            let candidate_h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
+            let max_physical_w = canvas_physical_w.max(canvas_logical_w).max(candidate_w);
+            let max_physical_h = canvas_physical_h.max(canvas_logical_h).max(candidate_h);
+            let looks_like_physical_tail = remaining >= 40
+                && u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap()) <= 1
+                && u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap()) <= 1
+                && (1..=max_physical_w.saturating_mul(8).max(1)).contains(&u32::from_le_bytes(
+                    body[off + 32..off + 36].try_into().unwrap(),
+                ))
+                && (1..=max_physical_h.saturating_mul(8).max(1)).contains(&u32::from_le_bytes(
+                    body[off + 36..off + 40].try_into().unwrap(),
+                ));
+            if looks_like_physical_tail {
+                40
+            } else if remaining >= 32 {
                 32
             } else {
                 24
@@ -512,7 +531,7 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         let h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap());
         let transform = u32::from_le_bytes(body[off + 16..off + 20].try_into().unwrap());
         let refresh_milli_hz = u32::from_le_bytes(body[off + 20..off + 24].try_into().unwrap());
-        let (vrr_supported, vrr_enabled) = if fixed_len == 32 {
+        let (vrr_supported, vrr_enabled) = if fixed_len >= 32 {
             let supported = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
             let enabled = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
             if supported > 1 || enabled > 1 || enabled > supported {
@@ -522,6 +541,14 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
         } else {
             (false, false)
         };
+        let (physical_w, physical_h) = if fixed_len == 40 {
+            (
+                u32::from_le_bytes(body[off + 32..off + 36].try_into().unwrap()).max(1),
+                u32::from_le_bytes(body[off + 36..off + 40].try_into().unwrap()).max(1),
+            )
+        } else {
+            (w.max(1), h.max(1))
+        };
         off += fixed_len;
         screens.push(OutputLayoutScreen {
             name,
@@ -530,6 +557,8 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             y,
             w,
             h,
+            physical_w,
+            physical_h,
             transform,
             refresh_milli_hz,
             vrr_supported,
@@ -2305,37 +2334,29 @@ fn decode_compositor_to_shell_body(
                     .to_string();
                 (output_name, tail)
             };
-            let (
-                client_x,
-                client_y,
-                client_w,
-                client_h,
-                frame_x,
-                frame_y,
-                frame_w,
-                frame_h,
-            ) = if body.len() == rect_pos {
-                (x, y, w, h, x, y, w, h)
-            } else {
-                if body.len() != rect_pos + WINDOW_GEOMETRY_RECTS_BYTES {
-                    return Err(DecodeError::BadWindowPayload);
-                }
-                let schema =
-                    u32::from_le_bytes(body[rect_pos..rect_pos + 4].try_into().unwrap());
-                if schema != WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION {
-                    return Err(DecodeError::BadWindowPayload);
-                }
-                (
-                    i32::from_le_bytes(body[rect_pos + 4..rect_pos + 8].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 8..rect_pos + 12].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 12..rect_pos + 16].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 16..rect_pos + 20].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 20..rect_pos + 24].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 24..rect_pos + 28].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 28..rect_pos + 32].try_into().unwrap()),
-                    i32::from_le_bytes(body[rect_pos + 32..rect_pos + 36].try_into().unwrap()),
-                )
-            };
+            let (client_x, client_y, client_w, client_h, frame_x, frame_y, frame_w, frame_h) =
+                if body.len() == rect_pos {
+                    (x, y, w, h, x, y, w, h)
+                } else {
+                    if body.len() != rect_pos + WINDOW_GEOMETRY_RECTS_BYTES {
+                        return Err(DecodeError::BadWindowPayload);
+                    }
+                    let schema =
+                        u32::from_le_bytes(body[rect_pos..rect_pos + 4].try_into().unwrap());
+                    if schema != WINDOW_GEOMETRY_RECTS_SCHEMA_VERSION {
+                        return Err(DecodeError::BadWindowPayload);
+                    }
+                    (
+                        i32::from_le_bytes(body[rect_pos + 4..rect_pos + 8].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 8..rect_pos + 12].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 12..rect_pos + 16].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 16..rect_pos + 20].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 20..rect_pos + 24].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 24..rect_pos + 28].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 28..rect_pos + 32].try_into().unwrap()),
+                        i32::from_le_bytes(body[rect_pos + 32..rect_pos + 36].try_into().unwrap()),
+                    )
+                };
             Ok(DecodedCompositorToShellMessage::WindowGeometry {
                 window_id,
                 surface_id,
@@ -3051,6 +3072,8 @@ mod tests {
                 y: 0,
                 w: 3840,
                 h: 2160,
+                physical_w: 3840,
+                physical_h: 2160,
                 transform: 0,
                 refresh_milli_hz: 60000,
                 vrr_supported: true,
@@ -3078,6 +3101,8 @@ mod tests {
                     y: 0,
                     w: 3840,
                     h: 2160,
+                    physical_w: 3840,
+                    physical_h: 2160,
                     transform: 0,
                     refresh_milli_hz: 60000,
                     vrr_supported: true,
@@ -3132,6 +3157,8 @@ mod tests {
                     y: 20,
                     w: 800,
                     h: 600,
+                    physical_w: 800,
+                    physical_h: 600,
                     transform: 0,
                     refresh_milli_hz: 60000,
                     vrr_supported: false,

@@ -100,21 +100,22 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
         {(screen) => {
           const loc = props.screenCssRect(screen)
           return (
-            <div
-              class="pointer-events-none absolute z-1 box-border border border-dashed border-(--shell-border) bg-(--shell-overlay-muted)"
-              style={{
-                left: `${loc.x}px`,
-                top: `${loc.y}px`,
-                width: `${loc.width}px`,
-                height: `${loc.height}px`,
-              }}
-            >
-              <Show when={props.debugHudFrameVisible()}>
+            <Show when={props.debugHudFrameVisible()}>
+              <div
+                data-shell-secondary-screen={screen.name || 'display'}
+                class="pointer-events-none absolute z-1 box-border border border-dashed border-(--shell-border) bg-transparent"
+                style={{
+                  left: `${loc.x}px`,
+                  top: `${loc.y}px`,
+                  width: `${loc.width}px`,
+                  height: `${loc.height}px`,
+                }}
+              >
                 <span class="border border-(--shell-border) bg-(--shell-surface-elevated) text-(--shell-text-muted) absolute top-2 left-2 rounded px-2 py-1 text-[11px] font-semibold tracking-wider uppercase">
                   {screen.name || 'Display'}
                 </span>
-              </Show>
-            </div>
+              </div>
+            </Show>
           )
         }}
       </For>
@@ -188,7 +189,7 @@ export function ShellSurfaceLayers(props: ShellSurfaceLayersProps) {
                       props.isPrimaryTaskbarScreen(screen) ? props.sniTrayItems() : []
                     }
                     trayIconSlotPx={
-                      props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 40
+                      props.isPrimaryTaskbarScreen(screen) ? props.trayIconSlotPx() : 36
                     }
                     onSniTrayActivate={props.onSniTrayActivate}
                     onSniTrayContextMenu={props.onSniTrayContextMenu}

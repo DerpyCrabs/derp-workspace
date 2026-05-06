@@ -128,6 +128,8 @@ struct E2eOutputSnapshot {
     y: i32,
     width: i32,
     height: i32,
+    physical_width: i32,
+    physical_height: i32,
     scale: f64,
     transform: String,
     refresh_milli_hz: u32,
@@ -543,6 +545,16 @@ impl CompositorState {
                     .map(|mode| mode.refresh)
                     .unwrap_or_default()
                     .max(0) as u32;
+                let (physical_width, physical_height) = output
+                    .current_mode()
+                    .map(|mode| (mode.size.w.max(1), mode.size.h.max(1)))
+                    .unwrap_or_else(|| {
+                        let scale = output.current_scale().fractional_scale();
+                        (
+                            ((geometry.size.w.max(1) as f64) * scale).round().max(1.0) as i32,
+                            ((geometry.size.h.max(1) as f64) * scale).round().max(1.0) as i32,
+                        )
+                    });
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(output.name().as_str());
                 Some(E2eOutputSnapshot {
                     name: output.name(),
@@ -550,6 +562,8 @@ impl CompositorState {
                     y: geometry.loc.y,
                     width: geometry.size.w,
                     height: geometry.size.h,
+                    physical_width,
+                    physical_height,
                     scale: output.current_scale().fractional_scale(),
                     transform: format!("{:?}", output.current_transform()),
                     refresh_milli_hz,

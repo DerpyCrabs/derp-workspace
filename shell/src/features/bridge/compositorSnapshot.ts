@@ -133,7 +133,18 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
     const vrrSupported = view.getUint32(cursor + 24, true)
     const vrrEnabled = view.getUint32(cursor + 28, true)
     if (vrrSupported > 1 || vrrEnabled > 1 || vrrEnabled > vrrSupported) return null
-    cursor += 32
+    const maxPhysicalWidth = Math.max(canvasPhysicalWidth, canvasLogicalWidth, width, 1) * 8
+    const maxPhysicalHeight = Math.max(canvasPhysicalHeight, canvasLogicalHeight, height, 1) * 8
+    const tailPhysicalWidth = cursor + 40 <= view.byteLength ? view.getUint32(cursor + 32, true) : 0
+    const tailPhysicalHeight = cursor + 40 <= view.byteLength ? view.getUint32(cursor + 36, true) : 0
+    const hasPhysicalTail =
+      tailPhysicalWidth >= 1 &&
+      tailPhysicalWidth <= maxPhysicalWidth &&
+      tailPhysicalHeight >= 1 &&
+      tailPhysicalHeight <= maxPhysicalHeight
+    const physicalWidth = hasPhysicalTail ? tailPhysicalWidth : Math.max(1, width)
+    const physicalHeight = hasPhysicalTail ? tailPhysicalHeight : Math.max(1, height)
+    cursor += hasPhysicalTail ? 40 : 32
     screens.push({
       name,
       identity,
@@ -141,6 +152,8 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
       y,
       width,
       height,
+      physical_width: physicalWidth,
+      physical_height: physicalHeight,
       transform,
       refresh_milli_hz: refreshMilliHz,
       vrr_supported: vrrSupported !== 0,

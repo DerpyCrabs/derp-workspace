@@ -14,8 +14,7 @@ export const SHELL_RESIZE_RIGHT = 8
 /** Hit slop for resize handles (CSS px). */
 export const CHROME_RESIZE_HANDLE_PX = 10
 
-/** Bottom reserve for taskbar (matches Taskbar h-11 and primary chrome fill bottom padding). */
-export const CHROME_TASKBAR_RESERVE_PX = 44
+export const CHROME_TASKBAR_RESERVE_PX = 36
 
 /** `layout_state` tail on [`MSG_SHELL_SET_GEOMETRY`]: normal floating geometry. */
 export const SHELL_LAYOUT_FLOATING = 0

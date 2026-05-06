@@ -19,6 +19,55 @@ export type LogicalWorkspaceBounds = {
   maxY: number
 }
 
+export type ClientMenuBounds = {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export function fitContextMenuClientPosition(
+  anchor: { x: number; y: number; alignAboveY?: number },
+  menuClientW: number,
+  menuClientH: number,
+  bounds: ClientMenuBounds,
+  margin = 4,
+): { left: number; top: number; maxHeight: number; opensAbove: boolean } {
+  const pad = Math.max(0, Math.round(margin))
+  const minX = Math.round(bounds.x) + pad
+  const minY = Math.round(bounds.y) + pad
+  const maxX = Math.round(bounds.x + bounds.w) - pad
+  const maxY = Math.round(bounds.y + bounds.h) - pad
+  const w = Math.max(1, Math.round(menuClientW))
+  const h = Math.max(1, Math.round(menuClientH))
+  const ax = Math.round(anchor.x)
+  const ay = Math.round(anchor.y)
+  const aboveY = Math.round(anchor.alignAboveY ?? anchor.y)
+  let left = ax
+  if (left + w > maxX) left = maxX - w
+  if (left < minX) left = minX
+  const belowTop = ay
+  const aboveTop = aboveY - h
+  const belowFits = belowTop + h <= maxY
+  const aboveFits = aboveTop >= minY
+  let opensAbove = false
+  let top = belowTop
+  if (!belowFits && aboveFits) {
+    opensAbove = true
+    top = aboveTop
+  } else if (!belowFits) {
+    const belowSpace = Math.max(0, maxY - belowTop)
+    const aboveSpace = Math.max(0, aboveY - minY)
+    opensAbove = aboveSpace > belowSpace
+    top = opensAbove ? minY : Math.max(minY, Math.min(belowTop, maxY - h))
+  }
+  if (!opensAbove && top < minY) top = minY
+  if (!opensAbove && top + h > maxY) top = Math.max(minY, maxY - h)
+  if (opensAbove && top < minY) top = minY
+  const maxHeight = Math.max(48, opensAbove ? aboveY - minY : maxY - top)
+  return { left, top, maxHeight, opensAbove }
+}
+
 export function logicalWorkspaceBoundsFromScreens(
   screens: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
   origin: { x: number; y: number } | null,

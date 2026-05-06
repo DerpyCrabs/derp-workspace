@@ -509,8 +509,20 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const displaysHtml = await getShellHtml(base, '[data-settings-displays-page]')
+    const shellHtml = await getShellHtml(base)
+    assert(!shellHtml.includes('data-shell-secondary-screen='), 'secondary monitor debug tint should be hidden outside debug hud')
     for (const output of settingsMoved.compositor.outputs) {
       assert(displaysHtml.includes(output.name), `settings displays page missing output ${output.name}`)
+      const physicalWidth = output.physical_width ?? Math.round(output.width * (output.scale ?? 1))
+      const physicalHeight = output.physical_height ?? Math.round(output.height * (output.scale ?? 1))
+      assert(
+        displaysHtml.includes(`physical ${physicalWidth}x${physicalHeight}`),
+        `settings displays page missing physical size for ${output.name}`,
+      )
+      assert(
+        displaysHtml.includes(`logical ${output.width}x${output.height}`),
+        `settings displays page missing logical size for ${output.name}`,
+      )
     }
     state.multiMonitorShellMove = {
       window_id: SHELL_UI_SETTINGS_WINDOW_ID,

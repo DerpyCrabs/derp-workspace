@@ -146,6 +146,7 @@ export type BuildE2eShellSnapshotArgs = {
   programsMenuOpen: boolean
   powerMenuOpen: boolean
   volumeMenuOpen: boolean
+  traySniMenuOpen: boolean
   debugWindowVisible: boolean
   settingsWindowVisible: boolean
   snapAssistPicker: E2eSnapAssistPicker | null
@@ -778,6 +779,10 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     ).trim(),
     rect: args.projectCurrentMenuElementRect(el) ?? snapshotRect(el, args.origin),
   }))
+  const traySniContextMenu = cache.queryAll('[data-tray-sni-menu-idx]').map((el) => ({
+    label: (el.textContent ?? '').trim(),
+    rect: args.projectCurrentMenuElementRect(el) ?? snapshotRect(el, args.origin),
+  }))
 
   const menuLayerHostElResolved =
     args.menuLayerHost?.() ??
@@ -802,6 +807,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     let panel: HTMLElement | null = null
     if (args.volumeMenuOpen) panel = cache.query('[data-shell-volume-menu-panel]')
     else if (args.powerMenuOpen) panel = cache.query('[data-shell-power-menu-panel]')
+    else if (args.traySniMenuOpen) panel = cache.query('[data-shell-tray-sni-menu-panel]')
     else if (windowSwitcherOpen) panel = cache.query('[data-shell-window-switcher-panel]')
     else if (args.programsMenuOpen) panel = cache.query('[data-shell-programs-menu-panel]')
     else return null
@@ -811,8 +817,12 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     const hit = args.document.elementFromPoint(r.left + r.width * 0.5, r.top + r.height * 0.5)
     const hit_ok = !!(hit && menuLayerHostElResolved.contains(hit))
     let tray_flap_above_toggle: boolean | null = null
-    if (args.volumeMenuOpen || args.powerMenuOpen) {
-      const toggleSel = args.volumeMenuOpen ? '[data-shell-volume-toggle]' : '[data-shell-power-toggle]'
+    if (args.volumeMenuOpen || args.powerMenuOpen || args.traySniMenuOpen) {
+      const toggleSel = args.volumeMenuOpen
+        ? '[data-shell-volume-toggle]'
+        : args.powerMenuOpen
+          ? '[data-shell-power-toggle]'
+          : '[data-shell-tray-strip] button'
       const toggle = cache.query(toggleSel)
       if (toggle instanceof HTMLElement) {
         const tr = toggle.getBoundingClientRect()
@@ -844,15 +854,17 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     window_switcher_open: windowSwitcherOpen,
     power_menu_open: args.powerMenuOpen,
     volume_menu_open: args.volumeMenuOpen,
+    tray_sni_menu_open: args.traySniMenuOpen,
     menu_layer_host_connected: !!menuLayerHostElResolved,
     menu_layer_host_z_index,
     menu_portal_hit_test,
     overlay_menu_dom:
-      args.programsMenuOpen || args.volumeMenuOpen || args.powerMenuOpen
+      args.programsMenuOpen || args.volumeMenuOpen || args.powerMenuOpen || args.traySniMenuOpen
         ? {
             host_connected: !!menuLayerHostElResolved,
             volume_panel_dom: !!cache.query('[data-shell-volume-menu-panel]'),
             power_menu_dom: !!cache.query('[data-shell-power-menu-panel]'),
+            tray_sni_menu_dom: !!cache.query('[data-shell-tray-sni-menu-panel]'),
             programs_menu_dom: !!cache.query('[data-shell-programs-menu-panel]'),
             window_switcher_dom: !!cache.query('[data-shell-window-switcher-panel]'),
           }
@@ -880,6 +892,11 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
     text_editor_windows: textEditorWindows,
     pdf_viewer_windows: pdfViewerWindows,
     file_browser_context_menu: fileBrowserContextMenu,
+    taskbar_tray_sni_buttons: cache.queryAll('[data-shell-tray-strip] button').map((el) => ({
+      title: el.getAttribute('title') ?? '',
+      rect: snapshotRect(el, args.origin),
+    })),
+    tray_sni_context_menu: traySniContextMenu,
     programs_menu_query: args.programsMenuQuery,
     window_switcher_selected_window_id:
       args.compositorInteractionState?.window_switcher_selected_window_id ?? null,

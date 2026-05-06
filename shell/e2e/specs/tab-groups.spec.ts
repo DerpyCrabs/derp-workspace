@@ -3176,7 +3176,11 @@ export default defineGroup(import.meta.url, ({ test }) => {
       const tabStripHtml = await timing.step('read tab strip html', () =>
         getShellHtml(base, `[data-workspace-tab-strip="${merged.group.group_id}"]`),
       )
+      const titlebarHtml = await timing.step('read grouped titlebar html', () =>
+        getShellHtml(base, `[data-shell-titlebar="${jsWindow.window.window_id}"]`),
+      )
       assert(tabStripHtml.includes('data-workspace-tab-handle='), 'missing tab drag handle markup')
+      assert(!titlebarHtml.includes('border-b border-(--shell-border)'), 'grouped tabbar titlebar should not render bottom border')
       await timing.step('select js tab', () => selectTabByClick(base, jsWindow.window.window_id))
       await timing.step('wait for switched js geometry', () =>
         waitFor(

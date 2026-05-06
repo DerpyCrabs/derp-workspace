@@ -202,6 +202,8 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(60000),
       ...u32(1),
       ...u32(0),
+      ...u32(2560),
+      ...u32(1440),
       ...u32(name.length),
       ...name,
     ])
@@ -238,6 +240,8 @@ describe('decodeCompositorSnapshot', () => {
               y: 0,
               width: 1920,
               height: 1080,
+              physical_width: 2560,
+              physical_height: 1440,
               transform: 0,
               refresh_milli_hz: 60000,
               vrr_supported: true,

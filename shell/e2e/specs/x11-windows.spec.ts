@@ -1,6 +1,11 @@
+import { execFile } from 'node:child_process'
+import { access } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import {
   activateTaskbarWindow,
   assert,
+  assertRectMinSize,
+  clickRect,
   closeTaskbarWindow,
   compositorWindowById,
   defineGroup,
@@ -8,11 +13,16 @@ import {
   getJson,
   getSnapshots,
   ensureXtermWindow,
+  KEY,
   outputForWindow,
+  rightClickRect,
   runKeybind,
   shellWindowById,
   shellQuote,
   spawnCommand,
+  SkipError,
+  taskbarEntry,
+  tapKey,
   waitForSpawnedWindow,
   waitFor,
   waitForNativeFocus,
@@ -26,6 +36,73 @@ import {
 } from '../lib/runtime.ts'
 
 const XTERM_TITLE = 'Derp X11 Xterm'
+const V2RAYN_BIN = '/opt/v2rayn-bin/v2rayN'
+
+const execFileAsync = promisify(execFile)
+
+function v2rayNWindow(shell: ShellSnapshot) {
+  return shell.windows.find((window) => /v2rayn/i.test(`${window.title} ${window.app_id}`))
+}
+
+async function waitForV2rayNVisible(base: string) {
+  return waitFor(
+    'wait for v2rayN visible taskbar row',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const window = v2rayNWindow(shell)
+      const row = window ? taskbarEntry(shell, window.window_id) : null
+      return window && row?.activate ? { shell, window, row } : null
+    },
+    30000,
+    250,
+  )
+}
+
+async function closeV2rayNTaskbarRow(base: string, shell: ShellSnapshot, windowId: number) {
+  const row = taskbarEntry(shell, windowId)
+  assert(row?.activate, 'missing v2rayN taskbar row')
+  await rightClickRect(base, assertRectMinSize('v2rayN taskbar row', row.activate, 12, 12))
+  const action = await waitFor(
+    'wait for v2rayN taskbar close menu action',
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const item = next.file_browser_context_menu?.find((entry) => entry.id === 'close-window')
+      return item?.rect ? item : null
+    },
+    2000,
+    40,
+  )
+  await clickRect(base, assertRectMinSize('v2rayN close window action', action.rect, 32, 18))
+}
+
+async function waitForV2rayNTrayHidden(base: string, windowId: number) {
+  return waitFor(
+    'wait for v2rayN hidden to tray',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const visible = shell.windows.some((window) => window.window_id === windowId)
+      const taskbarVisible = shell.taskbar_windows.some((entry) => entry.window_id === windowId)
+      return visible || taskbarVisible ? null : shell
+    },
+    5000,
+    40,
+  )
+}
+
+async function waitForV2rayNTrayButton(base: string) {
+  return waitFor(
+    'wait for v2rayN tray button',
+    async () => {
+      const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const button = shell.taskbar_tray_sni_buttons?.find(
+        (entry) => /v2rayn|vless|paper/i.test(entry.title) && entry.rect,
+      )
+      return button?.rect ? button.rect : null
+    },
+    5000,
+    40,
+  )
+}
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('x11 xterm participates in shell taskbar and window actions', async ({ base, state }) => {
@@ -143,5 +220,54 @@ export default defineGroup(import.meta.url, ({ test }) => {
     const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
     await closeTaskbarWindow(base, shell, probe.window.window_id)
     await waitForWindowGone(base, probe.window.window_id, 2000)
+  })
+
+  test('v2rayN taskbar close hides to tray and restores on activation', async ({ base }) => {
+    try {
+      await access(V2RAYN_BIN)
+    } catch {
+      throw new SkipError('v2rayN binary not installed on remote')
+    }
+
+    await execFileAsync('pkill', ['-f', V2RAYN_BIN]).catch(() => undefined)
+    await waitFor(
+      'wait for stale v2rayN windows gone',
+      async () => (v2rayNWindow(await getJson<ShellSnapshot>(base, '/test/state/shell')) ? null : true),
+      5000,
+      40,
+    ).catch(() => undefined)
+    if (!v2rayNWindow(await getJson<ShellSnapshot>(base, '/test/state/shell'))) {
+      await spawnCommand(base, `/bin/sh -lc ${shellQuote(V2RAYN_BIN)}`)
+    }
+    const opened = await waitForV2rayNVisible(base)
+    await closeV2rayNTaskbarRow(base, opened.shell, opened.window.window_id)
+    const hidden = await waitForV2rayNTrayHidden(base, opened.window.window_id)
+    assert(!taskbarEntry(hidden, opened.window.window_id), 'v2rayN taskbar row survived close to tray')
+
+    const processCheck = await execFileAsync('pgrep', ['-a', '-f', 'v2rayN|xray'])
+    assert(processCheck.stdout.includes('v2rayN'), 'v2rayN process exited after close to tray')
+
+    const trayButton = await waitForV2rayNTrayButton(base)
+    await clickRect(base, trayButton)
+    const restored = await waitForV2rayNVisible(base)
+    assert(restored.window.window_id === opened.window.window_id, 'v2rayN restore should reuse the hidden window id')
+    await closeV2rayNTaskbarRow(base, restored.shell, restored.window.window_id)
+    const hiddenAgain = await waitForV2rayNTrayHidden(base, restored.window.window_id)
+    assert(!taskbarEntry(hiddenAgain, restored.window.window_id), 'v2rayN taskbar row survived second close to tray')
+
+    const trayButtonAfterRestoreHide = await waitForV2rayNTrayButton(base)
+    await rightClickRect(base, trayButtonAfterRestoreHide)
+    const trayMenu = await waitFor(
+      'wait for v2rayN tray context menu entries',
+      async () => {
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const items = shell.tray_sni_context_menu ?? []
+        return items.length > 0 ? items : null
+      },
+      5000,
+      40,
+    )
+    assert(!trayMenu.some((entry) => /empty menu|no menu/i.test(entry.label)), 'v2rayN tray menu should expose real actions')
+    await tapKey(base, KEY.escape)
   })
 })

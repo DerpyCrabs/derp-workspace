@@ -61,6 +61,10 @@ describe('themeStore', () => {
       palette: 'default',
       mode: 'system',
     })
+    expect(parseThemeSettingsResponse('{"palette":"gray","mode":"dark"}')).toEqual({
+      palette: 'gray',
+      mode: 'dark',
+    })
   })
 
   it('waits for shell http injection before loading persisted settings', async () => {

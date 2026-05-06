@@ -50,6 +50,7 @@ const THEME_PALETTES: {
   swatches: [string, string, string]
 }[] = [
   { value: 'default', label: 'Default', swatches: ['#7f99b9', '#242932', '#c9d2de'] },
+  { value: 'gray', label: 'Gray', swatches: ['#737373', '#262626', '#d4d4d4'] },
   { value: 'caffeine', label: 'Caffeine', swatches: ['#9b7656', '#372922', '#d8c1ad'] },
   { value: 'cosmic-night', label: 'Cosmic Night', swatches: ['#916ee2', '#2e2746', '#d6c9f8'] },
 ]
@@ -276,7 +277,7 @@ export function SettingsAppearancePage(props: {
             )}
           </For>
         </div>
-        <div class="grid gap-2 md:grid-cols-3">
+        <div class="grid gap-2 md:grid-cols-4">
           <For each={THEME_PALETTES}>
             {(palette) => (
               <button
@@ -304,6 +305,8 @@ export function SettingsAppearancePage(props: {
                 <div class="text-[0.74rem] text-(--shell-text-dim)">
                   {palette.value === 'default'
                     ? 'Balanced shell palette'
+                    : palette.value === 'gray'
+                      ? 'Neutral gray shell palette'
                     : palette.value === 'caffeine'
                       ? 'Warm browns and amber accents'
                       : 'Purple-forward night palette'}

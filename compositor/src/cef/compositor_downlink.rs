@@ -151,7 +151,8 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
                 value_i32(detail, "frame_y"),
                 value_i32(detail, "frame_width"),
                 value_i32(detail, "frame_height"),
-            ) else {
+            )
+            else {
                 return false;
             };
             push_u32(bytes, window_id);
@@ -176,10 +177,7 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             push_i32(bytes, frame_y);
             push_i32(bytes, frame_width);
             push_i32(bytes, frame_height);
-            debug_assert_eq!(
-                bytes.len() - fixed_start,
-                HOT_DETAIL_WINDOW_GEOMETRY_BYTES
-            );
+            debug_assert_eq!(bytes.len() - fixed_start, HOT_DETAIL_WINDOW_GEOMETRY_BYTES);
             push_string(bytes, value_string(detail, "output_id").unwrap_or(""))
                 && push_string(bytes, value_string(detail, "output_name").unwrap_or(""))
         }
@@ -508,6 +506,8 @@ fn apply_message(
                         "y": screen.y,
                         "width": screen.w,
                         "height": screen.h,
+                        "physical_width": screen.physical_w,
+                        "physical_height": screen.physical_h,
                         "transform": screen.transform,
                         "refresh_milli_hz": screen.refresh_milli_hz,
                         "vrr_supported": screen.vrr_supported,
