@@ -4,12 +4,19 @@ import path from 'node:path'
 import {
   artifactDir,
   assert,
+  captureScreenshotRect,
+  comparePngFixture,
   defineGroup,
+  getJson,
   nativeBin,
   shellQuote,
   spawnCommand,
   waitFor,
+  waitForWindowGone,
+  writeJsonArtifact,
+  type CompositorSnapshot,
 } from '../lib/runtime.ts'
+import { closeWindow } from '../lib/setup.ts'
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
@@ -44,5 +51,86 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(output.includes('wp_linux_drm_syncobj_manager_v1 1'), output)
     assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('google chrome wayland animation presents successive frames', async ({ base, state }) => {
+    const title = `Derp Chrome Frame Probe ${Date.now()}`
+    const profileDir = `/tmp/derp-chrome-frame-probe-${Date.now()}`
+    const html = [
+      '<!doctype html><meta charset="utf-8">',
+      `<title>${title}</title>`,
+      '<style>',
+      'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111820}',
+      '#probe{position:absolute;left:80px;top:90px;width:340px;height:240px;background:#e64141;animation:probe .22s steps(2,end) infinite}',
+      '@keyframes probe{from{background:#e64141;transform:translateX(0)}to{background:#2d75ff;transform:translateX(150px)}}',
+      '</style><div id="probe"></div>',
+    ].join('')
+    const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+    const command = [
+      'sh',
+      '-lc',
+      shellQuote(
+        [
+          'bin="$(command -v google-chrome-unstable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"',
+          'test -n "$bin"',
+          `rm -rf ${shellQuote(profileDir)}`,
+          [
+            'exec "$bin"',
+            '--ozone-platform=wayland',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-search-engine-choice-screen',
+            '--password-store=basic',
+            '--disable-sync',
+            `--user-data-dir=${shellQuote(profileDir)}`,
+            `--app=${shellQuote(dataUrl)}`,
+          ].join(' '),
+        ].join('; '),
+      ),
+    ].join(' ')
+    await spawnCommand(base, command)
+    const spawned = await waitFor(
+      'wait for chrome frame probe',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositor.windows.find(
+          (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
+        )
+        return window ? { compositor, window } : null
+      },
+      8000,
+      100,
+    )
+    state.knownWindowIds.add(spawned.window.window_id)
+    const rect = {
+      x: spawned.window.x + 96,
+      y: spawned.window.y + 112,
+      width: Math.min(460, Math.max(120, spawned.window.width - 192)),
+      height: Math.min(280, Math.max(120, spawned.window.height - 224)),
+    }
+    const before = await captureScreenshotRect(base, rect)
+    const animated = await waitFor(
+      'wait for chrome animation pixels to change',
+      async () => {
+        const next = await captureScreenshotRect(base, rect)
+        const comparison = await comparePngFixture(next.path, before.path, {
+          maxDifferentPixels: rect.width * rect.height,
+          maxChannelDelta: 0,
+        })
+        return comparison.differentPixels > 1000 ? { path: next.path, comparison } : null
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('chrome-wayland-frame-probe.json', {
+      windowId: spawned.window.window_id,
+      title,
+      rect,
+      before: before.path,
+      after: animated.path,
+      comparison: animated.comparison,
+    })
+    await closeWindow(base, spawned.window.window_id)
+    await waitForWindowGone(base, spawned.window.window_id, 5000)
   })
 })

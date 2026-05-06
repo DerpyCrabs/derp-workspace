@@ -2340,6 +2340,19 @@ function clickableCloseControl(shell: ShellSnapshot, windowId: number): Rect | n
   return controls.close_hit?.includes(`data-shell-close-trigger=${windowId}`) ? controls.close : null
 }
 
+async function waitForClickableCloseControl(base: string, windowId: number): Promise<{ shell: ShellSnapshot; close: Rect }> {
+  return waitFor(
+    `wait for titlebar close control ${windowId}`,
+    async () => {
+      const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
+      const close = clickableCloseControl(next, windowId)
+      return close ? { shell: next, close } : null
+    },
+    1000,
+    40,
+  )
+}
+
 export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnapshot, windowId: number): Promise<void> {
   let shell = shellSnapshot
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2347,20 +2360,13 @@ export async function closeTaskbarWindow(base: string, shellSnapshot: ShellSnaps
     if (closeRect) {
       await clickRect(base, closeRect)
     } else {
-      const row = taskbarEntry(shell, windowId)
-      const taskbarRect = row?.activate
-      assert(taskbarRect, `missing taskbar activate control for window ${windowId}`)
-      await clickRect(base, taskbarRect)
-      const closeTarget = await waitFor(
-        `wait for titlebar close control ${windowId}`,
-        async () => {
-          const next = await getJson<ShellSnapshot>(base, '/test/state/shell')
-          const close = clickableCloseControl(next, windowId)
-          return close ? { shell: next, close } : null
-        },
-        1000,
-        40,
-      )
+      if (shell.focused_window_id !== windowId) {
+        const row = taskbarEntry(shell, windowId)
+        const taskbarRect = row?.activate
+        assert(taskbarRect, `missing taskbar activate control for window ${windowId}`)
+        await clickRect(base, taskbarRect)
+      }
+      const closeTarget = await waitForClickableCloseControl(base, windowId)
       shell = closeTarget.shell
       await clickRect(base, closeTarget.close)
     }

@@ -75,6 +75,9 @@ impl CompositorHandler for CompositorState {
                                         &client,
                                     )
                                     .blocker_cleared(&mut data.state, &dh);
+                                    if let Some(drms) = data.drm.as_mut() {
+                                        drms.request_render();
+                                    }
                                     Ok(())
                                 },
                             );
@@ -96,6 +99,9 @@ impl CompositorHandler for CompositorState {
                                     &client,
                                 )
                                 .blocker_cleared(&mut data.state, &dh);
+                                if let Some(drms) = data.drm.as_mut() {
+                                    drms.request_render();
+                                }
                                 Ok(())
                             },
                         );
@@ -110,21 +116,21 @@ impl CompositorHandler for CompositorState {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.wayland_commit_needs_render = true;
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+        if let Some(window) = self.space.elements().find_map(|e| {
+            if let DerpSpaceElem::Wayland(w) = e {
+                (w.toplevel().unwrap().wl_surface() == &root).then_some(w)
+            } else {
+                None
+            }
+        }) {
+            window.on_commit();
+        }
         if !is_sync_subsurface(surface) {
-            self.wayland_commit_needs_render = true;
-            let mut root = surface.clone();
-            while let Some(parent) = get_parent(&root) {
-                root = parent;
-            }
-            if let Some(window) = self.space.elements().find_map(|e| {
-                if let DerpSpaceElem::Wayland(w) = e {
-                    (w.toplevel().unwrap().wl_surface() == &root).then_some(w)
-                } else {
-                    None
-                }
-            }) {
-                window.on_commit();
-            }
             self.xdg_sync_pending_deferred_toplevel(&root);
             layer_shell::handle_commit(self, &root);
         }
