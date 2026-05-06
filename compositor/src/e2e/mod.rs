@@ -193,6 +193,11 @@ struct E2eCompositorSnapshot {
     captured_at_ms: u128,
     pointer: E2ePointSnapshot,
     pointer_pressed_button_count: usize,
+    cursor_theme: String,
+    cursor_size: u32,
+    cursor_shape: String,
+    cursor_name: Option<String>,
+    cursor_source_path: Option<String>,
     focused_window_id: Option<u32>,
     focused_shell_ui_window_id: Option<u32>,
     session_power_action: Option<String>,
@@ -529,6 +534,26 @@ impl CompositorState {
             .get_pointer()
             .map(|pointer| pointer.current_location())
             .unwrap_or_else(|| Point::from((0.0, 0.0)));
+        let cursor_settings = self.cursor_theme.settings();
+        let mut cursor_shape = "hidden".to_string();
+        let mut cursor_name = None;
+        let mut cursor_source_path = None;
+        if let smithay::input::pointer::CursorImageStatus::Named(icon) = &self.pointer_cursor_image
+        {
+            let _ = self.cursor_theme.with_cursor(icon, 1.0, |cursor, _, key| {
+                cursor_shape = key.label().to_string();
+                cursor_name = Some(cursor.name.clone());
+                cursor_source_path = cursor
+                    .source_path
+                    .as_ref()
+                    .map(|path| path.display().to_string());
+            });
+        } else if matches!(
+            &self.pointer_cursor_image,
+            smithay::input::pointer::CursorImageStatus::Surface(_)
+        ) {
+            cursor_shape = "surface".to_string();
+        }
         let workspace = self.workspace_logical_bounds().map(|rect| E2eRectSnapshot {
             x: rect.loc.x,
             y: rect.loc.y,
@@ -721,6 +746,11 @@ impl CompositorState {
                 y: pointer.y,
             },
             pointer_pressed_button_count: self.pointer_pressed_buttons.len(),
+            cursor_theme: cursor_settings.theme,
+            cursor_size: cursor_settings.size,
+            cursor_shape,
+            cursor_name,
+            cursor_source_path,
             focused_window_id: self.keyboard_focused_window_id(),
             focused_shell_ui_window_id: self.shell_focused_ui_window_id,
             session_power_action: self.e2e_last_session_power_action.clone(),

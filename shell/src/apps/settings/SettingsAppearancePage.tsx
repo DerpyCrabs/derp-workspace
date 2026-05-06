@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onMount, onCleanup } from 'solid-js'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
+import { Select } from '@/host/Select'
 import {
   getThemeSettings,
   prefersDarkTheme,
@@ -15,6 +16,13 @@ import {
   hexToSolidRgba,
   normalizeHexColor,
 } from './appearanceBackground'
+import {
+  CURSOR_SIZE_CHOICES,
+  DEFAULT_CURSOR_SETTINGS,
+  sanitizeCursorSettings,
+  type CursorSettings,
+  type CursorThemeChoice,
+} from './appearanceCursor'
 
 export type GnomeDesktopBackgroundPayload = {
   schema: string
@@ -104,6 +112,10 @@ export function SettingsAppearancePage(props: {
   const [wallpapers, setWallpapers] = createSignal<GnomeWallpaperChoice[]>([])
   const [wallQuery, setWallQuery] = createSignal('')
   const [solidColorHex, setSolidColorHex] = createSignal('#1a1a1a')
+  const [cursorSettings, setCursorSettings] = createSignal<CursorSettings>(DEFAULT_CURSOR_SETTINGS)
+  const [cursorThemes, setCursorThemes] = createSignal<string[]>([])
+  const [cursorBusy, setCursorBusy] = createSignal(false)
+  const [cursorErr, setCursorErr] = createSignal<string | null>(null)
 
   const filteredWallpapers = createMemo(() => {
     const q = wallQuery().trim().toLowerCase()
@@ -113,6 +125,11 @@ export function SettingsAppearancePage(props: {
   })
 
   const resolvedMode = createMemo(() => resolveThemeMode(themeSettings().mode, prefersDarkTheme()))
+  const cursorThemeOptions = createMemo(() => {
+    const all = cursorThemes()
+    const current = cursorSettings().theme
+    return all.includes(current) ? all : [current, ...all]
+  })
 
   async function loadWallpaperChoices() {
     const base = shellHttpBase()
@@ -140,6 +157,68 @@ export function SettingsAppearancePage(props: {
       setWallErr(e instanceof Error ? e.message : String(e))
     } finally {
       setWallBusy(false)
+    }
+  }
+
+  async function loadCursorSettings() {
+    const base = shellHttpBase()
+    if (!base) {
+      setCursorErr('Needs cef_host control server to read cursor settings.')
+      return
+    }
+    setCursorBusy(true)
+    setCursorErr(null)
+    try {
+      const [settingsRes, themesRes] = await Promise.all([
+        fetch(`${base}/settings_cursor`),
+        fetch(`${base}/cursor_themes`),
+      ])
+      const settingsText = await settingsRes.text()
+      const themesText = await themesRes.text()
+      if (!settingsRes.ok) {
+        setCursorErr(`Cursor settings (${settingsRes.status}): ${settingsText || 'empty response'}`)
+        return
+      }
+      setCursorSettings(sanitizeCursorSettings(JSON.parse(settingsText)))
+      if (themesRes.ok) {
+        const data = JSON.parse(themesText) as CursorThemeChoice
+        setCursorThemes(Array.isArray(data.items) ? data.items : [])
+      } else {
+        setCursorThemes([])
+      }
+    } catch (e) {
+      setCursorErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCursorBusy(false)
+    }
+  }
+
+  async function saveCursorSettings(next: CursorSettings) {
+    const base = shellHttpBase()
+    if (!base) {
+      setCursorErr('Needs cef_host control server to save cursor settings.')
+      return
+    }
+    const sanitized = sanitizeCursorSettings(next)
+    setCursorSettings(sanitized)
+    setCursorBusy(true)
+    setCursorErr(null)
+    try {
+      const res = await fetch(`${base}/settings_cursor`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sanitized),
+      })
+      const text = await res.text()
+      if (!res.ok) {
+        setCursorErr(`Cursor save (${res.status}): ${text || 'empty response'}`)
+        return
+      }
+      setCursorSettings(sanitizeCursorSettings(JSON.parse(text)))
+    } catch (e) {
+      setCursorErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCursorBusy(false)
     }
   }
 
@@ -232,6 +311,7 @@ export function SettingsAppearancePage(props: {
     onCleanup(unsubscribe)
     void load()
     void loadWallpaperChoices()
+    void loadCursorSettings()
   })
 
   return (
@@ -244,7 +324,7 @@ export function SettingsAppearancePage(props: {
           disabled={busy() || !shellHttpBase()}
           onClick={() => void load()}
         >
-          {busy() ? 'Reading…' : 'Refresh'}
+          {busy() ? 'Reading...' : 'Refresh'}
         </button>
       </div>
       <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
@@ -318,6 +398,79 @@ export function SettingsAppearancePage(props: {
         <p class="mt-3 text-[0.75rem] text-(--shell-text-dim)">
           Theme choice is saved in <span class="text-(--shell-text-muted)">settings.json</span>.
         </p>
+      </div>
+      <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3" data-settings-cursor-page>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p class="text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">
+            Cursor
+          </p>
+          <button
+            type="button"
+            class="border border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover) cursor-pointer rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium disabled:cursor-default"
+            disabled={cursorBusy() || !shellHttpBase()}
+            onClick={() => void loadCursorSettings()}
+          >
+            {cursorBusy() ? 'Reading...' : 'Refresh'}
+          </button>
+        </div>
+        <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem]">
+          <div class="min-w-0 text-[0.78rem] font-medium text-(--shell-text-muted)">
+            <span class="mb-1 block text-(--shell-text-dim)">Theme</span>
+            <Select
+              options={cursorThemeOptions()}
+              value={cursorSettings().theme}
+              onChange={(theme) => void saveCursorSettings({ ...cursorSettings(), theme: String(theme) })}
+              itemLabel={(theme) => String(theme)}
+              equals={(a, b) => a === b}
+              triggerClass="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) hover:bg-(--shell-control-muted-hover) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none w-full min-w-0 max-w-none cursor-pointer rounded-md px-2.5 py-1.5 text-left font-inherit text-[0.82rem] disabled:cursor-default"
+              listClass="border border-(--shell-overlay-border) bg-(--shell-overlay) text-(--shell-text) absolute top-2 left-2 z-90000 flex max-h-[min(320px,50vh,calc(100%-16px))] min-w-48 flex-col overflow-hidden rounded-[0.35rem] py-0.5"
+              minMenuWidthPx={240}
+              triggerAttrs={{
+                disabled: cursorBusy() || !shellHttpBase(),
+                'data-settings-cursor-theme': true,
+              }}
+              optionAttrs={(theme) => ({ 'data-settings-cursor-theme-option': String(theme) })}
+            />
+          </div>
+          <label class="min-w-0 text-[0.78rem] font-medium text-(--shell-text-muted)">
+            <span class="mb-1 block text-(--shell-text-dim)">Size</span>
+            <input
+              type="number"
+              min="8"
+              max="128"
+              step="1"
+              class="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none w-full min-w-0 rounded-md px-2.5 py-1.5 text-[0.82rem]"
+              value={cursorSettings().size}
+              disabled={cursorBusy() || !shellHttpBase()}
+              data-settings-cursor-size
+              onChange={(e) => void saveCursorSettings({ ...cursorSettings(), size: Number(e.currentTarget.value) })}
+            />
+          </label>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <For each={CURSOR_SIZE_CHOICES}>
+            {(size) => (
+              <button
+                type="button"
+                class="cursor-pointer rounded-md border px-2.5 py-1 text-[0.76rem] font-medium disabled:cursor-default"
+                classList={{
+                  'border-(--shell-accent-border) bg-(--shell-accent) text-(--shell-accent-foreground)':
+                    cursorSettings().size === size,
+                  'border-(--shell-border-strong) bg-(--shell-control-muted-bg) text-(--shell-control-muted-text) hover:bg-(--shell-control-muted-hover)':
+                    cursorSettings().size !== size,
+                }}
+                disabled={cursorBusy() || !shellHttpBase()}
+                data-settings-cursor-size-option={size}
+                onClick={() => void saveCursorSettings({ ...cursorSettings(), size })}
+              >
+                {size}
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={cursorErr()}>
+          <p class="text-(--shell-warning-text) mt-2 text-[0.8rem]">{cursorErr()}</p>
+        </Show>
       </div>
       <div class="border border-(--shell-border) bg-(--shell-surface) text-(--shell-text) rounded-lg px-3 py-3">
         <p class="mb-2 text-[0.72rem] font-semibold uppercase tracking-wide text-(--shell-text-dim)">

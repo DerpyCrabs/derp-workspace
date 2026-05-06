@@ -35,6 +35,10 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 use wayland_protocols::wp::{
+    cursor_shape::v1::client::{
+        wp_cursor_shape_device_v1::{Shape as CursorShape, WpCursorShapeDeviceV1},
+        wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+    },
     fifo::v1::client::{wp_fifo_manager_v1::WpFifoManagerV1, wp_fifo_v1::WpFifoV1},
     pointer_constraints::zv1::client::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
@@ -104,6 +108,8 @@ struct Args {
     spawn_on_press_command: Option<String>,
     #[arg(long, default_value_t = false)]
     fifo_smoke: bool,
+    #[arg(long, default_value_t = false)]
+    cursor_shape_pointer: bool,
     #[arg(long = "require-global")]
     require_global: Vec<String>,
     #[arg(long, default_value_t = false)]
@@ -151,6 +157,15 @@ fn main() {
             globals
                 .bind::<WpFifoManagerV1, _, _>(&qh, 1..=1, ())
                 .expect("bind wp_fifo_manager_v1"),
+        )
+    } else {
+        None
+    };
+    let cursor_shape_manager = if args.cursor_shape_pointer {
+        Some(
+            globals
+                .bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=2, ())
+                .expect("bind wp_cursor_shape_manager_v1"),
         )
     } else {
         None
@@ -206,6 +221,8 @@ fn main() {
         spawn_on_press_requested: false,
         pointer_constraint_mode,
         fifo,
+        cursor_shape_manager,
+        cursor_shape_device: None,
         fifo_smoke_draws: 0,
         keyboard: None,
         keyboard_seat: None,
@@ -257,6 +274,8 @@ struct TestClient {
     spawn_on_press_requested: bool,
     pointer_constraint_mode: PointerConstraintMode,
     fifo: Option<WpFifoV1>,
+    cursor_shape_manager: Option<WpCursorShapeManagerV1>,
+    cursor_shape_device: Option<WpCursorShapeDeviceV1>,
     fifo_smoke_draws: u32,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_seat: Option<wl_seat::WlSeat>,
@@ -948,6 +967,18 @@ impl PointerHandler for TestClient {
                 continue;
             };
             match event.kind {
+                PointerEventKind::Enter { serial, .. } => {
+                    if self.cursor_shape_device.is_none() {
+                        if let (Some(manager), Some(pointer)) =
+                            (self.cursor_shape_manager.as_ref(), self.pointer.as_ref())
+                        {
+                            self.cursor_shape_device = Some(manager.get_pointer(pointer, qh, ()));
+                        }
+                    }
+                    if let Some(device) = self.cursor_shape_device.as_ref() {
+                        device.set_shape(serial, CursorShape::Pointer);
+                    }
+                }
                 PointerEventKind::Press { serial, .. }
                 | PointerEventKind::Release { serial, .. } => {
                     self.request_spawn_activation(qh, serial, seat.clone(), event.surface.clone());
@@ -1040,6 +1071,8 @@ delegate_activation!(TestClient);
 delegate_keyboard!(TestClient);
 delegate_noop!(TestClient: ignore WpFifoManagerV1);
 delegate_noop!(TestClient: ignore WpFifoV1);
+delegate_noop!(TestClient: ignore WpCursorShapeManagerV1);
+delegate_noop!(TestClient: ignore WpCursorShapeDeviceV1);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {

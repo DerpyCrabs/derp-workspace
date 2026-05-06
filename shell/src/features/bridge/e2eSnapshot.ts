@@ -1134,6 +1134,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
         args.origin,
       ),
       settings_default_app_image: queryRect(cache, '[data-default-app-select="image"]', args.origin),
+      settings_cursor_theme: queryRect(cache, '[data-settings-cursor-theme]', args.origin),
+      settings_cursor_size: queryRect(cache, '[data-settings-cursor-size]', args.origin),
       settings_session_autosave_enable: queryRect(cache, '[data-settings-session-autosave-enable]', args.origin),
       settings_session_autosave_disable: queryRect(cache, '[data-settings-session-autosave-disable]', args.origin),
       power_menu_save_session: powerMenuRect('[data-power-menu-action="save-session"]'),

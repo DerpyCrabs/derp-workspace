@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,13 @@ use serde::{Deserialize, Serialize};
 pub struct ThemeSettingsFile {
     pub palette: String,
     pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CursorSettingsFile {
+    pub theme: String,
+    pub size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,11 +254,24 @@ impl Default for ThemeSettingsFile {
     }
 }
 
+impl Default for CursorSettingsFile {
+    fn default() -> Self {
+        Self {
+            theme: gnome_cursor_setting("cursor-theme").unwrap_or_else(|| "default".into()),
+            size: gnome_cursor_setting("cursor-size")
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|size| (8..=128).contains(size))
+                .unwrap_or(24),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SettingsFile {
     pub version: u32,
     pub theme: ThemeSettingsFile,
+    pub cursor: CursorSettingsFile,
     pub keyboard: KeyboardSettingsFile,
     pub hotkeys: HotkeySettingsFile,
     pub default_applications: DefaultApplicationsFile,
@@ -264,6 +285,7 @@ impl Default for SettingsFile {
         Self {
             version: 1,
             theme: ThemeSettingsFile::default(),
+            cursor: CursorSettingsFile::default(),
             keyboard: KeyboardSettingsFile::default(),
             hotkeys: HotkeySettingsFile::default(),
             default_applications: DefaultApplicationsFile::default(),
@@ -282,6 +304,63 @@ fn is_valid_theme_mode(value: &str) -> bool {
     matches!(value, "light" | "dark" | "system")
 }
 
+fn parse_gsettings_line(raw: &str) -> String {
+    let s = raw.trim();
+    if s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2 {
+        return s[1..s.len() - 1].replace("\\'", "'");
+    }
+    if let Some(r) = s.strip_prefix("uint32 ") {
+        return r.trim().to_string();
+    }
+    if let Some(r) = s.strip_prefix("int32 ") {
+        return r.trim().to_string();
+    }
+    s.to_string()
+}
+
+fn trim_stdout(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches(['\n', '\r'])
+        .to_string()
+}
+
+fn gnome_cursor_setting(key: &str) -> Option<String> {
+    let out = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", key])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value = parse_gsettings_line(&trim_stdout(&out.stdout));
+    (!value.is_empty()).then_some(value)
+}
+
+fn gnome_cursor_set(key: &str, value: &str) {
+    match Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", key, value])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(?status, %key, %value, "gsettings cursor set failed"),
+        Err(error) => tracing::warn!(%error, %key, %value, "gsettings cursor set spawn failed"),
+    }
+}
+
+fn sanitize_cursor_theme_name(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return CursorSettingsFile::default().theme;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| !ch.is_control() && ch != '/' && ch != '\\')
+    {
+        return trimmed.to_string();
+    }
+    CursorSettingsFile::default().theme
+}
+
 pub fn sanitize_theme_settings(theme: ThemeSettingsFile) -> ThemeSettingsFile {
     ThemeSettingsFile {
         palette: if is_valid_theme_palette(&theme.palette) {
@@ -294,6 +373,13 @@ pub fn sanitize_theme_settings(theme: ThemeSettingsFile) -> ThemeSettingsFile {
         } else {
             ThemeSettingsFile::default().mode
         },
+    }
+}
+
+pub fn sanitize_cursor_settings(cursor: CursorSettingsFile) -> CursorSettingsFile {
+    CursorSettingsFile {
+        theme: sanitize_cursor_theme_name(&cursor.theme),
+        size: cursor.size.clamp(8, 128),
     }
 }
 
@@ -959,6 +1045,7 @@ fn read_settings_file_from_path(path: &Path) -> SettingsFile {
     match serde_json::from_str::<SettingsFile>(&raw) {
         Ok(mut cfg) => {
             cfg.theme = sanitize_theme_settings(cfg.theme);
+            cfg.cursor = sanitize_cursor_settings(cfg.cursor);
             cfg.keyboard = sanitize_keyboard_settings(cfg.keyboard);
             cfg.hotkeys = sanitize_hotkey_settings(cfg.hotkeys);
             cfg.default_applications =
@@ -1119,6 +1206,47 @@ pub fn write_theme_settings(theme: ThemeSettingsFile) -> Result<(), String> {
     })
 }
 
+pub fn read_cursor_settings() -> CursorSettingsFile {
+    let Some(path) = settings_config_path() else {
+        return CursorSettingsFile::default();
+    };
+    read_settings_file_from_path(&path).cursor
+}
+
+pub fn read_cursor_settings_json() -> Result<String, String> {
+    serde_json::to_string(&read_cursor_settings()).map_err(|e| e.to_string())
+}
+
+pub fn write_cursor_settings(cursor: CursorSettingsFile) -> Result<CursorSettingsFile, String> {
+    let Some(path) = settings_config_path() else {
+        return Err("missing config dir".into());
+    };
+    ensure_parent_dir(&path)?;
+    let mut cfg = read_settings_file_from_path(&path);
+    let cursor = sanitize_cursor_settings(cursor);
+    if cfg.version == 1 && cfg.cursor == cursor {
+        return Ok(cursor);
+    }
+    cfg.version = 1;
+    cfg.cursor = cursor.clone();
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|e| {
+        tracing::warn!(
+            target: "derp_settings_config",
+            ?e,
+            path = %path.display(),
+            "write settings config"
+        );
+        e.to_string()
+    })?;
+    Ok(cursor)
+}
+
+pub fn mirror_cursor_settings_to_gnome(cursor: &CursorSettingsFile) {
+    gnome_cursor_set("cursor-theme", &cursor.theme);
+    gnome_cursor_set("cursor-size", &cursor.size.to_string());
+}
+
 pub fn read_default_applications_settings() -> DefaultApplicationsFile {
     let Some(path) = settings_config_path() else {
         return DefaultApplicationsFile::default();
@@ -1196,11 +1324,12 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::{
-        normalize_hotkey_chord, read_hotkey_settings, read_keyboard_settings, read_theme_settings,
-        sanitize_hotkey_settings_for_write, sanitize_keyboard_settings, sanitize_theme_settings,
-        settings_config_path, write_hotkey_settings, write_keyboard_settings, write_theme_settings,
-        HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile, KeyboardLayoutEntryFile,
-        KeyboardSettingsFile, ThemeSettingsFile,
+        normalize_hotkey_chord, read_cursor_settings, read_hotkey_settings, read_keyboard_settings,
+        read_theme_settings, sanitize_cursor_settings, sanitize_hotkey_settings_for_write,
+        sanitize_keyboard_settings, sanitize_theme_settings, settings_config_path,
+        write_cursor_settings, write_hotkey_settings, write_keyboard_settings, write_theme_settings,
+        CursorSettingsFile, HotkeyActionFile, HotkeyBindingFile, HotkeySettingsFile,
+        KeyboardLayoutEntryFile, KeyboardSettingsFile, ThemeSettingsFile,
     };
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1259,6 +1388,63 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"theme\""));
         assert!(raw.contains("\"palette\": \"caffeine\""));
+
+        let _ = std::fs::remove_file(&path);
+        std::env::remove_var("DERP_SETTINGS_CONFIG");
+    }
+
+    #[test]
+    fn sanitize_cursor_settings_clamps_size_and_theme() {
+        assert_eq!(
+            sanitize_cursor_settings(CursorSettingsFile {
+                theme: "Adwaita".into(),
+                size: 4,
+            }),
+            CursorSettingsFile {
+                theme: "Adwaita".into(),
+                size: 8,
+            }
+        );
+        assert_eq!(
+            sanitize_cursor_settings(CursorSettingsFile {
+                theme: "bad/name".into(),
+                size: 999,
+            })
+            .size,
+            128
+        );
+    }
+
+    #[test]
+    fn read_and_write_cursor_settings_round_trip() {
+        let _guard = env_lock().lock().unwrap();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "derp-settings-config-cursor-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("main")
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("DERP_SETTINGS_CONFIG", &path);
+
+        write_cursor_settings(CursorSettingsFile {
+            theme: "Adwaita".into(),
+            size: 32,
+        })
+        .unwrap();
+
+        assert_eq!(
+            read_cursor_settings(),
+            CursorSettingsFile {
+                theme: "Adwaita".into(),
+                size: 32,
+            }
+        );
+
+        let raw = std::fs::read_to_string(settings_config_path().unwrap()).unwrap();
+        assert!(raw.contains("\"cursor\""));
+        assert!(raw.contains("\"theme\": \"Adwaita\""));
+        assert!(raw.contains("\"size\": 32"));
 
         let _ = std::fs::remove_file(&path);
         std::env::remove_var("DERP_SETTINGS_CONFIG");

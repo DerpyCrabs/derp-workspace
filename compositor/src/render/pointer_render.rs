@@ -26,31 +26,35 @@ type Desk<'a> = DesktopStack<'a, WinEl>;
 fn push_named_cursor_fallback(
     state: &CompositorState,
     renderer: &mut GlesRenderer,
+    icon: &smithay::input::pointer::CursorIcon,
     pos_output_local: Point<f64, Logical>,
     scale_f: f64,
     out: &mut Vec<Desk<'_>>,
 ) {
-    let (hx, hy) = state.cursor_fallback_hotspot;
-    let top_left = Point::from((
-        pos_output_local.x - hx as f64,
-        pos_output_local.y - hy as f64,
-    ));
-    let phys_i: Point<i32, Physical> = top_left.to_physical_precise_round(Scale::from(scale_f));
-    let phys = phys_i.to_f64();
-    match MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        phys,
-        &state.cursor_fallback_buffer,
-        None,
-        None,
-        None,
-        Kind::Cursor,
-    ) {
-        Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
-            el, scale_f,
-        ))),
-        Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
-    }
+    let _ = state.cursor_theme.with_cursor(icon, scale_f, |cursor, _, _| {
+        let (hx, hy) = cursor.hotspot_physical;
+        let top_left = Point::from((
+            pos_output_local.x - hx as f64 / scale_f.max(0.25),
+            pos_output_local.y - hy as f64 / scale_f.max(0.25),
+        ));
+        let phys_i: Point<i32, Physical> =
+            top_left.to_physical_precise_round(Scale::from(scale_f));
+        let phys = phys_i.to_f64();
+        match MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            phys,
+            &cursor.buffer,
+            None,
+            None,
+            None,
+            Kind::Cursor,
+        ) {
+            Ok(el) => out.push(DesktopStack::CursorTex(FractionalDamageElement::new(
+                el, scale_f,
+            ))),
+            Err(e) => tracing::warn!(?e, "cursor fallback MemoryRenderBufferRenderElement"),
+        }
+    });
 }
 
 /// Append pointer layers. Caller should place these **first** in the `elements` slice passed to
@@ -85,8 +89,8 @@ pub fn append_pointer_desktop_elements(
     let pos = pos_global - output_geo.loc.to_f64();
 
     match &state.pointer_cursor_image {
-        CursorImageStatus::Named(_) => {
-            push_named_cursor_fallback(state, renderer, pos, scale_f, out);
+        CursorImageStatus::Named(icon) => {
+            push_named_cursor_fallback(state, renderer, icon, pos, scale_f, out);
         }
         CursorImageStatus::Surface(surface) => {
             if !surface.alive() {

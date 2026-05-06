@@ -8,6 +8,7 @@ import {
   comparePngFixture,
   defineGroup,
   getJson,
+  movePoint,
   nativeBin,
   shellQuote,
   spawnCommand,
@@ -16,7 +17,7 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
 } from '../lib/runtime.ts'
-import { closeWindow } from '../lib/setup.ts'
+import { closeWindow, postJson } from '../lib/setup.ts'
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
@@ -51,6 +52,75 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(output.includes('wp_linux_drm_syncobj_manager_v1 1'), output)
     assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('native cursor-shape pointer uses selected XCursor theme', async ({ base, state }) => {
+    const beforeSettings = await getJson<{ theme: string; size: number }>(base, '/settings_cursor')
+    const nextSettings = {
+      theme: beforeSettings.theme || 'default',
+      size: Math.max(24, Math.min(48, beforeSettings.size || 24)),
+    }
+    await postJson(base, '/settings_cursor', nextSettings)
+    const title = `Derp Cursor Shape Probe ${Date.now()}`
+    const command = [
+      shellQuote(nativeBin()),
+      '--title',
+      shellQuote(title),
+      '--token',
+      'cursor-shape-pointer',
+      '--width',
+      '360',
+      '--height',
+      '240',
+      '--cursor-shape-pointer',
+    ].join(' ')
+    let windowId: number | null = null
+    try {
+      await spawnCommand(base, command)
+      const spawned = await waitFor(
+        'wait for cursor shape probe',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find(
+            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
+          )
+          return window ? { compositor, window } : null
+        },
+        5000,
+        100,
+      )
+      windowId = spawned.window.window_id
+      state.knownWindowIds.add(spawned.window.window_id)
+      await movePoint(
+        base,
+        spawned.window.x + Math.floor(spawned.window.width / 2),
+        spawned.window.y + Math.floor(spawned.window.height / 2),
+      )
+      const shaped = await waitFor(
+        'wait for pointer cursor shape',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          return compositor.cursor_shape === 'pointer' && compositor.cursor_name ? compositor : null
+        },
+        3000,
+        100,
+      )
+      await writeJsonArtifact('cursor-shape-pointer.json', {
+        windowId: spawned.window.window_id,
+        settings: nextSettings,
+        cursorTheme: shaped.cursor_theme,
+        cursorSize: shaped.cursor_size,
+        cursorShape: shaped.cursor_shape,
+        cursorName: shaped.cursor_name,
+        cursorSourcePath: shaped.cursor_source_path,
+      })
+    } finally {
+      if (windowId !== null) {
+        await closeWindow(base, windowId)
+        await waitForWindowGone(base, windowId, 5000)
+      }
+      await postJson(base, '/settings_cursor', beforeSettings)
+    }
   })
 
   test('google chrome wayland animation presents successive frames', async ({ base, state }) => {

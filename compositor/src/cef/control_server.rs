@@ -978,8 +978,20 @@ fn handle_one(
         return Ok(());
     }
 
+    if method.eq_ignore_ascii_case("GET") && req_path == "/cursor_themes" {
+        let json = crate::platform::cursor_fallback::cursor_themes_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if method.eq_ignore_ascii_case("GET") && req_path == "/settings_theme" {
         let json = crate::session::settings_config::read_theme_settings_json()?;
+        write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/settings_cursor" {
+        let json = crate::session::settings_config::read_cursor_settings_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1578,6 +1590,15 @@ fn handle_one(
                 serde_json::from_value::<crate::session::settings_config::ThemeSettingsFile>(v)
                     .map_err(|e| format!("invalid theme settings: {e}"))?;
             crate::session::settings_config::write_theme_settings(theme)?;
+        }
+        "/settings_cursor" => {
+            let cursor =
+                serde_json::from_value::<crate::session::settings_config::CursorSettingsFile>(v)
+                    .map_err(|e| format!("invalid cursor settings: {e}"))?;
+            let cursor = uplink.settings_cursor_apply(cursor)?;
+            let body = serde_json::to_string(&cursor).map_err(|e| e.to_string())?;
+            write_http_ok_json(stream, &body).map_err(|e| e.to_string())?;
+            return Ok(());
         }
         "/settings_keyboard" => {
             let keyboard =

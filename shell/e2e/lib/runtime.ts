@@ -197,6 +197,11 @@ export interface CompositorSnapshot {
   orphaned_wayland_surface_protocol_ids?: number[]
   pointer?: { x: number; y: number }
   pointer_pressed_button_count?: number
+  cursor_theme?: string
+  cursor_size?: number
+  cursor_shape?: string
+  cursor_name?: string | null
+  cursor_source_path?: string | null
   workspace?: CompositorWorkspaceRect | null
   shell_context_menu_global?: CompositorWorkspaceRect | null
   shell_floating_layers?: CompositorFloatingLayerSnapshot[]

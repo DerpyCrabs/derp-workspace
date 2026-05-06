@@ -1300,6 +1300,13 @@ impl CompositorState {
                 .map_err(|e| format!("invalid theme settings: {e}"))?;
                 crate::session::settings_config::write_theme_settings(settings)?;
             }
+            "cursor" => {
+                let settings = serde_json::from_value::<
+                    crate::session::settings_config::CursorSettingsFile,
+                >(value)
+                .map_err(|e| format!("invalid cursor settings: {e}"))?;
+                self.apply_cursor_settings(settings)?;
+            }
             "keyboard" => {
                 let settings = serde_json::from_value::<
                     crate::session::settings_config::KeyboardSettingsFile,

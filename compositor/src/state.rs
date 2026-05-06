@@ -28,7 +28,7 @@ use smithay::{
         Color32F, ImportDma, Renderer,
     },
     backend::{
-        renderer::element::{memory::MemoryRenderBuffer, Id},
+        renderer::element::Id,
         session::libseat::LibSeatSession,
     },
     desktop::{
@@ -732,12 +732,8 @@ pub struct CompositorState {
     pub(crate) shell_last_pointer_ipc_global_logical: Option<(i32, i32)>,
     pub(crate) shell_last_pointer_ipc_modifiers: Option<u32>,
     pub(crate) pointer_pressed_buttons: HashSet<u32>,
-    /// Last client cursor from [`smithay::wayland::seat::SeatHandler::cursor_image`]; composited on DRM / nested swapchain.
     pub pointer_cursor_image: CursorImageStatus,
-    /// Themed / system default pointer (`left_ptr`); also used for [`CursorImageStatus::Named`].
-    pub(crate) cursor_fallback_buffer: MemoryRenderBuffer,
-    /// Hotspot within [`Self::cursor_fallback_buffer`] (logical px).
-    pub(crate) cursor_fallback_hotspot: (i32, i32),
+    pub(crate) cursor_theme: crate::platform::cursor_fallback::CursorThemeManager,
     shell_spawn_known_native_window_ids: Option<HashSet<u32>>,
     shell_spawn_target_output_name: Option<String>,
     /// Wayland [`Window`] handles for compositor-minimized toplevels (unmapped from [`Self::space`]).
@@ -1345,8 +1341,9 @@ impl CompositorState {
         let popups = PopupManager::default();
         let window_registry = WindowRegistry::new();
         let wallpaper_loader = crate::desktop::desktop_background::spawn_wallpaper_loader_thread();
-        let (cursor_fallback_buffer, cursor_fallback_hotspot) =
-            crate::platform::cursor_fallback::load_cursor_fallback();
+        let cursor_theme = crate::platform::cursor_fallback::CursorThemeManager::new(
+            crate::session::settings_config::read_cursor_settings(),
+        );
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, &options.seat_name);
         seat.add_keyboard(Default::default(), 200, 25)
@@ -1587,8 +1584,7 @@ impl CompositorState {
             // Smithay only calls `cursor_image` when focus changes; motion with focus `None` and no
             // prior surface leaves this stale — `Hidden` meant zero composited cursor on the shell/CEF path.
             pointer_cursor_image: CursorImageStatus::default_named(),
-            cursor_fallback_buffer,
-            cursor_fallback_hotspot,
+            cursor_theme,
             shell_spawn_known_native_window_ids: None,
             shell_spawn_target_output_name: None,
             shell_minimized_windows: HashMap::new(),
@@ -14054,6 +14050,17 @@ impl CompositorState {
         self.shell_ipc_maybe_forward_pointer_move(pointer.current_location());
     }
 
+    pub(crate) fn apply_cursor_settings(
+        &mut self,
+        settings: crate::session::settings_config::CursorSettingsFile,
+    ) -> Result<crate::session::settings_config::CursorSettingsFile, String> {
+        let settings = crate::session::settings_config::write_cursor_settings(settings)?;
+        crate::session::settings_config::mirror_cursor_settings_to_gnome(&settings);
+        self.cursor_theme.apply_settings(settings.clone());
+        self.loop_signal.wakeup();
+        Ok(settings)
+    }
+
     /// Run `sh -c` with [`Self::socket_name`] as `WAYLAND_DISPLAY` (nested compositor clients).
     pub fn try_spawn_wayland_client_sh(&mut self, shell_command: &str) -> Result<(), String> {
         let trimmed = shell_command.trim();
@@ -14069,6 +14076,9 @@ impl CompositorState {
             ("WAYLAND_DISPLAY".to_string(), display),
             ("XDG_RUNTIME_DIR".to_string(), runtime),
         ];
+        let cursor_settings = self.cursor_theme.settings();
+        envs.push(("XCURSOR_THEME".to_string(), cursor_settings.theme));
+        envs.push(("XCURSOR_SIZE".to_string(), cursor_settings.size.to_string()));
         self.xdg_activation_prune_stale_tokens();
         let activation_token = {
             let surface = self
