@@ -525,7 +525,11 @@ function App() {
       </div>
     )
   })
-  const [screenDraft, setScreenDraft] = createStore<{ rows: LayoutScreen[] }>({ rows: [] })
+  const [screenDraft, setScreenDraft] = createStore<{ revision: number; dirty: boolean; rows: LayoutScreen[] }>({
+    revision: -1,
+    dirty: false,
+    rows: [],
+  })
   const [tilingCfgRev, setTilingCfgRev] = createSignal(0)
   const [crosshairCursor, setCrosshairCursor] = createSignal(false)
   const [trayReservedPx, setTrayReservedPx] = createSignal(0)
@@ -537,7 +541,6 @@ function App() {
   const [compositorSnapshotSequence, setCompositorSnapshotSequence] = createSignal(0)
   let windowSyncRecoveryPending = false
   let windowSyncRecoveryRequestedAt = 0
-  let lastAppliedOutputTopologyRevision = -1
   let nextClientMutationId = 1
   const pendingClientMutationIds = new Map<number, { sentAt: number; snapshotEpoch: number | null }>()
   const [nativeWindowRefs, setNativeWindowRefs] = createSignal<Map<number, SessionWindowRef>>(new Map())
@@ -552,9 +555,12 @@ function App() {
   createEffect(() => {
     const topology = outputTopology()
     const revision = topology?.revision ?? -1
-    if (revision === lastAppliedOutputTopologyRevision) return
-    lastAppliedOutputTopologyRevision = revision
-    setScreenDraft('rows', topology?.screens ?? [])
+    if (screenDraft.dirty && screenDraft.revision === revision) return
+    setScreenDraft({
+      revision,
+      dirty: false,
+      rows: topology?.screens ?? [],
+    })
   })
 
   createEffect(() => {
@@ -1449,6 +1455,7 @@ function App() {
       settingsActivePage,
       setSettingsActivePage,
       setScreenDraft,
+      markScreenDraftDirty,
       autoShellChromeMonitorName,
       canSessionControl,
       uiScalePercent,
@@ -1817,6 +1824,11 @@ function App() {
       sendMoveEnd,
       compositorInteractionState()?.interaction_serial ?? null,
     )
+  }
+
+  function markScreenDraftDirty() {
+    if (screenDraft.dirty) return
+    setScreenDraft('dirty', true)
   }
 
   let previousCompositorMoveWindowId: number | null = null

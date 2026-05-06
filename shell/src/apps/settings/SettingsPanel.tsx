@@ -24,8 +24,9 @@ export type { SettingsLayoutScreen }
 export type SettingsPanelProps = {
   activePage?: Accessor<SettingsPageId>
   setActivePage?: Setter<SettingsPageId>
-  screenDraft: { rows: SettingsLayoutScreen[] }
-  setScreenDraft: SetStoreFunction<{ rows: SettingsLayoutScreen[] }>
+  screenDraft: { revision: number; dirty: boolean; rows: SettingsLayoutScreen[] }
+  setScreenDraft: SetStoreFunction<{ revision: number; dirty: boolean; rows: SettingsLayoutScreen[] }>
+  markScreenDraftDirty: () => void
   currentMonitorName: Accessor<string | null>
   shellChromePrimaryName: Accessor<string | null>
   autoShellChromeMonitorName: Accessor<string | null>
@@ -107,6 +108,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <SettingsDisplaysPage
             screenDraft={props.screenDraft}
             setScreenDraft={props.setScreenDraft}
+            markScreenDraftDirty={props.markScreenDraftDirty}
             shellChromePrimaryName={props.shellChromePrimaryName}
             autoShellChromeMonitorName={props.autoShellChromeMonitorName}
             taskbarAutoHide={props.taskbarAutoHide}

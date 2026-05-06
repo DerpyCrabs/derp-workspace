@@ -12,6 +12,7 @@ import {
   getSnapshots,
   getShellHtml,
   KEY,
+  shellWindowById,
   syncTest,
   tapKey,
   typeText,
@@ -19,6 +20,10 @@ import {
   waitForNativeFocus,
   waitForProgramsMenuClosed,
   waitForSpawnedWindow,
+  windowControls,
+  writeJsonArtifact,
+  type CompositorSnapshot,
+  type ShellSnapshot,
 } from '../lib/runtime.ts'
 import { openProgramsMenu, openShellTestWindow, spawnNativeWindow } from '../lib/setup.ts'
 
@@ -39,6 +44,44 @@ type EventLine = {
   revision: number
   domains?: string[]
   state?: any
+}
+
+function assertShellChromeReflectsCompositor(
+  compositor: CompositorSnapshot,
+  shell: ShellSnapshot,
+  windowId: number,
+  label: string,
+) {
+  const compositorWindow = compositorWindowById(compositor, windowId)
+  const shellWindow = shellWindowById(shell, windowId)
+  assert(compositorWindow, `${label}: missing compositor window ${windowId}`)
+  assert(shellWindow, `${label}: missing shell window ${windowId}`)
+  assert(shellWindow.x === compositorWindow.x, `${label}: shell x ${shellWindow.x} != compositor x ${compositorWindow.x}`)
+  assert(shellWindow.y === compositorWindow.y, `${label}: shell y ${shellWindow.y} != compositor y ${compositorWindow.y}`)
+  assert(
+    shellWindow.width === compositorWindow.width,
+    `${label}: shell width ${shellWindow.width} != compositor width ${compositorWindow.width}`,
+  )
+  assert(
+    shellWindow.height === compositorWindow.height,
+    `${label}: shell height ${shellWindow.height} != compositor height ${compositorWindow.height}`,
+  )
+  assert(
+    shellWindow.maximized === compositorWindow.maximized,
+    `${label}: shell maximized ${shellWindow.maximized} != compositor maximized ${compositorWindow.maximized}`,
+  )
+  assert(
+    shellWindow.minimized === compositorWindow.minimized,
+    `${label}: shell minimized ${shellWindow.minimized} != compositor minimized ${compositorWindow.minimized}`,
+  )
+  if (shellWindow.minimized) return
+  const controls = windowControls(shell, windowId)
+  assert(controls?.titlebar, `${label}: missing shell titlebar controls`)
+  assert(
+    typeof shellWindow.frame_width === 'number' &&
+      Math.abs(controls.titlebar.width - shellWindow.frame_width) <= 1,
+    `${label}: titlebar width should reflect compositor frame width`,
+  )
 }
 
 class JsonLineReader {
@@ -209,17 +252,30 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(movedWindow, 'missing native window after move')
     assert(movedWindow.x === target.x, `expected moved x ${target.x}, got ${movedWindow.x}`)
     assert(movedWindow.y === target.y, `expected moved y ${target.y}, got ${movedWindow.y}`)
+    assertShellChromeReflectsCompositor(moved.compositor, moved.shell, nativeId, 'external move')
 
     await derpctl(['window', 'maximize', String(nativeId), '--enabled', 'true'])
     await syncTest(base)
     const maximized = await getSnapshots(base)
     assert(compositorWindowById(maximized.compositor, nativeId)?.maximized === true, 'maximize did not apply')
+    assertShellChromeReflectsCompositor(maximized.compositor, maximized.shell, nativeId, 'external maximize')
     await derpctl(['window', 'maximize', String(nativeId), '--enabled', 'false'])
 
     await derpctl(['window', 'minimize', String(nativeId)])
     await syncTest(base)
     const minimized = await getSnapshots(base)
     assert(compositorWindowById(minimized.compositor, nativeId)?.minimized === true, 'minimize did not apply')
+    assertShellChromeReflectsCompositor(minimized.compositor, minimized.shell, nativeId, 'external minimize')
+    await writeJsonArtifact('external-control-shell-consistency.json', {
+      nativeId,
+      target,
+      movedShell: shellWindowById(moved.shell, nativeId),
+      movedCompositor: compositorWindowById(moved.compositor, nativeId),
+      maximizedShell: shellWindowById(maximized.shell, nativeId),
+      maximizedCompositor: compositorWindowById(maximized.compositor, nativeId),
+      minimizedShell: shellWindowById(minimized.shell, nativeId),
+      minimizedCompositor: compositorWindowById(minimized.compositor, nativeId),
+    })
   })
 
   test('derpctl events stream snapshot then ordered changes', async ({ base, state }) => {

@@ -122,8 +122,9 @@ function primaryBadgeLabel(
 }
 
 export type SettingsDisplaysPageProps = {
-  screenDraft: { rows: SettingsLayoutScreen[] }
-  setScreenDraft: SetStoreFunction<{ rows: SettingsLayoutScreen[] }>
+  screenDraft: { revision: number; dirty: boolean; rows: SettingsLayoutScreen[] }
+  setScreenDraft: SetStoreFunction<{ revision: number; dirty: boolean; rows: SettingsLayoutScreen[] }>
+  markScreenDraftDirty: () => void
   shellChromePrimaryName: () => string | null
   autoShellChromeMonitorName: () => string | null
   taskbarAutoHide: () => boolean
@@ -213,6 +214,7 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
       dragState.scale,
     )
     batch(() => {
+      props.markScreenDraftDirty()
       props.setScreenDraft('rows', dragState!.index, 'x', snapped.x)
       props.setScreenDraft('rows', dragState!.index, 'y', snapped.y)
     })
@@ -492,9 +494,10 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       type="number"
                       class="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none w-18 rounded px-[0.35rem] py-0.5"
                       value={row.x}
-                      onInput={(e) =>
+                      onInput={(e) => {
+                        props.markScreenDraftDirty()
                         props.setScreenDraft('rows', i(), 'x', Number(e.currentTarget.value) || 0)
-                      }
+                      }}
                     />
                   </label>
                   <label class="uppercase flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-(--shell-text-dim)">
@@ -503,9 +506,10 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       type="number"
                       class="border border-(--shell-input-border) bg-(--shell-input-bg) text-(--shell-text) placeholder:text-(--shell-text-dim) focus:border-(--shell-input-focus) focus:outline-none focus-visible:border-(--shell-input-focus) focus-visible:outline-none w-18 rounded px-[0.35rem] py-0.5"
                       value={row.y}
-                      onInput={(e) =>
+                      onInput={(e) => {
+                        props.markScreenDraftDirty()
                         props.setScreenDraft('rows', i(), 'y', Number(e.currentTarget.value) || 0)
-                      }
+                      }}
                     />
                   </label>
                   <label class="flex flex-col gap-[0.15rem] text-[0.7rem] tracking-wide text-(--shell-text-dim) [&_.relative]:mt-[0.15rem]">
@@ -515,7 +519,10 @@ export function SettingsDisplaysPage(props: SettingsDisplaysPageProps) {
                       rowIndex={i()}
                       openIndex={props.orientationPickerOpen}
                       setOpenIndex={props.setOrientationPickerOpen}
-                      onChange={(v) => props.setScreenDraft('rows', i(), 'transform', v)}
+                      onChange={(v) => {
+                        props.markScreenDraftDirty()
+                        props.setScreenDraft('rows', i(), 'transform', v)
+                      }}
                     />
                   </label>
                   <Show when={row.vrr_supported}>

@@ -90,10 +90,11 @@ export type ShellHostedWindowContentEnv = {
   pointerInMain: Accessor<{ x: number; y: number } | null>
   rootPointerDowns: Accessor<number>
   exclusionZonesHud: Accessor<ExclusionHudZone[]>
-  screenDraft: { rows: LayoutScreen[] }
+  screenDraft: { revision: number; dirty: boolean; rows: LayoutScreen[] }
   settingsActivePage: Accessor<SettingsPageId>
   setSettingsActivePage: Setter<SettingsPageId>
-  setScreenDraft: SetStoreFunction<{ rows: LayoutScreen[] }>
+  setScreenDraft: SetStoreFunction<{ revision: number; dirty: boolean; rows: LayoutScreen[] }>
+  markScreenDraftDirty: () => void
   autoShellChromeMonitorName: Accessor<string | null>
   canSessionControl: Accessor<boolean>
   uiScalePercent: Accessor<100 | 150 | 200>
@@ -152,6 +153,7 @@ export function renderShellHostedWindowContent(
         setActivePage={env.setSettingsActivePage}
         screenDraft={env.screenDraft}
         setScreenDraft={env.setScreenDraft}
+        markScreenDraftDirty={env.markScreenDraftDirty}
         currentMonitorName={() => env.windowById(SHELL_UI_SETTINGS_WINDOW_ID)()?.output_name ?? null}
         shellChromePrimaryName={env.shellChromePrimaryName}
         autoShellChromeMonitorName={env.autoShellChromeMonitorName}

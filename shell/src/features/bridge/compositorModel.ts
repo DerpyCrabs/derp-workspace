@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, type Accessor, type Setter } from 'solid-js'
+import { batch, createMemo, createSignal, getOwner, runWithOwner, type Accessor } from 'solid-js'
 import {
   applyDetail,
   applyDetailMutable,
@@ -92,96 +92,12 @@ function sameNumberArray(left: readonly number[], right: readonly number[]): boo
   return true
 }
 
-function raiseFocusedWindowInMap(map: Map<number, DerpWindow>, windowId: number): Map<number, DerpWindow> {
-  const focusedWindow = map.get(windowId)
-  if (!focusedWindow) return map
-  let maxStackZ = 0
-  for (const window of map.values()) {
-    if (window.window_id !== windowId && window.stack_z > maxStackZ) maxStackZ = window.stack_z
-  }
-  if (focusedWindow.stack_z > maxStackZ) return map
-  const next = new Map(map)
-  next.set(windowId, { ...focusedWindow, stack_z: maxStackZ + 1 })
-  return next
-}
-
 function sameWindowArray(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
   if (left.length !== right.length) return false
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) return false
   }
   return true
-}
-
-function workspaceWindowFieldsEqual(left: DerpWindow, right: DerpWindow): boolean {
-  return (
-    left.window_id === right.window_id &&
-    left.surface_id === right.surface_id &&
-    left.stack_z === right.stack_z &&
-    left.x === right.x &&
-    left.y === right.y &&
-    left.width === right.width &&
-    left.height === right.height &&
-    left.client_x === right.client_x &&
-    left.client_y === right.client_y &&
-    left.client_width === right.client_width &&
-    left.client_height === right.client_height &&
-    left.frame_x === right.frame_x &&
-    left.frame_y === right.frame_y &&
-    left.frame_width === right.frame_width &&
-    left.frame_height === right.frame_height &&
-    left.title === right.title &&
-    left.app_id === right.app_id &&
-    left.output_id === right.output_id &&
-    left.output_name === right.output_name &&
-    left.kind === right.kind &&
-    left.x11_class === right.x11_class &&
-    left.x11_instance === right.x11_instance &&
-    left.minimized === right.minimized &&
-    left.maximized === right.maximized &&
-    left.fullscreen === right.fullscreen &&
-    left.shell_flags === right.shell_flags &&
-    left.capture_identifier === right.capture_identifier &&
-    left.workspace_visible === right.workspace_visible
-  )
-}
-
-function buildWorkspaceWindowsMap(
-  source: ReadonlyMap<number, DerpWindow>,
-  prev: ReadonlyMap<number, DerpWindow>,
-): Map<number, DerpWindow> {
-  let identical = source.size === prev.size
-  const next = new Map<number, DerpWindow>()
-  for (const [windowId, window] of source) {
-    const previousWindow = prev.get(windowId)
-    const stableWindow = previousWindow && workspaceWindowFieldsEqual(previousWindow, window) ? previousWindow : window
-    next.set(windowId, stableWindow)
-    if (identical && prev.get(windowId) !== stableWindow) identical = false
-  }
-  return identical ? (prev as Map<number, DerpWindow>) : next
-}
-
-function buildWorkspaceWindowsMapForTouched(
-  source: ReadonlyMap<number, DerpWindow>,
-  prev: ReadonlyMap<number, DerpWindow>,
-  touchedWindowIds: ReadonlySet<number>,
-): Map<number, DerpWindow> {
-  let next: Map<number, DerpWindow> | null = null
-  for (const windowId of touchedWindowIds) {
-    const window = source.get(windowId)
-    const previousWindow = prev.get(windowId)
-    if (!window) {
-      if (!previousWindow) continue
-      if (!next) next = new Map(prev)
-      next.delete(windowId)
-      continue
-    }
-    const stableWindow = previousWindow && workspaceWindowFieldsEqual(previousWindow, window) ? previousWindow : window
-    if (previousWindow === stableWindow) continue
-    if (!next) next = new Map(prev)
-    next.set(windowId, stableWindow)
-  }
-  return next ?? (prev as Map<number, DerpWindow>)
 }
 
 function isWindowSnapshotDetail(detail: DerpShellDetail) {
@@ -268,12 +184,9 @@ function collectSnapshotAuthoritativeState(details: readonly DerpShellDetail[]):
 }
 
 export function createCompositorModel(options: CreateCompositorModelOptions = {}) {
+  const modelOwner = getOwner()
   const [windows, setWindows] = createSignal<Map<number, DerpWindow>>(new Map())
-  const [workspaceWindows, setWorkspaceWindows] = createSignal<Map<number, DerpWindow>>(new Map())
-  const windowSignals = new Map<
-    number,
-    { get: Accessor<DerpWindow | undefined>; set: Setter<DerpWindow | undefined> }
-  >()
+  const windowAccessors = new Map<number, Accessor<DerpWindow | undefined>>()
   const [windowOrderIds, setWindowOrderIds] = createSignal<number[]>([])
   const [windowOrderRevision, setWindowOrderRevision] = createSignal(-1)
   const [windowsRevision, setWindowsRevision] = createSignal(-1)
@@ -293,93 +206,30 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
   let pendingFocusedWindowId: number | null = null
   const pendingWindowDetails = new Map<number, Map<DerpShellDetail['type'], DerpShellDetail>>()
 
-  const ensureWindowSignal = (windowId: number) => {
-    let signal = windowSignals.get(windowId)
-    if (!signal) {
-      const [get, set] = createSignal<DerpWindow | undefined>(windows().get(windowId), { equals: Object.is })
-      signal = { get, set }
-      windowSignals.set(windowId, signal)
+  const windowById = (windowId: number) => {
+    let accessor = windowAccessors.get(windowId)
+    if (!accessor) {
+      const createAccessor = () => createMemo(() => windows().get(windowId), undefined, { equals: Object.is })
+      accessor = modelOwner ? (runWithOwner(modelOwner, createAccessor) ?? createAccessor()) : createAccessor()
+      windowAccessors.set(windowId, accessor)
     }
-    return signal
-  }
-
-  const syncWindowSignals = (prev: ReadonlyMap<number, DerpWindow>, next: ReadonlyMap<number, DerpWindow>) => {
-    for (const [windowId, window] of next) {
-      if (prev.get(windowId) === window) continue
-      ensureWindowSignal(windowId).set(() => window)
-    }
-    for (const windowId of prev.keys()) {
-      if (next.has(windowId)) continue
-      const signal = windowSignals.get(windowId)
-      if (signal) {
-        signal.set(() => undefined)
-        windowSignals.delete(windowId)
-      }
-    }
-  }
-
-  const syncTouchedWindowSignals = (
-    prev: ReadonlyMap<number, DerpWindow>,
-    next: ReadonlyMap<number, DerpWindow>,
-    touchedWindowIds: ReadonlySet<number>,
-  ) => {
-    for (const windowId of touchedWindowIds) {
-      const window = next.get(windowId)
-      if (prev.get(windowId) === window) continue
-      const signal = windowSignals.get(windowId)
-      if (window) {
-        ensureWindowSignal(windowId).set(() => window)
-      } else if (signal) {
-        signal.set(() => undefined)
-        windowSignals.delete(windowId)
-      }
-    }
+    return accessor
   }
 
   const commitWindows = (updater: (prev: Map<number, DerpWindow>) => Map<number, DerpWindow>) => {
     setWindows((prev) => {
       const next = updater(prev)
-      if (next !== prev) {
-        syncWindowSignals(prev, next)
-        setWorkspaceWindows((stablePrev) => buildWorkspaceWindowsMap(next, stablePrev))
-      }
       return next
     })
   }
-  createEffect(() => {
-    const windowId = focusedWindowId()
-    if (windowId === null) return
-    const current = windows()
-    const raised = raiseFocusedWindowInMap(current, windowId)
-    if (raised === current) return
-    commitWindows(() => raised)
-    const nextOrderIds = [...raised.values()]
-      .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
-      .map((window) => window.window_id)
-    setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-  })
-  const publishWindows = (
-    prev: ReadonlyMap<number, DerpWindow>,
-    next: Map<number, DerpWindow>,
-    touchedWindowIds?: ReadonlySet<number>,
-  ) => {
+
+  const publishWindows = (prev: ReadonlyMap<number, DerpWindow>, next: Map<number, DerpWindow>) => {
     if (next === prev) return
-    if (touchedWindowIds) {
-      syncTouchedWindowSignals(prev, next, touchedWindowIds)
-    } else {
-      syncWindowSignals(prev, next)
-    }
     setWindows(next)
-    setWorkspaceWindows((stablePrev) =>
-      touchedWindowIds
-        ? buildWorkspaceWindowsMapForTouched(next, stablePrev, touchedWindowIds)
-        : buildWorkspaceWindowsMap(next, stablePrev),
-    )
   }
 
   const allWindowsMap = createMemo(() => windows())
-  const windowById = (windowId: number) => ensureWindowSignal(windowId).get
-  const workspaceWindowsMap = createMemo(() => workspaceWindows())
+  const workspaceWindowsMap = createMemo(() => windows())
   const windowsListIds = createMemo(() => windowOrderIds())
   const windowsList = createMemo((prev: DerpWindow[] = []) => {
     const out: DerpWindow[] = []
@@ -410,8 +260,6 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     const baseWindows = windows()
     let nextWindows = baseWindows
     let windowsMutated = false
-    const touchedWindowIds = new Set<number>()
-    let canPublishTouchedOnly = true
     const currentWindows = () => nextWindows
     const queuePendingWindowDetail = (windowId: number, detail: DerpShellDetail) => {
       let pending = pendingWindowDetails.get(windowId)
@@ -428,7 +276,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       for (const type of ['window_geometry', 'window_metadata', 'window_state'] as const) {
         const detail = pending.get(type)
         if (!detail) continue
-        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        applyDetailMutable(ensureMutableWindows(), detail)
         if (detail.type === 'window_state' && detail.minimized) {
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
@@ -456,17 +304,6 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
             continue
           }
           pendingFocusedWindowId = null
-          const raisedWindows = raiseFocusedWindowInMap(currentWindows(), windowId)
-          if (raisedWindows !== currentWindows()) {
-            const mutableWindows = ensureMutableWindows()
-            const raisedWindow = raisedWindows.get(windowId)
-            if (raisedWindow) mutableWindows.set(windowId, raisedWindow)
-            touchedWindowIds.add(windowId)
-            const nextOrderIds = [...mutableWindows.values()]
-              .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
-              .map((window) => window.window_id)
-            setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-          }
           setFocusedWindowId((prev) => (prev === windowId ? prev : windowId))
         } else {
           pendingFocusedWindowId = null
@@ -486,7 +323,6 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (revision !== windowsRevision()) {
           nextWindows = buildWindowsMapFromList(detail.windows, currentWindows())
           windowsMutated = nextWindows !== baseWindows
-          canPublishTouchedOnly = false
           const nextOrderIds = collectWindowOrderIds(detail.windows)
           setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
           setWindowsRevision(revision)
@@ -506,11 +342,9 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
 
       if (detail.type === 'window_order') {
         const revision = coerceRevision(detail.revision)
-        if (revision !== windowOrderRevision()) {
+        if (revision >= windowOrderRevision()) {
           const mutableWindows = ensureMutableWindows()
-          if (applyDetailMutable(mutableWindows, detail)) {
-            for (const windowId of collectWindowOrderIds(detail.windows)) touchedWindowIds.add(windowId)
-          }
+          applyDetailMutable(mutableWindows, detail)
           const nextOrderIds = collectWindowOrderIds(detail.windows)
           setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
           setWindowOrderRevision(revision)
@@ -578,7 +412,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
         if (detail.minimized && windowId !== null) {
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
-        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        applyDetailMutable(ensureMutableWindows(), detail)
         results.push({
           kind: 'window_state',
           detailType: detail.type,
@@ -597,7 +431,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           if (pendingFocusedWindowId === windowId) pendingFocusedWindowId = null
           setFocusedWindowId((prev) => (prev === windowId ? null : prev))
         }
-        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        applyDetailMutable(ensureMutableWindows(), detail)
         results.push({
           kind: 'window_unmapped',
           detailType: detail.type,
@@ -620,7 +454,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           })
           continue
         }
-        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        applyDetailMutable(ensureMutableWindows(), detail)
         results.push({
           kind: 'window_geometry',
           detailType: detail.type,
@@ -631,7 +465,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
       }
 
       if (detail.type === 'window_mapped') {
-        if (applyDetailMutable(ensureMutableWindows(), detail)) touchedWindowIds.add(detail.window_id)
+        applyDetailMutable(ensureMutableWindows(), detail)
         applyPendingWindowDetails(detail.window_id)
         const focusMappedWindow = pendingFocusedWindowId === detail.window_id
         if (focusMappedWindow) {
@@ -658,7 +492,7 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
           })
           continue
         }
-        if (applyDetailMutable(ensureMutableWindows(), detail) && windowId !== null) touchedWindowIds.add(windowId)
+        applyDetailMutable(ensureMutableWindows(), detail)
         results.push({
           kind: 'window_metadata',
           detailType: detail.type,
@@ -674,91 +508,78 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     }
 
     if (windowsMutated) {
-      publishWindows(
-        baseWindows,
-        nextWindows,
-        canPublishTouchedOnly && touchedWindowIds.size > 0 ? touchedWindowIds : undefined,
-      )
+      publishWindows(baseWindows, nextWindows)
     }
     return results
   })
 
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
     batch(() => {
-    const authoritative = collectSnapshotAuthoritativeState(details)
-    let nextWindowsMap: Map<number, DerpWindow> | null = null
-    if (authoritative.windows !== undefined) {
-      if (authoritative.windows.revision !== windowsRevision()) {
-        const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
-        commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
-        const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
-        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-        setWindowsRevision(authoritative.windows.revision)
-        nextWindowsMap = nextWindows
-      }
-      if (authoritative.focusedWindowId === undefined) {
-        const map = nextWindowsMap ?? windows()
-        setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
-      }
-    }
-    if (authoritative.windowOrder !== undefined) {
-      const windowOrder = authoritative.windowOrder
-      commitWindows((map) => applyDetail(map, { type: 'window_order', windows: windowOrder.rows }))
-      const nextOrderIds = collectWindowOrderIds(windowOrder.rows)
-      setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
-      if (windowOrder.revision !== windowOrderRevision()) {
-        setWindowOrderRevision(windowOrder.revision)
-      }
-    }
-    if (authoritative.workspaceSnapshot !== undefined) {
-      if (authoritative.workspaceSnapshot.revision !== workspaceRevision()) {
-        const nextState = normalizeWorkspaceSnapshot(authoritative.workspaceSnapshot.state)
-        setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
-        setWorkspaceRevision(authoritative.workspaceSnapshot.revision)
-      }
-    }
-    if (authoritative.shellHostedAppByWindow !== undefined) {
-      if (authoritative.shellHostedAppByWindow.revision !== shellHostedAppRevision()) {
-        setShellHostedAppByWindow(authoritative.shellHostedAppByWindow.byWindowId)
-        setShellHostedAppRevision(authoritative.shellHostedAppByWindow.revision)
-      }
-    }
-    if (authoritative.commandPalette !== undefined) {
-      if (authoritative.commandPalette.revision !== commandPaletteRevision()) {
-        setCommandPaletteState(authoritative.commandPalette.state)
-        setCommandPaletteRevision(authoritative.commandPalette.revision)
-      }
-    }
-    const nextFocusedWindowId = authoritative.focusedWindowId
-    let hasWindowDetails = false
-    const unmappedWindowIds: number[] = []
-    for (const detail of details) {
-      if (isWindowSnapshotDetail(detail)) {
-        hasWindowDetails = true
-        if (detail.type === 'window_unmapped') {
-          const windowId = coerceShellWindowId(detail.window_id)
-          if (windowId !== null) unmappedWindowIds.push(windowId)
+      const authoritative = collectSnapshotAuthoritativeState(details)
+      let nextWindowsMap: Map<number, DerpWindow> | null = null
+      if (authoritative.windows !== undefined) {
+        if (authoritative.windows.revision !== windowsRevision()) {
+          const nextWindows = buildWindowsMapFromList(authoritative.windows.rows, windows())
+          commitWindows((prev) => (prev === nextWindows ? prev : nextWindows))
+          const nextOrderIds = collectWindowOrderIds(authoritative.windows.rows)
+          setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+          setWindowsRevision(authoritative.windows.revision)
+          nextWindowsMap = nextWindows
+        }
+        if (authoritative.focusedWindowId === undefined) {
+          const map = nextWindowsMap ?? windows()
+          setFocusedWindowId((prev) => (prev != null && map.has(prev) ? prev : null))
         }
       }
-    }
-    if (hasWindowDetails) {
-      commitWindows((map) => applyWindowSnapshotDetailsFromSnapshot(map, details))
-      for (const windowId of unmappedWindowIds) {
-        setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+      if (authoritative.windowOrder !== undefined) {
+        const windowOrder = authoritative.windowOrder
+        commitWindows((map) => applyDetail(map, { type: 'window_order', windows: windowOrder.rows }))
+        const nextOrderIds = collectWindowOrderIds(windowOrder.rows)
+        setWindowOrderIds((prev) => (sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds))
+        if (windowOrder.revision !== windowOrderRevision()) {
+          setWindowOrderRevision(windowOrder.revision)
+        }
       }
-    }
-    if (nextFocusedWindowId !== undefined) {
-      if (nextFocusedWindowId !== null) {
-        commitWindows((map) => raiseFocusedWindowInMap(map, nextFocusedWindowId))
-        setWindowOrderIds((prev) => {
-          const nextOrderIds = [...windows().values()]
-            .sort((left, right) => right.stack_z - left.stack_z || right.window_id - left.window_id)
-            .map((window) => window.window_id)
-          return sameNumberArray(prev, nextOrderIds) ? prev : nextOrderIds
-        })
+      if (authoritative.workspaceSnapshot !== undefined) {
+        if (authoritative.workspaceSnapshot.revision !== workspaceRevision()) {
+          const nextState = normalizeWorkspaceSnapshot(authoritative.workspaceSnapshot.state)
+          setWorkspaceSnapshot((prev) => (workspaceSnapshotsEqual(prev, nextState) ? prev : nextState))
+          setWorkspaceRevision(authoritative.workspaceSnapshot.revision)
+        }
       }
-      setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
-    }
+      if (authoritative.shellHostedAppByWindow !== undefined) {
+        if (authoritative.shellHostedAppByWindow.revision !== shellHostedAppRevision()) {
+          setShellHostedAppByWindow(authoritative.shellHostedAppByWindow.byWindowId)
+          setShellHostedAppRevision(authoritative.shellHostedAppByWindow.revision)
+        }
+      }
+      if (authoritative.commandPalette !== undefined) {
+        if (authoritative.commandPalette.revision !== commandPaletteRevision()) {
+          setCommandPaletteState(authoritative.commandPalette.state)
+          setCommandPaletteRevision(authoritative.commandPalette.revision)
+        }
+      }
+      const nextFocusedWindowId = authoritative.focusedWindowId
+      let hasWindowDetails = false
+      const unmappedWindowIds: number[] = []
+      for (const detail of details) {
+        if (isWindowSnapshotDetail(detail)) {
+          hasWindowDetails = true
+          if (detail.type === 'window_unmapped') {
+            const windowId = coerceShellWindowId(detail.window_id)
+            if (windowId !== null) unmappedWindowIds.push(windowId)
+          }
+        }
+      }
+      if (hasWindowDetails) {
+        commitWindows((map) => applyWindowSnapshotDetailsFromSnapshot(map, details))
+        for (const windowId of unmappedWindowIds) {
+          setFocusedWindowId((prev) => (prev === windowId ? null : prev))
+        }
+      }
+      if (nextFocusedWindowId !== undefined) {
+        setFocusedWindowId((prev) => (prev === nextFocusedWindowId ? prev : nextFocusedWindowId))
+      }
     })
   }
 

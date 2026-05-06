@@ -8,6 +8,7 @@ import type { DerpShellDetail } from '@/host/appWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 
 const DOMAIN_COUNT = 13
+const SNAPSHOT_DOMAIN_WINDOWS = 1 << 1
 const SNAPSHOT_DOMAIN_KEYBOARD = 1 << 3
 
 function u32(value: number): number[] {
@@ -218,6 +219,27 @@ describe('registerCompositorBridgeRuntime', () => {
     ).toBe(true)
   })
 
+  it('keeps compositor window order details even when a newer snapshot claims the order domain', () => {
+    expect(
+      queuedCompositorDetailSurvivesSnapshotSync(
+        {
+          type: 'window_order',
+          revision: 12,
+          windows: [
+            { window_id: 50, stack_z: 2 },
+            { window_id: 51, stack_z: 3 },
+          ],
+          snapshot_epoch: 174,
+        } satisfies DerpShellDetail,
+        {
+          sequence: 188,
+          domainFlags: 1 << 9,
+          incremental: true,
+        },
+      ),
+    ).toBe(true)
+  })
+
   it('keeps newer hot window details live while snapshot catchup is pending', async () => {
     vi.stubGlobal('window', {
       __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
@@ -316,6 +338,45 @@ describe('registerCompositorBridgeRuntime', () => {
     ])
 
     expect(runtimeOptions.applyModelCompositorDetails).toHaveBeenCalledTimes(1)
+    dispose()
+  })
+
+  it('drops stale mapped details when a newer snapshot covered the windows domain', async () => {
+    const readSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(emptySnapshot(10n))
+      .mockReturnValueOnce(snapshot(12n, SNAPSHOT_DOMAIN_WINDOWS, { 1: 2n }, []))
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    vi.mocked(runtimeOptions.applyModelCompositorDetails).mockClear()
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'window_mapped',
+        window_id: 7,
+        surface_id: 70,
+        stack_z: 1,
+        x: 11,
+        y: 12,
+        width: 640,
+        height: 480,
+        minimized: false,
+        maximized: false,
+        fullscreen: false,
+        title: 'Late Map',
+        app_id: 'late.map',
+        snapshot_epoch: 11,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -638,6 +699,130 @@ describe('registerCompositorBridgeRuntime', () => {
       { type: 'window_unmapped', window_id: 7, snapshot_epoch: 12 } satisfies DerpShellDetail,
     ])
 
+    expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
+    dispose()
+  })
+
+  it('flushes shared shell state and repaints for compositor chrome-affecting batches', async () => {
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    window.__DERP_APPLY_COMPOSITOR_BATCH?.([
+      {
+        type: 'window_geometry',
+        window_id: 7,
+        surface_id: 70,
+        x: 11,
+        y: 12,
+        width: 640,
+        height: 480,
+        output_name: 'DP-1',
+        maximized: false,
+        fullscreen: false,
+      } satisfies DerpShellDetail,
+      {
+        type: 'window_metadata',
+        window_id: 7,
+        surface_id: 70,
+        title: 'Fresh Title',
+        app_id: 'fresh.app',
+      } satisfies DerpShellDetail,
+      {
+        type: 'focus_changed',
+        surface_id: 70,
+        window_id: 7,
+      } satisfies DerpShellDetail,
+    ])
+
+    expect(runtimeOptions.scheduleCompositorFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({ flushWindows: true, syncExclusion: true }),
+    )
+    expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
+    dispose()
+  })
+
+  it('flushes shared shell state and repaints for compositor chrome-affecting snapshots', async () => {
+    const geometrySnapshot = snapshot(
+      12n,
+      1 << 10,
+      { 10: 2n },
+      [
+        ...packet(8, [
+          ...u32(7),
+          ...u32(70),
+          ...u32(11),
+          ...u32(12),
+          ...u32(640),
+          ...u32(480),
+          ...u32(0),
+          ...u32(0),
+          ...u32(0),
+          ...u32(4),
+          ...utf8Bytes('DP-1'),
+        ]),
+      ],
+    )
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(geometrySnapshot)
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    vi.mocked(runtimeOptions.scheduleCompositorFollowup).mockClear()
+    vi.mocked(runtimeOptions.bumpSnapChrome).mockClear()
+    vi.mocked(runtimeOptions.shellWireSend).mockClear()
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(runtimeOptions.scheduleCompositorFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({ flushWindows: true, syncExclusion: true }),
+    )
+    expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
+    expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
+    dispose()
+  })
+
+  it('flushes shared shell state and repaints for authoritative window list snapshots', async () => {
+    const windowListSnapshot = snapshot(
+      12n,
+      SNAPSHOT_DOMAIN_WINDOWS,
+      { 1: 2n },
+      [
+        ...packet(11, [
+          ...u64(2n),
+          ...u32(0),
+        ]),
+      ],
+    )
+    const readSnapshot = vi.fn().mockReturnValueOnce(emptySnapshot(10n)).mockReturnValueOnce(windowListSnapshot)
+    vi.stubGlobal('window', {
+      __DERP_COMPOSITOR_SNAPSHOT_PATH: '/tmp/snapshot',
+      __derpCompositorSnapshotRead: readSnapshot,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const runtimeOptions = options()
+    const dispose = registerCompositorBridgeRuntime(runtimeOptions)
+
+    await Promise.resolve()
+    vi.mocked(runtimeOptions.scheduleCompositorFollowup).mockClear()
+    vi.mocked(runtimeOptions.bumpSnapChrome).mockClear()
+    vi.mocked(runtimeOptions.shellWireSend).mockClear()
+    window.__DERP_SYNC_COMPOSITOR_SNAPSHOT?.()
+
+    expect(runtimeOptions.scheduleCompositorFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({ flushWindows: true, syncExclusion: true }),
+    )
     expect(runtimeOptions.bumpSnapChrome).toHaveBeenCalledTimes(1)
     expect(runtimeOptions.shellWireSend).toHaveBeenCalledWith('invalidate_view')
     dispose()

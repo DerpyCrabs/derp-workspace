@@ -108,7 +108,8 @@ function runtimeDetailSnapshotEpoch(detail: DerpShellDetail) {
 function runtimeDetailCanBeSupersededBySnapshot(detail: DerpShellDetail) {
   return (
     detail.type === 'window_list' ||
-    detail.type === 'window_order' ||
+    detail.type === 'window_mapped' ||
+    detail.type === 'window_unmapped' ||
     detail.type === 'focus_changed' ||
     detail.type === 'workspace_state' ||
     detail.type === 'shell_hosted_app_state' ||
@@ -324,12 +325,49 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const snapshotDomainInteraction = 1 << 6
   const snapshotDomainCommandPalette = 1 << 13
 
-  const countWindowUnmapped = (details: readonly DerpShellDetail[]) => {
-    let count = 0
-    for (const detail of details) {
-      if (detail.type === 'window_unmapped') count += 1
+  const compositorVisualFollowupForDetail = (detail: DerpShellDetail): CompositorFollowup & { repaint?: boolean } => {
+    switch (detail.type) {
+      case 'output_geometry':
+        return { syncExclusion: true, flushWindows: true, repaint: true }
+      case 'output_layout':
+        return { syncExclusion: true, flushWindows: true, resetScroll: true, repaint: true }
+      case 'focus_changed':
+      case 'window_list':
+      case 'window_order':
+      case 'window_geometry':
+      case 'window_mapped':
+      case 'window_state':
+      case 'window_unmapped':
+      case 'workspace_state':
+        return { syncExclusion: true, flushWindows: true, repaint: true }
+      case 'window_metadata':
+      case 'shell_hosted_app_state':
+      case 'interaction_state':
+      case 'native_drag_preview':
+        return { flushWindows: true, repaint: true }
+      default:
+        return {}
     }
-    return count
+  }
+  const scheduleCompositorVisualFollowup = (details: readonly DerpShellDetail[]) => {
+    let syncExclusion = false
+    let flushWindows = false
+    let resetScroll = false
+    let repaint = false
+    for (const detail of details) {
+      const followup = compositorVisualFollowupForDetail(detail)
+      syncExclusion ||= followup.syncExclusion === true
+      flushWindows ||= followup.flushWindows === true
+      resetScroll ||= followup.resetScroll === true
+      repaint ||= followup.repaint === true
+    }
+    if (syncExclusion || flushWindows || resetScroll) {
+      options.scheduleCompositorFollowup({ syncExclusion, flushWindows, resetScroll })
+    }
+    if (repaint) {
+      options.bumpSnapChrome()
+      options.shellWireSend('invalidate_view')
+    }
   }
   const snapshotDomainNativeDragPreview = 1 << 7
   const snapshotDomainTray = 1 << 8
@@ -641,7 +679,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorSnapshot = (details: readonly DerpShellDetail[], domainFlags: number) => {
     if (details.length === 0) return
     const skipOutputGeometry = details.some((detail) => detail.type === 'output_layout')
-    const needsPostApplyPaint = countWindowUnmapped(details) > 0
     let sawWindowList = false
     let sawInteractionState = false
     batch(() => {
@@ -663,10 +700,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       if (sawWindowList) options.markHasSeenCompositorWindowSync()
     })
     if (sawWindowList) options.clearWindowSyncRecoveryPending()
-    if (needsPostApplyPaint) {
-      options.bumpSnapChrome()
-      options.shellWireSend('invalidate_view')
-    }
+    scheduleCompositorVisualFollowup(details)
   }
 
   const modelDetailOptions = () => ({
@@ -1072,7 +1106,6 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
   const applyCompositorBatch = (details: readonly DerpShellDetail[]) => {
     if (details.length === 0) return
     const applyStart = performance.now()
-    const needsPostApplyPaint = countWindowUnmapped(details) > 0
     batch(() => {
       const pendingModelDetails: DerpShellDetail[] = []
       let batchSnapshotResult: ReturnType<typeof syncCompositorSnapshot> | undefined
@@ -1091,10 +1124,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       }
       flushPendingModelDetails()
     })
-    if (needsPostApplyPaint) {
-      options.bumpSnapChrome()
-      options.shellWireSend('invalidate_view')
-    }
+    scheduleCompositorVisualFollowup(details)
     noteShellBatchApply(performance.now() - applyStart, details.length)
   }
 

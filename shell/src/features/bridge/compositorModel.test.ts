@@ -152,7 +152,7 @@ describe('createCompositorModel', () => {
     })
   })
 
-  it('keeps focused window topmost when focus arrives after a stale order update', () => {
+  it('updates focus without rewriting compositor-owned stack order', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
       model.applyCompositorSnapshot([
@@ -176,7 +176,49 @@ describe('createCompositorModel', () => {
       ])
 
       expect(model.focusedWindowId()).toBe(51)
-      expect(model.windows().get(51)?.stack_z).toBe(3)
+      expect(model.windows().get(51)?.stack_z).toBe(1)
+      expect(model.windowsListIds()).toEqual([50, 51])
+      dispose()
+    })
+  })
+
+  it('lets same-revision compositor order rows correct stale window stack values', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [
+            { ...nativeWindow(50, 'Launcher'), stack_z: 2 },
+            { ...nativeWindow(51, 'Target'), stack_z: 1 },
+          ],
+        },
+        {
+          type: 'window_order',
+          revision: 2,
+          windows: [
+            { window_id: 50, stack_z: 2 },
+            { window_id: 51, stack_z: 1 },
+          ],
+        },
+      ])
+
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_order',
+            revision: 2,
+            windows: [
+              { window_id: 50, stack_z: 2 },
+              { window_id: 51, stack_z: 3 },
+            ],
+          },
+        ],
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+
+      expect(model.windowById(51)()?.stack_z).toBe(3)
       expect(model.windowsListIds()).toEqual([51, 50])
       dispose()
     })
@@ -437,11 +479,10 @@ describe('createCompositorModel', () => {
     })
   })
 
-  it('evicts unmapped per-window accessors instead of reusing stale signals', () => {
+  it('keeps per-window accessors derived from the authoritative map across unmap and remap', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
       let previousAccessor: ReturnType<typeof model.windowById> | null = null
-      const oldAccessors: ReturnType<typeof model.windowById>[] = []
 
       for (let revision = 1; revision <= 5; revision += 1) {
         model.applyCompositorSnapshot([
@@ -452,7 +493,7 @@ describe('createCompositorModel', () => {
           },
         ])
         const accessor = model.windowById(7)
-        if (previousAccessor) expect(accessor).not.toBe(previousAccessor)
+        if (previousAccessor) expect(accessor).toBe(previousAccessor)
         expect(accessor()?.title).toBe(`Window ${revision}`)
         model.applyCompositorDetail(
           {
@@ -462,7 +503,6 @@ describe('createCompositorModel', () => {
           { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
         )
         expect(accessor()).toBeUndefined()
-        oldAccessors.push(accessor)
         previousAccessor = accessor
       }
 
@@ -475,10 +515,42 @@ describe('createCompositorModel', () => {
       ])
       const latest = model.windowById(7)
       expect(latest()?.title).toBe('Window 6')
-      for (const accessor of oldAccessors) {
-        expect(accessor()).toBeUndefined()
-        expect(accessor).not.toBe(latest)
-      }
+      expect(previousAccessor).toBe(latest)
+      dispose()
+    })
+  })
+
+  it('keeps windowById accessors live when first requested from a disposed owner', () => {
+    createRoot((dispose) => {
+      const model = createCompositorModel()
+      model.applyCompositorSnapshot([
+        {
+          type: 'window_list',
+          revision: 1,
+          windows: [{ ...nativeWindow(7, 'Old'), stack_z: 1 }],
+        },
+      ])
+      let accessor!: ReturnType<typeof model.windowById>
+      createRoot((disposeNested) => {
+        accessor = model.windowById(7)
+        expect(accessor()).toMatchObject({ title: 'Old' })
+        disposeNested()
+      })
+
+      model.applyCompositorDetails(
+        [
+          {
+            type: 'window_metadata',
+            window_id: 7,
+            surface_id: 70,
+            title: 'New',
+            app_id: 'new.app',
+          },
+        ],
+        { fallbackMonitorKey: () => 'DP-1', requestWindowSyncRecovery: () => {} },
+      )
+
+      expect(accessor()).toMatchObject({ title: 'New', app_id: 'new.app' })
       dispose()
     })
   })
