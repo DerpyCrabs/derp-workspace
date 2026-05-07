@@ -41,9 +41,11 @@ import {
   pointInRect,
   postJson,
   raiseTaskbarWindow,
+  readPngRgba,
   resetPerfCounters,
   runKeybind,
   shellWindowStack,
+  spawnCommand,
   spawnNativeWindow,
   shellWindowById,
   syncTest,
@@ -66,6 +68,52 @@ import {
 
 const NATIVE_TITLEBAR_PX = 26
 const NATIVE_BORDER_PX = 4
+
+async function assertTitlebarEdgeOwnedByClient(path: string, label: string) {
+  const png = await readPngRgba(path)
+  const minDominantPixels = Math.floor(png.width * 0.6)
+  const dominantRows = Array.from({ length: png.height }, (_, y) => {
+    const counts = new Map<string, number>()
+    for (let x = 0; x < png.width; x += 1) {
+      const index = (y * png.width + x) * 4
+      const key = `${png.data[index]},${png.data[index + 1]},${png.data[index + 2]},${png.data[index + 3]}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    let color = ''
+    let count = 0
+    for (const [key, value] of counts) {
+      if (value > count) {
+        color = key
+        count = value
+      }
+    }
+    return { y, color, count }
+  })
+  const chromeColor = dominantRows[0]?.color ?? ''
+  const firstClientRow = dominantRows.find((row) => row.color !== chromeColor)
+  assert(firstClientRow !== undefined, `${label} should expose native client pixels below titlebar`)
+  assert(
+    firstClientRow.y <= 7,
+    `${label} edge is still shell chrome at row ${firstClientRow.y}: ${JSON.stringify({ chromeColor, dominantRows })}`,
+  )
+  const nativeBackgroundRow = dominantRows
+    .slice(firstClientRow.y + 1)
+    .find((row) => row.color !== chromeColor && row.count >= minDominantPixels)
+  assert(
+    nativeBackgroundRow !== undefined,
+    `${label} should have a stable native background below the titlebar: ${JSON.stringify({ chromeColor, dominantRows })}`,
+  )
+  assert(
+    firstClientRow.color === nativeBackgroundRow.color,
+    `${label} first client row is a transition artifact: ${JSON.stringify({
+      chromeColor,
+      firstClientRow,
+      nativeBackgroundRow,
+      dominantRows,
+    })}`,
+  )
+  return { width: png.width, height: png.height, chromeColor, firstClientRow, nativeBackgroundRow, dominantRows }
+}
 
 function resolveWindowOutputName(compositor: CompositorSnapshot, window: WindowSnapshot): string | null {
   const centerX = window.x + Math.floor(window.width / 2)
@@ -471,6 +519,28 @@ async function waitForNativeWindowGeometry(
   )
 }
 
+async function waitForFootWindow(base: string, knownWindowIds: Set<number>, label: string) {
+  return waitFor(
+    label,
+    async () => {
+      const snapshots = await getSnapshots(base)
+      const window = snapshots.compositor.windows.find(
+        (entry) =>
+          !entry.shell_hosted &&
+          !knownWindowIds.has(entry.window_id) &&
+          entry.app_id === 'foot' &&
+          !entry.minimized,
+      )
+      if (!window) return null
+      const controls = windowControls(snapshots.shell, window.window_id)
+      if (!controls?.titlebar) return null
+      return { ...snapshots, window, controls }
+    },
+    5000,
+    100,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('spawn native red and green windows', async ({ base, state }) => {
     const { red, green } = await ensureNativePair(base, state)
@@ -505,6 +575,34 @@ export default defineGroup(import.meta.url, ({ test }) => {
     }
     await movePoint(base, outside.x, outside.y)
     const before = await captureScreenshotRect(base, rect)
+    const bottomSeamRect = {
+      x: window.x - NATIVE_BORDER_PX,
+      y: window.y + window.height - 5,
+      width: Math.min(520, window.width + NATIVE_BORDER_PX * 2),
+      height: 10,
+    }
+    const topSeamRect = {
+      x: window.x - NATIVE_BORDER_PX,
+      y: window.y - 5,
+      width: Math.min(520, window.width + NATIVE_BORDER_PX * 2),
+      height: 10,
+    }
+    const leftSeamRect = {
+      x: window.x - 5,
+      y: window.y + 12,
+      width: 10,
+      height: Math.min(260, window.height - 24),
+    }
+    const rightSeamRect = {
+      x: window.x + window.width - 5,
+      y: window.y + 12,
+      width: 10,
+      height: Math.min(260, window.height - 24),
+    }
+    const bottomSeamBefore = await captureScreenshotRect(base, bottomSeamRect)
+    const topSeamBefore = await captureScreenshotRect(base, topSeamRect)
+    const leftSeamBefore = await captureScreenshotRect(base, leftSeamRect)
+    const rightSeamBefore = await captureScreenshotRect(base, rightSeamRect)
     const ys = [
       rect.y + 16,
       rect.y + Math.floor(rect.height / 2),
@@ -515,20 +613,180 @@ export default defineGroup(import.meta.url, ({ test }) => {
         await movePoint(base, x, y)
       }
     }
+    for (let x = bottomSeamRect.x + 8; x <= bottomSeamRect.x + bottomSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y + window.height - 1)
+      await movePoint(base, x, window.y + window.height + 1)
+    }
+    for (let x = topSeamRect.x + 8; x <= topSeamRect.x + topSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y - 1)
+      await movePoint(base, x, window.y + 1)
+    }
+    for (let y = leftSeamRect.y + 8; y <= leftSeamRect.y + leftSeamRect.height - 8; y += 29) {
+      await movePoint(base, window.x - 1, y)
+      await movePoint(base, window.x + 1, y)
+    }
+    for (let y = rightSeamRect.y + 8; y <= rightSeamRect.y + rightSeamRect.height - 8; y += 29) {
+      await movePoint(base, window.x + window.width - 1, y)
+      await movePoint(base, window.x + window.width + 1, y)
+    }
     await movePoint(base, outside.x, outside.y)
     await syncTest(base)
     const after = await captureScreenshotRect(base, rect)
+    const bottomSeamAfter = await captureScreenshotRect(base, bottomSeamRect)
+    const topSeamAfter = await captureScreenshotRect(base, topSeamRect)
+    const leftSeamAfter = await captureScreenshotRect(base, leftSeamRect)
+    const rightSeamAfter = await captureScreenshotRect(base, rightSeamRect)
     const comparison = await comparePngFixture(after.path, before.path)
+    const bottomSeamComparison = await comparePngFixture(bottomSeamAfter.path, bottomSeamBefore.path, {
+      maxChannelDelta: 31,
+    })
+    const topSeamComparison = await comparePngFixture(topSeamAfter.path, topSeamBefore.path)
+    const topEdgeOwnership = await assertTitlebarEdgeOwnedByClient(topSeamAfter.path, 'native titlebar seam')
+    const leftSeamComparison = await comparePngFixture(leftSeamAfter.path, leftSeamBefore.path)
+    const rightSeamComparison = await comparePngFixture(rightSeamAfter.path, rightSeamBefore.path)
     const beforeArtifact = await copyArtifactFile('native-cursor-damage-before.png', before.path)
     const afterArtifact = await copyArtifactFile('native-cursor-damage-after.png', after.path)
+    const bottomSeamBeforeArtifact = await copyArtifactFile(
+      'native-cursor-damage-bottom-seam-before.png',
+      bottomSeamBefore.path,
+    )
+    const bottomSeamAfterArtifact = await copyArtifactFile(
+      'native-cursor-damage-bottom-seam-after.png',
+      bottomSeamAfter.path,
+    )
+    const topSeamBeforeArtifact = await copyArtifactFile('native-cursor-damage-top-seam-before.png', topSeamBefore.path)
+    const topSeamAfterArtifact = await copyArtifactFile('native-cursor-damage-top-seam-after.png', topSeamAfter.path)
+    const leftSeamBeforeArtifact = await copyArtifactFile('native-cursor-damage-left-seam-before.png', leftSeamBefore.path)
+    const leftSeamAfterArtifact = await copyArtifactFile('native-cursor-damage-left-seam-after.png', leftSeamAfter.path)
+    const rightSeamBeforeArtifact = await copyArtifactFile('native-cursor-damage-right-seam-before.png', rightSeamBefore.path)
+    const rightSeamAfterArtifact = await copyArtifactFile('native-cursor-damage-right-seam-after.png', rightSeamAfter.path)
     await writeJsonArtifact('native-cursor-damage.json', {
       windowId,
       window,
       rect,
+      bottomSeamRect,
+      topSeamRect,
+      leftSeamRect,
+      rightSeamRect,
       outside,
       before: beforeArtifact,
       after: afterArtifact,
+      bottomSeamBefore: bottomSeamBeforeArtifact,
+      bottomSeamAfter: bottomSeamAfterArtifact,
+      topSeamBefore: topSeamBeforeArtifact,
+      topSeamAfter: topSeamAfterArtifact,
+      leftSeamBefore: leftSeamBeforeArtifact,
+      leftSeamAfter: leftSeamAfterArtifact,
+      rightSeamBefore: rightSeamBeforeArtifact,
+      rightSeamAfter: rightSeamAfterArtifact,
       comparison,
+      bottomSeamComparison,
+      topSeamComparison,
+      topEdgeOwnership,
+      leftSeamComparison,
+      rightSeamComparison,
+    })
+  })
+
+  test('real foot native decoration seams stay stable after cursor sweep', async ({ base, state }) => {
+    await spawnCommand(base, 'foot --title derp-native-seam-foot')
+    const opened = await waitForFootWindow(base, state.knownWindowIds, 'wait for foot native seam window')
+    const windowId = opened.window.window_id
+    state.knownWindowIds.add(windowId)
+    state.spawnedNativeWindowIds.add(windowId)
+    await waitForWindowRaised(base, windowId)
+    await waitForNativeFocus(base, windowId, 4000)
+    const ready = await waitForNativeWindowGeometry(base, windowId, 'wait for foot native seam geometry')
+    const window = ready.window
+    const outside = {
+      x: window.x + Math.min(window.width - 12, 80),
+      y: window.y + Math.min(window.height - 12, 80),
+    }
+    const topSeamRect = {
+      x: window.x - NATIVE_BORDER_PX,
+      y: window.y - 5,
+      width: Math.min(520, window.width + NATIVE_BORDER_PX * 2),
+      height: 10,
+    }
+    const bottomSeamRect = {
+      x: window.x - NATIVE_BORDER_PX,
+      y: window.y + window.height - 5,
+      width: Math.min(520, window.width + NATIVE_BORDER_PX * 2),
+      height: 10,
+    }
+    const leftSeamRect = {
+      x: window.x - 5,
+      y: window.y + 12,
+      width: 10,
+      height: Math.min(260, window.height - 24),
+    }
+    const rightSeamRect = {
+      x: window.x + window.width - 5,
+      y: window.y + 12,
+      width: 10,
+      height: Math.min(260, window.height - 24),
+    }
+    await movePoint(base, outside.x, outside.y)
+    await syncTest(base)
+    const topBefore = await captureScreenshotRect(base, topSeamRect)
+    const bottomBefore = await captureScreenshotRect(base, bottomSeamRect)
+    const leftBefore = await captureScreenshotRect(base, leftSeamRect)
+    const rightBefore = await captureScreenshotRect(base, rightSeamRect)
+    for (let x = topSeamRect.x + 8; x <= topSeamRect.x + topSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y - 1)
+      await movePoint(base, x, window.y + 1)
+    }
+    for (let x = bottomSeamRect.x + 8; x <= bottomSeamRect.x + bottomSeamRect.width - 8; x += 29) {
+      await movePoint(base, x, window.y + window.height - 1)
+      await movePoint(base, x, window.y + window.height + 1)
+    }
+    for (let y = leftSeamRect.y + 8; y <= leftSeamRect.y + leftSeamRect.height - 8; y += 29) {
+      await movePoint(base, window.x - 1, y)
+      await movePoint(base, window.x + 1, y)
+    }
+    for (let y = rightSeamRect.y + 8; y <= rightSeamRect.y + rightSeamRect.height - 8; y += 29) {
+      await movePoint(base, window.x + window.width - 1, y)
+      await movePoint(base, window.x + window.width + 1, y)
+    }
+    await movePoint(base, outside.x, outside.y)
+    await syncTest(base)
+    const topAfter = await captureScreenshotRect(base, topSeamRect)
+    const bottomAfter = await captureScreenshotRect(base, bottomSeamRect)
+    const leftAfter = await captureScreenshotRect(base, leftSeamRect)
+    const rightAfter = await captureScreenshotRect(base, rightSeamRect)
+    const topComparison = await comparePngFixture(topAfter.path, topBefore.path, { maxDifferentPixels: 1200 })
+    const bottomComparison = await comparePngFixture(bottomAfter.path, bottomBefore.path, { maxChannelDelta: 8 })
+    const topEdgeOwnership = await assertTitlebarEdgeOwnedByClient(topAfter.path, 'foot native titlebar seam')
+    const leftComparison = await comparePngFixture(leftAfter.path, leftBefore.path, { maxDifferentPixels: 300 })
+    const rightComparison = await comparePngFixture(rightAfter.path, rightBefore.path, { maxDifferentPixels: 300 })
+    const topBeforeArtifact = await copyArtifactFile('foot-native-seam-top-before.png', topBefore.path)
+    const topAfterArtifact = await copyArtifactFile('foot-native-seam-top-after.png', topAfter.path)
+    const bottomBeforeArtifact = await copyArtifactFile('foot-native-seam-bottom-before.png', bottomBefore.path)
+    const bottomAfterArtifact = await copyArtifactFile('foot-native-seam-bottom-after.png', bottomAfter.path)
+    const leftBeforeArtifact = await copyArtifactFile('foot-native-seam-left-before.png', leftBefore.path)
+    const leftAfterArtifact = await copyArtifactFile('foot-native-seam-left-after.png', leftAfter.path)
+    const rightBeforeArtifact = await copyArtifactFile('foot-native-seam-right-before.png', rightBefore.path)
+    const rightAfterArtifact = await copyArtifactFile('foot-native-seam-right-after.png', rightAfter.path)
+    await writeJsonArtifact('foot-native-seams.json', {
+      windowId,
+      window,
+      topSeamRect,
+      bottomSeamRect,
+      leftSeamRect,
+      rightSeamRect,
+      topBefore: topBeforeArtifact,
+      topAfter: topAfterArtifact,
+      bottomBefore: bottomBeforeArtifact,
+      bottomAfter: bottomAfterArtifact,
+      leftBefore: leftBeforeArtifact,
+      leftAfter: leftAfterArtifact,
+      rightBefore: rightBeforeArtifact,
+      rightAfter: rightAfterArtifact,
+      topComparison,
+      bottomComparison,
+      topEdgeOwnership,
+      leftComparison,
+      rightComparison,
     })
   })
 

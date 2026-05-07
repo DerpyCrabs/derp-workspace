@@ -4,13 +4,23 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::layer_map_for_output;
 use smithay::desktop::space::{Space, SpaceElement, SpaceRenderElements};
 use smithay::output::Output;
-use smithay::utils::Scale;
+use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::derp_space::{render_window_elements_with_exclusion_mode, DerpSpaceElem};
 use crate::state::CompositorState;
 
 pub(crate) type DerpWinRenderEl = <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement;
+
+fn logical_point_to_physical_floor(
+    point: Point<i32, Logical>,
+    scale: Scale<f64>,
+) -> Point<i32, Physical> {
+    Point::from((
+        ((point.x as f64) * scale.x).floor() as i32,
+        ((point.y as f64) * scale.y).floor() as i32,
+    ))
+}
 
 pub(crate) fn derp_space_render_elements_with_window_ids(
     space: &Space<DerpSpaceElem>,
@@ -81,7 +91,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             match elem {
                 DerpSpaceElem::Wayland(window) => {
                     let scale = Scale::from(output_scale);
-                    let loc_phys = location.to_physical_precise_round(scale);
+                    let loc_phys = logical_point_to_physical_floor(location, scale);
                     for (el, include_self_decor) in render_window_elements_with_exclusion_mode(
                         window,
                         renderer,
@@ -98,7 +108,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 }
                 DerpSpaceElem::X11(_) => {
                     let scale = Scale::from(output_scale);
-                    let loc_phys = location.to_physical_precise_round(scale);
+                    let loc_phys = logical_point_to_physical_floor(location, scale);
                     for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
                         elem,
                         renderer,

@@ -356,7 +356,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
             ×
           </button>
         </div>
-        </div>
+      </div>
       </div>
       <div
         data-shell-resize-bottom-left={model()?.window_id ?? 0}

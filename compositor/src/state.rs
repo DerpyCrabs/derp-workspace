@@ -2976,7 +2976,7 @@ impl CompositorState {
             outer.loc,
             Size::from((outer.size.w.max(1), titlebar_h.saturating_add(inset_top))),
         )];
-        if is_shell_hosted && border > 0 {
+        if border > 0 {
             let client = Self::shell_hosted_client_global_rect(&info);
             out.push(Rectangle::new(
                 Point::from((outer.loc.x, client.loc.y)),
@@ -6576,6 +6576,17 @@ impl CompositorState {
     ) {
         if let ChromeEvent::WindowMapped { info } = &event {
             self.shell_prepare_spawned_toplevel_stack(info.window_id);
+        }
+        if matches!(
+            event,
+            ChromeEvent::WindowMapped { .. }
+                | ChromeEvent::WindowGeometryChanged { .. }
+                | ChromeEvent::WindowStateChanged { .. }
+                | ChromeEvent::WindowUnmapped { .. }
+        ) {
+            self.shell_exclusion_zones_need_full_damage = true;
+            self.shell_force_next_dmabuf_full_damage();
+            self.shell_nudge_cef_repaint();
         }
         let ipc_event = match &event {
             ChromeEvent::WindowMapped { info } => ChromeEvent::WindowMapped {
