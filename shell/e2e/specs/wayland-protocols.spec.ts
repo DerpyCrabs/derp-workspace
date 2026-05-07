@@ -15,7 +15,7 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
 } from '../lib/runtime.ts'
-import { closeWindow, postJson } from '../lib/setup.ts'
+import { closeWindow, postJson, runKeybind } from '../lib/setup.ts'
 
 export default defineGroup(import.meta.url, ({ test }) => {
   test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
@@ -50,6 +50,116 @@ export default defineGroup(import.meta.url, ({ test }) => {
     )
     assert(output.includes('wp_linux_drm_syncobj_manager_v1 1'), output)
     assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('advertises presentation content-type and tearing-control globals', async ({ base }) => {
+    const outputPath = path.join(artifactDir(), `wayland-protocol-globals-${Date.now()}.txt`)
+    const command = [
+      shellQuote(nativeBin()),
+      '--require-global',
+      'wp_presentation',
+      '--require-global',
+      'wp_content_type_manager_v1',
+      '--require-global',
+      'wp_tearing_control_manager_v1',
+      '--list-globals',
+      '>',
+      shellQuote(outputPath),
+      '2>&1;',
+      'printf',
+      shellQuote('\\nexit:%s\\n'),
+      '$?',
+      '>>',
+      shellQuote(outputPath),
+    ].join(' ')
+    await spawnCommand(base, `sh -lc ${shellQuote(command)}`)
+    const output = await waitFor(
+      'wait for wayland protocol registry probe',
+      async () => {
+        try {
+          const text = await readFile(outputPath, 'utf8')
+          return text.includes('\nexit:') ? text : null
+        } catch {
+          return null
+        }
+      },
+      5000,
+      100,
+    )
+    assert(output.includes('wp_presentation 2'), output)
+    assert(output.includes('wp_content_type_manager_v1 1'), output)
+    assert(output.includes('wp_tearing_control_manager_v1 1'), output)
+    assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('native presentation content type and tearing hints are committed', async ({ base, state }) => {
+    const title = `Derp Wayland Protocol Probe ${Date.now()}`
+    const command = [
+      shellQuote(nativeBin()),
+      '--title',
+      shellQuote(title),
+      '--token',
+      'wayland-protocols',
+      '--width',
+      '420',
+      '--height',
+      '260',
+      '--presentation-smoke',
+      '--content-type',
+      'game',
+      '--tearing-hint',
+      'async',
+      '--burst-frames',
+      '180',
+    ].join(' ')
+    let windowId: number | null = null
+    try {
+      await spawnCommand(base, command)
+      const spawned = await waitFor(
+        'wait for protocol probe window state',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find(
+            (entry) => !entry.shell_hosted && !state.knownWindowIds.has(entry.window_id) && entry.title.includes(title),
+          )
+          if (!window) return null
+          if (window.content_type !== 'game') return null
+          if (window.tearing_hint !== 'async') return null
+          if (!window.title.includes('presented=')) return null
+          return { compositor, window }
+        },
+        5000,
+        100,
+      )
+      windowId = spawned.window.window_id
+      state.knownWindowIds.add(windowId)
+      await runKeybind(base, 'toggle_fullscreen', windowId)
+      const flip = await waitFor(
+        'wait for async flip diagnostic',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find((entry) => entry.window_id === windowId)
+          if (!window?.fullscreen) return null
+          const output = compositor.outputs.find((entry) => entry.name === window.output_name)
+          if (!output) return null
+          if (output.last_flip_mode === 'async') return { compositor, window, output }
+          if (output.last_flip_fallback_reason) return { compositor, window, output }
+          return null
+        },
+        5000,
+        100,
+      )
+      await writeJsonArtifact('wayland-protocols-presentation-content-tearing.json', {
+        command,
+        window: flip.window,
+        output: flip.output,
+      })
+    } finally {
+      if (windowId !== null) {
+        await closeWindow(base, windowId)
+        await waitForWindowGone(base, windowId, 5000)
+      }
+    }
   })
 
   test('native cursor-shape pointer uses selected XCursor theme', async ({ base, state }) => {

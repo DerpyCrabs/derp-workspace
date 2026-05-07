@@ -23,6 +23,7 @@ mod render;
 mod session;
 mod shell;
 pub mod state;
+pub(crate) mod tearing_control;
 mod tray;
 
 pub use derp_space::DerpSpaceElem;

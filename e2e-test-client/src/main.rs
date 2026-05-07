@@ -32,9 +32,12 @@ use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
-    Connection, QueueHandle,
+    Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::wp::{
+    content_type::v1::client::{
+        wp_content_type_manager_v1::WpContentTypeManagerV1, wp_content_type_v1,
+    },
     cursor_shape::v1::client::{
         wp_cursor_shape_device_v1::{Shape as CursorShape, WpCursorShapeDeviceV1},
         wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
@@ -43,7 +46,11 @@ use wayland_protocols::wp::{
     pointer_constraints::zv1::client::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
     },
+    presentation_time::client::{wp_presentation::WpPresentation, wp_presentation_feedback},
     relative_pointer::zv1::client::zwp_relative_pointer_v1,
+    tearing_control::v1::client::{
+        wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +82,58 @@ impl PointerConstraintMode {
 enum PointerConstraintHandle {
     Locked(zwp_locked_pointer_v1::ZwpLockedPointerV1),
     Confined(zwp_confined_pointer_v1::ZwpConfinedPointerV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContentTypeArg {
+    None,
+    Photo,
+    Video,
+    Game,
+}
+
+impl ContentTypeArg {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "none" => Ok(Self::None),
+            "photo" => Ok(Self::Photo),
+            "video" => Ok(Self::Video),
+            "game" => Ok(Self::Game),
+            other => Err(format!("unsupported --content-type value: {other}")),
+        }
+    }
+
+    fn protocol(self) -> wp_content_type_v1::Type {
+        match self {
+            Self::None => wp_content_type_v1::Type::None,
+            Self::Photo => wp_content_type_v1::Type::Photo,
+            Self::Video => wp_content_type_v1::Type::Video,
+            Self::Game => wp_content_type_v1::Type::Game,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TearingHintArg {
+    Vsync,
+    Async,
+}
+
+impl TearingHintArg {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "vsync" => Ok(Self::Vsync),
+            "async" => Ok(Self::Async),
+            other => Err(format!("unsupported --tearing-hint value: {other}")),
+        }
+    }
+
+    fn protocol(self) -> wp_tearing_control_v1::PresentationHint {
+        match self {
+            Self::Vsync => wp_tearing_control_v1::PresentationHint::Vsync,
+            Self::Async => wp_tearing_control_v1::PresentationHint::Async,
+        }
+    }
 }
 
 impl PointerConstraintHandle {
@@ -110,6 +169,14 @@ struct Args {
     fifo_smoke: bool,
     #[arg(long, default_value_t = false)]
     cursor_shape_pointer: bool,
+    #[arg(long, default_value_t = false)]
+    presentation_smoke: bool,
+    #[arg(long, default_value = "none")]
+    content_type: String,
+    #[arg(long, default_value = "vsync")]
+    tearing_hint: String,
+    #[arg(long, default_value_t = 1)]
+    burst_frames: u32,
     #[arg(long = "require-global")]
     require_global: Vec<String>,
     #[arg(long, default_value_t = false)]
@@ -120,6 +187,10 @@ fn main() {
     let args = Args::parse();
     let pointer_constraint_mode = PointerConstraintMode::parse(&args.pointer_constraint)
         .unwrap_or_else(|error| panic!("{error}"));
+    let content_type_arg =
+        ContentTypeArg::parse(&args.content_type).unwrap_or_else(|error| panic!("{error}"));
+    let tearing_hint_arg =
+        TearingHintArg::parse(&args.tearing_hint).unwrap_or_else(|error| panic!("{error}"));
     let strip_color = parse_strip_color(&args.strip, &args.token)
         .unwrap_or_else(|error| panic!("invalid --strip value: {error}"));
     let conn = Connection::connect_to_env().expect("connect to wayland compositor");
@@ -170,6 +241,33 @@ fn main() {
     } else {
         None
     };
+    let presentation = if args.presentation_smoke {
+        Some(
+            globals
+                .bind::<WpPresentation, _, _>(&qh, 1..=2, ())
+                .expect("bind wp_presentation"),
+        )
+    } else {
+        None
+    };
+    let content_type_manager = if content_type_arg != ContentTypeArg::None {
+        Some(
+            globals
+                .bind::<WpContentTypeManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind wp_content_type_manager_v1"),
+        )
+    } else {
+        None
+    };
+    let tearing_control_manager = if tearing_hint_arg != TearingHintArg::Vsync {
+        Some(
+            globals
+                .bind::<WpTearingControlManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind wp_tearing_control_manager_v1"),
+        )
+    } else {
+        None
+    };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -186,6 +284,19 @@ fn main() {
     let fifo = fifo_manager
         .as_ref()
         .map(|manager| manager.get_fifo(window.wl_surface(), &qh, ()));
+    let content_type = content_type_manager.as_ref().map(|manager| {
+        let content_type = manager.get_surface_content_type(window.wl_surface(), &qh, ());
+        content_type.set_content_type(content_type_arg.protocol());
+        content_type
+    });
+    let tearing_control = tearing_control_manager.as_ref().map(|manager| {
+        let tearing_control = manager.get_tearing_control(window.wl_surface(), &qh, ());
+        tearing_control.set_presentation_hint(tearing_hint_arg.protocol());
+        tearing_control
+    });
+    if content_type.is_some() || tearing_control.is_some() {
+        window.wl_surface().commit();
+    }
 
     let pool = SlotPool::new((args.width * args.height * 4) as usize, &shm_state)
         .expect("create shared memory pool");
@@ -221,9 +332,16 @@ fn main() {
         spawn_on_press_requested: false,
         pointer_constraint_mode,
         fifo,
+        presentation,
+        _content_type: content_type,
+        _tearing_control: tearing_control,
         cursor_shape_manager,
         cursor_shape_device: None,
         fifo_smoke_draws: 0,
+        presentation_presented: 0,
+        presentation_discarded: 0,
+        presentation_smoke: args.presentation_smoke,
+        burst_frames_remaining: args.burst_frames.saturating_sub(1),
         keyboard: None,
         keyboard_seat: None,
         pointer: None,
@@ -274,9 +392,16 @@ struct TestClient {
     spawn_on_press_requested: bool,
     pointer_constraint_mode: PointerConstraintMode,
     fifo: Option<WpFifoV1>,
+    presentation: Option<WpPresentation>,
+    _content_type: Option<wp_content_type_v1::WpContentTypeV1>,
+    _tearing_control: Option<wp_tearing_control_v1::WpTearingControlV1>,
     cursor_shape_manager: Option<WpCursorShapeManagerV1>,
     cursor_shape_device: Option<WpCursorShapeDeviceV1>,
     fifo_smoke_draws: u32,
+    presentation_presented: u32,
+    presentation_discarded: u32,
+    presentation_smoke: bool,
+    burst_frames_remaining: u32,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -348,20 +473,22 @@ impl TestClient {
         self.window
             .wl_surface()
             .frame(qh, self.window.wl_surface().clone());
+        if let Some(presentation) = self.presentation.as_ref() {
+            presentation.feedback(self.window.wl_surface(), qh, ());
+        }
         if let Some(fifo) = self.fifo.as_ref() {
             if self.fifo_smoke_draws > 0 {
                 fifo.wait_barrier();
             }
             fifo.set_barrier();
             self.fifo_smoke_draws = self.fifo_smoke_draws.saturating_add(1);
-            self.window.set_title(format!(
-                "{} | fifo={}",
-                self.base_title, self.fifo_smoke_draws
-            ));
         }
         buffer
             .attach_to(self.window.wl_surface())
             .expect("attach buffer");
+        if self.fifo.is_some() || self.presentation_smoke {
+            self.update_status_title();
+        }
         self.window.wl_surface().commit();
         self.maybe_activate_from_startup_token();
         self.needs_redraw = false;
@@ -458,20 +585,29 @@ impl TestClient {
     }
 
     fn update_status_title(&self) {
-        if self.pointer_constraint_mode == PointerConstraintMode::None {
-            return;
+        let mut title = self.base_title.clone();
+        if self.fifo.is_some() {
+            title.push_str(&format!(" | fifo={}", self.fifo_smoke_draws));
         }
-        self.window.set_title(format!(
-            "{} | mode={} lock={} confine={} last={:.0},{:.0} total={:.0},{:.0}",
-            self.base_title,
-            self.pointer_constraint_mode.label(),
-            u8::from(self.constraint_locked),
-            u8::from(self.constraint_confined),
-            self.last_relative.0.round(),
-            self.last_relative.1.round(),
-            self.total_relative.0.round(),
-            self.total_relative.1.round(),
-        ));
+        if self.presentation_smoke {
+            title.push_str(&format!(
+                " | presented={} discarded={}",
+                self.presentation_presented, self.presentation_discarded
+            ));
+        }
+        if self.pointer_constraint_mode != PointerConstraintMode::None {
+            title.push_str(&format!(
+                " | mode={} lock={} confine={} last={:.0},{:.0} total={:.0},{:.0}",
+                self.pointer_constraint_mode.label(),
+                u8::from(self.constraint_locked),
+                u8::from(self.constraint_confined),
+                self.last_relative.0.round(),
+                self.last_relative.1.round(),
+                self.total_relative.0.round(),
+                self.total_relative.1.round(),
+            ));
+        }
+        self.window.set_title(title);
     }
 }
 
@@ -694,7 +830,11 @@ impl CompositorHandler for TestClient {
             self.drop_buffer();
             return;
         }
-        self.draw(conn, qh);
+        if self.burst_frames_remaining > 0 {
+            self.burst_frames_remaining = self.burst_frames_remaining.saturating_sub(1);
+            self.needs_redraw = true;
+            self.draw(conn, qh);
+        }
     }
 
     fn surface_enter(
@@ -1057,6 +1197,29 @@ impl RelativePointerHandler for TestClient {
     }
 }
 
+impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &wp_presentation_feedback::WpPresentationFeedback,
+        event: wp_presentation_feedback::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_presentation_feedback::Event::Presented { .. } => {
+                state.presentation_presented = state.presentation_presented.saturating_add(1);
+                state.update_status_title();
+            }
+            wp_presentation_feedback::Event::Discarded => {
+                state.presentation_discarded = state.presentation_discarded.saturating_add(1);
+                state.update_status_title();
+            }
+            _ => {}
+        }
+    }
+}
+
 delegate_compositor!(TestClient);
 delegate_output!(TestClient);
 delegate_shm!(TestClient);
@@ -1073,6 +1236,11 @@ delegate_noop!(TestClient: ignore WpFifoManagerV1);
 delegate_noop!(TestClient: ignore WpFifoV1);
 delegate_noop!(TestClient: ignore WpCursorShapeManagerV1);
 delegate_noop!(TestClient: ignore WpCursorShapeDeviceV1);
+delegate_noop!(TestClient: ignore WpPresentation);
+delegate_noop!(TestClient: ignore WpContentTypeManagerV1);
+delegate_noop!(TestClient: ignore wp_content_type_v1::WpContentTypeV1);
+delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
+delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {

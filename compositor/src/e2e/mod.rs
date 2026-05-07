@@ -135,6 +135,8 @@ struct E2eOutputSnapshot {
     refresh_milli_hz: u32,
     vrr_supported: bool,
     vrr_enabled: bool,
+    last_flip_mode: String,
+    last_flip_fallback_reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -156,6 +158,8 @@ struct E2eWindowSnapshot {
     client_side_decoration: bool,
     shell_hosted: bool,
     wayland_client_pid: Option<i32>,
+    content_type: String,
+    tearing_hint: String,
     render_alpha: f32,
     workspace_visible: bool,
     mapped_x: Option<i32>,
@@ -581,6 +585,8 @@ impl CompositorState {
                         )
                     });
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(output.name().as_str());
+                let (last_flip_mode, last_flip_fallback_reason) =
+                    self.output_flip_state(output.name().as_str());
                 Some(E2eOutputSnapshot {
                     name: output.name(),
                     x: geometry.loc.x,
@@ -594,6 +600,8 @@ impl CompositorState {
                     refresh_milli_hz,
                     vrr_supported,
                     vrr_enabled,
+                    last_flip_mode,
+                    last_flip_fallback_reason,
                 })
             })
             .collect();
@@ -625,6 +633,8 @@ impl CompositorState {
                     client_side_decoration: record.info.client_side_decoration,
                     shell_hosted: record.kind == WindowKind::ShellHosted,
                     wayland_client_pid: record.info.wayland_client_pid,
+                    content_type: self.content_type_label_for_window_id(record.info.window_id),
+                    tearing_hint: self.tearing_hint_label_for_window_id(record.info.window_id),
                     render_alpha,
                     workspace_visible,
                     mapped_x: mapped_rect.map(|rect| rect.loc.x),

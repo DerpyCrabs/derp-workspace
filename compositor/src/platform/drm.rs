@@ -47,6 +47,8 @@ use smithay::reexports::{
     rustix::fs::OFlags,
 };
 use smithay::utils::{DeviceFd, Physical, Rectangle, Transform};
+use smithay::wayland::presentation::{PresentationFeedbackCallback, Refresh};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use tracing::{debug, error, info, warn};
 
 const DERP_EGL_DMABUF_FORMAT_SAMPLE_LEN: usize = 32;
@@ -91,12 +93,25 @@ pub struct DrmHead {
     pub vrr_enabled: bool,
     pending_frame_complete: bool,
     last_vblank_at: Option<Instant>,
+    pending_presentation_feedback: Vec<PresentationFeedbackCallback>,
+    presentation_sequence: u64,
+    last_flip_mode: String,
+    last_flip_fallback_reason: Option<String>,
 }
 
 impl DrmHead {
     fn on_vblank_inner(&mut self) {
         if let Err(e) = self.gbm_surface.frame_submitted() {
             warn!(?e, "drm frame_submitted");
+        }
+        self.presentation_sequence = self.presentation_sequence.saturating_add(1);
+        let time = monotonic_time();
+        let refresh = presentation_refresh_for_output(&self.output, self.vrr_enabled);
+        let flags = wp_presentation_feedback::Kind::Vsync
+            | wp_presentation_feedback::Kind::HwClock
+            | wp_presentation_feedback::Kind::HwCompletion;
+        for feedback in self.pending_presentation_feedback.drain(..) {
+            feedback.presented(&self.output, time, refresh, self.presentation_sequence, flags);
         }
         self.pending_frame_complete = false;
         self.last_vblank_at = Some(Instant::now());
@@ -381,16 +396,38 @@ impl DrmHead {
             return (false, false);
         }
 
+        let mut presentation_feedback = state.drain_presentation_feedback_for_output(output);
+        let requested_async = state.output_async_tearing_candidate_window(output).is_some();
+        let (flip_mode, fallback_reason) = if requested_async {
+            (
+                "vsync".to_string(),
+                Some("async-page-flip-not-exposed-by-gbm-buffered-surface".to_string()),
+            )
+        } else {
+            ("vsync".to_string(), None)
+        };
+
         if let Err(e) = self
             .gbm_surface
             .queue_buffer(Some(sync_for_queue), damage_for_queue, ())
         {
+            for feedback in presentation_feedback.drain(..) {
+                feedback.discarded();
+            }
             warn!(?e, "drm queue_buffer");
             loop_handle.insert_idle(|d| drm_idle_render(d));
             return (false, false);
         }
 
         self.pending_frame_complete = true;
+        self.pending_presentation_feedback = presentation_feedback;
+        self.last_flip_mode = flip_mode;
+        self.last_flip_fallback_reason = fallback_reason;
+        state.set_output_flip_state(
+            self.connector_name.clone(),
+            self.last_flip_mode.clone(),
+            self.last_flip_fallback_reason.clone(),
+        );
 
         state.signal_fifo_barriers_for_output(output);
 
@@ -417,6 +454,31 @@ impl DrmHead {
         });
 
         (content_advanced, true)
+    }
+}
+
+fn monotonic_time() -> Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if rc != 0 {
+        return Duration::ZERO;
+    }
+    Duration::new(ts.tv_sec.max(0) as u64, ts.tv_nsec.max(0) as u32)
+}
+
+fn presentation_refresh_for_output(output: &Output, vrr_enabled: bool) -> Refresh {
+    let Some(mode) = output.current_mode() else {
+        return Refresh::Unknown;
+    };
+    let refresh = mode.refresh.max(1) as f64;
+    let duration = Duration::from_secs_f64(1_000.0 / refresh);
+    if vrr_enabled {
+        Refresh::variable(duration)
+    } else {
+        Refresh::fixed(duration)
     }
 }
 
@@ -802,6 +864,10 @@ impl DrmSession {
                 vrr_enabled,
                 pending_frame_complete: false,
                 last_vblank_at: None,
+                pending_presentation_feedback: Vec::new(),
+                presentation_sequence: 0,
+                last_flip_mode: "vsync".to_string(),
+                last_flip_fallback_reason: None,
             });
         }
 
@@ -1244,6 +1310,10 @@ pub fn init_drm(
             vrr_enabled,
             pending_frame_complete: false,
             last_vblank_at: None,
+            pending_presentation_feedback: Vec::new(),
+            presentation_sequence: 0,
+            last_flip_mode: "vsync".to_string(),
+            last_flip_fallback_reason: None,
         });
     }
 

@@ -57,6 +57,7 @@ use smithay::{
     utils::{Buffer, Logical, Point, Rectangle, Serial, Size, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState as WlCompositorState},
+        content_type::{ContentTypeState, ContentTypeSurfaceCachedState},
         cursor_shape::CursorShapeManagerState,
         dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjHandler, DrmSyncobjState},
@@ -66,6 +67,9 @@ use smithay::{
         idle_inhibit::IdleInhibitManagerState,
         keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState,
         output::OutputManagerState,
+        presentation::{
+            PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState,
+        },
         selection::{
             data_device::{
                 clear_data_device_selection, current_data_device_selection_userdata,
@@ -104,6 +108,9 @@ use crate::{
     shell::shell_ipc,
     window_registry::{WindowKind, WindowRegistry},
     CalloopData,
+};
+use crate::tearing_control::{
+    TearingControlState, TearingControlSurfaceCachedState, TearingPresentationHint,
 };
 use smithay::input::pointer::CursorImageStatus;
 
@@ -436,6 +443,9 @@ pub struct CompositorState {
 
     pub compositor_state: WlCompositorState,
     pub(crate) _fifo_manager_state: FifoManagerState,
+    pub(crate) _presentation_state: PresentationState,
+    pub(crate) _content_type_state: ContentTypeState,
+    pub(crate) _tearing_control_state: TearingControlState,
     pub xdg_shell_state: XdgShellState,
     pub xdg_activation_state: XdgActivationState,
     pub xdg_decoration_state: XdgDecorationState,
@@ -513,6 +523,7 @@ pub struct CompositorState {
     pub(crate) taskbar_auto_hide: bool,
     pub(crate) taskbar_side_by_output_name: HashMap<String, ShellTaskbarSide>,
     output_vrr_by_name: HashMap<String, (bool, bool)>,
+    pub(crate) output_flip_state_by_name: HashMap<String, (String, Option<String>)>,
     pub(crate) display_config_save_pending: bool,
     pub(crate) display_config_save_suppressed: bool,
     /// When true, [`smithay::backend::input::AbsolutePositionEvent`] `x`/`y` on touch are **window pixels**
@@ -1163,6 +1174,9 @@ impl CompositorState {
 
         let compositor_state = WlCompositorState::new_v6::<Self>(&dh);
         let fifo_manager_state = FifoManagerState::new::<Self>(&dh);
+        let presentation_state = PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32);
+        let content_type_state = ContentTypeState::new::<Self>(&dh);
+        let tearing_control_state = TearingControlState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
@@ -1337,6 +1351,9 @@ impl CompositorState {
             socket_name,
             compositor_state,
             _fifo_manager_state: fifo_manager_state,
+            _presentation_state: presentation_state,
+            _content_type_state: content_type_state,
+            _tearing_control_state: tearing_control_state,
             xdg_shell_state,
             xdg_activation_state,
             xdg_decoration_state,
@@ -1404,6 +1421,7 @@ impl CompositorState {
             taskbar_auto_hide: false,
             taskbar_side_by_output_name: HashMap::new(),
             output_vrr_by_name: HashMap::new(),
+            output_flip_state_by_name: HashMap::new(),
             display_config_save_pending: false,
             display_config_save_suppressed: false,
             touch_abs_is_window_pixels: false,
@@ -2628,6 +2646,15 @@ impl CompositorState {
             )))
     }
 
+    pub(crate) fn output_async_tearing_candidate_window(&self, output: &Output) -> Option<u32> {
+        if !self.output_has_fullscreen_native_direct_path(output) {
+            return None;
+        }
+        let window_id = self.ordered_window_ids_on_output(output).last().copied()?;
+        (self.tearing_hint_for_window_id(window_id) == TearingPresentationHint::Async)
+            .then_some(window_id)
+    }
+
     fn window_ids_strictly_above_in_stack<'a>(
         &self,
         ordered_window_ids: &'a [u32],
@@ -3798,6 +3825,100 @@ impl CompositorState {
                 None
             }
         })
+    }
+
+    pub(crate) fn content_type_label_for_surface(&self, surface: &WlSurface) -> String {
+        smithay::wayland::compositor::with_states(surface, |states| {
+            let mut guard = states.cached_state.get::<ContentTypeSurfaceCachedState>();
+            format!("{:?}", guard.current().content_type()).to_ascii_lowercase()
+        })
+    }
+
+    pub(crate) fn tearing_hint_for_surface(
+        &self,
+        surface: &WlSurface,
+    ) -> TearingPresentationHint {
+        smithay::wayland::compositor::with_states(surface, |states| {
+            states
+                .cached_state
+                .get::<TearingControlSurfaceCachedState>()
+                .current()
+                .hint()
+        })
+    }
+
+    pub(crate) fn wl_surface_for_window_id(&self, window_id: u32) -> Option<WlSurface> {
+        let sid = self.window_registry.surface_id_for_window(window_id)?;
+        if let Some(window) = self.find_window_by_surface_id(sid) {
+            return window.toplevel().map(|toplevel| toplevel.wl_surface().clone());
+        }
+        self.find_x11_window_by_surface_id(sid)
+            .and_then(|x11| x11.wl_surface())
+    }
+
+    pub(crate) fn content_type_label_for_window_id(&self, window_id: u32) -> String {
+        self.wl_surface_for_window_id(window_id)
+            .map(|surface| self.content_type_label_for_surface(&surface))
+            .unwrap_or_else(|| "none".to_string())
+    }
+
+    pub(crate) fn tearing_hint_for_window_id(&self, window_id: u32) -> TearingPresentationHint {
+        self.wl_surface_for_window_id(window_id)
+            .map(|surface| self.tearing_hint_for_surface(&surface))
+            .unwrap_or(TearingPresentationHint::Vsync)
+    }
+
+    pub(crate) fn tearing_hint_label_for_window_id(&self, window_id: u32) -> String {
+        self.tearing_hint_for_window_id(window_id).label().to_string()
+    }
+
+    pub(crate) fn drain_presentation_feedback_for_output(
+        &mut self,
+        output: &Output,
+    ) -> Vec<PresentationFeedbackCallback> {
+        let mut callbacks = Vec::new();
+        let mut seen = HashSet::new();
+        for elem in self.space.elements_for_output(output) {
+            match elem {
+                DerpSpaceElem::Wayland(window) => {
+                    if let Some(toplevel) = window.toplevel() {
+                        with_surfaces_surface_tree(toplevel.wl_surface(), |surface, states| {
+                            let key = surface
+                                .client()
+                                .map(|client| (client.id(), surface.id().protocol_id()));
+                            if key.is_none_or(|key| seen.insert(key)) {
+                                callbacks.extend(std::mem::take(
+                                    &mut states
+                                        .cached_state
+                                        .get::<PresentationFeedbackCachedState>()
+                                        .current()
+                                        .callbacks,
+                                ));
+                            }
+                        });
+                    }
+                }
+                DerpSpaceElem::X11(x11) => {
+                    if let Some(surface) = x11.wl_surface() {
+                        with_surfaces_surface_tree(&surface, |surface, states| {
+                            let key = surface
+                                .client()
+                                .map(|client| (client.id(), surface.id().protocol_id()));
+                            if key.is_none_or(|key| seen.insert(key)) {
+                                callbacks.extend(std::mem::take(
+                                    &mut states
+                                        .cached_state
+                                        .get::<PresentationFeedbackCachedState>()
+                                        .current()
+                                        .callbacks,
+                                ));
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        callbacks
     }
 
     pub(crate) fn xwayland_scale_for_fractional_output(scale: f64) -> f64 {
@@ -7214,6 +7335,23 @@ impl CompositorState {
             .get(name)
             .copied()
             .unwrap_or((false, false))
+    }
+
+    pub(crate) fn set_output_flip_state(
+        &mut self,
+        name: String,
+        mode: impl Into<String>,
+        fallback_reason: Option<String>,
+    ) {
+        self.output_flip_state_by_name
+            .insert(name, (mode.into(), fallback_reason));
+    }
+
+    pub(crate) fn output_flip_state(&self, name: &str) -> (String, Option<String>) {
+        self.output_flip_state_by_name
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| ("vsync".to_string(), None))
     }
 
     pub(crate) fn taskbar_side_for_output_name(&self, name: &str) -> ShellTaskbarSide {

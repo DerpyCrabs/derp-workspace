@@ -92,6 +92,8 @@ export interface OutputSnapshot {
   refresh_milli_hz?: number
   vrr_supported?: boolean
   vrr_enabled?: boolean
+  last_flip_mode?: string
+  last_flip_fallback_reason?: string | null
 }
 
 export interface WindowSnapshot {
@@ -124,6 +126,8 @@ export interface WindowSnapshot {
   surface_id?: number
   client_side_decoration?: boolean
   wayland_client_pid?: number | null
+  content_type?: string
+  tearing_hint?: string
   render_alpha?: number
   workspace_visible?: boolean
   mapped_x?: number | null
@@ -2878,6 +2882,10 @@ export function buildNativeSpawnCommand({
   pointerConstraint = 'none',
   spawnOnPressCommand,
   fifoSmoke = false,
+  presentationSmoke = false,
+  contentType,
+  tearingHint,
+  burstFrames,
 }: {
   title: string
   appId?: string
@@ -2889,6 +2897,10 @@ export function buildNativeSpawnCommand({
   pointerConstraint?: 'none' | 'lock' | 'confine'
   spawnOnPressCommand?: string
   fifoSmoke?: boolean
+  presentationSmoke?: boolean
+  contentType?: 'none' | 'photo' | 'video' | 'game'
+  tearingHint?: 'vsync' | 'async'
+  burstFrames?: number
 }): string {
   const parts = [
     nativeBin(),
@@ -2909,6 +2921,10 @@ export function buildNativeSpawnCommand({
   ]
   if (dropBufferAfterDraw) parts.push('--drop-buffer-after-draw')
   if (fifoSmoke) parts.push('--fifo-smoke')
+  if (presentationSmoke) parts.push('--presentation-smoke')
+  if (contentType) parts.push('--content-type', shellQuote(contentType))
+  if (tearingHint) parts.push('--tearing-hint', shellQuote(tearingHint))
+  if (burstFrames !== undefined) parts.push('--burst-frames', String(burstFrames))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -2933,6 +2949,10 @@ export async function spawnNativeWindow(
     pointerConstraint,
     spawnOnPressCommand,
     fifoSmoke,
+    presentationSmoke,
+    contentType,
+    tearingHint,
+    burstFrames,
   }: {
     title: string
     appId?: string
@@ -2944,6 +2964,10 @@ export async function spawnNativeWindow(
     pointerConstraint?: 'none' | 'lock' | 'confine'
     spawnOnPressCommand?: string
     fifoSmoke?: boolean
+    presentationSmoke?: boolean
+    contentType?: 'none' | 'photo' | 'video' | 'game'
+    tearingHint?: 'vsync' | 'async'
+    burstFrames?: number
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -2957,6 +2981,10 @@ export async function spawnNativeWindow(
     pointerConstraint,
     spawnOnPressCommand,
     fifoSmoke,
+    presentationSmoke,
+    contentType,
+    tearingHint,
+    burstFrames,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

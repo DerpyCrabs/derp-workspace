@@ -103,4 +103,7 @@ smithay::delegate_xwayland_shell!(crate::CompositorState);
 smithay::delegate_dmabuf!(crate::CompositorState);
 smithay::delegate_drm_syncobj!(crate::CompositorState);
 smithay::delegate_fifo!(crate::CompositorState);
+smithay::delegate_presentation!(crate::CompositorState);
+smithay::delegate_content_type!(crate::CompositorState);
+crate::delegate_tearing_control!(crate::CompositorState);
 
