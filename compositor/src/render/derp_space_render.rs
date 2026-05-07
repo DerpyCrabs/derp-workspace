@@ -67,17 +67,17 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
     };
 
     if let Some(output_geo) = space.output_geometry(output) {
-        for elem in space.elements_for_output(output).rev() {
-            let Some(elem_bbox) = space.element_bbox(elem) else {
+        for elem in state.space_elements_for_output_top_to_bottom(output) {
+            let Some(elem_bbox) = space.element_bbox(&elem) else {
                 continue;
             };
             if !output_geo.overlaps(elem_bbox) {
                 continue;
             }
-            let Some(eloc) = space.element_location(elem) else {
+            let Some(eloc) = space.element_location(&elem) else {
                 continue;
             };
-            let wid = state.derp_elem_window_id(elem);
+            let wid = state.derp_elem_window_id(&elem);
             if wid.is_some_and(|window_id| {
                 !state.workspace_window_is_visible_during_render(window_id)
             }) {
@@ -88,7 +88,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                 .unwrap_or(alpha);
             let render_origin = eloc - elem.geometry().loc;
             let location = render_origin - output_geo.loc;
-            match elem {
+            match &elem {
                 DerpSpaceElem::Wayland(window) => {
                     let scale = Scale::from(output_scale);
                     let loc_phys = logical_point_to_physical_floor(location, scale);
@@ -110,7 +110,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let scale = Scale::from(output_scale);
                     let loc_phys = logical_point_to_physical_floor(location, scale);
                     for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
-                        elem,
+                        &elem,
                         renderer,
                         loc_phys,
                         scale,

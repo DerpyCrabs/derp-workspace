@@ -1295,6 +1295,41 @@ impl CompositorState {
             .unwrap_or(0)
     }
 
+    fn space_elements_top_to_bottom_from<'a, I>(&self, elements: I) -> Vec<DerpSpaceElem>
+    where
+        I: Iterator<Item = &'a DerpSpaceElem>,
+    {
+        let stack_z: HashMap<u32, u32> = self
+            .shell_window_stack_ids()
+            .into_iter()
+            .enumerate()
+            .map(|(index, window_id)| (window_id, index as u32 + 1))
+            .collect();
+        let mut entries: Vec<(u32, usize, DerpSpaceElem)> = elements
+            .enumerate()
+            .map(|(index, elem)| {
+                let z = self
+                    .derp_elem_window_id(elem)
+                    .and_then(|window_id| stack_z.get(&window_id).copied())
+                    .unwrap_or(0);
+                (z, index, elem.clone())
+            })
+            .collect();
+        entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        entries.into_iter().map(|(_, _, elem)| elem).collect()
+    }
+
+    pub(crate) fn space_elements_top_to_bottom(&self) -> Vec<DerpSpaceElem> {
+        self.space_elements_top_to_bottom_from(self.space.elements())
+    }
+
+    pub(crate) fn space_elements_for_output_top_to_bottom(
+        &self,
+        output: &Output,
+    ) -> Vec<DerpSpaceElem> {
+        self.space_elements_top_to_bottom_from(self.space.elements_for_output(output))
+    }
+
     pub fn stop_event_loop(&self) {
         self.event_loop_stop.store(true, Ordering::Release);
         self.loop_signal.stop();
@@ -2139,19 +2174,19 @@ impl CompositorState {
         {
             return Some((None, surface, point));
         }
-        for elem in self.space.elements().rev() {
-            let Some(map_loc) = self.space.element_location(elem) else {
+        for elem in self.space_elements_top_to_bottom() {
+            let Some(map_loc) = self.space.element_location(&elem) else {
                 continue;
             };
             let render_loc = map_loc - elem.geometry().loc;
             let local = pos - render_loc.to_f64();
-            let window_id = self.derp_elem_window_id(elem);
+            let window_id = self.derp_elem_window_id(&elem);
             if window_id
                 .is_some_and(|window_id| !self.workspace_window_is_visible_during_render(window_id))
             {
                 continue;
             }
-            let hit = match elem {
+            let hit = match &elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + render_loc).to_f64())),
@@ -4224,13 +4259,13 @@ impl CompositorState {
         if let Some(hit) = self.layer_surface_under(pos, &[Layer::Overlay, Layer::Top]) {
             return Some(hit);
         }
-        for elem in self.space.elements().rev() {
-            let Some(map_loc) = self.space.element_location(elem) else {
+        for elem in self.space_elements_top_to_bottom() {
+            let Some(map_loc) = self.space.element_location(&elem) else {
                 continue;
             };
             let render_loc = map_loc - elem.geometry().loc;
             let local = pos - render_loc.to_f64();
-            let hit = match elem {
+            let hit = match &elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
                     .map(|(s, p)| (s, (p + render_loc).to_f64())),
@@ -4243,7 +4278,7 @@ impl CompositorState {
             let Some((surf, p_global)) = hit else {
                 continue;
             };
-            if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
+            if self.native_hit_blocked_by_shell_exclusion(&elem, pos) {
                 continue;
             }
             return Some((surf, p_global));
@@ -4302,16 +4337,16 @@ impl CompositorState {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(DerpSpaceElem, Point<i32, Logical>)> {
-        for elem in self.space.elements().rev() {
-            let Some(map_loc) = self.space.element_location(elem) else {
+        for elem in self.space_elements_top_to_bottom() {
+            let Some(map_loc) = self.space.element_location(&elem) else {
                 continue;
             };
-            if self.native_hit_blocked_by_shell_exclusion(elem, pos) {
+            if self.native_hit_blocked_by_shell_exclusion(&elem, pos) {
                 continue;
             }
             let render_loc = map_loc - elem.geometry().loc;
             let local = pos - render_loc.to_f64();
-            let hit = match elem {
+            let hit = match &elem {
                 DerpSpaceElem::Wayland(window) => window
                     .surface_under(local, WindowSurfaceType::ALL)
                     .is_some(),
@@ -4322,7 +4357,7 @@ impl CompositorState {
             if !hit {
                 continue;
             }
-            return Some((elem.clone(), map_loc));
+            return Some((elem, map_loc));
         }
         None
     }
