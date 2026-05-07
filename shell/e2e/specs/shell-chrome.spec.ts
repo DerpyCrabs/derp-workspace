@@ -19,6 +19,7 @@ import {
   autoLayoutManagedWindowsOnOutput,
   dragBetweenPoints,
   defineGroup,
+  doubleClickRect,
   expectedGridAutoLayoutClientRect,
   getPerfCounters,
   getJson,
@@ -87,6 +88,11 @@ function shellTitlebarDragPoint(shell: ShellSnapshot, windowId: number) {
     x: Math.max(minX, Math.min(maxX, preferredX)),
     y: rect.global_y + Math.max(8, Math.min(rect.height - 8, Math.round(rect.height / 2))),
   }
+}
+
+function rectAroundPoint(point: { x: number; y: number }, size = 4): Rect {
+  const half = size / 2
+  return { x: 0, y: 0, global_x: point.x - half, global_y: point.y - half, width: size, height: size }
 }
 
 function pointInWorkspaceRect(
@@ -1409,6 +1415,54 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('shell window titlebar double click toggles maximize and restore', async ({ base, state }) => {
+    const opened = await openShellTestWindow(base, state)
+    const windowId = opened.window.window_id
+    const focused = await waitForShellUiFocus(base, windowId)
+    const before = compositorWindowById(focused.compositor, windowId)
+    assert(before && !before.maximized, 'missing non-maximized shell test window before titlebar double click')
+    const start = shellTitlebarDragPoint(focused.shell, windowId)
+    await doubleClickRect(base, rectAroundPoint(start))
+    const maximized = await waitFor(
+      'wait for shell test maximized after titlebar double click',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = compositorWindowById(compositor, windowId)
+        const controls = windowControls(shell, windowId)
+        if (!window?.maximized || !controls?.titlebar) return null
+        return { compositor, shell, window, titlebar: controls.titlebar }
+      },
+      5000,
+      100,
+    )
+    const second = shellTitlebarDragPoint(maximized.shell, windowId)
+    await doubleClickRect(base, rectAroundPoint(second))
+    const restored = await waitFor(
+      'wait for shell test restored after titlebar double click',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, windowId)
+        if (!window || window.maximized || window.fullscreen || window.minimized) return null
+        if (Math.abs(window.x - before.x) > 2) return null
+        if (Math.abs(window.y - before.y) > 2) return null
+        if (Math.abs(window.width - before.width) > 2) return null
+        if (Math.abs(window.height - before.height) > 2) return null
+        return { compositor, window }
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('shell-titlebar-double-click-maximize.json', {
+      windowId,
+      firstClick: start,
+      secondClick: second,
+      before,
+      maximized: maximized.window,
+      restored: restored.window,
+    })
+  })
+
   test('maximized shell window titlebar drag restores under pointer', async ({ base, state }) => {
     const opened = await openShellTestWindow(base, state)
     const windowId = opened.window.window_id
@@ -1442,7 +1496,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const start = rectCenter(shellMax.titlebar)
-    await dragBetweenPoints(base, start.x, start.y, start.x, start.y + 160, 18)
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      await movePoint(base, start.x, start.y + 4)
+      await waitFor(
+        'wait for shell test unmaximized after small titlebar drag',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositorWindowById(compositor, windowId)
+          return window && !window.maximized && !window.fullscreen && !window.minimized ? { window } : null
+        },
+        5000,
+        100,
+      )
+      await movePoint(base, start.x, start.y + 160)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
     const restored = await waitFor(
       'wait for shell test unmaximized after titlebar drag',
       async () => {

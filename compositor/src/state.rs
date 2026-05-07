@@ -9013,7 +9013,6 @@ impl CompositorState {
 
     fn shell_move_begin_inner(&mut self, window_id: u32, pointer_driven: bool) {
         self.shell_resize_end_active();
-        self.shell_restore_maximized_drag_window_if_needed(window_id);
         if self.shell_move_try_begin_backed(window_id, pointer_driven) {
             return;
         }
@@ -9232,6 +9231,7 @@ impl CompositorState {
             );
             return;
         };
+        self.shell_restore_maximized_drag_window_if_needed(wid);
         if self.window_registry.is_shell_hosted(wid) {
             self.shell_move_pending_delta.0 += dx;
             self.shell_move_pending_delta.1 += dy;

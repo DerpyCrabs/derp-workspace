@@ -1189,6 +1189,13 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
             const currentVisibleWindowId = visibleWindowId()
             if (currentVisibleWindowId != null) options.beginShellWindowMove(currentVisibleWindowId, clientX, clientY)
           }}
+          onTitlebarDoubleClick={() => {
+            const currentVisibleWindowId = visibleWindowId()
+            if (currentVisibleWindowId != null) {
+              options.focusWindowViaShell(currentVisibleWindowId)
+              options.toggleShellMaximizeForWindow(currentVisibleWindowId)
+            }
+          }}
           onSnapAssistOpen={(anchorRect: DOMRect) => {
             const currentVisibleWindowId = visibleWindowId()
             if (currentVisibleWindowId == null) return
@@ -1457,6 +1464,10 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           }}
           onTitlebarPointerDown={(_, clientX, clientY) => {
             options.beginShellWindowMove(props.windowId, clientX, clientY)
+          }}
+          onTitlebarDoubleClick={() => {
+            options.focusWindowViaShell(props.windowId)
+            options.toggleShellMaximizeForWindow(props.windowId)
           }}
           onSnapAssistOpen={(anchorRect) => {
             options.focusWindowViaShell(props.windowId)

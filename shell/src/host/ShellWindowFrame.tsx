@@ -54,6 +54,7 @@ type ShellWindowFrameProps = {
   contentVisible?: MaybeAcc<boolean>
   onFocusRequest?: () => void
   onTitlebarPointerDown: (pointerId: number, clientX: number, clientY: number) => void
+  onTitlebarDoubleClick?: () => void
   onSnapAssistOpen?: (anchorRect: DOMRect) => void
   onResizeEdgeDown: (edges: number, pointerId: number, clientX: number, clientY: number) => void
   onMinimize: () => void
@@ -64,6 +65,8 @@ type ShellWindowFrameProps = {
 }
 
 export function ShellWindowFrame(props: ShellWindowFrameProps) {
+  let lastTitlebarClick: { t: number; x: number; y: number } | null = null
+  let suppressDblClickUntil = 0
   const requestFocus = () => {
     props.onFocusRequest?.()
   }
@@ -87,6 +90,12 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
   const dragging = () => props.dragging !== undefined && readAcc(props.dragging)
   const chromeHidden = () =>
     (props.hidden !== undefined && readAcc(props.hidden)) || !frameVisible()
+  const fireTitlebarDoubleClick = () => {
+    suppressDblClickUntil = performance.now() + 750
+    lastTitlebarClick = null
+    requestFocus()
+    props.onTitlebarDoubleClick?.()
+  }
 
   return (
     <div
@@ -202,7 +211,26 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
           }
           e.preventDefault()
           e.stopPropagation()
+          const now = performance.now()
+          if (
+            lastTitlebarClick &&
+            now - lastTitlebarClick.t <= 500 &&
+            Math.abs(e.clientX - lastTitlebarClick.x) <= 8 &&
+            Math.abs(e.clientY - lastTitlebarClick.y) <= 8
+          ) {
+            fireTitlebarDoubleClick()
+            return
+          }
+          lastTitlebarClick = { t: now, x: e.clientX, y: e.clientY }
           props.onTitlebarPointerDown(e.pointerId, e.clientX, e.clientY)
+        }}
+        onDblClick={(e) => {
+          if (e.button !== 0) return
+          if (titlebarInteractionTarget(e.target)) return
+          e.preventDefault()
+          e.stopPropagation()
+          if (performance.now() <= suppressDblClickUntil) return
+          fireTitlebarDoubleClick()
         }}
         onTouchStart={(e) => {
           if (titlebarInteractionTarget(e.target)) {

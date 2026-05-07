@@ -24,7 +24,7 @@ import {
   closeWindow,
   compositorWindowById,
   defineGroup,
-  dragBetweenPoints,
+  doubleClickRect,
   ensureNativePair,
   expectedGridAutoLayoutClientRect,
   getPerfCounters,
@@ -106,6 +106,11 @@ function nativeFrameTopLeftFromVisual(visual: {
     x: visual.x - NATIVE_BORDER_PX,
     y: visual.y - NATIVE_TITLEBAR_PX,
   }
+}
+
+function rectAroundPoint(point: { x: number; y: number }, size = 4) {
+  const half = size / 2
+  return { x: 0, y: 0, global_x: point.x - half, global_y: point.y - half, width: size, height: size }
 }
 
 function trackedStack(shell: ShellSnapshot, windowIds: number[]) {
@@ -800,6 +805,61 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
   })
 
+  test('native titlebar double click toggles maximize and restore', async ({ base, state }) => {
+    const { red } = await ensureNativePair(base, state)
+    const redId = red.window.window_id
+    await raiseTaskbarWindow(base, redId)
+    const focused = await waitForNativeFocus(base, redId, 4000)
+    const before = compositorWindowById(focused.compositor, redId)
+    assert(before && !before.maximized, 'missing non-maximized native window before titlebar double click')
+    const titlebar = assertRectMinSize(
+      'native titlebar before double click',
+      windowControls(focused.shell, redId)?.titlebar,
+      80,
+      16,
+    )
+    const start = rectCenter(titlebar)
+    await doubleClickRect(base, rectAroundPoint(start))
+    const maximized = await waitFor(
+      'wait for native maximized after titlebar double click',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const shell = await getJson<ShellSnapshot>(base, '/test/state/shell')
+        const window = compositorWindowById(compositor, redId)
+        const controls = windowControls(shell, redId)
+        if (!window?.maximized || !controls?.titlebar) return null
+        return { compositor, shell, window, titlebar: controls.titlebar }
+      },
+      5000,
+      100,
+    )
+    const second = rectCenter(assertRectMinSize('native maximized titlebar before double click restore', maximized.titlebar, 80, 16))
+    await doubleClickRect(base, rectAroundPoint(second))
+    const restored = await waitFor(
+      'wait for native restored after titlebar double click',
+      async () => {
+        const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+        const window = compositorWindowById(compositor, redId)
+        if (!window || window.maximized || window.fullscreen || window.minimized) return null
+        if (Math.abs(window.x - before.x) > 80) return null
+        if (Math.abs(window.y - before.y) > 80) return null
+        if (Math.abs(window.width - before.width) > 80) return null
+        if (Math.abs(window.height - before.height) > 80) return null
+        return { compositor, window }
+      },
+      5000,
+      100,
+    )
+    await writeJsonArtifact('native-titlebar-double-click-maximize.json', {
+      redId,
+      firstClick: start,
+      secondClick: second,
+      before,
+      maximized: maximized.window,
+      restored: restored.window,
+    })
+  })
+
   test('maximized native titlebar drag leaves maximized for geometry diagnostics', async ({ base, state }) => {
     const { red } = await ensureNativePair(base, state)
     const redId = red.window.window_id
@@ -829,7 +889,24 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const start = rectCenter(shellMax.titlebar)
-    await dragBetweenPoints(base, start.x, start.y, start.x, start.y + 160, 18)
+    await movePoint(base, start.x, start.y)
+    await pointerButton(base, BTN_LEFT, 'press')
+    try {
+      await movePoint(base, start.x, start.y + 4)
+      await waitFor(
+        'wait for red unmaximized after small titlebar drag',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositorWindowById(compositor, redId)
+          return window && !window.maximized && !window.fullscreen ? { window } : null
+        },
+        5000,
+        100,
+      )
+      await movePoint(base, start.x, start.y + 160)
+    } finally {
+      await pointerButton(base, BTN_LEFT, 'release')
+    }
     const unmaxed = await waitFor(
       'wait for red unmaximized after titlebar drag',
       async () => {
