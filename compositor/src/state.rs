@@ -11400,12 +11400,18 @@ impl CompositorState {
         window_id: u32,
     ) -> Option<(String, i32, i32, i32, i32)> {
         let source = self.capture_window_source_descriptor(window_id)?;
+        let actual_rect = self.mapped_native_window_content_rect(window_id)?;
+        let output = self
+            .space
+            .outputs()
+            .find(|output| output.name() == source.output_name)?;
+        let scale = output.current_scale().fractional_scale();
         Some((
             source.output_name,
-            source.logical_rect.size.w,
-            source.logical_rect.size.h,
-            source.buffer_size.w,
-            source.buffer_size.h,
+            actual_rect.size.w,
+            actual_rect.size.h,
+            ((actual_rect.size.w as f64) * scale).round().max(1.0) as i32,
+            ((actual_rect.size.h as f64) * scale).round().max(1.0) as i32,
         ))
     }
 

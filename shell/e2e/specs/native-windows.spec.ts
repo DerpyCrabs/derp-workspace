@@ -1187,24 +1187,12 @@ export default defineGroup(import.meta.url, ({ test }) => {
         controls.native_drag_preview_source_width != null &&
         controls.native_drag_preview_source_height != null &&
         controls.native_drag_preview_backing_width != null &&
-        controls.native_drag_preview_backing_height != null
+        controls.native_drag_preview_backing_height != null &&
+        Math.abs(controls.native_drag_preview_source_width - window.width) <= 8 &&
+        Math.abs(controls.native_drag_preview_source_height - window.height) <= 8 &&
+        Math.abs(controls.native_drag_preview_backing_width - controls.native_drag_preview_source_width) <= 1 &&
+        Math.abs(controls.native_drag_preview_backing_height - controls.native_drag_preview_source_height) <= 1
       ) {
-        assert(
-          Math.abs(controls.native_drag_preview_source_width - window.width) <= 8,
-          `restored native drag preview width ${controls.native_drag_preview_source_width} should match restored window width ${window.width}`,
-        )
-        assert(
-          Math.abs(controls.native_drag_preview_source_height - window.height) <= 8,
-          `restored native drag preview height ${controls.native_drag_preview_source_height} should match restored window height ${window.height}`,
-        )
-        assert(
-          Math.abs(controls.native_drag_preview_backing_width - controls.native_drag_preview_source_width) <= 1,
-          'restored native drag preview backing width should match source width',
-        )
-        assert(
-          Math.abs(controls.native_drag_preview_backing_height - controls.native_drag_preview_source_height) <= 1,
-          'restored native drag preview backing height should match source height',
-        )
         previewDuringDrag = {
           window,
           sourceWidth: controls.native_drag_preview_source_width,

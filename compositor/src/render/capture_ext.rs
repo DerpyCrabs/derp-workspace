@@ -384,17 +384,20 @@ fn send_session_constraints(
         *size = descriptor.buffer_size;
     }
     session.shm_format(wl_shm::Format::Xrgb8888.into());
-    if let Some(device) = state.capture_dmabuf_device {
-        session.dmabuf_device(device.to_ne_bytes().to_vec());
-        let mut formats: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
-        for format in &state.capture_dmabuf_formats {
-            formats
-                .entry(format.code as u32)
-                .or_default()
-                .extend_from_slice(&u64::from(format.modifier).to_ne_bytes());
-        }
-        for (code, modifiers) in formats {
-            session.dmabuf_format(code, modifiers);
+    let advertise_dmabuf = matches!(descriptor.key, CaptureSourceKey::Window(_));
+    if advertise_dmabuf {
+        if let Some(device) = state.capture_dmabuf_device {
+            session.dmabuf_device(device.to_ne_bytes().to_vec());
+            let mut formats: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+            for format in &state.capture_dmabuf_formats {
+                formats
+                    .entry(format.code as u32)
+                    .or_default()
+                    .extend_from_slice(&u64::from(format.modifier).to_ne_bytes());
+            }
+            for (code, modifiers) in formats {
+                session.dmabuf_format(code, modifiers);
+            }
         }
     }
     session.buffer_size(
