@@ -1,7 +1,5 @@
 use smithay::reexports::calloop::channel::Sender;
 use smithay::utils::{Logical, Rectangle};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::cef::compositor_tx::CefToCompositor;
 
 #[derive(Clone)]
@@ -41,13 +39,7 @@ impl UplinkToCompositor {
     pub fn session_power_systemctl(&self, verb: String) {
         let state_verb = verb.clone();
         self.run(move |s| {
-            s.e2e_last_session_power_action = Some(state_verb);
-            s.e2e_last_session_power_requested_at_ms = Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis(),
-            );
+            s.session_services.record_session_power_action(state_verb);
         });
         std::thread::spawn(move || {
             match std::process::Command::new("systemctl").arg(&verb).output() {
@@ -412,7 +404,7 @@ impl UplinkToCompositor {
         self.run_result(move |s| {
             crate::session::session_state::merge_shell_hosted_into_session_value(
                 &mut v,
-                &s.shell_hosted_app_state,
+                &s.shell_osr.shell_hosted_app_state,
             );
             crate::session::session_state::write_session_state_json(v)
         })
@@ -425,7 +417,7 @@ impl UplinkToCompositor {
         self.run_result(move |s| {
             crate::session::session_state::merge_shell_hosted_window_state_into_shell_snapshot(
                 &mut shell,
-                &s.shell_hosted_app_state,
+                &s.shell_osr.shell_hosted_app_state,
             );
             crate::session::session_state::write_shell_session_json(shell)
         })

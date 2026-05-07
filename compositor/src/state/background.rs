@@ -106,9 +106,9 @@ impl CompositorState {
         };
         self.desktop_background_config = default;
         self.desktop_background_by_output_name = outs;
-        self.display_config_save_pending = true;
-        self.shell_exclusion_zones_need_full_damage = true;
-        self.shell_dmabuf_dirty_force_full = true;
+        self.output_topology.display_config_save_pending = true;
+        self.shell_osr.shell_exclusion_zones_need_full_damage = true;
+        self.shell_osr.shell_dmabuf_dirty_force_full = true;
         self.request_desktop_wallpaper_decode();
     }
 
@@ -116,7 +116,7 @@ impl CompositorState {
         let needed = self.collect_desktop_wallpaper_paths();
         self.prune_desktop_wallpaper_paths(&needed);
         if needed.is_empty() {
-            self.shell_exclusion_zones_need_full_damage = true;
+            self.shell_osr.shell_exclusion_zones_need_full_damage = true;
             return;
         }
         for p in needed {
@@ -175,7 +175,7 @@ impl CompositorState {
                             commit,
                         },
                     );
-                    self.shell_exclusion_zones_need_full_damage = true;
+                    self.shell_osr.shell_exclusion_zones_need_full_damage = true;
                 }
                 Err(e) => tracing::warn!(target: "derp_wallpaper", ?e, "wallpaper import_memory"),
             }

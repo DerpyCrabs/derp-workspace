@@ -86,7 +86,7 @@ impl WaylandDndGrabHandler for CalloopData {}
 
 impl DataDeviceHandler for CalloopData {
     fn data_device_state(&mut self) -> &mut DataDeviceState {
-        &mut self.state.data_device_state
+        &mut self.state.input_routing.data_device_state
     }
 }
 

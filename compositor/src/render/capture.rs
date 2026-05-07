@@ -91,7 +91,7 @@ impl ScreencopyManagerState {
 
 impl CompositorState {
     fn capture_output_scales(&self) -> HashMap<String, f64> {
-        self.space
+        self.output_topology.space
             .outputs()
             .map(|output| (output.name(), output.current_scale().fractional_scale()))
             .collect()
@@ -113,11 +113,10 @@ impl CompositorState {
         &self,
         record: &crate::window_registry::WindowRecord,
     ) -> CachedCaptureWindowSource {
-        let logical_rect = self
-            .space
+        let logical_rect = self.output_topology.space
             .elements()
             .find(|elem| self.derp_elem_window_id(elem) == Some(record.info.window_id))
-            .and_then(|elem| self.space.element_geometry(elem))
+            .and_then(|elem| self.output_topology.space.element_geometry(elem))
             .unwrap_or_else(|| {
                 Rectangle::new(
                     (record.info.x, record.info.y).into(),
@@ -153,8 +152,7 @@ impl CompositorState {
         record: &crate::window_registry::WindowRecord,
         output_scales: &HashMap<String, f64>,
     ) -> CaptureSourceDescriptor {
-        let cached = self
-            .capture_window_source_cache
+        let cached = self.capture.capture_window_source_cache
             .get(&record.info.window_id)
             .cloned()
             .unwrap_or_else(|| self.capture_cached_window_source_fallback(record));
@@ -169,28 +167,28 @@ impl CompositorState {
     }
 
     pub(crate) fn capture_refresh_window_source_cache(&mut self, window_id: u32) {
-        let Some(record) = self.window_registry.window_record(window_id) else {
-            self.capture_window_source_cache.remove(&window_id);
+        let Some(record) = self.windows.window_registry.window_record(window_id) else {
+            self.capture.capture_window_source_cache.remove(&window_id);
             return;
         };
         if record.kind == crate::window_registry::WindowKind::ShellHosted
             || self.window_info_is_solid_shell_host(&record.info)
         {
-            self.capture_window_source_cache.remove(&window_id);
+            self.capture.capture_window_source_cache.remove(&window_id);
             return;
         }
-        self.capture_window_source_cache.insert(
+        self.capture.capture_window_source_cache.insert(
             window_id,
             Self::capture_cached_window_source_from_info(&record.info),
         );
     }
 
     pub(crate) fn capture_forget_window_source_cache(&mut self, window_id: u32) {
-        self.capture_window_source_cache.remove(&window_id);
+        self.capture.capture_window_source_cache.remove(&window_id);
     }
 
     pub(crate) fn capture_output_source(&self, output: &Output) -> Option<CaptureSourceDescriptor> {
-        let logical_rect = self.space.output_geometry(output)?;
+        let logical_rect = self.output_topology.space.output_geometry(output)?;
         let mode = output.current_mode()?;
         let buffer_size = transformed_output_size(
             Size::from((mode.size.w as i32, mode.size.h as i32)),
@@ -208,7 +206,7 @@ impl CompositorState {
 
     pub(crate) fn capture_window_sources(&self) -> Vec<CaptureSourceDescriptor> {
         let output_scales = self.capture_output_scales();
-        self.window_registry
+        self.windows.window_registry
             .all_records()
             .into_iter()
             .filter(|record| !self.window_info_is_solid_shell_host(&record.info))
@@ -227,7 +225,7 @@ impl CompositorState {
         &self,
         window_id: u32,
     ) -> Option<CaptureSourceDescriptor> {
-        let record = self.window_registry.window_record(window_id)?;
+        let record = self.windows.window_registry.window_record(window_id)?;
         if self.window_info_is_solid_shell_host(&record.info)
             || record.kind == crate::window_registry::WindowKind::ShellHosted
             || !shell_window_row_should_show(&record.info)
@@ -246,14 +244,13 @@ impl CompositorState {
                 continue;
             };
             active.insert(window_id);
-            if !self.capture_toplevel_handles.contains_key(&window_id) {
-                let handle = self
-                    .foreign_toplevel_list_state
+            if !self.capture.capture_toplevel_handles.contains_key(&window_id) {
+                let handle = self.capture.foreign_toplevel_list_state
                     .new_toplevel::<Self>(source.title.clone(), source.app_id.clone());
                 crate::render::capture_ext::capture_tag_toplevel_handle(&handle, window_id);
-                self.capture_toplevel_handles.insert(window_id, handle);
+                self.capture.capture_toplevel_handles.insert(window_id, handle);
             }
-            let Some(handle) = self.capture_toplevel_handles.get(&window_id).cloned() else {
+            let Some(handle) = self.capture.capture_toplevel_handles.get(&window_id).cloned() else {
                 continue;
             };
             handle.send_title(&source.title);
@@ -261,18 +258,17 @@ impl CompositorState {
             handle.send_done();
         }
 
-        let stale: Vec<u32> = self
-            .capture_toplevel_handles
+        let stale: Vec<u32> = self.capture.capture_toplevel_handles
             .keys()
             .copied()
             .filter(|window_id| !active.contains(window_id))
             .collect();
         for window_id in stale {
-            if let Some(handle) = self.capture_toplevel_handles.remove(&window_id) {
-                self.foreign_toplevel_list_state.remove_toplevel(&handle);
+            if let Some(handle) = self.capture.capture_toplevel_handles.remove(&window_id) {
+                self.capture.foreign_toplevel_list_state.remove_toplevel(&handle);
             }
         }
-        self.foreign_toplevel_list_state.cleanup_closed_handles();
+        self.capture.foreign_toplevel_list_state.cleanup_closed_handles();
     }
 
     pub(crate) fn process_screencopy_output_if_needed(
@@ -282,7 +278,7 @@ impl CompositorState {
         framebuffer: &GlesTarget<'_>,
     ) {
         let output_name = output.name();
-        let mut pending = std::mem::take(&mut self.pending_screencopy_copies);
+        let mut pending = std::mem::take(&mut self.capture.pending_screencopy_copies);
         let mut matching = Vec::new();
         let mut remaining = Vec::with_capacity(pending.len());
         for request in pending.drain(..) {
@@ -292,7 +288,7 @@ impl CompositorState {
                 remaining.push(request);
             }
         }
-        self.pending_screencopy_copies = remaining;
+        self.capture.pending_screencopy_copies = remaining;
         if matching.is_empty() {
             return;
         }
@@ -387,7 +383,7 @@ impl CompositorState {
 
 impl ForeignToplevelListHandler for CompositorState {
     fn foreign_toplevel_list_state(&mut self) -> &mut ForeignToplevelListState {
-        &mut self.foreign_toplevel_list_state
+        &mut self.capture.foreign_toplevel_list_state
     }
 }
 
@@ -397,7 +393,7 @@ impl IdleInhibitHandler for CompositorState {
         surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) {
         if let Some(client) = surface.client() {
-            self.idle_inhibit_surfaces
+            self.input_routing.idle_inhibit_surfaces
                 .insert((client.id(), surface.id().protocol_id()));
         }
     }
@@ -407,7 +403,7 @@ impl IdleInhibitHandler for CompositorState {
         surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) {
         if let Some(client) = surface.client() {
-            self.idle_inhibit_surfaces
+            self.input_routing.idle_inhibit_surfaces
                 .remove(&(client.id(), surface.id().protocol_id()));
         }
     }
@@ -415,7 +411,7 @@ impl IdleInhibitHandler for CompositorState {
 
 impl KeyboardShortcutsInhibitHandler for CompositorState {
     fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
-        &mut self.keyboard_shortcuts_inhibit_state
+        &mut self.input_routing.keyboard_shortcuts_inhibit_state
     }
 
     fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
@@ -591,15 +587,15 @@ fn queue_screencopy_copy(
 
     match validate_screencopy_buffer(&buffer, data) {
         Ok(()) => {
-            state.pending_screencopy_copies.push(PendingScreencopyCopy {
+            state.capture.pending_screencopy_copies.push(PendingScreencopyCopy {
                 frame: frame.clone(),
                 output_name: data.output_name.clone(),
                 logical_region: data.logical_region,
                 buffer,
                 with_damage,
             });
-            state.capture_force_full_damage_frames = state.capture_force_full_damage_frames.max(8);
-            state.loop_signal.wakeup();
+            state.capture.capture_force_full_damage_frames = state.capture.capture_force_full_damage_frames.max(8);
+            state.core.loop_signal.wakeup();
         }
         Err(error) => {
             frame.post_error(zwlr_screencopy_frame_v1::Error::InvalidBuffer, error);

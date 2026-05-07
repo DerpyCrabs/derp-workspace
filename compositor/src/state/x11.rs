@@ -2,7 +2,7 @@ use super::*;
 
 impl XWaylandShellHandler for CompositorState {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
-        &mut self.xwayland_shell_state
+        &mut self.windows.xwayland_shell_state
     }
 
     fn surface_associated(&mut self, _xwm_id: XwmId, surface: WlSurface, window: X11Surface) {
@@ -15,32 +15,31 @@ impl XWaylandShellHandler for CompositorState {
         );
         if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
             let restored = self.shell_restore_tray_hidden_x11_window(info.window_id, &window);
-            if self.shell_pending_native_focus_window_id == Some(info.window_id) {
+            if self.windows.shell_pending_native_focus_window_id == Some(info.window_id) {
                 self.shell_raise_and_focus_window(info.window_id);
             }
             let elem = DerpSpaceElem::X11(window.clone());
-            if self.space.elements().any(|e| *e == elem) && (!info.minimized || restored) {
+            if self.output_topology.space.elements().any(|e| *e == elem) && (!info.minimized || restored) {
                 let window_id = info.window_id;
                 self.scratchpad_consider_window(window_id);
-                let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+                let current_info = self.windows.window_registry.window_info(window_id).unwrap_or(info);
                 let output_name = current_info.output_name.clone();
-                if !(self.scratchpad_windows.contains_key(&window_id) && current_info.minimized) {
+                if !(self.workspace_layout.scratchpad_windows.contains_key(&window_id) && current_info.minimized) {
                     self.shell_emit_chrome_event(ChromeEvent::WindowMapped { info: current_info });
                 }
-                if !self.scratchpad_windows.contains_key(&window_id) {
+                if !self.workspace_layout.scratchpad_windows.contains_key(&window_id) {
                     self.shell_consider_focus_spawned_toplevel(window_id);
                     let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
                 }
             }
         }
-        self.loop_signal.wakeup();
+        self.core.loop_signal.wakeup();
     }
 }
 
 impl XwmHandler for CompositorState {
     fn xwm_state(&mut self, xwm: XwmId) -> &mut X11Wm {
-        let (id, wm) = self
-            .x11_wm_slot
+        let (id, wm) = self.windows.x11_wm_slot
             .as_mut()
             .expect("X11 WM should exist while handling X11 events");
         assert_eq!(*id, xwm);
@@ -85,23 +84,23 @@ impl XwmHandler for CompositorState {
             }
         }
         let elem = DerpSpaceElem::X11(window.clone());
-        let was_mapped = self.space.elements().any(|e| *e == elem);
-        self.space.map_element(elem, (geo.loc.x, geo.loc.y), false);
+        let was_mapped = self.output_topology.space.elements().any(|e| *e == elem);
+        self.output_topology.space.map_element(elem, (geo.loc.x, geo.loc.y), false);
         if let Some(surface) = window.wl_surface() {
             if let Some(info) = self.ensure_x11_window_registered(&surface, &window) {
                 let restored = self.shell_restore_tray_hidden_x11_window(info.window_id, &window);
                 if (!was_mapped || restored) && !info.minimized {
                     let window_id = info.window_id;
                     self.scratchpad_consider_window(window_id);
-                    let current_info = self.window_registry.window_info(window_id).unwrap_or(info);
+                    let current_info = self.windows.window_registry.window_info(window_id).unwrap_or(info);
                     let output_name = current_info.output_name.clone();
-                    if !(self.scratchpad_windows.contains_key(&window_id) && current_info.minimized)
+                    if !(self.workspace_layout.scratchpad_windows.contains_key(&window_id) && current_info.minimized)
                     {
                         self.shell_emit_chrome_event(ChromeEvent::WindowMapped {
                             info: current_info,
                         });
                     }
-                    if !self.scratchpad_windows.contains_key(&window_id) {
+                    if !self.workspace_layout.scratchpad_windows.contains_key(&window_id) {
                         self.shell_consider_focus_spawned_toplevel(window_id);
                         let _ = self.workspace_apply_auto_layout_for_output_name(&output_name);
                     }
@@ -110,7 +109,7 @@ impl XwmHandler for CompositorState {
                 }
             }
         }
-        self.loop_signal.wakeup();
+        self.core.loop_signal.wakeup();
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {
@@ -120,12 +119,12 @@ impl XwmHandler for CompositorState {
             "x11 mapped_override_redirect_window"
         );
         let geo = window.geometry();
-        self.space.map_element(
+        self.output_topology.space.map_element(
             DerpSpaceElem::X11(window.clone()),
             (geo.loc.x, geo.loc.y),
             false,
         );
-        self.loop_signal.wakeup();
+        self.core.loop_signal.wakeup();
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, window: X11Surface) {
@@ -136,15 +135,15 @@ impl XwmHandler for CompositorState {
         );
         if let Some(window_id) = self.x11_window_id_for_surface(&window) {
             if self.shell_x11_window_is_tray_hidden(window_id) {
-                self.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
+                self.output_topology.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
                 self.shell_reply_window_list();
-                self.loop_signal.wakeup();
+                self.core.loop_signal.wakeup();
                 return;
             }
-            if self.shell_minimized_x11_windows.contains_key(&window_id)
-                && !self.shell_close_pending_native_windows.contains(&window_id)
+            if self.windows.shell_minimized_x11_windows.contains_key(&window_id)
+                && !self.windows.shell_close_pending_native_windows.contains(&window_id)
             {
-                self.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
+                self.output_topology.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));
                 self.emit_x11_window_updates(&window, false, false);
                 return;
             }
@@ -209,15 +208,15 @@ impl XwmHandler for CompositorState {
             "x11 configure_notify"
         );
         if let Some(window_id) = self.x11_window_id_for_surface(&window) {
-            if self.shell_pending_native_focus_window_id == Some(window_id)
+            if self.windows.shell_pending_native_focus_window_id == Some(window_id)
                 && window.wl_surface().is_some()
             {
                 self.shell_raise_and_focus_window(window_id);
             }
         }
         let elem = DerpSpaceElem::X11(window.clone());
-        if self.space.elements().any(|e| *e == elem) {
-            self.space
+        if self.output_topology.space.elements().any(|e| *e == elem) {
+            self.output_topology.space
                 .map_element(elem, (geometry.loc.x, geometry.loc.y), false);
         }
         self.emit_x11_window_updates(&window, true, false);
@@ -309,7 +308,7 @@ impl XwmHandler for CompositorState {
     }
 
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
-        self.seat
+        self.input_routing.seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.current_focus())
             .and_then(|surface| self.x11_window_containing_surface(&surface))
@@ -326,7 +325,7 @@ impl XwmHandler for CompositorState {
         if selection != SelectionTarget::Clipboard {
             return;
         }
-        if let Some(user_data) = current_data_device_selection_userdata(&self.seat) {
+        if let Some(user_data) = current_data_device_selection_userdata(&self.input_routing.seat) {
             if user_data.is_empty() || mime_type != "image/png" {
                 return;
             }
@@ -336,7 +335,7 @@ impl XwmHandler for CompositorState {
             }
             return;
         }
-        if let Err(error) = request_data_device_client_selection(&self.seat, mime_type, fd) {
+        if let Err(error) = request_data_device_client_selection(&self.input_routing.seat, mime_type, fd) {
             tracing::warn!(
                 ?error,
                 "failed to request current wayland clipboard for xwayland"
@@ -349,8 +348,8 @@ impl XwmHandler for CompositorState {
             return;
         }
         set_data_device_selection(
-            &self.display_handle,
-            &self.seat,
+            &self.core.display_handle,
+            &self.input_routing.seat,
             mime_types,
             Arc::new(Vec::new()),
         );
@@ -360,15 +359,15 @@ impl XwmHandler for CompositorState {
         if selection != SelectionTarget::Clipboard {
             return;
         }
-        if current_data_device_selection_userdata(&self.seat).is_some() {
-            clear_data_device_selection(&self.display_handle, &self.seat);
+        if current_data_device_selection_userdata(&self.input_routing.seat).is_some() {
+            clear_data_device_selection(&self.core.display_handle, &self.input_routing.seat);
         }
     }
 
     fn disconnected(&mut self, _xwm: XwmId) {
         tracing::warn!("XWayland WM disconnected from X server");
-        self.x11_wm_slot = None;
-        self.x11_client = None;
+        self.windows.x11_wm_slot = None;
+        self.windows.x11_client = None;
     }
 }
 

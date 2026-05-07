@@ -24,8 +24,7 @@ pub fn init_wayland_listener(
 
     loop_handle
         .insert_source(listening_socket, move |client_stream, _, state| {
-            if let Err(e) = state
-                .display_handle
+            if let Err(e) = state.display_handle
                 .insert_client(client_stream, Arc::new(ClientState::default()))
             {
                 tracing::warn!(?e, "wayland client insert failed");
@@ -43,7 +42,7 @@ pub fn init_wayland_listener(
                     }
                 }
                 state.state.handle_pending_wayland_client_disconnects();
-                if std::mem::take(&mut state.state.wayland_commit_needs_render) {
+                if std::mem::take(&mut state.state.windows.wayland_commit_needs_render) {
                     if let Some(drms) = state.drm.as_mut() {
                         drms.request_render();
                     }

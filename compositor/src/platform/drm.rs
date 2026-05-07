@@ -209,8 +209,8 @@ impl DrmHead {
             let cc = state.desktop_background_config.solid_rgba;
 
             let render_res: Result<RenderOutputResult<'_>, OutputDamageError<GlesError>> =
-                if state.shell_presentation_fullscreen {
-                    match space_render_elements(renderer, [&state.space], output, 1.0) {
+                if state.shell_osr.shell_presentation_fullscreen {
+                    match space_render_elements(renderer, [&state.output_topology.space], output, 1.0) {
                         Ok(space_els) => {
                             for el in &shell_render.move_proxy {
                                 render_elements.push(DesktopStack::ShellDma(el));
@@ -238,13 +238,9 @@ impl DrmHead {
                             for t in backdrop.textures {
                                 render_elements.push(DesktopStack::BackdropTex(t));
                             }
-                            let capture_needs_full_damage =
-                                state.active_image_copy_capture_sessions > 0
-                                    || state.capture_force_full_damage_frames > 0
-                                    || !state.pending_screencopy_copies.is_empty()
-                                    || !state.pending_image_copy_captures.is_empty();
-                            let age_for_render = if state.shell_exclusion_zones_need_full_damage
-                                || state.screenshot_overlay_needs_full_damage
+                            let capture_needs_full_damage = state.capture.capture_needs_full_damage();
+                            let age_for_render = if state.shell_osr.shell_exclusion_zones_need_full_damage
+                                || state.capture.screenshot_overlay_needs_full_damage()
                                 || shell_render.force_full_damage
                                 || backdrop_force_full_damage
                                 || capture_needs_full_damage
@@ -261,11 +257,8 @@ impl DrmHead {
                                 [cc[0], cc[1], cc[2], cc[3]],
                             );
                             if out.is_ok() {
-                                state.shell_exclusion_zones_need_full_damage = false;
-                                state.screenshot_overlay_needs_full_damage = false;
-                                if state.capture_force_full_damage_frames > 0 {
-                                    state.capture_force_full_damage_frames -= 1;
-                                }
+                                state.shell_osr.shell_exclusion_zones_need_full_damage = false;
+                                state.capture.mark_rendered_frame();
                             }
                             out
                         }
@@ -276,7 +269,7 @@ impl DrmHead {
                         render_elements.push(DesktopStack::ShellDma(el));
                     }
                     let tagged = derp_space_render::derp_space_render_elements_with_window_ids(
-                        &state.space,
+                        &state.output_topology.space,
                         state,
                         renderer,
                         output,
@@ -323,12 +316,9 @@ impl DrmHead {
                     for t in backdrop.textures {
                         render_elements.push(DesktopStack::BackdropTex(t));
                     }
-                    let capture_needs_full_damage = state.active_image_copy_capture_sessions > 0
-                        || state.capture_force_full_damage_frames > 0
-                        || !state.pending_screencopy_copies.is_empty()
-                        || !state.pending_image_copy_captures.is_empty();
-                    let age_for_render = if state.shell_exclusion_zones_need_full_damage
-                        || state.screenshot_overlay_needs_full_damage
+                    let capture_needs_full_damage = state.capture.capture_needs_full_damage();
+                    let age_for_render = if state.shell_osr.shell_exclusion_zones_need_full_damage
+                        || state.capture.screenshot_overlay_needs_full_damage()
                         || shell_render.force_full_damage
                         || backdrop_force_full_damage
                         || capture_needs_full_damage
@@ -345,11 +335,8 @@ impl DrmHead {
                         [cc[0], cc[1], cc[2], cc[3]],
                     );
                     if out.is_ok() {
-                        state.shell_exclusion_zones_need_full_damage = false;
-                        state.screenshot_overlay_needs_full_damage = false;
-                        if state.capture_force_full_damage_frames > 0 {
-                            state.capture_force_full_damage_frames -= 1;
-                        }
+                        state.shell_osr.shell_exclusion_zones_need_full_damage = false;
+                        state.capture.mark_rendered_frame();
                     }
                     out
                 };
@@ -392,7 +379,7 @@ impl DrmHead {
             _ => None,
         };
 
-        if !content_advanced && state.shell_has_frame {
+        if !content_advanced && state.shell_osr.shell_has_frame {
             return (false, false);
         }
 
@@ -431,11 +418,11 @@ impl DrmHead {
 
         state.signal_fifo_barriers_for_output(output);
 
-        state.space.elements().for_each(|elem| match elem {
+        state.output_topology.space.elements().for_each(|elem| match elem {
             DerpSpaceElem::Wayland(window) => {
                 window.send_frame(
                     output,
-                    state.start_time.elapsed(),
+                    state.core.start_time.elapsed(),
                     Some(Duration::ZERO),
                     |_, _| Some(output.clone()),
                 );
@@ -445,7 +432,7 @@ impl DrmHead {
                     smithay::desktop::utils::send_frames_surface_tree(
                         &surf,
                         output,
-                        state.start_time.elapsed(),
+                        state.core.start_time.elapsed(),
                         Some(Duration::ZERO),
                         |_, _| Some(output.clone()),
                     );
@@ -689,7 +676,7 @@ impl DrmSession {
                 "connector disconnected; migrating windows and unmapping output"
             );
             state.migrate_windows_before_output_unmapped(&head.output);
-            state.space.unmap_output(&head.output);
+            state.output_topology.space.unmap_output(&head.output);
             self.hotplug_retry_after.remove(&head.connector);
             drop(head);
         }
@@ -736,7 +723,7 @@ impl DrmSession {
             return;
         }
 
-        let shell_sc = CompositorState::wayland_scale_for_shell_ui(state.shell_ui_scale);
+        let shell_sc = CompositorState::wayland_scale_for_shell_ui(state.output_topology.shell_ui_scale);
         let hotplug_backoff = Duration::from_secs(2);
         let mut shift_total = 0i32;
         let mut planned: Vec<(crtc::Handle, DrmCtlMode, Vec<connector::Handle>, i32)> =
@@ -845,7 +832,7 @@ impl DrmSession {
             );
             output.set_preferred(mode);
 
-            state.space.map_output(&output, (cursor_x, cursor_y));
+            state.output_topology.space.map_output(&output, (cursor_x, cursor_y));
 
             cursor_x = cursor_x.saturating_add(lw);
 
@@ -897,8 +884,8 @@ impl DrmSession {
     }
 
     fn render_tick(&mut self, state: &mut CompositorState, display: &mut DisplayHandle) {
-        if state.display_config_save_pending && !state.display_config_save_suppressed {
-            state.display_config_save_pending = false;
+        if state.output_topology.display_config_save_pending && !state.output_topology.display_config_save_suppressed {
+            state.output_topology.display_config_save_pending = false;
             crate::controls::display_config::save_from_drm_session(state, self);
         }
 
@@ -907,7 +894,7 @@ impl DrmSession {
         }
 
         state.sync_shell_shared_state_for_input();
-        state.space.refresh();
+        state.output_topology.space.refresh();
 
         crate::cef::begin_frame_diag::note_drm_render_tick();
 
@@ -1219,7 +1206,7 @@ pub fn init_drm(
     data.state.init_drm_syncobj_global(syncobj_import_device);
 
     let renderer = Arc::new(Mutex::new(renderer));
-    data.state.dmabuf_import_renderer = Some(Arc::downgrade(&renderer));
+    data.state.capture.dmabuf_import_renderer = Some(Arc::downgrade(&renderer));
 
     let color_formats = [
         Fourcc::Xrgb8888,
@@ -1263,7 +1250,7 @@ pub fn init_drm(
                 .map_err(|e| format!("GbmBufferedSurface: {e}"))?;
 
         let mode = OutputMode::from(drm_mode);
-        let shell_sc = CompositorState::wayland_scale_for_shell_ui(data.state.shell_ui_scale);
+        let shell_sc = CompositorState::wayland_scale_for_shell_ui(data.state.output_topology.shell_ui_scale);
         let logical_stride_w = {
             let sz = Transform::Normal
                 .transform_size(mode.size)
@@ -1291,7 +1278,7 @@ pub fn init_drm(
         );
         output.set_preferred(mode);
 
-        data.state.space.map_output(&output, (cursor_x, cursor_y));
+        data.state.output_topology.space.map_output(&output, (cursor_x, cursor_y));
 
         cursor_x = cursor_x.saturating_add(logical_stride_w);
 
@@ -1317,7 +1304,7 @@ pub fn init_drm(
         });
     }
 
-    std::env::set_var("WAYLAND_DISPLAY", &data.state.socket_name);
+    std::env::set_var("WAYLAND_DISPLAY", &data.state.core.socket_name);
 
     let mut libinput_context =
         Libinput::new_with_udev(LibinputSessionInterface::from(session.clone()));

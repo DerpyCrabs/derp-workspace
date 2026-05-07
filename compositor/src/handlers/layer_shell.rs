@@ -19,13 +19,13 @@ impl CompositorState {
     ) -> Option<smithay::output::Output> {
         output
             .and_then(|wl_output| {
-                self.space
+                self.output_topology.space
                     .outputs()
                     .find(|output| output.owns(wl_output))
                     .cloned()
             })
             .or_else(|| self.shell_effective_primary_output())
-            .or_else(|| self.space.outputs().next().cloned())
+            .or_else(|| self.output_topology.space.outputs().next().cloned())
     }
 
     fn arrange_layer_output(&self, output: &smithay::output::Output) {
@@ -68,7 +68,7 @@ impl WlrLayerShellHandler for CompositorState {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        for output in self.space.outputs() {
+        for output in self.output_topology.space.outputs() {
             let layer = {
                 let layer_map = layer_map_for_output(output);
                 let layer = layer_map

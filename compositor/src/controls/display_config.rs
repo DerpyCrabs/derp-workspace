@@ -111,7 +111,7 @@ pub(crate) fn apply_keyboard_from_section(state: &mut CompositorState, kb: &Keyb
         variant: kb.variant.as_str(),
         options: kb.options.clone(),
     };
-    let Some(handle) = state.seat.get_keyboard() else {
+    let Some(handle) = state.input_routing.seat.get_keyboard() else {
         return;
     };
     match handle.set_xkb_config(state, xkb_cfg) {
@@ -290,7 +290,7 @@ pub fn apply_stored_from_heads(
 
     state.apply_desktop_background_from_display_file(&cfg);
 
-    state.display_config_save_suppressed = true;
+    state.output_topology.display_config_save_suppressed = true;
 
     let live = live_heads_from_drm(drm, heads);
 
@@ -301,12 +301,12 @@ pub fn apply_stored_from_heads(
     {
         state.set_shell_ui_scale(scale);
     }
-    state.taskbar_auto_hide = cfg.taskbar_auto_hide;
-    state.taskbar_side_by_output_name.clear();
+    state.output_topology.taskbar_auto_hide = cfg.taskbar_auto_hide;
+    state.output_topology.taskbar_side_by_output_name.clear();
     for s in &cfg.screens {
         if let Some(n) = resolve_entry(&s.connector, s.monitor_id.as_ref(), &live) {
             if s.taskbar_side != ShellTaskbarSide::Bottom {
-                state.taskbar_side_by_output_name.insert(n, s.taskbar_side);
+                state.output_topology.taskbar_side_by_output_name.insert(n, s.taskbar_side);
             }
         }
     }
@@ -359,7 +359,7 @@ pub fn apply_stored_from_heads(
         }
     }
 
-    state.display_config_save_suppressed = false;
+    state.output_topology.display_config_save_suppressed = false;
     state.resync_embedded_shell_host_after_ipc_connect();
     true
 }
@@ -432,7 +432,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         .filter(|h| drm_connector_connected(&session.drm, h.connector))
         .filter_map(|h| {
             let out = &h.output;
-            let g = state.space.output_geometry(out)?;
+            let g = state.output_topology.space.output_geometry(out)?;
             let edid = read_connector_edid(&session.drm, h.connector);
             let monitor_id = edid.as_deref().and_then(monitor_id_from_edid);
             Some(ScreenEntry {
@@ -447,7 +447,7 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         })
         .collect();
 
-    let shell_chrome_primary = match state.shell_primary_output_name.as_ref() {
+    let shell_chrome_primary = match state.output_topology.shell_primary_output_name.as_ref() {
         None => None,
         Some(name) => session
             .heads
@@ -474,8 +474,8 @@ pub fn save_from_drm_session(state: &CompositorState, session: &DrmSession) {
         .unwrap_or_default();
     let file = DisplayConfigFile {
         version: 1,
-        ui_scale: state.shell_ui_scale,
-        taskbar_auto_hide: state.taskbar_auto_hide,
+        ui_scale: state.output_topology.shell_ui_scale,
+        taskbar_auto_hide: state.output_topology.taskbar_auto_hide,
         shell_chrome_primary,
         screens,
         keyboard,

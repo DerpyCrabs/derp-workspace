@@ -256,7 +256,7 @@ impl CompositorState {
         &self,
         window_id: Option<u32>,
     ) -> Option<E2eInteractionVisualSnapshot> {
-        let info = self.window_registry.window_info(window_id?)?;
+        let info = self.windows.window_registry.window_info(window_id?)?;
         Some(E2eInteractionVisualSnapshot {
             x: info.x,
             y: info.y,
@@ -303,8 +303,7 @@ impl CompositorState {
             .output_containing_global_point(pos)
             .or_else(|| self.leftmost_output())
             .ok_or_else(|| "no output available for pointer move".to_string())?;
-        let output_geo = self
-            .space
+        let output_geo = self.output_topology.space
             .output_geometry(&output)
             .ok_or_else(|| "missing output geometry for pointer move".to_string())?;
         let local = pos - output_geo.loc.to_f64();
@@ -386,7 +385,7 @@ impl CompositorState {
             frame = frame.value(Axis::Vertical, -(f64::from(delta_y)));
         }
         self.shell_ipc_maybe_forward_pointer_axis(delta_x, delta_y);
-        if let Some(pointer) = self.seat.get_pointer() {
+        if let Some(pointer) = self.input_routing.seat.get_pointer() {
             pointer.axis(self, frame);
             pointer.frame(self);
         }
@@ -398,7 +397,7 @@ impl CompositorState {
         keycode: u32,
         key_state: KeyState,
     ) -> Result<(), String> {
-        let Some(keyboard) = self.seat.get_keyboard() else {
+        let Some(keyboard) = self.input_routing.seat.get_keyboard() else {
             return Err("keyboard is unavailable".to_string());
         };
         let serial = SERIAL_COUNTER.next_serial();
@@ -423,41 +422,41 @@ impl CompositorState {
                     return FilterResult::Intercept(());
                 }
                 if key_state == KeyState::Pressed {
-                    if is_super && !state.seat.keyboard_shortcuts_inhibited() {
+                    if is_super && !state.input_routing.seat.keyboard_shortcuts_inhibited() {
                         state.programs_menu_prepare_super_press();
                         return FilterResult::Intercept(());
                     }
                     if matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Tab)
                         && mods.alt
-                        && !state.seat.keyboard_shortcuts_inhibited()
+                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
                     {
                         state.shell_window_switcher_cycle(mods.shift);
                         return FilterResult::Intercept(());
                     }
-                    if state.programs_menu_super_armed
+                    if state.input_routing.programs_menu_super_armed
                         && !is_super
-                        && !state.seat.keyboard_shortcuts_inhibited()
+                        && !state.input_routing.seat.keyboard_shortcuts_inhibited()
                     {
                         if let Some(action) = state
                             .super_hotkey_action_for_chord(raw_sym, mods.ctrl, mods.alt, mods.shift)
                         {
-                            state.programs_menu_super_chord = true;
+                            state.input_routing.programs_menu_super_chord = true;
                             if state.shell_cef_active() {
                                 state.handle_super_hotkey_action(action);
                             }
                             return FilterResult::Intercept(());
                         }
-                        state.programs_menu_super_chord = true;
+                        state.input_routing.programs_menu_super_chord = true;
                         return FilterResult::Intercept(());
                     }
                 } else if key_state == KeyState::Released
                     && is_super
-                    && !state.seat.keyboard_shortcuts_inhibited()
+                    && !state.input_routing.seat.keyboard_shortcuts_inhibited()
                 {
-                    let armed = state.programs_menu_super_armed;
-                    let chord = state.programs_menu_super_chord;
-                    state.programs_menu_super_armed = false;
-                    state.programs_menu_super_chord = false;
+                    let armed = state.input_routing.programs_menu_super_armed;
+                    let chord = state.input_routing.programs_menu_super_chord;
+                    state.input_routing.programs_menu_super_armed = false;
+                    state.input_routing.programs_menu_super_chord = false;
                     if armed && !chord {
                         if state.shell_cef_active() {
                             state.programs_menu_toggle_from_super(serial);
@@ -467,7 +466,7 @@ impl CompositorState {
                                 source = "e2e",
                                 "queue pending launcher toggle until shell load success"
                             );
-                            state.programs_menu_super_pending_toggle = true;
+                            state.input_routing.programs_menu_super_pending_toggle = true;
                         }
                         return FilterResult::Intercept(());
                     }
@@ -487,7 +486,7 @@ impl CompositorState {
                 }
                 if state.shell_keyboard_capture_active()
                     && state.shell_cef_active()
-                    && state.shell_has_frame
+                    && state.shell_osr.shell_has_frame
                 {
                     state.shell_ipc_forward_keyboard_to_cef(key_state, mods, &keysym, false);
                     state.shell_ipc_refresh_pointer_modifiers();
@@ -495,7 +494,7 @@ impl CompositorState {
                 }
                 if key_state == KeyState::Pressed
                     && matches!(raw_sym, smithay::input::keyboard::keysyms::KEY_Escape)
-                    && state.shell_exclusion_overlay_open
+                    && state.shell_osr.shell_exclusion_overlay_open
                     && state.shell_cef_active()
                 {
                     state.shell_dismiss_context_menu_from_compositor();
@@ -508,11 +507,10 @@ impl CompositorState {
     }
 
     pub(crate) fn e2e_crash_window_client(&mut self, window_id: u32) -> Result<(), String> {
-        let info = self
-            .window_registry
+        let info = self.windows.window_registry
             .window_info(window_id)
             .ok_or_else(|| format!("window {window_id} not found"))?;
-        if self.window_registry.is_shell_hosted(window_id) {
+        if self.windows.window_registry.is_shell_hosted(window_id) {
             return Err(format!("window {window_id} is shell hosted"));
         }
         let pid = info
@@ -533,18 +531,17 @@ impl CompositorState {
 
     pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
         self.sync_shell_shared_state_for_input();
-        let pointer = self
-            .seat
+        let pointer = self.input_routing.seat
             .get_pointer()
             .map(|pointer| pointer.current_location())
             .unwrap_or_else(|| Point::from((0.0, 0.0)));
-        let cursor_settings = self.cursor_theme.settings();
+        let cursor_settings = self.input_routing.cursor_theme.settings();
         let mut cursor_shape = "hidden".to_string();
         let mut cursor_name = None;
         let mut cursor_source_path = None;
-        if let smithay::input::pointer::CursorImageStatus::Named(icon) = &self.pointer_cursor_image
+        if let smithay::input::pointer::CursorImageStatus::Named(icon) = &self.input_routing.pointer_cursor_image
         {
-            let _ = self.cursor_theme.with_cursor(icon, 1.0, |cursor, _, key| {
+            let _ = self.input_routing.cursor_theme.with_cursor(icon, 1.0, |cursor, _, key| {
                 cursor_shape = key.label().to_string();
                 cursor_name = Some(cursor.name.clone());
                 cursor_source_path = cursor
@@ -553,7 +550,7 @@ impl CompositorState {
                     .map(|path| path.display().to_string());
             });
         } else if matches!(
-            &self.pointer_cursor_image,
+            &self.input_routing.pointer_cursor_image,
             smithay::input::pointer::CursorImageStatus::Surface(_)
         ) {
             cursor_shape = "surface".to_string();
@@ -564,11 +561,10 @@ impl CompositorState {
             width: rect.size.w,
             height: rect.size.h,
         });
-        let mut outputs: Vec<E2eOutputSnapshot> = self
-            .space
+        let mut outputs: Vec<E2eOutputSnapshot> = self.output_topology.space
             .outputs()
             .filter_map(|output| {
-                let geometry = self.space.output_geometry(&output)?;
+                let geometry = self.output_topology.space.output_geometry(&output)?;
                 let refresh_milli_hz = output
                     .current_mode()
                     .map(|mode| mode.refresh)
@@ -606,8 +602,7 @@ impl CompositorState {
             })
             .collect();
         outputs.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut windows: Vec<E2eWindowSnapshot> = self
-            .window_registry
+        let mut windows: Vec<E2eWindowSnapshot> = self.windows.window_registry
             .all_records()
             .into_iter()
             .map(|record| {
@@ -645,8 +640,7 @@ impl CompositorState {
             })
             .collect();
         windows.sort_by(|a, b| a.window_id.cmp(&b.window_id));
-        let mut ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot> = self
-            .space
+        let mut ordered_window_ids_by_output: Vec<E2eOutputWindowStackSnapshot> = self.output_topology.space
             .outputs()
             .map(|output| E2eOutputWindowStackSnapshot {
                 output_name: output.name(),
@@ -654,8 +648,7 @@ impl CompositorState {
             })
             .collect();
         ordered_window_ids_by_output.sort_by(|a, b| a.output_name.cmp(&b.output_name));
-        let shell_ui_windows = self
-            .shell_ui_windows
+        let shell_ui_windows = self.shell_osr.shell_ui_windows
             .iter()
             .map(|window| E2eShellUiWindowSnapshot {
                 id: window.id,
@@ -674,32 +667,29 @@ impl CompositorState {
                 buffer: Self::e2e_rect_snapshot(window.buffer_rect),
             })
             .collect();
-        let shell_exclusion_global = self
-            .shell_exclusion_global
+        let shell_exclusion_global = self.shell_osr.shell_exclusion_global
             .iter()
             .copied()
             .map(Self::e2e_rect_snapshot)
             .collect();
-        let mut pending_deferred_window_ids: Vec<u32> = self
-            .pending_deferred_toplevels
+        let mut pending_deferred_window_ids: Vec<u32> = self.windows.pending_deferred_toplevels
             .values()
             .filter_map(|pending| {
                 pending.window.toplevel().and_then(|toplevel| {
-                    self.window_registry
+                    self.windows.window_registry
                         .window_id_for_wl_surface(toplevel.wl_surface())
                 })
             })
             .collect();
         pending_deferred_window_ids.sort_unstable();
         pending_deferred_window_ids.dedup();
-        let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self
-            .space
+        let mut orphaned_wayland_surface_protocol_ids: Vec<u32> = self.output_topology.space
             .elements()
             .filter_map(|elem| match elem {
                 DerpSpaceElem::Wayland(window) => {
                     let toplevel = window.toplevel()?;
                     let wl_surface = toplevel.wl_surface();
-                    self.window_registry
+                    self.windows.window_registry
                         .window_id_for_wl_surface(wl_surface)
                         .is_none()
                         .then_some(wl_surface.id().protocol_id())
@@ -709,8 +699,7 @@ impl CompositorState {
             .collect();
         orphaned_wayland_surface_protocol_ids.sort_unstable();
         orphaned_wayland_surface_protocol_ids.dedup();
-        let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self
-            .shell_exclusion_floating
+        let shell_floating_layers: Vec<E2eFloatingLayerSnapshot> = self.shell_osr.shell_exclusion_floating
             .iter()
             .enumerate()
             .map(|(index, rect)| E2eFloatingLayerSnapshot {
@@ -755,48 +744,44 @@ impl CompositorState {
                 x: pointer.x,
                 y: pointer.y,
             },
-            pointer_pressed_button_count: self.pointer_pressed_buttons.len(),
+            pointer_pressed_button_count: self.input_routing.pointer_pressed_buttons.len(),
             cursor_theme: cursor_settings.theme,
             cursor_size: cursor_settings.size,
             cursor_shape,
             cursor_name,
             cursor_source_path,
             focused_window_id: self.keyboard_focused_window_id(),
-            focused_shell_ui_window_id: self.shell_focused_ui_window_id,
-            session_power_action: self.e2e_last_session_power_action.clone(),
-            session_power_requested_at_ms: self.e2e_last_session_power_requested_at_ms,
+            focused_shell_ui_window_id: self.shell_osr.shell_focused_ui_window_id,
+            session_power_action: self.session_services.last_session_power_action(),
+            session_power_requested_at_ms: self.session_services.last_session_power_requested_at_ms(),
             shell_keyboard_focus: self.shell_keyboard_capture_active(),
-            screenshot_selection_active: self.screenshot_selection_active,
-            shell_context_menu_visible: self.shell_exclusion_overlay_open
-                && !self.shell_exclusion_floating.is_empty(),
+            screenshot_selection_active: self.capture.screenshot_selection_active(),
+            shell_context_menu_visible: self.shell_osr.shell_exclusion_overlay_open
+                && !self.shell_osr.shell_exclusion_floating.is_empty(),
             shell_context_menu_global,
             shell_floating_layers,
-            shell_pointer_grab_window_id: self.shell_ui_pointer_grab,
-            shell_move_window_id: self.shell_move_window_id,
-            shell_resize_window_id: self.shell_resize_window_id,
-            shell_move_visual: self.e2e_interaction_visual_snapshot(self.shell_move_window_id),
-            shell_move_proxy_window_id: self
-                .shell_move_proxy
+            shell_pointer_grab_window_id: self.input_routing.shell_ui_pointer_grab,
+            shell_move_window_id: self.input_routing.shell_move_window_id,
+            shell_resize_window_id: self.input_routing.shell_resize_window_id,
+            shell_move_visual: self.e2e_interaction_visual_snapshot(self.input_routing.shell_move_window_id),
+            shell_move_proxy_window_id: self.input_routing.shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| proxy.window_id)),
-            shell_move_proxy_global: self
-                .shell_move_proxy
+            shell_move_proxy_global: self.input_routing.shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
                 .and_then(|_| self.shell_move_proxy_target_global_rect())
                 .map(Self::e2e_rect_snapshot),
-            shell_move_proxy_capture_global: self
-                .shell_move_proxy
+            shell_move_proxy_capture_global: self.input_routing.shell_move_proxy
                 .as_ref()
                 .and_then(|proxy| proxy.texture.as_ref().map(|_| ()))
                 .and_then(|_| {
-                    self.shell_move_proxy
+                    self.input_routing.shell_move_proxy
                         .as_ref()
                         .and_then(|proxy| proxy.texture_global_rect)
                 })
                 .map(Self::e2e_rect_snapshot),
-            shell_move_proxy_visible_rects: self
-                .space
+            shell_move_proxy_visible_rects: self.output_topology.space
                 .outputs()
                 .flat_map(|output| {
                     crate::render::shell_render::shell_move_proxy_visible_rects_for_output(
@@ -805,44 +790,39 @@ impl CompositorState {
                 })
                 .map(Self::e2e_rect_snapshot)
                 .collect(),
-            shell_move_proxy_alpha: self.shell_move_proxy.as_ref().and_then(|proxy| {
+            shell_move_proxy_alpha: self.input_routing.shell_move_proxy.as_ref().and_then(|proxy| {
                 proxy
                     .texture
                     .as_ref()
                     .map(|_| crate::state::SHELL_DRAG_WINDOW_ALPHA)
             }),
-            shell_move_proxy_decor_only: self
-                .shell_move_proxy
+            shell_move_proxy_decor_only: self.input_routing.shell_move_proxy
                 .as_ref()
-                .is_some_and(|proxy| !self.window_registry.is_shell_hosted(proxy.window_id)),
-            shell_resize_visual: self.e2e_interaction_visual_snapshot(self.shell_resize_window_id),
-            shell_canvas_origin_x: self.shell_canvas_logical_origin.0,
-            shell_canvas_origin_y: self.shell_canvas_logical_origin.1,
-            shell_canvas_width: self.shell_canvas_logical_size.0,
-            shell_canvas_height: self.shell_canvas_logical_size.1,
+                .is_some_and(|proxy| !self.windows.window_registry.is_shell_hosted(proxy.window_id)),
+            shell_resize_visual: self.e2e_interaction_visual_snapshot(self.input_routing.shell_resize_window_id),
+            shell_canvas_origin_x: self.output_topology.shell_canvas_logical_origin.0,
+            shell_canvas_origin_y: self.output_topology.shell_canvas_logical_origin.1,
+            shell_canvas_width: self.output_topology.shell_canvas_logical_size.0,
+            shell_canvas_height: self.output_topology.shell_canvas_logical_size.1,
             workspace,
             outputs,
             windows,
             window_stack_order: self.shell_window_stack_ids().into_iter().rev().collect(),
             ordered_window_ids_by_output,
-            shell_ui_windows_generation: self.shell_ui_windows_generation,
+            shell_ui_windows_generation: self.shell_osr.shell_ui_windows_generation,
             shell_ui_windows,
             shell_window_frames,
             shell_exclusion_global,
-            shell_native_drag_preview_window_id: self
-                .shell_native_drag_preview
+            shell_native_drag_preview_window_id: self.input_routing.shell_native_drag_preview
                 .as_ref()
                 .map(|preview| preview.window_id),
-            shell_native_drag_preview_generation: self
-                .shell_native_drag_preview
+            shell_native_drag_preview_generation: self.input_routing.shell_native_drag_preview
                 .as_ref()
                 .map(|preview| preview.generation),
-            shell_native_drag_preview_shell_ready: self
-                .shell_native_drag_preview
+            shell_native_drag_preview_shell_ready: self.input_routing.shell_native_drag_preview
                 .as_ref()
                 .is_some_and(|preview| preview.shell_ready),
-            shell_native_drag_preview_image_path: self
-                .shell_native_drag_preview
+            shell_native_drag_preview_image_path: self.input_routing.shell_native_drag_preview
                 .as_ref()
                 .and_then(|preview| preview.image_path.clone()),
             shell_native_drag_preview_clip_rect: self
@@ -864,17 +844,16 @@ impl CompositorState {
         if logical_rect.size.w <= 0 || logical_rect.size.h <= 0 {
             return Err("screenshot region must be non-empty".to_string());
         }
-        let outputs: Vec<String> = self
-            .space
+        let outputs: Vec<String> = self.output_topology.space
             .outputs()
             .filter_map(|output| {
-                let geo = self.space.output_geometry(&output)?;
+                let geo = self.output_topology.space.output_geometry(&output)?;
                 geo.intersection(logical_rect).map(|_| output.name())
             })
             .collect();
         let request_id = next_screenshot_request_id();
         let save_path = next_artifact_path("screenshot", "png")?;
-        self.screenshot_request = Some(
+        self.capture.set_screenshot_request(
             crate::render::screenshot::PendingScreenshotRequest::for_region_e2e(
                 logical_rect,
                 outputs,
@@ -882,7 +861,7 @@ impl CompositorState {
                 save_path,
             )?,
         );
-        self.loop_signal.wakeup();
+        self.core.loop_signal.wakeup();
         Ok(request_id)
     }
 }

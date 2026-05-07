@@ -115,9 +115,9 @@ pub(crate) fn shell_dmabuf_buffer_src_for_output(
     buf_w: u32,
     buf_h: u32,
 ) -> Option<Rectangle<f64, BufferCoord>> {
-    let output_geo = state.space.output_geometry(output)?;
-    let (cox, coy) = state.shell_canvas_logical_origin;
-    let (clw_u, clh_u) = state.shell_canvas_logical_size;
+    let output_geo = state.output_topology.space.output_geometry(output)?;
+    let (cox, coy) = state.output_topology.shell_canvas_logical_origin;
+    let (clw_u, clh_u) = state.output_topology.shell_canvas_logical_size;
     let clwf = clw_u.max(1) as f64;
     let clhf = clh_u.max(1) as f64;
     let bw = buf_w.max(1) as f64;
@@ -207,7 +207,7 @@ fn build_main_shell_dmabuf_element(
     buf_w: u32,
     buf_h: u32,
 ) -> Result<Option<ShellDmaElement>, GlesError> {
-    let Some(ref dmabuf) = state.shell_dmabuf else {
+    let Some(ref dmabuf) = state.shell_osr.shell_dmabuf else {
         return Ok(None);
     };
     let Some(buffer_src) = shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h) else {
@@ -218,16 +218,16 @@ fn build_main_shell_dmabuf_element(
     let shell_size_logical = output_geo.size;
     let output_scale = Scale::from(output.current_scale().fractional_scale());
 
-    let damage_phys = if state.shell_dmabuf_dirty_force_full {
+    let damage_phys = if state.shell_osr.shell_dmabuf_dirty_force_full {
         None
-    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
+    } else if state.shell_osr.shell_dmabuf_dirty_buffer.is_empty() {
         None
     } else {
         let mapped = shell_dmabuf_dirty_buffer_to_physical(
             buffer_src,
             Rectangle::new(output_geo.loc, output_geo.size),
             output_scale,
-            &state.shell_dmabuf_dirty_buffer,
+            &state.shell_osr.shell_dmabuf_dirty_buffer,
         );
         Some(mapped)
     };
@@ -235,11 +235,11 @@ fn build_main_shell_dmabuf_element(
     match crate::desktop::desktop_stack::shell_dmabuf_overlay_element(
         renderer,
         dmabuf,
-        state.shell_dmabuf_overlay_id.clone(),
+        state.shell_osr.shell_dmabuf_overlay_id.clone(),
         shell_loc_phys,
         shell_size_logical,
         buffer_src,
-        state.shell_dmabuf_commit,
+        state.shell_osr.shell_dmabuf_commit,
         damage_phys,
     ) {
         Ok(el) => Ok(Some(el)),
@@ -297,7 +297,7 @@ fn build_main_shell_memory_element(
     buf_w: u32,
     buf_h: u32,
 ) -> Result<Option<ShellDmaElement>, GlesError> {
-    let Some(ref pixels) = state.shell_software_frame else {
+    let Some(ref pixels) = state.shell_osr.shell_software_frame else {
         return Ok(None);
     };
     let Some(buffer_src) = shell_dmabuf_buffer_src_for_output(state, output, buf_w, buf_h) else {
@@ -308,16 +308,16 @@ fn build_main_shell_memory_element(
     let shell_size_logical = output_geo.size;
     let output_scale = Scale::from(output.current_scale().fractional_scale());
 
-    let damage_phys = if state.shell_dmabuf_dirty_force_full {
+    let damage_phys = if state.shell_osr.shell_dmabuf_dirty_force_full {
         None
-    } else if state.shell_dmabuf_dirty_buffer.is_empty() {
+    } else if state.shell_osr.shell_dmabuf_dirty_buffer.is_empty() {
         None
     } else {
         let mapped = shell_dmabuf_dirty_buffer_to_physical(
             buffer_src,
             Rectangle::new(output_geo.loc, output_geo.size),
             output_scale,
-            &state.shell_dmabuf_dirty_buffer,
+            &state.shell_osr.shell_dmabuf_dirty_buffer,
         );
         Some(mapped)
     };
@@ -325,12 +325,12 @@ fn build_main_shell_memory_element(
     crate::desktop::desktop_stack::shell_memory_overlay_element(
         renderer,
         pixels,
-        state.shell_dmabuf_overlay_id.clone(),
+        state.shell_osr.shell_dmabuf_overlay_id.clone(),
         shell_loc_phys,
         shell_size_logical,
         buffer_src,
         Size::<i32, BufferCoord>::from((buf_w as i32, buf_h as i32)),
-        state.shell_dmabuf_commit,
+        state.shell_osr.shell_dmabuf_commit,
         damage_phys,
     )
     .map(Some)
@@ -399,13 +399,13 @@ fn shell_move_proxy_titlebar_fill_layer(
 }
 
 pub(crate) fn shell_move_proxy_layers(state: &CompositorState) -> Vec<ShellMoveProxyLayer> {
-    let Some(proxy) = state.shell_move_proxy.as_ref() else {
+    let Some(proxy) = state.input_routing.shell_move_proxy.as_ref() else {
         return Vec::new();
     };
     if proxy.texture.is_none() {
         return Vec::new();
     }
-    if state.shell_move_window_id != Some(proxy.window_id) && proxy.release_state.is_none() {
+    if state.input_routing.shell_move_window_id != Some(proxy.window_id) && proxy.release_state.is_none() {
         return Vec::new();
     }
     let Some(source_global_rect) = proxy.source_global_rect else {
@@ -426,7 +426,7 @@ pub(crate) fn shell_move_proxy_layers(state: &CompositorState) -> Vec<ShellMoveP
         texture_global_rect,
         target_global_rect,
     );
-    if state.window_registry.is_shell_hosted(proxy.window_id) {
+    if state.windows.window_registry.is_shell_hosted(proxy.window_id) {
         return vec![ShellMoveProxyLayer {
             target_global_rect: texture_target_global_rect,
             buffer_origin: Point::from((0, 0)),
@@ -542,13 +542,13 @@ pub(crate) fn shell_move_proxy_visible_rects_for_output(
     state: &CompositorState,
     output: &Output,
 ) -> Vec<Rectangle<i32, Logical>> {
-    let Some(proxy) = state.shell_move_proxy.as_ref() else {
+    let Some(proxy) = state.input_routing.shell_move_proxy.as_ref() else {
         return Vec::new();
     };
     if proxy.texture.is_none() {
         return Vec::new();
     }
-    let Some(output_geo) = state.space.output_geometry(output) else {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
         return Vec::new();
     };
     let clip_holes =
@@ -574,7 +574,7 @@ fn capture_shell_move_proxy_texture(
     renderer: &mut GlesRenderer,
 ) -> Result<(), GlesError> {
     let Some((pending_capture, has_texture, texture_global_rect, source_buffer_rect)) =
-        state.shell_move_proxy.as_ref().map(|proxy| {
+        state.input_routing.shell_move_proxy.as_ref().map(|proxy| {
             (
                 proxy.pending_capture,
                 proxy.texture.is_some(),
@@ -588,7 +588,7 @@ fn capture_shell_move_proxy_texture(
     if !pending_capture || has_texture {
         return Ok(());
     }
-    let Some(dmabuf) = state.shell_dmabuf.as_ref() else {
+    let Some(dmabuf) = state.shell_osr.shell_dmabuf.as_ref() else {
         return Ok(());
     };
     let Some(texture_global_rect) = texture_global_rect else {
@@ -598,7 +598,7 @@ fn capture_shell_move_proxy_texture(
         return Ok(());
     };
     if source_buffer_rect.size.w <= 0 || source_buffer_rect.size.h <= 0 {
-        state.shell_move_proxy = None;
+        state.input_routing.shell_move_proxy = None;
         return Ok(());
     }
 
@@ -635,7 +635,7 @@ fn capture_shell_move_proxy_texture(
         let _ = frame.finish()?;
     }
 
-    let Some(proxy) = state.shell_move_proxy.as_mut() else {
+    let Some(proxy) = state.input_routing.shell_move_proxy.as_mut() else {
         return Ok(());
     };
     proxy.texture = Some(frozen);
@@ -651,13 +651,13 @@ fn build_shell_move_proxy_elements(
     renderer: &mut GlesRenderer,
     output: &Output,
 ) -> Vec<ShellDmaElement> {
-    let Some(proxy) = state.shell_move_proxy.as_ref() else {
+    let Some(proxy) = state.input_routing.shell_move_proxy.as_ref() else {
         return Vec::new();
     };
     let Some(texture) = proxy.texture.clone() else {
         return Vec::new();
     };
-    let Some(output_geo) = state.space.output_geometry(output) else {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
         return Vec::new();
     };
     let clip_holes =
@@ -765,24 +765,24 @@ pub fn compositor_shell_render_elements(
         .remove(&output_name)
         .unwrap_or_default();
     let mut render = ShellOutputRenderElements::default();
-    let output_geo = state.space.output_geometry(output);
+    let output_geo = state.output_topology.space.output_geometry(output);
     let output_scale = output.current_scale().fractional_scale();
 
     capture_shell_move_proxy_texture(state, renderer)?;
     render.move_proxy = build_shell_move_proxy_elements(state, renderer, output);
 
-    if state.shell_has_frame {
-        if let (Some(output_geo), Some((buf_w, buf_h))) = (output_geo, state.shell_view_px) {
+    if state.shell_osr.shell_has_frame {
+        if let (Some(output_geo), Some((buf_w, buf_h))) = (output_geo, state.shell_osr.shell_view_px) {
             let key = ShellMainCacheKey {
                 output_geo,
                 output_scale_bits: output_scale.to_bits(),
-                canvas_origin: state.shell_canvas_logical_origin,
-                canvas_size: state.shell_canvas_logical_size,
+                canvas_origin: state.output_topology.shell_canvas_logical_origin,
+                canvas_size: state.output_topology.shell_canvas_logical_size,
                 view_px: (buf_w, buf_h),
             };
             let (element, force_full_damage) =
-                cache_shell_element(&mut cache.main, key, state.shell_dmabuf_commit, || {
-                    if !state.shell_frame_is_dmabuf {
+                cache_shell_element(&mut cache.main, key, state.shell_osr.shell_dmabuf_commit, || {
+                    if !state.shell_osr.shell_frame_is_dmabuf {
                         return build_main_shell_memory_element(
                             state, renderer, output_geo, output, buf_w, buf_h,
                         );

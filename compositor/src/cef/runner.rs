@@ -409,7 +409,7 @@ wrap_load_handler! {
             );
             host.invalidate(PaintElementType::VIEW);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
-                if let Ok(g) = state.shell_to_cef.lock() {
+                if let Ok(g) = state.shell_osr.shell_to_cef.lock() {
                     if let Some(link) = g.as_ref() {
                         link.set_delivery_ready(false);
                     }
@@ -445,7 +445,7 @@ wrap_life_span_handler! {
             }
             self.handshake.store(true, Ordering::SeqCst);
             let _ = self.cef_tx.send(CefToCompositor::Run(Box::new(|state| {
-                if let Ok(g) = state.shell_to_cef.lock() {
+                if let Ok(g) = state.shell_osr.shell_to_cef.lock() {
                     if let Some(link) = g.as_ref() {
                         link.set_delivery_ready(false);
                     }

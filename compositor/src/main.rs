@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state =
         CompositorState::new(&mut event_loop, display, init).map_err(std::io::Error::other)?;
-    tracing::debug!(socket = ?state.socket_name, "Compositor listening");
+    tracing::debug!(socket = ?state.socket_name(), "Compositor listening");
 
     let mut data = CalloopData {
         state,
@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         drm: None,
     };
 
-    match compositor::control::start_control_server(data.state.cef_to_compositor_tx.clone()) {
+    match compositor::control::start_control_server(data.state.cef_to_compositor_tx()) {
         Ok(path) => {
             tracing::warn!(target: "derp_control", path = %path.display(), "control socket listening")
         }
@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cef_join = cef::spawn_cef_ui_thread(
         cef_url,
-        data.state.cef_to_compositor_tx.clone(),
+        data.state.cef_to_compositor_tx(),
         shell_to_cef.clone(),
         cef_handshake,
         cef_shutdown.clone(),
@@ -129,8 +129,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         xwayland::spawn_pending_sidecar(&mut data);
     }
 
-    let loop_stop = data.state.loop_signal.clone();
-    let event_loop_stop_flag = data.state.event_loop_stop.clone();
+    let loop_stop = data.state.loop_signal();
+    let event_loop_stop_flag = data.state.event_loop_stop_flag();
     let request_restart = Arc::new(AtomicBool::new(false));
     let request_restart_thread = Arc::clone(&request_restart);
     std::thread::Builder::new()
@@ -159,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .expect("signal-hook thread");
 
-    while !data.state.event_loop_stop.load(Ordering::Acquire) {
+    while !data.state.event_loop_should_stop() {
         let dispatch_result =
             catch_unwind(AssertUnwindSafe(|| event_loop.dispatch(None, &mut data)));
         match dispatch_result {

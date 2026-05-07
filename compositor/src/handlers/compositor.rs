@@ -66,7 +66,7 @@ impl CompositorHandler for CompositorState {
                 if let Some(acquire_point) = acquire_point {
                     if let Ok((blocker, source)) = acquire_point.generate_blocker() {
                         if let Some(client) = surface.client() {
-                            let res = state.loop_handle.insert_source(
+                            let res = state.core.loop_handle.insert_source(
                                 source,
                                 move |_, _, data: &mut crate::CalloopData| {
                                     let dh = data.display_handle.clone();
@@ -90,7 +90,7 @@ impl CompositorHandler for CompositorState {
                 }
                 if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
                     if let Some(client) = surface.client() {
-                        let res = state.loop_handle.insert_source(
+                        let res = state.core.loop_handle.insert_source(
                             source,
                             move |_, _, data: &mut crate::CalloopData| {
                                 let dh = data.display_handle.clone();
@@ -116,12 +116,12 @@ impl CompositorHandler for CompositorState {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        self.wayland_commit_needs_render = true;
+        self.windows.wayland_commit_needs_render = true;
         let mut root = surface.clone();
         while let Some(parent) = get_parent(&root) {
             root = parent;
         }
-        if let Some(window) = self.space.elements().find_map(|e| {
+        if let Some(window) = self.output_topology.space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 (w.toplevel().unwrap().wl_surface() == &root).then_some(w)
             } else {
@@ -135,8 +135,8 @@ impl CompositorHandler for CompositorState {
             layer_shell::handle_commit(self, &root);
         }
 
-        xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
-        resize_grab::handle_commit(&mut self.space, surface);
+        xdg_shell::handle_commit(&mut self.popups, &self.output_topology.space, surface);
+        resize_grab::handle_commit(&mut self.output_topology.space, surface);
 
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
@@ -144,7 +144,7 @@ impl CompositorHandler for CompositorState {
                 root = parent;
             }
             self.hide_bufferless_native_window(&root);
-            let window = self.space.elements().find_map(|e| {
+            let window = self.output_topology.space.elements().find_map(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())
                 } else {

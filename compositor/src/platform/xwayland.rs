@@ -50,28 +50,28 @@ pub fn start_xwayland(
                     display = display_number,
                     "XWayland ready; DISPLAY set for OSR / child processes"
                 );
-                d.state.x11_client = Some(client.clone());
+                d.state.windows.x11_client = Some(client.clone());
                 d.state.client_compositor_state(&client).set_client_scale(
                     crate::state::CompositorState::xwayland_client_scale_for_shell_ui(
-                        d.state.shell_ui_scale,
+                        d.state.output_topology.shell_ui_scale,
                     ),
                 );
                 match X11Wm::start_wm(loop_handle.clone(), &dh, x11_socket, client.clone()) {
                     Ok(wm) => {
                         let id = wm.id();
                         tracing::warn!(xwm_id = ?id, "X11Wm::start_wm succeeded");
-                        d.state.x11_wm_slot = Some((id, wm));
+                        d.state.windows.x11_wm_slot = Some((id, wm));
                     }
                     Err(e) => {
-                        d.state.x11_wm_slot = None;
+                        d.state.windows.x11_wm_slot = None;
                         tracing::error!(?e, "X11Wm::start_wm failed");
                     }
                 }
                 spawn_pending_sidecar(d);
             }
             XWaylandEvent::Error => {
-                d.state.x11_wm_slot = None;
-                d.state.x11_client = None;
+                d.state.windows.x11_wm_slot = None;
+                d.state.windows.x11_client = None;
                 tracing::error!("XWayland failed to start (is `xwayland` installed?)");
                 spawn_pending_sidecar(d);
             }

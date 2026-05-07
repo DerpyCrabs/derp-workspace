@@ -152,7 +152,7 @@ impl CompositorState {
         framebuffer: &GlesTarget<'_>,
     ) {
         let output_name = output.name();
-        let mut pending = std::mem::take(&mut self.pending_image_copy_captures);
+        let mut pending = std::mem::take(&mut self.capture.pending_image_copy_captures);
         let mut matching = Vec::new();
         let mut remaining = Vec::with_capacity(pending.len());
         for request in pending.drain(..) {
@@ -162,7 +162,7 @@ impl CompositorState {
                 remaining.push(request);
             }
         }
-        self.pending_image_copy_captures = remaining;
+        self.capture.pending_image_copy_captures = remaining;
         if matching.is_empty() {
             return;
         }
@@ -303,8 +303,7 @@ impl CompositorState {
         key: &CaptureSourceKey,
     ) -> Option<CaptureSourceDescriptor> {
         match key {
-            CaptureSourceKey::Output(output_name) => self
-                .space
+            CaptureSourceKey::Output(output_name) => self.output_topology.space
                 .outputs()
                 .find(|output| output.name() == *output_name)
                 .and_then(|output| self.capture_output_source(output)),
@@ -325,8 +324,7 @@ impl CompositorState {
                 source,
             }),
             CaptureSourceKey::Window(window_id) => {
-                let output = self
-                    .space
+                let output = self.output_topology.space
                     .outputs()
                     .find(|output| output.name() == source.output_name)?;
                 let output_source = self.capture_output_source(output)?;
@@ -368,9 +366,9 @@ fn release_image_copy_session(state: &mut CompositorState, data: &ImageCopyCaptu
     if data
         .registered_for_full_damage
         .swap(false, Ordering::AcqRel)
-        && state.active_image_copy_capture_sessions > 0
+        && state.capture.active_image_copy_capture_sessions > 0
     {
-        state.active_image_copy_capture_sessions -= 1;
+        state.capture.active_image_copy_capture_sessions -= 1;
     }
 }
 
@@ -386,10 +384,10 @@ fn send_session_constraints(
     session.shm_format(wl_shm::Format::Xrgb8888.into());
     let advertise_dmabuf = matches!(descriptor.key, CaptureSourceKey::Window(_));
     if advertise_dmabuf {
-        if let Some(device) = state.capture_dmabuf_device {
+        if let Some(device) = state.capture.capture_dmabuf_device {
             session.dmabuf_device(device.to_ne_bytes().to_vec());
             let mut formats: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
-            for format in &state.capture_dmabuf_formats {
+            for format in &state.capture.capture_dmabuf_formats {
                 formats
                     .entry(format.code as u32)
                     .or_default()
@@ -421,7 +419,7 @@ fn validate_ext_buffer(
                 "ext image copy buffer dimensions do not match advertised size".to_string(),
             );
         }
-        if !state.capture_dmabuf_formats.contains(&format) {
+        if !state.capture.capture_dmabuf_formats.contains(&format) {
             return Err("ext image copy dmabuf format is not advertised".to_string());
         }
         return Ok(ValidatedCaptureBuffer::Dmabuf(dmabuf));
@@ -503,8 +501,7 @@ fn render_window_output_texture(
     ),
     String,
 > {
-    let output = state
-        .space
+    let output = state.output_topology.space
         .outputs()
         .find(|output| output.name() == output_name)
         .ok_or_else(|| "capture output is no longer available".to_string())?;
@@ -513,7 +510,7 @@ fn render_window_output_texture(
         .ok_or_else(|| "capture output source is no longer available".to_string())?;
     let elements: Vec<_> =
         crate::render::derp_space_render::derp_space_render_elements_with_window_ids(
-            &state.space,
+            &state.output_topology.space,
             state,
             renderer,
             &output,
@@ -750,21 +747,18 @@ fn render_window_preview_image_direct(
     let source = state
         .capture_window_source_descriptor(window_id)
         .ok_or_else(|| format!("missing capture source for window {window_id}"))?;
-    let output = state
-        .space
+    let output = state.output_topology.space
         .outputs()
         .find(|output| output.name() == source.output_name)
         .ok_or_else(|| "capture output is no longer available".to_string())?;
     let render_scale = output.current_scale().fractional_scale();
     let scale = Scale::from(render_scale);
-    let elem = state
-        .space
+    let elem = state.output_topology.space
         .elements()
         .find(|elem| state.derp_elem_window_id(elem) == Some(window_id))
         .cloned()
         .ok_or_else(|| "capture window is no longer mapped".to_string())?;
-    let map_loc = state
-        .space
+    let map_loc = state.output_topology.space
         .element_location(&elem)
         .ok_or_else(|| "capture window location is unavailable".to_string())?;
     let render_origin = map_loc - elem.geometry().loc;
@@ -998,7 +992,7 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, (), CompositorState> for ExtImageCap
                     registered_for_full_damage: AtomicBool::new(true),
                     buffer_size: Mutex::new(Size::from((1, 1))),
                 };
-                state.active_image_copy_capture_sessions += 1;
+                state.capture.active_image_copy_capture_sessions += 1;
                 let session = data_init.init(session, session_data);
                 if let Some(data) = session.data::<ImageCopyCaptureSessionState>() {
                     if let Some(descriptor) = state.capture_source_descriptor(&data.source) {
@@ -1179,8 +1173,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                             return;
                         }
                     };
-                state
-                    .pending_image_copy_captures
+                state.capture.pending_image_copy_captures
                     .push(PendingImageCopyCapture {
                         frame: resource.clone(),
                         session: data.session.clone(),
@@ -1192,9 +1185,9 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ImageCopyCaptureFrameState, Compositor
                         buffer_size: resolved.source.buffer_size,
                         buffer: validated_buffer,
                     });
-                state.capture_force_full_damage_frames =
-                    state.capture_force_full_damage_frames.max(8);
-                state.loop_signal.wakeup();
+                state.capture.capture_force_full_damage_frames =
+                    state.capture.capture_force_full_damage_frames.max(8);
+                state.core.loop_signal.wakeup();
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {
                 data.frame_active.store(false, Ordering::Release);

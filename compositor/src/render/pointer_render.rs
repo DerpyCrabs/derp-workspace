@@ -31,7 +31,7 @@ fn push_named_cursor_fallback(
     scale_f: f64,
     out: &mut Vec<Desk<'_>>,
 ) {
-    let _ = state.cursor_theme.with_cursor(icon, scale_f, |cursor, _, _| {
+    let _ = state.input_routing.cursor_theme.with_cursor(icon, scale_f, |cursor, _, _| {
         let (hx, hy) = cursor.hotspot_physical;
         let top_left = Point::from((
             pos_output_local.x - hx as f64 / scale_f.max(0.25),
@@ -65,14 +65,14 @@ pub fn append_pointer_desktop_elements(
     output: &Output,
     out: &mut Vec<Desk<'_>>,
 ) {
-    let Some(pointer) = state.seat.get_pointer() else {
+    let Some(pointer) = state.input_routing.seat.get_pointer() else {
         return;
     };
     let pos_global = pointer.current_location();
     let scale_f = output.current_scale().fractional_scale();
 
     if !matches!(
-        &state.pointer_cursor_image,
+        &state.input_routing.pointer_cursor_image,
         CursorImageStatus::Named(_) | CursorImageStatus::Surface(_)
     ) {
         return;
@@ -83,12 +83,12 @@ pub fn append_pointer_desktop_elements(
     if hit.name() != output.name() {
         return;
     }
-    let Some(output_geo) = state.space.output_geometry(output) else {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
         return;
     };
     let pos = pos_global - output_geo.loc.to_f64();
 
-    match &state.pointer_cursor_image {
+    match &state.input_routing.pointer_cursor_image {
         CursorImageStatus::Named(icon) => {
             push_named_cursor_fallback(state, renderer, icon, pos, scale_f, out);
         }

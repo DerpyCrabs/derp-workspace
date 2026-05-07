@@ -66,7 +66,7 @@ pub(crate) fn append_screenshot_overlay_for_output<'a>(
     if !state.screenshot_selection_active() {
         return;
     }
-    let Some(output_geo) = state.space.output_geometry(output) else {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
         return;
     };
     let scale_f = output.current_scale().fractional_scale();

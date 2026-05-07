@@ -396,7 +396,7 @@ pub(crate) fn desktop_backdrop_layers(
     output: &Output,
     scale_f: f64,
 ) -> (BackdropLayers, bool) {
-    let Some(output_geo) = state.space.output_geometry(output) else {
+    let Some(output_geo) = state.output_topology.space.output_geometry(output) else {
         note_backdrop_cache_result(false, false);
         return (
             BackdropLayers {

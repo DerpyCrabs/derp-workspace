@@ -54,7 +54,7 @@ impl FractionalScaleHandler for CompositorState {
 
 impl DmabufHandler for CompositorState {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
-        &mut self.dmabuf_state
+        &mut self.capture.dmabuf_state
     }
 
     fn dmabuf_imported(
@@ -63,7 +63,7 @@ impl DmabufHandler for CompositorState {
         dmabuf: Dmabuf,
         notifier: ImportNotifier,
     ) {
-        if let Some(weak) = self.dmabuf_import_renderer.as_ref() {
+        if let Some(weak) = self.capture.dmabuf_import_renderer.as_ref() {
             if let Some(renderer_arc) = weak.upgrade() {
                 match renderer_arc.lock() {
                     Ok(mut r) => match r.import_dmabuf(&dmabuf, None) {
@@ -90,7 +90,7 @@ impl DmabufHandler for CompositorState {
 
 impl DrmSyncobjHandler for CompositorState {
     fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
-        self.drm_syncobj_state.as_mut()
+        self.capture.drm_syncobj_state.as_mut()
     }
 }
 

@@ -306,7 +306,7 @@ impl CommandPaletteRegistry {
         out
     }
 
-    fn state_value(&self) -> Value {
+    pub(crate) fn state_value(&self) -> Value {
         let categories = self.sorted_categories();
         let actions = self
             .sorted_actions()
@@ -523,7 +523,7 @@ fn handle_subscribe(
         let domains = ControlDomains::from_params(request.params.as_ref())?;
         let revisions = state.control_revision_snapshot();
         let snapshot = state.control_state_value(domains)?;
-        let rx = state.control_event_hub.subscribe(domains, revisions);
+        let rx = state.session_services.control_event_hub.subscribe(domains, revisions);
         let line = json!({
             "event": "snapshot",
             "revision": revisions.overall(),
@@ -666,7 +666,7 @@ fn apply_request(state: &mut CompositorState, request: ControlRequest) -> Result
                 other => return Err(format!("unknown layout mode {other}")),
             };
             ensure_window(state, id)?;
-            let (ox, oy) = state.shell_canvas_logical_origin;
+            let (ox, oy) = state.output_topology.shell_canvas_logical_origin;
             state.window_op_set_geometry(
                 id,
                 x.saturating_sub(ox),
@@ -1036,8 +1036,7 @@ fn validate_workspace_mutation_json(raw: &str) -> Result<(), String> {
 }
 
 fn ensure_window(state: &CompositorState, window_id: u32) -> Result<(), String> {
-    state
-        .window_registry
+    state.windows.window_registry
         .window_info(window_id)
         .map(|_| ())
         .ok_or_else(|| format!("unknown window {window_id}"))
@@ -1046,25 +1045,23 @@ fn ensure_window(state: &CompositorState, window_id: u32) -> Result<(), String> 
 impl CompositorState {
     pub(crate) fn control_revision_snapshot(&self) -> ControlRevisions {
         ControlRevisions {
-            outputs: self.shell_output_topology_revision,
-            windows: self
-                .shell_window_domain_revision
-                .max(self.window_registry.revision())
-                .max(self.control_windows_revision),
-            workspace: self
-                .shell_workspace_revision
-                .max(self.control_workspace_revision),
-            settings: self.control_settings_revision,
-            palette: self.command_palette_revision,
+            outputs: self.output_topology.shell_output_topology_revision,
+            windows: self.windows.shell_window_domain_revision
+                .max(self.windows.window_registry.revision())
+                .max(self.windows.control_windows_revision),
+            workspace: self.workspace_layout.shell_workspace_revision
+                .max(self.workspace_layout.control_workspace_revision),
+            settings: self.session_services.control_settings_revision(),
+            palette: self.session_services.command_palette_revision(),
         }
     }
 
     fn control_bump_windows_revision(&mut self) {
-        self.control_windows_revision = self.control_windows_revision.wrapping_add(1).max(1);
+        self.windows.control_windows_revision = self.windows.control_windows_revision.wrapping_add(1).max(1);
     }
 
     fn control_bump_workspace_revision(&mut self) {
-        self.control_workspace_revision = self.control_workspace_revision.wrapping_add(1).max(1);
+        self.workspace_layout.control_workspace_revision = self.workspace_layout.control_workspace_revision.wrapping_add(1).max(1);
     }
 
     pub(crate) fn control_state_value(&self, domains: ControlDomains) -> Result<Value, String> {
@@ -1095,14 +1092,13 @@ impl CompositorState {
     }
 
     fn control_outputs_value(&self) -> Value {
-        let outputs = self
-            .space
+        let outputs = self.output_topology.space
             .outputs()
             .filter_map(|output| {
-                let geometry = self.space.output_geometry(output)?;
+                let geometry = self.output_topology.space.output_geometry(output)?;
                 let mode = output.current_mode();
                 let name = output.name();
-                let primary = self.shell_primary_output_name.as_deref() == Some(name.as_str());
+                let primary = self.output_topology.shell_primary_output_name.as_deref() == Some(name.as_str());
                 Some(json!({
                     "name": name,
                     "identity": Self::shell_output_identity(output),
@@ -1122,7 +1118,7 @@ impl CompositorState {
 
     fn control_windows_value(&self) -> Value {
         let focused = self.logical_focused_window_id();
-        let mut records = self.window_registry.all_records();
+        let mut records = self.windows.window_registry.all_records();
         records.sort_by_key(|record| record.info.window_id);
         let windows = records
             .into_iter()
@@ -1153,18 +1149,14 @@ impl CompositorState {
     }
 
     pub(crate) fn command_palette_state_value(&self) -> Value {
-        let mut state = self.command_palette_registry.state_value();
-        if let Some(object) = state.as_object_mut() {
-            object.insert("revision".into(), json!(self.command_palette_revision));
-        }
-        state
+        self.session_services.command_palette_state_value()
     }
 
     fn control_bump_palette_revision(&mut self) {
-        self.command_palette_revision = self.command_palette_revision.wrapping_add(1).max(1);
+        let revision = self.session_services.bump_command_palette_revision();
         self.shell_send_to_cef(
             shell_wire::DecodedCompositorToShellMessage::CommandPaletteState {
-                revision: self.command_palette_revision,
+                revision,
                 state_json: self.command_palette_state_value().to_string(),
             },
         );
@@ -1174,13 +1166,13 @@ impl CompositorState {
         &mut self,
         category: CommandPaletteCategory,
     ) -> Result<(), String> {
-        self.command_palette_registry.upsert_category(category)?;
+        self.session_services.command_palette_registry.upsert_category(category)?;
         self.control_bump_palette_revision();
         Ok(())
     }
 
     pub(crate) fn control_palette_remove_category(&mut self, owner: &str, id: &str) {
-        self.command_palette_registry.remove_category(owner, id);
+        self.session_services.command_palette_registry.remove_category(owner, id);
         self.control_bump_palette_revision();
     }
 
@@ -1188,33 +1180,31 @@ impl CompositorState {
         &mut self,
         action: CommandPaletteAction,
     ) -> Result<(), String> {
-        self.command_palette_registry.upsert_action(action)?;
+        self.session_services.command_palette_registry.upsert_action(action)?;
         self.control_bump_palette_revision();
         Ok(())
     }
 
     pub(crate) fn control_palette_remove_action(&mut self, owner: &str, id: &str) {
-        self.command_palette_registry.remove_action(owner, id);
+        self.session_services.command_palette_registry.remove_action(owner, id);
         self.control_bump_palette_revision();
     }
 
     pub(crate) fn control_palette_clear_owner(&mut self, owner: &str) {
-        self.command_palette_registry.clear_owner(owner);
+        self.session_services.command_palette_registry.clear_owner(owner);
         self.control_bump_palette_revision();
     }
 
     pub(crate) fn control_palette_activate(&mut self, owner: &str, id: &str) -> Result<(), String> {
         validate_palette_identifier(owner, "owner")?;
         validate_palette_identifier(id, "id")?;
-        let action = self
-            .command_palette_registry
+        let action = self.session_services.command_palette_registry
             .action(owner, id)
             .ok_or_else(|| format!("unknown palette action {owner}/{id}"))?;
         if action.disabled {
             return Err(format!("palette action {owner}/{id} is disabled"));
         }
-        if !self
-            .command_palette_registry
+        if !self.session_services.command_palette_registry
             .category_exists(&action.owner, &action.category_id)
         {
             return Err(format!("unknown palette category {}", action.category_id));
@@ -1250,11 +1240,11 @@ impl CompositorState {
     }
 
     pub fn control_publish_if_changed(&mut self) {
-        if self.control_event_hub.subscribers.is_empty() {
+        if self.session_services.control_event_hub.subscribers.is_empty() {
             return;
         }
         let revisions = self.control_revision_snapshot();
-        let mut subscribers = std::mem::take(&mut self.control_event_hub.subscribers);
+        let mut subscribers = std::mem::take(&mut self.session_services.control_event_hub.subscribers);
         let mut keep = Vec::with_capacity(subscribers.len());
         for mut subscriber in subscribers.drain(..) {
             let changed = revisions
@@ -1284,7 +1274,7 @@ impl CompositorState {
                 keep.push(subscriber);
             }
         }
-        self.control_event_hub.subscribers = keep;
+        self.session_services.control_event_hub.subscribers = keep;
     }
 
     pub(crate) fn control_apply_settings(
@@ -1353,7 +1343,7 @@ impl CompositorState {
             }
             other => return Err(format!("unknown settings section {other}")),
         }
-        self.control_settings_revision = self.control_settings_revision.wrapping_add(1).max(1);
+        self.session_services.bump_control_settings_revision();
         Ok(())
     }
 }

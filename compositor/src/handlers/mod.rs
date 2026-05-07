@@ -38,12 +38,11 @@ impl CompositorState {
     }
 
     fn xdg_activation_serial_is_current(&self, serial: Serial) -> bool {
-        self.seat
+        self.input_routing.seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.last_enter())
             .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
-            || self
-                .seat
+            || self.input_routing.seat
                 .get_pointer()
                 .and_then(|pointer| pointer.last_enter())
                 .is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
@@ -51,23 +50,22 @@ impl CompositorState {
 
     fn xdg_activation_surface_matches_current_focus(&self, surface: &WlSurface) -> bool {
         let root = self.pointer_constraint_root_surface(surface);
-        self.seat
+        self.input_routing.seat
             .get_keyboard()
             .and_then(|keyboard| keyboard.current_focus())
             .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
-            || self
-                .seat
+            || self.input_routing.seat
                 .get_pointer()
                 .and_then(|pointer| pointer.current_focus())
                 .is_some_and(|focus| self.pointer_constraint_root_surface(&focus) == root)
     }
 
     fn xdg_activation_window_id_for_surface(&self, surface: &WlSurface) -> Option<u32> {
-        self.window_registry
+        self.windows.window_registry
             .window_id_for_wl_surface(surface)
             .or_else(|| {
                 let root = self.pointer_constraint_root_surface(surface);
-                self.window_registry.window_id_for_wl_surface(&root)
+                self.windows.window_registry.window_id_for_wl_surface(&root)
             })
     }
 
@@ -85,15 +83,13 @@ impl CompositorState {
     ) -> Option<Point<f64, Logical>> {
         let root = self.pointer_constraint_root_surface(surface);
         if let Some(window) = self.wayland_window_containing_surface(&root) {
-            let map_loc = self
-                .space
+            let map_loc = self.output_topology.space
                 .element_location(&crate::DerpSpaceElem::Wayland(window.clone()))?;
             let render_loc = map_loc - window.geometry().loc;
             return Some(render_loc.to_f64());
         }
         if let Some(x11) = self.x11_window_containing_surface(&root) {
-            let map_loc = self
-                .space
+            let map_loc = self.output_topology.space
                 .element_location(&crate::DerpSpaceElem::X11(x11.clone()))?;
             let render_loc = map_loc - x11.geometry().loc;
             return Some(render_loc.to_f64());
@@ -135,7 +131,7 @@ impl SeatHandler for CompositorState {
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<CompositorState> {
-        &mut self.seat_state
+        &mut self.input_routing.seat_state
     }
 
     fn cursor_image(
@@ -143,35 +139,35 @@ impl SeatHandler for CompositorState {
         _seat: &Seat<Self>,
         image: smithay::input::pointer::CursorImageStatus,
     ) {
-        self.pointer_cursor_image = image;
+        self.input_routing.pointer_cursor_image = image;
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        let dh = &self.display_handle;
+        let dh = &self.core.display_handle;
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
         set_data_device_focus(dh, seat, client);
 
         self.keyboard_on_focus_surface_changed(focused);
 
-        let window_id = focused.and_then(|s| self.window_registry.window_id_for_wl_surface(s));
+        let window_id = focused.and_then(|s| self.windows.window_registry.window_id_for_wl_surface(s));
         if let Some(wid) = window_id {
-            if let Some(sid) = self.window_registry.surface_id_for_window(wid) {
+            if let Some(sid) = self.windows.window_registry.surface_id_for_window(wid) {
                 if let Some(window) = self.find_window_by_surface_id(sid) {
-                    self.space
+                    self.output_topology.space
                         .raise_element(&crate::derp_space::DerpSpaceElem::Wayland(window), true);
                 } else if let Some(x11) = self.find_x11_window_by_surface_id(sid) {
-                    self.space
+                    self.output_topology.space
                         .raise_element(&crate::derp_space::DerpSpaceElem::X11(x11), true);
                 }
             }
             self.shell_window_stack_touch(wid);
-            if let Some(info) = self.window_registry.window_info(wid) {
+            if let Some(info) = self.windows.window_registry.window_info(wid) {
                 if !self.window_info_is_solid_shell_host(&info) {
                     self.shell_note_non_shell_focus();
                 }
             }
         }
-        let surface_id = window_id.and_then(|w| self.window_registry.surface_id_for_window(w));
+        let surface_id = window_id.and_then(|w| self.windows.window_registry.surface_id_for_window(w));
         self.shell_emit_chrome_event(ChromeEvent::FocusChanged {
             surface_id,
             window_id,
@@ -197,7 +193,7 @@ impl XdgActivationHandler for CompositorState {
         else {
             return false;
         };
-        if Seat::from_resource(&seat) != Some(self.seat.clone()) {
+        if Seat::from_resource(&seat) != Some(self.input_routing.seat.clone()) {
             return false;
         }
         if !self.xdg_activation_serial_is_current(serial) {
@@ -224,18 +220,18 @@ impl XdgActivationHandler for CompositorState {
             self.xdg_activation_state.remove_token(&token);
             return;
         };
-        let Some(info) = self.window_registry.window_info(window_id) else {
+        let Some(info) = self.windows.window_registry.window_info(window_id) else {
             self.xdg_activation_state.remove_token(&token);
             return;
         };
         if info.minimized {
-            if self.scratchpad_windows.contains_key(&window_id) {
+            if self.workspace_layout.scratchpad_windows.contains_key(&window_id) {
                 self.xdg_activation_state.remove_token(&token);
                 return;
             }
             self.shell_restore_minimized_window(window_id);
         } else if self.wayland_window_id_is_pending_deferred_toplevel(window_id) {
-            self.shell_pending_native_focus_window_id = Some(window_id);
+            self.windows.shell_pending_native_focus_window_id = Some(window_id);
         } else {
             self.shell_raise_and_focus_window(window_id);
             self.shell_reply_window_list();
@@ -262,8 +258,8 @@ impl PointerConstraintsHandler for CompositorState {
             });
         let pointer_root_window_id = pointer_root
             .as_ref()
-            .and_then(|focus| self.window_registry.window_id_for_wl_surface(focus));
-        let surface_window_id = self.window_registry.window_id_for_wl_surface(surface);
+            .and_then(|focus| self.windows.window_registry.window_id_for_wl_surface(focus));
+        let surface_window_id = self.windows.window_registry.window_id_for_wl_surface(surface);
         let Some(current_focus) = pointer_root else {
             return;
         };
@@ -311,7 +307,7 @@ impl SelectionHandler for CompositorState {
         if ty != SelectionTarget::Clipboard {
             return;
         }
-        let Some((_, xwm)) = self.x11_wm_slot.as_mut() else {
+        let Some((_, xwm)) = self.windows.x11_wm_slot.as_mut() else {
             return;
         };
         if let Err(error) = xwm.new_selection(ty, source.map(|source| source.mime_types())) {
@@ -331,7 +327,7 @@ impl SelectionHandler for CompositorState {
             return;
         }
         if user_data.is_empty() {
-            let Some((_, xwm)) = self.x11_wm_slot.as_mut() else {
+            let Some((_, xwm)) = self.windows.x11_wm_slot.as_mut() else {
                 return;
             };
             if let Err(error) = xwm.send_selection(ty, mime_type, fd) {
@@ -351,7 +347,7 @@ impl SelectionHandler for CompositorState {
 
 impl DataDeviceHandler for CompositorState {
     fn data_device_state(&mut self) -> &mut DataDeviceState {
-        &mut self.data_device_state
+        &mut self.input_routing.data_device_state
     }
 }
 
@@ -359,7 +355,7 @@ impl DataControlHandler for CompositorState {
     fn data_control_state(
         &mut self,
     ) -> &mut smithay::wayland::selection::wlr_data_control::DataControlState {
-        &mut self.data_control_state
+        &mut self.input_routing.data_control_state
     }
 }
 
