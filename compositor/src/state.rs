@@ -9012,6 +9012,10 @@ impl CompositorState {
             rect.size.h,
             0,
         );
+        if kind != WindowKind::ShellHosted {
+            self.capture_refresh_window_source_cache(window_id);
+            self.shell_native_drag_preview_begin(window_id);
+        }
     }
 
     pub fn shell_move_begin(&mut self, window_id: u32) {
@@ -11243,7 +11247,7 @@ impl CompositorState {
     ) {
         let Some((window_id, generation)) =
             self.shell_native_drag_preview.as_ref().and_then(|preview| {
-                if !preview.capture_pending || preview.image_path.is_some() {
+                if !preview.capture_pending && preview.image_path.is_none() {
                     return None;
                 }
                 Some((preview.window_id, preview.generation))
@@ -11261,6 +11265,7 @@ impl CompositorState {
         else {
             return;
         };
+        let mut should_send_clear = false;
         if let Some(preview) = self.shell_native_drag_preview.as_mut() {
             if preview.window_id == window_id
                 && preview.generation == generation
@@ -11277,8 +11282,23 @@ impl CompositorState {
                 preview.buffer_height = buffer_height;
                 preview.image_path = None;
                 preview.shell_ready = false;
+                preview.capture_pending = true;
+                should_send_clear = true;
             }
         }
+        if should_send_clear {
+            self.shell_send_native_drag_preview_state();
+        }
+        let Some((window_id, generation)) =
+            self.shell_native_drag_preview.as_ref().and_then(|preview| {
+                if !preview.capture_pending || preview.image_path.is_some() {
+                    return None;
+                }
+                Some((preview.window_id, preview.generation))
+            })
+        else {
+            return;
+        };
         if !self.shell_native_drag_preview_capture_ready(
             window_id,
             next_logical_width,

@@ -1147,6 +1147,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
       100,
     )
     const start = rectCenter(shellMax.titlebar)
+    let previewDuringDrag: {
+      window: WindowSnapshot
+      sourceWidth: number
+      sourceHeight: number
+      backingWidth: number
+      backingHeight: number
+      previewRect: CompositorWorkspaceRect
+      generation: number | null
+      imagePath: string | null
+    } | null = null
     await movePoint(base, start.x, start.y)
     await pointerButton(base, BTN_LEFT, 'press')
     try {
@@ -1162,6 +1172,50 @@ export default defineGroup(import.meta.url, ({ test }) => {
         100,
       )
       await movePoint(base, start.x, start.y + 160)
+      const { compositor, shell } = await getSnapshots(base)
+      const window = compositorWindowById(compositor, redId)
+      const controls = windowControls(shell, redId)
+      if (
+        window &&
+        !window.maximized &&
+        !window.fullscreen &&
+        compositor.shell_native_drag_preview_window_id === redId &&
+        compositor.shell_native_drag_preview_shell_ready === true &&
+        compositor.shell_native_drag_preview_image_path &&
+        controls?.native_drag_preview_rect &&
+        controls.native_drag_preview_loaded === true &&
+        controls.native_drag_preview_source_width != null &&
+        controls.native_drag_preview_source_height != null &&
+        controls.native_drag_preview_backing_width != null &&
+        controls.native_drag_preview_backing_height != null
+      ) {
+        assert(
+          Math.abs(controls.native_drag_preview_source_width - window.width) <= 8,
+          `restored native drag preview width ${controls.native_drag_preview_source_width} should match restored window width ${window.width}`,
+        )
+        assert(
+          Math.abs(controls.native_drag_preview_source_height - window.height) <= 8,
+          `restored native drag preview height ${controls.native_drag_preview_source_height} should match restored window height ${window.height}`,
+        )
+        assert(
+          Math.abs(controls.native_drag_preview_backing_width - controls.native_drag_preview_source_width) <= 1,
+          'restored native drag preview backing width should match source width',
+        )
+        assert(
+          Math.abs(controls.native_drag_preview_backing_height - controls.native_drag_preview_source_height) <= 1,
+          'restored native drag preview backing height should match source height',
+        )
+        previewDuringDrag = {
+          window,
+          sourceWidth: controls.native_drag_preview_source_width,
+          sourceHeight: controls.native_drag_preview_source_height,
+          backingWidth: controls.native_drag_preview_backing_width,
+          backingHeight: controls.native_drag_preview_backing_height,
+          previewRect: controls.native_drag_preview_rect,
+          generation: controls.native_drag_preview_generation ?? null,
+          imagePath: compositor.shell_native_drag_preview_image_path,
+        }
+      }
     } finally {
       await pointerButton(base, BTN_LEFT, 'release')
     }
@@ -1191,6 +1245,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       redId,
       grab: { x: start.x, y: start.y },
       after: { x: w.x, y: w.y, w: w.width, h: w.height, output: w.output_name, centerX },
+      previewDuringDrag,
     })
   })
 
