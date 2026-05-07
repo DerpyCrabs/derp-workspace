@@ -213,7 +213,7 @@ impl CompositorState {
             .filter(|record| record.kind != crate::window_registry::WindowKind::ShellHosted)
             .filter(|record| shell_window_row_should_show(&record.info))
             .filter(|record| {
-                !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+                !self.window_id_is_deferred_initial_map(record.info.window_id)
             })
             .map(|record| {
                 self.capture_window_source_descriptor_from_record(&record, &output_scales)
@@ -229,7 +229,7 @@ impl CompositorState {
         if self.window_info_is_solid_shell_host(&record.info)
             || record.kind == crate::window_registry::WindowKind::ShellHosted
             || !shell_window_row_should_show(&record.info)
-            || self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+            || self.window_id_is_deferred_initial_map(record.info.window_id)
         {
             return None;
         }

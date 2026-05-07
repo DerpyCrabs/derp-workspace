@@ -2,10 +2,12 @@
 
 use std::collections::HashMap;
 
+use smithay::desktop::Window;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Rectangle};
+use smithay::xwayland::X11Surface;
 
 use crate::chrome_bridge::WindowInfo;
 
@@ -28,18 +30,70 @@ pub enum WindowKind {
     ShellHosted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowBackend {
+    WaylandXdg,
+    X11,
+    ShellHosted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowLifecycle {
+    Registered,
+    DeferredInitialMap,
+    Mapped,
+    Minimized,
+    TrayHidden,
+    CloseRequested,
+}
+
+impl WindowLifecycle {
+    pub fn is_deferred_initial_map(self) -> bool {
+        self == Self::DeferredInitialMap
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum RestoreHandle {
+    None,
+    Wayland(Window),
+    X11(X11Surface),
+}
+
+impl RestoreHandle {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowLifecycleEvent {
+    DeferInitialMap,
+    Map,
+    Minimize,
+    Restore,
+    HideToTray,
+    RequestClose,
+}
+
 #[derive(Debug, Clone)]
 pub struct WindowRecord {
     pub info: WindowInfo,
     pub kind: WindowKind,
+    pub backend: WindowBackend,
+    pub lifecycle: WindowLifecycle,
+    pub restore_handle: RestoreHandle,
     pub shell_hosted_float_restore: Option<Rectangle<i32, Logical>>,
 }
 
 impl WindowRecord {
-    fn native(info: WindowInfo) -> Self {
+    fn native(info: WindowInfo, backend: WindowBackend) -> Self {
         Self {
             info,
             kind: WindowKind::Native,
+            backend,
+            lifecycle: WindowLifecycle::Registered,
+            restore_handle: RestoreHandle::None,
             shell_hosted_float_restore: None,
         }
     }
@@ -51,6 +105,9 @@ impl WindowRecord {
         Self {
             info,
             kind: WindowKind::ShellHosted,
+            backend: WindowBackend::ShellHosted,
+            lifecycle: WindowLifecycle::Mapped,
+            restore_handle: RestoreHandle::None,
             shell_hosted_float_restore,
         }
     }
@@ -115,9 +172,25 @@ impl WindowRegistry {
             client_side_decoration: false,
         };
         self.by_surface.insert(k, window_id);
-        self.records.insert(window_id, WindowRecord::native(info));
+        self.records.insert(window_id, WindowRecord::native(info, WindowBackend::WaylandXdg));
         self.bump_revision();
         window_id
+    }
+
+    pub fn set_native_backend(&mut self, window_id: WindowId, backend: WindowBackend) -> Option<bool> {
+        if backend == WindowBackend::ShellHosted {
+            return None;
+        }
+        let record = self.records.get_mut(&window_id)?;
+        if record.kind != WindowKind::Native {
+            return None;
+        }
+        let changed = record.backend != backend;
+        record.backend = backend;
+        if changed {
+            self.bump_revision();
+        }
+        Some(changed)
     }
 
     pub fn register_shell_hosted(
@@ -306,6 +379,64 @@ impl WindowRegistry {
         self.records.get(&window_id).cloned()
     }
 
+    pub fn lifecycle(&self, window_id: WindowId) -> Option<WindowLifecycle> {
+        self.records.get(&window_id).map(|record| record.lifecycle)
+    }
+
+    pub fn transition(
+        &mut self,
+        window_id: WindowId,
+        event: WindowLifecycleEvent,
+    ) -> Option<bool> {
+        let record = self.records.get_mut(&window_id)?;
+        let previous = record.lifecycle;
+        let current = match event {
+            WindowLifecycleEvent::DeferInitialMap => WindowLifecycle::DeferredInitialMap,
+            WindowLifecycleEvent::Map => WindowLifecycle::Mapped,
+            WindowLifecycleEvent::Minimize => WindowLifecycle::Minimized,
+            WindowLifecycleEvent::Restore => WindowLifecycle::Mapped,
+            WindowLifecycleEvent::HideToTray => WindowLifecycle::TrayHidden,
+            WindowLifecycleEvent::RequestClose => WindowLifecycle::CloseRequested,
+        };
+        record.lifecycle = current;
+        record.info.minimized = current == WindowLifecycle::Minimized;
+        let changed = previous != current;
+        if changed {
+            self.bump_revision();
+        }
+        Some(changed)
+    }
+
+    pub fn set_restore_handle(
+        &mut self,
+        window_id: WindowId,
+        restore_handle: RestoreHandle,
+    ) -> Option<()> {
+        let record = self.records.get_mut(&window_id)?;
+        record.restore_handle = restore_handle;
+        self.bump_revision();
+        Some(())
+    }
+
+    pub fn take_restore_handle(&mut self, window_id: WindowId) -> RestoreHandle {
+        let Some(record) = self.records.get_mut(&window_id) else {
+            return RestoreHandle::None;
+        };
+        let mut handle = RestoreHandle::None;
+        std::mem::swap(&mut record.restore_handle, &mut handle);
+        self.bump_revision();
+        handle
+    }
+
+    pub fn clear_restore_handle(&mut self, window_id: WindowId) {
+        if let Some(record) = self.records.get_mut(&window_id) {
+            if !record.restore_handle.is_none() {
+                record.restore_handle = RestoreHandle::None;
+                self.bump_revision();
+            }
+        }
+    }
+
     pub fn window_kind(&self, window_id: WindowId) -> Option<WindowKind> {
         self.records.get(&window_id).map(|record| record.kind)
     }
@@ -371,16 +502,6 @@ impl WindowRegistry {
             .collect()
     }
 
-    pub fn set_minimized(&mut self, window_id: WindowId, minimized: bool) -> Option<()> {
-        let info = &mut self.records.get_mut(&window_id)?.info;
-        if info.minimized == minimized {
-            return Some(());
-        }
-        info.minimized = minimized;
-        self.bump_revision();
-        Some(())
-    }
-
     pub fn set_tiling_state(
         &mut self,
         wl: &WlSurface,
@@ -396,5 +517,84 @@ impl WindowRegistry {
             self.bump_revision();
         }
         Some(changed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(window_id: WindowId) -> WindowInfo {
+        WindowInfo {
+            window_id,
+            surface_id: window_id,
+            title: "test".to_string(),
+            app_id: "test.app".to_string(),
+            wayland_client_pid: None,
+            x: 1,
+            y: 2,
+            width: 300,
+            height: 200,
+            output_name: "test-output".to_string(),
+            minimized: false,
+            maximized: false,
+            fullscreen: false,
+            client_side_decoration: false,
+        }
+    }
+
+    #[test]
+    fn lifecycle_transition_updates_minimized_invariant() {
+        let mut registry = WindowRegistry::new();
+        registry.records.insert(
+            42,
+            WindowRecord::native(info(42), WindowBackend::WaylandXdg),
+        );
+
+        assert_eq!(
+            registry.transition(42, WindowLifecycleEvent::Map),
+            Some(true)
+        );
+        assert_eq!(registry.window_info(42).unwrap().minimized, false);
+
+        assert_eq!(
+            registry.transition(42, WindowLifecycleEvent::Minimize),
+            Some(true)
+        );
+        assert_eq!(registry.lifecycle(42), Some(WindowLifecycle::Minimized));
+        assert_eq!(registry.window_info(42).unwrap().minimized, true);
+
+        assert_eq!(
+            registry.transition(42, WindowLifecycleEvent::RequestClose),
+            Some(true)
+        );
+        assert_eq!(registry.lifecycle(42), Some(WindowLifecycle::CloseRequested));
+        assert_eq!(registry.window_info(42).unwrap().minimized, false);
+    }
+
+    #[test]
+    fn failed_close_can_restore_previous_lifecycle() {
+        let mut registry = WindowRegistry::new();
+        registry.records.insert(
+            43,
+            WindowRecord::native(info(43), WindowBackend::X11),
+        );
+        registry.transition(43, WindowLifecycleEvent::Map);
+        registry.transition(43, WindowLifecycleEvent::RequestClose);
+
+        assert_eq!(
+            registry.transition(43, WindowLifecycleEvent::Map),
+            Some(true)
+        );
+        assert_eq!(registry.lifecycle(43), Some(WindowLifecycle::Mapped));
+
+        registry.transition(43, WindowLifecycleEvent::Minimize);
+        registry.transition(43, WindowLifecycleEvent::RequestClose);
+        assert_eq!(
+            registry.transition(43, WindowLifecycleEvent::Minimize),
+            Some(true)
+        );
+        assert_eq!(registry.lifecycle(43), Some(WindowLifecycle::Minimized));
+        assert_eq!(registry.window_info(43).unwrap().minimized, true);
     }
 }

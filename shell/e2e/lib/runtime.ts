@@ -121,6 +121,8 @@ export interface WindowSnapshot {
   maximized: boolean
   fullscreen: boolean
   shell_hosted: boolean
+  backend?: string
+  lifecycle?: string
   scratchpad?: boolean
   stack_z?: number
   surface_id?: number

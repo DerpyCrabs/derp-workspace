@@ -247,6 +247,8 @@ impl CompositorState {
                 info.minimized = false;
                 info.clone()
             });
+            let _ = self.windows.window_registry
+                .transition(id, crate::window_registry::WindowLifecycleEvent::Restore);
             self.shell_osr.shell_exclusion_zones_need_full_damage = true;
             self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
                 window_id: id,
@@ -347,6 +349,8 @@ impl CompositorState {
             self.shell_emit_shell_ui_focus_if_changed(None);
             self.shell_keyboard_capture_clear();
         }
+        let _ = self.windows.window_registry
+            .transition(window_id, crate::window_registry::WindowLifecycleEvent::RequestClose);
         self.windows.window_registry.remove_shell_hosted(window_id);
         if self.shell_osr.shell_hosted_app_state.remove(&window_id).is_some() {
             self.shell_hosted_app_state_send();
@@ -368,6 +372,11 @@ impl CompositorState {
     }
 
     pub(crate) fn shell_backed_minimize_if_any(&mut self, window_id: u32) -> bool {
+        if self.windows.window_registry.lifecycle(window_id)
+            == Some(crate::window_registry::WindowLifecycle::CloseRequested)
+        {
+            return true;
+        }
         let minimized = self.windows.window_registry
             .update_shell_hosted(window_id, |info, _| {
                 let already = info.minimized;
@@ -382,6 +391,8 @@ impl CompositorState {
         if already_minimized {
             return true;
         }
+        let _ = self.windows.window_registry
+            .transition(window_id, crate::window_registry::WindowLifecycleEvent::Minimize);
         self.cancel_shell_move_resize_for_window(window_id);
         if self.shell_osr.shell_focused_ui_window_id == Some(window_id) {
             self.shell_emit_shell_ui_focus_if_changed(None);
@@ -407,6 +418,8 @@ impl CompositorState {
         let Some(Some(snap)) = snap else {
             return false;
         };
+        let _ = self.windows.window_registry
+            .transition(window_id, crate::window_registry::WindowLifecycleEvent::Restore);
         self.shell_osr.shell_exclusion_zones_need_full_damage = true;
         self.shell_send_to_cef(shell_wire::DecodedCompositorToShellMessage::WindowState {
             window_id,

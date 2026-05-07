@@ -216,6 +216,17 @@ export default defineGroup(import.meta.url, ({ test }) => {
       stateReply.result.windows.some((window: any) => window.window_id === shellHostedId && window.shell_hosted === true),
       'state missing shell-hosted window',
     )
+    const initialSnapshots = await getSnapshots(base)
+    assert(compositorWindowById(initialSnapshots.compositor, nativeId)?.backend === 'wayland_xdg', 'native backend missing from snapshot')
+    assert(compositorWindowById(initialSnapshots.compositor, nativeId)?.lifecycle === 'mapped', 'native lifecycle missing from snapshot')
+    assert(
+      compositorWindowById(initialSnapshots.compositor, shellHostedId)?.backend === 'shell_hosted',
+      'shell-hosted backend missing from snapshot',
+    )
+    assert(
+      compositorWindowById(initialSnapshots.compositor, shellHostedId)?.lifecycle === 'mapped',
+      'shell-hosted lifecycle missing from snapshot',
+    )
 
     await derpctlTransaction([
       { method: 'window.set_maximized', params: { window_id: nativeId, enabled: false } },
@@ -265,16 +276,125 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await syncTest(base)
     const minimized = await getSnapshots(base)
     assert(compositorWindowById(minimized.compositor, nativeId)?.minimized === true, 'minimize did not apply')
+    assert(compositorWindowById(minimized.compositor, nativeId)?.lifecycle === 'minimized', 'native lifecycle did not minimize')
     assertShellChromeReflectsCompositor(minimized.compositor, minimized.shell, nativeId, 'external minimize')
+    const hiddenTarget = {
+      x: target.x + 41,
+      y: target.y + 37,
+      width: target.width + 20,
+      height: target.height + 16,
+    }
+    await derpctl([
+      'window',
+      'move',
+      String(nativeId),
+      '--x',
+      String(hiddenTarget.x),
+      '--y',
+      String(hiddenTarget.y),
+      '--width',
+      String(hiddenTarget.width),
+      '--height',
+      String(hiddenTarget.height),
+    ])
+    await derpctl(['window', 'focus', String(nativeId)])
+    const restoredHiddenMove = await waitFor(
+      'wait for minimized native geometry restore',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, nativeId)
+        if (!window || window.minimized) return null
+        if (window.lifecycle !== 'mapped') return null
+        if (
+          window.x !== hiddenTarget.x ||
+          window.y !== hiddenTarget.y ||
+          window.width !== hiddenTarget.width ||
+          window.height !== hiddenTarget.height
+        ) {
+          return null
+        }
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    assertShellChromeReflectsCompositor(
+      restoredHiddenMove.compositor,
+      restoredHiddenMove.shell,
+      nativeId,
+      'external hidden native move restore',
+    )
+
+    await derpctl(['window', 'minimize', String(shellHostedId)])
+    await syncTest(base)
+    const shellHostedMinimized = await getSnapshots(base)
+    assert(compositorWindowById(shellHostedMinimized.compositor, shellHostedId)?.minimized === true, 'shell-hosted minimize did not apply')
+    assert(
+      compositorWindowById(shellHostedMinimized.compositor, shellHostedId)?.lifecycle === 'minimized',
+      'shell-hosted lifecycle did not minimize',
+    )
+    const shellHiddenTarget = {
+      x: shellHosted.window.x + 43,
+      y: shellHosted.window.y + 39,
+      width: Math.max(360, shellHosted.window.width + 24),
+      height: Math.max(260, shellHosted.window.height + 18),
+    }
+    await derpctl([
+      'window',
+      'move',
+      String(shellHostedId),
+      '--x',
+      String(shellHiddenTarget.x),
+      '--y',
+      String(shellHiddenTarget.y),
+      '--width',
+      String(shellHiddenTarget.width),
+      '--height',
+      String(shellHiddenTarget.height),
+    ])
+    await derpctl(['window', 'focus', String(shellHostedId)])
+    const restoredShellHiddenMove = await waitFor(
+      'wait for minimized shell-hosted geometry restore',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const window = compositorWindowById(snapshots.compositor, shellHostedId)
+        if (!window || window.minimized) return null
+        if (window.lifecycle !== 'mapped') return null
+        if (
+          window.x !== shellHiddenTarget.x ||
+          window.y !== shellHiddenTarget.y ||
+          window.width !== shellHiddenTarget.width ||
+          window.height !== shellHiddenTarget.height
+        ) {
+          return null
+        }
+        return snapshots
+      },
+      5000,
+      100,
+    )
+    assertShellChromeReflectsCompositor(
+      restoredShellHiddenMove.compositor,
+      restoredShellHiddenMove.shell,
+      shellHostedId,
+      'external hidden shell-hosted move restore',
+    )
     await writeJsonArtifact('external-control-shell-consistency.json', {
       nativeId,
+      shellHostedId,
       target,
+      hiddenTarget,
+      shellHiddenTarget,
       movedShell: shellWindowById(moved.shell, nativeId),
       movedCompositor: compositorWindowById(moved.compositor, nativeId),
       maximizedShell: shellWindowById(maximized.shell, nativeId),
       maximizedCompositor: compositorWindowById(maximized.compositor, nativeId),
       minimizedShell: shellWindowById(minimized.shell, nativeId),
       minimizedCompositor: compositorWindowById(minimized.compositor, nativeId),
+      restoredHiddenMoveShell: shellWindowById(restoredHiddenMove.shell, nativeId),
+      restoredHiddenMoveCompositor: compositorWindowById(restoredHiddenMove.compositor, nativeId),
+      restoredShellHiddenMoveShell: shellWindowById(restoredShellHiddenMove.shell, shellHostedId),
+      restoredShellHiddenMoveCompositor: compositorWindowById(restoredShellHiddenMove.compositor, shellHostedId),
     })
   })
 

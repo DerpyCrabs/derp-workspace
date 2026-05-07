@@ -129,6 +129,8 @@ impl XdgShellHandler for CompositorState {
             self.windows.pending_gnome_initial_toplevels.insert(reg.window_id);
         }
         if defer_initial_map {
+            let _ = self.windows.window_registry
+                .transition(reg.window_id, crate::window_registry::WindowLifecycleEvent::DeferInitialMap);
             let key =
                 crate::window_registry::wl_surface_key(&wl0).expect("new_toplevel surface key");
             self.windows.pending_deferred_toplevels.insert(
@@ -147,6 +149,8 @@ impl XdgShellHandler for CompositorState {
                 "xdg new_toplevel deferred until app_id"
             );
         } else {
+            let _ = self.windows.window_registry
+                .transition(reg.window_id, crate::window_registry::WindowLifecycleEvent::Map);
             self.output_topology.space.map_element(
                 DerpSpaceElem::Wayland(window.clone()),
                 (map_x, map_y),
@@ -197,10 +201,14 @@ impl XdgShellHandler for CompositorState {
         let keyboard_had_focus_here =
             window_id_pre.is_some_and(|id| self.keyboard_focused_window_id() == Some(id));
         let removed_pre = self.windows.window_registry.snapshot_for_wl_surface(wl);
-        let mut had_pending_deferred = false;
+        let mut had_pending_deferred = window_id_pre.is_some_and(|window_id| {
+            self.windows.window_registry.lifecycle(window_id)
+                == Some(crate::window_registry::WindowLifecycle::DeferredInitialMap)
+        });
         if let Some(k) = crate::window_registry::wl_surface_key(wl) {
-            had_pending_deferred = self.windows.pending_deferred_toplevels.remove(&k).is_some();
-            if had_pending_deferred {
+            let removed_pending_payload = self.windows.pending_deferred_toplevels.remove(&k).is_some();
+            if removed_pending_payload {
+                had_pending_deferred = true;
                 tracing::warn!(
                     target: "derp_toplevel",
                     wl_surface_protocol_id = wl.id().protocol_id(),
@@ -228,7 +236,7 @@ impl XdgShellHandler for CompositorState {
             self.capture_forget_window_source_cache(window_id);
             self.windows.shell_close_pending_native_windows.remove(&window_id);
             self.shell_window_stack_forget(window_id);
-            self.windows.shell_minimized_windows.remove(&window_id);
+            self.windows.window_registry.clear_restore_handle(window_id);
             if let Some(ref meta) = removed {
                 tracing::warn!(
                     target: "derp_toplevel",

@@ -106,7 +106,10 @@ use crate::{
         WorkspaceTaskbarPin, WorkspaceTaskbarPinMonitor,
     },
     shell::shell_ipc,
-    window_registry::{WindowKind, WindowRegistry},
+    window_registry::{
+        RestoreHandle, WindowBackend, WindowKind, WindowLifecycle, WindowLifecycleEvent,
+        WindowRegistry,
+    },
     CalloopData,
 };
 use crate::tearing_control::{
@@ -1031,8 +1034,6 @@ impl CompositorState {
                 x11_client: None,
                 shell_spawn_known_native_window_ids: None,
                 shell_spawn_target_output_name: None,
-                shell_minimized_windows: HashMap::new(),
-                shell_minimized_x11_windows: HashMap::new(),
                 shell_pending_native_configure_frames: HashMap::new(),
                 shell_known_x11_windows: HashMap::new(),
                 shell_pending_native_focus_window_id: None,
@@ -2396,8 +2397,6 @@ impl CompositorState {
             self.windows.shell_close_pending_native_windows
                 .remove(&info.window_id);
             self.shell_window_stack_forget(info.window_id);
-            self.windows.shell_minimized_windows.remove(&info.window_id);
-            self.windows.shell_minimized_x11_windows.remove(&info.window_id);
             self.windows.shell_known_x11_windows.remove(&info.window_id);
             self.tray_notifications.shell_tray_hidden_x11_windows.remove(&info.window_id);
             self.forget_tray_hidden_x11_window_id(info.window_id);
@@ -4249,6 +4248,10 @@ impl CompositorState {
                 (map_x, map_y),
                 false,
             );
+            if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(&wl0) {
+                let _ = self.windows.window_registry
+                    .transition(window_id, WindowLifecycleEvent::Map);
+            }
             self.notify_geometry_if_changed(&pending.window);
             let info = self.windows.window_registry
                 .snapshot_for_wl_surface(&wl0)
@@ -4276,13 +4279,10 @@ impl CompositorState {
         }
     }
 
-    pub(crate) fn wayland_window_id_is_pending_deferred_toplevel(&self, window_id: u32) -> bool {
-        self.windows.pending_deferred_toplevels.values().any(|p| {
-            p.window.toplevel().and_then(|t| {
-                self.windows.window_registry
-                    .window_id_for_wl_surface(t.wl_surface())
-            }) == Some(window_id)
-        })
+    pub(crate) fn window_id_is_deferred_initial_map(&self, window_id: u32) -> bool {
+        self.windows.window_registry
+            .lifecycle(window_id)
+            .is_some_and(WindowLifecycle::is_deferred_initial_map)
     }
 
     /// Updates [`WindowRegistry`] from current [`Space`] layout and notifies the bridge if geometry changed.
@@ -6033,12 +6033,15 @@ impl CompositorState {
     fn shell_hide_x11_window_to_tray(&mut self, window_id: u32, x11: &X11Surface) {
         self.windows.shell_close_pending_native_windows.remove(&window_id);
         self.windows.shell_close_refocus_targets.remove(&window_id);
-        self.windows.shell_minimized_x11_windows.remove(&window_id);
         let info = self.windows.window_registry.window_info(window_id);
         self.remember_tray_hidden_x11_window_id(window_id, info.as_ref());
         self.tray_notifications.shell_tray_hidden_x11_windows
             .insert(window_id, x11.clone());
         self.windows.shell_known_x11_windows.insert(window_id, x11.clone());
+        let _ = self.windows.window_registry
+            .set_restore_handle(window_id, RestoreHandle::X11(x11.clone()));
+        let _ = self.windows.window_registry
+            .transition(window_id, WindowLifecycleEvent::HideToTray);
         if self.windows.shell_pending_native_focus_window_id == Some(window_id) {
             self.windows.shell_pending_native_focus_window_id = None;
         }
@@ -6077,7 +6080,9 @@ impl CompositorState {
             return false;
         }
         self.windows.shell_pending_native_focus_window_id = Some(window_id);
-        let _ = self.windows.window_registry.set_minimized(window_id, false);
+        let _ = self.windows.window_registry
+            .transition(window_id, WindowLifecycleEvent::Restore);
+        self.windows.window_registry.clear_restore_handle(window_id);
         if let Err(error) = x11.set_hidden(false) {
             tracing::warn!(window_id, ?error, "x11 set_hidden(false) failed");
         }
@@ -6181,11 +6186,21 @@ impl CompositorState {
         {
             let (title, app_id) = Self::x11_window_title_app_id(window);
             let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
-            self.windows.window_registry
+            let window_id = self.windows.window_registry
                 .register_toplevel(surface, title, app_id, pid);
+            let _ = self.windows.window_registry
+                .set_native_backend(window_id, WindowBackend::X11);
         }
         let info = self.emit_x11_window_updates(window, false, true);
         if let Some(info) = &info {
+            let elem = DerpSpaceElem::X11(window.clone());
+            if self.output_topology.space.elements().any(|e| *e == elem)
+                && self.windows.window_registry.lifecycle(info.window_id)
+                    != Some(WindowLifecycle::Minimized)
+            {
+                let _ = self.windows.window_registry
+                    .transition(info.window_id, WindowLifecycleEvent::Map);
+            }
             self.windows.shell_known_x11_windows
                 .insert(info.window_id, window.clone());
         }
@@ -6205,12 +6220,11 @@ impl CompositorState {
             self.windows.shell_known_x11_windows.remove(&window_id);
             self.clear_toplevel_layout_maps(window_id);
             self.windows.shell_close_pending_native_windows.remove(&window_id);
+            self.windows.window_registry.clear_restore_handle(window_id);
             if self.windows.shell_pending_native_focus_window_id == Some(window_id) {
                 self.windows.shell_pending_native_focus_window_id = None;
             }
             self.shell_window_stack_forget(window_id);
-            self.windows.shell_minimized_windows.remove(&window_id);
-            self.windows.shell_minimized_x11_windows.remove(&window_id);
             self.tray_notifications.shell_tray_hidden_x11_windows.remove(&window_id);
             self.forget_tray_hidden_x11_window_id(window_id);
         }
@@ -7586,7 +7600,7 @@ impl CompositorState {
                 continue;
             }
             if record.kind != WindowKind::ShellHosted
-                && self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+                && self.window_id_is_deferred_initial_map(record.info.window_id)
             {
                 continue;
             }
@@ -7836,7 +7850,7 @@ impl CompositorState {
             .filter(|record| !self.shell_x11_window_is_tray_hidden(record.info.window_id))
             .filter(|record| {
                 record.kind == WindowKind::ShellHosted
-                    || !self.wayland_window_id_is_pending_deferred_toplevel(record.info.window_id)
+                    || !self.window_id_is_deferred_initial_map(record.info.window_id)
             })
             .map(|record| record.info.window_id)
             .collect();
@@ -7869,7 +7883,7 @@ impl CompositorState {
                 || !shell_window_row_should_show(&info)
                 || self.shell_x11_window_is_tray_hidden(info.window_id)
                 || (record.kind != WindowKind::ShellHosted
-                    && self.wayland_window_id_is_pending_deferred_toplevel(info.window_id))
+                    && self.window_id_is_deferred_initial_map(info.window_id))
             {
                 continue;
             }
@@ -9173,7 +9187,110 @@ impl CompositorState {
         Ok(())
     }
 
-    /// `layout_state`: 0 = floating; 1 = maximized — bounds are **output-local layout** px from the shell.
+    fn shell_set_hidden_native_window_geometry(
+        &mut self,
+        window_id: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        target_output_name: &str,
+        previous_output_name: &str,
+        layout_state: u32,
+    ) -> bool {
+        let Some(record) = self.windows.window_registry.window_record(window_id) else {
+            return false;
+        };
+        match record.restore_handle {
+            RestoreHandle::Wayland(window) => {
+                if layout_state == 0 {
+                    self.clear_toplevel_layout_maps(window_id);
+                } else if layout_state == 1 {
+                    self.cancel_shell_move_resize_for_window(window_id);
+                    if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
+                        if let Some(s) = self.toplevel_rect_snapshot(&window) {
+                            self.windows.toplevel_floating_restore.insert(window_id, s);
+                        }
+                    }
+                }
+                let _ = self.windows.window_registry.update_native(window_id, |window_info| {
+                    window_info.maximized = layout_state == 1;
+                    window_info.fullscreen = false;
+                    window_info.x = x;
+                    window_info.y = y;
+                    window_info.width = w.max(1);
+                    window_info.height = h.max(1);
+                    window_info.output_name = target_output_name.to_string();
+                });
+                self.capture_refresh_window_source_cache(window_id);
+                let tl = window.toplevel().unwrap();
+                tl.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Fullscreen);
+                    state.fullscreen_output = None;
+                    if layout_state == 1 {
+                        state.states.set(xdg_toplevel::State::Maximized);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                    }
+                    state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
+                });
+                tl.send_pending_configure();
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    previous_output_name,
+                    target_output_name,
+                );
+                self.shell_reply_window_list();
+                true
+            }
+            RestoreHandle::X11(x11) => {
+                if layout_state == 0 {
+                    self.clear_toplevel_layout_maps(window_id);
+                } else {
+                    self.cancel_shell_move_resize_for_window(window_id);
+                    if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
+                        let geometry = x11.geometry();
+                        self.windows.toplevel_floating_restore.insert(
+                            window_id,
+                            (
+                                geometry.loc.x,
+                                geometry.loc.y,
+                                geometry.size.w,
+                                geometry.size.h,
+                            ),
+                        );
+                    }
+                }
+                let _ = self.windows.window_registry.update_native(window_id, |window_info| {
+                    window_info.maximized = layout_state == 1;
+                    window_info.fullscreen = false;
+                    window_info.x = x;
+                    window_info.y = y;
+                    window_info.width = w.max(1);
+                    window_info.height = h.max(1);
+                    window_info.output_name = target_output_name.to_string();
+                });
+                self.capture_refresh_window_source_cache(window_id);
+                let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
+                if let Err(error) = x11.set_fullscreen(false) {
+                    tracing::warn!(window_id, ?error, "x11 set_fullscreen failed");
+                }
+                if let Err(error) = x11.set_maximized(layout_state == 1) {
+                    tracing::warn!(window_id, ?error, "x11 set_maximized failed");
+                }
+                if let Err(error) = x11.configure(Some(rect)) {
+                    tracing::warn!(window_id, ?error, "x11 configure failed");
+                }
+                self.workspace_relayout_auto_layout_outputs_after_geometry(
+                    previous_output_name,
+                    target_output_name,
+                );
+                self.shell_reply_window_list();
+                true
+            }
+            RestoreHandle::None => false,
+        }
+    }
+
     pub fn shell_set_window_geometry(
         &mut self,
         window_id: u32,
@@ -9206,98 +9323,19 @@ impl CompositorState {
         let target_output_name = self
             .output_for_window_position(x, y, w, h)
             .unwrap_or_default();
-        if info.minimized {
-            if let Some(window) = self.windows.shell_minimized_windows.get(&window_id).cloned() {
-                if layout_state == 0 {
-                    self.clear_toplevel_layout_maps(window_id);
-                } else if layout_state == 1 {
-                    self.cancel_shell_move_resize_for_window(window_id);
-                    if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
-                        if let Some(s) = self.toplevel_rect_snapshot(&window) {
-                            self.windows.toplevel_floating_restore.insert(window_id, s);
-                        }
-                    }
-                }
-                let _ = self.windows.window_registry
-                    .update_native(window_id, |window_info| {
-                        if layout_state == 1 {
-                            window_info.maximized = true;
-                        } else {
-                            window_info.maximized = false;
-                        }
-                        window_info.fullscreen = false;
-                        window_info.x = x;
-                        window_info.y = y;
-                        window_info.width = w.max(1);
-                        window_info.height = h.max(1);
-                        window_info.output_name = target_output_name.clone();
-                    });
-                self.capture_refresh_window_source_cache(window_id);
-                let tl = window.toplevel().unwrap();
-                tl.with_pending_state(|state| {
-                    state.states.unset(xdg_toplevel::State::Fullscreen);
-                    state.fullscreen_output = None;
-                    if layout_state == 1 {
-                        state.states.set(xdg_toplevel::State::Maximized);
-                    } else {
-                        state.states.unset(xdg_toplevel::State::Maximized);
-                    }
-                    state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
-                });
-                tl.send_pending_configure();
-                self.workspace_relayout_auto_layout_outputs_after_geometry(
-                    &previous_output_name,
-                    &target_output_name,
-                );
-                self.shell_reply_window_list();
-                return;
-            }
-            if let Some(x11) = self.windows.shell_minimized_x11_windows.get(&window_id).cloned() {
-                if layout_state == 0 {
-                    self.clear_toplevel_layout_maps(window_id);
-                } else {
-                    self.cancel_shell_move_resize_for_window(window_id);
-                    if !self.windows.toplevel_floating_restore.contains_key(&window_id) {
-                        let geometry = x11.geometry();
-                        self.windows.toplevel_floating_restore.insert(
-                            window_id,
-                            (
-                                geometry.loc.x,
-                                geometry.loc.y,
-                                geometry.size.w,
-                                geometry.size.h,
-                            ),
-                        );
-                    }
-                }
-                let _ = self.windows.window_registry
-                    .update_native(window_id, |window_info| {
-                        window_info.maximized = layout_state == 1;
-                        window_info.fullscreen = false;
-                        window_info.x = x;
-                        window_info.y = y;
-                        window_info.width = w.max(1);
-                        window_info.height = h.max(1);
-                        window_info.output_name = target_output_name.clone();
-                    });
-                self.capture_refresh_window_source_cache(window_id);
-                let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
-                if let Err(error) = x11.set_fullscreen(false) {
-                    tracing::warn!(window_id, ?error, "x11 set_fullscreen failed");
-                }
-                if let Err(error) = x11.set_maximized(layout_state == 1) {
-                    tracing::warn!(window_id, ?error, "x11 set_maximized failed");
-                }
-                if let Err(error) = x11.configure(Some(rect)) {
-                    tracing::warn!(window_id, ?error, "x11 configure failed");
-                }
-                self.workspace_relayout_auto_layout_outputs_after_geometry(
-                    &previous_output_name,
-                    &target_output_name,
-                );
-                self.shell_reply_window_list();
-                return;
-            }
+        if info.minimized
+            && self.shell_set_hidden_native_window_geometry(
+                window_id,
+                x,
+                y,
+                w,
+                h,
+                &target_output_name,
+                &previous_output_name,
+                layout_state,
+            )
+        {
+            return;
         }
         if let Some(window) = self.find_window_by_surface_id(sid) {
             if layout_state == 0 {
@@ -9310,45 +9348,6 @@ impl CompositorState {
                     }
                 }
             }
-
-            if info.minimized {
-                let _ = self.windows.window_registry
-                    .update_native(window_id, |window_info| {
-                        if layout_state == 1 {
-                            window_info.maximized = true;
-                        } else {
-                            window_info.maximized = false;
-                        }
-                        window_info.fullscreen = false;
-                        window_info.x = x;
-                        window_info.y = y;
-                        window_info.width = w.max(1);
-                        window_info.height = h.max(1);
-                        window_info.output_name = target_output_name.clone();
-                    });
-                self.capture_refresh_window_source_cache(window_id);
-                if let Some(window) = self.windows.shell_minimized_windows.get(&window_id) {
-                    let tl = window.toplevel().unwrap();
-                    tl.with_pending_state(|state| {
-                        state.states.unset(xdg_toplevel::State::Fullscreen);
-                        state.fullscreen_output = None;
-                        if layout_state == 1 {
-                            state.states.set(xdg_toplevel::State::Maximized);
-                        } else {
-                            state.states.unset(xdg_toplevel::State::Maximized);
-                        }
-                        state.size = Some(smithay::utils::Size::from((w.max(1), h.max(1))));
-                    });
-                    tl.send_pending_configure();
-                }
-                self.workspace_relayout_auto_layout_outputs_after_geometry(
-                    &previous_output_name,
-                    &target_output_name,
-                );
-                self.shell_reply_window_list();
-                return;
-            }
-
             let (map_x, map_y, content_w, content_h) = (x, y, w.max(1), h.max(1));
 
             let tl = window.toplevel().unwrap();
@@ -9403,37 +9402,6 @@ impl CompositorState {
                     (location.x, location.y, geometry.size.w, geometry.size.h),
                 );
             }
-        }
-        if info.minimized {
-            let _ = self.windows.window_registry
-                .update_native(window_id, |window_info| {
-                    window_info.maximized = layout_state == 1;
-                    window_info.fullscreen = false;
-                    window_info.x = x;
-                    window_info.y = y;
-                    window_info.width = w.max(1);
-                    window_info.height = h.max(1);
-                    window_info.output_name = target_output_name.clone();
-                });
-            self.capture_refresh_window_source_cache(window_id);
-            if let Some(window) = self.windows.shell_minimized_x11_windows.get(&window_id) {
-                let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
-                if let Err(error) = window.set_fullscreen(false) {
-                    tracing::warn!(window_id, ?error, "x11 set_fullscreen failed");
-                }
-                if let Err(error) = window.set_maximized(layout_state == 1) {
-                    tracing::warn!(window_id, ?error, "x11 set_maximized failed");
-                }
-                if let Err(error) = window.configure(Some(rect)) {
-                    tracing::warn!(window_id, ?error, "x11 configure failed");
-                }
-                self.workspace_relayout_auto_layout_outputs_after_geometry(
-                    &previous_output_name,
-                    &target_output_name,
-                );
-                self.shell_reply_window_list();
-            }
-            return;
         }
         let rect = Rectangle::new(Point::from((x, y)), Size::from((w.max(1), h.max(1))));
         self.apply_x11_window_bounds(window_id, &x11, rect, layout_state == 1, false, true);
@@ -9548,10 +9516,54 @@ impl CompositorState {
         if self.input_routing.shell_resize_window_id == Some(window_id) {
             self.shell_resize_end(window_id);
         }
+        if let Some(record) = self.windows.window_registry.window_record(window_id) {
+            match record.restore_handle {
+                RestoreHandle::Wayland(window) => {
+                    let Some(tl) = window.toplevel() else {
+                        return;
+                    };
+                    let _ = self.windows.window_registry
+                        .transition(window_id, WindowLifecycleEvent::RequestClose);
+                    self.windows.shell_close_pending_native_windows.insert(window_id);
+                    tl.send_close();
+                    tracing::warn!(
+                        target: "derp_shell_close",
+                        window_id,
+                        "shell_close_window done minimized_wayland_send_close"
+                    );
+                    return;
+                }
+                RestoreHandle::X11(x11) => {
+                    if self.x11_window_should_hide_to_tray_on_close(&info) {
+                        self.shell_hide_x11_window_to_tray(window_id, &x11);
+                        return;
+                    }
+                    let _ = self.windows.window_registry
+                        .transition(window_id, WindowLifecycleEvent::RequestClose);
+                    self.windows.shell_close_pending_native_windows.insert(window_id);
+                    if let Err(error) = x11.close() {
+                        tracing::warn!(
+                            target: "derp_toplevel",
+                            window_id,
+                            ?error,
+                            "shell_close_window minimized x11 close failed"
+                        );
+                        self.windows.shell_close_pending_native_windows.remove(&window_id);
+                        self.windows.shell_close_refocus_targets.remove(&window_id);
+                        let _ = self.windows.window_registry
+                            .transition(window_id, WindowLifecycleEvent::Minimize);
+                    }
+                    return;
+                }
+                RestoreHandle::None => {}
+            }
+        }
         if let Some(window) = self.find_window_by_surface_id(sid) {
             let Some(tl) = window.toplevel() else {
                 return;
             };
+            let _ = self.windows.window_registry
+                .transition(window_id, WindowLifecycleEvent::RequestClose);
             self.windows.shell_close_pending_native_windows.insert(window_id);
             tracing::warn!(
                 target: "derp_toplevel",
@@ -9606,6 +9618,8 @@ impl CompositorState {
             app_id = %info.app_id,
             "shell_close_window x11 close"
         );
+        let _ = self.windows.window_registry
+            .transition(window_id, WindowLifecycleEvent::RequestClose);
         self.windows.shell_close_pending_native_windows.insert(window_id);
         if let Err(error) = x11.close() {
             tracing::warn!(
@@ -9616,6 +9630,8 @@ impl CompositorState {
             );
             self.windows.shell_close_pending_native_windows.remove(&window_id);
             self.windows.shell_close_refocus_targets.remove(&window_id);
+            let _ = self.windows.window_registry
+                .transition(window_id, WindowLifecycleEvent::Map);
         } else {
             tracing::warn!(
                 target: "derp_shell_close",
@@ -9639,7 +9655,7 @@ impl CompositorState {
                 Some(smithay::wayland::compositor::BufferAssignment::Removed)
             )
         });
-        let pending_deferred = self.wayland_window_id_is_pending_deferred_toplevel(window_id);
+        let pending_deferred = self.window_id_is_deferred_initial_map(window_id);
         let Some(window) = self.output_topology.space.elements().find_map(|e| {
             if let DerpSpaceElem::Wayland(w) = e {
                 (w.toplevel().unwrap().wl_surface() == root).then_some(w.clone())
@@ -9676,7 +9692,7 @@ impl CompositorState {
             self.windows.shell_pending_native_focus_window_id = None;
         }
         self.shell_window_stack_forget(window_id);
-        self.windows.shell_minimized_windows.remove(&window_id);
+        self.windows.window_registry.clear_restore_handle(window_id);
         if keyboard_had_focus {
             let serial = SERIAL_COUNTER.next_serial();
             self.input_routing.seat
@@ -10019,6 +10035,9 @@ impl CompositorState {
         if self.window_info_is_solid_shell_host(&info) {
             return;
         }
+        if self.windows.window_registry.lifecycle(window_id) == Some(WindowLifecycle::CloseRequested) {
+            return;
+        }
         if info.minimized {
             return;
         }
@@ -10034,10 +10053,11 @@ impl CompositorState {
         if let Some(window) = self.find_window_by_surface_id(sid) {
             let _ = window.set_activated(false);
             window.toplevel().unwrap().send_pending_configure();
-            self.windows.shell_minimized_windows
-                .insert(window_id, window.clone());
+            let _ = self.windows.window_registry
+                .set_restore_handle(window_id, RestoreHandle::Wayland(window.clone()));
+            let _ = self.windows.window_registry
+                .transition(window_id, WindowLifecycleEvent::Minimize);
             self.output_topology.space.unmap_elem(&DerpSpaceElem::Wayland(window));
-            self.windows.window_registry.set_minimized(window_id, true);
 
             if self.keyboard_focused_window_id() == Some(window_id) {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -10055,8 +10075,10 @@ impl CompositorState {
         let Some(x11) = self.find_x11_window_by_surface_id(sid) else {
             return;
         };
-        self.windows.shell_minimized_x11_windows
-            .insert(window_id, x11.clone());
+        let _ = self.windows.window_registry
+            .set_restore_handle(window_id, RestoreHandle::X11(x11.clone()));
+        let _ = self.windows.window_registry
+            .transition(window_id, WindowLifecycleEvent::Minimize);
         if self.windows.shell_pending_native_focus_window_id == Some(window_id) {
             self.windows.shell_pending_native_focus_window_id = None;
         }
@@ -10067,10 +10089,6 @@ impl CompositorState {
             tracing::warn!(window_id, ?error, "x11 set_hidden failed");
         }
         self.output_topology.space.unmap_elem(&DerpSpaceElem::X11(x11.clone()));
-        let _ = self.windows.window_registry
-            .update_native(window_id, |window_info| {
-                window_info.minimized = true;
-            });
         if self.keyboard_focused_window_id() == Some(window_id) {
             let serial = SERIAL_COUNTER.next_serial();
             self.input_routing.seat
@@ -10103,7 +10121,8 @@ impl CompositorState {
         if !info.minimized {
             return;
         }
-        if let Some(window) = self.windows.shell_minimized_windows.remove(&window_id) {
+        match self.windows.window_registry.take_restore_handle(window_id) {
+            RestoreHandle::Wayland(window) => {
             self.shell_keyboard_capture_clear();
             self.output_topology.space.elements().for_each(|e| {
                 e.set_activate(false);
@@ -10117,7 +10136,8 @@ impl CompositorState {
                 (info.x, info.y),
                 true,
             );
-            let _ = self.windows.window_registry.set_minimized(window_id, false);
+            let _ = self.windows.window_registry
+                .transition(window_id, WindowLifecycleEvent::Restore);
 
             let _ = window.set_activated(true);
             self.output_topology.space
@@ -10146,11 +10166,8 @@ impl CompositorState {
             );
             self.shell_emit_window_state(window_id, false);
             return;
-        }
-        let Some(x11) = self.windows.shell_minimized_x11_windows.remove(&window_id) else {
-            let _ = self.windows.window_registry.set_minimized(window_id, false);
-            return;
-        };
+            }
+            RestoreHandle::X11(x11) => {
 
         self.shell_keyboard_capture_clear();
         self.output_topology.space.elements().for_each(|e| {
@@ -10160,7 +10177,8 @@ impl CompositorState {
             }
         });
         self.windows.shell_pending_native_focus_window_id = Some(window_id);
-        let _ = self.windows.window_registry.set_minimized(window_id, false);
+        let _ = self.windows.window_registry
+            .transition(window_id, WindowLifecycleEvent::Restore);
         if let Err(error) = x11.set_hidden(false) {
             tracing::warn!(window_id, ?error, "x11 set_hidden(false) failed");
         }
@@ -10191,6 +10209,12 @@ impl CompositorState {
         self.shell_emit_window_state(window_id, false);
         if self.windows.shell_pending_native_focus_window_id == Some(window_id) {
             self.shell_raise_and_focus_window(window_id);
+        }
+            }
+            RestoreHandle::None => {
+                let _ = self.windows.window_registry
+                    .transition(window_id, WindowLifecycleEvent::Restore);
+            }
         }
     }
 

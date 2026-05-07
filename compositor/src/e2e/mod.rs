@@ -13,7 +13,7 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat;
 
 use crate::derp_space::DerpSpaceElem;
-use crate::window_registry::WindowKind;
+use crate::window_registry::{WindowBackend, WindowKind, WindowLifecycle};
 use crate::CompositorState;
 
 static NEXT_SCREENSHOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -157,6 +157,8 @@ struct E2eWindowSnapshot {
     fullscreen: bool,
     client_side_decoration: bool,
     shell_hosted: bool,
+    backend: String,
+    lifecycle: String,
     wayland_client_pid: Option<i32>,
     content_type: String,
     tearing_hint: String,
@@ -252,6 +254,25 @@ struct E2eFloatingLayerSnapshot {
 }
 
 impl CompositorState {
+    fn e2e_window_backend_label(backend: WindowBackend) -> &'static str {
+        match backend {
+            WindowBackend::WaylandXdg => "wayland_xdg",
+            WindowBackend::X11 => "x11",
+            WindowBackend::ShellHosted => "shell_hosted",
+        }
+    }
+
+    fn e2e_window_lifecycle_label(lifecycle: WindowLifecycle) -> &'static str {
+        match lifecycle {
+            WindowLifecycle::Registered => "registered",
+            WindowLifecycle::DeferredInitialMap => "deferred_initial_map",
+            WindowLifecycle::Mapped => "mapped",
+            WindowLifecycle::Minimized => "minimized",
+            WindowLifecycle::TrayHidden => "tray_hidden",
+            WindowLifecycle::CloseRequested => "close_requested",
+        }
+    }
+
     fn e2e_interaction_visual_snapshot(
         &self,
         window_id: Option<u32>,
@@ -627,6 +648,8 @@ impl CompositorState {
                     fullscreen: record.info.fullscreen,
                     client_side_decoration: record.info.client_side_decoration,
                     shell_hosted: record.kind == WindowKind::ShellHosted,
+                    backend: Self::e2e_window_backend_label(record.backend).to_string(),
+                    lifecycle: Self::e2e_window_lifecycle_label(record.lifecycle).to_string(),
                     wayland_client_pid: record.info.wayland_client_pid,
                     content_type: self.content_type_label_for_window_id(record.info.window_id),
                     tearing_hint: self.tearing_hint_label_for_window_id(record.info.window_id),
@@ -672,14 +695,11 @@ impl CompositorState {
             .copied()
             .map(Self::e2e_rect_snapshot)
             .collect();
-        let mut pending_deferred_window_ids: Vec<u32> = self.windows.pending_deferred_toplevels
-            .values()
-            .filter_map(|pending| {
-                pending.window.toplevel().and_then(|toplevel| {
-                    self.windows.window_registry
-                        .window_id_for_wl_surface(toplevel.wl_surface())
-                })
-            })
+        let mut pending_deferred_window_ids: Vec<u32> = self.windows.window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| record.lifecycle == WindowLifecycle::DeferredInitialMap)
+            .map(|record| record.info.window_id)
             .collect();
         pending_deferred_window_ids.sort_unstable();
         pending_deferred_window_ids.dedup();

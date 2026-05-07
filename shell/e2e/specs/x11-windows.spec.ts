@@ -137,6 +137,8 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(spawned.window.y > 0, `expected x11 spawn y > 0, got ${spawned.window.y}`)
     assert(spawnedOutput?.scale === 1.5, `expected 1.5 output scale, got ${spawnedOutput?.scale}`)
     assert(spawned.window.xwayland_scale === 1, `expected x11 preferred scale 1, got ${spawned.window.xwayland_scale}`)
+    assert(spawned.window.backend === 'x11', `expected x11 backend, got ${spawned.window.backend}`)
+    assert(spawned.window.lifecycle === 'mapped', `expected mapped lifecycle, got ${spawned.window.lifecycle}`)
 
     const shellWithTaskbar = await waitForTaskbarEntry(base, windowId)
     const shellWindow = shellWindowById(shellWithTaskbar, windowId)
@@ -174,6 +176,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await activateTaskbarWindow(base, shellBeforeMinimize, windowId)
     const minimized = await waitForWindowMinimized(base, windowId)
     assert(shellWindowById(minimized.shell, windowId)?.minimized, 'x11 taskbar minimize should mark shell window minimized')
+    assert(compositorWindowById(minimized.compositor, windowId)?.lifecycle === 'minimized', 'x11 lifecycle did not minimize')
 
     await activateTaskbarWindow(base, minimized.shell, windowId)
     await waitForNativeFocus(base, windowId)

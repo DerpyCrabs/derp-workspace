@@ -140,7 +140,8 @@ impl XwmHandler for CompositorState {
                 self.core.loop_signal.wakeup();
                 return;
             }
-            if self.windows.shell_minimized_x11_windows.contains_key(&window_id)
+            if self.windows.window_registry.lifecycle(window_id)
+                == Some(WindowLifecycle::Minimized)
                 && !self.windows.shell_close_pending_native_windows.contains(&window_id)
             {
                 self.output_topology.space.unmap_elem(&DerpSpaceElem::X11(window.clone()));

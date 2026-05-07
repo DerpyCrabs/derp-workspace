@@ -230,7 +230,7 @@ impl XdgActivationHandler for CompositorState {
                 return;
             }
             self.shell_restore_minimized_window(window_id);
-        } else if self.wayland_window_id_is_pending_deferred_toplevel(window_id) {
+        } else if self.window_id_is_deferred_initial_map(window_id) {
             self.windows.shell_pending_native_focus_window_id = Some(window_id);
         } else {
             self.shell_raise_and_focus_window(window_id);

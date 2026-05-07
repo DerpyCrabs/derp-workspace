@@ -11,8 +11,6 @@ pub(crate) struct WindowManagementState {
     pub(crate) x11_client: Option<Client>,
     pub(crate) shell_spawn_known_native_window_ids: Option<HashSet<u32>>,
     pub(crate) shell_spawn_target_output_name: Option<String>,
-    pub(crate) shell_minimized_windows: HashMap<u32, Window>,
-    pub(crate) shell_minimized_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_pending_native_configure_frames: HashMap<u32, PendingNativeConfigureFrame>,
     pub(crate) shell_known_x11_windows: HashMap<u32, X11Surface>,
     pub(crate) shell_pending_native_focus_window_id: Option<u32>,
@@ -423,7 +421,8 @@ impl WindowManagementState {
         let (title, app_id) = Self::x11_window_title_app_id(window);
         let geometry = window.geometry();
         let pid = window.pid().and_then(|pid| i32::try_from(pid).ok());
-        let compositor_minimized = self.shell_minimized_x11_windows.contains_key(&window_id);
+        let compositor_minimized = self.window_registry.lifecycle(window_id)
+            == Some(WindowLifecycle::Minimized);
         let minimized = compositor_minimized || (window.is_hidden() && prev.minimized);
         let skip_x11_geometry = compositor_minimized && !in_space;
         let width = geometry.size.w.max(1);

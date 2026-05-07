@@ -162,7 +162,7 @@ impl CompositorState {
             self.scratchpad_forget_window(window_id);
             return;
         };
-        if self.wayland_window_id_is_pending_deferred_toplevel(window_id) {
+        if self.window_id_is_deferred_initial_map(window_id) {
             return;
         }
         let matched = self.scratchpad_match_for_window(window_id, &info);
