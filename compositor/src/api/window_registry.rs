@@ -241,6 +241,21 @@ impl WindowRegistry {
         Some(wid)
     }
 
+    pub fn surface_key_for_window(&self, window_id: WindowId) -> Option<(ClientId, u32)> {
+        self.by_surface
+            .iter()
+            .find_map(|(key, wid)| (*wid == window_id).then(|| key.clone()))
+    }
+
+    pub fn remove_by_window_id(&mut self, window_id: WindowId) -> Option<WindowInfo> {
+        self.by_surface.retain(|_, wid| *wid != window_id);
+        let removed = self.records.remove(&window_id).map(|record| record.info);
+        if removed.is_some() {
+            self.bump_revision();
+        }
+        removed
+    }
+
     pub fn native_infos_for_client(&self, client_id: &ClientId) -> Vec<WindowInfo> {
         self.by_surface
             .iter()

@@ -925,6 +925,7 @@ impl DrmSession {
 }
 
 fn drm_idle_render(data: &mut CalloopData) {
+    data.state.handle_pending_wayland_client_disconnects();
     let Some(drms) = data.drm.as_mut() else {
         return;
     };

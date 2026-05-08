@@ -225,6 +225,28 @@ fi
 EOF
 fi
 
+echo "=== ensure remote wleird clients ==="
+ssh_base bash -s <<'REMOTE'
+set -euo pipefail
+if command -v wleird-frame-callback >/dev/null 2>&1 \
+  && command -v wleird-surface-outputs >/dev/null 2>&1 \
+  && command -v wleird-disobey-resize >/dev/null 2>&1; then
+  exit 0
+fi
+src="$HOME/src/wleird"
+if [[ -d "$src/.git" ]]; then
+  git -C "$src" fetch --depth 1 origin main
+  git -C "$src" checkout --detach FETCH_HEAD
+else
+  mkdir -p "$(dirname "$src")"
+  git clone --depth 1 https://gitlab.freedesktop.org/emersion/wleird.git "$src"
+fi
+cd "$src"
+meson setup build --prefix=/usr/local --wipe
+ninja -C build
+sudo ninja -C build install
+REMOTE
+
 if [[ "$DERP_E2E_SOFTWARE_SESSION" == "1" ]]; then
   echo "=== enable remote CEF software rendering for e2e ==="
   ssh_base bash -s <<EOF

@@ -606,6 +606,7 @@ impl CompositorState {
     }
 
     pub(crate) fn e2e_compositor_snapshot_json(&mut self) -> Result<String, String> {
+        self.handle_pending_wayland_client_disconnects();
         self.sync_shell_shared_state_for_input();
         let pointer = self.input_routing.seat
             .get_pointer()

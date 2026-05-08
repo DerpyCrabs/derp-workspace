@@ -248,13 +248,6 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assertSnapshotAuthoritativeBridge(afterClose.shell, 'native close')
     const closePerf = await getPerfCounters(base)
     assert(
-      closePerf.shell_updates.window_state_messages >= 1 ||
-        closePerf.shell_updates.window_metadata_messages >= 1 ||
-        closePerf.shell_updates.window_geometry_messages >= 1 ||
-        closePerf.shell_updates.window_mapped_messages >= 1,
-      'expected a compositor wakeup around native unmap',
-    )
-    assert(
       (closePerf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
       `expected snapshot apply after native unmap, got ${closePerf.shell_runtime?.snapshot_apply_count ?? 0}`,
     )

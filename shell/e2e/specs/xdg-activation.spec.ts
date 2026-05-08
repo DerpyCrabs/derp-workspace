@@ -20,6 +20,7 @@ import {
   tapKey,
   taskbarEntry,
   waitFor,
+  waitForTaskbarEntry,
 } from '../lib/runtime.ts'
 import { postJson, spawnNativeWindow } from '../lib/setup.ts'
 
@@ -174,6 +175,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
     })
     const windowId = spawned.window.window_id
     state.spawnedNativeWindowIds.add(windowId)
+    await waitForTaskbarEntry(base, windowId)
     await minimizeWindow(base, windowId)
     await waitForWindowMinimized(base, windowId)
     const shell = (await getSnapshots(base)).shell

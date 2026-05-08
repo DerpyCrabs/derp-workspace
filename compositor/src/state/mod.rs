@@ -161,8 +161,8 @@ pub(crate) fn toplevel_should_defer_initial_map(
     app_id.trim().is_empty()
 }
 
-pub(crate) fn shell_window_row_should_show(info: &WindowInfo) -> bool {
-    !info.app_id.trim().is_empty()
+pub(crate) fn shell_window_row_should_show(_info: &WindowInfo) -> bool {
+    true
 }
 
 #[derive(Debug)]
@@ -2371,6 +2371,51 @@ impl CompositorState {
         for client_id in pending {
             self.cleanup_disconnected_wayland_client(client_id);
         }
+        self.cleanup_dead_native_client_processes();
+    }
+
+    pub(crate) fn cleanup_dead_native_client_processes(&mut self) {
+        let infos: Vec<_> = self.windows.window_registry
+            .all_records()
+            .into_iter()
+            .filter(|record| {
+                record.kind == WindowKind::Native
+                    && record.backend == WindowBackend::WaylandXdg
+                    && record.info.wayland_client_pid.is_some_and(|pid| {
+                        pid > 0 && std::fs::metadata(format!("/proc/{pid}")).is_err()
+                    })
+            })
+            .map(|record| record.info)
+            .collect();
+        for info in infos {
+            self.cleanup_dead_native_window(info);
+        }
+    }
+
+    fn cleanup_dead_native_window(&mut self, info: WindowInfo) {
+        if let Some(window) = self.find_window_by_surface_id(info.surface_id) {
+            self.output_topology.space.unmap_elem(&DerpSpaceElem::Wayland(window));
+        }
+        if let Some(key) = self.windows.window_registry.surface_key_for_window(info.window_id) {
+            self.windows.pending_deferred_toplevels.remove(&key);
+        }
+        self.clear_toplevel_layout_maps(info.window_id);
+        self.windows.pending_gnome_initial_toplevels.remove(&info.window_id);
+        self.windows.shell_close_pending_native_windows
+            .remove(&info.window_id);
+        self.shell_window_stack_forget(info.window_id);
+        self.windows.shell_known_x11_windows.remove(&info.window_id);
+        self.tray_notifications.shell_tray_hidden_x11_windows.remove(&info.window_id);
+        self.forget_tray_hidden_x11_window_id(info.window_id);
+        self.capture_forget_window_source_cache(info.window_id);
+        if self.windows.shell_pending_native_focus_window_id == Some(info.window_id) {
+            self.windows.shell_pending_native_focus_window_id = None;
+        }
+        let keyboard_had_focus = self.keyboard_focused_window_id() == Some(info.window_id);
+        if let Some(removed) = self.windows.window_registry.remove_by_window_id(info.window_id) {
+            self.shell_emit_chrome_window_unmapped(removed.window_id, Some(removed));
+            self.try_refocus_after_closed_window(info.window_id, keyboard_had_focus);
+        }
     }
 
     fn cleanup_disconnected_wayland_client(&mut self, client_id: ClientId) {
@@ -4265,16 +4310,14 @@ impl CompositorState {
                     attrs.app_id.clone().unwrap_or_default(),
                 )
             });
-            let ident = !app_id.trim().is_empty();
             let geo = pending.window.geometry();
             let matches_initial_rect = pending.initial_client_rect.is_none_or(|rect| {
                 geo.size.w == rect.size.w.max(1) && geo.size.h == rect.size.h.max(1)
             });
-            let retry_initial_resize = ident
-                && has_buffer_extent
+            let retry_initial_resize = has_buffer_extent
                 && pending.initial_client_rect.is_some()
                 && !matches_initial_rect;
-            let ready = ident && has_buffer_extent && matches_initial_rect;
+            let ready = has_buffer_extent && matches_initial_rect;
             (ready, title, app_id, retry_initial_resize)
         };
         if retry_initial_resize {

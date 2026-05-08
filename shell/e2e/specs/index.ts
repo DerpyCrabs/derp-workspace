@@ -21,6 +21,7 @@ import taskbarCloseGroup from './taskbar-close.spec.ts'
 import textEditorGroup from './text-editor.spec.ts'
 import waylandProtocolsGroup from './wayland-protocols.spec.ts'
 import windowParityGroup from './window-parity.spec.ts'
+import wleirdGroup from './wleird.spec.ts'
 import x11WindowsGroup from './x11-windows.spec.ts'
 import xdgActivationGroup from './xdg-activation.spec.ts'
 
@@ -29,6 +30,7 @@ export const defaultGroups = [
   compositorSnapshotGroup,
   nativeWindowsGroup,
   waylandProtocolsGroup,
+  wleirdGroup,
   notificationsGroup,
   windowParityGroup,
   x11WindowsGroup,
