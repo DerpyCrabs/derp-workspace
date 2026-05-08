@@ -500,6 +500,8 @@ describe('registerCompositorBridgeRuntime', () => {
             height: 480,
             title: 'Settings',
             app_id: 'derp.settings',
+            icon_name: '',
+            icon_buffers: [],
             output_id: '',
             output_name: 'DP-4',
             kind: 'settings',

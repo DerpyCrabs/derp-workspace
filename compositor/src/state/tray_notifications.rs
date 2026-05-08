@@ -368,6 +368,7 @@ mod tests {
             surface_id: 8,
             title: title.into(),
             app_id: app_id.into(),
+            icon: crate::chrome_bridge::WindowIconInfo::default(),
             wayland_client_pid: pid,
             x: 0,
             y: 0,

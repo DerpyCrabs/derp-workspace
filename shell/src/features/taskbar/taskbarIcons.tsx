@@ -12,9 +12,10 @@ import Music4 from 'lucide-solid/icons/music-4'
 import Settings from 'lucide-solid/icons/settings'
 import SquareTerminal from 'lucide-solid/icons/square-terminal'
 import Video from 'lucide-solid/icons/video'
-import { createEffect, type Component } from 'solid-js'
+import { createEffect, createMemo, createSignal, type Component } from 'solid-js'
 import { renderFileBrowserCustomIcon } from '@/apps/file-browser/fileBrowserCustomIcons'
 import { useFileBrowserFilesSettings } from '@/apps/file-browser/fileBrowserFilesSettings'
+import { shellHttpBase } from '@/features/bridge/shellHttp'
 
 export type TaskbarIconMeta = {
   title: string
@@ -123,7 +124,10 @@ function monogram(meta: TaskbarIconMeta): string {
 }
 
 function accentColor(meta: TaskbarIconMeta): string {
-  const key = normalizedKey(meta) || 'app'
+  const key = [meta.desktopIcon, meta.desktopId, meta.appId, meta.title]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    ?.trim()
+    .toLowerCase() || 'app'
   let hash = 0
   for (let i = 0; i < key.length; i += 1) {
     hash = (hash * 33 + key.charCodeAt(i)) >>> 0
@@ -137,12 +141,19 @@ export function TaskbarWindowIcon(props: {
   compact?: boolean
 }) {
   const filesSettings = useFileBrowserFilesSettings()
+  const [failedImageKey, setFailedImageKey] = createSignal<string | null>(null)
   createEffect(() => {
     if (!props.meta.shellFilePath) return
     void filesSettings.warm()
   })
   const Icon = chooseIcon(props.meta)
   const sizeClass = props.compact ? 'h-4 w-4' : 'h-[18px] w-[18px]'
+  const imageSrc = createMemo(() => {
+    const icon = props.meta.desktopIcon?.trim()
+    const base = shellHttpBase()
+    if (!icon || !base || failedImageKey() === icon) return null
+    return `${base}/desktop_icon?name=${encodeURIComponent(icon)}`
+  })
   const customIcon = () => {
     const path = props.meta.shellFilePath
     if (!path) return null
@@ -156,13 +167,23 @@ export function TaskbarWindowIcon(props: {
       style={{
         width: props.compact ? '18px' : '20px',
         height: props.compact ? '18px' : '20px',
-        'background-color': accentColor(props.meta),
+        'background-color': imageSrc() ? 'transparent' : accentColor(props.meta),
         opacity: props.active ? '1' : '0.92',
       }}
       aria-hidden="true"
     >
       {customIcon() ? (
         customIcon()
+      ) : imageSrc() ? (
+        <img
+          src={imageSrc()!}
+          class="h-full w-full object-contain"
+          draggable={false}
+          onError={() => {
+            const icon = props.meta.desktopIcon?.trim()
+            if (icon) setFailedImageKey(icon)
+          }}
+        />
       ) : Icon ? (
         <Icon class={sizeClass} stroke-width={2.2} />
       ) : (

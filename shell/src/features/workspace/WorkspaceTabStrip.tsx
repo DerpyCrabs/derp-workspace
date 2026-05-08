@@ -1,13 +1,14 @@
-import FileText from 'lucide-solid/icons/file-text'
 import X from 'lucide-solid/icons/x'
 import { For, Show, createEffect, createMemo, onCleanup, onMount } from 'solid-js'
 import type { TabMergeTarget } from '@/features/workspace/tabGroupOps'
 import { windowLabel } from '@/features/workspace/tabGroupOps'
+import { TaskbarWindowIcon } from '@/features/taskbar/taskbarIcons'
 
 export type WorkspaceTabStripTab = {
   window_id: number
   title: string
   app_id: string
+  icon_name: string
   active: boolean
   pinned: boolean
 }
@@ -249,7 +250,15 @@ export function WorkspaceTabStrip(props: WorkspaceTabStripProps) {
             data-workspace-tab-handle={tab().window_id}
             aria-hidden="true"
           >
-            <FileText class="h-3 w-3" stroke-width={2} />
+            <TaskbarWindowIcon
+              meta={{
+                title: tab().title,
+                appId: tab().app_id,
+                desktopIcon: tab().icon_name || null,
+              }}
+              active={tab().active}
+              compact
+            />
           </span>
           <span class="flex min-w-0 items-center gap-1">
             <Show when={tab().pinned}>

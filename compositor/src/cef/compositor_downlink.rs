@@ -641,8 +641,20 @@ fn apply_message(
             surface_id,
             title,
             app_id,
+            icon_name,
+            icon_buffers,
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_metadata();
+            let icon_buffers: Vec<Value> = icon_buffers
+                .into_iter()
+                .map(|buffer| {
+                    json!({
+                        "width": buffer.width,
+                        "height": buffer.height,
+                        "scale": buffer.scale,
+                    })
+                })
+                .collect();
             pending_details.push(detail_with_snapshot_epoch(
                 json!({
                     "type": "window_metadata",
@@ -650,6 +662,8 @@ fn apply_message(
                     "surface_id": surface_id,
                     "title": title,
                     "app_id": app_id,
+                    "icon_name": icon_name,
+                    "icon_buffers": icon_buffers,
                 }),
                 message_snapshot_epoch,
             ));
@@ -681,6 +695,12 @@ fn apply_message(
                         "kind": window.kind,
                         "x11_class": window.x11_class,
                         "x11_instance": window.x11_instance,
+                        "icon_name": window.icon_name,
+                        "icon_buffers": window.icon_buffers.into_iter().map(|buffer| json!({
+                            "width": buffer.width,
+                            "height": buffer.height,
+                            "scale": buffer.scale,
+                        })).collect::<Vec<Value>>(),
                     })
                 })
                 .collect();

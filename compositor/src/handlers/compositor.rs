@@ -150,6 +150,7 @@ impl CompositorHandler for CompositorState {
                 root = parent;
             }
             self.hide_bufferless_native_window(&root);
+            self.xdg_toplevel_icon_sync_committed(&root);
             let window = self.output_topology.space.elements().find_map(|e| {
                 if let DerpSpaceElem::Wayland(w) = e {
                     (w.toplevel().unwrap().wl_surface() == &root).then_some(w.clone())

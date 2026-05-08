@@ -4,7 +4,20 @@
 use std::sync::Arc;
 
 /// Protocol version for IPC evolution (`protocol_version` in messages).
-pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 4;
+pub const CHROME_BRIDGE_PROTOCOL_VERSION: u32 = 5;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowIconBufferInfo {
+    pub width: i32,
+    pub height: i32,
+    pub scale: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowIconInfo {
+    pub name: String,
+    pub buffers: Vec<WindowIconBufferInfo>,
+}
 
 /// Stable compositor window id, metadata, and layout in Smithay logical space.
 ///
@@ -18,6 +31,7 @@ pub struct WindowInfo {
     pub surface_id: u32,
     pub title: String,
     pub app_id: String,
+    pub icon: WindowIconInfo,
     /// Linux: Wayland client PID at map time; matches shell IPC `SO_PEERCRED` for `cef_host`.
     pub wayland_client_pid: Option<i32>,
     pub x: i32,

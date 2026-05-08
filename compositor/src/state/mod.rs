@@ -86,6 +86,7 @@ use smithay::{
         shm::ShmState,
         viewporter::ViewporterState,
         xdg_activation::{XdgActivationState, XdgActivationTokenData},
+        xdg_toplevel_icon::XdgToplevelIconManager,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
@@ -381,6 +382,7 @@ pub struct CompositorState {
     pub xdg_activation_state: XdgActivationState,
     pub(crate) xdg_activation_token_max_age_override: Option<Duration>,
     pub xdg_decoration_state: XdgDecorationState,
+    pub(crate) _xdg_toplevel_icon_manager: XdgToplevelIconManager,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
     pub cursor_shape_manager_state: CursorShapeManagerState,
@@ -814,6 +816,10 @@ impl CompositorState {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let mut xdg_toplevel_icon_manager = XdgToplevelIconManager::new::<Self>(&dh);
+        xdg_toplevel_icon_manager.add_icon_size(16);
+        xdg_toplevel_icon_manager.add_icon_size(32);
+        xdg_toplevel_icon_manager.add_icon_size(64);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let cursor_shape_manager_state = CursorShapeManagerState::new::<Self>(&dh);
@@ -1008,6 +1014,7 @@ impl CompositorState {
             xdg_activation_state,
             xdg_activation_token_max_age_override: None,
             xdg_decoration_state,
+            _xdg_toplevel_icon_manager: xdg_toplevel_icon_manager,
             fractional_scale_manager_state,
             viewporter_state,
             cursor_shape_manager_state,
@@ -4819,6 +4826,7 @@ impl CompositorState {
             surface_id: info.surface_id,
             title: info.title.clone(),
             app_id: info.app_id.clone(),
+            icon: info.icon.clone(),
             wayland_client_pid: info.wayland_client_pid,
             x: info.x.saturating_sub(ox),
             y: info.y.saturating_sub(oy),
@@ -7601,6 +7609,17 @@ impl CompositorState {
             kind: scratchpad_kind,
             x11_class,
             x11_instance,
+            icon_name: info.icon.name.clone(),
+            icon_buffers: info
+                .icon
+                .buffers
+                .iter()
+                .map(|buffer| shell_wire::ShellWindowIconBufferSnapshot {
+                    width: buffer.width,
+                    height: buffer.height,
+                    scale: buffer.scale,
+                })
+                .collect(),
         }
     }
 

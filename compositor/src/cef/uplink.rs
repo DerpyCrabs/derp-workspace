@@ -233,6 +233,13 @@ impl UplinkToCompositor {
         });
     }
 
+    pub fn shell_minimize_sync(&self, window_id: u32) -> Result<(), String> {
+        self.run_result(move |s| {
+            s.window_op_minimize(window_id);
+            Ok(())
+        })
+    }
+
     pub fn shell_set_fullscreen(&self, window_id: u32, enabled: bool) {
         self.run(move |s| {
             s.window_op_set_fullscreen(window_id, enabled);

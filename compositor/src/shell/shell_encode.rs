@@ -62,6 +62,17 @@ pub fn chrome_event_to_shell_message(
                 surface_id: info.surface_id,
                 title: info.title.clone(),
                 app_id: info.app_id.clone(),
+                icon_name: info.icon.name.clone(),
+                icon_buffers: info
+                    .icon
+                    .buffers
+                    .iter()
+                    .map(|buffer| shell_wire::ShellWindowIconBufferSnapshot {
+                        width: buffer.width,
+                        height: buffer.height,
+                        scale: buffer.scale,
+                    })
+                    .collect(),
             }
         }
         ChromeEvent::FocusChanged {

@@ -75,6 +75,10 @@ use wayland_protocols::ext::{
         ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
     },
 };
+use wayland_protocols::xdg::toplevel_icon::v1::client::{
+    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1,
+    xdg_toplevel_icon_v1::XdgToplevelIconV1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{Anchor, Event as LayerSurfaceEvent, ZwlrLayerSurfaceV1},
@@ -234,6 +238,10 @@ struct Args {
     ext_image_copy_capture_output: bool,
     #[arg(long, default_value_t = 3)]
     ext_image_copy_capture_frames: u32,
+    #[arg(long)]
+    xdg_icon_name: Option<String>,
+    #[arg(long, default_value_t = false)]
+    xdg_icon_shm: bool,
 }
 
 fn main() {
@@ -341,6 +349,15 @@ fn main() {
     } else {
         None
     };
+    let xdg_toplevel_icon_manager = if args.xdg_icon_name.is_some() || args.xdg_icon_shm {
+        Some(
+            globals
+                .bind::<XdgToplevelIconManagerV1, _, _>(&qh, 1..=1, ())
+                .expect("bind xdg_toplevel_icon_manager_v1"),
+        )
+    } else {
+        None
+    };
     let activation_state = ActivationState::bind(&globals, &qh).ok();
     let startup_activation_token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
     if startup_activation_token.is_some() {
@@ -353,6 +370,42 @@ fn main() {
     window.set_app_id(args.app_id.clone());
     window.set_min_size(Some((args.width, args.height)));
     window.set_max_size(Some((args.width, args.height)));
+    let mut icon_pool = None;
+    let mut icon_buffer = None;
+    let mut toplevel_icon = None;
+    if let Some(manager) = xdg_toplevel_icon_manager.as_ref() {
+        let icon = manager.create_icon(&qh, ());
+        if let Some(name) = args.xdg_icon_name.as_ref() {
+            icon.set_name(name.clone());
+        }
+        if args.xdg_icon_shm {
+            let icon_size = 16;
+            let mut pool = SlotPool::new((icon_size * icon_size * 4) as usize, &shm_state)
+                .expect("create icon shared memory pool");
+            let (buffer, canvas) = pool
+                .create_buffer(
+                    icon_size as i32,
+                    icon_size as i32,
+                    (icon_size * 4) as i32,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                )
+                .expect("create icon buffer");
+            for y in 0..icon_size {
+                for x in 0..icon_size {
+                    let index = ((y * icon_size + x) * 4) as usize;
+                    canvas[index] = if x < 8 { 0x30 } else { 0xf0 };
+                    canvas[index + 1] = if y < 8 { 0x40 } else { 0xd0 };
+                    canvas[index + 2] = 0xc0;
+                    canvas[index + 3] = 0xff;
+                }
+            }
+            icon.add_buffer(buffer.wl_buffer(), 1);
+            icon_pool = Some(pool);
+            icon_buffer = Some(buffer);
+        }
+        manager.set_icon(window.xdg_toplevel(), Some(&icon));
+        toplevel_icon = Some(icon);
+    }
     window.commit();
     let fifo = fifo_manager
         .as_ref()
@@ -411,6 +464,10 @@ fn main() {
         presentation,
         _content_type: content_type,
         _tearing_control: tearing_control,
+        _xdg_toplevel_icon_manager: xdg_toplevel_icon_manager,
+        _toplevel_icon: toplevel_icon,
+        _icon_pool: icon_pool,
+        _icon_buffer: icon_buffer,
         cursor_shape_manager,
         cursor_shape_device: None,
         fifo_smoke_draws: 0,
@@ -587,6 +644,10 @@ struct TestClient {
     presentation: Option<WpPresentation>,
     _content_type: Option<wp_content_type_v1::WpContentTypeV1>,
     _tearing_control: Option<wp_tearing_control_v1::WpTearingControlV1>,
+    _xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerV1>,
+    _toplevel_icon: Option<XdgToplevelIconV1>,
+    _icon_pool: Option<SlotPool>,
+    _icon_buffer: Option<Buffer>,
     cursor_shape_manager: Option<WpCursorShapeManagerV1>,
     cursor_shape_device: Option<WpCursorShapeDeviceV1>,
     fifo_smoke_draws: u32,
@@ -2892,6 +2953,8 @@ delegate_noop!(TestClient: ignore WpContentTypeManagerV1);
 delegate_noop!(TestClient: ignore wp_content_type_v1::WpContentTypeV1);
 delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
 delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
+delegate_noop!(TestClient: ignore XdgToplevelIconManagerV1);
+delegate_noop!(TestClient: ignore XdgToplevelIconV1);
 delegate_compositor!(LayerPanelClient);
 delegate_output!(LayerPanelClient);
 delegate_shm!(LayerPanelClient);

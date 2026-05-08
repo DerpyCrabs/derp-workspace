@@ -96,6 +96,7 @@ impl DrmSyncobjHandler for CompositorState {
 
 smithay::delegate_xdg_activation!(crate::CompositorState);
 smithay::delegate_xdg_decoration!(crate::CompositorState);
+smithay::delegate_xdg_toplevel_icon!(crate::CompositorState);
 smithay::delegate_fractional_scale!(crate::CompositorState);
 smithay::delegate_viewporter!(crate::CompositorState);
 smithay::delegate_cursor_shape!(crate::CompositorState);

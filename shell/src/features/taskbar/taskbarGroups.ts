@@ -2,6 +2,7 @@ type GroupWindowLike = {
   window_id: number
   title: string
   app_id: string
+  icon_name: string
   minimized: boolean
   output_name: string
 }
@@ -11,6 +12,7 @@ export type TaskbarGroupRow = {
   window_id: number
   title: string
   app_id: string
+  icon_name: string
   minimized: boolean
   output_name: string
   tab_count: number
@@ -28,6 +30,7 @@ export function buildTaskbarGroupRows(groups: readonly TaskbarGroupLike[]): Task
     window_id: group.visibleWindow.window_id,
     title: group.visibleWindow.title,
     app_id: group.visibleWindow.app_id,
+    icon_name: group.visibleWindow.icon_name,
     minimized: group.visibleWindow.minimized,
     output_name: group.visibleWindow.output_name,
     tab_count: group.members.length,

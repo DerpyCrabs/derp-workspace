@@ -206,6 +206,8 @@ impl CompositorState {
                 surface_id: loc.surface_id,
                 title: loc.title.clone(),
                 app_id: loc.app_id.clone(),
+                icon_name: String::new(),
+                icon_buffers: Vec::new(),
             },
         );
         self.shell_backed_emit_geometry_messages(info);
@@ -318,6 +320,17 @@ impl CompositorState {
                 surface_id: info.surface_id,
                 title: info.title,
                 app_id: info.app_id,
+                icon_name: info.icon.name,
+                icon_buffers: info
+                    .icon
+                    .buffers
+                    .into_iter()
+                    .map(|buffer| shell_wire::ShellWindowIconBufferSnapshot {
+                        width: buffer.width,
+                        height: buffer.height,
+                        scale: buffer.scale,
+                    })
+                    .collect(),
             },
         );
         self.scratchpad_consider_window(p.window_id);

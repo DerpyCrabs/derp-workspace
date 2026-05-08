@@ -951,9 +951,18 @@ fn append_snapshot_message(
             surface_id,
             title,
             app_id,
+            icon_name,
+            icon_buffers,
         } => extend_snapshot_packet(
             payload,
-            shell_wire::encode_window_metadata(*window_id, *surface_id, title, app_id),
+            shell_wire::encode_window_metadata(
+                *window_id,
+                *surface_id,
+                title,
+                app_id,
+                icon_name,
+                icon_buffers,
+            ),
             "window metadata",
         )?,
         shell_wire::DecodedCompositorToShellMessage::FocusChanged {
@@ -1381,6 +1390,8 @@ mod tests {
                 kind: "native".to_string(),
                 x11_class: "Foot".to_string(),
                 x11_instance: "foot".to_string(),
+                icon_name: String::new(),
+                icon_buffers: Vec::new(),
             }],
         }
     }

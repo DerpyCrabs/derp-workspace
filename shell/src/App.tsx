@@ -1662,6 +1662,7 @@ function App() {
     workspaceSnapshot,
     workspaceGroupsById,
     workspaceGroups,
+    desktopApps: desktopApps.items,
     activeWorkspaceGroupId,
     focusedWindowId,
     allWindowsMap,

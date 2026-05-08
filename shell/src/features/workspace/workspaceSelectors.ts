@@ -24,6 +24,23 @@ export type TaskbarWorkspaceRow = TaskbarGroupRow & {
   shell_file_path: string | null
 }
 
+export function resolveWindowDesktopApplication(
+  apps: readonly DesktopAppMatchCandidate[],
+  window: Pick<DerpWindow, 'title' | 'app_id'>,
+): DesktopAppMatchCandidate | null {
+  return matchDesktopApplication(apps, {
+    title: window.title,
+    app_id: window.app_id,
+  })
+}
+
+export function resolveWindowDesktopIcon(
+  apps: readonly DesktopAppMatchCandidate[],
+  window: Pick<DerpWindow, 'title' | 'app_id' | 'icon_name'>,
+): string | null {
+  return window.icon_name || resolveWindowDesktopApplication(apps, window)?.icon || null
+}
+
 function sameWindowMembers(left: readonly DerpWindow[], right: readonly DerpWindow[]): boolean {
   if (left.length !== right.length) return false
   for (let index = 0; index < left.length; index += 1) {
@@ -214,10 +231,7 @@ export function buildTaskbarRowsByMonitor(
       const matchKey = `${row.app_id}\u0000${row.title}`
       let match = desktopMatchByKey.get(matchKey)
       if (!desktopMatchByKey.has(matchKey)) {
-        match = matchDesktopApplication(apps, {
-          title: row.title,
-          app_id: row.app_id,
-        })
+        match = resolveWindowDesktopApplication(apps, row)
         desktopMatchByKey.set(matchKey, match)
       }
       const previousRow = previousRowsByGroupId.get(row.group_id)
@@ -225,7 +239,7 @@ export function buildTaskbarRowsByMonitor(
       const nextRow = {
         ...row,
         desktop_id: match?.desktop_id ?? null,
-        desktop_icon: match?.icon ?? null,
+        desktop_icon: row.icon_name || match?.icon || null,
         app_display_name: appDisplayName,
         shell_file_path: shellHostedFilePath(row, shellHostedAppByWindow),
       }

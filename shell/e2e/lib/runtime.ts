@@ -100,6 +100,8 @@ export interface WindowSnapshot {
   window_id: number
   title: string
   app_id: string
+  icon_name?: string
+  icon_buffers?: Array<{ width: number; height: number; scale: number }>
   kind?: string
   x11_class?: string
   x11_instance?: string
@@ -2899,6 +2901,8 @@ export function buildNativeSpawnCommand({
   contentType,
   tearingHint,
   burstFrames,
+  xdgIconName,
+  xdgIconShm = false,
 }: {
   title: string
   appId?: string
@@ -2917,6 +2921,8 @@ export function buildNativeSpawnCommand({
   contentType?: 'none' | 'photo' | 'video' | 'game'
   tearingHint?: 'vsync' | 'async'
   burstFrames?: number
+  xdgIconName?: string
+  xdgIconShm?: boolean
 }): string {
   const parts = [
     nativeBin(),
@@ -2941,6 +2947,8 @@ export function buildNativeSpawnCommand({
   if (contentType) parts.push('--content-type', shellQuote(contentType))
   if (tearingHint) parts.push('--tearing-hint', shellQuote(tearingHint))
   if (burstFrames !== undefined) parts.push('--burst-frames', String(burstFrames))
+  if (xdgIconName) parts.push('--xdg-icon-name', shellQuote(xdgIconName))
+  if (xdgIconShm) parts.push('--xdg-icon-shm')
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -2975,6 +2983,8 @@ export async function spawnNativeWindow(
     contentType,
     tearingHint,
     burstFrames,
+    xdgIconName,
+    xdgIconShm,
   }: {
     title: string
     appId?: string
@@ -2993,6 +3003,8 @@ export async function spawnNativeWindow(
     contentType?: 'none' | 'photo' | 'video' | 'game'
     tearingHint?: 'vsync' | 'async'
     burstFrames?: number
+    xdgIconName?: string
+    xdgIconShm?: boolean
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3013,6 +3025,8 @@ export async function spawnNativeWindow(
     contentType,
     tearingHint,
     burstFrames,
+    xdgIconName,
+    xdgIconShm,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

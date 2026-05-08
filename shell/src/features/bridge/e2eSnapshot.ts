@@ -943,6 +943,8 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       window_id: window.window_id,
       title: window.title,
       app_id: window.app_id,
+      icon_name: window.icon_name,
+      icon_buffers: window.icon_buffers,
       kind: window.kind,
       x11_class: window.x11_class,
       x11_instance: window.x11_instance,

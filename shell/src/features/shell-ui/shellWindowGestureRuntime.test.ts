@@ -34,6 +34,8 @@ const windowRow: DerpWindow = {
   height: 480,
   title: 'Window',
   app_id: 'test',
+  icon_name: '',
+  icon_buffers: [],
   output_id: 'output-1',
   output_name: 'HDMI-A-1',
   kind: 'xdg',

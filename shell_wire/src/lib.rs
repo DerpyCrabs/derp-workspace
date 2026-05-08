@@ -121,7 +121,7 @@ pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SPAWN_COMMAND_BYTES: u32 = 4096;
 pub const MAX_WINDOW_STRING_BYTES: u32 = 4096;
 pub const MAX_WINDOW_LIST_ENTRIES: u32 = 512;
-pub const WINDOW_LIST_SCHEMA_VERSION: u32 = 0x44525702;
+pub const WINDOW_LIST_SCHEMA_VERSION: u32 = 0x44525703;
 pub const WINDOW_LIST_HEADER_BYTES_V1: usize = 16;
 pub const WINDOW_LIST_HEADER_BYTES: usize = 24;
 pub const WINDOW_LIST_ROW_BYTES_V1: usize = 60;
@@ -136,6 +136,7 @@ pub const MAX_OUTPUT_LAYOUT_SCREENS: u32 = 16;
 pub const MAX_OUTPUT_LAYOUT_NAME_BYTES: u32 = 128;
 /// Max UTF-8 bytes in [`MSG_SHELL_SET_OUTPUT_LAYOUT`] JSON payload.
 pub const MAX_SHELL_OUTPUT_LAYOUT_JSON_BYTES: u32 = 4096;
+pub const MAX_WINDOW_ICON_BUFFERS: u32 = 16;
 
 pub const TASKBAR_SIDE_BOTTOM: u32 = 0;
 pub const TASKBAR_SIDE_TOP: u32 = 1;
@@ -719,19 +720,33 @@ fn encode_window_strings(
     h: i32,
     title: &str,
     app_id: &str,
+    icon_name: &str,
+    icon_buffers: &[ShellWindowIconBufferSnapshot],
 ) -> Option<Vec<u8>> {
     let tb = title.as_bytes();
     let ab = app_id.as_bytes();
-    if tb.contains(&0) || ab.contains(&0) {
+    let ib = icon_name.as_bytes();
+    if tb.contains(&0) || ab.contains(&0) || ib.contains(&0) {
         return None;
     }
     let tl = u32::try_from(tb.len()).ok()?;
     let al = u32::try_from(ab.len()).ok()?;
-    if tl > MAX_WINDOW_STRING_BYTES || al > MAX_WINDOW_STRING_BYTES {
+    let il = u32::try_from(ib.len()).ok()?;
+    let bl = u32::try_from(icon_buffers.len()).ok()?;
+    if tl > MAX_WINDOW_STRING_BYTES
+        || al > MAX_WINDOW_STRING_BYTES
+        || il > MAX_WINDOW_STRING_BYTES
+        || bl > MAX_WINDOW_ICON_BUFFERS
+    {
         return None;
     }
     let header = 4u32 * 9;
-    let body_len = header.checked_add(tl)?.checked_add(al)?;
+    let body_len = header
+        .checked_add(tl)?
+        .checked_add(al)?
+        .checked_add(8)?
+        .checked_add(il)?
+        .checked_add(bl.checked_mul(12)?)?;
     if body_len > MAX_BODY_BYTES {
         return None;
     }
@@ -748,6 +763,14 @@ fn encode_window_strings(
     v.extend_from_slice(&al.to_le_bytes());
     v.extend_from_slice(tb);
     v.extend_from_slice(ab);
+    v.extend_from_slice(&il.to_le_bytes());
+    v.extend_from_slice(ib);
+    v.extend_from_slice(&bl.to_le_bytes());
+    for buffer in icon_buffers {
+        v.extend_from_slice(&buffer.width.to_le_bytes());
+        v.extend_from_slice(&buffer.height.to_le_bytes());
+        v.extend_from_slice(&buffer.scale.to_le_bytes());
+    }
     Some(v)
 }
 
@@ -880,6 +903,8 @@ pub fn encode_window_metadata(
     surface_id: u32,
     title: &str,
     app_id: &str,
+    icon_name: &str,
+    icon_buffers: &[ShellWindowIconBufferSnapshot],
 ) -> Option<Vec<u8>> {
     encode_window_strings(
         MSG_WINDOW_METADATA,
@@ -891,6 +916,8 @@ pub fn encode_window_metadata(
         0,
         title,
         app_id,
+        icon_name,
+        icon_buffers,
     )
 }
 
@@ -967,6 +994,13 @@ pub fn encode_shell_resize_end(window_id: u32) -> Vec<u8> {
 pub const SHELL_WINDOW_FLAG_SHELL_HOSTED: u32 = 1;
 pub const SHELL_WINDOW_FLAG_SCRATCHPAD: u32 = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellWindowIconBufferSnapshot {
+    pub width: i32,
+    pub height: i32,
+    pub scale: i32,
+}
+
 /// One row in [`MSG_WINDOW_LIST`] / [`DecodedCompositorToShellMessage::WindowList`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellWindowSnapshot {
@@ -1000,6 +1034,8 @@ pub struct ShellWindowSnapshot {
     pub kind: String,
     pub x11_class: String,
     pub x11_instance: String,
+    pub icon_name: String,
+    pub icon_buffers: Vec<ShellWindowIconBufferSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1028,6 +1064,7 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         let kb = w.kind.as_bytes();
         let xcb = w.x11_class.as_bytes();
         let xib = w.x11_instance.as_bytes();
+        let inb = w.icon_name.as_bytes();
         if tb.len() > MAX_WINDOW_STRING_BYTES as usize
             || ab.len() > MAX_WINDOW_STRING_BYTES as usize
             || ib.len() > MAX_WINDOW_STRING_BYTES as usize
@@ -1036,6 +1073,8 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
             || kb.len() > MAX_WINDOW_STRING_BYTES as usize
             || xcb.len() > MAX_WINDOW_STRING_BYTES as usize
             || xib.len() > MAX_WINDOW_STRING_BYTES as usize
+            || inb.len() > MAX_WINDOW_STRING_BYTES as usize
+            || w.icon_buffers.len() > MAX_WINDOW_ICON_BUFFERS as usize
         {
             return None;
         }
@@ -1047,6 +1086,8 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         let klen = u32::try_from(kb.len()).ok()?;
         let xclen = u32::try_from(xcb.len()).ok()?;
         let xilen = u32::try_from(xib.len()).ok()?;
+        let inlen = u32::try_from(inb.len()).ok()?;
+        let icon_buffer_count = u32::try_from(w.icon_buffers.len()).ok()?;
         body.extend_from_slice(&w.window_id.to_le_bytes());
         body.extend_from_slice(&w.surface_id.to_le_bytes());
         body.extend_from_slice(&w.stack_z.to_le_bytes());
@@ -1084,6 +1125,14 @@ pub fn encode_window_list(revision: u64, windows: &[ShellWindowSnapshot]) -> Opt
         body.extend_from_slice(xcb);
         body.extend_from_slice(&xilen.to_le_bytes());
         body.extend_from_slice(xib);
+        body.extend_from_slice(&inlen.to_le_bytes());
+        body.extend_from_slice(inb);
+        body.extend_from_slice(&icon_buffer_count.to_le_bytes());
+        for buffer in &w.icon_buffers {
+            body.extend_from_slice(&buffer.width.to_le_bytes());
+            body.extend_from_slice(&buffer.height.to_le_bytes());
+            body.extend_from_slice(&buffer.scale.to_le_bytes());
+        }
     }
     let body_len = u32::try_from(body.len()).ok()?;
     if body_len > MAX_BODY_BYTES {
@@ -1491,6 +1540,8 @@ pub enum DecodedCompositorToShellMessage {
         surface_id: u32,
         title: String,
         app_id: String,
+        icon_name: String,
+        icon_buffers: Vec<ShellWindowIconBufferSnapshot>,
     },
     FocusChanged {
         surface_id: Option<u32>,
@@ -2116,7 +2167,59 @@ fn decode_window_strings_body(
         .to_string();
     match expect_type {
         MSG_WINDOW_METADATA => {
-            if body.len() != end {
+            let mut cursor = end;
+            let mut icon_name = String::new();
+            let mut icon_buffers = Vec::new();
+            if cursor != body.len() {
+                if cursor + 8 > body.len() {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                let icon_name_len =
+                    u32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()) as usize;
+                cursor += 4;
+                if icon_name_len > MAX_WINDOW_STRING_BYTES as usize {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                let icon_name_end = cursor
+                    .checked_add(icon_name_len)
+                    .ok_or(DecodeError::BadWindowPayload)?;
+                if icon_name_end + 4 > body.len() {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                icon_name = std::str::from_utf8(&body[cursor..icon_name_end])
+                    .map_err(|_| DecodeError::BadUtf8Command)?
+                    .to_string();
+                cursor = icon_name_end;
+                let icon_buffer_count =
+                    u32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()) as usize;
+                cursor += 4;
+                if icon_buffer_count > MAX_WINDOW_ICON_BUFFERS as usize {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                let icon_buffers_end = cursor
+                    .checked_add(
+                        icon_buffer_count
+                            .checked_mul(12)
+                            .ok_or(DecodeError::BadWindowPayload)?,
+                    )
+                    .ok_or(DecodeError::BadWindowPayload)?;
+                if icon_buffers_end > body.len() {
+                    return Err(DecodeError::BadWindowPayload);
+                }
+                for _ in 0..icon_buffer_count {
+                    icon_buffers.push(ShellWindowIconBufferSnapshot {
+                        width: i32::from_le_bytes(body[cursor..cursor + 4].try_into().unwrap()),
+                        height: i32::from_le_bytes(
+                            body[cursor + 4..cursor + 8].try_into().unwrap(),
+                        ),
+                        scale: i32::from_le_bytes(
+                            body[cursor + 8..cursor + 12].try_into().unwrap(),
+                        ),
+                    });
+                    cursor += 12;
+                }
+            }
+            if body.len() != cursor {
                 return Err(DecodeError::BadWindowPayload);
             }
             Ok(DecodedCompositorToShellMessage::WindowMetadata {
@@ -2124,6 +2227,8 @@ fn decode_window_strings_body(
                 surface_id,
                 title,
                 app_id,
+                icon_name,
+                icon_buffers,
             })
         }
         MSG_WINDOW_MAPPED => {
@@ -3013,6 +3118,48 @@ fn decode_window_list_compositor_body(
             .map_err(|_| DecodeError::BadUtf8Command)?
             .to_string();
         off += x11_instance_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let icon_name_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if icon_name_len > MAX_WINDOW_STRING_BYTES as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        if off + icon_name_len > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let icon_name = std::str::from_utf8(&body[off..off + icon_name_len])
+            .map_err(|_| DecodeError::BadUtf8Command)?
+            .to_string();
+        off += icon_name_len;
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let icon_buffer_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if icon_buffer_count > MAX_WINDOW_ICON_BUFFERS as usize {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let icon_buffers_end = off
+            .checked_add(
+                icon_buffer_count
+                    .checked_mul(12)
+                    .ok_or(DecodeError::BadWindowListPayload)?,
+            )
+            .ok_or(DecodeError::BadWindowListPayload)?;
+        if icon_buffers_end > body.len() {
+            return Err(DecodeError::BadWindowListPayload);
+        }
+        let mut icon_buffers = Vec::with_capacity(icon_buffer_count);
+        for _ in 0..icon_buffer_count {
+            icon_buffers.push(ShellWindowIconBufferSnapshot {
+                width: i32::from_le_bytes(body[off..off + 4].try_into().unwrap()),
+                height: i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap()),
+                scale: i32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap()),
+            });
+            off += 12;
+        }
         windows.push(ShellWindowSnapshot {
             window_id,
             surface_id,
@@ -3043,6 +3190,8 @@ fn decode_window_list_compositor_body(
             kind,
             x11_class,
             x11_instance,
+            icon_name,
+            icon_buffers,
         });
     }
     if off != body.len() {
@@ -3283,6 +3432,12 @@ mod tests {
                 kind: "native".to_string(),
                 x11_class: "ExampleClass".to_string(),
                 x11_instance: "example-instance".to_string(),
+                icon_name: "utilities-terminal".to_string(),
+                icon_buffers: vec![ShellWindowIconBufferSnapshot {
+                    width: 32,
+                    height: 32,
+                    scale: 1,
+                }],
             }],
         )
         .unwrap();
@@ -3322,6 +3477,12 @@ mod tests {
                     kind: "native".to_string(),
                     x11_class: "ExampleClass".to_string(),
                     x11_instance: "example-instance".to_string(),
+                    icon_name: "utilities-terminal".to_string(),
+                    icon_buffers: vec![ShellWindowIconBufferSnapshot {
+                        width: 32,
+                        height: 32,
+                        scale: 1,
+                    }],
                 }]
             })
         );

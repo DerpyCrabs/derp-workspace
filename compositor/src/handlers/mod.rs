@@ -5,7 +5,7 @@ mod xdg_shell;
 use std::io::Write;
 
 use crate::{
-    chrome_bridge::{ChromeEvent, WindowInfo},
+    chrome_bridge::{ChromeEvent, WindowIconBufferInfo, WindowIconInfo, WindowInfo},
     CompositorState,
 };
 
@@ -27,6 +27,7 @@ use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
+use smithay::wayland::xdg_toplevel_icon::{ToplevelIconCachedState, XdgToplevelIconHandler};
 use smithay::{delegate_data_control, delegate_data_device, delegate_output, delegate_seat};
 
 impl CompositorState {
@@ -154,6 +155,41 @@ impl CompositorState {
             }
         });
     }
+
+    pub(crate) fn xdg_toplevel_icon_sync_committed(&mut self, surface: &WlSurface) {
+        let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(surface) else {
+            return;
+        };
+        let icon = smithay::wayland::compositor::with_states(surface, |states| {
+            let mut cached = states.cached_state.get::<ToplevelIconCachedState>();
+            let current = cached.current();
+            let buffers = current
+                .buffers()
+                .iter()
+                .filter_map(|(buffer, scale)| {
+                    let data = smithay::wayland::shm::with_buffer_contents(
+                        buffer,
+                        |_ptr, _len, data| data,
+                    )
+                    .ok()?;
+                    Some(WindowIconBufferInfo {
+                        width: data.width,
+                        height: data.height,
+                        scale: *scale,
+                    })
+                })
+                .collect();
+            WindowIconInfo {
+                name: current.icon_name().unwrap_or_default().to_string(),
+                buffers,
+            }
+        });
+        if let Some(true) = self.windows.window_registry.set_icon(surface, icon) {
+            if let Some(info) = self.windows.window_registry.window_info(window_id) {
+                self.shell_emit_chrome_event(ChromeEvent::WindowMetadataChanged { info });
+            }
+        }
+    }
 }
 
 impl SeatHandler for CompositorState {
@@ -274,6 +310,16 @@ impl XdgActivationHandler for CompositorState {
             self.shell_send_to_cef(order);
         }
         self.xdg_activation_state.remove_token(&token);
+    }
+}
+
+impl XdgToplevelIconHandler for CompositorState {
+    fn set_icon(
+        &mut self,
+        _toplevel: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
+        wl_surface: WlSurface,
+    ) {
+        self.xdg_toplevel_icon_sync_committed(&wl_surface);
     }
 }
 

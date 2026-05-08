@@ -9,7 +9,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Rectangle};
 use smithay::xwayland::X11Surface;
 
-use crate::chrome_bridge::WindowInfo;
+use crate::chrome_bridge::{WindowIconInfo, WindowInfo};
 
 pub type WindowId = u32;
 
@@ -160,6 +160,7 @@ impl WindowRegistry {
             surface_id,
             title,
             app_id,
+            icon: WindowIconInfo::default(),
             wayland_client_pid,
             x: 0,
             y: 0,
@@ -212,6 +213,7 @@ impl WindowRegistry {
             surface_id: window_id,
             title,
             app_id,
+            icon: WindowIconInfo::default(),
             wayland_client_pid: None,
             x: client_global.loc.x,
             y: client_global.loc.y,
@@ -407,6 +409,17 @@ impl WindowRegistry {
         Some(changed)
     }
 
+    pub fn set_icon(&mut self, wl: &WlSurface, icon: WindowIconInfo) -> Option<bool> {
+        let wid = *self.by_surface.get(&key(wl)?)?;
+        let info = &mut self.records.get_mut(&wid)?.info;
+        let changed = info.icon != icon;
+        info.icon = icon;
+        if changed {
+            self.bump_revision();
+        }
+        Some(changed)
+    }
+
     pub fn set_restore_handle(
         &mut self,
         window_id: WindowId,
@@ -530,6 +543,7 @@ mod tests {
             surface_id: window_id,
             title: "test".to_string(),
             app_id: "test.app".to_string(),
+            icon: WindowIconInfo::default(),
             wayland_client_pid: None,
             x: 1,
             y: 2,

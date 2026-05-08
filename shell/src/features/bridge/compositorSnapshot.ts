@@ -42,10 +42,11 @@ const SNAPSHOT_DOMAIN_WINDOW_METADATA = 1 << 11
 const SNAPSHOT_DOMAIN_WINDOW_STATE = 1 << 12
 const SNAPSHOT_DOMAIN_COMMAND_PALETTE = 1 << 13
 const MAX_WINDOW_STRING_BYTES = 4096
+const MAX_WINDOW_ICON_BUFFERS = 16
 const MAX_OUTPUT_LAYOUT_NAME_BYTES = 128
 const MAX_WINDOW_LIST_ENTRIES = 512
 const MAX_OUTPUT_LAYOUT_SCREENS = 16
-const WINDOW_LIST_SCHEMA_VERSION = 0x44525702
+const WINDOW_LIST_SCHEMA_VERSION = 0x44525703
 const WINDOW_LIST_HEADER_BYTES = 24
 const WINDOW_LIST_HEADER_BYTES_V1 = 16
 const WINDOW_LIST_ROW_BYTES = 92
@@ -339,6 +340,26 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
     const x11Instance = readUtf8(bytes, cursor, x11InstanceLen)
     if (x11Instance == null) return null
     cursor += x11InstanceLen
+    if (cursor + 8 > view.byteLength) return null
+    const iconNameLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (iconNameLen > MAX_WINDOW_STRING_BYTES) return null
+    const iconName = readUtf8(bytes, cursor, iconNameLen)
+    if (iconName == null) return null
+    cursor += iconNameLen
+    const iconBufferCount = view.getUint32(cursor, true)
+    cursor += 4
+    if (iconBufferCount > MAX_WINDOW_ICON_BUFFERS) return null
+    if (cursor + iconBufferCount * 12 > view.byteLength) return null
+    const iconBuffers: Array<{ width: number; height: number; scale: number }> = []
+    for (let iconIndex = 0; iconIndex < iconBufferCount; iconIndex += 1) {
+      iconBuffers.push({
+        width: view.getInt32(cursor, true),
+        height: view.getInt32(cursor + 4, true),
+        scale: view.getInt32(cursor + 8, true),
+      })
+      cursor += 12
+    }
     windows.push({
       window_id: windowId,
       surface_id: surfaceId,
@@ -363,6 +384,8 @@ function decodeWindowList(bytes: Uint8Array, view: DataView, offset: number): De
       shell_flags: shellFlags,
       title,
       app_id: appId,
+      icon_name: iconName,
+      icon_buffers: iconBuffers,
       output_id: outputId,
       output_name: outputName,
       capture_identifier: captureIdentifier,
@@ -471,6 +494,31 @@ function decodeWindowMetadata(bytes: Uint8Array, view: DataView, offset: number)
   const appId = readUtf8(bytes, cursor, appLen)
   if (appId == null) return null
   cursor += appLen
+  let iconName = ''
+  let iconBuffers: Array<{ width: number; height: number; scale: number }> = []
+  if (cursor !== view.byteLength) {
+    if (cursor + 8 > view.byteLength) return null
+    const iconNameLen = view.getUint32(cursor, true)
+    cursor += 4
+    if (iconNameLen > MAX_WINDOW_STRING_BYTES) return null
+    const nextIconName = readUtf8(bytes, cursor, iconNameLen)
+    if (nextIconName == null) return null
+    iconName = nextIconName
+    cursor += iconNameLen
+    const iconBufferCount = view.getUint32(cursor, true)
+    cursor += 4
+    if (iconBufferCount > MAX_WINDOW_ICON_BUFFERS) return null
+    if (cursor + iconBufferCount * 12 > view.byteLength) return null
+    iconBuffers = []
+    for (let iconIndex = 0; iconIndex < iconBufferCount; iconIndex += 1) {
+      iconBuffers.push({
+        width: view.getInt32(cursor, true),
+        height: view.getInt32(cursor + 4, true),
+        scale: view.getInt32(cursor + 8, true),
+      })
+      cursor += 12
+    }
+  }
   if (cursor !== view.byteLength) return null
   return {
     type: 'window_metadata',
@@ -478,6 +526,8 @@ function decodeWindowMetadata(bytes: Uint8Array, view: DataView, offset: number)
     surface_id: surfaceId,
     title,
     app_id: appId,
+    icon_name: iconName,
+    icon_buffers: iconBuffers,
   }
 }
 

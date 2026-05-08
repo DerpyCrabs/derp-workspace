@@ -845,7 +845,7 @@ fn handle_one(
             .ok_or_else(|| "minimize: missing window_id".to_string())?
             .parse::<u32>()
             .map_err(|_| "minimize: invalid window_id".to_string())?;
-        uplink.shell_minimize(window_id);
+        uplink.shell_minimize_sync(window_id)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -859,6 +859,16 @@ fn handle_one(
     if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_applications" {
         let json = crate::cef::desktop_apps::list_applications_json()?;
         write_http_ok_json(stream, &json).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if method.eq_ignore_ascii_case("GET") && req_path == "/desktop_icon" {
+        let q = query_str.ok_or_else(|| "desktop_icon: missing query".to_string())?;
+        let name = query_param_raw(q, "name")
+            .ok_or_else(|| "desktop_icon: missing name".to_string())
+            .and_then(percent_decode_component)?;
+        let (bytes, content_type) = crate::cef::desktop_apps::read_desktop_icon_bytes(&name)?;
+        write_http_ok_bytes(stream, content_type, &bytes).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -1483,7 +1493,7 @@ fn handle_one(
 
     if req_path == "/test/window/minimize" {
         let window_id = json_u32_field(&v, "window_id")?;
-        uplink.shell_minimize(window_id);
+        uplink.shell_minimize_sync(window_id)?;
         write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
         return Ok(());
     }

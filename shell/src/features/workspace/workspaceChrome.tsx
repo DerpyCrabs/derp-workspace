@@ -12,7 +12,8 @@ import {
   type TabMergeTarget,
 } from './tabGroupOps'
 import { clampWorkspaceSplitPaneFraction, type WorkspaceSnapshot } from './workspaceSnapshot'
-import type { WorkspaceGroupModel } from './workspaceSelectors'
+import { resolveWindowDesktopIcon, type WorkspaceGroupModel } from './workspaceSelectors'
+import type { DesktopAppMatchCandidate } from '@/features/desktop/desktopApplicationsState'
 import { isShellTestWindowId, SHELL_UI_DEBUG_WINDOW_ID, SHELL_UI_SETTINGS_WINDOW_ID } from '@/features/shell-ui/backedShellWindows'
 import { SHELL_WINDOW_FLAG_SCRATCHPAD, SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 import type { DerpWindow } from '@/host/appWindowState'
@@ -178,6 +179,7 @@ type WorkspaceChromeOptions = {
   workspaceSnapshot: Accessor<WorkspaceSnapshot>
   workspaceGroupsById: Accessor<ReadonlyMap<string, WorkspaceGroupModel>>
   workspaceGroups: Accessor<readonly WorkspaceGroupModel[]>
+  desktopApps: Accessor<readonly DesktopAppMatchCandidate[]>
   activeWorkspaceGroupId: Accessor<string | null>
   focusedWindowId: Accessor<number | null>
   allWindowsMap: Accessor<ReadonlyMap<number, DerpWindow>>
@@ -1149,6 +1151,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
                   window_id: member.window_id,
                   title: member.title,
                   app_id: member.app_id,
+                  icon_name: resolveWindowDesktopIcon(options.desktopApps(), member) ?? '',
                   active: member.window_id === group()!.visibleWindowId,
                   pinned: options.isWorkspaceWindowPinned(member.window_id),
                 }))}

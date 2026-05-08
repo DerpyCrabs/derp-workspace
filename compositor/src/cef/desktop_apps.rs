@@ -63,6 +63,13 @@ pub fn list_applications_json() -> Result<String, String> {
     applications_cache().list_json()
 }
 
+pub fn read_desktop_icon_bytes(name: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let path = resolve_desktop_icon_path(name)?;
+    let content_type = icon_content_type(&path).ok_or_else(|| "desktop_icon: unsupported type".to_string())?;
+    let bytes = fs::read(&path).map_err(|e| format!("desktop_icon: {e}"))?;
+    Ok((bytes, content_type))
+}
+
 pub fn warm_applications_cache() {
     if let Err(e) = applications_cache().list_json() {
         tracing::warn!("desktop apps cache warm failed: {e}");
@@ -220,6 +227,125 @@ fn application_dirs() -> Vec<PathBuf> {
     }
 
     dirs
+}
+
+fn icon_base_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| {
+                let mut p = PathBuf::from(h);
+                p.push(".local/share");
+                p
+            })
+        });
+    if let Some(p) = data_home {
+        dirs.push(p.join("icons"));
+    }
+    let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+        .unwrap_or_else(|| std::ffi::OsString::from("/usr/local/share:/usr/share"));
+    for part in std::env::split_paths(&data_dirs) {
+        if part.as_os_str().is_empty() {
+            continue;
+        }
+        dirs.push(part.join("icons"));
+    }
+    dirs.push(PathBuf::from("/usr/share/pixmaps"));
+    dirs
+}
+
+fn icon_content_type(path: &Path) -> Option<&'static str> {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "svg" => Some("image/svg+xml"),
+        "xpm" => Some("image/x-xpixmap"),
+        _ => None,
+    }
+}
+
+fn valid_icon_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn resolve_desktop_icon_path(name: &str) -> Result<PathBuf, String> {
+    if name.starts_with('/') {
+        let path = fs::canonicalize(name).map_err(|e| format!("desktop_icon: {e}"))?;
+        if icon_content_type(&path).is_some() && path.is_file() {
+            return Ok(path);
+        }
+        return Err("desktop_icon: unsupported path".to_string());
+    }
+    if !valid_icon_name(name) {
+        return Err("desktop_icon: invalid name".to_string());
+    }
+    let mut best: Option<(u32, PathBuf)> = None;
+    for base in icon_base_dirs() {
+        if !base.is_dir() {
+            continue;
+        }
+        find_icon_candidate(&base, name, &mut best);
+    }
+    best.map(|(_, path)| path)
+        .ok_or_else(|| "desktop_icon: not found".to_string())
+}
+
+fn find_icon_candidate(dir: &Path, name: &str, best: &mut Option<(u32, PathBuf)>) {
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            find_icon_candidate(&path, name, best);
+            continue;
+        }
+        if icon_content_type(&path).is_none() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if stem != name {
+            continue;
+        }
+        let score = icon_candidate_score(&path);
+        if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+            *best = Some((score, path));
+        }
+    }
+}
+
+fn icon_candidate_score(path: &Path) -> u32 {
+    let s = path.to_string_lossy();
+    let mut score = 0;
+    if s.contains("/apps/") || s.contains("\\apps\\") {
+        score += 1000;
+    }
+    if s.contains("/hicolor/") || s.contains("\\hicolor\\") {
+        score += 500;
+    }
+    if s.contains("/scalable/") || s.contains("\\scalable\\") {
+        score += 256;
+    }
+    for size in [512, 256, 128, 96, 64, 48, 32, 24, 16] {
+        let token = format!("{size}x{size}");
+        if s.contains(&token) {
+            score += size;
+            break;
+        }
+    }
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => score + 30,
+        "svg" => score + 20,
+        "xpm" => score + 10,
+        _ => score,
+    }
 }
 
 fn desktop_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>, String> {

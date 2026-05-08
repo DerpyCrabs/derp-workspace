@@ -15,6 +15,8 @@ function makeWindow(window_id: number, patch: Partial<DerpWindow> = {}): DerpWin
     height: 300,
     title: `window-${window_id}`,
     app_id: `app.${window_id}`,
+    icon_name: patch.icon_name ?? '',
+    icon_buffers: patch.icon_buffers ?? [],
     ...patch,
     output_id: patch.output_id ?? 'make:model:serial',
     output_name: patch.output_name ?? 'HDMI-A-1',

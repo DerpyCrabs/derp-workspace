@@ -71,7 +71,7 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(11),
       ...u64(17n),
       ...u32(1),
-      ...u32(0x44525702),
+      ...u32(0x44525703),
       ...u32(92),
       ...u32(9),
       ...u32(10),
@@ -110,6 +110,8 @@ describe('decodeCompositorSnapshot', () => {
       ...x11Class,
       ...u32(x11Instance.length),
       ...x11Instance,
+      ...u32(0),
+      ...u32(0),
     ])
 
     const focusChanged = frame([...u32(10), ...u32(10), ...u32(9)])
@@ -165,6 +167,8 @@ describe('decodeCompositorSnapshot', () => {
               shell_flags: 0,
               title: 'Terminal',
               app_id: 'foot',
+              icon_name: '',
+              icon_buffers: [],
               output_id: 'make:model:serial',
               output_name: 'HDMI-A-1',
               capture_identifier: 'cap-1',
@@ -336,7 +340,7 @@ describe('decodeCompositorSnapshot', () => {
       ...u32(11),
       ...u64(17n),
       ...u32(1),
-      ...u32(0x44525702),
+      ...u32(0x44525703),
       ...u32(92),
       ...u32(9),
       ...u32(10),
@@ -375,6 +379,8 @@ describe('decodeCompositorSnapshot', () => {
       ...empty,
       ...u32(empty.length),
       ...empty,
+      ...u32(0),
+      ...u32(0),
     ])
     const windowOrder = frame([
       ...u32(63),

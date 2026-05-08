@@ -146,6 +146,8 @@ struct E2eWindowSnapshot {
     stack_z: u32,
     title: String,
     app_id: String,
+    icon_name: String,
+    icon_buffers: Vec<E2eWindowIconBufferSnapshot>,
     xwayland_scale: Option<f64>,
     output_name: String,
     x: i32,
@@ -168,6 +170,13 @@ struct E2eWindowSnapshot {
     mapped_y: Option<i32>,
     mapped_width: Option<i32>,
     mapped_height: Option<i32>,
+}
+
+#[derive(Serialize)]
+struct E2eWindowIconBufferSnapshot {
+    width: i32,
+    height: i32,
+    scale: i32,
 }
 
 #[derive(Serialize)]
@@ -647,6 +656,18 @@ impl CompositorState {
                     stack_z: self.shell_window_stack_z(record.info.window_id),
                     title: record.info.title,
                     app_id: record.info.app_id,
+                    icon_name: record.info.icon.name,
+                    icon_buffers: record
+                        .info
+                        .icon
+                        .buffers
+                        .into_iter()
+                        .map(|buffer| E2eWindowIconBufferSnapshot {
+                            width: buffer.width,
+                            height: buffer.height,
+                            scale: buffer.scale,
+                        })
+                        .collect(),
                     xwayland_scale: self.xwayland_scale_for_window_id(record.info.window_id),
                     output_name: record.info.output_name,
                     x: record.info.x,

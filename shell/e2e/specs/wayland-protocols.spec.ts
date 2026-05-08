@@ -12,12 +12,15 @@ import {
   captureScreenshotRect,
   copyArtifactFile,
   defineGroup,
+  compositorWindowById,
   getJson,
+  getSnapshots,
   KEY,
   movePoint,
   nativeBin,
   readPngRgba,
   shellQuote,
+  shellWindowById,
   SkipError,
   spawnCommand,
   syncTest,
@@ -847,6 +850,74 @@ export default defineGroup(import.meta.url, ({ test }) => {
         await waitForWindowGone(base, windowId, 5000)
       }
     }
+  })
+
+  test('native xdg toplevel icon metadata reaches shell snapshots', async ({ base, state }) => {
+    const stamp = Date.now()
+    const iconName = `derp-e2e-icon-${stamp}`
+    const named = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Xdg Icon Name ${stamp}`,
+      appId: 'derp.e2e.icon.name',
+      token: `xdg-icon-name-${stamp}`,
+      strip: 'green',
+      xdgIconName: iconName,
+    })
+    state.spawnedNativeWindowIds.add(named.window.window_id)
+    const namedSnapshot = await waitFor(
+      'wait for named xdg icon snapshot',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const compositorWindow = compositorWindowById(snapshots.compositor, named.window.window_id)
+        const shellWindow = shellWindowById(snapshots.shell, named.window.window_id)
+        if (compositorWindow?.icon_name !== iconName) return null
+        if (shellWindow?.icon_name !== iconName) return null
+        return { snapshots, compositorWindow, shellWindow }
+      },
+      5000,
+      100,
+    )
+    assert(namedSnapshot.compositorWindow.title === named.window.title, 'icon name changed compositor title metadata')
+    assert(namedSnapshot.shellWindow.title === named.window.title, 'icon name changed shell title metadata')
+    assert(namedSnapshot.compositorWindow.app_id === 'derp.e2e.icon.name', 'icon name changed compositor app_id metadata')
+    assert(namedSnapshot.shellWindow.app_id === 'derp.e2e.icon.name', 'icon name changed shell app_id metadata')
+
+    const buffered = await spawnNativeWindow(base, state.knownWindowIds, {
+      title: `Derp Xdg Icon Buffer ${stamp}`,
+      appId: 'derp.e2e.icon.buffer',
+      token: `xdg-icon-buffer-${stamp}`,
+      strip: 'red',
+      xdgIconShm: true,
+    })
+    state.spawnedNativeWindowIds.add(buffered.window.window_id)
+    const bufferedSnapshot = await waitFor(
+      'wait for shm xdg icon snapshot',
+      async () => {
+        const snapshots = await getSnapshots(base)
+        const compositorWindow = compositorWindowById(snapshots.compositor, buffered.window.window_id)
+        const shellWindow = shellWindowById(snapshots.shell, buffered.window.window_id)
+        const compositorBuffer = compositorWindow?.icon_buffers?.[0]
+        const shellBuffer = shellWindow?.icon_buffers?.[0]
+        if (!compositorBuffer || compositorBuffer.width !== 16 || compositorBuffer.height !== 16 || compositorBuffer.scale !== 1) return null
+        if (!shellBuffer || shellBuffer.width !== 16 || shellBuffer.height !== 16 || shellBuffer.scale !== 1) return null
+        return { snapshots, compositorWindow, shellWindow }
+      },
+      5000,
+      100,
+    )
+    assert(bufferedSnapshot.compositorWindow.title === buffered.window.title, 'shm icon changed compositor title metadata')
+    assert(bufferedSnapshot.shellWindow.title === buffered.window.title, 'shm icon changed shell title metadata')
+    assert(bufferedSnapshot.compositorWindow.app_id === 'derp.e2e.icon.buffer', 'shm icon changed compositor app_id metadata')
+    assert(bufferedSnapshot.shellWindow.app_id === 'derp.e2e.icon.buffer', 'shm icon changed shell app_id metadata')
+    await writeJsonArtifact('wayland-protocols-xdg-toplevel-icon.json', {
+      named: {
+        compositor: namedSnapshot.compositorWindow,
+        shell: namedSnapshot.shellWindow,
+      },
+      buffered: {
+        compositor: bufferedSnapshot.compositorWindow,
+        shell: bufferedSnapshot.shellWindow,
+      },
+    })
   })
 
   test('native cursor-shape pointer uses selected XCursor theme', async ({ base, state }) => {

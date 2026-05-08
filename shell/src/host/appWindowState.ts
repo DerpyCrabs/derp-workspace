@@ -57,6 +57,8 @@ export type DerpShellDetail = ({
       frame_height?: number
       title: string
       app_id: string
+      icon_name?: string
+      icon_buffers?: Array<{ width: number; height: number; scale: number }>
       output_id?: string
       output_name?: string
       stack_z?: number
@@ -98,6 +100,8 @@ export type DerpShellDetail = ({
       surface_id: number
       title: string
       app_id: string
+      icon_name?: string
+      icon_buffers?: Array<{ width: number; height: number; scale: number }>
     }
   | { type: 'focus_changed'; surface_id: number | null; window_id: number | null }
   | { type: 'window_state'; window_id: number; minimized: boolean }
@@ -209,6 +213,8 @@ export type DerpWindow = {
   frame_height?: number
   title: string
   app_id: string
+  icon_name: string
+  icon_buffers: Array<{ width: number; height: number; scale: number }>
   output_id: string
   output_name: string
   kind: string
@@ -237,6 +243,21 @@ function coerceOutputId(nextValue: unknown): string {
 
 function coerceOptionalFiniteNumber(nextValue: unknown): number | undefined {
   return typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : undefined
+}
+
+function coerceIconBuffers(raw: unknown): Array<{ width: number; height: number; scale: number }> {
+  if (!Array.isArray(raw)) return []
+  const out: Array<{ width: number; height: number; scale: number }> = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const r = row as Record<string, unknown>
+    const width = Number(r.width)
+    const height = Number(r.height)
+    const scale = Number(r.scale)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(scale)) continue
+    out.push({ width: Math.trunc(width), height: Math.trunc(height), scale: Math.trunc(scale) })
+  }
+  return out
 }
 
 export function windowIsShellHosted(window: Pick<DerpWindow, 'window_id' | 'app_id' | 'shell_flags'>): boolean {
@@ -320,6 +341,8 @@ export function buildWindowsMapFromList(
       frame_height: coerceOptionalFiniteNumber(r.frame_height),
       title: typeof r.title === 'string' ? r.title : '',
       app_id: typeof r.app_id === 'string' ? r.app_id : '',
+      icon_name: typeof r.icon_name === 'string' ? r.icon_name : '',
+      icon_buffers: coerceIconBuffers(r.icon_buffers),
       output_id: coerceOutputId(r.output_id),
       output_name: coerceOutputName(r.output_name),
       kind: typeof r.kind === 'string' ? r.kind : '',
@@ -370,6 +393,12 @@ function sameDerpWindow(left: DerpWindow, right: DerpWindow): boolean {
     left.frame_height === right.frame_height &&
     left.title === right.title &&
     left.app_id === right.app_id &&
+    left.icon_name === right.icon_name &&
+    left.icon_buffers.length === right.icon_buffers.length &&
+    left.icon_buffers.every((buffer, index) => {
+      const other = right.icon_buffers[index]
+      return !!other && buffer.width === other.width && buffer.height === other.height && buffer.scale === other.scale
+    }) &&
     left.output_id === right.output_id &&
     left.output_name === right.output_name &&
     left.kind === right.kind &&

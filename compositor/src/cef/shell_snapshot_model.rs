@@ -197,6 +197,8 @@ impl ShellSnapshotModel {
                             kind: kind.clone(),
                             x11_class: x11_class.clone(),
                             x11_instance: x11_instance.clone(),
+                            icon_name: String::new(),
+                            icon_buffers: Vec::new(),
                         },
                     );
                 }
@@ -286,14 +288,20 @@ impl ShellSnapshotModel {
                 surface_id,
                 title,
                 app_id,
+                icon_name,
+                icon_buffers,
             } => {
                 let changed = if let Some(row) = self.window_row_mut(*window_id) {
                     let changed = row.surface_id != *surface_id
                         || row.title != *title
-                        || row.app_id != *app_id;
+                        || row.app_id != *app_id
+                        || row.icon_name != *icon_name
+                        || row.icon_buffers != *icon_buffers;
                     row.surface_id = *surface_id;
                     row.title = title.clone();
                     row.app_id = app_id.clone();
+                    row.icon_name = icon_name.clone();
+                    row.icon_buffers = icon_buffers.clone();
                     changed
                 } else {
                     false
@@ -536,6 +544,12 @@ mod tests {
                 surface_id: 31,
                 title: "Renamed".to_string(),
                 app_id: "app.renamed".to_string(),
+                icon_name: "utilities-terminal".to_string(),
+                icon_buffers: vec![shell_wire::ShellWindowIconBufferSnapshot {
+                    width: 32,
+                    height: 32,
+                    scale: 1,
+                }],
             },
         );
 
