@@ -64,6 +64,10 @@ use wayland_protocols::wp::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
     },
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1::{Layer as WlrLayer, ZwlrLayerShellV1},
+    zwlr_layer_surface_v1::{Anchor, Event as LayerSurfaceEvent, ZwlrLayerSurfaceV1},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PointerConstraintMode {
@@ -205,6 +209,10 @@ struct Args {
     status_json: Option<String>,
     #[arg(long)]
     control_socket: Option<String>,
+    #[arg(long, default_value_t = false)]
+    layer_panel: bool,
+    #[arg(long, default_value_t = 48)]
+    exclusive_zone: i32,
 }
 
 fn main() {
@@ -246,6 +254,11 @@ fn main() {
 
     if args.explicit_sync_dmabuf {
         run_explicit_sync_dmabuf(&args);
+        return;
+    }
+
+    if args.layer_panel {
+        run_layer_panel(&args);
         return;
     }
 
@@ -392,6 +405,119 @@ fn main() {
         event_queue
             .blocking_dispatch(&mut state)
             .expect("dispatch wayland events");
+    }
+}
+
+struct LayerPanelClient {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    _compositor_state: CompositorState,
+    shm_state: Shm,
+    pool: SlotPool,
+    surface: wl_surface::WlSurface,
+    _layer_shell: ZwlrLayerShellV1,
+    _layer_surface: ZwlrLayerSurfaceV1,
+    buffer: Option<Buffer>,
+    width: u32,
+    height: u32,
+    token: String,
+    configured: bool,
+}
+
+fn run_layer_panel(args: &Args) {
+    let conn = Connection::connect_to_env().expect("connect to wayland compositor");
+    let (globals, mut event_queue) = registry_queue_init(&conn).expect("init registry");
+    let qh = event_queue.handle();
+    let compositor_state = CompositorState::bind(&globals, &qh).expect("bind wl_compositor");
+    let shm_state = Shm::bind(&globals, &qh).expect("bind wl_shm");
+    let output_state = OutputState::new(&globals, &qh);
+    let registry_state = RegistryState::new(&globals);
+    let layer_shell = globals
+        .bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=4, ())
+        .expect("bind zwlr_layer_shell_v1");
+    let surface = compositor_state.create_surface(&qh);
+    let layer_surface = layer_shell.get_layer_surface(
+        &surface,
+        None::<&wl_output::WlOutput>,
+        WlrLayer::Top,
+        "derp-e2e-exclusive-panel".to_string(),
+        &qh,
+        (),
+    );
+    let zone = args.exclusive_zone.max(1);
+    layer_surface.set_size(0, zone as u32);
+    layer_surface.set_anchor(Anchor::Top | Anchor::Left | Anchor::Right);
+    layer_surface.set_exclusive_zone(zone);
+    surface.commit();
+    let pool = SlotPool::new((args.width.max(1) * zone as u32 * 4) as usize, &shm_state)
+        .expect("create shared memory pool");
+    let mut state = LayerPanelClient {
+        registry_state,
+        output_state,
+        _compositor_state: compositor_state,
+        shm_state,
+        pool,
+        surface,
+        _layer_shell: layer_shell,
+        _layer_surface: layer_surface,
+        buffer: None,
+        width: args.width.max(1),
+        height: zone as u32,
+        token: args.token.clone(),
+        configured: false,
+    };
+    loop {
+        event_queue
+            .blocking_dispatch(&mut state)
+            .expect("dispatch wayland layer panel events");
+    }
+}
+
+impl LayerPanelClient {
+    fn draw(&mut self) {
+        if !self.configured {
+            return;
+        }
+        let stride = (self.width * 4) as i32;
+        let required_len = (self.width * self.height * 4) as usize;
+        if self.pool.len() < required_len {
+            self.pool.resize(required_len).expect("resize pool");
+        }
+        if self.buffer.is_none() {
+            let (buffer, _) = self
+                .pool
+                .create_buffer(
+                    self.width as i32,
+                    self.height as i32,
+                    stride,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                )
+                .expect("create layer buffer");
+            self.buffer = Some(buffer);
+        }
+        let needs_replacement = {
+            let buffer = self.buffer.as_mut().expect("buffer allocated");
+            self.pool.canvas(buffer).is_none()
+        };
+        if needs_replacement {
+            let (buffer, _) = self
+                .pool
+                .create_buffer(
+                    self.width as i32,
+                    self.height as i32,
+                    stride,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                )
+                .expect("create fallback layer buffer");
+            self.buffer = Some(buffer);
+        }
+        let buffer = self.buffer.as_mut().expect("buffer ready");
+        let canvas = self.pool.canvas(buffer).expect("buffer canvas");
+        draw_pattern(canvas, self.width, self.height, &self.token, [40, 180, 220, 255]);
+        self.surface
+            .damage_buffer(0, 0, self.width as i32, self.height as i32);
+        buffer.attach_to(&self.surface).expect("attach layer buffer");
+        self.surface.commit();
     }
 }
 
@@ -2055,6 +2181,109 @@ impl ShmHandler for TestClient {
     }
 }
 
+impl CompositorHandler for LayerPanelClient {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for LayerPanelClient {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ShmHandler for LayerPanelClient {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for LayerPanelClient {
+    fn event(
+        state: &mut Self,
+        proxy: &ZwlrLayerSurfaceV1,
+        event: LayerSurfaceEvent,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let LayerSurfaceEvent::Configure { serial, width, height } = event {
+            proxy.ack_configure(serial);
+            state.width = width.max(1);
+            state.height = height.max(1);
+            state.buffer = None;
+            state.configured = true;
+            state.draw();
+        }
+    }
+}
+
 impl SeatHandler for TestClient {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
@@ -2271,6 +2500,12 @@ delegate_noop!(TestClient: ignore WpContentTypeManagerV1);
 delegate_noop!(TestClient: ignore wp_content_type_v1::WpContentTypeV1);
 delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
 delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
+delegate_compositor!(LayerPanelClient);
+delegate_output!(LayerPanelClient);
+delegate_shm!(LayerPanelClient);
+delegate_registry!(LayerPanelClient);
+delegate_noop!(LayerPanelClient: ignore ZwlrLayerShellV1);
+delegate_noop!(LayerPanelClient: ignore wl_buffer::WlBuffer);
 delegate_compositor!(ProtocolProbe);
 delegate_output!(ProtocolProbe);
 delegate_shm!(ProtocolProbe);
@@ -2296,4 +2531,12 @@ impl ProvidesRegistryState for TestClient {
     }
 
     registry_handlers!(OutputState, SeatState);
+}
+
+impl ProvidesRegistryState for LayerPanelClient {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(OutputState);
 }

@@ -381,6 +381,18 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
       y: s.y,
       width: s.width,
       height: s.height,
+      usable_x:
+        typeof s.usable_x === 'number' && Number.isFinite(s.usable_x) ? Math.round(s.usable_x) : Math.round(s.x),
+      usable_y:
+        typeof s.usable_y === 'number' && Number.isFinite(s.usable_y) ? Math.round(s.usable_y) : Math.round(s.y),
+      usable_width:
+        typeof s.usable_width === 'number' && Number.isFinite(s.usable_width)
+          ? Math.max(1, Math.round(s.usable_width))
+          : Math.max(1, Math.round(s.width)),
+      usable_height:
+        typeof s.usable_height === 'number' && Number.isFinite(s.usable_height)
+          ? Math.max(1, Math.round(s.usable_height))
+          : Math.max(1, Math.round(s.height)),
       physical_width:
         typeof s.physical_width === 'number' && Number.isFinite(s.physical_width)
           ? Math.max(1, Math.round(s.physical_width))

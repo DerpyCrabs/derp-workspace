@@ -1734,6 +1734,12 @@ impl CompositorState {
         let Some(output_geo) = self.output_topology.space.output_geometry(output) else {
             return false;
         };
+        let Some(layer_usable) = self.output_topology.layer_usable_area_global_for_output(output) else {
+            return false;
+        };
+        if layer_usable != output_geo {
+            return false;
+        }
         let Some(window_id) = self.ordered_window_ids_on_output(output).last().copied() else {
             return false;
         };
@@ -3360,7 +3366,7 @@ impl CompositorState {
         &self,
         output: &Output,
     ) -> Option<Rectangle<i32, Logical>> {
-        let geo = self.output_topology.space.output_geometry(output)?;
+        let geo = self.output_topology.layer_usable_area_global_for_output(output)?;
         if self.output_topology.taskbar_auto_hide {
             return Some(Rectangle::new(
                 geo.loc,
@@ -3989,6 +3995,52 @@ impl CompositorState {
         applied
     }
 
+    fn workspace_apply_manual_tiles_for_all_outputs(&mut self) -> bool {
+        let monitors = self.workspace_layout.workspace_state.monitor_tiles.clone();
+        let mut applied = false;
+        for monitor in monitors {
+            let Some(layout_state) = self
+                .workspace_monitor_layout_state_for_output(&monitor.output_name)
+                .cloned()
+            else {
+                continue;
+            };
+            if layout_state.layout != WorkspaceMonitorLayoutType::ManualSnap {
+                continue;
+            }
+            let Some(output) = self.output_topology.space
+                .outputs()
+                .find(|entry| entry.name() == monitor.output_name)
+                .cloned()
+            else {
+                continue;
+            };
+            for entry in monitor.entries {
+                let Some(frame_rect) = self.shell_tile_frame_rect_for_output(&output, &entry.zone) else {
+                    continue;
+                };
+                self.workspace_set_monitor_tile(
+                    &monitor.output_name,
+                    entry.window_id,
+                    entry.zone,
+                    WorkspaceRect {
+                        x: frame_rect.loc.x,
+                        y: frame_rect.loc.y,
+                        width: frame_rect.size.w.max(1),
+                        height: frame_rect.size.h.max(1),
+                    },
+                );
+                let client_rect = self.workspace_auto_layout_client_rect_from_frame_rect(frame_rect);
+                self.shell_apply_global_client_rect(entry.window_id, client_rect, 0);
+                applied = true;
+            }
+        }
+        if applied {
+            self.workspace_send_state();
+        }
+        applied
+    }
+
     fn workspace_relayout_auto_layout_outputs_after_geometry(
         &mut self,
         previous_output_name: &str,
@@ -4477,7 +4529,7 @@ impl CompositorState {
         &self,
         output: &Output,
     ) -> Option<Rectangle<i32, Logical>> {
-        let g = self.output_topology.space.output_geometry(output)?;
+        let g = self.output_topology.layer_usable_area_global_for_output(output)?;
         let th = self.shell_osr.shell_chrome_titlebar_h.max(0);
         if self.output_topology.taskbar_auto_hide {
             return Some(Rectangle::new(
@@ -5559,7 +5611,14 @@ impl CompositorState {
         self.display_config_request_save();
     }
 
+    pub(crate) fn refresh_usable_area_dependent_window_layouts(&mut self) {
+        self.refresh_taskbar_dependent_window_layouts();
+        self.resync_embedded_shell_host_after_ipc_connect();
+        self.send_shell_output_layout();
+    }
+
     fn refresh_taskbar_dependent_window_layouts(&mut self) {
+        self.workspace_apply_manual_tiles_for_all_outputs();
         self.workspace_apply_auto_layout_for_all_outputs();
         let maximized: Vec<_> = self.windows.window_registry
             .all_records()

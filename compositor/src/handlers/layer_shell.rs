@@ -32,6 +32,22 @@ impl CompositorState {
         layer_map_for_output(output).arrange();
     }
 
+    fn arrange_layer_output_and_refresh_usable_area(
+        &mut self,
+        output: &smithay::output::Output,
+    ) {
+        let before = self
+            .output_topology
+            .layer_usable_area_global_for_output(output);
+        self.arrange_layer_output(output);
+        let after = self
+            .output_topology
+            .layer_usable_area_global_for_output(output);
+        if before != after {
+            self.refresh_usable_area_dependent_window_layouts();
+        }
+    }
+
     fn desktop_layer_surface_configured(layer: &DesktopLayerSurface) -> bool {
         smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
             states
@@ -60,7 +76,7 @@ impl WlrLayerShellHandler for CompositorState {
         };
         let layer_surface = DesktopLayerSurface::new(surface, namespace);
         let _ = layer_map_for_output(&output).map_layer(&layer_surface);
-        self.arrange_layer_output(&output);
+        self.arrange_layer_output_and_refresh_usable_area(&output);
     }
 
     fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
@@ -68,7 +84,8 @@ impl WlrLayerShellHandler for CompositorState {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        for output in self.output_topology.space.outputs() {
+        let outputs: Vec<_> = self.output_topology.space.outputs().cloned().collect();
+        for output in &outputs {
             let layer = {
                 let layer_map = layer_map_for_output(output);
                 let layer = layer_map
@@ -80,7 +97,16 @@ impl WlrLayerShellHandler for CompositorState {
             let Some(layer) = layer else {
                 continue;
             };
+            let before = self
+                .output_topology
+                .layer_usable_area_global_for_output(output);
             layer_map_for_output(output).unmap_layer(&layer);
+            let after = self
+                .output_topology
+                .layer_usable_area_global_for_output(output);
+            if before != after {
+                self.refresh_usable_area_dependent_window_layouts();
+            }
         }
     }
 }
@@ -89,7 +115,7 @@ pub(crate) fn handle_commit(state: &mut CompositorState, root: &WlSurface) {
     let Some((output, layer)) = state.layer_surface_for_root(root) else {
         return;
     };
-    state.arrange_layer_output(&output);
+    state.arrange_layer_output_and_refresh_usable_area(&output);
     if !CompositorState::desktop_layer_surface_configured(&layer) {
         layer.layer_surface().send_configure();
     }

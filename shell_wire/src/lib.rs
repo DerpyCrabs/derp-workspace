@@ -326,6 +326,10 @@ pub struct OutputLayoutScreen {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    pub usable_x: i32,
+    pub usable_y: i32,
+    pub usable_w: u32,
+    pub usable_h: u32,
     pub physical_w: u32,
     pub physical_h: u32,
     pub transform: u32,
@@ -386,6 +390,14 @@ pub fn encode_output_layout(
             .checked_add(nl as usize)?
             .checked_add(4)?;
     }
+    body_sz = body_sz.checked_add(4)?;
+    for s in screens {
+        let nl = u32::try_from(s.name.as_bytes().len()).ok()?;
+        body_sz = body_sz
+            .checked_add(4)?
+            .checked_add(nl as usize)?
+            .checked_add(16)?;
+    }
     let body_len = u32::try_from(body_sz).ok()?;
     if body_len > MAX_BODY_BYTES {
         return None;
@@ -430,6 +442,17 @@ pub fn encode_output_layout(
         v.extend_from_slice(&nl.to_le_bytes());
         v.extend_from_slice(nb);
         v.extend_from_slice(&s.taskbar_side.to_le_bytes());
+    }
+    v.extend_from_slice(&n.to_le_bytes());
+    for s in screens {
+        let nb = s.name.as_bytes();
+        let nl = nb.len() as u32;
+        v.extend_from_slice(&nl.to_le_bytes());
+        v.extend_from_slice(nb);
+        v.extend_from_slice(&s.usable_x.to_le_bytes());
+        v.extend_from_slice(&s.usable_y.to_le_bytes());
+        v.extend_from_slice(&s.usable_w.max(1).to_le_bytes());
+        v.extend_from_slice(&s.usable_h.max(1).to_le_bytes());
     }
     Some(v)
 }
@@ -557,6 +580,10 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             y,
             w,
             h,
+            usable_x: x,
+            usable_y: y,
+            usable_w: w.max(1),
+            usable_h: h.max(1),
             physical_w,
             physical_h,
             transform,
@@ -626,6 +653,44 @@ fn decode_output_layout_body(body: &[u8]) -> Result<DecodedCompositorToShellMess
             }
             if let Some(screen) = screens.iter_mut().find(|screen| screen.name == name) {
                 screen.taskbar_side = side;
+            }
+        }
+    }
+    if off < body.len() {
+        if off + 4 > body.len() {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        let usable_count = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if usable_count > MAX_OUTPUT_LAYOUT_SCREENS as usize {
+            return Err(DecodeError::BadOutputLayoutPayload);
+        }
+        for _ in 0..usable_count {
+            if off + 4 > body.len() {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            let nl = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+            off += 4;
+            if nl == 0 || nl > MAX_OUTPUT_LAYOUT_NAME_BYTES as usize {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            if off + nl + 16 > body.len() {
+                return Err(DecodeError::BadOutputLayoutPayload);
+            }
+            let name = std::str::from_utf8(&body[off..off + nl])
+                .map_err(|_| DecodeError::BadUtf8Command)?
+                .to_string();
+            off += nl;
+            let usable_x = i32::from_le_bytes(body[off..off + 4].try_into().unwrap());
+            let usable_y = i32::from_le_bytes(body[off + 4..off + 8].try_into().unwrap());
+            let usable_w = u32::from_le_bytes(body[off + 8..off + 12].try_into().unwrap()).max(1);
+            let usable_h = u32::from_le_bytes(body[off + 12..off + 16].try_into().unwrap()).max(1);
+            off += 16;
+            if let Some(screen) = screens.iter_mut().find(|screen| screen.name == name) {
+                screen.usable_x = usable_x;
+                screen.usable_y = usable_y;
+                screen.usable_w = usable_w;
+                screen.usable_h = usable_h;
             }
         }
     }
@@ -3072,6 +3137,10 @@ mod tests {
                 y: 0,
                 w: 3840,
                 h: 2160,
+                usable_x: 0,
+                usable_y: 40,
+                usable_w: 3840,
+                usable_h: 2120,
                 physical_w: 3840,
                 physical_h: 2160,
                 transform: 0,
@@ -3101,6 +3170,10 @@ mod tests {
                     y: 0,
                     w: 3840,
                     h: 2160,
+                    usable_x: 0,
+                    usable_y: 40,
+                    usable_w: 3840,
+                    usable_h: 2120,
                     physical_w: 3840,
                     physical_h: 2160,
                     transform: 0,
@@ -3157,6 +3230,10 @@ mod tests {
                     y: 20,
                     w: 800,
                     h: 600,
+                    usable_x: 10,
+                    usable_y: 20,
+                    usable_w: 800,
+                    usable_h: 600,
                     physical_w: 800,
                     physical_h: 600,
                     transform: 0,

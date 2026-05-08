@@ -8,6 +8,10 @@ export type LayoutScreen = {
   y: number
   width: number
   height: number
+  usable_x?: number
+  usable_y?: number
+  usable_width?: number
+  usable_height?: number
 }
 
 export const TILE_SNAP_EDGE_PX = 18
@@ -18,44 +22,56 @@ export function monitorTileFrameAreaGlobal(
   taskbarSide: TaskbarSide = 'bottom',
   taskbarReservePx: number = CHROME_TASKBAR_RESERVE_PX,
 ): { x: number; y: number; w: number; h: number } {
+  const base = {
+    x: typeof mon.usable_x === 'number' && Number.isFinite(mon.usable_x) ? mon.usable_x : mon.x,
+    y: typeof mon.usable_y === 'number' && Number.isFinite(mon.usable_y) ? mon.usable_y : mon.y,
+    width:
+      typeof mon.usable_width === 'number' && Number.isFinite(mon.usable_width)
+        ? mon.usable_width
+        : mon.width,
+    height:
+      typeof mon.usable_height === 'number' && Number.isFinite(mon.usable_height)
+        ? mon.usable_height
+        : mon.height,
+  }
   const tb = reserveTaskbar ? taskbarReservePx : 0
   if (tb <= 0) {
     return {
-      x: mon.x,
-      y: mon.y,
-      w: Math.max(1, mon.width),
-      h: Math.max(1, mon.height),
+      x: base.x,
+      y: base.y,
+      w: Math.max(1, base.width),
+      h: Math.max(1, base.height),
     }
   }
   if (taskbarSide === 'top') {
     return {
-      x: mon.x,
-      y: mon.y + tb,
-      w: Math.max(1, mon.width),
-      h: Math.max(1, mon.height - tb),
+      x: base.x,
+      y: base.y + tb,
+      w: Math.max(1, base.width),
+      h: Math.max(1, base.height - tb),
     }
   }
   if (taskbarSide === 'left') {
     return {
-      x: mon.x + tb,
-      y: mon.y,
-      w: Math.max(1, mon.width - tb),
-      h: Math.max(1, mon.height),
+      x: base.x + tb,
+      y: base.y,
+      w: Math.max(1, base.width - tb),
+      h: Math.max(1, base.height),
     }
   }
   if (taskbarSide === 'right') {
     return {
-      x: mon.x,
-      y: mon.y,
-      w: Math.max(1, mon.width - tb),
-      h: Math.max(1, mon.height),
+      x: base.x,
+      y: base.y,
+      w: Math.max(1, base.width - tb),
+      h: Math.max(1, base.height),
     }
   }
   return {
-    x: mon.x,
-    y: mon.y,
-    w: Math.max(1, mon.width),
-    h: Math.max(1, mon.height - tb),
+    x: base.x,
+    y: base.y,
+    w: Math.max(1, base.width),
+    h: Math.max(1, base.height - tb),
   }
 }
 

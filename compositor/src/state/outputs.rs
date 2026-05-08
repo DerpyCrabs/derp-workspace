@@ -82,6 +82,21 @@ impl OutputTopologyState {
         ))
     }
 
+    pub(crate) fn layer_usable_area_global_for_output(
+        &self,
+        output: &Output,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let geo = self.space.output_geometry(output)?;
+        let zone = layer_map_for_output(output).non_exclusive_zone();
+        Some(Rectangle::new(
+            Point::from((
+                geo.loc.x.saturating_add(zone.loc.x),
+                geo.loc.y.saturating_add(zone.loc.y),
+            )),
+            Size::from((zone.size.w.max(1), zone.size.h.max(1))),
+        ))
+    }
+
     pub(crate) fn wayland_scale_for_shell_ui(shell_ui_scale: f64) -> Scale {
         if (shell_ui_scale - 1.0).abs() < f64::EPSILON {
             return Scale::Integer(1);
@@ -377,6 +392,7 @@ impl OutputTopologyState {
                 let refresh_milli_hz = u32::try_from(mode.refresh.max(1)).unwrap_or(1);
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(o.name().as_str());
                 let taskbar_side = self.taskbar_side_for_output_name(o.name().as_str());
+                let usable = self.layer_usable_area_global_for_output(o).unwrap_or(g);
                 Some(shell_wire::OutputLayoutScreen {
                     name: o.name(),
                     identity: Self::shell_output_identity(o),
@@ -384,6 +400,10 @@ impl OutputTopologyState {
                     y: g.loc.y,
                     w: u32::try_from(g.size.w).ok()?.max(1),
                     h: u32::try_from(g.size.h).ok()?.max(1),
+                    usable_x: usable.loc.x,
+                    usable_y: usable.loc.y,
+                    usable_w: u32::try_from(usable.size.w).ok()?.max(1),
+                    usable_h: u32::try_from(usable.size.h).ok()?.max(1),
                     physical_w: u32::try_from(mode.size.w).ok()?.max(1),
                     physical_h: u32::try_from(mode.size.h).ok()?.max(1),
                     transform: transform_to_wire(tf),

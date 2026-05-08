@@ -147,6 +147,10 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
       y,
       width,
       height,
+      usable_x: x,
+      usable_y: y,
+      usable_width: Math.max(1, width),
+      usable_height: Math.max(1, height),
       physical_width: physicalWidth,
       physical_height: physicalHeight,
       transform,
@@ -196,6 +200,34 @@ function decodeOutputLayout(bytes: Uint8Array, view: DataView, offset: number): 
       if (taskbarSide === null) return null
       const screen = screens.find((entry) => entry.name === name)
       if (screen) screen.taskbar_side = taskbarSide
+    }
+  }
+  if (cursor < view.byteLength) {
+    if (cursor + 4 > view.byteLength) return null
+    const usableCount = view.getUint32(cursor, true)
+    cursor += 4
+    if (usableCount > MAX_OUTPUT_LAYOUT_SCREENS) return null
+    for (let i = 0; i < usableCount; i += 1) {
+      if (cursor + 4 > view.byteLength) return null
+      const nameLen = view.getUint32(cursor, true)
+      cursor += 4
+      if (nameLen === 0 || nameLen > MAX_OUTPUT_LAYOUT_NAME_BYTES) return null
+      const name = readUtf8(bytes, cursor, nameLen)
+      if (name == null) return null
+      cursor += nameLen
+      if (cursor + 16 > view.byteLength) return null
+      const usableX = view.getInt32(cursor, true)
+      const usableY = view.getInt32(cursor + 4, true)
+      const usableWidth = view.getUint32(cursor + 8, true)
+      const usableHeight = view.getUint32(cursor + 12, true)
+      cursor += 16
+      const screen = screens.find((entry) => entry.name === name)
+      if (screen) {
+        screen.usable_x = usableX
+        screen.usable_y = usableY
+        screen.usable_width = Math.max(1, usableWidth)
+        screen.usable_height = Math.max(1, usableHeight)
+      }
     }
   }
   if (cursor !== view.byteLength) return null

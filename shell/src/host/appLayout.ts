@@ -14,6 +14,10 @@ export function screensListForLayout(
         name: '',
         x: ox,
         y: oy,
+        usable_x: ox,
+        usable_y: oy,
+        usable_width: canvas.w,
+        usable_height: canvas.h,
         refresh_milli_hz: 0,
         width: canvas.w,
         height: canvas.h,
@@ -31,6 +35,13 @@ export function screensListForLayout(
 
 export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): LayoutScreen {
   const loc = rectGlobalToCanvasLocal(s.x, s.y, s.width, s.height, origin)
+  const usable = rectGlobalToCanvasLocal(
+    s.usable_x ?? s.x,
+    s.usable_y ?? s.y,
+    s.usable_width ?? s.width,
+    s.usable_height ?? s.height,
+    origin,
+  )
   return {
     name: s.name,
     identity: s.identity,
@@ -38,6 +49,10 @@ export function layoutScreenCssRect(s: LayoutScreen, origin: CanvasOrigin): Layo
     y: loc.y,
     width: loc.w,
     height: loc.h,
+    usable_x: usable.x,
+    usable_y: usable.y,
+    usable_width: usable.w,
+    usable_height: usable.h,
     physical_width: s.physical_width,
     physical_height: s.physical_height,
     transform: s.transform,

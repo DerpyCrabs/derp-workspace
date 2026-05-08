@@ -24,7 +24,7 @@ import {
   writeJsonArtifact,
   type CompositorSnapshot,
 } from '../lib/runtime.ts'
-import { closeWindow, postJson, runKeybind } from '../lib/setup.ts'
+import { closeWindow, openShellTestWindow, postJson, runKeybind, spawnNativeWindow } from '../lib/setup.ts'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -109,6 +109,19 @@ function overlappedOutputs(compositor: CompositorSnapshot, window: { x: number; 
   return compositor.outputs.filter((output) => outputOverlapArea(window, output) > 16 * 16)
 }
 
+function assertAvoidsTopReserve(
+  label: string,
+  output: { x: number; y: number; width: number; height: number },
+  window: { x: number; y: number; width: number; height: number },
+  reserve: number,
+) {
+  assert(window.y >= output.y + reserve, `${label} y ${window.y} overlaps reserve ending at ${output.y + reserve}`)
+  assert(
+    window.height <= output.height - reserve,
+    `${label} height ${window.height} exceeds output height ${output.height} minus reserve ${reserve}`,
+  )
+}
+
 export default defineGroup(import.meta.url, ({ test }) => {
   test('advertises linux-drm-syncobj-v1 to Wayland clients', async ({ base }) => {
     const outputPath = path.join(artifactDir(), `drm-syncobj-globals-${Date.now()}.txt`)
@@ -182,6 +195,91 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(output.includes('wp_content_type_manager_v1 1'), output)
     assert(output.includes('wp_tearing_control_manager_v1 1'), output)
     assert(output.includes('\nexit:0\n'), output)
+  })
+
+  test('layer-shell exclusive zone reserves compositor work areas', async ({ base, state }) => {
+    const zone = 64
+    const stamp = Date.now()
+    const panelToken = `layer-exclusive-panel-${stamp}`
+    await spawnCommand(
+      base,
+      `${shellQuote(nativeBin())} --layer-panel --exclusive-zone ${zone} --token ${shellQuote(panelToken)}`,
+    )
+    try {
+      const native = await spawnNativeWindow(base, state.knownWindowIds, {
+        title: `Derp Layer Exclusive Native ${stamp}`,
+        token: `layer-exclusive-native-${stamp}`,
+        strip: 'red',
+      })
+      state.spawnedNativeWindowIds.add(native.window.window_id)
+      await derpctl(['window', 'maximize', String(native.window.window_id), '--enabled', 'true'])
+      const nativeMaximized = await waitFor(
+        'wait for native maximize to avoid layer panel',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find((entry) => entry.window_id === native.window.window_id)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
+          return window?.maximized && output && window.y >= output.y + zone ? { compositor, window, output } : null
+        },
+        5000,
+        100,
+      )
+      assertAvoidsTopReserve('native maximized', nativeMaximized.output, nativeMaximized.window, zone)
+      await derpctl(['window', 'maximize', String(native.window.window_id), '--enabled', 'false'])
+      await derpctl(['window', 'focus', String(native.window.window_id)])
+      await runKeybind(base, 'tile_left')
+      const nativeTiled = await waitFor(
+        'wait for native tile to avoid layer panel',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find((entry) => entry.window_id === native.window.window_id)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
+          return window && output && !window.maximized && window.y >= output.y + zone ? { compositor, window, output } : null
+        },
+        5000,
+        100,
+      )
+      assertAvoidsTopReserve('native tiled', nativeTiled.output, nativeTiled.window, zone)
+
+      const shellHosted = await openShellTestWindow(base, state)
+      await derpctl(['window', 'maximize', String(shellHosted.window.window_id), '--enabled', 'true'])
+      const shellMaximized = await waitFor(
+        'wait for shell-hosted maximize to avoid layer panel',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find((entry) => entry.window_id === shellHosted.window.window_id)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
+          return window?.maximized && output && window.y >= output.y + zone ? { compositor, window, output } : null
+        },
+        5000,
+        100,
+      )
+      assertAvoidsTopReserve('shell-hosted maximized', shellMaximized.output, shellMaximized.window, zone)
+      await derpctl(['window', 'maximize', String(shellHosted.window.window_id), '--enabled', 'false'])
+      await derpctl(['window', 'focus', String(shellHosted.window.window_id)])
+      await runKeybind(base, 'tile_right')
+      const shellTiled = await waitFor(
+        'wait for shell-hosted tile to avoid layer panel',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          const window = compositor.windows.find((entry) => entry.window_id === shellHosted.window.window_id)
+          const output = compositor.outputs.find((entry) => entry.name === window?.output_name)
+          return window && output && !window.maximized && window.y >= output.y + zone ? { compositor, window, output } : null
+        },
+        5000,
+        100,
+      )
+      assertAvoidsTopReserve('shell-hosted tiled', shellTiled.output, shellTiled.window, zone)
+      await writeJsonArtifact('layer-shell-exclusive-zone-work-area.json', {
+        zone,
+        nativeMaximized: nativeMaximized.window,
+        nativeTiled: nativeTiled.window,
+        shellMaximized: shellMaximized.window,
+        shellTiled: shellTiled.window,
+      })
+    } finally {
+      await spawnCommand(base, `pkill -f ${shellQuote(panelToken)} || true`)
+    }
   })
 
   test('linux-drm-syncobj-v1 protocol errors are enforced', async ({ base }) => {

@@ -8,6 +8,10 @@ export type LayoutScreen = {
   y: number
   width: number
   height: number
+  usable_x?: number
+  usable_y?: number
+  usable_width?: number
+  usable_height?: number
   physical_width: number
   physical_height: number
   transform: number
