@@ -11,6 +11,7 @@ use crate::{
 
 use smithay::delegate_layer_shell;
 use smithay::delegate_pointer_constraints;
+use smithay::delegate_pointer_gestures;
 use smithay::delegate_relative_pointer;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -449,4 +450,5 @@ impl OutputHandler for CompositorState {}
 delegate_output!(crate::CompositorState);
 delegate_layer_shell!(crate::CompositorState);
 delegate_relative_pointer!(crate::CompositorState);
+delegate_pointer_gestures!(crate::CompositorState);
 delegate_pointer_constraints!(crate::CompositorState);

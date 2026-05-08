@@ -535,6 +535,15 @@ impl UplinkToCompositor {
         self.run_result(move |s| s.e2e_pointer_wheel(delta_x, delta_y))
     }
 
+    pub fn test_pointer_gesture(&self, gesture: String) -> Result<(), String> {
+        self.run_result(move |s| match gesture.as_str() {
+            "swipe" => s.e2e_pointer_gesture_swipe(),
+            "pinch" => s.e2e_pointer_gesture_pinch(),
+            "hold" => s.e2e_pointer_gesture_hold(),
+            _ => Err("pointer_gesture: gesture must be swipe, pinch or hold".to_string()),
+        })
+    }
+
     pub fn test_key(&self, keycode: u32, pressed: bool) -> Result<(), String> {
         self.run_result(move |s| {
             s.e2e_keyboard_key(

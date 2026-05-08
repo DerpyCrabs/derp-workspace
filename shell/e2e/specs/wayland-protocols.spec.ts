@@ -18,6 +18,8 @@ import {
   KEY,
   movePoint,
   nativeBin,
+  pointerGesture,
+  pointerWheel,
   readPngRgba,
   shellQuote,
   shellWindowById,
@@ -145,6 +147,22 @@ function assertAvoidsTopReserve(
   )
 }
 
+async function moveWindowToOutput(windowId: number, output: { x: number; y: number; width: number; height: number }) {
+  await derpctl([
+    'window',
+    'move',
+    String(windowId),
+    '--x',
+    String(output.x + 80),
+    '--y',
+    String(output.y + 96),
+    '--width',
+    String(Math.min(520, Math.max(260, output.width - 160))),
+    '--height',
+    String(Math.min(360, Math.max(180, output.height - 192))),
+  ])
+}
+
 function assertFullDamage(
   frame: ExtImageCopyStatus['frames'][number],
   size: { buffer_width: number; buffer_height: number },
@@ -259,6 +277,119 @@ export default defineGroup(import.meta.url, ({ test }) => {
     assert(output.includes('\nexit:0\n'), output)
   })
 
+  test('forwards pointer gestures to native clients without leaking shell UI gestures', async ({ base, state }) => {
+    const outputPath = path.join(artifactDir(), `pointer-gestures-globals-${Date.now()}.txt`)
+    const globalsCommand = [
+      shellQuote(nativeBin()),
+      '--require-global',
+      'zwp_pointer_gestures_v1',
+      '--list-globals',
+      '>',
+      shellQuote(outputPath),
+      '2>&1;',
+      'printf',
+      shellQuote('\\nexit:%s\\n'),
+      '$?',
+      '>>',
+      shellQuote(outputPath),
+    ].join(' ')
+    await spawnCommand(base, `sh -lc ${shellQuote(globalsCommand)}`)
+    const globalsOutput = await waitFor(
+      'wait for pointer gestures registry probe',
+      async () => {
+        try {
+          const text = await readFile(outputPath, 'utf8')
+          return text.includes('\nexit:') ? text : null
+        } catch {
+          return null
+        }
+      },
+      5000,
+      100,
+    )
+    assert(globalsOutput.includes('zwp_pointer_gestures_v1'), globalsOutput)
+    assert(globalsOutput.includes('\nexit:0\n'), globalsOutput)
+
+    const stamp = Date.now()
+    const statusPath = path.join(artifactDir(), `pointer-gestures-status-${stamp}.json`)
+    const title = `Derp Pointer Gesture Probe ${stamp}`
+    const native = await spawnNativeWindow(base, state.knownWindowIds, {
+      title,
+      appId: 'derp.e2e.pointer.gestures',
+      token: `pointer-gestures-${stamp}`,
+      strip: 'green',
+      width: 420,
+      height: 260,
+      gestureStatusJson: statusPath,
+    })
+    state.spawnedNativeWindowIds.add(native.window.window_id)
+    try {
+      await waitForNativeFocus(base, native.window.window_id)
+      await movePoint(
+        base,
+        native.window.x + Math.floor(native.window.width / 2),
+        native.window.y + Math.floor(native.window.height / 2),
+      )
+      await waitFor('wait for gesture probe status file', () => readStatusJson<Record<string, number>>(statusPath), 5000, 100)
+      await pointerGesture(base, 'swipe')
+      await pointerGesture(base, 'pinch')
+      const delivered = await waitFor(
+        'wait for native pointer gestures',
+        async () => {
+          const status = await readStatusJson<Record<string, number>>(statusPath)
+          if (!status) return null
+          return status.swipe_begin >= 1 &&
+            status.swipe_update >= 1 &&
+            status.swipe_end >= 1 &&
+            status.pinch_begin >= 1 &&
+            status.pinch_update >= 1 &&
+            status.pinch_end >= 1
+            ? status
+            : null
+        },
+        5000,
+        100,
+      )
+      await movePoint(base, native.window.x + 24, native.window.y + 24)
+      await pointerWheel(base, 0, -120)
+      const pointerAfterMotion = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+      assert(
+        Math.round(pointerAfterMotion.pointer?.x ?? -1) === native.window.x + 24 &&
+          Math.round(pointerAfterMotion.pointer?.y ?? -1) === native.window.y + 24,
+        `pointer motion changed unexpectedly: ${JSON.stringify(pointerAfterMotion.pointer)}`,
+      )
+      const beforeShellGesture = await readStatusJson<Record<string, number>>(statusPath)
+      const shellRect = pointerAfterMotion.shell_exclusion_global?.[0]
+      assert(shellRect && shellRect.width > 0 && shellRect.height > 0, 'missing shell exclusion rect for leak probe')
+      await movePoint(
+        base,
+        shellRect.x + Math.floor(shellRect.width / 2),
+        shellRect.y + Math.floor(shellRect.height / 2),
+      )
+      await pointerGesture(base, 'swipe')
+      const afterShellGesture = await readStatusJson<Record<string, number>>(statusPath)
+      assert(beforeShellGesture && afterShellGesture, 'missing gesture status around shell leak probe')
+      assert(
+        afterShellGesture.swipe_begin === beforeShellGesture.swipe_begin &&
+          afterShellGesture.swipe_update === beforeShellGesture.swipe_update &&
+          afterShellGesture.swipe_end === beforeShellGesture.swipe_end,
+        `shell UI gesture leaked to native client: before=${JSON.stringify(beforeShellGesture)} after=${JSON.stringify(afterShellGesture)}`,
+      )
+      await writeJsonArtifact('pointer-gestures-forwarding.json', {
+        globals: globalsOutput,
+        native: native.window,
+        delivered,
+        beforeShellGesture,
+        afterShellGesture,
+        shellRect,
+        pointerAfterMotion: pointerAfterMotion.pointer,
+      })
+    } finally {
+      await closeWindow(base, native.window.window_id)
+      await waitForWindowGone(base, native.window.window_id, 5000)
+    }
+  })
+
   test('xdg-activation focuses a target only after a focused user interaction token', async ({ base, state }) => {
     const stamp = Date.now()
     const launcherTitle = `Derp Activation Policy Launcher ${stamp}`
@@ -316,12 +447,30 @@ export default defineGroup(import.meta.url, ({ test }) => {
       `${shellQuote(nativeBin())} --layer-panel --exclusive-zone ${zone} --token ${shellQuote(panelToken)}`,
     )
     try {
+      const panelOutput = await waitFor(
+        'wait for layer panel exclusive zone',
+        async () => {
+          const compositor = await getJson<CompositorSnapshot>(base, '/test/state/compositor')
+          return (
+            compositor.outputs.find(
+              (output) =>
+                output.usable_y != null &&
+                output.usable_height != null &&
+                output.usable_y >= output.y + zone &&
+                output.usable_height <= output.height - zone,
+            ) ?? null
+          )
+        },
+        5000,
+        100,
+      )
       const native = await spawnNativeWindow(base, state.knownWindowIds, {
         title: `Derp Layer Exclusive Native ${stamp}`,
         token: `layer-exclusive-native-${stamp}`,
         strip: 'red',
       })
       state.spawnedNativeWindowIds.add(native.window.window_id)
+      await moveWindowToOutput(native.window.window_id, panelOutput)
       await derpctl(['window', 'maximize', String(native.window.window_id), '--enabled', 'true'])
       const nativeMaximized = await waitFor(
         'wait for native maximize to avoid layer panel',
@@ -352,6 +501,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       assertAvoidsTopReserve('native tiled', nativeTiled.output, nativeTiled.window, zone)
 
       const shellHosted = await openShellTestWindow(base, state)
+      await moveWindowToOutput(shellHosted.window.window_id, panelOutput)
       await derpctl(['window', 'maximize', String(shellHosted.window.window_id), '--enabled', 'true'])
       const shellMaximized = await waitFor(
         'wait for shell-hosted maximize to avoid layer panel',

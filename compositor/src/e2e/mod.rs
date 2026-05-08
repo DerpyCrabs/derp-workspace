@@ -128,6 +128,10 @@ struct E2eOutputSnapshot {
     y: i32,
     width: i32,
     height: i32,
+    usable_x: i32,
+    usable_y: i32,
+    usable_width: i32,
+    usable_height: i32,
     physical_width: i32,
     physical_height: i32,
     scale: f64,
@@ -560,6 +564,38 @@ impl CompositorState {
         Ok(())
     }
 
+    pub(crate) fn e2e_pointer_gesture_swipe(&mut self) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        let time = self.e2e_now_ms() as u32;
+        self.pointer_gesture_swipe_begin(3, time);
+        self.pointer_gesture_swipe_update(Point::from((24.0, 0.0)), time);
+        self.pointer_gesture_swipe_end(false, time);
+        Ok(())
+    }
+
+    pub(crate) fn e2e_pointer_gesture_pinch(&mut self) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        let time = self.e2e_now_ms() as u32;
+        self.pointer_gesture_pinch_begin(2, time);
+        self.pointer_gesture_pinch_update(Point::from((0.0, 0.0)), 1.25, 15.0, time);
+        self.pointer_gesture_pinch_end(false, time);
+        Ok(())
+    }
+
+    pub(crate) fn e2e_pointer_gesture_hold(&mut self) -> Result<(), String> {
+        if self.workspace_logical_bounds().is_none() {
+            return Err("no workspace bounds available".to_string());
+        }
+        let time = self.e2e_now_ms() as u32;
+        self.pointer_gesture_hold_begin(3, time);
+        self.pointer_gesture_hold_end(false, time);
+        Ok(())
+    }
+
     pub(crate) fn e2e_set_xdg_activation_token_max_age(
         &mut self,
         max_age: Option<Duration>,
@@ -623,12 +659,20 @@ impl CompositorState {
                 let (vrr_supported, vrr_enabled) = self.output_vrr_state(output.name().as_str());
                 let (last_flip_mode, last_flip_fallback_reason) =
                     self.output_flip_state(output.name().as_str());
+                let usable = self
+                    .output_topology
+                    .layer_usable_area_global_for_output(&output)
+                    .unwrap_or(geometry);
                 Some(E2eOutputSnapshot {
                     name: output.name(),
                     x: geometry.loc.x,
                     y: geometry.loc.y,
                     width: geometry.size.w,
                     height: geometry.size.h,
+                    usable_x: usable.loc.x,
+                    usable_y: usable.loc.y,
+                    usable_width: usable.size.w,
+                    usable_height: usable.size.h,
                     physical_width,
                     physical_height,
                     scale: output.current_scale().fractional_scale(),

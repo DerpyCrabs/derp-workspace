@@ -85,6 +85,10 @@ export interface OutputSnapshot {
   y: number
   width: number
   height: number
+  usable_x?: number
+  usable_y?: number
+  usable_width?: number
+  usable_height?: number
   physical_width?: number
   physical_height?: number
   scale?: number
@@ -2018,6 +2022,11 @@ export async function pointerWheel(base: string, deltaX: number, deltaY: number)
   await syncTest(base)
 }
 
+export async function pointerGesture(base: string, gesture: 'swipe' | 'pinch' | 'hold'): Promise<void> {
+  await postJson(base, '/test/input/pointer_gesture', { gesture })
+  await syncTest(base)
+}
+
 export async function pointerButton(base: string, button: number, action: 'press' | 'release'): Promise<void> {
   await postJson(base, '/test/input/pointer_button', { button, action })
   await syncTest(base)
@@ -2903,6 +2912,7 @@ export function buildNativeSpawnCommand({
   burstFrames,
   xdgIconName,
   xdgIconShm = false,
+  gestureStatusJson,
 }: {
   title: string
   appId?: string
@@ -2923,6 +2933,7 @@ export function buildNativeSpawnCommand({
   burstFrames?: number
   xdgIconName?: string
   xdgIconShm?: boolean
+  gestureStatusJson?: string
 }): string {
   const parts = [
     nativeBin(),
@@ -2949,6 +2960,7 @@ export function buildNativeSpawnCommand({
   if (burstFrames !== undefined) parts.push('--burst-frames', String(burstFrames))
   if (xdgIconName) parts.push('--xdg-icon-name', shellQuote(xdgIconName))
   if (xdgIconShm) parts.push('--xdg-icon-shm')
+  if (gestureStatusJson) parts.push('--gesture-status-json', shellQuote(gestureStatusJson))
   if (spawnOnPressCommand) {
     parts.push('--spawn-on-press-command', shellQuote(spawnOnPressCommand))
   }
@@ -2985,6 +2997,7 @@ export async function spawnNativeWindow(
     burstFrames,
     xdgIconName,
     xdgIconShm,
+    gestureStatusJson,
   }: {
     title: string
     appId?: string
@@ -3005,6 +3018,7 @@ export async function spawnNativeWindow(
     burstFrames?: number
     xdgIconName?: string
     xdgIconShm?: boolean
+    gestureStatusJson?: string
   },
 ): Promise<NativeSpawnResult> {
   const command = buildNativeSpawnCommand({
@@ -3027,6 +3041,7 @@ export async function spawnNativeWindow(
     burstFrames,
     xdgIconName,
     xdgIconShm,
+    gestureStatusJson,
   })
   await spawnCommand(base, command)
   return waitForSpawnedWindow(base, knownWindowIds, { title, appId, command })

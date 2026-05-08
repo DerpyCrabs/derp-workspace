@@ -1383,6 +1383,17 @@ fn handle_one(
         return Ok(());
     }
 
+    if req_path == "/test/input/pointer_gesture" {
+        let gesture = v
+            .get("gesture")
+            .and_then(|x| x.as_str())
+            .unwrap_or("swipe")
+            .to_string();
+        uplink.test_pointer_gesture(gesture)?;
+        write_http_ok_json(stream, r#"{"ok":true}"#).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     if req_path == "/test/input/click" {
         let button = v
             .get("button")

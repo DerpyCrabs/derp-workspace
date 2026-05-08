@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::fs;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +60,10 @@ use wayland_protocols::wp::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
     },
     presentation_time::client::{wp_presentation::WpPresentation, wp_presentation_feedback},
+    pointer_gestures::zv1::client::{
+        zwp_pointer_gesture_hold_v1, zwp_pointer_gesture_pinch_v1,
+        zwp_pointer_gesture_swipe_v1, zwp_pointer_gestures_v1::ZwpPointerGesturesV1,
+    },
     relative_pointer::zv1::client::zwp_relative_pointer_v1,
     tearing_control::v1::client::{
         wp_tearing_control_manager_v1::WpTearingControlManagerV1, wp_tearing_control_v1,
@@ -242,6 +247,8 @@ struct Args {
     xdg_icon_name: Option<String>,
     #[arg(long, default_value_t = false)]
     xdg_icon_shm: bool,
+    #[arg(long)]
+    gesture_status_json: Option<String>,
 }
 
 fn main() {
@@ -354,6 +361,15 @@ fn main() {
             globals
                 .bind::<XdgToplevelIconManagerV1, _, _>(&qh, 1..=1, ())
                 .expect("bind xdg_toplevel_icon_manager_v1"),
+        )
+    } else {
+        None
+    };
+    let pointer_gestures = if args.gesture_status_json.is_some() {
+        Some(
+            globals
+                .bind::<ZwpPointerGesturesV1, _, _>(&qh, 1..=3, ())
+                .expect("bind zwp_pointer_gestures_v1"),
         )
     } else {
         None
@@ -480,6 +496,12 @@ fn main() {
         pointer: None,
         pointer_seat: None,
         relative_pointer: None,
+        pointer_gestures,
+        gesture_swipe: None,
+        gesture_pinch: None,
+        gesture_hold: None,
+        gesture_status_json: args.gesture_status_json,
+        gesture_status: GestureStatus::default(),
         pointer_constraint: None,
         constraint_locked: false,
         constraint_confined: false,
@@ -660,11 +682,34 @@ struct TestClient {
     pointer: Option<wl_pointer::WlPointer>,
     pointer_seat: Option<wl_seat::WlSeat>,
     relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
+    pointer_gestures: Option<ZwpPointerGesturesV1>,
+    gesture_swipe: Option<zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1>,
+    gesture_pinch: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
+    gesture_hold: Option<zwp_pointer_gesture_hold_v1::ZwpPointerGestureHoldV1>,
+    gesture_status_json: Option<String>,
+    gesture_status: GestureStatus,
     pointer_constraint: Option<PointerConstraintHandle>,
     constraint_locked: bool,
     constraint_confined: bool,
     last_relative: (f64, f64),
     total_relative: (f64, f64),
+}
+
+#[derive(Default)]
+struct GestureStatus {
+    swipe_begin: u32,
+    swipe_update: u32,
+    swipe_end: u32,
+    pinch_begin: u32,
+    pinch_update: u32,
+    pinch_end: u32,
+    hold_begin: u32,
+    hold_end: u32,
+    last_swipe_delta: (f64, f64),
+    last_pinch_delta: (f64, f64),
+    last_pinch_scale: f64,
+    last_pinch_rotation: f64,
+    last_cancelled: bool,
 }
 
 impl TestClient {
@@ -796,6 +841,55 @@ impl TestClient {
                 .map(PointerConstraintHandle::Confined),
             PointerConstraintMode::None => None,
         };
+    }
+
+    fn ensure_gesture_pointer_state(&mut self, qh: &QueueHandle<Self>) {
+        if self.gesture_swipe.is_some() {
+            return;
+        }
+        let (Some(manager), Some(pointer)) = (self.pointer_gestures.as_ref(), self.pointer.as_ref()) else {
+            return;
+        };
+        self.gesture_swipe = Some(manager.get_swipe_gesture(pointer, qh, ()));
+        self.gesture_pinch = Some(manager.get_pinch_gesture(pointer, qh, ()));
+        self.gesture_hold = Some(manager.get_hold_gesture(pointer, qh, ()));
+        self.write_gesture_status();
+    }
+
+    fn write_gesture_status(&self) {
+        let Some(path) = self.gesture_status_json.as_ref() else {
+            return;
+        };
+        let status = &self.gesture_status;
+        let json = format!(
+            concat!(
+                "{{",
+                "\"swipe_begin\":{},\"swipe_update\":{},\"swipe_end\":{},",
+                "\"pinch_begin\":{},\"pinch_update\":{},\"pinch_end\":{},",
+                "\"hold_begin\":{},\"hold_end\":{},",
+                "\"last_swipe_delta\":[{:.3},{:.3}],",
+                "\"last_pinch_delta\":[{:.3},{:.3}],",
+                "\"last_pinch_scale\":{:.6},\"last_pinch_rotation\":{:.6},",
+                "\"last_cancelled\":{}",
+                "}}\n"
+            ),
+            status.swipe_begin,
+            status.swipe_update,
+            status.swipe_end,
+            status.pinch_begin,
+            status.pinch_update,
+            status.pinch_end,
+            status.hold_begin,
+            status.hold_end,
+            status.last_swipe_delta.0,
+            status.last_swipe_delta.1,
+            status.last_pinch_delta.0,
+            status.last_pinch_delta.1,
+            status.last_pinch_scale,
+            status.last_pinch_rotation,
+            if status.last_cancelled { "true" } else { "false" },
+        );
+        fs::write(path, json).expect("write gesture status json");
     }
 
     fn maybe_activate_from_startup_token(&mut self) {
@@ -2768,6 +2862,7 @@ impl SeatHandler for TestClient {
                 .ok();
             self.pointer = Some(pointer);
             self.ensure_game_pointer_state(qh);
+            self.ensure_gesture_pointer_state(qh);
         }
     }
 
@@ -2790,6 +2885,15 @@ impl SeatHandler for TestClient {
             }
             if let Some(relative_pointer) = self.relative_pointer.take() {
                 relative_pointer.destroy();
+            }
+            if let Some(gesture) = self.gesture_swipe.take() {
+                gesture.destroy();
+            }
+            if let Some(gesture) = self.gesture_pinch.take() {
+                gesture.destroy();
+            }
+            if let Some(gesture) = self.gesture_hold.take() {
+                gesture.destroy();
             }
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
@@ -2909,6 +3013,105 @@ impl RelativePointerHandler for TestClient {
     }
 }
 
+impl Dispatch<zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_pointer_gesture_swipe_v1::ZwpPointerGestureSwipeV1,
+        event: zwp_pointer_gesture_swipe_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_pointer_gesture_swipe_v1::Event::Begin { fingers, .. } => {
+                state.gesture_status.swipe_begin =
+                    state.gesture_status.swipe_begin.saturating_add(1);
+                state.gesture_status.last_cancelled = false;
+                let _ = fingers;
+            }
+            zwp_pointer_gesture_swipe_v1::Event::Update { dx, dy, .. } => {
+                state.gesture_status.swipe_update =
+                    state.gesture_status.swipe_update.saturating_add(1);
+                state.gesture_status.last_swipe_delta = (dx, dy);
+            }
+            zwp_pointer_gesture_swipe_v1::Event::End { cancelled, .. } => {
+                state.gesture_status.swipe_end =
+                    state.gesture_status.swipe_end.saturating_add(1);
+                state.gesture_status.last_cancelled = cancelled != 0;
+            }
+            _ => {}
+        }
+        state.write_gesture_status();
+    }
+}
+
+impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1,
+        event: zwp_pointer_gesture_pinch_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_pointer_gesture_pinch_v1::Event::Begin { fingers, .. } => {
+                state.gesture_status.pinch_begin =
+                    state.gesture_status.pinch_begin.saturating_add(1);
+                state.gesture_status.last_cancelled = false;
+                let _ = fingers;
+            }
+            zwp_pointer_gesture_pinch_v1::Event::Update {
+                dx,
+                dy,
+                scale,
+                rotation,
+                ..
+            } => {
+                state.gesture_status.pinch_update =
+                    state.gesture_status.pinch_update.saturating_add(1);
+                state.gesture_status.last_pinch_delta = (dx, dy);
+                state.gesture_status.last_pinch_scale = scale;
+                state.gesture_status.last_pinch_rotation = rotation;
+            }
+            zwp_pointer_gesture_pinch_v1::Event::End { cancelled, .. } => {
+                state.gesture_status.pinch_end =
+                    state.gesture_status.pinch_end.saturating_add(1);
+                state.gesture_status.last_cancelled = cancelled != 0;
+            }
+            _ => {}
+        }
+        state.write_gesture_status();
+    }
+}
+
+impl Dispatch<zwp_pointer_gesture_hold_v1::ZwpPointerGestureHoldV1, ()> for TestClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_pointer_gesture_hold_v1::ZwpPointerGestureHoldV1,
+        event: zwp_pointer_gesture_hold_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_pointer_gesture_hold_v1::Event::Begin { fingers, .. } => {
+                state.gesture_status.hold_begin =
+                    state.gesture_status.hold_begin.saturating_add(1);
+                state.gesture_status.last_cancelled = false;
+                let _ = fingers;
+            }
+            zwp_pointer_gesture_hold_v1::Event::End { cancelled, .. } => {
+                state.gesture_status.hold_end =
+                    state.gesture_status.hold_end.saturating_add(1);
+                state.gesture_status.last_cancelled = cancelled != 0;
+            }
+            _ => {}
+        }
+        state.write_gesture_status();
+    }
+}
+
 impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, ()> for TestClient {
     fn event(
         state: &mut Self,
@@ -2955,6 +3158,7 @@ delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
 delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconManagerV1);
 delegate_noop!(TestClient: ignore XdgToplevelIconV1);
+delegate_noop!(TestClient: ignore ZwpPointerGesturesV1);
 delegate_compositor!(LayerPanelClient);
 delegate_output!(LayerPanelClient);
 delegate_shm!(LayerPanelClient);

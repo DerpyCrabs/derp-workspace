@@ -7,13 +7,22 @@ use smithay::{
     backend::{
         input::{
             AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+            GestureBeginEvent as BackendGestureBeginEvent,
+            GestureEndEvent as BackendGestureEndEvent,
+            GesturePinchUpdateEvent as BackendGesturePinchUpdateEvent,
+            GestureSwipeUpdateEvent as BackendGestureSwipeUpdateEvent,
             KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
         },
         session::Session,
     },
     input::{
         keyboard::{keysyms, FilterResult},
-        pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
+        pointer::{
+            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+            GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
+            GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, MotionEvent,
+            RelativeMotionEvent,
+        },
     },
     reexports::{calloop::LoopHandle, wayland_server::protocol::wl_surface::WlSurface},
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
@@ -86,6 +95,159 @@ fn vt_number_from_fkey(sym: u32) -> Option<i32> {
 }
 
 impl CompositorState {
+    fn pointer_gesture_should_route_to_native(&mut self) -> bool {
+        let Some(pointer) = self.input_routing.seat.get_pointer() else {
+            return false;
+        };
+        if self.shell_move_is_active()
+            || self.shell_resize_is_active()
+            || self.shell_ui_pointer_grab_active()
+        {
+            return false;
+        }
+        let pos = pointer.current_location();
+        self.sync_shell_shared_state_for_input();
+        if self.shell_pointer_should_ipc_to_cef(pos) {
+            return false;
+        }
+        let in_excl = self.point_in_shell_exclusion_zones(pos);
+        let in_shell_ui = self.shell_ui_placement_topmost_for_input_at(pos).is_some();
+        let under_native = self.native_surface_under_no_shell_exclusion(pos).is_some();
+        under_native && !in_excl && !in_shell_ui
+    }
+
+    pub(crate) fn pointer_gesture_swipe_begin(&mut self, fingers: u32, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_swipe_begin(
+            self,
+            &GestureSwipeBeginEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                fingers,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_swipe_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        time_msec: u32,
+    ) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_swipe_update(self, &GestureSwipeUpdateEvent { time: time_msec, delta });
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_swipe_end(&mut self, cancelled: bool, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_swipe_end(
+            self,
+            &GestureSwipeEndEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                cancelled,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_pinch_begin(&mut self, fingers: u32, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_pinch_begin(
+            self,
+            &GesturePinchBeginEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                fingers,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_pinch_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        scale: f64,
+        rotation: f64,
+        time_msec: u32,
+    ) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_pinch_update(
+            self,
+            &GesturePinchUpdateEvent {
+                time: time_msec,
+                delta,
+                scale,
+                rotation,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_pinch_end(&mut self, cancelled: bool, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_pinch_end(
+            self,
+            &GesturePinchEndEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                cancelled,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_hold_begin(&mut self, fingers: u32, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_hold_begin(
+            self,
+            &GestureHoldBeginEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                fingers,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    pub(crate) fn pointer_gesture_hold_end(&mut self, cancelled: bool, time_msec: u32) {
+        if !self.pointer_gesture_should_route_to_native() {
+            return;
+        }
+        let pointer = self.input_routing.seat.get_pointer().unwrap();
+        pointer.gesture_hold_end(
+            self,
+            &GestureHoldEndEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: time_msec,
+                cancelled,
+            },
+        );
+        pointer.frame(self);
+    }
+
     fn active_pointer_constraint(
         &self,
         pointer: &smithay::input::pointer::PointerHandle<Self>,
@@ -1184,11 +1346,39 @@ impl CompositorState {
                 pointer.axis(self, frame);
                 pointer.frame(self);
             }
+            InputEvent::GestureSwipeBegin { event, .. } => {
+                self.pointer_gesture_swipe_begin(event.fingers(), event.time_msec());
+            }
+            InputEvent::GestureSwipeUpdate { event, .. } => {
+                self.pointer_gesture_swipe_update(event.delta(), event.time_msec());
+            }
+            InputEvent::GestureSwipeEnd { event, .. } => {
+                self.pointer_gesture_swipe_end(event.cancelled(), event.time_msec());
+            }
+            InputEvent::GesturePinchBegin { event, .. } => {
+                self.pointer_gesture_pinch_begin(event.fingers(), event.time_msec());
+            }
+            InputEvent::GesturePinchUpdate { event, .. } => {
+                self.pointer_gesture_pinch_update(
+                    event.delta(),
+                    event.scale(),
+                    event.rotation(),
+                    event.time_msec(),
+                );
+            }
+            InputEvent::GesturePinchEnd { event, .. } => {
+                self.pointer_gesture_pinch_end(event.cancelled(), event.time_msec());
+            }
+            InputEvent::GestureHoldBegin { event, .. } => {
+                self.pointer_gesture_hold_begin(event.fingers(), event.time_msec());
+            }
+            InputEvent::GestureHoldEnd { event, .. } => {
+                self.pointer_gesture_hold_end(event.cancelled(), event.time_msec());
+            }
             _ => {
-                // Gesture swipe/pinch/hold updates fire very often; use trace to avoid log floods.
                 tracing::trace!(
                     target: "derp_input",
-                    "unhandled InputEvent (Gesture*, Tablet*, Switch*, …); try RUST_LOG=derp_input=trace"
+                    "unhandled InputEvent (Tablet*, Switch*, …); try RUST_LOG=derp_input=trace"
                 );
             }
         }
