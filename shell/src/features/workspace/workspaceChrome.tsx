@@ -1025,6 +1025,7 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       if (!window) return 'auto'
       const shellHosted = isShellHostedWorkspaceWindow(window)
       if (shellHosted) return 'none'
+      if (window.client_side_decoration) return 'none'
       return nativeDragPreviewVisible() ? 'none' : 'auto'
     })
     const contentBackground = createMemo(() => {
@@ -1032,6 +1033,11 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
       if (!window) return 'var(--shell-surface-inset)'
       const shellHosted = isShellHostedWorkspaceWindow(window)
       if (shellHosted) return 'transparent'
+      if (window.client_side_decoration) {
+        return options.activeWorkspaceGroupId() === props.groupId
+          ? 'var(--shell-window-chrome-focused)'
+          : 'var(--shell-window-chrome-unfocused)'
+      }
       return nativeDragPreviewLoaded() ? 'var(--shell-surface-inset)' : 'transparent'
     })
     const frameModel = createMemo((): ShellWindowModel | undefined => {
@@ -1141,7 +1147,11 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           contentPointerEvents={contentPointerEvents}
           contentBackground={contentBackground}
           frameVisible={frameVisible}
-          contentVisible={() => visibleShellHostedMemberWindowIds().length > 0 || nativeDragPreviewVisible() !== null}
+          contentVisible={() =>
+            visibleShellHostedMemberWindowIds().length > 0 ||
+            nativeDragPreviewVisible() !== null ||
+            !!visibleWindow()?.client_side_decoration
+          }
           hidden={() => frameHidden() || proxyHidden()}
           tabStrip={
             group() ? (
@@ -1459,8 +1469,14 @@ export function createWorkspaceChrome(options: WorkspaceChromeOptions) {
           frameVisible={frameVisible}
           hidden={() => windowModel()?.minimized ?? true}
           contentPointerEvents={() => 'none'}
-          contentBackground={() => 'transparent'}
-          contentVisible={() => shellHosted() && frameVisible()}
+          contentBackground={() => {
+            const window = windowModel()
+            if (window?.client_side_decoration) {
+              return focused() ? 'var(--shell-window-chrome-focused)' : 'var(--shell-window-chrome-unfocused)'
+            }
+            return 'transparent'
+          }}
+          contentVisible={() => (shellHosted() || !!windowModel()?.client_side_decoration) && frameVisible()}
           onFocusRequest={() => {
             if (shellHosted()) options.focusShellUiWindow(props.windowId)
             else options.focusWindowViaShell(props.windowId)

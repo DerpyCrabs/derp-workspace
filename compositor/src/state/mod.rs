@@ -47,7 +47,10 @@ use smithay::{
             timer::{TimeoutAction, Timer},
             EventLoop, LoopHandle, LoopSignal, RegistrationToken,
         },
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_protocols::xdg::{
+            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as XdgDecoMode,
+            shell::server::xdg_toplevel,
+        },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -212,6 +215,21 @@ pub(crate) fn read_toplevel_tiling(wl: &WlSurface) -> (bool, bool) {
         (
             st.states.contains(xdg_toplevel::State::Maximized),
             st.states.contains(xdg_toplevel::State::Fullscreen),
+        )
+    })
+}
+
+pub(crate) fn read_toplevel_client_side_decoration(wl: &WlSurface) -> bool {
+    smithay::wayland::compositor::with_states(wl, |states| {
+        let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
+            return false;
+        };
+        let Ok(data) = data.lock() else {
+            return false;
+        };
+        !matches!(
+            data.current_server_state().decoration_mode,
+            Some(XdgDecoMode::ServerSide)
         )
     })
 }
@@ -1841,7 +1859,12 @@ impl CompositorState {
         };
         let mut out = vec![Rectangle::new(
             outer.loc,
-            Size::from((outer.size.w.max(1), titlebar_h.saturating_add(inset_top))),
+            Size::from((
+                outer.size.w.max(1),
+                titlebar_h
+                    .saturating_add(inset_top)
+                    .saturating_add(if info.client_side_decoration { 1 } else { 0 }),
+            )),
         )];
         if border > 0 {
             let client = Self::shell_hosted_client_global_rect(&info);
@@ -4423,6 +4446,7 @@ impl CompositorState {
             return;
         };
         let (max, fs) = read_toplevel_tiling(wl);
+        let client_side_decoration = read_toplevel_client_side_decoration(wl);
         let mut layout_w = gw;
         let mut layout_h = gh;
         let mut layout_max = max;
@@ -4463,7 +4487,16 @@ impl CompositorState {
         let tiling_changed = self.windows.window_registry
             .set_tiling_state(wl, layout_max, layout_fs)
             .unwrap_or(false);
-        let layout_or_tiling = changed == Some(true) || tiling_changed;
+        let decoration_changed = self.windows.window_registry
+            .window_info(window_id)
+            .is_some_and(|info| info.client_side_decoration != client_side_decoration);
+        if decoration_changed {
+            let _ = self.windows.window_registry.update_native(window_id, |info| {
+                info.client_side_decoration = client_side_decoration;
+                info.clone()
+            });
+        }
+        let layout_or_tiling = changed == Some(true) || tiling_changed || decoration_changed;
         if force_shell_emit || layout_or_tiling {
             if let Some(info) = self.windows.window_registry.snapshot_for_wl_surface(wl) {
                 self.shell_emit_chrome_event(ChromeEvent::WindowGeometryChanged { info });
@@ -4528,6 +4561,18 @@ impl CompositorState {
         }
         let (max, fs) = read_toplevel_tiling(wl);
         let _ = self.windows.window_registry.set_tiling_state(wl, max, fs);
+        if let Some(window_id) = self.windows.window_registry.window_id_for_wl_surface(wl) {
+            let client_side_decoration = read_toplevel_client_side_decoration(wl);
+            let changed = self.windows.window_registry
+                .window_info(window_id)
+                .is_some_and(|info| info.client_side_decoration != client_side_decoration);
+            if changed {
+                let _ = self.windows.window_registry.update_native(window_id, |info| {
+                    info.client_side_decoration = client_side_decoration;
+                    info.clone()
+                });
+            }
+        }
     }
 
     pub(crate) fn resync_wayland_window_registry_from_space(&mut self) {

@@ -168,6 +168,9 @@ fn encode_hot_detail(bytes: &mut Vec<u8>, detail: &Value) -> bool {
             if value_bool(detail, "fullscreen").unwrap_or(false) {
                 flags |= 2;
             }
+            if value_bool(detail, "client_side_decoration").unwrap_or(false) {
+                flags |= 4;
+            }
             bytes.push(flags);
             push_i32(bytes, client_x);
             push_i32(bytes, client_y);
@@ -551,6 +554,7 @@ fn apply_message(
             minimized,
             maximized,
             fullscreen,
+            client_side_decoration,
             title,
             app_id,
             shell_flags,
@@ -560,7 +564,6 @@ fn apply_message(
             kind,
             x11_class,
             x11_instance,
-            ..
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_mapped();
             pending_details.push(detail_with_snapshot_epoch(
@@ -576,6 +579,7 @@ fn apply_message(
                     "minimized": minimized,
                     "maximized": maximized,
                     "fullscreen": fullscreen,
+                    "client_side_decoration": client_side_decoration,
                     "title": title,
                     "app_id": app_id,
                     "shell_flags": shell_flags,
@@ -606,9 +610,9 @@ fn apply_message(
             frame_h,
             maximized,
             fullscreen,
+            client_side_decoration,
             output_id,
             output_name,
-            ..
         } => {
             crate::cef::begin_frame_diag::note_shell_detail_window_geometry();
             pending_details.push(detail_with_snapshot_epoch(
@@ -632,6 +636,7 @@ fn apply_message(
                     "output_name": output_name,
                     "maximized": maximized,
                     "fullscreen": fullscreen,
+                    "client_side_decoration": client_side_decoration,
                 }),
                 message_snapshot_epoch,
             ));

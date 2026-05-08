@@ -20,6 +20,7 @@ export type ShellWindowFrameLayoutModel = {
   frame_height?: number
   maximized: boolean
   fullscreen: boolean
+  client_side_decoration?: boolean
   snap_tiled?: boolean
 }
 

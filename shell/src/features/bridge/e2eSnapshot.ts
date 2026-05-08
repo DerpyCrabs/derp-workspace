@@ -972,6 +972,7 @@ export function buildE2eShellSnapshot(args: BuildE2eShellSnapshotArgs) {
       minimized: window.minimized,
       maximized: window.maximized,
       fullscreen: window.fullscreen,
+      client_side_decoration: window.client_side_decoration,
       shell_hosted: !!(window.shell_flags & SHELL_WINDOW_FLAG_SHELL_HOSTED),
       scratchpad: !!(window.shell_flags & SHELL_WINDOW_FLAG_SCRATCHPAD),
     })),

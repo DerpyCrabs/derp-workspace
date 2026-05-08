@@ -25,6 +25,7 @@ export type ShellWindowModel = {
   app_id: string
   maximized: boolean
   fullscreen: boolean
+  client_side_decoration?: boolean
   snap_tiled?: boolean
 }
 
@@ -164,6 +165,7 @@ export function ShellWindowFrame(props: ShellWindowFrameProps) {
       </Show>
       <Show when={props.contentVisible !== undefined ? readAcc(props.contentVisible) : props.children}>
         <div
+          data-shell-window-content={model()?.window_id ?? 0}
           class="pointer-events-auto absolute z-5 box-border min-h-0 min-w-0 overflow-auto bg-(--shell-surface-inset) text-(--shell-text)"
           style={{
             left: `${layout().contentLeft}px`,

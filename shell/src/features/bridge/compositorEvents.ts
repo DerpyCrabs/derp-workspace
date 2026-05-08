@@ -147,6 +147,7 @@ function decodeHotWindowGeometry(
     output_name,
     maximized: (flags & 1) !== 0,
     fullscreen: (flags & 2) !== 0,
+    client_side_decoration: (flags & 4) !== 0,
     ...(snapshot_epoch > 0 ? { snapshot_epoch } : {}),
   }
 }

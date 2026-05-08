@@ -65,6 +65,7 @@ export type DerpShellDetail = ({
       minimized?: boolean
       maximized?: boolean
       fullscreen?: boolean
+      client_side_decoration?: boolean
       shell_flags?: number
       capture_identifier?: string
       kind?: string
@@ -93,6 +94,7 @@ export type DerpShellDetail = ({
       output_name?: string
       maximized?: boolean
       fullscreen?: boolean
+      client_side_decoration?: boolean
     }
   | {
       type: 'window_metadata'
@@ -223,6 +225,7 @@ export type DerpWindow = {
   minimized: boolean
   maximized: boolean
   fullscreen: boolean
+  client_side_decoration?: boolean
   shell_flags: number
   capture_identifier: string
   workspace_visible: boolean
@@ -351,6 +354,7 @@ export function buildWindowsMapFromList(
       minimized: !!r.minimized,
       maximized: !!r.maximized,
       fullscreen: !!r.fullscreen,
+      client_side_decoration: !!r.client_side_decoration,
       shell_flags,
       capture_identifier:
         typeof r.capture_identifier === 'string'
@@ -407,6 +411,7 @@ function sameDerpWindow(left: DerpWindow, right: DerpWindow): boolean {
     left.minimized === right.minimized &&
     left.maximized === right.maximized &&
     left.fullscreen === right.fullscreen &&
+    left.client_side_decoration === right.client_side_decoration &&
     left.shell_flags === right.shell_flags &&
     left.capture_identifier === right.capture_identifier &&
     left.workspace_visible === right.workspace_visible

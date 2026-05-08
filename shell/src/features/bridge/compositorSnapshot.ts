@@ -414,12 +414,16 @@ function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number)
   let cursor = offset + 28
   let maximized = false
   let fullscreen = false
+  let client_side_decoration = false
   if (cursor + 8 <= view.byteLength) {
     maximized = view.getUint32(cursor, true) !== 0
     fullscreen = view.getUint32(cursor + 4, true) !== 0
     cursor += 8
   }
-  if (cursor + 4 <= view.byteLength) cursor += 4
+  if (cursor + 4 <= view.byteLength) {
+    client_side_decoration = view.getUint32(cursor, true) !== 0
+    cursor += 4
+  }
   let outputName = ''
   let rectCursor = cursor
   if (cursor < view.byteLength) {
@@ -476,6 +480,7 @@ function decodeWindowGeometry(bytes: Uint8Array, view: DataView, offset: number)
     output_name: outputName,
     maximized,
     fullscreen,
+    client_side_decoration,
   }
 }
 

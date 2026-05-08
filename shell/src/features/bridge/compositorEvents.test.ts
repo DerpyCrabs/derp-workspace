@@ -141,6 +141,7 @@ describe('installCompositorBatchHandler', () => {
         output_name: 'DP-1',
         maximized: true,
         fullscreen: false,
+        client_side_decoration: false,
         snapshot_epoch: 7,
       },
       {
@@ -205,6 +206,7 @@ describe('installCompositorBatchHandler', () => {
         output_name: 'DP-1',
         maximized: true,
         fullscreen: false,
+        client_side_decoration: false,
         snapshot_epoch: 7,
       },
       {

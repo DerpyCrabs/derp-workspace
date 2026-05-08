@@ -479,6 +479,7 @@ describe('decodeCompositorSnapshot', () => {
           output_name: 'DP-1',
           maximized: true,
           fullscreen: false,
+          client_side_decoration: true,
         },
       ],
     })
