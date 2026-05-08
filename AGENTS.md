@@ -12,6 +12,7 @@ Rules:
 - keep tailwind/style lint clean when editing shell ui files
 - on Windows run repo `.sh` scripts through Git Bash explicitly, e.g. `& 'C:\Program Files\Git\bin\bash.exe' ./scripts/remote-verify.sh`
 - after changes do ./scripts/remote-update-and-restart.sh
+- if compositor crashes or remote update leaves no compositor running, restart gdm on the remote to start it again
 - use ./scripts/remote-verify.sh and ./scripts/e2e-remote.sh to tar-sync sources to the remote machine and run verification there
 - for compositor, native window lifecycle, or e2e harness changes add or update a remote e2e test and keep fetched local artifacts under .artifacts/e2e
 - if you need logs use ./scripts/fetch-logs.sh

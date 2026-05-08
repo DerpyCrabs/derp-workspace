@@ -506,6 +506,8 @@ pub struct DrmSession {
     hotplug_retry_after: HashMap<connector::Handle, Instant>,
     drm_idle_render_armed: bool,
     drm_late_render_armed: bool,
+    render_pending_after_vblank: bool,
+    render_every_vblank_until_shell_frame: bool,
 }
 
 impl DrmSession {
@@ -627,7 +629,11 @@ impl DrmSession {
                 break;
             }
         }
-        self.schedule_drm_idle_render_coalesced();
+        if self.render_every_vblank_until_shell_frame || self.render_pending_after_vblank {
+            self.render_pending_after_vblank =
+                self.heads.iter().any(|head| head.pending_frame_complete);
+            self.schedule_drm_idle_render_coalesced();
+        }
     }
 
     fn schedule_drm_idle_render_coalesced(&mut self) {
@@ -657,6 +663,9 @@ impl DrmSession {
     }
 
     pub(crate) fn request_render(&mut self) {
+        if self.heads.iter().any(|head| head.pending_frame_complete) {
+            self.render_pending_after_vblank = true;
+        }
         self.schedule_drm_idle_render_coalesced();
     }
 
@@ -932,6 +941,9 @@ fn drm_idle_render(data: &mut CalloopData) {
     drms.drm_idle_render_armed = false;
     drms.drm_late_render_armed = false;
     drms.render_tick(&mut data.state, &mut data.display_handle);
+    if data.state.shell_osr.shell_has_frame {
+        drms.render_every_vblank_until_shell_frame = false;
+    }
 }
 
 fn drm_connector_topology_sort_key(info: &connector::Info, h: connector::Handle) -> (u8, u32, u32) {
@@ -1332,6 +1344,8 @@ pub fn init_drm(
         hotplug_retry_after: HashMap::new(),
         drm_idle_render_armed: false,
         drm_late_render_armed: false,
+        render_pending_after_vblank: false,
+        render_every_vblank_until_shell_frame: true,
     };
 
     let _ = crate::controls::display_config::apply_stored_from_heads(
