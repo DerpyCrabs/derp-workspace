@@ -65,6 +65,27 @@ describe('workspaceState', () => {
     expect(next.pinnedWindowIds).toEqual([])
   })
 
+  it('normalizes authoritative snapshots without seeding or repairing compositor-owned groups', () => {
+    const state = normalizeWorkspaceState({
+      groups: [
+        { id: 'group-1', windowIds: [3, 4] },
+        { id: 'group-2', windowIds: [9] },
+      ],
+      activeTabByGroupId: {
+        'group-1': 99,
+      },
+      pinnedWindowIds: [4, 9, 42],
+      nextGroupSeq: 3,
+    })
+
+    expect(state.groups).toEqual([
+      { id: 'group-1', windowIds: [3, 4] },
+      { id: 'group-2', windowIds: [9] },
+    ])
+    expect(state.activeTabByGroupId).toEqual({})
+    expect(state.pinnedWindowIds).toEqual([4, 9, 42])
+  })
+
   it('merges one window into the target group after the target member', () => {
     const state = reconcileWorkspaceState(createEmptyWorkspaceState(), [1, 2, 3])
     const next = mergeWorkspaceGroups(state, 1, 2)

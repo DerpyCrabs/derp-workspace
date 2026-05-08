@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerCompositorBridgeRuntime } from './compositorBridgeRuntime'
-import type { CompositorApplyResult } from './compositorModel'
 import type { DerpShellDetail } from '@/host/appWindowState'
 import { SHELL_WINDOW_FLAG_SHELL_HOSTED } from '@/features/shell-ui/shellUiWindows'
 
@@ -72,10 +71,6 @@ function emptyWindowListSnapshot(sequence: bigint, revision = 2n): ArrayBuffer {
 }
 
 function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRuntime>[0]> = {}) {
-  const applyModelCompositorDetail = vi.fn((detail: DerpShellDetail): CompositorApplyResult => ({
-    kind: detail.type === 'window_geometry' ? 'window_geometry' : 'ignored',
-    detailType: detail.type,
-  }))
   return {
     setKeyboardLayoutLabel: vi.fn(),
     setVolumeOverlay: vi.fn(),
@@ -93,11 +88,7 @@ function options(overrides: Partial<Parameters<typeof registerCompositorBridgeRu
     clearWindowSyncRecoveryPending: vi.fn(),
     scheduleExclusionZonesSync: vi.fn(),
     scheduleCompositorFollowup: vi.fn(),
-    applyModelCompositorSnapshot: vi.fn(),
-    applyModelCompositorDetails: vi.fn((details: readonly DerpShellDetail[]) =>
-      details.map((detail) => applyModelCompositorDetail(detail)),
-    ),
-    applyModelCompositorDetail,
+    applyModelAuthoritativeSnapshotDetails: vi.fn(),
     closeAllAtlasSelects: vi.fn(() => false),
     hideContextMenu: vi.fn(),
     toggleProgramsMenuMeta: vi.fn(),
@@ -172,7 +163,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetail).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -200,7 +191,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetail).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -228,7 +219,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.scheduleCompositorFollowup).toHaveBeenCalledWith(
       expect.objectContaining({ flushWindows: true, syncExclusion: true }),
     )
@@ -257,7 +248,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
     dispose()
   })
@@ -286,7 +277,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    vi.mocked(runtimeOptions.applyModelCompositorDetails).mockClear()
+    vi.mocked(runtimeOptions.applyModelAuthoritativeSnapshotDetails).mockClear()
     window.__DERP_APPLY_COMPOSITOR_BATCH?.([
       {
         type: 'window_mapped',
@@ -306,7 +297,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -325,7 +316,7 @@ describe('registerCompositorBridgeRuntime', () => {
     const dispose = registerCompositorBridgeRuntime(runtimeOptions)
 
     await Promise.resolve()
-    vi.mocked(runtimeOptions.applyModelCompositorDetails).mockClear()
+    vi.mocked(runtimeOptions.applyModelAuthoritativeSnapshotDetails).mockClear()
     window.__DERP_APPLY_COMPOSITOR_BATCH?.([
       {
         type: 'window_mapped',
@@ -345,7 +336,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     dispose()
   })
 
@@ -373,7 +364,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    vi.mocked(runtimeOptions.applyModelCompositorDetails).mockClear()
+    vi.mocked(runtimeOptions.applyModelAuthoritativeSnapshotDetails).mockClear()
     window.__DERP_APPLY_COMPOSITOR_BATCH?.([
       {
         type: 'window_geometry',
@@ -390,7 +381,7 @@ describe('registerCompositorBridgeRuntime', () => {
       } satisfies DerpShellDetail,
     ])
 
-    expect(runtimeOptions.applyModelCompositorDetails).not.toHaveBeenCalled()
+    expect(runtimeOptions.applyModelAuthoritativeSnapshotDetails).not.toHaveBeenCalled()
     expect(runtimeOptions.requestCompositorSync).not.toHaveBeenCalled()
     dispose()
   })

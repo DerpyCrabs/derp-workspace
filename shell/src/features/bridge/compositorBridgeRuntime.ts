@@ -8,7 +8,6 @@ import {
   installCompositorSnapshotHandler,
   markShellLatencySample,
 } from '@/features/bridge/compositorEvents'
-import type { CompositorApplyResult } from '@/features/bridge/compositorModel'
 import { decodeCompositorSnapshot } from '@/features/bridge/compositorSnapshot'
 import {
   installShellRuntimePerfCounters,
@@ -116,21 +115,7 @@ type CompositorBridgeRuntimeOptions = {
   clearWindowSyncRecoveryPending: () => void
   scheduleExclusionZonesSync: () => void
   scheduleCompositorFollowup: (options?: CompositorFollowup) => void
-  applyModelCompositorSnapshot: (details: readonly DerpShellDetail[]) => void
-  applyModelCompositorDetails: (
-    details: readonly DerpShellDetail[],
-    options: {
-      fallbackMonitorKey: () => string
-      requestWindowSyncRecovery: () => void
-    },
-  ) => readonly CompositorApplyResult[]
-  applyModelCompositorDetail: (
-    detail: DerpShellDetail,
-    options: {
-      fallbackMonitorKey: () => string
-      requestWindowSyncRecovery: () => void
-    },
-  ) => CompositorApplyResult
+  applyModelAuthoritativeSnapshotDetails: (details: readonly DerpShellDetail[]) => void
   closeAllAtlasSelects: () => boolean
   hideContextMenu: () => void
   toggleProgramsMenuMeta: (outputName: string | null) => void
@@ -546,7 +531,7 @@ export function registerCompositorBridgeRuntime(options: CompositorBridgeRuntime
     let sawWindowList = false
     let sawInteractionState = false
     batch(() => {
-      options.applyModelCompositorSnapshot(details)
+      options.applyModelAuthoritativeSnapshotDetails(details)
       for (const detail of details) {
         if (detail.type === 'window_list') {
           sawWindowList = true

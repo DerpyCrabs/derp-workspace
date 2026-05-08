@@ -333,9 +333,7 @@ function App() {
     focusedWindowId,
     shellHostedAppByWindow,
     commandPaletteState,
-    applyCompositorSnapshot: applyModelCompositorSnapshot,
-    applyCompositorDetails: applyModelCompositorDetails,
-    applyCompositorDetail: applyModelCompositorDetail,
+    applyAuthoritativeSnapshotDetails: applyModelAuthoritativeSnapshotDetails,
   } = createCompositorModel()
   const allWindowsMap = compositorWindowsMap
   const windows = compositorWindowsMap
@@ -2036,9 +2034,7 @@ function App() {
         },
         scheduleExclusionZonesSync,
         scheduleCompositorFollowup: workspaceLayoutBridge.scheduleCompositorFollowup,
-        applyModelCompositorSnapshot,
-        applyModelCompositorDetails,
-        applyModelCompositorDetail,
+        applyModelAuthoritativeSnapshotDetails,
         closeAllAtlasSelects,
         hideContextMenu: shellContextMenus.hideContextMenu,
         toggleProgramsMenuMeta: shellContextMenus.toggleProgramsMenuMeta,

@@ -44,11 +44,6 @@ type CreateCompositorModelOptions = {
   initialWorkspaceState?: WorkspaceSnapshot
 }
 
-type ApplyCompositorDetailOptions = {
-  fallbackMonitorKey: () => string
-  requestWindowSyncRecovery: () => void
-}
-
 type SnapshotAuthoritativeState = {
   focusedWindowId?: number | null
   windows?: { revision: number; rows: unknown[] }
@@ -233,12 +228,10 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     followup: followupForIncrementalDetail(detail),
   })
 
-  const applyCompositorDetails = (
-    details: readonly DerpShellDetail[],
-    _applyOptions: ApplyCompositorDetailOptions,
-  ): CompositorApplyResult[] => details.map(ignoredCompositorResult)
+  const applyIncrementalWakeupDetails = (details: readonly DerpShellDetail[]): CompositorApplyResult[] =>
+    details.map(ignoredCompositorResult)
 
-  const applyCompositorSnapshot = (details: readonly DerpShellDetail[]) => {
+  const applyAuthoritativeSnapshotDetails = (details: readonly DerpShellDetail[]) => {
     batch(() => {
       const authoritative = collectSnapshotAuthoritativeState(details)
       if (authoritative.windows !== undefined) {
@@ -277,10 +270,8 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     })
   }
 
-  const applyCompositorDetail = (
-    detail: DerpShellDetail,
-    applyOptions: ApplyCompositorDetailOptions,
-  ): CompositorApplyResult => applyCompositorDetails([detail], applyOptions)[0]!
+  const applyIncrementalWakeupDetail = (detail: DerpShellDetail): CompositorApplyResult =>
+    applyIncrementalWakeupDetails([detail])[0]!
 
   return {
     windows,
@@ -294,8 +285,11 @@ export function createCompositorModel(options: CreateCompositorModelOptions = {}
     focusedWindowId: liveFocusedWindowId,
     shellHostedAppByWindow,
     commandPaletteState,
-    applyCompositorSnapshot,
-    applyCompositorDetails,
-    applyCompositorDetail,
+    applyAuthoritativeSnapshotDetails,
+    applyIncrementalWakeupDetails,
+    applyIncrementalWakeupDetail,
+    applyCompositorSnapshot: applyAuthoritativeSnapshotDetails,
+    applyCompositorDetails: applyIncrementalWakeupDetails,
+    applyCompositorDetail: applyIncrementalWakeupDetail,
   }
 }

@@ -576,7 +576,7 @@ export function normalizeWorkspaceSnapshot(raw: unknown): WorkspaceSnapshot {
   const nextSeq = Math.trunc(nextRaw)
   state.nextGroupSeq =
     Number.isFinite(nextSeq) && nextSeq > 0 ? nextSeq : inferNextGroupSeq(state)
-  return reconcileWorkspaceSnapshot(state, allWorkspaceWindowIds(state))
+  return state
 }
 
 function inferNextGroupSeq(state: WorkspaceSnapshot): number {

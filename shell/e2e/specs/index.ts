@@ -1,4 +1,5 @@
 import artifactsGroup from './artifacts.spec.ts'
+import compositorSnapshotGroup from './compositor-snapshot.spec.ts'
 import customHotkeysGroup from './custom-hotkeys.spec.ts'
 import externalControlGroup from './external-control.spec.ts'
 import fileBrowserGroup from './file-browser.spec.ts'
@@ -25,6 +26,7 @@ import xdgActivationGroup from './xdg-activation.spec.ts'
 
 export const defaultGroups = [
   shellChromeGroup,
+  compositorSnapshotGroup,
   nativeWindowsGroup,
   waylandProtocolsGroup,
   notificationsGroup,

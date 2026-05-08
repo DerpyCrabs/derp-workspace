@@ -59,7 +59,7 @@ describe('createCompositorModel', () => {
         actions: [],
       }
 
-      model.applyCompositorSnapshot([
+      model.applyAuthoritativeSnapshotDetails([
         { type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Foot')] },
         { type: 'focus_changed', surface_id: 70, window_id: 7 },
         { type: 'workspace_state', revision: 2, state: workspace },
@@ -84,9 +84,9 @@ describe('createCompositorModel', () => {
   it('ignores partial snapshot window details when no authoritative window list is present', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
-      model.applyCompositorSnapshot([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
+      model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
 
-      model.applyCompositorSnapshot([
+      model.applyAuthoritativeSnapshotDetails([
         {
           type: 'window_geometry',
           window_id: 7,
@@ -127,7 +127,7 @@ describe('createCompositorModel', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
 
-      model.applyCompositorSnapshot([
+      model.applyAuthoritativeSnapshotDetails([
         {
           type: 'window_list',
           revision: 1,
@@ -155,7 +155,7 @@ describe('createCompositorModel', () => {
   it('does not mutate model state from incremental compositor details', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
-      model.applyCompositorSnapshot([
+      model.applyAuthoritativeSnapshotDetails([
         { type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Stable')] },
         { type: 'focus_changed', surface_id: 70, window_id: 7 },
         { type: 'workspace_state', revision: 1, state: emptyWorkspace() },
@@ -188,10 +188,7 @@ describe('createCompositorModel', () => {
           state: { ...emptyWorkspace(), pinnedWindowIds: [7] },
         },
       ]
-      const results = model.applyCompositorDetails(details, {
-        fallbackMonitorKey: () => 'DP-1',
-        requestWindowSyncRecovery: () => {},
-      })
+      const results = model.applyIncrementalWakeupDetails(details)
 
       expect(results).toHaveLength(details.length)
       expect(results.every((result) => result.kind === 'ignored')).toBe(true)
@@ -207,10 +204,10 @@ describe('createCompositorModel', () => {
   it('keeps per-window accessors live and stable across snapshot replacement', () => {
     createRoot((dispose) => {
       const model = createCompositorModel()
-      model.applyCompositorSnapshot([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
+      model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 1, windows: [nativeWindow(7, 'Old')] }])
       const accessor = model.windowById(7)
 
-      model.applyCompositorSnapshot([{ type: 'window_list', revision: 2, windows: [nativeWindow(7, 'New')] }])
+      model.applyAuthoritativeSnapshotDetails([{ type: 'window_list', revision: 2, windows: [nativeWindow(7, 'New')] }])
 
       expect(model.windowById(7)).toBe(accessor)
       expect(accessor()?.title).toBe('New')
