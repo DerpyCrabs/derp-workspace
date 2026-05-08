@@ -1,6 +1,7 @@
 import { createSignal, type Accessor } from 'solid-js'
 import { shellHttpBase, waitForShellHttpBase } from '@/features/bridge/shellHttp'
 import { parseDesktopApplicationsResponse, type DesktopAppEntry } from '@/features/bridge/shellBridge'
+import { preloadDesktopAppIcons } from './desktopIcons'
 
 export type DesktopApplicationsController = {
   items: Accessor<DesktopAppEntry[]>
@@ -230,6 +231,7 @@ async function refreshDesktopApplications(): Promise<void> {
       setDesktopAppItems(list)
       setDesktopAppsLoaded(true)
       setDesktopAppsErr(null)
+      preloadDesktopAppIcons(list, base)
     } catch (error) {
       if (!desktopAppsLoaded()) setDesktopAppsErr(`Network error: ${error}`)
     } finally {

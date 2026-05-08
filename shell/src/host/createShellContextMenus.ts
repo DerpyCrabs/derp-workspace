@@ -17,6 +17,7 @@ import { useDesktopApplicationsState } from '@/features/desktop/desktopApplicati
 import type { createFloatingLayerStore } from '@/features/floating/floatingLayers'
 import { shellHttpBase } from '@/features/bridge/shellHttp'
 import type { DesktopAppEntry } from '@/features/bridge/shellBridge'
+import { DesktopAppIcon } from '@/features/desktop/desktopIcons'
 import {
   canvasOriginXY,
   canvasRectToClientCss,
@@ -838,6 +839,12 @@ export function createShellContextMenus(args: CreateShellContextMenusArgs) {
         categoryLabel: 'Apps',
         label: app.name,
         subtitle: app.generic_name || app.executable || app.exec,
+        icon: DesktopAppIcon({
+          icon: app.icon,
+          label: app.name,
+          class: 'bg-(--shell-surface-elevated) flex h-7 w-7 shrink-0 items-center justify-center rounded',
+          imageClass: 'h-6 w-6 object-contain',
+        }),
         badge: app.terminal ? 'tty' : undefined,
         title: app.exec,
         keywords: [

@@ -194,6 +194,16 @@ export default defineGroup(import.meta.url, ({ test }) => {
     await clickRect(base, menuOpen.controls.taskbar_programs_toggle)
     await waitForProgramsMenuClosed(base)
     const menuBySuper = await ensureProgramsMenuSearchReady(base, await openProgramsMenuBySuper(base))
+    const launcherHtml = await getShellHtml(base, '[aria-label="Command palette"]')
+    const commandRowCount = launcherHtml.match(/data-command-palette-id=/g)?.length ?? 0
+    const commandIconCount = launcherHtml.match(/data-command-palette-icon/g)?.length ?? 0
+    assert(commandRowCount > 0, 'command palette should render command rows')
+    assert(commandIconCount === commandRowCount, `command palette should render an icon for every row (${commandIconCount}/${commandRowCount})`)
+    if (desktopApps.some((app) => typeof app.icon === 'string' && app.icon.trim().length > 0)) {
+      assert(launcherHtml.includes('data-desktop-app-icon="image"'), 'command palette should render desktop app icons')
+      assert(launcherHtml.includes('/desktop_icon?name='), 'command palette app icons should use desktop icon endpoint')
+    }
+    await writeTextArtifact('programs-menu-icons.html', launcherHtml)
     await typeText(base, 'a')
     await waitFor(
       'wait for programs menu query',

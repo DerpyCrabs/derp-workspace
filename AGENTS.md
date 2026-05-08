@@ -10,6 +10,7 @@ Rules:
 - user can't change environment so you need to change scripts
 - for shell styling use inline tailwind classes only, don't extract style constants or reintroduce custom shell css classes
 - keep tailwind/style lint clean when editing shell ui files
+- on Windows run repo `.sh` scripts through Git Bash explicitly, e.g. `& 'C:\Program Files\Git\bin\bash.exe' ./scripts/remote-verify.sh`
 - after changes do ./scripts/remote-update-and-restart.sh
 - use ./scripts/remote-verify.sh and ./scripts/e2e-remote.sh to tar-sync sources to the remote machine and run verification there
 - for compositor, native window lifecycle, or e2e harness changes add or update a remote e2e test and keep fetched local artifacts under .artifacts/e2e
