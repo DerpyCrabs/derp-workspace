@@ -96,6 +96,7 @@ pub fn append_pointer_desktop_elements(
             if !surface.alive() {
                 return;
             }
+            state.explicit_sync_mark_surface_tree_sampled(surface);
             let hotspot: Point<i32, Logical> = compositor::with_states(surface, |states| {
                 states
                     .data_map

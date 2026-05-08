@@ -130,6 +130,7 @@ where
 
 pub(crate) fn render_window_elements_with_exclusion_mode<R>(
     window: &Window,
+    state: Option<&crate::state::CompositorState>,
     renderer: &mut R,
     location: Point<i32, Physical>,
     scale: Scale<f64>,
@@ -142,9 +143,15 @@ where
     match window.underlying_surface() {
         WindowSurface::Wayland(s) => {
             let surface = s.wl_surface();
+            if let Some(state) = state {
+                state.explicit_sync_mark_surface_tree_sampled(surface);
+            }
             let mut out = Vec::new();
             let popup_render_elements =
                 PopupManager::popups_for_surface(surface).flat_map(|(popup, popup_offset)| {
+                    if let Some(state) = state {
+                        state.explicit_sync_mark_surface_tree_sampled(popup.wl_surface());
+                    }
                     let offset = (window.geometry().loc + popup_offset - popup.geometry().loc)
                         .to_physical_precise_round(scale);
                     render_elements_from_surface_tree(
@@ -183,6 +190,9 @@ where
             out
         }
         WindowSurface::X11(x11) => {
+            if let (Some(state), Some(surface)) = (state, x11.wl_surface()) {
+                state.explicit_sync_mark_surface_tree_sampled(&surface);
+            }
             AsRenderElements::render_elements(x11, renderer, location, scale, alpha)
                 .into_iter()
                 .filter_map(|el| {
@@ -210,10 +220,12 @@ where
     ) -> Vec<C> {
         match self {
             DerpSpaceElem::Wayland(window) => {
-                render_window_elements_with_exclusion_mode(window, renderer, location, scale, alpha)
-                    .into_iter()
-                    .map(|(el, _)| C::from(el))
-                    .collect()
+                render_window_elements_with_exclusion_mode(
+                    window, None, renderer, location, scale, alpha,
+                )
+                .into_iter()
+                .map(|(el, _)| C::from(el))
+                .collect()
             }
             DerpSpaceElem::X11(x11) => {
                 AsRenderElements::render_elements(x11, renderer, location, scale, alpha)

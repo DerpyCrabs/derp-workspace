@@ -171,6 +171,8 @@ impl DrmHead {
                 }
             };
 
+            state.explicit_sync_begin_output_sample();
+
             type Desk<'a> =
                 DesktopStack<'a, <DerpSpaceElem as AsRenderElements<GlesRenderer>>::RenderElement>;
             let output_scale = output.current_scale().fractional_scale();
@@ -350,6 +352,7 @@ impl DrmHead {
             match render_res {
                 Ok(result) => {
                     let sync = result.sync;
+                    state.explicit_sync_finish_output_sample(sync.clone());
                     let submit = if let Some(damage) = result.damage {
                         PendingSubmit::Damage(damage.clone())
                     } else {
@@ -360,9 +363,11 @@ impl DrmHead {
                 }
                 Err(e) => {
                     warn!(?e, "drm render_output");
+                    let sync = smithay::backend::renderer::sync::SyncPoint::signaled();
+                    state.explicit_sync_finish_output_sample(sync.clone());
                     (
                         PendingSubmit::Full,
-                        smithay::backend::renderer::sync::SyncPoint::signaled(),
+                        sync,
                     )
                 }
             }
@@ -910,6 +915,7 @@ impl DrmSession {
         for head in &mut self.heads {
             let _ = head.render_one(drm_ref, &renderer, &loop_handle, state, display);
         }
+        state.explicit_sync_schedule_frame_releases();
 
         crate::cef::begin_frame_diag::maybe_log_cef_begin_frame_pacing();
 

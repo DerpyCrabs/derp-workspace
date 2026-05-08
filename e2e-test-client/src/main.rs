@@ -1,4 +1,8 @@
 use clap::Parser;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixListener;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use smithay_client_toolkit::{
     activation::{ActivationHandler, ActivationState, RequestData},
     compositor::{CompositorHandler, CompositorState},
@@ -31,7 +35,7 @@ use smithay_client_toolkit::{
 use wayland_client::{
     delegate_noop,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::wp::{
@@ -43,6 +47,14 @@ use wayland_protocols::wp::{
         wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
     },
     fifo::v1::client::{wp_fifo_manager_v1::WpFifoManagerV1, wp_fifo_v1::WpFifoV1},
+    linux_dmabuf::zv1::client::{
+        zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+    },
+    linux_drm_syncobj::v1::client::{
+        wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1,
+        wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1,
+        wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1,
+    },
     pointer_constraints::zv1::client::{
         zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
     },
@@ -181,6 +193,18 @@ struct Args {
     require_global: Vec<String>,
     #[arg(long, default_value_t = false)]
     list_globals: bool,
+    #[arg(long)]
+    explicit_sync_error: Option<String>,
+    #[arg(long, default_value_t = false)]
+    explicit_sync_dmabuf: bool,
+    #[arg(long, default_value_t = 0)]
+    explicit_sync_dmabuf_stress_frames: u32,
+    #[arg(long, default_value_t = false)]
+    explicit_sync_dmabuf_wait_control: bool,
+    #[arg(long)]
+    status_json: Option<String>,
+    #[arg(long)]
+    control_socket: Option<String>,
 }
 
 fn main() {
@@ -212,6 +236,16 @@ fn main() {
                 panic!("missing required global {required}");
             }
         }
+        return;
+    }
+
+    if let Some(mode) = args.explicit_sync_error.as_deref() {
+        run_explicit_sync_protocol_error(mode, &args);
+        return;
+    }
+
+    if args.explicit_sync_dmabuf {
+        run_explicit_sync_dmabuf(&args);
         return;
     }
 
@@ -608,6 +642,1002 @@ impl TestClient {
             ));
         }
         self.window.set_title(title);
+    }
+}
+
+fn ioc(dir: libc::c_ulong, nr: libc::c_ulong, size: libc::c_ulong) -> libc::c_ulong {
+    const NRSHIFT: libc::c_ulong = 0;
+    const TYPESHIFT: libc::c_ulong = 8;
+    const SIZESHIFT: libc::c_ulong = 16;
+    const DIRSHIFT: libc::c_ulong = 30;
+    (dir << DIRSHIFT)
+        | ((b'd' as libc::c_ulong) << TYPESHIFT)
+        | (nr << NRSHIFT)
+        | (size << SIZESHIFT)
+}
+
+fn iowr<T>(nr: libc::c_ulong) -> libc::c_ulong {
+    ioc(3, nr, std::mem::size_of::<T>() as libc::c_ulong)
+}
+
+#[repr(C)]
+struct DrmSyncobjCreate {
+    handle: u32,
+    flags: u32,
+}
+
+#[repr(C)]
+struct DrmSyncobjHandle {
+    handle: u32,
+    flags: u32,
+    fd: i32,
+    pad: u32,
+}
+
+#[repr(C)]
+struct DrmSyncobjTimelineWait {
+    handles: u64,
+    points: u64,
+    timeout_nsec: i64,
+    count_handles: u32,
+    flags: u32,
+    first_signaled: u32,
+    pad: u32,
+}
+
+#[repr(C)]
+struct DrmSyncobjTimelineArray {
+    handles: u64,
+    points: u64,
+    count_handles: u32,
+    flags: u32,
+}
+
+#[repr(C)]
+struct DrmModeCreateDumb {
+    height: u32,
+    width: u32,
+    bpp: u32,
+    flags: u32,
+    handle: u32,
+    pitch: u32,
+    size: u64,
+}
+
+#[repr(C)]
+struct DrmModeMapDumb {
+    handle: u32,
+    pad: u32,
+    offset: u64,
+}
+
+#[repr(C)]
+struct DrmModeDestroyDumb {
+    handle: u32,
+}
+
+#[repr(C)]
+struct DrmPrimeHandle {
+    handle: u32,
+    flags: u32,
+    fd: i32,
+}
+
+struct DrmTimeline {
+    drm: std::fs::File,
+    handle: u32,
+    fd: OwnedFd,
+}
+
+struct DumbDmabuf {
+    drm: std::fs::File,
+    handle: u32,
+    fd: OwnedFd,
+    map: *mut libc::c_void,
+    size: usize,
+    pitch: u32,
+}
+
+impl Drop for DumbDmabuf {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.map, self.size);
+        }
+        let mut destroy = DrmModeDestroyDumb {
+            handle: self.handle,
+        };
+        unsafe {
+            libc::ioctl(
+                self.drm.as_raw_fd(),
+                iowr::<DrmModeDestroyDumb>(0xB4),
+                &mut destroy,
+            );
+        }
+    }
+}
+
+fn open_drm_node() -> std::fs::File {
+    for path in [
+        "/dev/dri/card0",
+        "/dev/dri/card1",
+        "/dev/dri/renderD128",
+        "/dev/dri/renderD129",
+    ] {
+        if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            return file;
+        }
+    }
+    panic!("unable to open a DRM node for syncobj test");
+}
+
+fn create_syncobj_timeline() -> DrmTimeline {
+    let drm = open_drm_node();
+    let mut create = DrmSyncobjCreate {
+        handle: 0,
+        flags: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmSyncobjCreate>(0xBF),
+            &mut create,
+        )
+    };
+    if rc != 0 {
+        panic!(
+            "DRM_IOCTL_SYNCOBJ_CREATE failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mut handle = DrmSyncobjHandle {
+        handle: create.handle,
+        flags: 0,
+        fd: -1,
+        pad: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmSyncobjHandle>(0xC1),
+            &mut handle,
+        )
+    };
+    if rc != 0 || handle.fd < 0 {
+        panic!(
+            "DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    DrmTimeline {
+        drm,
+        handle: create.handle,
+        fd: unsafe { OwnedFd::from_raw_fd(handle.fd) },
+    }
+}
+
+fn create_syncobj_timeline_fd() -> OwnedFd {
+    create_syncobj_timeline().fd
+}
+
+fn signal_syncobj_point(drm: &std::fs::File, handle: u32, point: u64) {
+    let handles = [handle];
+    let points = [point];
+    let mut signal = DrmSyncobjTimelineArray {
+        handles: handles.as_ptr() as u64,
+        points: points.as_ptr() as u64,
+        count_handles: 1,
+        flags: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmSyncobjTimelineArray>(0xCD),
+            &mut signal,
+        )
+    };
+    if rc != 0 {
+        panic!(
+            "DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+fn wait_syncobj_point(drm: &std::fs::File, handle: u32, point: u64, timeout_nsec: i64) -> bool {
+    let handles = [handle];
+    let points = [point];
+    let mut wait = DrmSyncobjTimelineWait {
+        handles: handles.as_ptr() as u64,
+        points: points.as_ptr() as u64,
+        timeout_nsec,
+        count_handles: 1,
+        flags: 1 | 2,
+        first_signaled: 0,
+        pad: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmSyncobjTimelineWait>(0xCA),
+            &mut wait,
+        )
+    };
+    if rc == 0 {
+        true
+    } else {
+        let error = std::io::Error::last_os_error();
+        matches!(error.raw_os_error(), Some(code) if code == libc::ETIME || code == libc::EAGAIN)
+            .then_some(false)
+            .unwrap_or_else(|| panic!("DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT failed: {error}"))
+    }
+}
+
+fn create_dumb_dmabuf(width: u32, height: u32, rgba: [u8; 4]) -> DumbDmabuf {
+    let drm = open_drm_node();
+    let mut create = DrmModeCreateDumb {
+        height,
+        width,
+        bpp: 32,
+        flags: 0,
+        handle: 0,
+        pitch: 0,
+        size: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmModeCreateDumb>(0xB2),
+            &mut create,
+        )
+    };
+    if rc != 0 {
+        panic!(
+            "DRM_IOCTL_MODE_CREATE_DUMB failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mut prime = DrmPrimeHandle {
+        handle: create.handle,
+        flags: libc::O_CLOEXEC as u32,
+        fd: -1,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmPrimeHandle>(0x2D),
+            &mut prime,
+        )
+    };
+    if rc != 0 || prime.fd < 0 {
+        panic!(
+            "DRM_IOCTL_PRIME_HANDLE_TO_FD failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mut map = DrmModeMapDumb {
+        handle: create.handle,
+        pad: 0,
+        offset: 0,
+    };
+    let rc = unsafe {
+        libc::ioctl(
+            drm.as_raw_fd(),
+            iowr::<DrmModeMapDumb>(0xB3),
+            &mut map,
+        )
+    };
+    if rc != 0 {
+        panic!(
+            "DRM_IOCTL_MODE_MAP_DUMB failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let mapped = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            create.size as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            drm.as_raw_fd(),
+            map.offset as libc::off_t,
+        )
+    };
+    if mapped == libc::MAP_FAILED {
+        panic!("mmap dumb buffer failed: {}", std::io::Error::last_os_error());
+    }
+    let mut buffer = DumbDmabuf {
+        drm,
+        handle: create.handle,
+        fd: unsafe { OwnedFd::from_raw_fd(prime.fd) },
+        map: mapped,
+        size: create.size as usize,
+        pitch: create.pitch,
+    };
+    fill_dumb_dmabuf(&mut buffer, width, height, rgba);
+    buffer
+}
+
+fn fill_dumb_dmabuf(buffer: &mut DumbDmabuf, width: u32, height: u32, rgba: [u8; 4]) {
+    let data = unsafe { std::slice::from_raw_parts_mut(buffer.map as *mut u8, buffer.size) };
+    for y in 0..height as usize {
+        let row = y * buffer.pitch as usize;
+        for x in 0..width as usize {
+            let index = row + x * 4;
+            data[index] = rgba[2];
+            data[index + 1] = rgba[1];
+            data[index + 2] = rgba[0];
+            data[index + 3] = rgba[3];
+        }
+    }
+}
+
+struct ProtocolProbe {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    shm_state: Shm,
+    pool: SlotPool,
+    buffer: Option<Buffer>,
+}
+
+impl ProtocolProbe {
+    fn attach_buffer(&mut self, surface: &wl_surface::WlSurface, width: u32, height: u32) {
+        let stride = (width * 4) as i32;
+        let required_len = (width * height * 4) as usize;
+        if self.pool.len() < required_len {
+            self.pool.resize(required_len).expect("resize protocol pool");
+        }
+        if self.buffer.is_none() {
+            let (buffer, _) = self
+                .pool
+                .create_buffer(
+                    width as i32,
+                    height as i32,
+                    stride,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                )
+                .expect("create protocol buffer");
+            self.buffer = Some(buffer);
+        }
+        let buffer = self.buffer.as_mut().expect("protocol buffer");
+        let canvas = self.pool.canvas(buffer).expect("protocol buffer canvas");
+        for chunk in canvas.chunks_exact_mut(4) {
+            chunk[0] = 0x20;
+            chunk[1] = 0x60;
+            chunk[2] = 0xa0;
+            chunk[3] = 0xff;
+        }
+        buffer.attach_to(surface).expect("attach protocol buffer");
+    }
+}
+
+#[derive(Clone, Default)]
+struct ExplicitSyncDmabufStatus {
+    configured: bool,
+    frame_a_committed: bool,
+    frame_b_committed: bool,
+    acquire_b_signaled: bool,
+    release_a_observed: bool,
+    release_b_observed: bool,
+    stress_total: u32,
+    stress_committed: u32,
+    stress_release_observed: u32,
+    stress_release_failed: bool,
+}
+
+struct ExplicitSyncDmabufClient {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    _compositor_state: CompositorState,
+    _xdg_shell_state: XdgShell,
+    window: Window,
+    dmabuf: ZwpLinuxDmabufV1,
+    sync_surface: WpLinuxDrmSyncobjSurfaceV1,
+    timeline_proxy: WpLinuxDrmSyncobjTimelineV1,
+    timeline: DrmTimeline,
+    width: u32,
+    height: u32,
+    base_title: String,
+    buffer_a: Option<DumbDmabuf>,
+    buffer_b: Option<DumbDmabuf>,
+    wl_buffer_a: Option<wl_buffer::WlBuffer>,
+    wl_buffer_b: Option<wl_buffer::WlBuffer>,
+    configured: bool,
+    committed: bool,
+    stress_frames: u32,
+    wait_control: bool,
+    ready_committed: bool,
+    control_triggered: std::sync::Arc<AtomicBool>,
+    exit: bool,
+    status_path: Option<String>,
+    status: std::sync::Arc<Mutex<ExplicitSyncDmabufStatus>>,
+}
+
+fn write_explicit_sync_status(
+    path: &Option<String>,
+    status: &std::sync::Arc<Mutex<ExplicitSyncDmabufStatus>>,
+) {
+    let Some(path) = path.as_ref() else {
+        return;
+    };
+    let Ok(status) = status.lock() else {
+        return;
+    };
+    let tmp = format!("{path}.tmp");
+    let body = format!(
+        "{{\"configured\":{},\"frame_a_committed\":{},\"frame_b_committed\":{},\"acquire_b_signaled\":{},\"release_a_observed\":{},\"release_b_observed\":{},\"stress_total\":{},\"stress_committed\":{},\"stress_release_observed\":{},\"stress_release_failed\":{}}}\n",
+        status.configured,
+        status.frame_a_committed,
+        status.frame_b_committed,
+        status.acquire_b_signaled,
+        status.release_a_observed,
+        status.release_b_observed,
+        status.stress_total,
+        status.stress_committed,
+        status.stress_release_observed,
+        status.stress_release_failed,
+    );
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
+}
+
+fn update_explicit_sync_status(
+    path: &Option<String>,
+    status: &std::sync::Arc<Mutex<ExplicitSyncDmabufStatus>>,
+    update: impl FnOnce(&mut ExplicitSyncDmabufStatus),
+) {
+    if let Ok(mut guard) = status.lock() {
+        update(&mut guard);
+    }
+    write_explicit_sync_status(path, status);
+}
+
+impl ExplicitSyncDmabufClient {
+    fn create_dmabuf_buffer(
+        &self,
+        qh: &QueueHandle<Self>,
+        buffer: &DumbDmabuf,
+    ) -> wl_buffer::WlBuffer {
+        const DRM_FORMAT_ARGB8888: u32 = 0x34325241;
+        let params = self.dmabuf.create_params(qh, ());
+        params.add(buffer.fd.as_fd(), 0, 0, buffer.pitch, 0, 0);
+        params.create_immed(
+            self.width as i32,
+            self.height as i32,
+            DRM_FORMAT_ARGB8888,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            qh,
+            (),
+        )
+    }
+
+    fn commit_frames(&mut self, qh: &QueueHandle<Self>) {
+        if !self.configured || self.committed {
+            return;
+        }
+        if self.stress_frames > 0 && self.wait_control && !self.control_triggered.load(Ordering::SeqCst) {
+            if !self.ready_committed {
+                self.commit_ready_frame(qh);
+            }
+            return;
+        }
+        if self.stress_frames > 0 {
+            self.commit_stress_frames(qh);
+            return;
+        }
+        let buffer_a = create_dumb_dmabuf(self.width, self.height, [224, 36, 36, 255]);
+        let buffer_b = create_dumb_dmabuf(self.width, self.height, [32, 190, 76, 255]);
+        let wl_buffer_a = self.create_dmabuf_buffer(qh, &buffer_a);
+        let wl_buffer_b = self.create_dmabuf_buffer(qh, &buffer_b);
+        signal_syncobj_point(&self.timeline.drm, self.timeline.handle, 1);
+        self.sync_surface
+            .set_acquire_point(&self.timeline_proxy, 0, 1);
+        self.sync_surface
+            .set_release_point(&self.timeline_proxy, 0, 2);
+        self.window.wl_surface().attach(Some(&wl_buffer_a), 0, 0);
+        self.window
+            .wl_surface()
+            .damage_buffer(0, 0, self.width as i32, self.height as i32);
+        self.window.wl_surface().commit();
+        self.window
+            .set_title(format!("{} | pending acquire", self.base_title));
+        self.sync_surface
+            .set_acquire_point(&self.timeline_proxy, 0, 3);
+        self.sync_surface
+            .set_release_point(&self.timeline_proxy, 0, 4);
+        self.window.wl_surface().attach(Some(&wl_buffer_b), 0, 0);
+        self.window
+            .wl_surface()
+            .damage_buffer(0, 0, self.width as i32, self.height as i32);
+        self.window.wl_surface().commit();
+        self.buffer_a = Some(buffer_a);
+        self.buffer_b = Some(buffer_b);
+        self.wl_buffer_a = Some(wl_buffer_a);
+        self.wl_buffer_b = Some(wl_buffer_b);
+        self.committed = true;
+        update_explicit_sync_status(&self.status_path, &self.status, |status| {
+            status.frame_a_committed = true;
+            status.frame_b_committed = true;
+        });
+    }
+
+    fn commit_ready_frame(&mut self, qh: &QueueHandle<Self>) {
+        let buffer_a = create_dumb_dmabuf(self.width, self.height, [226, 42, 42, 255]);
+        let wl_buffer_a = self.create_dmabuf_buffer(qh, &buffer_a);
+        signal_syncobj_point(&self.timeline.drm, self.timeline.handle, 1);
+        self.sync_surface
+            .set_acquire_point(&self.timeline_proxy, 0, 1);
+        self.sync_surface
+            .set_release_point(&self.timeline_proxy, 0, 2);
+        self.window.wl_surface().attach(Some(&wl_buffer_a), 0, 0);
+        self.window
+            .wl_surface()
+            .damage_buffer(0, 0, self.width as i32, self.height as i32);
+        self.window.wl_surface().commit();
+        self.window.set_title(format!("{} | ready", self.base_title));
+        self.buffer_a = Some(buffer_a);
+        self.wl_buffer_a = Some(wl_buffer_a);
+        self.ready_committed = true;
+        update_explicit_sync_status(&self.status_path, &self.status, |status| {
+            status.frame_a_committed = true;
+        });
+    }
+
+    fn commit_stress_frames(&mut self, qh: &QueueHandle<Self>) {
+        let buffer_a = create_dumb_dmabuf(self.width, self.height, [226, 42, 42, 255]);
+        let buffer_b = create_dumb_dmabuf(self.width, self.height, [42, 112, 226, 255]);
+        let wl_buffer_a = self.create_dmabuf_buffer(qh, &buffer_a);
+        let wl_buffer_b = self.create_dmabuf_buffer(qh, &buffer_b);
+        for frame in 0..self.stress_frames {
+            let acquire = 1000 + u64::from(frame) * 2;
+            let release = acquire + 1;
+            signal_syncobj_point(&self.timeline.drm, self.timeline.handle, acquire);
+            self.sync_surface
+                .set_acquire_point(&self.timeline_proxy, 0, acquire as u32);
+            self.sync_surface
+                .set_release_point(&self.timeline_proxy, 0, release as u32);
+            let buffer = if frame % 2 == 0 {
+                &wl_buffer_a
+            } else {
+                &wl_buffer_b
+            };
+            self.window.wl_surface().attach(Some(buffer), 0, 0);
+            self.window
+                .wl_surface()
+                .damage_buffer(0, 0, self.width as i32, self.height as i32);
+            self.window.wl_surface().commit();
+        }
+        self.window
+            .set_title(format!("{} | stress={}", self.base_title, self.stress_frames));
+        self.buffer_a = Some(buffer_a);
+        self.buffer_b = Some(buffer_b);
+        self.wl_buffer_a = Some(wl_buffer_a);
+        self.wl_buffer_b = Some(wl_buffer_b);
+        self.committed = true;
+        update_explicit_sync_status(&self.status_path, &self.status, |status| {
+            status.stress_total = self.stress_frames;
+            status.stress_committed = self.stress_frames;
+        });
+    }
+}
+
+impl CompositorHandler for ExplicitSyncDmabufClient {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl WindowHandler for ExplicitSyncDmabufClient {
+    fn request_close(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _window: &Window) {
+        self.exit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _window: &Window,
+        _configure: WindowConfigure,
+        _serial: u32,
+    ) {
+        self.configured = true;
+        update_explicit_sync_status(&self.status_path, &self.status, |status| {
+            status.configured = true;
+        });
+        self.commit_frames(qh);
+    }
+}
+
+impl OutputHandler for ExplicitSyncDmabufClient {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ProvidesRegistryState for ExplicitSyncDmabufClient {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(OutputState);
+}
+
+fn start_explicit_sync_control(
+    socket_path: Option<String>,
+    status_path: Option<String>,
+    status: std::sync::Arc<Mutex<ExplicitSyncDmabufStatus>>,
+    control_triggered: std::sync::Arc<AtomicBool>,
+    drm: std::fs::File,
+    handle: u32,
+) {
+    let Some(socket_path) = socket_path else {
+        return;
+    };
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).expect("bind explicit sync control socket");
+    std::thread::Builder::new()
+        .name("derp-explicit-sync-client-control".to_string())
+        .spawn(move || {
+            if listener.accept().is_ok() {
+                control_triggered.store(true, Ordering::SeqCst);
+                signal_syncobj_point(&drm, handle, 3);
+                update_explicit_sync_status(&status_path, &status, |status| {
+                    status.acquire_b_signaled = true;
+                });
+            }
+        })
+        .expect("spawn explicit sync control thread");
+}
+
+fn start_explicit_sync_release_watcher(
+    status_path: Option<String>,
+    status: std::sync::Arc<Mutex<ExplicitSyncDmabufStatus>>,
+    drm: std::fs::File,
+    handle: u32,
+    stress_frames: u32,
+) {
+    std::thread::Builder::new()
+        .name("derp-explicit-sync-client-release".to_string())
+        .spawn(move || {
+            if stress_frames > 0 {
+                for frame in 0..stress_frames {
+                    let release = 1001 + u64::from(frame) * 2;
+                    if wait_syncobj_point(&drm, handle, release, i64::MAX) {
+                        update_explicit_sync_status(&status_path, &status, |status| {
+                            status.stress_release_observed =
+                                status.stress_release_observed.saturating_add(1);
+                        });
+                    } else {
+                        update_explicit_sync_status(&status_path, &status, |status| {
+                            status.stress_release_failed = true;
+                        });
+                        break;
+                    }
+                }
+                return;
+            }
+            if wait_syncobj_point(&drm, handle, 2, i64::MAX) {
+                update_explicit_sync_status(&status_path, &status, |status| {
+                    status.release_a_observed = true;
+                });
+            }
+            if wait_syncobj_point(&drm, handle, 4, i64::MAX) {
+                update_explicit_sync_status(&status_path, &status, |status| {
+                    status.release_b_observed = true;
+                });
+            }
+        })
+        .expect("spawn explicit sync release watcher");
+}
+
+fn run_explicit_sync_dmabuf(args: &Args) {
+    let conn = Connection::connect_to_env().expect("connect explicit sync dmabuf client");
+    let (globals, mut event_queue) =
+        registry_queue_init::<ExplicitSyncDmabufClient>(&conn).expect("init dmabuf registry");
+    let qh = event_queue.handle();
+    let compositor_state = CompositorState::bind(&globals, &qh).expect("bind wl_compositor");
+    let xdg_shell_state = XdgShell::bind(&globals, &qh).expect("bind xdg_shell");
+    let registry_state = RegistryState::new(&globals);
+    let output_state = OutputState::new(&globals, &qh);
+    let dmabuf = globals
+        .bind::<ZwpLinuxDmabufV1, _, _>(&qh, 1..=4, ())
+        .expect("bind zwp_linux_dmabuf_v1");
+    let sync_manager = globals
+        .bind::<WpLinuxDrmSyncobjManagerV1, _, _>(&qh, 1..=1, ())
+        .expect("bind wp_linux_drm_syncobj_manager_v1");
+    let timeline = create_syncobj_timeline();
+    let timeline_proxy = sync_manager.import_timeline(timeline.fd.as_fd(), &qh, ());
+    let surface = compositor_state.create_surface(&qh);
+    let sync_surface = sync_manager.get_surface(&surface, &qh, ());
+    let window = xdg_shell_state.create_window(surface, WindowDecorations::RequestServer, &qh);
+    window.set_title(args.title.clone());
+    window.set_app_id(args.app_id.clone());
+    window.set_min_size(Some((args.width, args.height)));
+    window.set_max_size(Some((args.width, args.height)));
+    window.commit();
+    let status = std::sync::Arc::new(Mutex::new(ExplicitSyncDmabufStatus::default()));
+    let control_triggered = std::sync::Arc::new(AtomicBool::new(false));
+    write_explicit_sync_status(&args.status_json, &status);
+    start_explicit_sync_control(
+        args.control_socket.clone(),
+        args.status_json.clone(),
+        status.clone(),
+        control_triggered.clone(),
+        timeline.drm.try_clone().expect("clone syncobj drm fd"),
+        timeline.handle,
+    );
+    start_explicit_sync_release_watcher(
+        args.status_json.clone(),
+        status.clone(),
+        timeline.drm.try_clone().expect("clone release drm fd"),
+        timeline.handle,
+        args.explicit_sync_dmabuf_stress_frames,
+    );
+    let mut state = ExplicitSyncDmabufClient {
+        registry_state,
+        output_state,
+        _compositor_state: compositor_state,
+        _xdg_shell_state: xdg_shell_state,
+        window,
+        dmabuf,
+        sync_surface,
+        timeline_proxy,
+        timeline,
+        width: args.width,
+        height: args.height,
+        base_title: args.title.clone(),
+        buffer_a: None,
+        buffer_b: None,
+        wl_buffer_a: None,
+        wl_buffer_b: None,
+        configured: false,
+        committed: false,
+        stress_frames: args.explicit_sync_dmabuf_stress_frames,
+        wait_control: args.explicit_sync_dmabuf_wait_control,
+        ready_committed: false,
+        control_triggered,
+        exit: false,
+        status_path: args.status_json.clone(),
+        status,
+    };
+    while !state.exit {
+        if state.wait_control && state.stress_frames > 0 && !state.committed && state.ready_committed {
+            event_queue
+                .dispatch_pending(&mut state)
+                .expect("dispatch pending explicit sync dmabuf");
+            if state.control_triggered.load(Ordering::SeqCst) {
+                state.commit_frames(&qh);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        } else {
+            event_queue
+                .blocking_dispatch(&mut state)
+                .expect("dispatch explicit sync dmabuf");
+        }
+        conn.flush().expect("flush explicit sync dmabuf");
+    }
+}
+
+impl CompositorHandler for ProtocolProbe {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ShmHandler for ProtocolProbe {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
+impl OutputHandler for ProtocolProbe {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ProvidesRegistryState for ProtocolProbe {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(OutputState);
+}
+
+fn run_explicit_sync_protocol_error(mode: &str, args: &Args) {
+    let conn = Connection::connect_to_env().expect("connect explicit sync probe");
+    let (globals, mut event_queue) =
+        registry_queue_init::<ProtocolProbe>(&conn).expect("init explicit sync registry");
+    let qh = event_queue.handle();
+    let compositor_state = CompositorState::bind(&globals, &qh).expect("bind wl_compositor");
+    let shm_state = Shm::bind(&globals, &qh).expect("bind wl_shm");
+    let registry_state = RegistryState::new(&globals);
+    let output_state = OutputState::new(&globals, &qh);
+    let sync_manager = globals
+        .bind::<WpLinuxDrmSyncobjManagerV1, _, _>(&qh, 1..=1, ())
+        .expect("bind wp_linux_drm_syncobj_manager_v1");
+    let surface = compositor_state.create_surface(&qh);
+    let sync_surface = sync_manager.get_surface(&surface, &qh, ());
+    let timeline_fd = create_syncobj_timeline_fd();
+    let timeline = sync_manager.import_timeline(timeline_fd.as_fd(), &qh, ());
+    let pool = SlotPool::new((args.width * args.height * 4) as usize, &shm_state)
+        .expect("create protocol pool");
+    let mut state = ProtocolProbe {
+        registry_state,
+        output_state,
+        shm_state,
+        pool,
+        buffer: None,
+    };
+    match mode {
+        "no-buffer" => {
+            sync_surface.set_acquire_point(&timeline, 0, 1);
+            sync_surface.set_release_point(&timeline, 0, 2);
+            surface.commit();
+        }
+        "no-acquire" => {
+            sync_surface.set_release_point(&timeline, 0, 2);
+            state.attach_buffer(&surface, args.width, args.height);
+            surface.damage_buffer(0, 0, args.width as i32, args.height as i32);
+            surface.commit();
+        }
+        "no-release" => {
+            sync_surface.set_acquire_point(&timeline, 0, 1);
+            state.attach_buffer(&surface, args.width, args.height);
+            surface.damage_buffer(0, 0, args.width as i32, args.height as i32);
+            surface.commit();
+        }
+        "unsupported-buffer" => {
+            sync_surface.set_acquire_point(&timeline, 0, 1);
+            sync_surface.set_release_point(&timeline, 0, 2);
+            state.attach_buffer(&surface, args.width, args.height);
+            surface.damage_buffer(0, 0, args.width as i32, args.height as i32);
+            surface.commit();
+        }
+        "conflicting-points" => {
+            sync_surface.set_acquire_point(&timeline, 0, 1);
+            sync_surface.set_release_point(&timeline, 0, 1);
+            state.attach_buffer(&surface, args.width, args.height);
+            surface.damage_buffer(0, 0, args.width as i32, args.height as i32);
+            surface.commit();
+        }
+        other => panic!("unsupported --explicit-sync-error mode: {other}"),
+    }
+    loop {
+        event_queue
+            .blocking_dispatch(&mut state)
+            .expect("dispatch explicit sync protocol error");
     }
 }
 
@@ -1241,6 +2271,24 @@ delegate_noop!(TestClient: ignore WpContentTypeManagerV1);
 delegate_noop!(TestClient: ignore wp_content_type_v1::WpContentTypeV1);
 delegate_noop!(TestClient: ignore WpTearingControlManagerV1);
 delegate_noop!(TestClient: ignore wp_tearing_control_v1::WpTearingControlV1);
+delegate_compositor!(ProtocolProbe);
+delegate_output!(ProtocolProbe);
+delegate_shm!(ProtocolProbe);
+delegate_registry!(ProtocolProbe);
+delegate_noop!(ProtocolProbe: ignore WpLinuxDrmSyncobjManagerV1);
+delegate_noop!(ProtocolProbe: ignore WpLinuxDrmSyncobjSurfaceV1);
+delegate_noop!(ProtocolProbe: ignore WpLinuxDrmSyncobjTimelineV1);
+delegate_compositor!(ExplicitSyncDmabufClient);
+delegate_output!(ExplicitSyncDmabufClient);
+delegate_xdg_shell!(ExplicitSyncDmabufClient);
+delegate_xdg_window!(ExplicitSyncDmabufClient);
+delegate_registry!(ExplicitSyncDmabufClient);
+delegate_noop!(ExplicitSyncDmabufClient: ignore ZwpLinuxDmabufV1);
+delegate_noop!(ExplicitSyncDmabufClient: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
+delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjManagerV1);
+delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjSurfaceV1);
+delegate_noop!(ExplicitSyncDmabufClient: ignore WpLinuxDrmSyncobjTimelineV1);
+delegate_noop!(ExplicitSyncDmabufClient: ignore wl_buffer::WlBuffer);
 
 impl ProvidesRegistryState for TestClient {
     fn registry(&mut self) -> &mut RegistryState {

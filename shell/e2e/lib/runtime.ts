@@ -201,6 +201,14 @@ export interface CompositorSnapshot {
   shell_native_drag_preview_clip_rect?: CompositorWorkspaceRect | null
   pending_deferred_window_ids?: number[]
   orphaned_wayland_surface_protocol_ids?: number[]
+  explicit_sync?: {
+    tracked_commits: number
+    pending_releases: number
+    current_output_sampled: number
+    release_signaled: number
+    release_wait_threads: number
+    release_eventfds: number
+  }
   pointer?: { x: number; y: number }
   pointer_pressed_button_count?: number
   cursor_theme?: string

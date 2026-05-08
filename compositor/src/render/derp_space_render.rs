@@ -51,6 +51,9 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
             let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
                 continue;
             };
+            surface.with_surfaces(|surface, _| {
+                state.explicit_sync_mark_surface_sampled(surface);
+            });
             for el in AsRenderElements::<GlesRenderer>::render_elements::<
                 WaylandSurfaceRenderElement<GlesRenderer>,
             >(
@@ -94,6 +97,7 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                     let loc_phys = logical_point_to_physical_floor(location, scale);
                     for (el, include_self_decor) in render_window_elements_with_exclusion_mode(
                         window,
+                        Some(state),
                         renderer,
                         loc_phys,
                         scale,
@@ -106,7 +110,10 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
                         ));
                     }
                 }
-                DerpSpaceElem::X11(_) => {
+                DerpSpaceElem::X11(x11) => {
+                    if let Some(surface) = x11.wl_surface() {
+                        state.explicit_sync_mark_surface_tree_sampled(&surface);
+                    }
                     let scale = Scale::from(output_scale);
                     let loc_phys = logical_point_to_physical_floor(location, scale);
                     for el in AsRenderElements::render_elements::<DerpWinRenderEl>(
@@ -127,6 +134,9 @@ pub(crate) fn derp_space_render_elements_with_window_ids(
         let Some(loc) = layer_map.layer_geometry(surface).map(|g| g.loc) else {
             continue;
         };
+        surface.with_surfaces(|surface, _| {
+            state.explicit_sync_mark_surface_sampled(surface);
+        });
         for el in AsRenderElements::<GlesRenderer>::render_elements::<
             WaylandSurfaceRenderElement<GlesRenderer>,
         >(

@@ -87,6 +87,11 @@ impl CompositorHandler for CompositorState {
                             }
                         }
                     }
+                    tracing::warn!(
+                        surface_id = surface.id().protocol_id(),
+                        "explicit sync acquire blocker creation failed"
+                    );
+                    return;
                 }
                 if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
                     if let Some(client) = surface.client() {
@@ -115,6 +120,7 @@ impl CompositorHandler for CompositorState {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        self.explicit_sync_capture_surface_commit(surface);
         on_commit_buffer_handler::<Self>(surface);
         self.windows.wayland_commit_needs_render = true;
         let mut root = surface.clone();
@@ -158,7 +164,9 @@ impl CompositorHandler for CompositorState {
         }
     }
 
-    fn destroyed(&mut self, _surface: &WlSurface) {}
+    fn destroyed(&mut self, surface: &WlSurface) {
+        self.explicit_sync_surface_destroyed(surface);
+    }
 }
 
 impl BufferHandler for CompositorState {

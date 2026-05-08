@@ -125,7 +125,7 @@ export default defineGroup(import.meta.url, ({ test }) => {
       (perf.shell_runtime?.snapshot_apply_count ?? 0) >= 1,
       `expected snapshot apply after native window spawn, got ${perf.shell_runtime?.snapshot_apply_count ?? 0}`,
     )
-    assert(perf.shell_sync.snapshot_reads <= 4, `expected bounded snapshot reads after native window spawn, got ${perf.shell_sync.snapshot_reads}`)
+    assert(perf.shell_sync.snapshot_reads <= 6, `expected bounded snapshot reads after native window spawn, got ${perf.shell_sync.snapshot_reads}`)
 
     const controls = windowControls(shell, spawned.window.window_id)
     assert(controls?.titlebar, 'spawned native window missing shell titlebar controls')

@@ -244,6 +244,7 @@ struct E2eCompositorSnapshot {
     shell_native_drag_preview_clip_rect: Option<E2eRectSnapshot>,
     pending_deferred_window_ids: Vec<u32>,
     orphaned_wayland_surface_protocol_ids: Vec<u32>,
+    explicit_sync: crate::state::ExplicitSyncSnapshot,
 }
 
 #[derive(Serialize)]
@@ -850,6 +851,7 @@ impl CompositorState {
                 .map(Self::e2e_rect_snapshot),
             pending_deferred_window_ids,
             orphaned_wayland_surface_protocol_ids,
+            explicit_sync: self.explicit_sync_snapshot(),
         })
         .map_err(|e| format!("serialize compositor snapshot: {e}"))
     }

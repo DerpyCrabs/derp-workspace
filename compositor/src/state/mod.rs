@@ -391,6 +391,7 @@ pub struct CompositorState {
     pub(crate) capture: CaptureState,
     pub(crate) tray_notifications: TrayNotificationsState,
     pub(crate) windows: WindowManagementState,
+    pub(crate) explicit_sync: Mutex<ExplicitSyncState>,
     pub(crate) shell_osr: ShellOsrState,
     pub(crate) workspace_layout: WorkspaceLayoutState,
     pub(crate) input_routing: InputRoutingState,
@@ -1047,6 +1048,7 @@ impl CompositorState {
                 control_windows_revision: 0,
                 shell_window_switcher_selected_window_id: None,
             },
+            explicit_sync: Mutex::new(ExplicitSyncState::default()),
             shell_osr: ShellOsrState {
                 shell_to_cef,
                 cef_to_compositor_tx,
@@ -10804,6 +10806,8 @@ mod background;
 pub(crate) use background::*;
 mod windows;
 pub(crate) use windows::*;
+mod explicit_sync;
+pub(crate) use explicit_sync::*;
 mod scratchpads;
 mod x11;
 mod protocols;
